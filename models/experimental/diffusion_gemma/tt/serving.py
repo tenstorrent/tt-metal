@@ -71,7 +71,8 @@ from models.experimental.diffusion_gemma.tt.generate import (
 # a bring-up-era bounded-memory workaround with a known QB2 1024-wide RNG distribution
 # bias, and it cost ~25 s per 256-token block in host-driven paths — a standing perf
 # trap. If full-vocab noise ever OOMs again at 256K contexts, pursue the TP-sharded
-# denoise terminal (DG_TERMINAL_SHARDED, tt/sampling.py) instead of resurrecting it.
+# denoise terminal (unimplemented design note at the bottom of tt/sampling.py) instead
+# of resurrecting it.
 # A "host" mode (IID full-vocabulary torch Gumbel drawn per step) was removed: it
 # repaired 0 of the drifting prompts while costing 1.40x per request, because the
 # language drift was the canvas attending the prefill pad keys (fixed in d0936d4da4f),

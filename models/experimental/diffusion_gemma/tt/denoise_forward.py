@@ -23,6 +23,7 @@ from models.experimental.diffusion_gemma.reference.attention_mask import (
     build_canvas_reveal_denoise_mask,
     build_canvas_reveal_denoise_window_mask,
 )
+from models.experimental.diffusion_gemma.tt.ccl import replicate_mapper as _replicate_mapper
 from models.experimental.diffusion_gemma.tt.concat_moe import concat_experts_forward
 from models.experimental.diffusion_gemma.tt.diffusion_attention import denoise_attention
 from models.experimental.diffusion_gemma.tt.expert_operations import shared_mlp_forward
@@ -49,11 +50,6 @@ def default_self_conditioning_compute_kernel_config():
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
-
-
-def _replicate_mapper(mesh_device):
-    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
-    return ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
 
 def build_device_canvas_denoise_mask(
@@ -1020,56 +1016,6 @@ def _apply_denoise_lm_head(hidden_states, tt_model):
     return logits
 
 
-def collect_prompt_hidden_by_layer(tt_model, prompt_hidden):
-    """Collect per-layer frozen prompt attention inputs for denoise K/V source.
-
-    The DiffusionGemma decoder reads encoder K/V. Until the real paged encoder
-    cache is threaded into this wrapper, this helper captures the tensor that
-    feeds each layer's K/V projections: the prompt hidden states after that
-    layer's input RMSNorm, while advancing the prompt through the normal causal
-    layer stack. Returned tensors are owned by the caller.
-    """
-    hidden_states = prompt_hidden
-    prompt_hidden_by_layer = []
-    for layer_idx, layer in enumerate(tt_model.layers):
-        prompt_hidden_by_layer.append(layer.input_layernorm.forward(hidden_states))
-        hidden_states = layer(
-            hidden_states,
-            rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=hidden_states.shape[-2]),
-            position_idx=None,
-            page_table=None,
-            kv_cache=None,
-            is_decode=False,
-        )
-    hidden_states.deallocate(True)
-    return prompt_hidden_by_layer
-
-
-def collect_prompt_kv_by_layer(tt_model, prompt_hidden):
-    """Collect per-layer frozen prompt K/V heads for denoise prefix attention.
-
-    This uses the existing Gemma4 prefill ``keep_kv`` path to capture K/V after
-    per-head norm and RoPE. Those tensors match the shape carried by KV caches,
-    so this is the narrow interface the future paged encoder-cache read should
-    populate.
-    """
-    hidden_states = prompt_hidden
-    prompt_kv_by_layer = []
-    for layer_idx, layer in enumerate(tt_model.layers):
-        hidden_states = layer(
-            hidden_states,
-            rope_mats=tt_model._get_rope_mats(layer_idx, seq_len=hidden_states.shape[-2]),
-            position_idx=None,
-            page_table=None,
-            kv_cache=None,
-            is_decode=False,
-            keep_kv=True,
-        )
-        prompt_kv_by_layer.append(layer.self_attn._last_kv)
-    hidden_states.deallocate(True)
-    return prompt_kv_by_layer
-
-
 def read_prompt_kv_cache_slice(kv_cache, *, prompt_len: int, seq_len_start: int = 0, borrow_full_span: bool = False):
     """Read a frozen prompt K/V prefix from a contiguous Gemma4 KV cache.
 
@@ -1304,7 +1250,6 @@ class MutablePrefixKVReader:
         # (contents only, address stable) once per block from outside any trace.
         self.window_layers: dict[int, int] = {}
         self._window_bufs: dict[int, tuple] = {}
-        self._window_lo: dict[int, int] = {}
 
     def set_read_span(self, p_max: int) -> None:
         p_max = int(p_max)
@@ -1391,7 +1336,6 @@ class MutablePrefixKVReader:
                 seq_len_start=lo,
                 layer_idx=layer_idx,
             )
-            self._window_lo[layer_idx] = lo
 
     def refresh_windows(self, prompt_len: int) -> None:
         """Refresh bounded-window buffer CONTENTS for a block (OUTSIDE any trace).
@@ -1417,11 +1361,6 @@ class MutablePrefixKVReader:
             finally:
                 k_src.deallocate(True)
                 v_src.deallocate(True)
-            self._window_lo[layer_idx] = lo
-
-    def window_offset(self, layer_idx: int) -> int:
-        """Absolute position the windowed read for ``layer_idx`` currently starts at."""
-        return self._window_lo[layer_idx]
 
     def release_window_buffers(self) -> None:
         for layer_idx, pair in getattr(self, "_window_bufs", {}).items():
@@ -1431,7 +1370,6 @@ class MutablePrefixKVReader:
                 except BaseException as cleanup_error:
                     logger.error(f"failed to release window buffer for layer {layer_idx}: {cleanup_error}")
         self._window_bufs = {}
-        self._window_lo = {}
         self.window_layers = {}
 
     def __call__(self, layer_idx: int):

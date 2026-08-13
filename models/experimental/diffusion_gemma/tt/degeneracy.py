@@ -194,16 +194,6 @@ def _resolve_float(name: str, default: float) -> float:
     return value
 
 
-def _resolve_int(name: str, default: int) -> int:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    value = int(raw)
-    if value <= 0:
-        raise ValueError(f"{name} must be positive, got {value}")
-    return value
-
-
 DEFAULT_RETRIES = 2
 
 

@@ -22,71 +22,19 @@ Callers must tilize and tile-align the gather dimension first.
 """
 
 import ttnn
-from models.common.utility_functions import is_blackhole
+
+# DG reuses Gemma-4's CCLManager unchanged: it pre-creates the double-buffered
+# reduce-scatter / all-gather / barrier semaphores before trace capture, which is
+# all the DG collectives below need. (DG once carried a near-identical copy whose
+# only delta was a buffer-depth kwarg that nothing ever passed; the tests already
+# exercised DG collectives with the gemma4 manager, proving interchangeability.)
+from models.demos.gemma4.tt.ccl import CCLManager, default_num_links  # noqa: F401  (re-exported)
 
 
-def default_num_links():
-    """Default TP-collective link count for the current architecture."""
-    return 2 if is_blackhole() else 1
-
-
-SEMAPHORE_BUFFER_DEPTH = 2
-"""Number of pre-created semaphore sets to round-robin through.
-
-DiffusionGemma uses one command queue, so programs execute in issue order and
-double buffering provides one full collective of reuse slack.
-"""
-
-
-class CCLManager:
-    """Own the mesh and pre-created semaphores used by DG collectives."""
-
-    def __init__(self, mesh_device, num_links=None, topology=ttnn.Topology.Linear, buffer_depth=None):
-        if num_links is None:
-            num_links = default_num_links()
-        self.mesh_device = mesh_device
-        self.num_links = num_links
-        self.topology = topology
-        self.num_devices = mesh_device.get_num_devices()
-
-        grid = mesh_device.compute_with_storage_grid_size()
-        num_cores = grid.x * grid.y
-        core_range_set = ttnn.num_cores_to_corerangeset(num_cores, grid, row_wise=True)
-
-        depth = SEMAPHORE_BUFFER_DEPTH if buffer_depth is None else int(buffer_depth)
-        if depth < 1:
-            raise ValueError(f"buffer_depth must be >= 1, got {depth}")
-        self._rs_semaphores = []
-        self._ag_semaphores = []
-        self._barrier_semaphores = []
-        for _ in range(depth):
-            self._rs_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)])
-            self._ag_semaphores.append([ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(2)])
-            self._barrier_semaphores.append(ttnn.create_global_semaphore(mesh_device, core_range_set, 0))
-        ttnn.synchronize_device(mesh_device)
-
-        self._depth = depth
-        self._rs_idx = 0
-        self._ag_idx = 0
-        self._barrier_idx = 0
-
-    def get_rs_semaphore(self):
-        """Return three reduce-scatter semaphores and advance the ring."""
-        semaphores = self._rs_semaphores[self._rs_idx]
-        self._rs_idx = (self._rs_idx + 1) % self._depth
-        return semaphores
-
-    def get_ag_semaphore(self):
-        """Return two all-gather semaphores and advance the ring."""
-        semaphores = self._ag_semaphores[self._ag_idx]
-        self._ag_idx = (self._ag_idx + 1) % self._depth
-        return semaphores
-
-    def get_barrier_semaphore(self):
-        """Return one barrier semaphore and advance the ring."""
-        semaphore = self._barrier_semaphores[self._barrier_idx]
-        self._barrier_idx = (self._barrier_idx + 1) % self._depth
-        return semaphore
+def replicate_mapper(mesh_device):
+    """``ReplicateTensorToMesh`` for a multi-device mesh, ``None`` for a single device."""
+    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
+    return ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
 
 def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
@@ -124,7 +72,11 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
 
 
 def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
-    """DG-local replacement for Gemma-4 attention's ``apply_allreduce``."""
+    """DG-local replacement for Gemma-4 attention's ``apply_allreduce``.
+
+    ``hidden_size`` is accepted and ignored so call sites keep the exact Gemma-4
+    signature and stay diffable against the shared originals.
+    """
     return ccl_allreduce(tensor, mesh_config, ccl_manager)
 
 

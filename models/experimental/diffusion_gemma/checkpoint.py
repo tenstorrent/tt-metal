@@ -400,45 +400,6 @@ def build_tt_model_from_checkpoint_dir(
     return build_tt_model_from_checkpoint_inputs(mesh_device, inputs, **model_kwargs)
 
 
-def generate_text_from_checkpoint_dir(
-    tt_model,
-    checkpoint_dir: str | Path,
-    prompt,
-    *,
-    tokenizer_kwargs: dict | None = None,
-    state_prefixes: tuple[str, ...] | list[str] | str = TEXT_GENERATION_PREFIXES,
-    state_device: str = "cpu",
-    checkpoint_loader=load_checkpoint_inputs,
-    generate_fn=None,
-    **generate_kwargs,
-):
-    """Load a HF checkpoint directory and run the TT prompt-to-text entrypoint.
-
-    This is the thin runnable glue for #47464: callers provide an already-built
-    TT Gemma4/DiffusionGemma model and a checkpoint directory; this helper loads
-    the host tokenizer + raw decoder state and delegates to
-    ``generate_text_from_checkpoint_state``.
-    """
-
-    inputs = checkpoint_loader(
-        checkpoint_dir,
-        tokenizer_kwargs=tokenizer_kwargs,
-        state_prefixes=state_prefixes,
-        device=state_device,
-    )
-    if generate_fn is None:
-        from models.experimental.diffusion_gemma.tt.generate import generate_text_from_checkpoint_state
-
-        generate_fn = generate_text_from_checkpoint_state
-    return generate_fn(
-        tt_model,
-        inputs.tokenizer,
-        prompt,
-        dg_state_dict=inputs.state_dict,
-        **generate_kwargs,
-    )
-
-
 def generate_text_from_checkpoint_model_inputs(
     checkpoint_model_inputs: CheckpointModelInputs,
     prompt,
@@ -458,41 +419,4 @@ def generate_text_from_checkpoint_model_inputs(
         prompt,
         dg_state_dict=checkpoint_model_inputs.state_dict,
         **generate_kwargs,
-    )
-
-
-def build_and_generate_text_from_checkpoint_dir(
-    mesh_device,
-    checkpoint_dir: str | Path,
-    prompt,
-    *,
-    tokenizer_kwargs: dict | None = None,
-    state_prefixes: tuple[str, ...] | list[str] | str = TEXT_GENERATION_PREFIXES,
-    state_device: str = "cpu",
-    checkpoint_loader=load_checkpoint_inputs,
-    generate_fn=None,
-    **kwargs,
-):
-    """Build the TT model from a checkpoint directory and run prompt-to-text.
-
-    ``model_kwargs`` in ``kwargs`` are forwarded to ``create_tt_model`` through
-    ``build_tt_model_from_checkpoint_dir``; all remaining kwargs are forwarded to
-    ``generate_text_from_checkpoint_state``.
-    """
-
-    model_kwargs = dict(kwargs.pop("model_kwargs", {}) or {})
-    checkpoint_model_inputs = build_tt_model_from_checkpoint_dir(
-        mesh_device,
-        checkpoint_dir,
-        tokenizer_kwargs=tokenizer_kwargs,
-        state_prefixes=state_prefixes,
-        state_device=state_device,
-        checkpoint_loader=checkpoint_loader,
-        **model_kwargs,
-    )
-    return generate_text_from_checkpoint_model_inputs(
-        checkpoint_model_inputs,
-        prompt,
-        generate_fn=generate_fn,
-        **kwargs,
     )

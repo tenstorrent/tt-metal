@@ -23,6 +23,7 @@ import ttnn
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTrajectory
 from models.experimental.diffusion_gemma.tt import degeneracy
+from models.experimental.diffusion_gemma.tt.ccl import replicate_mapper as _replicate_mapper
 from models.experimental.diffusion_gemma.tt.degeneracy import DegenerateBlockError
 from models.experimental.diffusion_gemma.tt.commit_decode import commit_decode_forward
 from models.experimental.diffusion_gemma.tt.denoise_forward import (
@@ -71,11 +72,6 @@ def _deallocate_if_possible(value) -> None:
     except Exception:
         # Best-effort cleanup while preserving the original device failure.
         pass
-
-
-def _replicate_mapper(mesh_device):
-    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
-    return ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
 
 def _validate_nonnegative_integer_token_tensor(

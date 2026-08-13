@@ -67,7 +67,7 @@ from models.demos.gemma4.tt.attention.operations import (
     effective_block_size,
     split_qkv_heads_prefill,
 )
-from models.experimental.diffusion_gemma.tt.ccl import apply_allreduce
+from models.experimental.diffusion_gemma.tt.ccl import apply_allreduce, replicate_mapper as _replicate_mapper
 from models.experimental.diffusion_gemma.tt.chunked_prefill import (
     _chunked_sdpa_program_config,
     _sliding_window_square_sdpa,
@@ -117,11 +117,6 @@ _DEFAULT_KV_WRITE_MODE = _default_kv_write_mode()
 
 _FILL_FALLBACK_WARNED: set[str] = set()
 _LOGGED_KV_WRITE_MODES: set[str] = set()
-
-
-def _replicate_mapper(mesh_device):
-    is_mesh = hasattr(mesh_device, "shape") and mesh_device.get_num_devices() > 1
-    return ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
 
 def build_device_commit_causal_mask(
