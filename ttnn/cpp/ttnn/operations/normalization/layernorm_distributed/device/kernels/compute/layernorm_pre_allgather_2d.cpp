@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-/*
- * This kernel computes distributed rmsnorm statistics: E(x**2).
- */
+// Produces one E[x^2] tile per row; the scalar statistic occupies the leftmost column.
 
 #include <cstdint>
 
@@ -64,6 +62,7 @@ void kernel_main() {
     }
 
 #ifdef IS_MERGE_CORE
+    // Merge cores sum the column's partial statistics into out_final.
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(num_cores_y),
         ckl::BinaryFpu<

@@ -16,6 +16,8 @@
 
 namespace ckl = compute_kernel_lib;
 
+// GELU'(x) = 0.5*(1+tanh(z)) + 0.5*beta*x*(1+3*kappa*x^2)*(1-tanh(z)^2),
+// where z = beta*(x+kappa*x^3); output = grad_out*GELU'(x).
 ALWI void gelu_tanh_fp32_chain(uint32_t num_tiles) {
     constexpr float kBeta = M_SQRT2 * M_2_SQRTPI * 0.5f;
     constexpr float kKappa = 0.044715f;

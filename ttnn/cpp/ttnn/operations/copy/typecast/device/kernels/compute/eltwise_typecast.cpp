@@ -15,6 +15,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
 
+    // The writer drains dfb::out on interleaved paths; sharded paths may leave it resident in
+    // borrowed output storage.
     constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
     ckl::typecast<
         ckl::input(dfb::in, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),

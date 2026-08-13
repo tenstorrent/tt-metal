@@ -12,6 +12,7 @@
 
 namespace ckl = compute_kernel_lib;
 
+// out = input*cos + rotate_half(input)*sin.
 template <uint32_t in0_dfb_id, uint32_t in1_dfb_id, uint32_t out_dfb_id>
 ALWI void mul_tiles_chain() {
     ckl::mul<

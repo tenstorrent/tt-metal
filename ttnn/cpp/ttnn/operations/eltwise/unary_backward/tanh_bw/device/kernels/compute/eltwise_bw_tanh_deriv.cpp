@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Avoids catastrophic cancellation in the naive 1 - tanh²(x) formula.
+// Uses sech^2(x) = 4*exp(-2*abs(x)) / (1+exp(-2*abs(x)))^2 to avoid catastrophic
+// cancellation in the naive 1-tanh(x)^2 formula.
 
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"

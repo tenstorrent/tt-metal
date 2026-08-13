@@ -26,6 +26,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_input_idx_id, dfb_dL_da_idx_id);
 
+    // dL/dx = dL/dout * sigmoid(x) * (1 + x*(1-sigmoid(x))).
     ckl::eltwise_chain(
         ckl::IterationShape::grid(num_rows_per_core, padded_Wt).block_size(block_size),
         ckl::CopyTile<

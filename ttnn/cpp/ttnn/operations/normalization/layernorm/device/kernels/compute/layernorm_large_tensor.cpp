@@ -62,6 +62,8 @@ void kernel_main() {
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
     constexpr bool activate_after_normalize = fused_activation_enabled && !do_gamma && !do_beta;
     constexpr bool activate_after_gamma = fused_activation_enabled && !do_beta;
+    // Fused activation runs after the last enabled affine stage: after beta, otherwise after
+    // gamma, otherwise immediately after normalization.
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
     constexpr bool FLOAT32_REDUCTION = get_compile_time_arg_val(5) == 1;
     constexpr bool LEGACY_RSQRT = get_compile_time_arg_val(6) == 1;

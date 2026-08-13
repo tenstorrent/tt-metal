@@ -229,6 +229,8 @@ void kernel_main() {
             ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
             ckl::PackTile<ckl::output(dfb_ex2pe_id)>{});
 
+        // Gamma and beta each contain one row and remain resident across all NCHt rows; tile
+        // offsets select the current width block.
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
         for (auto block : generic::blocks(Wt, block_size)) {
             const auto block_shape = ckl::IterationShape::tiles(block.size())

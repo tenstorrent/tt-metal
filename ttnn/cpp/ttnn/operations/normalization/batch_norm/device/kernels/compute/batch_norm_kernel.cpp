@@ -14,6 +14,7 @@
 
 namespace ckl = compute_kernel_lib;
 
+// out = ((input - batch_mean) / sqrt(batch_var + eps)) * optional(weight) + optional(bias).
 template <bool WeightHas, bool BiasHas>
 ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     ckl::eltwise_chain(
@@ -32,7 +33,7 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
         ckl::input(dfb::input),
         ckl::input(dfb::batch_mean, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{};
     constexpr auto mul_den = ckl::DestReuseBinary<
-        input(dfb::den, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+        ckl::input(dfb::den, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
         ckl::BinaryFpuOp::Mul,
         ckl::DestReuseType::DEST_TO_SRCA>{};
     constexpr auto mul_weight = ckl::Optional<

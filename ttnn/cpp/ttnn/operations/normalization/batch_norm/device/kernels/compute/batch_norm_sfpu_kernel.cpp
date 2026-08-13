@@ -12,6 +12,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
+// out = ((input - batch_mean) / sqrt(batch_var + eps)) * optional(weight) + optional(bias).
 // The writer-facing output DFB is only bound when the accumulation format is wider than the output
 // dtype; on the other path the writer drains the compute output directly, so the same kernel-side
 // handle has to name a different DFB. The alias is gated at the preprocessor stage because

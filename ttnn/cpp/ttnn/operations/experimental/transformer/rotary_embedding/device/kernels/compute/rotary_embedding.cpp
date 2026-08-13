@@ -14,6 +14,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 
+// out = input*cos + rotate_half(input)*sin. Decode mode reuses row-broadcast cos/sin
+// instead of consuming one trig tile per output tile.
 #ifdef DECODE_MODE
 inline constexpr bool kDecodeMode = true;
 #else

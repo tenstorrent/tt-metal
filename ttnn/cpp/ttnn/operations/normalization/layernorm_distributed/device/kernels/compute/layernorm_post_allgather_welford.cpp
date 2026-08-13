@@ -17,6 +17,8 @@
 
 namespace ckl = compute_kernel_lib;
 
+// Combine per-device Welford statistics into mean and variance, compute reciprocal standard
+// deviation, then apply LayerNorm with optional gamma and beta.
 constexpr uint32_t stats_tile_stride = 2;
 constexpr auto Wt_file_scope = get_arg(args::Wt);
 constexpr auto dfb_length_file_scope = get_arg(args::dfb_length);
@@ -41,6 +43,8 @@ constexpr auto beta_input_dfb = normed_output_dfb;
 
 ALWI void normalize_chunk(const uint32_t num_tiles) {
     const auto shape = ckl::IterationShape::tiles(num_tiles).block_size(ckl::DEST_AUTO_LIMIT);
+    // When a whole row fits in one pass, gamma and beta remain resident and are re-read for every
+    // row. Chunked rows consume one block at a time.
     constexpr auto gamma_beta_wait =
         Wt_file_scope == dfb_length_file_scope ? ckl::WaitPolicy::Cumulative : ckl::WaitPolicy::PerBlockSize;
     constexpr auto gamma_beta_pop =
@@ -51,6 +55,7 @@ ALWI void normalize_chunk(const uint32_t num_tiles) {
         ckl::input(dfb::stats_reduced, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None),
         ckl::output(dfb::x_minus_mean, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize)>(shape);
 
+    // Normalize x, then route through gamma and beta when fused; otherwise write directly to out.
     ckl::mul<
         ckl::input(
             dfb::x_minus_mean, ckl::WaitPolicy::PerBlockSize, ckl::PopPolicy::PerBlockSize, ckl::OperandKind::Block),
@@ -98,6 +103,7 @@ void kernel_main() {
         dfb_stats_reduced.push_back(stats_tile_stride);
         dfb_stats_reduced.wait_front(stats_tile_stride);
 
+        // combine_welford_partials stores [mean, variance]; tile 1 supplies variance.
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<

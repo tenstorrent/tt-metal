@@ -75,6 +75,7 @@ void kernel_main() {
         DataflowBuffer(dfb_stats_reduced_id).push_back(stats_tile_stride);
         DataflowBuffer(dfb_stats_reduced_id).wait_front(stats_tile_stride);
 
+        // combine_welford_partials stores [mean, variance]; tile 1 supplies variance.
         ckl::eltwise_chain(
             ckl::IterationShape::one_tile(),
             ckl::BinaryFpu<

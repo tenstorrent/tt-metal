@@ -15,6 +15,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb::in0, dfb::in1, dfb::out);
 
+    // The reader repeats the RHS row every Wt tiles, so compute can consume both streams
+    // linearly while broadcasting RHS down H.
     compute_kernel_lib::eltwise_chain(
         compute_kernel_lib::IterationShape::tiles(B * Ht * Wt),
         compute_kernel_lib::BinaryFpu<

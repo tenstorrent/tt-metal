@@ -29,6 +29,8 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_linear1_id, dfb_dL_dlinear1_id);
 
+    // dL/dgate = dL/dprod * U * sigmoid(U).
+    // dL/dlinear1 = dL/dprod * gate * sigmoid(U) * (1 + U*(1-sigmoid(U))).
     ckl::eltwise_chain(
         ckl::IterationShape::grid(num_rows_per_core, padded_Wt).block_size(block_size),
         // D0 = U, D1 = sigmoid(U), D2 = dL/dprod.

@@ -301,6 +301,8 @@ void kernel_main() {
                 ckl::PushPolicy::PerTile,
                 ckl::DataFormatReconfig::Disabled)>{});
 
+        // Gamma and beta each contain one row and remain resident across all NCHt rows; tile
+        // offsets select the current width block.
         // Remainder of the layernorm operation
         dfb_ex2pe_obj.wait_front(onetile);
         for (auto block : generic::blocks(Wt, blk)) {

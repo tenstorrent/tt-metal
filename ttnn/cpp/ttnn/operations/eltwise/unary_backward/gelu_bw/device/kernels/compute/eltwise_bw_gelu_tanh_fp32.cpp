@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Same tanh-approximation GELU backward formula as eltwise_bw_gelu_tanh.cpp, restricted to
-// 4 live DST tiles (0-3) instead of 6.
+// GELU'(x) = 0.5*(1+tanh(z)) + 0.5*beta*x*(1+3*kappa*x^2)*(1-tanh(z)^2),
+// where z = beta*(x+kappa*x^3); output = grad_out*GELU'(x). This version is restricted
+// to four live DST tiles (0-3).
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"

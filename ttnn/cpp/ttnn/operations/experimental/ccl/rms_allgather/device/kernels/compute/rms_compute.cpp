@@ -179,6 +179,7 @@ void kernel_main() {
                 ckl::ReduceDataFormatReconfigMode::INPUT>(ckl::ReduceInputBlockShape::row(num_distributed_blocks));
             DataflowBuffer(dfb_stats_id).pop_front(num_distributed_blocks);
 
+            // Reduce distributed E[x^2], then compute 1/sqrt(E[x^2] + eps).
             ckl::eltwise_chain(
                 ckl::IterationShape::one_tile(),
                 ckl::BinaryFpu<ckl::BinaryFpuOp::Add, ckl::input(dfb_var_id), ckl::input(dfb_eps_id)>{},
@@ -186,6 +187,7 @@ void kernel_main() {
                 ckl::PackTile<ckl::output(dfb_stats_reduced_id)>{});
         }
     }
+    // Normalize x with the gathered reciprocal RMS, then apply gamma.
     ckl::mul<
         ckl::input(dfb_xmm_id, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
         ckl::input(dfb_ex_global_id, ckl::BroadcastDim::Col, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),

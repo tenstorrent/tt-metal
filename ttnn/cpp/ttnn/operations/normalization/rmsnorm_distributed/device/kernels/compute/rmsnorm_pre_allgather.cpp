@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-/*
- * This kernel computes rmsnorm statistics: E(x**2).
- */
+// Produces one E[x^2] tile per row; the scalar statistic occupies the leftmost column.
 
 #include <cstdint>
 
