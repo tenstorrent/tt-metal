@@ -12,7 +12,7 @@ on:
         description: "Enable coverage collection and merge job"
         required: false
         type: boolean
-        default: true
+        default: false
 
 permissions:
   checks: write
