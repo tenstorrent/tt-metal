@@ -810,6 +810,18 @@ inline void fabric_dbg_latch_loopback([[maybe_unused]] uint32_t loopback_val, [[
 #endif
 }
 
+// Raw PCS link-up read (value == 1 means up), for gating the self-loopback probe. The loopback's
+// noc_async_read_barrier hangs the sender step while a link is DOWN (recovering NOC), which prevents the
+// router from ever reaching the context switch that runs eth recovery -- so only fire the probe when the
+// link is up (the end-of-run barrier hang is post-retrain, link up).
+inline bool fabric_dbg_link_is_up() {
+#if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(ETH_CORE_A_ETH_CTRL_A_PCS_STATUS_REG_ADDR) == 1;
+#else
+    return true;
+#endif
+}
+
 // Reset the min-free latch: a packet just went out, so start a fresh window.
 inline void fabric_dbg_reset_min_free_latch() {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
