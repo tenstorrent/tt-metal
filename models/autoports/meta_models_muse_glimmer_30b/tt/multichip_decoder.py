@@ -185,21 +185,22 @@ FABRIC_CONFIG = ttnn.FabricConfig.FABRIC_1D_RING
 #: reduces decode in BF16 and prefill in BFP8, so both were measured
 #: (``logs/fabric_packet_probe.log``; decode traced, prefill warmed):
 #:
-#: ===========================================  ==========  ==========
-#: op / payload                                 4352 B      8192 B
-#: ===========================================  ==========  ==========
-#: **decode, BF16**: reduce_scatter + all_gather  35.80 us  **34.82**
-#: prefill, BF16: all_reduce                     2197.8     **1928.3**
-#: **prefill, BFP8 (shipped)**: all_reduce       **1563.7**  1581.1
-#: prefill, BFP8: reduce_scatter w=4              **759.9**   775.8
-#: ===========================================  ==========  ==========
+#: =============================================  =========================  =========================
+#: op / payload                                   4352 B                     8192 B
+#: =============================================  =========================  =========================
+#: **decode, BF16**: reduce_scatter + all_gather  19.03 + 16.77 = 35.80 us   19.23 + 15.59 = 34.82 us
+#: prefill, BF16: all_reduce                      2197.80                    **1928.31**
+#: **prefill, BFP8 (shipped)**: all_reduce        **1563.71**                1581.06
+#: prefill, BFP8: reduce_scatter w=4              **759.92**                 775.76
+#: =============================================  =========================  =========================
 #:
 #: So the runtime's advice is right for the decode payload and wrong for the
 #: shipped prefill one.  8192 ships because the decode step is the per-token
 #: metric: it saves 1.96 us per token per layer (two sublayers x 0.98), against
 #: 34.7 us spread over a whole 8192-token prefill chunk.  The consequence is that
 #: the warning still fires on the prefill collectives, now recommending 4352;
-#: that is the 1.1 % row above, measured and taken knowingly.
+#: that is the 1.1 % *prefill-collective* row above -- not the reducer margin,
+#: which is a different 1.1 % -- measured and taken knowingly.
 #: 15232 (the Blackhole maximum) was measured too and adds nothing over 8192.
 FABRIC_PACKET_PAYLOAD_BYTES = 8192
 
@@ -342,7 +343,8 @@ MULTICHIP_DECODE_SDPA = (None, None, 0, 0, 32)
 #: it spends 97 % of the layer's remaining accuracy budget to buy 1.6 % of the
 #: decode step.  This layer is a *stacking* baseline: the full model composes 52
 #: of them, and ``test_two_layers_stack`` measures how error composes (0.9936 per
-#: layer becomes 0.972 for two).  A margin of three parts per million is not a
+#: layer becomes 0.971975 for two -- ``logs/full_test_run.log``).  A margin of
+#: three parts per million is not a
 #: margin the next stage can build on, and 1.6 % is not what it costs to keep it.
 #: Prefill is the opposite case on both counts -- ~2.1e-3 of headroom, 1.2e-4 of
 #: cost, 11 % of the window -- so prefill takes it.

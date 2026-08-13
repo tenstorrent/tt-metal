@@ -186,7 +186,7 @@ detour (`logs/smoke_v1.log`, `logs/smoke_v1_full.log`):
 
 ```
 PLAN tp=4 local_heads=8 local_kv=1 kv_replicated=True local_qkv_width=1280 local_intermediate=5120
-PREFILL[sliding] seq_len=2049 0.9936738334644831 -> PASS      (single chip: 0.993759 at 8192)
+PREFILL[sliding] seq_len=2049 0.9936738334644831 -> PASS
 PREFILL replica device=1/2/3 bit-identical=True
 DECODE[sliding] pos=2049 0.9918319710852616 -> PASS
 ```
@@ -279,7 +279,7 @@ prefill number ($optimize OPT-012):
 It passes, by 2.8e-6, where BF16 passes by 1.05e-4 — 97 % of the layer's
 remaining accuracy budget for 1.6 % of the decode step, on a layer whose whole
 purpose is to be stacked 52 times and whose two-layer chain already measures
-0.972. Rejected on that trade, with both numbers, not on a synthetic result.
+0.971975. Rejected on that trade, with both numbers, not on a synthetic result.
 
 ### 7.2 Reducer form, split by mode
 
@@ -612,7 +612,7 @@ decode positions, and the length divides by neither tile, page block nor chunk.
 The rest of the surface is in `logs/full_test_run.log`, `test_results.xml` and
 `logs/pcc_summary.txt`: **104 tests, 104 passed, 298 asserted PCC checks** -- 20
 against the single-chip layer (worst 0.999183), 30 on the released checkpoint
-(worst 0.995105, bar 0.995), 238 single-layer synthetic (worst 0.990516, bar
+(worst 0.995105, bar 0.995), 246 single-layer synthetic (worst 0.990516, bar
 0.99) and 2 two-layer-chain (worst 0.967946, bar 0.96).
 
 ### 9.4 Watcher, and a teardown fault
@@ -620,7 +620,7 @@ against the single-chip layer (worst 0.999183), 30 on the released checkpoint
 31 node ids, `TT_METAL_WATCHER=10 TT_METAL_WATCHER_APPEND=0
 TT_METAL_WATCHER_NOINLINE=1`, in a run with no profiler attached: **31 passed**,
 zero `Watcher detected` / tripped / sanitize / `TT_ASSERT` / `DEBUG_ASSERT` /
-out-of-bounds / fault / Error lines across 28,788 log lines and 25 dumps
+out-of-bounds / fault / Error lines across 22,977 log lines and 20 dumps
 (`logs/watcher_run.log`, `watcher/watcher.log.gz`).
 
 The process then aborts **at teardown**, after every test has reported, with
@@ -633,11 +633,11 @@ become active again. Try resetting the board.
   --- tt::tt_metal::MetalContext::~MetalContext()
 ```
 
-Seen twice (18:48 and 19:52), both times closing the 1x4 `FABRIC_1D_RING` mesh
+Seen three times (18:48, 19:52 and 22:05), every time closing the 1x4 `FABRIC_1D_RING` mesh
 with no submesh and no second mesh in the process -- so it is *not* the
 1x1-after-1x4 interaction documented in `test_multichip_vs_single_chip.py`, which
 an earlier version of this log wrongly conflated with it. It does not
-self-recover: both times the next process to open the mesh failed at startup with
+self-recover: every time the next process to open the mesh failed at startup with
 the same signature and `tt-smi -r` cleared it (one reset each). It has only been
 seen on the watcher path -- the same node ids inside the 100-test acceptance
 suite, the A/B runs, the eight Tracy captures and the comparison module have
@@ -730,15 +730,19 @@ row).
    0.57 ms on `sliding` (3.0 %), so whole-layer prefill cannot
    resolve a reducer choice at all — and the `rs_ag` prefill row is 2.8 % slower on
    `sliding` and 0.6 % *faster* on `full`. Decode is decided and repeatable: the
-   pair wins 1.1 % on both kinds. The prefill claim now rests on the op-level
+   pair wins 1.10 % on `sliding` and 1.21 % on `full`. The prefill claim now
+   rests on the op-level
    0.24 % at the shipped packet size, and the README says so.
 
 3. **The fabric packet size, measured whole-layer for the first time.** `layer_ab`
    gained `--packet-bytes` (a mesh-open argument, so it needs one process per
-   value, not a CANDIDATE). 8192 against 4352: decode **0.4574 / 0.4259** against
-   0.4589 / 0.4282, prefill **18.84 / 18.29** against 19.11 / 18.32. 8192 wins or
-   ties all four windows. The isolated 1.1 % prefill-collective regression at 8192
-   is real and does **not** survive to the layer. The runtime's advice is also
+   value, not a CANDIDATE). 8192 wins or ties all four windows. (The figures this
+   item originally quoted were re-measured in round 4 along with everything else
+   the chain runs; the current pair is in the README's
+   [Fabric packet size](README.md#fabric-packet-size) table,
+   `logs/layer_ab_packet8192.log` and `logs/layer_ab_packet4352.log`.) The
+   isolated 1.1 % prefill-collective regression at 8192 is real and does **not**
+   survive to the layer. The runtime's advice is also
    provably unsatisfiable: at 8192 it asks for 4352 (1088 B BFP8 prefill pages), at
    4352 it asks for 8192 (2048 B BF16 decode pages). Both warnings are in the two
    logs. The README now has the `Fabric packet size` section it had been linking
@@ -817,8 +821,8 @@ shipped sharded layout.
 
 - **the floor is calibrated.** Each op runs at 1, 2, 4 and 8 copies per trace; the
   per-op cost is the slope, the floor the intercept. Both print. (The full-width
-  norm: 8.11 µs per op on a 7.36 µs floor — the old probe's single point read
-  15.49, which is the sum.)
+  norm: 8.11 µs per op on a 7.34 µs floor — the old probe's single point read
+  15.46, which is the sum.)
 - **the distributed norm is priced whole, on the sharded layout**, as
   `rms_norm_pre_all_gather` → `all_gather` → `rms_norm_post_all_gather`. Getting
   there needed two TTNN facts the old probe had walked around: the pre-op requires
@@ -984,7 +988,8 @@ own logs. Two holes let it happen, and each had a live instance sitting in it:
 2. **Nothing checked the shipped module.** `multichip_decoder.py`'s docstrings
    carry three measurement tables citing logs, and only two integer constants in
    it were being checked. Pointed at the module, the gate immediately found the
-   `14.89` the README had already corrected to `14.90`, a geometry table citing
+   stale distributed-norm figure the README had already corrected, a geometry
+   table citing
    one of the two logs its rows came from, and a derived per-token figure with no
    check behind it.
 
@@ -1027,3 +1032,86 @@ columns are "the shipped configuration" — every arm reduces with the `rs_ag`
 pair, including at 8192 rows where the layer ships `all_reduce`, which keeps the
 arms comparable with each other at a measured cost of 0.24 %. The README now says
 so instead of implying the prefill reducer was pinned to the shipped one.
+
+## 17. Review round 6: the gate's block model, and a watcher run two commits stale
+
+Round 6 found four things. Two were the gate; one was a self-contradicting table;
+one was a freshness gap nobody had checked.
+
+### 17.1 The gate, third iteration
+
+Round 5's version inherited a citation only for blocks starting with `|`. Round 6
+demonstrated the hole rather than describing it: a planted `1814.9 → 1814.99` in
+§7.4's *prose* passed, because that paragraph's citation sits one block above it
+and prose was never given the inheritance. Fixed by inheriting for every block.
+
+The `<!-- superseded -->` markers were worse than useless. Each sat alone between
+blank lines, so each was its own block containing no figures — the marker
+suppressed *itself* and the table it was meant to label was skipped for the
+unrelated reason of citing nothing. The printed "3 blocks marked superseded" was
+counting comment lines. A marker now suppresses the block that follows it as well
+as its own, so the count means what §16 said it meant, and the §7.4 marker no
+longer sits in front of the live, correct table.
+
+The sum rule from round 5 was too loose by a wide margin. Round 6 measured it:
+accepting any value that is the sum or difference of *any two* numbers in the
+cited artifacts has a false-accept rate of 29-100 % depending on the log — worse
+than the rounding shortcut round 5 had just rejected at ~11 %. It now accepts only
+the arithmetic a block actually writes down: `a + b = c`, with both addends
+present in the artifact. `FABRIC_PACKET_PAYLOAD_BYTES`'s decode row now shows its
+addends (`19.03 + 16.77 = 35.80`), which is better documentation anyway.
+
+Both behaviours are verified by planting the defect: the prose evasion is now
+caught, and a stale figure inside a properly marked superseded table is still
+(correctly) skipped.
+
+### 17.2 A table that contradicted its own total
+
+`README.md` and this log both said "298 asserted PCC checks" and then listed a
+population table whose rows sum to 290 — the synthetic row still read 238 after
+the K/V test added eight checks. `logs/pcc_summary.txt` and the contract had 246
+all along, and both generated-file checkers were green, because they compare
+generated files against logs and never the prose against either.
+
+The gate skips integers by design (structural counts like 52 layers and 6656
+columns would drown it), so this needed its own check rather than a rule change:
+the four population counts, their bars and their **sum** are now re-derived from
+`logs/pcc_summary.txt` and compared with both documents. That also covers the
+class round 5's "50 dumps" belonged to.
+
+### 17.3 The watcher evidence was two commits stale
+
+The committed watcher run was from 19:52; rounds 4 and 5 then changed
+`tests/test_multichip_decoder.py` (the K/V identity assertions) and
+`tt/multichip_decoder.py`. Nothing had re-run it, and no gate could notice.
+Re-run at HEAD: **31 passed**, all eight watcher counters 0, 22,977 log lines and
+20 dumps. The dump count is 20 rather than the 25 recorded last round because
+this run is shorter; the *doubling* correction from round 5 was right, and
+`bench/run_watcher.sh` now derives it correctly either way.
+
+The teardown fault reproduced for the **third** time, and this time the whole
+documented chain was exercised end to end: SIGABRT at mesh close after all 31
+tests reported, the next process (`bench/smoke.py`) failing at startup with the
+same ethernet-core signature, one `tt-smi -r` clearing it, and the smoke passing
+afterwards (prefill 0.99359, decode 0.99236, all three replicas bit-identical).
+The occurrence count in §9.4 and the README is updated from two to three.
+
+### 17.4 Also corrected
+
+`context_contract.json`'s `vs_single_chip` block was wrong in three ways, all
+found by the round-6 verification rather than by any checker: its `command`
+pointed at `test_multichip_decoder.py` (which contains no such test, so it
+collects nothing) instead of `test_multichip_vs_single_chip.py`; its note said the
+baseline runs "on a 1x1 **submesh** of the same mesh", which is the construction
+this stage found *hangs the parent mesh's collectives* and is the reason the
+comparison lives in its own module; and it described the recorded PCCs as the
+2049-token prefill when they are the worst over both measured shapes. The
+capacity-evidence block also gained the `commands`/`log` keys the previous
+stage's equivalent carries.
+
+Two more one-decimal drifts of the kind the gate cannot see: the reducer margin
+in the rejected-candidates table and in §14.2 still said "1.1 % on both layer
+kinds" (1.10 % `sliding`, 1.21 % `full`), and `FABRIC_PACKET_PAYLOAD_BYTES`'s
+prose now says explicitly that *its* 1.1 % is the prefill-collective row, not the
+reducer margin. The two-layer-chain figure quoted as "0.972" throughout is now
+the value the summary actually contains, 0.971975 (prefill; decode is 0.967946).

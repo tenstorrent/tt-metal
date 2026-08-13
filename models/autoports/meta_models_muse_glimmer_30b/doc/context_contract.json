@@ -120,8 +120,8 @@
         "decode_sliding": 0.999843,
         "decode_full": 0.999183
       },
-      "note": "The only population that sees the parallelisation rather than the shared precision policy: the single-chip OptimizedDecoder is built on a 1x1 submesh of the same mesh with identical weights, inputs, page tables and positions, and compared against the multichip layer directly. prefill_* is the 2049-token prefill; decode_* is the worst of four consecutive decode steps.",
-      "command": "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_decoder.py -k vs_single_chip"
+      "note": "The only population that sees the parallelisation rather than the shared precision policy: an OptimizedDecoder on its own 1x1 mesh, with identical weights, inputs, page tables and positions, compared against the multichip layer. The two meshes are opened SEQUENTIALLY, in their own pytest invocation -- a 1x1 submesh of the open 1x4 mesh makes every later parent collective hang and wedges the fabric, which is why tests/test_multichip_vs_single_chip.py is a separate module. Each recorded value is the worst over both measured shapes (2049 batch 1 and 12345 batch 4); decode_* is in turn the worst of four consecutive decode steps.",
+      "command": "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py"
     },
     "batch": {
       "largest_tested": 32,
@@ -272,7 +272,15 @@
   "multichip_decoder_capacity_evidence": {
     "question": "Does the advertised 131072-token context still fit and run once the layer is fractured over four dies?",
     "answer": "Yes, with more headroom than before: per-device weights drop 3.88x and per-device KV cache 2x.",
-    "result": "10 full-context checks, all >= 0.990980 (see tested.prefill.pcc / tested.decode.pcc)"
+    "result": "10 full-context checks, all >= 0.990980 (see tested.prefill.pcc / tested.decode.pcc)",
+    "commands": [
+      "python models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/smoke.py --kind sliding --seq-len 2049",
+      "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_decoder.py -k 'full_context or per_device_weight_shapes'"
+    ],
+    "logs": [
+      "doc/multichip_decoder/logs/full_test_run.log",
+      "doc/multichip_decoder/logs/smoke_v1.log"
+    ]
   },
   "optimized_decoder": {
     "stage": "optimized_decoder",

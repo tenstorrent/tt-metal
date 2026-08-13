@@ -24,6 +24,7 @@ It checks, against the committed artifacts rather than against itself:
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import pathlib
 import re
@@ -123,6 +124,14 @@ def matmul_dram_rows(window: str) -> dict[str, tuple[float, float]]:
     }
 
 
+def pcc_populations() -> tuple[int, dict[str, int]]:
+    """``(total, {bar: count})`` from the generated PCC summary."""
+    text = (ROOT / "logs/pcc_summary.txt").read_text()
+    total = int(re.search(r"^(\d+) asserted checks", text, re.MULTILINE).group(1))
+    counts = {bar: int(n) for n, bar in re.findall(r"^\s+(\d+) .*?bar (0\.\d+)", text, re.MULTILINE)}
+    return total, counts
+
+
 def script_to_logs() -> dict[str, list[str]]:
     """``bench/x.py`` -> the ``logs/*.log`` the committed chain scripts redirect it to.
 
@@ -140,6 +149,11 @@ def script_to_logs() -> dict[str, list[str]]:
         if (ROOT / guess).exists():
             mapping.setdefault(f"bench/{probe.name}", set()).add(guess)
     return {name: sorted(logs) for name, logs in mapping.items()}
+
+
+@functools.lru_cache(maxsize=None)
+def artifact_numbers(haystack: str) -> frozenset[float]:
+    return frozenset(float(v) for v in re.findall(r"\d+\.\d+", haystack))
 
 
 def cited_figure_violations(doc: pathlib.Path) -> list[str]:
@@ -173,25 +187,27 @@ def cited_figure_violations(doc: pathlib.Path) -> list[str]:
     # though no blank line separates them, so they are separate blocks.
     blocks = [part for chunk in re.split(r"\n\s*\n", doc.read_text()) for part in re.split(r"\n(?=\d+\. )", chunk)]
     for index, block in enumerate(blocks):
-        # At line start only: §15.1 *describes* the marker in prose, inside
-        # backticks, and that is not a use of it.
-        if re.search(r"^<!-- superseded", block, re.MULTILINE):
+        # A marker on its own line is its own block, so it has to suppress the
+        # block that *follows* it as well as itself -- round 6 found three
+        # markers suppressing nothing but themselves.  At line start only:
+        # §15.1 describes the marker in prose, inside backticks, and that is not
+        # a use of it.
+        marker_here = re.search(r"^<!-- superseded", block, re.MULTILINE)
+        marker_above = index and re.search(r"^<!-- superseded", blocks[index - 1], re.MULTILINE)
+        if marker_here or marker_above:
             # The marker must say why and point somewhere; an empty one would be
             # a silent mute for any live claim sharing the block.
-            reason = re.search(r"<!-- superseded:\s*(.+?)-->", block, re.DOTALL)
+            reason = re.search(r"<!-- superseded:\s*(.+?)-->", block if marker_here else blocks[index - 1], re.DOTALL)
             if not reason or len(reason.group(1).strip()) < 20:
                 violations.append(
                     f"{doc.name}: <!-- superseded --> with no reason -- {' '.join(block.split())[:60]}..."
                 )
             suppressed += 1
             continue
-        # A table's citation is usually in the sentence that introduces it, one
-        # block up, so a table inherits the previous block's artifacts.  Without
-        # this the round-4 findings -- a whole table gone stale under a
-        # regenerated log -- are invisible to the gate.
-        scope = block
-        if block.lstrip().startswith("|") and index:
-            scope = blocks[index - 1] + "\n" + block
+        # A block's citation is usually in the sentence that introduces it, one
+        # block up -- for tables *and* for prose.  Round 6 showed the
+        # table-only version still let a live, log-backed paragraph through.
+        scope = blocks[index - 1] + "\n" + block if index else block
         cited = set(re.findall(r"`+(logs/[\w./-]+)`+", scope))
         # A block may cite the probe instead of the log it wrote, or a Tracy CSV.
         for script in re.findall(r"`+(bench/\w+\.py)`+", scope):
@@ -221,17 +237,18 @@ def cited_figure_violations(doc: pathlib.Path) -> list[str]:
                 if any(round(number, places) == target for number in measured):
                     continue
             # A doc legitimately *adds* two logged values -- "reduce_scatter +
-            # all_gather" is one number in a table and two rows in the log.  A
-            # sum or difference of two logged values is still checkable against
-            # the artifact, so accept it rather than mute the block.
-            if measured is None:
-                measured = [float(v) for v in re.findall(r"\d+\.\d+", haystack)]
-            if len(measured) <= 2000:
-                target = round(float(value), places)
-                pool = sorted({round(number, places) for number in measured})
-                wanted = set(pool)
-                if any(round(target - a, places) in wanted or round(target + a, places) in wanted for a in pool):
-                    continue
+            # all_gather" is one number in a table and two rows in the log.  Only
+            # the addition the block actually writes down is accepted: "a + b =
+            # value", with a and b both in the artifact.  Round 6 measured the
+            # earlier "any pair in the log" rule at a 29-100 % false-accept rate,
+            # which is worse than the rounding shortcut round 5 rejected.
+            if any(
+                round(float(a) + float(b), places) == round(float(value), places)
+                and float(a) in artifact_numbers(haystack)
+                and float(b) in artifact_numbers(haystack)
+                for a, b in re.findall(rf"(\d+\.\d+)\s*\+\s*(\d+\.\d+)\s*=\s*{re.escape(value)}\b", block)
+            ):
+                continue
             head = " ".join(block.split())[:70]
             violations.append(f"{doc.name}: {value} in none of {', '.join(cited)} -- {head}...")
     if suppressed:
@@ -463,6 +480,26 @@ def main() -> int:
             failures.check(f"{doc_name}: shipped {label} == {name}", len(wrong), 0, exact=True)
             if wrong:
                 print(f"   quotes {wrong} but the module defines {expected}")
+
+    # ---- the PCC population counts, which are integers the figure check skips --
+    # Round 6: the total was updated in both docs when the K/V test added eight
+    # checks and the *row* was not, so the table contradicted its own total.
+    total, counts = pcc_populations()
+    for doc_name, path in (("README", README), ("work log", WORK_LOG)):
+        text = path.read_text()
+        failures.check(
+            f"{doc_name}: asserted PCC total", int(re.search(r"(\d+) asserted PCC checks", text).group(1)), total
+        )
+        rows = {bar: int(n) for n, bar in re.findall(r"\| (\d+) \| (0\.\d+) \|", text)}
+        rows = rows or {bar: int(n) for n, bar in re.findall(r"(\d+) [\w\- ]*?\(worst 0\.\d+, bar (0\.\d+)\)", text)}
+        # Only the four bars the summary defines -- the docs contain other tables
+        # with a "| count | value |" shape.
+        for bar, count in sorted(counts.items()):
+            if bar in rows:
+                failures.check(f"{doc_name}: PCC population at bar {bar}", rows[bar], count)
+        quoted = [rows[bar] for bar in counts if bar in rows]
+        if len(quoted) == len(counts):
+            failures.check(f"{doc_name}: PCC populations sum to the total", sum(quoted), total)
 
     # ---- every figure a doc attributes to a log is in that log ---------------
     # The module's own docstring tables cite logs too, and round 5 found a stale

@@ -332,7 +332,7 @@ So it **passes**, by 2.8e-6, where the shipped BF16 payload passes by 1.05e-4. I
 spends 97 % of the layer's remaining accuracy budget to buy 1.6 % of the decode
 step. This layer is a *stacking* baseline — the full model composes 52 of them,
 and `test_two_layers_stack` measures how the error composes (0.9936 per layer
-becomes 0.972 for two) — and a margin of three parts per million is not a margin
+becomes 0.971975 for two) — and a margin of three parts per million is not a margin
 the next stage can build on. Prefill is the opposite case on every count: ~2.1e-3
 of headroom, 1.2e-4 of cost, 11 % of the window.
 
@@ -372,8 +372,9 @@ op-level evidence: at the shipped packet size `reduce_scatter(w=4) + all_gather`
 (`logs/fabric_packet_probe.log`). Prefill keeps the single dispatch because it
 costs nothing to keep, not because the pair was measured slower.
 
-**Row 4 is what the superseded "12 % slower" figure was measuring.** `rs_ag`
-prefill at one worker is 21.04 / 20.65 ms against the shipped 18.89 / 18.36 —
+**Row 4 is what the superseded "12 % slower" figure was measuring**
+(`logs/layer_ab_reducer_final.log`). `rs_ag` prefill at one worker is
+21.04 / 20.65 ms against the shipped 18.89 / 18.36 —
 **11.4 % / 12.5 %** slower, far outside the noise. That is a real effect and it is
 about the *worker count*, not the reducer form: the old rejection quoted it as if
 it were the reducer, from a run that predates
@@ -546,11 +547,12 @@ and [`logs/pcc_summary.txt`](logs/pcc_summary.txt) for the full surface:
 | --- | --- | --- | --- |
 | multichip vs single-chip TTNN | 20 | 0.999 | **0.999183** |
 | released bf16 checkpoint | 30 | 0.995 | **0.995105** |
-| i.i.d.-Gaussian synthetic, single layer | 238 | 0.99 | 0.990516 |
+| i.i.d.-Gaussian synthetic, single layer | 246 | 0.99 | 0.990516 |
 | two chained layers | 2 | 0.96 | 0.967946 |
 
 The two-layer row has its own bar because two layers compose two layers' error: a
-single layer is ~0.9936 on this harness and the chain measures 0.972 against the
+single layer is ~0.9936 on this harness and the chain measures 0.971975 (prefill) /
+0.967946 (decode) against the
 same HF math, so composing the single-layer bar would assert something
 arithmetically false. What that test is for is the layout contract — the tensor
 that comes out of layer *n*'s `prefill_forward` is the tensor that goes into
@@ -560,7 +562,7 @@ layer *n+1*'s, with the same dtype, memory config and shape, and no conversion.
 TT_METAL_WATCHER_APPEND=0 TT_METAL_WATCHER_NOINLINE=1` over 31 node ids covering
 every structurally distinct multichip path: **31 passed**, and zero
 `Watcher detected` / tripped / sanitize / `TT_ASSERT` / `DEBUG_ASSERT` /
-out-of-bounds / fault / Error lines across 28,788 log lines and 25 dumps
+out-of-bounds / fault / Error lines across 22,977 log lines and 20 dumps
 ([`logs/watcher_run.log`](logs/watcher_run.log), `watcher/watcher.log.gz`). Run
 separately from every profiler capture.
 
@@ -575,13 +577,13 @@ become active again. Try resetting the board.
 
 It is disclosed rather than filed under the grep counts, because it is a device-
 health event on this stage's core path and the last version of this document did
-not say so. What is known about it, from two occurrences:
+not say so. What is known about it, from three occurrences:
 
 * it fires in `RiscFirmwareInitializer::teardown` -> `MetalContext::~MetalContext`,
   i.e. closing the **1x4 `FABRIC_1D_RING` mesh**. No submesh and no second mesh
   are involved, so it is not the 1x1-after-1x4 interaction that
   `test_multichip_vs_single_chip.py` documents;
-* it does **not** self-recover: both times, the *next* process to open the mesh
+* it does **not** self-recover: every time, the *next* process to open the mesh
   failed at startup with the same signature, and `tt-smi -r` cleared it both
   times (work log §9.2). The reset is bounded and no second reset was needed;
 * it has only ever been seen on the **watcher** path. The same 31 node ids run
@@ -720,7 +722,7 @@ correctness constraint, unlike `l1_small_size`.
 | `gather_heads` (column-parallel `o_proj`) | rejected: **−9.1 %** decode for +13.8 % prefill on the boundary chain, and `o_proj`'s layout is one load-time choice for both modes | `logs/topology_probe_decode32_tuned.log`, `logs/topology_probe_prefill8192.log` |
 | BFP8 **decode** collective payload | rejected: **passes** the 0.995 real-weight bar by 2.8e-6 (against 1.05e-4 for BF16) to buy 1.6 % of decode | `logs/real_weight_ccl_dtype_gate.log`, `logs/real_weight_decode_bfp8_experiment.log` |
 | `rs_ag` reducer for prefill | rejected as a wash, not as slower: **0.24 %** apart at the op level (1584.9 vs 1581.1 μs), and whole-layer the gap is inside a prefill spread its own repeat control puts at 2.3 %. The superseded "12 % slower" figure was the *worker count*, not the reducer — re-measured directly as row 4 of the reducer table (11.4 % / 12.5 % at one worker). | `logs/fabric_packet_probe.log`, `logs/layer_ab_reducer_final.log` |
-| `all_reduce` reducer for decode | rejected: **1.1 %** slower on both layer kinds, in one like-for-like invocation | `logs/layer_ab_reducer_final.log` |
+| `all_reduce` reducer for decode | rejected: **1.10 %** (`sliding`) / **1.21 %** (`full`) slower, in one like-for-like invocation | `logs/layer_ab_reducer_final.log` |
 | 8-core and 4-core decode grids | rejected: 7.3 % slower / fails L1 | `logs/layer_ab_geometry_final.log` |
 | separate MLP working grid (the single-chip shape) | rejected: 4.4–4.8 % slower | `logs/layer_ab_geometry_mlpgrid.log` |
 | folding the activations into the matmul | rejected: 2.0–2.6 % slower, as on one chip | `logs/layer_ab_geometry_final.log` |
