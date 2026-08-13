@@ -173,7 +173,9 @@ struct kernel_config_msg_t {
     volatile uint16_t cross_node_dfb_offset;
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
     volatile uint32_t kernel_text_size[MaxProcessorsPerCoreType];
-    volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 12]; // CODEGEN:skip
+    // Reclaim 8 padding bytes on odd-processor architectures for the reload field and pad3,
+    // preserving local_cb_mask's 8-byte alignment and the total launch-message size.
+    volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 4]; // CODEGEN:skip
     volatile uint64_t local_cb_mask;
 
     volatile uint8_t brisc_noc_id;
@@ -184,6 +186,9 @@ struct kernel_config_msg_t {
     volatile uint32_t host_assigned_id;
     // bit i set => processor i enabled
     volatile uint32_t enables;
+    // Runtime binary reload: L1 address of this program's stage table, 0 if the program does not
+    // reload. Written by the host with the rest of the launch message.
+    volatile uint32_t reload_table_addr;
     volatile uint16_t watcher_kernel_ids[MaxProcessorsPerCoreType];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
@@ -191,11 +196,10 @@ struct kernel_config_msg_t {
     volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
     // Byte offset of PrefetcherPipe kernel-config region from kernel_config_base.
     // REMOTE_DFB_OFFSET_NONE (0xFF) means no PrefetcherPipes on this launch.
-    // Placed here (after the 2-byte origin pair) so the field is uint16-aligned without
-    // growing mailboxes_t: pad3 is 2 B smaller than the prior 1+X+4 layout.
+    // Placed after the 2-byte origin pair so the field is uint16-aligned.
     volatile uint16_t prefetcher_pipe_offset;
-    volatile uint8_t pad3[((1 - MaxProcessorsPerCoreType % 2) * 10) + 3];  // CODEGEN:skip — was 1+X+4; −2 B for
-                                                                           // prefetcher_pipe_offset
+    // Account for reload_table_addr and the bytes reclaimed from pad4 without growing mailboxes_t.
+    volatile uint8_t pad3[9 - (MaxProcessorsPerCoreType % 2) * 2];  // CODEGEN:skip
 
     // Per-processor kernel thread info (Quasar: num threads for kernel on this processor; thread_id in that kernel;
     // values fit in 8 bits) The array sizes are rounded up to a multiple of 8 bytes for alignment (i.e. a multiple of
@@ -216,6 +220,7 @@ static_assert(offsetof(kernel_config_msg_t, prefetcher_pipe_offset) % sizeof(uin
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_size) % sizeof(uint32_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, reload_table_addr) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint64_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
 

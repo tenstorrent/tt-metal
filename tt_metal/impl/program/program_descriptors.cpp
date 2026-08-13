@@ -121,6 +121,17 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
         for (const auto& cb : other.cbs) {
             result.cbs.push_back(cb);
         }
+
+        // One launch message per merged program, so one reload table; two different ones is an error.
+        if (other.reload_table_addr.has_value()) {
+            TT_FATAL(
+                !result.reload_table_addr.has_value() || *result.reload_table_addr == *other.reload_table_addr,
+                "Cannot merge ProgramDescriptors with different reload_table_addr ({:#x} and {:#x})",
+                result.reload_table_addr.value_or(0),
+                *other.reload_table_addr);
+            result.reload_table_addr = other.reload_table_addr;
+            result.reload_core_ranges = result.reload_core_ranges.merge(other.reload_core_ranges);
+        }
     }
 
     // Custom program hash is invalidated after merge
