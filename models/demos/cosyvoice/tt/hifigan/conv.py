@@ -73,8 +73,13 @@ def prepare_weights_default(device) -> bool:
 
     Applied to the **vocoder only**. The flow estimator uses the same `TtConv1d` and is
     captured in a trace, which unprepared weights make impossible; disabling it there took
-    the flow stage from 0.683 to 1.723 s on n300. The vocoder is not traced, so it gives
-    up nothing but ~1 ms per call.
+    the flow stage from 0.683 to 1.723 s on n300.
+
+    The vocoder is now traced too (`TtHiFTGenerator.decode`), which would have been a
+    problem if this returned False outright -- but on Wormhole the generator arms
+    `_verify_prepared` instead of dropping preparation, so the weights stay prepared and
+    the geometry check is a one-off host read. Capture waits for a geometry's *second*
+    sighting, by which time that read has already happened, so the two never overlap.
     """
     override = os.environ.get("COSYVOICE_CONV_PREPARE")
     if override is not None:
@@ -202,11 +207,12 @@ class TtConv1d:
         exactly at every length tested.
 
         `COSYVOICE_CONV_PREPARE=0` takes the op's own preparation instead, which measured
-        correct at every length on both parts. It is the default on Wormhole for that
-        reason, and the cost is ~1 ms per call at these sizes -- paid only by the vocoder,
-        which is the only user of this class and is not traced, so the traceability the
-        preparation exists for is not being given up. Revisit when the upstream defect is
-        fixed; `scripts/probe_prepared_weights.py` is the check.
+        correct at every length on both parts, at ~1 ms per call. That is now a genuine
+        trade rather than a free one: the vocoder is traced, so turning preparation off
+        makes `TtHiFTGenerator.decode` uncapturable and costs the 3.2x that tracing is
+        worth. Wormhole keeps preparation and verifies each geometry once instead --
+        see `prepare_weights_default`. Revisit when the upstream defect is fixed;
+        `scripts/probe_prepared_weights.py` is the check.
         """
         if not self._prepare:
             return self.weight, self.bias

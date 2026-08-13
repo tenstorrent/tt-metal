@@ -40,6 +40,7 @@ so that class of bug is caught before any silicon time is spent.
 """
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import numpy as np
@@ -152,6 +153,17 @@ class TtHiFTGenerator:
         self.num_upsamples = meta["num_upsamples"]
         self.bins = self.n_fft // 2 + 1
         self.upsample_rates = tuple(upsample_rates)
+
+        # Trace cache, keyed on (mel_frames, batch_size). See `decode` for why capture
+        # waits for the second sighting of a geometry.
+        self._trace_enabled = os.environ.get("COSYVOICE_HIFT_TRACE", "1") != "0"
+        self._trace_id = None
+        self._trace_key = None
+        self._trace_mel = None
+        self._trace_s = None
+        self._trace_out = None
+        self._geom_seen: dict[tuple[int, int], int] = {}
+        self._trace_off = False
 
         self.conv_pre = build_conv1d(device, bag.sub("conv_pre"), padding=3, dtype=dtype)
 
@@ -356,8 +368,121 @@ class TtHiFTGenerator:
         # cache_source. The caller owns it.
         return wav, audio_len, s
 
+    # -- trace cache -------------------------------------------------------
+
+    def _release_trace(self):
+        if self._trace_id is not None:
+            try:
+                ttnn.release_trace(self.device, self._trace_id)
+            except Exception:  # noqa: BLE001
+                pass
+            self._trace_id = None
+        self._trace_key = None
+        # `_trace_out` is allocated inside the capture, so it belongs to the trace
+        # region and `release_trace` reclaims it. Deallocating it here would be a
+        # double free; dropping the reference is all that is wanted.
+        self._trace_out = None
+        for name in ("_trace_mel", "_trace_s"):
+            buf = getattr(self, name, None)
+            if buf is not None:
+                try:
+                    ttnn.deallocate(buf)
+                except Exception:  # noqa: BLE001
+                    pass
+                setattr(self, name, None)
+
+    def release(self):
+        """Drop any captured trace. Safe to call more than once."""
+        self._release_trace()
+
+    def _capture(self, mel, s, key) -> bool:
+        mel_frames, batch_size = key
+        try:
+            self._release_trace()
+            self._trace_mel = ttnn.clone(mel)
+            self._trace_s = ttnn.clone(s)
+            # Warm first. The program cache and every convolution's prepared-weight
+            # cache have to be populated before recording -- a JIT compile or a weight
+            # tilize *during* capture is host work, which is exactly what a trace
+            # cannot contain.
+            ttnn.deallocate(self._decode_impl(self._trace_mel, self._trace_s, mel_frames, batch_size))
+            ttnn.synchronize_device(self.device)
+
+            tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+            self._trace_id = tid  # set before the body, so a failure still releases it
+            try:
+                # Allocated inside the capture, so the trace owns its address and every
+                # replay writes here. The caller is handed a clone, never this buffer.
+                self._trace_out = self._decode_impl(self._trace_mel, self._trace_s, mel_frames, batch_size)
+            finally:
+                ttnn.end_trace_capture(self.device, tid, cq_id=0)
+            self._trace_key = key
+            return True
+        except Exception as e:  # noqa: BLE001
+            # Needs the device opened with a `trace_region_size`. Tracing is an
+            # optimisation, so fall back loudly rather than failing the utterance, and
+            # stop retrying -- the reason will not change mid-run.
+            logger.warning(f"HiFT trace capture unavailable, vocoder stays untraced: {str(e)[:200]}")
+            self._release_trace()
+            self._trace_off = True
+            return False
+
+    def _replay(self, mel, s):
+        # Inputs are *copied into* the buffers the trace baked addresses for, never
+        # reassigned -- rebinding the attribute would leave the replay reading the
+        # previous utterance's mel and produce plausible audio from stale input, with
+        # no exception and no shape mismatch.
+        ttnn.copy(mel, self._trace_mel)
+        ttnn.copy(s, self._trace_s)
+        ttnn.execute_trace(self.device, self._trace_id, cq_id=0, blocking=True)
+        # The clone is what the caller owns; `_trace_out` stays put because the trace
+        # writes through it on every replay. TTNN warns that allocating while a trace
+        # is alive can collide with addresses the trace recorded -- one clone per
+        # replay is the same shape of risk the CFM already carries, and
+        # `test_hift_trace_is_bit_identical` replays repeatedly to keep it honest.
+        return ttnn.clone(self._trace_out)
+
     def decode(self, mel, s, mel_frames: int, batch_size: int = 1):
-        """mel: ttnn [B, T_mel, 80]; s: ttnn [B, T_audio, 1] -> [B, L, 1] waveform."""
+        """mel: ttnn [B, T_mel, 80]; s: ttnn [B, T_audio, 1] -> [B, L, 1] waveform.
+
+        Replays a captured trace when one is available for this geometry. Measured on
+        the 282-frame utterance: `46.7 -> 14.3 ms` on Blackhole `p150b` and
+        `47.4 -> 29.7 ms` on n300, bit-identical (`max|d| 0.000e+00`).
+
+        **Capture waits for the second sighting of a geometry**, because capturing costs
+        more than one untraced run (`74.7 ms` against `46.7 ms`). A one-shot synthesis
+        sees each geometry once and so never pays for a trace it cannot amortise;
+        streaming reuses its chunk geometry and picks the trace up automatically. Set
+        `COSYVOICE_HIFT_TRACE=0` to keep the vocoder untraced.
+
+        Every shape here is a function of `mel_frames`, so the trace is bound to one
+        length -- hence the key, and hence the release when the length changes.
+
+        **One trace is kept, not one per geometry.** A streamed utterance is
+        `A, B, B, ... B, C`: a first chunk without mel context, a run of identical middle
+        chunks, and a final chunk that skips the overlap trim. Only `B` ever repeats, so
+        one slot is the whole win, and the first-sighting rule means `A` and `C` never
+        evict it. A workload that alternated two *repeating* geometries would thrash at
+        one capture each -- if that ever shows up, this is the line to change.
+        """
+        key = (mel_frames, batch_size)
+        if self._trace_enabled and not self._trace_off:
+            if self._trace_id is not None and self._trace_key == key:
+                try:
+                    return self._replay(mel, s)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"HiFT trace replay failed, falling back to untraced: {str(e)[:200]}")
+                    self._release_trace()
+                    self._trace_off = True
+            else:
+                seen = self._geom_seen.get(key, 0) + 1
+                self._geom_seen[key] = seen
+                if seen >= 2 and self._capture(mel, s, key):
+                    return self._replay(mel, s)
+        return self._decode_impl(mel, s, mel_frames, batch_size)
+
+    def _decode_impl(self, mel, s, mel_frames: int, batch_size: int = 1):
+        """The untraced graph. `decode` is the entry point; this is what it records."""
         trace = shape_trace(mel_frames, n_fft=self.n_fft, hop_len=self.hop_len)
 
         s_stft, _ = self.stft(s, trace["audio_length"], batch_size)  # [B, 18, T]

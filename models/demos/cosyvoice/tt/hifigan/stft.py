@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import numpy as np
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -90,6 +91,14 @@ class TtStft:
         self.frame_weight = ttnn.from_torch(w, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
         self.conv_config = ttnn.Conv1dConfig(weights_dtype=dtype, deallocate_activation=False)
 
+        # The same kernel as OIHW, which is what `prepare_conv_weights` wants. Kept
+        # alongside the [O, I, K] form so the unprepared path still works when
+        # preparation is unavailable -- see `_prepared`.
+        w4 = torch.zeros(n_fft, 1, 1, n_fft, dtype=torch.float32)
+        w4[torch.arange(n_fft), 0, 0, torch.arange(n_fft)] = torch.from_numpy(self.window)
+        self._weight_4d = ttnn.from_torch(w4, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self._prep_cache: dict[tuple[int, int], ttnn.Tensor] = {}
+
         # Reversal operator for reflect padding. TTNN has no `flip`, and
         # `ttnn.pad` offers only Replicate and Zeros -- no reflect mode -- so the
         # reflection is composed from an exchange (anti-diagonal) matrix:
@@ -104,6 +113,57 @@ class TtStft:
     def n_frames(self, length: int) -> int:
         padded = length + (self.n_fft if self.center else 0)
         return (padded - self.n_fft) // self.hop + 1
+
+    _warned = False
+
+    def _prepared(self, x, length: int, batch_size: int):
+        """Pre-tilized framing weight, cached per input geometry.
+
+        Same reasoning as `TtConv1d._prepared`, and the same consequence: handing
+        `ttnn.conv1d` a host-layout weight makes it redo the layout transform on every
+        call, which is host traffic, which is what a trace forbids. Until this was
+        hoisted out, the vocoder could not be captured at all -- capture died on
+        `Writes are not supported during trace capture` inside this one op.
+
+        It buys nothing on its own (measured `1.00x` untraced). Its whole value is
+        making `TtHiFTGenerator.decode` traceable, which is worth `3.3x` on Blackhole
+        and `1.6x` on Wormhole. Output is bit-identical either way (`max|d| 0.000e+00`).
+
+        `length` is the *padded* length, since that is what the conv sees.
+        """
+        key = (length, batch_size)
+        if key in self._prep_cache:
+            return self._prep_cache[key]
+        try:
+            w = ttnn.prepare_conv_weights(
+                weight_tensor=self._weight_4d,
+                weights_format="OIHW",
+                has_bias=False,
+                input_memory_config=x.memory_config(),
+                input_layout=x.layout,
+                in_channels=1,
+                out_channels=self.n_fft,
+                batch_size=batch_size,
+                input_height=1,
+                input_width=length,
+                kernel_size=(1, self.n_fft),
+                stride=(1, self.hop),
+                padding=(0, 0),
+                dilation=(1, 1),
+                groups=1,
+                device=self.device,
+                input_dtype=self.dtype,
+                conv_config=self.conv_config,
+            )
+        except Exception as e:  # noqa: BLE001
+            # Logged rather than swallowed: a silent fallback here looks like a working
+            # fast path and the only symptom is a trace capture that fails elsewhere.
+            if not TtStft._warned:
+                TtStft._warned = True
+                logger.warning(f"stft prepare_conv_weights unavailable, stays untraceable: {str(e)[:200]}")
+            w = self.frame_weight
+        self._prep_cache[key] = w
+        return w
 
     def __call__(self, x, length: int, batch_size: int = 1):
         """x: ttnn [B, L, 1] (channels-last, single channel) -> [B, 2*bins, T]."""
@@ -128,7 +188,7 @@ class TtStft:
 
         frames, n_frames = ttnn.conv1d(
             input_tensor=x,
-            weight_tensor=self.frame_weight,
+            weight_tensor=self._prepared(x, length, batch_size),
             device=self.device,
             in_channels=1,
             out_channels=self.n_fft,
