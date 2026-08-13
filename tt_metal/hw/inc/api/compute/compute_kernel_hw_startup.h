@@ -72,20 +72,21 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
 
     ComputeKernelSentinel::instance().set_srca(src_a_cb).set_srcb(src_b_cb).set_pack(ocb);
 #else
-//     // [#48552] Raise the per-thread MOP read-timeout above the 65536-cycle reset default. On Quasar a read
-//     // with no response within CSR_TIMEOUT_COUNT cycles raises ERROR_TRISC1 0x0119 MEM_READ_NO_RESPONSE
-//     // (error_handling.h). The tilize datacopy MOP on MATH reads SrcA fed by slow DM readers (e.g.
-//     // tilize_with_val_padding's padding fills + L2 flush), and the default budget can expire mid-block
-//     // before the operand is valid -> spurious fault on Neo0TRISC1. Done ONCE here in hw_startup (must not
-//     // be re-run per block). 0x100000 is enough headroom without excess. Emitted on every TRISC thread (each
-//     // raises its own per-thread CSR); harmless on threads that don't do the long datacopy wait.
-#ifndef CSR_TIMEOUT_COUNT
-#define CSR_TIMEOUT_COUNT 0xBD0
-#endif
-    asm volatile("csrw %0, %1" : : "i"(CSR_TIMEOUT_COUNT), "r"(0x100000));
+    //     // [#48552] Raise the per-thread MOP read-timeout above the 65536-cycle reset default. On Quasar a read
+    //     // with no response within CSR_TIMEOUT_COUNT cycles raises ERROR_TRISC1 0x0119 MEM_READ_NO_RESPONSE
+    //     // (error_handling.h). The tilize datacopy MOP on MATH reads SrcA fed by slow DM readers (e.g.
+    //     // tilize_with_val_padding's padding fills + L2 flush), and the default budget can expire mid-block
+    //     // before the operand is valid -> spurious fault on Neo0TRISC1. Done ONCE here in hw_startup (must not
+    //     // be re-run per block). 0x100000 is enough headroom without excess. Emitted on every TRISC thread (each
+    //     // raises its own per-thread CSR); harmless on threads that don't do the long datacopy wait.
+    // #ifndef CSR_TIMEOUT_COUNT
+    // #define CSR_TIMEOUT_COUNT 0xBD0
+    // #endif
+    //     asm volatile("csrw %0, %1" : : "i"(CSR_TIMEOUT_COUNT), "r"(0x100000));
 
     UNPACK((llk_unpack_hw_configure(src_a_cb, src_b_cb)));
 
+    MATH(stojan());
     MATH((llk_math_pack_sync_init()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(src_a_cb, src_b_cb)));
 

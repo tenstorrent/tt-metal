@@ -14,6 +14,13 @@ using namespace ckernel::math;
 
 static DataFormatConfigSet data_format_config_set = DataFormatConfigSet::UNCONFIGURED;
 
+inline void stojan()
+{
+    for (int i = 0; i < 2000; i++)
+    {
+        TTI_NOP;
+    }
+}
 /**
  * @brief Sets up ALU formats for math destination register.
  *
