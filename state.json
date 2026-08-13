@@ -1,74 +1,51 @@
 {
-  "last_run": "2026-08-12T06:48:00Z",
-  "run_id": 31571161814,
+  "last_run": "2026-08-13T18:39:00Z",
+  "run_id": 31731364970,
   "open_prs": {
-    "51999": {
-      "issue": 51420,
-      "status": "checks green; pr-gate.yaml action_required (maintainer approval gate), unchanged this run; unchanged as of 2026-08-12 run"
-    },
-    "52106": {
-      "issue": 51660,
-      "status": "checks green; pr-gate.yaml action_required, unchanged this run; unchanged as of 2026-08-12 run"
-    },
-    "51868": {
-      "issue": 51866,
-      "status": "checks green (2 runs, one success conclusion); pr-gate.yaml action_required after fix-commit push; full review cycle done, one perf/predication concern deliberately deferred; unchanged this run; unchanged as of 2026-08-12 run"
-    }
+    "51999": {"issue": 51420, "status": "checks green; action_required maintainer gate; unchanged 2026-08-13"},
+    "52106": {"issue": 51660, "status": "checks green; action_required; unchanged 2026-08-13"},
+    "51868": {"issue": 51866, "status": "checks green; action_required; branch behind main; unchanged 2026-08-13"}
   },
   "issues_labeled": [
-    "52178:bug",
-    "52174:bug",
-    "52233:bug",
-    "52203:bug",
-    "52390:bug,ci-bug",
-    "52376:bug",
-    "52614:bug,community",
-    "52607:bug"
-  ],
-  "issues_commented": [
-    "52178"
+    "52178:bug","52174:bug","52233:bug","52203:bug","52390:bug,ci-bug","52376:bug",
+    "52614:bug,community","52607:bug","53046:bug"
   ],
   "covered_no_duplicate": {
     "52131": "PR #52136 already closes it",
-    "52174": "part of #52178 meta-issue",
-    "52178": "meta-issue, commented",
-    "52233": "root-caused by reporter jbaumanTT; fix already in open PR #52237 (draw packed-write payload in whole words); do not open duplicate fix PR",
-    "52203": "assignee abhullar-tt actively investigating (borrowed-DFB, quasar sharded tilize); no fix PR yet as of this run",
-    "52390": "closed by maintainer VirdhatchaniKN 2026-08-07; no longer needs action",
-    "52612": "fix already in open PR #52613 (drop stale sinh_bw/cosh_bw input-domain guard); do not open duplicate",
-    "52614": "fix already in open PR #52615 (factor magnitude out before squaring in variance composite); do not open duplicate",
-    "52607": "fix already in open PR #52608 (guard setexp exponent in xielu neg-exp helper); do not open duplicate",
-    "52901": "fix already in open PR #52902 (reporter's own Horner-order fix for slice TILE reader); do not open duplicate"
+    "52233": "fix in open PR #52237",
+    "52612": "fix in open PR #52613",
+    "52614": "fix in open PR #52615",
+    "52607": "fix in open PR #52608",
+    "52901": "fix in open PR #52902",
+    "53046": "fix already in open PR #53047 (lgamma bridge-guard <= fix); overlaps in-flight #51991, needs coordination per PR body -- do not open duplicate"
   },
   "dropped_fix_targets": {
-    "51845": "maintainer jasondavies explicitly rejected both proposed remedies on 2026-08-05 -- do not attempt fix"
+    "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
+    "53055": "reporter (maintainer ncvetkovicTT) deliberately deferred fix pending directed test -- filed as documentation, not an action item"
   },
   "watch_prs": {
-    "52124": "Clamp sin/cos to [-1,1] - maintainer rejected this approach in #51845 discussion",
-    "52126": "ttnn.i0 fix, I0_MAX_INPUT=88.5f concern per #52178",
-    "51843": "alternate ttnn.i0 fix, same concern",
-    "52237": "fixes #52233 zero-length NoC write (packed-write payload rounding); watch for merge",
-    "45709": "fully approved + CodeOwners complete but stuck in action_required repo-side gate since 2026-06; needs maintainer to manually re-enable/rerun gate, not a normal nudge case"
+    "52237": "fixes #52233, watch for merge",
+    "45709": "approved+CodeOwners complete but stuck action_required repo-side gate since 2026-06, needs maintainer manual re-enable",
+    "53047": "fixes #53046 lgamma bridge guards <= fix; overlaps #51991, needs coordination before merge"
   },
   "sfpu_clamp_family": {
-    "note": "Family in #52178 (kinginu). i1 #52174 fixed/measured. Still open no-PR: erfc #51137, digamma #51128, snake_beta #51116. sin/cos #51845 blocked. softplus #51866 has PR #51868 pending gate."
+    "note": "Family in #52178 (kinginu). Still open no-PR: erfc #51137, digamma #51128, snake_beta #51116. sin/cos #51845 blocked. softplus #51866 has PR #51868 pending gate. lgamma z=0.75 boundary #53046 has PR #53047 pending, overlaps #51991."
   },
-  "welcome_candidates_pending_verification": {
-    "thwaitsusa0316": "author of #52114, not yet verified",
-    "kinginu": "multiple recent issues, likely established",
-    "EazyHood": "clearly established, do NOT welcome"
+  "no_fix_needed_investigated": {
+    "53029": "K3 AttnRes segmented-batch silent correctness bug -- deep hw-specific investigation, root cause unknown, left for owning team (pjosipovic)",
+    "53069": "Quasar perf-test coverage issue, PR-derived tracking issue, not a defect"
   },
   "stale_pr_nudges": {
-    "34933": "2026-08-07: /codeowners ping (approved-adjacent doc fix, branch behind main)",
-    "21584": "2026-08-07: /codeowners ping (eth benchmark re-enable, 3x approved, stale since 2025-12)",
+    "34933": "2026-08-13: author nudge (behind main, doc capitalization fix)",
+    "21584": "2026-08-13: /codeowners ping (eth benchmark re-enable, 3x approved, stale)",
     "45516": "2026-08-12: author nudge (behind main, no reviews yet)",
-    "49658": "2026-08-12: /codeowners ping (approved by mgajewskiTT, 1 pending CodeOwners group)"
+    "49658": "2026-08-12: /codeowners ping (approved, 1 pending CodeOwners group)"
   },
   "backlog_cursor": {
-    "task1_labeling": "labeled 52614, 52607 this run; oldest-first sweep resumed near 52260/52231/52228 (perf tracking / cleanup tasks, no clear label fit -- skipped); next candidates: continue oldest-first from ~52200s not yet covered",
-    "task2_commenting": "no new comments this run -- 52612/52614/52607 all have thorough reporter root-cause + fix PR already open, additional comment would be redundant",
-    "task3_fix": "no new fix PRs opened this run -- 3 candidate community bugs (52607,52612,52614) already have fix PRs from original reporters (52608,52613,52615); just needs maintainer review",
-    "task6_stale_prs": "pinged #45516, #49658 this run (2/3 used); #34933/#21584 skipped (pinged 2026-08-10, within cooldown); #22649 closed, removed from tracking; #45709 noted separately as gate-stuck, not nudge-eligible"
+    "task1_labeling": "labeled 53046 this run (bug, confirmed fp32 boundary defect with fix PR already open); continue oldest-first sweep from ~52940s CI-auto-triage / low-signal issues next",
+    "task2_commenting": "no new comments this run -- 53046/53055/53029/53069 already thoroughly self-documented by reporters or maintainers, additional comment would be redundant",
+    "task3_fix": "no new fix PRs opened -- 53046 already has fix PR #53047 from reporter; 53055/53029 need deeper hw investigation not safe to attempt blind",
+    "task6_stale_prs": "re-nudged #34933 (author) and #21584 (/codeowners ping) this run, past 3-day cooldown; #45516/#49658 skipped (nudged 2026-08-12, within cooldown)"
   },
-  "notes": "2026-08-12 run: Task 5 - checked CI on all 3 repo-assist PRs, all green/unchanged, still action_required. Task 1/3 - confirmed #52901 has existing reporter fix PR #52902 (Horner-order bug in slice TILE reader), skipped duplicate, recorded covered. Task 6 - confirmed #22649 now closed, removed from watch; #34933/#21584 within cooldown, skipped; nudged #45516 (author, behind main) and #49658 (/codeowners ping, 1 pending group); noted #45709 as gate-stuck special case (approved but action_required, needs maintainer). Task 8 - appended run entry to #51865 monthly summary with all above; refreshed suggested actions."
+  "notes": "2026-08-13 run: Task 5 - all 3 repo-assist PRs unchanged, still action_required. Task 1 - labeled #53046 (lgamma fp32 boundary bug) which already has fix PR #53047 from reporter kinginu; recorded as covered, no duplicate. Task 2 - reviewed #53055 (P3 LLK zero-flag, deliberately deferred by maintainer reporter) and #53029 (K3 AttnRes silent correctness, deep hw investigation) -- both well-documented already, no comment added to avoid redundancy. Task 6 - re-pinged #34933 and #21584 past cooldown. Task 8 - updated #51865 monthly summary with run history and refreshed suggested actions list including new PR #53047."
 }
