@@ -202,10 +202,24 @@ def _skip_coverage_unsupported(mathop):
         return
 
     # Coverage runs skip the broad profile wholesale; only the standard profile runs.
+    #
+    # This used to cite tt-llk#1435, which does not justify it: that issue is about
+    # test *ordering* -- test_eltwise_unary_sfpu.py failing on a mismatch when it runs after
+    # test_eltwise_binary -- and its one mention of coverage ("when ran with coverage, less
+    # variants fail because less of them are ran in the first place") is an observation of
+    # *this* skip's effect, not a rationale for it. The citation was circular, so it is gone;
+    # the actual reason the broad profile is excluded from the instrumented run is not
+    # recorded anywhere, and is presumably its cost under instrumentation.
+    #
+    # What matters for a reader here is that the skip is now a routing decision rather than a
+    # coverage hole. The broad profile runs in the non-coverage companion groups of llk-e2e
+    # (split_group 6-10 in tests/pipeline_reorg/llk_e2e_tests.yaml). Before those existed it
+    # ran in no automated job on any architecture, because every other LLK python job
+    # excludes the `nightly` marker.
     if mathop in BROAD_SWEEP_OPS:
         pytest.skip(
-            reason="Broad-profile ops are not run under coverage: "
-            "https://github.com/tenstorrent/tt-llk/issues/1435"
+            reason="Broad-profile ops are not run under coverage; they run in llk-e2e's "
+            "non-coverage groups instead (llk_e2e_*_nocov)."
         )
 
     if mathop in COVERAGE_COMPILE_SKIP_OPS:

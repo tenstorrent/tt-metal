@@ -73,3 +73,261 @@
     bh_p150b_civ2:
       timeout: 38
   owner_id: U09UC143684 # Nemanja Divnic
+
+# ---------------------------------------------------------------------------------------
+# Non-coverage companion groups (split_group 6-10).
+#
+# The groups above all pass --coverage, and `_skip_coverage_unsupported` in
+# test_sfpu_unary.py skips every BROAD_SWEEP_OPS variant wholesale when coverage is on.
+# Since the only other LLK python jobs (llk-smoke, llk-bit-exact) exclude the `nightly`
+# marker, the broad unary profile -- the large majority of the sweep's parametrizations --
+# was running in no automated job on any architecture. Coverage that nothing runs cannot
+# catch a regression, and the arch-gates in this suite are exactly the kind of thing that
+# regresses quietly.
+#
+# These groups are the same tests with the same markers and the same 5-way split, minus
+# --coverage, so the broad profile actually executes. They carry `coverage: false`, so
+# llk-e2e-impl skips the .info upload for them and the merge job still sees only the five
+# instrumented groups per arch. split_group is 6-10 rather than 1-5 because the artifact
+# names are keyed on it (`junit-report-<arch>-<split_group>`) and would otherwise collide.
+# ---------------------------------------------------------------------------------------
+
+- name: llk_e2e_wormhole_nocov group 1/5
+  split_group: 6
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 1 --timeout=60 \
+      --junitxml=pytest-report-wormhole-6-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 1 \
+      --timeout=60 \
+      --junitxml=pytest-report-wormhole-6-run.xml .
+    junitparser merge pytest-report-wormhole-6-compile.xml pytest-report-wormhole-6-run.xml pytest-report-wormhole-6.xml
+  skus:
+    wh_n150_civ2:
+      timeout: 38
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_e2e_wormhole_nocov group 2/5
+  split_group: 7
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 2 --timeout=60 \
+      --junitxml=pytest-report-wormhole-7-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 2 \
+      --timeout=60 \
+      --junitxml=pytest-report-wormhole-7-run.xml .
+    junitparser merge pytest-report-wormhole-7-compile.xml pytest-report-wormhole-7-run.xml pytest-report-wormhole-7.xml
+  skus:
+    wh_n150_civ2:
+      timeout: 38
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_e2e_wormhole_nocov group 3/5
+  split_group: 8
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 3 --timeout=60 \
+      --junitxml=pytest-report-wormhole-8-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 3 \
+      --timeout=60 \
+      --junitxml=pytest-report-wormhole-8-run.xml .
+    junitparser merge pytest-report-wormhole-8-compile.xml pytest-report-wormhole-8-run.xml pytest-report-wormhole-8.xml
+  skus:
+    wh_n150_civ2:
+      timeout: 38
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_e2e_wormhole_nocov group 4/5
+  split_group: 9
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 4 --timeout=60 \
+      --junitxml=pytest-report-wormhole-9-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 4 \
+      --timeout=60 \
+      --junitxml=pytest-report-wormhole-9-run.xml .
+    junitparser merge pytest-report-wormhole-9-compile.xml pytest-report-wormhole-9-run.xml pytest-report-wormhole-9.xml
+  skus:
+    wh_n150_civ2:
+      timeout: 38
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_e2e_wormhole_nocov group 5/5
+  split_group: 10
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 5 --timeout=60 \
+      --junitxml=pytest-report-wormhole-10-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 5 \
+      --timeout=60 \
+      --junitxml=pytest-report-wormhole-10-run.xml .
+    junitparser merge pytest-report-wormhole-10-compile.xml pytest-report-wormhole-10-run.xml pytest-report-wormhole-10.xml
+  skus:
+    wh_n150_civ2:
+      timeout: 38
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_e2e_blackhole_nocov group 1/5
+  split_group: 6
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 1 --timeout=60 \
+      --junitxml=pytest-report-blackhole-6-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 1 \
+      --timeout=60 \
+      --junitxml=pytest-report-blackhole-6-run.xml .
+    junitparser merge pytest-report-blackhole-6-compile.xml pytest-report-blackhole-6-run.xml pytest-report-blackhole-6.xml
+  skus:
+    bh_p150b_civ2:
+      timeout: 55
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_e2e_blackhole_nocov group 2/5
+  split_group: 7
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 2 --timeout=60 \
+      --junitxml=pytest-report-blackhole-7-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 2 \
+      --timeout=60 \
+      --junitxml=pytest-report-blackhole-7-run.xml .
+    junitparser merge pytest-report-blackhole-7-compile.xml pytest-report-blackhole-7-run.xml pytest-report-blackhole-7.xml
+  skus:
+    bh_p150b_civ2:
+      timeout: 55
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_e2e_blackhole_nocov group 3/5
+  split_group: 8
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 3 --timeout=60 \
+      --junitxml=pytest-report-blackhole-8-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 3 \
+      --timeout=60 \
+      --junitxml=pytest-report-blackhole-8-run.xml .
+    junitparser merge pytest-report-blackhole-8-compile.xml pytest-report-blackhole-8-run.xml pytest-report-blackhole-8.xml
+  skus:
+    bh_p150b_civ2:
+      timeout: 55
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_e2e_blackhole_nocov group 4/5
+  split_group: 9
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 4 --timeout=60 \
+      --junitxml=pytest-report-blackhole-9-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 4 \
+      --timeout=60 \
+      --junitxml=pytest-report-blackhole-9-run.xml .
+    junitparser merge pytest-report-blackhole-9-compile.xml pytest-report-blackhole-9-run.xml pytest-report-blackhole-9.xml
+  skus:
+    bh_p150b_civ2:
+      timeout: 55
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_e2e_blackhole_nocov group 5/5
+  split_group: 10
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests
+    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
+    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
+    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 5 --timeout=60 \
+      --junitxml=pytest-report-blackhole-10-compile.xml .
+    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
+      -m "$PYTEST_MARKERS" \
+      --splits 5 --group 5 \
+      --timeout=60 \
+      --junitxml=pytest-report-blackhole-10-run.xml .
+    junitparser merge pytest-report-blackhole-10-compile.xml pytest-report-blackhole-10-run.xml pytest-report-blackhole-10.xml
+  skus:
+    bh_p150b_civ2:
+      timeout: 55
+  owner_id: U09UC143684 # Nemanja Divnic
