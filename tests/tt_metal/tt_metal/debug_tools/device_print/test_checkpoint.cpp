@@ -121,14 +121,10 @@ static void run_basic_checkpoint(
     cq.enqueue_write_shards(s.input_dram, {distributed::ShardDataTransfer{s.zero}.host_data(input.data())}, false);
     fixture->RunProgram(mesh_device, s.workload);
 
-    std::vector<uint32_t> output;
-    {
-        auto* shard = s.output_dram->get_device_buffer(s.zero);
-        output.resize(
-            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(output)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{s.zero}.host_data(output.data())}, s.output_dram, true);
-    };
+    auto* shard = s.output_dram->get_device_buffer(s.zero);
+    std::vector<uint32_t> output(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{s.zero}.host_data(output.data())}, s.output_dram, true);
     EXPECT_EQ(input, output);
     EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, {"=== CKPT basic RISC* CBs ===", "CB0 sz=*"}));
 }
@@ -181,14 +177,10 @@ static void run_checkpoint_loop(
     cq.enqueue_write_shards(s.input_dram, {distributed::ShardDataTransfer{s.zero}.host_data(input.data())}, false);
     fixture->RunProgram(mesh_device, s.workload);
 
-    std::vector<uint32_t> output;
-    {
-        auto* shard = s.output_dram->get_device_buffer(s.zero);
-        output.resize(
-            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(output)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{s.zero}.host_data(output.data())}, s.output_dram, true);
-    };
+    auto* shard = s.output_dram->get_device_buffer(s.zero);
+    std::vector<uint32_t> output(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{s.zero}.host_data(output.data())}, s.output_dram, true);
     EXPECT_EQ(input, output);
     EXPECT_TRUE(FileContainsAllStrings(
         fixture->dprint_file_name, {"=== CKPT loop_iter RISC* CBs ===", "=== CKPT dump_dest dest regs ==="}));
@@ -292,19 +284,14 @@ static void run_global_checkpoint(
     cq.enqueue_write_shards(in1, {distributed::ShardDataTransfer{zero}.host_data(data1.data())}, false);
     fixture->RunProgram(mesh_device, workload);
 
-    std::vector<uint32_t> o0, o1;
-    {
-        auto* shard = out0->get_device_buffer(zero);
-        o0.resize(shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(o0)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero}.host_data(o0.data())}, out0, true);
-    };
-    {
-        auto* shard = out1->get_device_buffer(zero);
-        o1.resize(shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(o1)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero}.host_data(o1.data())}, out1, true);
-    };
+    auto* shard0 = out0->get_device_buffer(zero);
+    std::vector<uint32_t> o0(shard0->page_size() * shard0->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{zero}.host_data(o0.data())}, out0, true);
+    auto* shard1 = out1->get_device_buffer(zero);
+    std::vector<uint32_t> o1(shard1->page_size() * shard1->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{zero}.host_data(o1.data())}, out1, true);
     EXPECT_EQ(data0, o0);
     EXPECT_EQ(data1, o1);
     EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, {"=== CKPT global_sync RISC* CBs ===", "CB0 sz=*"}));
@@ -361,14 +348,10 @@ static void run_dump_cb(DevicePrintFixture* fixture, const std::shared_ptr<distr
     cq.enqueue_write_shards(s.input_dram, {distributed::ShardDataTransfer{s.zero}.host_data(input.data())}, false);
     fixture->RunProgram(mesh_device, s.workload);
 
-    std::vector<uint32_t> output;
-    {
-        auto* shard = s.output_dram->get_device_buffer(s.zero);
-        output.resize(
-            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(output)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{s.zero}.host_data(output.data())}, s.output_dram, true);
-    };
+    auto* shard = s.output_dram->get_device_buffer(s.zero);
+    std::vector<uint32_t> output(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{s.zero}.host_data(output.data())}, s.output_dram, true);
     EXPECT_EQ(input, output);
     EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, {"CB0 sz=*", "[0]*"}));
 }
@@ -423,14 +406,10 @@ static void run_dump_l1(DevicePrintFixture* fixture, const std::shared_ptr<distr
     cq.enqueue_write_shards(s.input_dram, {distributed::ShardDataTransfer{s.zero}.host_data(input.data())}, false);
     fixture->RunProgram(mesh_device, s.workload);
 
-    std::vector<uint32_t> output;
-    {
-        auto* shard = s.output_dram->get_device_buffer(s.zero);
-        output.resize(
-            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(output)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{s.zero}.host_data(output.data())}, s.output_dram, true);
-    };
+    auto* shard = s.output_dram->get_device_buffer(s.zero);
+    std::vector<uint32_t> output(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{s.zero}.host_data(output.data())}, s.output_dram, true);
     EXPECT_EQ(input, output);
     EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, {"CB0 sz=*", "L1[*"}));
 }
@@ -485,14 +464,10 @@ static void run_dump_typed(DevicePrintFixture* fixture, const std::shared_ptr<di
     cq.enqueue_write_shards(s.input_dram, {distributed::ShardDataTransfer{s.zero}.host_data(input.data())}, false);
     fixture->RunProgram(mesh_device, s.workload);
 
-    std::vector<uint32_t> output;
-    {
-        auto* shard = s.output_dram->get_device_buffer(s.zero);
-        output.resize(
-            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(output)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{s.zero}.host_data(output.data())}, s.output_dram, true);
-    };
+    auto* shard = s.output_dram->get_device_buffer(s.zero);
+    std::vector<uint32_t> output(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{s.zero}.host_data(output.data())}, s.output_dram, true);
     EXPECT_EQ(input, output);
     EXPECT_TRUE(FileContainsAllStrings(fixture->dprint_file_name, {"CB0 tile 0 (typed):*"}));
 }

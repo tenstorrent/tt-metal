@@ -92,13 +92,11 @@ void PerformDeviceWork(
     distributed::as_mesh_command_queue_base(mesh_cq).enqueue_write_mesh_buffer(mesh_buffer, write_data.data(), false);
 
     std::vector<uint32_t> read_data;
-    if ((mesh_buffer)->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED) {
-        (read_data).resize(
-            (mesh_buffer)->global_shard_spec().global_size /
-            sizeof(typename std::decay_t<decltype(read_data)>::value_type));
-    } else {
-        (read_data).resize((mesh_buffer)->size() / sizeof(typename std::decay_t<decltype(read_data)>::value_type));
-    }
+    read_data.resize(
+        (mesh_buffer->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED)
+            ? mesh_buffer->global_shard_spec().global_size /
+                  sizeof(typename std::decay_t<decltype(read_data)>::value_type)
+            : mesh_buffer->size() / sizeof(typename std::decay_t<decltype(read_data)>::value_type));
     distributed::as_mesh_command_queue_base(mesh_cq).enqueue_read_mesh_buffer((read_data).data(), mesh_buffer, true);
 
     if (read_data != write_data) {
@@ -470,13 +468,11 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(buffer, write_data.data(), true);
 
         std::vector<uint32_t> read_data;
-        if ((buffer)->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED) {
-            (read_data).resize(
-                (buffer)->global_shard_spec().global_size /
-                sizeof(typename std::decay_t<decltype(read_data)>::value_type));
-        } else {
-            (read_data).resize((buffer)->size() / sizeof(typename std::decay_t<decltype(read_data)>::value_type));
-        }
+        read_data.resize(
+            (buffer->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED)
+                ? buffer->global_shard_spec().global_size /
+                      sizeof(typename std::decay_t<decltype(read_data)>::value_type)
+                : buffer->size() / sizeof(typename std::decay_t<decltype(read_data)>::value_type));
         distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((read_data).data(), buffer, true);
 
         auto program = CreateProgram();

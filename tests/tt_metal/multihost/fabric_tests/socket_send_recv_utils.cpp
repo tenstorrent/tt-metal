@@ -253,21 +253,17 @@ bool test_socket_send_recv(
             const auto& core_to_core_id =
                 recv_data_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
             for (const auto& connection : socket.get_config().socket_connection_config) {
-                std::vector<uint32_t> recv_data_readback;
                 if (mesh_device_->is_local(connection.receiver_core.device_coord)) {
                     // Only read back data on devices owned by this host
-                    {
-                        auto* shard = recv_data_buffer->get_device_buffer(connection.receiver_core.device_coord);
-                        recv_data_readback.resize(
-                            shard->page_size() * shard->num_pages() /
-                            sizeof(typename std::decay_t<decltype(recv_data_readback)>::value_type));
-                        as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                            .enqueue_read_shards(
-                                {ShardDataTransfer{connection.receiver_core.device_coord}.host_data(
-                                    recv_data_readback.data())},
-                                recv_data_buffer,
-                                true);
-                    };
+                    auto* shard = recv_data_buffer->get_device_buffer(connection.receiver_core.device_coord);
+                    std::vector<uint32_t> recv_data_readback(
+                        shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+                    as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+                        .enqueue_read_shards(
+                            {ShardDataTransfer{connection.receiver_core.device_coord}.host_data(
+                                recv_data_readback.data())},
+                            recv_data_buffer,
+                            true);
                     uint32_t idx = core_to_core_id.at(connection.receiver_core.core_coord);
                     std::vector<uint32_t> recv_data_readback_per_core(
                         recv_data_readback.begin() + idx * data_size / sizeof(uint32_t),

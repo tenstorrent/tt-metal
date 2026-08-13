@@ -265,31 +265,10 @@ int main() {
     MeshEvent trace_event = workload_cq.enqueue_record_event();
     data_movement_cq.enqueue_wait_for_event(trace_event);
     // =========== Step 9: Read Outputs on MeshCQ1 ===========
-    std::vector<bfloat16> add_dst_vec = {};
-    std::vector<bfloat16> mul_sub_dst_vec = {};
-    add_dst_vec.resize(add_output_buf->size() / sizeof(bfloat16));
-    if ((add_output_buf)->global_layout() == MeshBufferLayout::SHARDED) {
-        (add_dst_vec)
-            .resize(
-                (add_output_buf)->global_shard_spec().global_size /
-                sizeof(typename std::decay_t<decltype(add_dst_vec)>::value_type));
-    } else {
-        (add_dst_vec)
-            .resize((add_output_buf)->size() / sizeof(typename std::decay_t<decltype(add_dst_vec)>::value_type));
-    }
+    std::vector<bfloat16> add_dst_vec(add_output_buf->size() / sizeof(bfloat16));
+    std::vector<bfloat16> mul_sub_dst_vec(mul_sub_output_buf->size() / sizeof(bfloat16));
     tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
         .enqueue_read_mesh_buffer((add_dst_vec).data(), add_output_buf, true);
-    mul_sub_dst_vec.resize(mul_sub_output_buf->size() / sizeof(bfloat16));
-    if ((mul_sub_output_buf)->global_layout() == MeshBufferLayout::SHARDED) {
-        (mul_sub_dst_vec)
-            .resize(
-                (mul_sub_output_buf)->global_shard_spec().global_size /
-                sizeof(typename std::decay_t<decltype(mul_sub_dst_vec)>::value_type));
-    } else {
-        (mul_sub_dst_vec)
-            .resize(
-                (mul_sub_output_buf)->size() / sizeof(typename std::decay_t<decltype(mul_sub_dst_vec)>::value_type));
-    }
     tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
         .enqueue_read_mesh_buffer((mul_sub_dst_vec).data(), mul_sub_output_buf, true);
 

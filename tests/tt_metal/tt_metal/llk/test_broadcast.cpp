@@ -476,15 +476,10 @@ void run_single_core_broadcast(
     distributed::EnqueueMeshWorkload(cq, workload, is_quasar);
     distributed::Finish(cq);
 
-    std::vector<uint32_t> dest_buffer_data;
-    {
-        auto* shard = dst_dram_buffer->get_device_buffer(zero_coord);
-        dest_buffer_data.resize(
-            shard->page_size() * shard->num_pages() /
-            sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, dst_dram_buffer, true);
-    };
+    auto* shard = dst_dram_buffer->get_device_buffer(zero_coord);
+    std::vector<uint32_t> dest_buffer_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, dst_dram_buffer, true);
     auto dest_buffer_data_untilized = ::unit_tests::compute::gold_standard_untilize(dest_buffer_data, config);
 
     bool result = is_close_packed_vectors<bfloat16, uint32_t>(

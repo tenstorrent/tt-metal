@@ -115,7 +115,8 @@ int main(int argc, char** argv) {
                 bw);
         }
 
-        std::vector<uint32_t> result_vec;
+        auto* shard = buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+        std::vector<uint32_t> result_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
         {
             auto begin = std::chrono::steady_clock::now();
             auto end = std::chrono::steady_clock::now();
@@ -123,17 +124,10 @@ int main(int argc, char** argv) {
 
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
-                {
-                    auto* shard = buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
-                    result_vec.resize(
-                        shard->page_size() * shard->num_pages() /
-                        sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-                    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-                        {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(
-                            result_vec.data())},
-                        buffer,
-                        true);
-                };
+                distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
+                    buffer,
+                    true);
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;
             }

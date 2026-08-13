@@ -130,17 +130,12 @@ int main(int argc, char** /*argv*/) {
             /*
              * Validation & Teardown
              */
-            std::vector<uint32_t> result_vec;
-            {
-                auto* shard = output_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
-                result_vec.resize(
-                    shard->page_size() * shard->num_pages() /
-                    sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-                distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
-                    output_dram_buffer,
-                    true);
-            };
+            auto* shard = output_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+            std::vector<uint32_t> result_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+            distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
+                output_dram_buffer,
+                true);
 
             pass &= input_vec == result_vec;
 

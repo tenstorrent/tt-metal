@@ -253,16 +253,12 @@ void create_and_run_row_pipeline(
     log_info(LogTest, "Kernels done.");
 
     log_info(LogTest, "Reading results from device...");
-    std::vector<uint32_t> result_vec;
-    {
-        auto* shard = dst_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
-        result_vec.resize(
-            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
-            dst_buffer,
-            true);
-    };
+    auto* shard = dst_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+    std::vector<uint32_t> result_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
+        dst_buffer,
+        true);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown

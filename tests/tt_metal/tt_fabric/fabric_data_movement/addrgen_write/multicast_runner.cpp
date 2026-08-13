@@ -425,14 +425,10 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
 
     // Read back and verify
     for (const auto& mc : dst_coords) {
-        std::vector<uint32_t> rx(n_words, 0u);
-        {
-            auto* shard = dst_buf->get_device_buffer(mc);
-            rx.resize(
-                shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(rx)>::value_type));
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mcq).enqueue_read_shards(
-                {Dist::ShardDataTransfer{mc}.host_data(rx.data())}, dst_buf, /*blocking=*/true);
-        };
+        auto* shard = dst_buf->get_device_buffer(mc);
+        std::vector<uint32_t> rx(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+        tt::tt_metal::distributed::as_mesh_command_queue_base(mcq).enqueue_read_shards(
+            {Dist::ShardDataTransfer{mc}.host_data(rx.data())}, dst_buf, /*blocking=*/true);
         verify_payload_words(rx, tx);
     }
 }

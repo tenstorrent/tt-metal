@@ -261,14 +261,10 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
         Finish(mesh_device->mesh_command_queue());
 
         for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {
-            std::vector<uint32_t> dst;
-            {
-                auto* shard = fd_buf->get_device_buffer(coord);
-                dst.resize(
-                    shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
-                tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
-                    .enqueue_read_shards({ShardDataTransfer{coord}.host_data(dst.data())}, fd_buf, true);
-            };
+            auto* shard = fd_buf->get_device_buffer(coord);
+            std::vector<uint32_t> dst(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                .enqueue_read_shards({ShardDataTransfer{coord}.host_data(dst.data())}, fd_buf, true);
             EXPECT_EQ(dst, fd_src_vec) << "Cycle " << cycle << ": sharded L1 readback failed in FD mode at " << coord;
         }
         assert_counter_incrementing(read_counter, "FD steady-state (cycle " + std::to_string(cycle) + ")");

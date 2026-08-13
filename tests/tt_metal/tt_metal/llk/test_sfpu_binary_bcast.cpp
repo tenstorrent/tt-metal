@@ -296,16 +296,10 @@ bool run_sfpu_binary_bcast(const std::shared_ptr<distributed::MeshDevice>& mesh_
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
-    std::vector<uint32_t> device_tiled;
-    {
-        auto* shard = dst_buffer->get_device_buffer(zero_coord);
-        device_tiled.resize(
-            shard->page_size() * shard->num_pages() /
-            sizeof(typename std::decay_t<decltype(device_tiled)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero_coord}.host_data(device_tiled.data())}, dst_buffer, true);
-    };
-
+    auto* shard_read = dst_buffer->get_device_buffer(zero_coord);
+    std::vector<uint32_t> device_tiled(shard_read->page_size() * shard_read->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{zero_coord}.host_data(device_tiled.data())}, dst_buffer, true);
     if (device_tiled.size() != golden_tiled.size()) {
         log_error(tt::LogTest, "Size mismatch: device={} golden={}", device_tiled.size(), golden_tiled.size());
         return false;

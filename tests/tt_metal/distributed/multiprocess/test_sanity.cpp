@@ -199,13 +199,11 @@ TEST_F(BigMeshDualRankTest2x4, SimpleShardedBufferTest) {
     tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
         .enqueue_write_mesh_buffer(mesh_buffer, src_vec.data(), false);
     std::vector<uint32_t> dst_vec;
-    if ((mesh_buffer)->global_layout() == MeshBufferLayout::SHARDED) {
-        (dst_vec).resize(
-            (mesh_buffer)->global_shard_spec().global_size /
-            sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
-    } else {
-        (dst_vec).resize((mesh_buffer)->size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
-    }
+    dst_vec.resize(
+        (mesh_buffer->global_layout() == MeshBufferLayout::SHARDED)
+            ? mesh_buffer->global_shard_spec().global_size /
+                  sizeof(typename std::decay_t<decltype(dst_vec)>::value_type)
+            : mesh_buffer->size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
     tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
         .enqueue_read_mesh_buffer((dst_vec).data(), mesh_buffer, true);
 

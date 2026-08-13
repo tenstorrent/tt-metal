@@ -392,17 +392,12 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
 
     if (cq_read) {
         log_info(tt::LogTest, "Reading with: FDMeshCommandQueue ReadShard");
-        {
-            auto* shard = mesh_buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate{0, 0});
-            dst.resize(
-                shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                .enqueue_read_shards(
-                    {tt::tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate{0, 0}}
-                         .host_data(dst.data())},
-                    mesh_buffer,
-                    /*blocking=*/false);
-        };
+        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+            .enqueue_read_shards(
+                {tt::tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate{0, 0}}
+                     .host_data(dst.data())},
+                mesh_buffer,
+                /*blocking=*/false);
         Finish(mesh_device_->mesh_command_queue());
     } else {
         log_info(tt::LogTest, "Reading with: ReadFromBuffer (equivalent to SDMeshCommandQueue enqueue_read_shards)");

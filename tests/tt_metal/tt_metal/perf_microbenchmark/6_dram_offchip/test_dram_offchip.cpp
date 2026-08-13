@@ -504,20 +504,15 @@ bool validation(
             input_offset += num_tiles_per_core;
         }
     } else {
-        std::vector<uint32_t> result_vec;
         log_info(LogTest, "ReadShard API may take a long time if the input size is large");
-        {
-            auto* shard = input_buffer->get_device_buffer(tt_metal::distributed::MeshCoordinate(0, 0));
-            result_vec.resize(
-                shard->page_size() * shard->num_pages() /
-                sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-            tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue())
-                .enqueue_read_shards(
-                    {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
-                        result_vec.data())},
-                    input_buffer,
-                    true);
-        };
+        auto* shard = input_buffer->get_device_buffer(tt_metal::distributed::MeshCoordinate(0, 0));
+        std::vector<uint32_t> result_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+        tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue())
+            .enqueue_read_shards(
+                {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
+                    result_vec.data())},
+                input_buffer,
+                true);
         log_info(LogTest, "ReadShard API done");
 
         for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {

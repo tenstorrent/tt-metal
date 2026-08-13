@@ -145,19 +145,14 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
         auto src_fabric_node_id =
             control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_devices()[0]->id());
 
-        std::vector<uint32_t> result_data;
-        {
-            auto* shard = result_buffers[src_idx]->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate({0, 0}));
-            result_data.resize(
-                shard->page_size() * shard->num_pages() /
-                sizeof(typename std::decay_t<decltype(result_data)>::value_type));
-            tt::tt_metal::distributed::as_mesh_command_queue_base(src_device->mesh_command_queue())
-                .enqueue_read_shards(
-                    {tt::tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate({0, 0})}
-                         .host_data(result_data.data())},
-                    result_buffers[src_idx],
-                    true);
-        };
+        auto* shard = result_buffers[src_idx]->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate({0, 0}));
+        std::vector<uint32_t> result_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+        tt::tt_metal::distributed::as_mesh_command_queue_base(src_device->mesh_command_queue())
+            .enqueue_read_shards(
+                {tt::tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate({0, 0})}
+                     .host_data(result_data.data())},
+                result_buffers[src_idx],
+                true);
         for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
             auto dst_fabric_node_id =
                 control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_devices()[0]->id());

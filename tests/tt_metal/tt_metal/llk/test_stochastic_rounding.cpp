@@ -181,17 +181,12 @@ StochasticRoundingResult run_stochastic_rounding(
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     distributed::Finish(cq);
 
-    std::vector<uint32_t> dest_buffer_data;
-    {
-        auto* shard = output_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
-        dest_buffer_data.resize(
-            shard->page_size() * shard->num_pages() /
-            sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dest_buffer_data.data())},
-            output_dram_buffer,
-            true);
-    };
+    auto* shard = output_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+    std::vector<uint32_t> dest_buffer_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dest_buffer_data.data())},
+        output_dram_buffer,
+        true);
 
     // Unpack BFloat16 results and count how many rounded up vs down
     auto output = unpack_vector<bfloat16, uint32_t>(dest_buffer_data);

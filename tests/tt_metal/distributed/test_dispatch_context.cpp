@@ -100,18 +100,13 @@ TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {
 
     for (std::size_t logical_x = 0; logical_x < mesh_buffer->device()->num_cols(); logical_x++) {
         for (std::size_t logical_y = 0; logical_y < mesh_buffer->device()->num_rows(); logical_y++) {
-            std::vector<uint32_t> dst_vec = {};
-            {
-                auto* shard = mesh_buffer->get_device_buffer(MeshCoordinate(logical_y, logical_x));
-                dst_vec.resize(
-                    shard->page_size() * shard->num_pages() /
-                    sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
-                tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                    .enqueue_read_shards(
-                        {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(dst_vec.data())},
-                        mesh_buffer,
-                        true);
-            };
+            auto* shard = mesh_buffer->get_device_buffer(MeshCoordinate(logical_y, logical_x));
+            std::vector<uint32_t> dst_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+                .enqueue_read_shards(
+                    {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(dst_vec.data())},
+                    mesh_buffer,
+                    true);
             EXPECT_EQ(dst_vec, src_vec);
         }
     }
@@ -227,14 +222,10 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         Finish(mesh_device_->mesh_command_queue());
 
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-            std::vector<uint32_t> dst;
-            {
-                auto* shard = fd_buf->get_device_buffer(coord);
-                dst.resize(
-                    shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
-                tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                    .enqueue_read_shards({ShardDataTransfer{coord}.host_data(dst.data())}, fd_buf, true);
-            };
+            auto* shard = fd_buf->get_device_buffer(coord);
+            std::vector<uint32_t> dst(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+                .enqueue_read_shards({ShardDataTransfer{coord}.host_data(dst.data())}, fd_buf, true);
             EXPECT_EQ(dst, fd_src_vec) << "Cycle " << cycle << ": sharded L1 readback failed in FD mode at " << coord;
         }
 
@@ -243,14 +234,10 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         // SD phase
         // Verify FD-written sharded buffer is still readable after FD->SD transition.
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-            std::vector<uint32_t> dst;
-            {
-                auto* shard = fd_buf->get_device_buffer(coord);
-                dst.resize(
-                    shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
-                tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                    .enqueue_read_shards({ShardDataTransfer{coord}.host_data(dst.data())}, fd_buf, true);
-            };
+            auto* shard = fd_buf->get_device_buffer(coord);
+            std::vector<uint32_t> dst(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+                .enqueue_read_shards({ShardDataTransfer{coord}.host_data(dst.data())}, fd_buf, true);
             EXPECT_EQ(dst, fd_src_vec) << "Cycle " << cycle << ": sharded L1 data mismatch after FD->SD transition at "
                                        << coord;
         }
@@ -265,14 +252,10 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         Finish(mesh_device_->mesh_command_queue());
 
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-            std::vector<uint32_t> dst;
-            {
-                auto* shard = sd_buf->get_device_buffer(coord);
-                dst.resize(
-                    shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
-                tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                    .enqueue_read_shards({ShardDataTransfer{coord}.host_data(dst.data())}, sd_buf, true);
-            };
+            auto* shard = sd_buf->get_device_buffer(coord);
+            std::vector<uint32_t> dst(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+                .enqueue_read_shards({ShardDataTransfer{coord}.host_data(dst.data())}, sd_buf, true);
             EXPECT_EQ(dst, sd_src_vec) << "Cycle " << cycle << ": SD interleaved L1 verification failed at " << coord;
         }
 
@@ -291,14 +274,10 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
 
         // Verify SD buffer is uncorrupted after running workloads.
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-            std::vector<uint32_t> dst;
-            {
-                auto* shard = sd_buf->get_device_buffer(coord);
-                dst.resize(
-                    shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
-                tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                    .enqueue_read_shards({ShardDataTransfer{coord}.host_data(dst.data())}, sd_buf, true);
-            };
+            auto* shard = sd_buf->get_device_buffer(coord);
+            std::vector<uint32_t> dst(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+                .enqueue_read_shards({ShardDataTransfer{coord}.host_data(dst.data())}, sd_buf, true);
             EXPECT_EQ(dst, sd_src_vec) << "Cycle " << cycle << ": SD buffer corrupted after running workloads at "
                                        << coord;
         }
@@ -319,16 +298,11 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
 
         for (std::size_t y = 0; y < mesh_device_->num_rows(); y++) {
             for (std::size_t x = 0; x < mesh_device_->num_cols(); x++) {
-                std::vector<uint32_t> dst;
-                {
-                    auto* shard = fd2_buf->get_device_buffer(MeshCoordinate(y, x));
-                    dst.resize(
-                        shard->page_size() * shard->num_pages() /
-                        sizeof(typename std::decay_t<decltype(dst)>::value_type));
-                    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                        .enqueue_read_shards(
-                            {ShardDataTransfer{MeshCoordinate(y, x)}.host_data(dst.data())}, fd2_buf, true);
-                };
+                auto* shard = fd2_buf->get_device_buffer(MeshCoordinate(y, x));
+                std::vector<uint32_t> dst(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+                tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+                    .enqueue_read_shards(
+                        {ShardDataTransfer{MeshCoordinate(y, x)}.host_data(dst.data())}, fd2_buf, true);
                 EXPECT_EQ(dst, fd2_src_vec)
                     << "Cycle " << cycle << ": DRAM readback failed in FD mode at (" << y << "," << x << ")";
             }

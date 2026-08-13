@@ -72,16 +72,12 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(
 
         distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(sticks_buffer, src_vec.data(), false);
 
-        vector<uint32_t> dst_vec;
-        {
-            auto* shard = sticks_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
-            dst_vec.resize(
-                shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
-            distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dst_vec.data())},
-                sticks_buffer,
-                true);
-        };
+        auto* shard = sticks_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+        std::vector<uint32_t> dst_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dst_vec.data())},
+            sticks_buffer,
+            true);
 
         pass &= (src_vec == dst_vec);
     } catch (const std::exception& e) {
@@ -215,17 +211,12 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(
         mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
         distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
 
-        std::vector<uint32_t> result_vec;
-        {
-            auto* shard = dst_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
-            result_vec.resize(
-                shard->page_size() * shard->num_pages() /
-                sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-            distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
-                dst_dram_buffer,
-                true);
-        };
+        auto* shard = dst_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+        std::vector<uint32_t> result_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
+            dst_dram_buffer,
+            true);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
@@ -368,17 +359,12 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(
         mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
         distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
 
-        std::vector<uint32_t> result_vec;
-        {
-            auto* shard = dst_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
-            result_vec.resize(
-                shard->page_size() * shard->num_pages() /
-                sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-            distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
-                dst_dram_buffer,
-                true);
-        };
+        auto* shard = dst_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+        std::vector<uint32_t> result_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
+            dst_dram_buffer,
+            true);
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
@@ -508,23 +494,18 @@ bool test_interleaved_l1_datacopy(
     // Now that kernels exist, set reader runtime args
     tt_metal::SetRuntimeArgs(program, unary_reader_kernel, core, {src->address(), 0, 0, num_pages});
 
-    std::vector<uint32_t> readback_buffer;
     tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dst->address(), 0, num_pages});
 
     distributed::MeshWorkload mesh_workload;
     mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
 
-    {
-        auto* shard = dst->get_device_buffer(distributed::MeshCoordinate(0, 0));
-        readback_buffer.resize(
-            shard->page_size() * shard->num_pages() /
-            sizeof(typename std::decay_t<decltype(readback_buffer)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(readback_buffer.data())},
-            dst,
-            true);
-    };
+    auto* shard = dst->get_device_buffer(distributed::MeshCoordinate(0, 0));
+    std::vector<uint32_t> readback_buffer(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(readback_buffer.data())},
+        dst,
+        true);
 
     pass = (host_buffer == readback_buffer);
 

@@ -627,15 +627,10 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     auto* dev = mesh_device->get_devices()[0];
     tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
 
-    std::vector<uint32_t> dest_buffer_data;
-    {
-        auto* shard = out_dram->get_device_buffer(zero_coord);
-        dest_buffer_data.resize(
-            shard->page_size() * shard->num_pages() /
-            sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, out_dram, false);
-    };
+    auto* shard = out_dram->get_device_buffer(zero_coord);
+    std::vector<uint32_t> dest_buffer_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, out_dram, false);
 
     auto device_unpacked = unpack_vector<bfloat16, uint32_t>(dest_buffer_data);
     auto golden_unpacked = unpack_vector<bfloat16, uint32_t>(packed_golden);
@@ -989,27 +984,19 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     auto* dev = mesh_device->get_devices()[0];
     tt_metal::detail::LaunchProgram(dev, program, /*wait_until_cores_done=*/true);
 
-    std::vector<uint32_t> out0_data;
-    std::vector<uint32_t> out1_data;
-    std::vector<uint32_t> out2_data;
-    {
-        auto* shard = out0_dram->get_device_buffer(zero_coord);
-        out0_data.resize(
-            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(out0_data)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero_coord}.host_data(out0_data.data())}, out0_dram, false);
-    };
+    auto* shard = out0_dram->get_device_buffer(zero_coord);
+    std::vector<uint32_t> out2_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    std::vector<uint32_t> out1_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    std::vector<uint32_t> out0_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{zero_coord}.host_data(out0_data.data())}, out0_dram, false);
     {
         auto* shard = out1_dram->get_device_buffer(zero_coord);
-        out1_data.resize(
-            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(out1_data)>::value_type));
         distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{zero_coord}.host_data(out1_data.data())}, out1_dram, false);
     };
     {
         auto* shard = out2_dram->get_device_buffer(zero_coord);
-        out2_data.resize(
-            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(out2_data)>::value_type));
         distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{zero_coord}.host_data(out2_data.data())}, out2_dram, false);
     };

@@ -198,27 +198,17 @@ TEST_F(GenericMeshDeviceFixture, PCIeHostReadBandwidthSweep) {
         cq.enqueue_write_shards(buffer, {distributed::ShardDataTransfer{device_coord}.host_data(src.data())}, false);
         distributed::Finish(cq);
 
-        vector<uint32_t> dst;
-
         // Warmup
-        {
-            auto* shard = buffer->get_device_buffer(device_coord);
-            dst.resize(
-                shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
-            distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-                {distributed::ShardDataTransfer{device_coord}.host_data(dst.data())}, buffer, true);
-        };
+        auto* shard = buffer->get_device_buffer(device_coord);
+        std::vector<uint32_t> dst(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+            {distributed::ShardDataTransfer{device_coord}.host_data(dst.data())}, buffer, true);
 
         // Timed
         auto start = chrono::high_resolution_clock::now();
         for (uint32_t i = 0; i < num_iterations; i++) {
-            {
-                auto* shard = buffer->get_device_buffer(device_coord);
-                dst.resize(
-                    shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
-                distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-                    {distributed::ShardDataTransfer{device_coord}.host_data(dst.data())}, buffer, true);
-            };
+            distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+                {distributed::ShardDataTransfer{device_coord}.host_data(dst.data())}, buffer, true);
         }
         auto end = chrono::high_resolution_clock::now();
 

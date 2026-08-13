@@ -81,16 +81,10 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
                     {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(page.data())},
                     true);
             } else if (data_movement_mode == DataMovementMode::READ) {
-                {
-                    auto* shard = buffers.back()->get_device_buffer(distributed::MeshCoordinate(0, 0));
-                    page.resize(
-                        shard->page_size() * shard->num_pages() /
-                        sizeof(typename std::decay_t<decltype(page)>::value_type));
-                    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-                        {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(page.data())},
-                        buffers.back(),
-                        true);
-                };
+                distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(page.data())},
+                    buffers.back(),
+                    true);
             }
         }
         distributed::Finish(cq);

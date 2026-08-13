@@ -205,12 +205,10 @@ int main(int argc, char** argv) {
     // We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1
     //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
     c_data.resize(c->size() / sizeof(uint32_t));
-    if ((c)->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED) {
-        (c_data).resize(
-            (c)->global_shard_spec().global_size / sizeof(typename std::decay_t<decltype(c_data)>::value_type));
-    } else {
-        (c_data).resize((c)->size() / sizeof(typename std::decay_t<decltype(c_data)>::value_type));
-    }
+    c_data.resize(
+        (c->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED)
+            ? c->global_shard_spec().global_size / sizeof(typename std::decay_t<decltype(c_data)>::value_type)
+            : c->size() / sizeof(typename std::decay_t<decltype(c_data)>::value_type));
     distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((c_data).data(), c, true);
 
     // Print partial results so we can see the output is correct (plus or minus some error due to BFP16 precision)

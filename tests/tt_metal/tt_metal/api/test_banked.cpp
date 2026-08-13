@@ -190,26 +190,14 @@ bool reader_cb_writer(
     SetRuntimeArgs(program_, writer_kernel, cfg.logical_core, writer_runtime_args);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    std::vector<uint32_t> reread_input_packed;
-    {
-        auto* shard = input_buffer->get_device_buffer(zero_coord);
-        reread_input_packed.resize(
-            shard->page_size() * shard->num_pages() /
-            sizeof(typename std::decay_t<decltype(reread_input_packed)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero_coord}.host_data(reread_input_packed.data())}, input_buffer, false);
-    };
-
-    std::vector<uint32_t> output_packed;
-    {
-        auto* shard = output_buffer->get_device_buffer(zero_coord);
-        output_packed.resize(
-            shard->page_size() * shard->num_pages() /
-            sizeof(typename std::decay_t<decltype(output_packed)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero_coord}.host_data(output_packed.data())}, output_buffer, false);
-    };
-
+    auto* input_shard = input_buffer->get_device_buffer(zero_coord);
+    std::vector<uint32_t> reread_input_packed(input_shard->page_size() * input_shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{zero_coord}.host_data(reread_input_packed.data())}, input_buffer, false);
+    auto* output_shard = output_buffer->get_device_buffer(zero_coord);
+    std::vector<uint32_t> output_packed(output_shard->page_size() * output_shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{zero_coord}.host_data(output_packed.data())}, output_buffer, false);
     pass &= (output_packed == input_packed);
 
     return pass;
@@ -324,15 +312,10 @@ bool reader_datacopy_writer(const std::shared_ptr<distributed::MeshDevice>& mesh
             (uint32_t)cfg.num_tiles,
         });
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    std::vector<uint32_t> dest_buffer_data;
-    {
-        auto* shard = output_buffer->get_device_buffer(zero_coord);
-        dest_buffer_data.resize(
-            shard->page_size() * shard->num_pages() /
-            sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, output_buffer, false);
-    };
+    auto* shard_read = output_buffer->get_device_buffer(zero_coord);
+    std::vector<uint32_t> dest_buffer_data(shard_read->page_size() * shard_read->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, output_buffer, false);
     pass &= input_packed == dest_buffer_data;
 
     return pass;

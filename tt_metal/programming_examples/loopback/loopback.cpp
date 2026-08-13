@@ -121,8 +121,7 @@ int main() {
         // NOTE: The above is equivalent to a blocking enqueue of the workload.
 
         // Read the result back. Use blocking=true to wait for completion.
-        std::vector<bfloat16> result_vec;
-        result_vec.resize(output_dram_buffer->size() / sizeof(bfloat16));
+        std::vector<bfloat16> result_vec(output_dram_buffer->size() / sizeof(bfloat16));
         distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer(
             (result_vec).data(), output_dram_buffer, true);
 

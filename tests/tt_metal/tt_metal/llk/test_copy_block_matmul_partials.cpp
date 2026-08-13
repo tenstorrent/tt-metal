@@ -258,14 +258,10 @@ void run_single_core_copy_block_matmul_partials(
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
-    std::vector<uint32_t> result_vec;
-    {
-        auto* shard = dst_dram_buffer->get_device_buffer(zero_coord);
-        result_vec.resize(
-            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero_coord}.host_data(result_vec.data())}, dst_dram_buffer, true);
-    };
+    auto* shard = dst_dram_buffer->get_device_buffer(zero_coord);
+    std::vector<uint32_t> result_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{zero_coord}.host_data(result_vec.data())}, dst_dram_buffer, true);
 
     EXPECT_EQ(src_vec.size(), result_vec.size());
     EXPECT_EQ(src_vec, result_vec);

@@ -252,15 +252,10 @@ bool run_sfpu_all_same_buffer(distributed::MeshCommandQueue& cq, const SfpuConfi
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     distributed::Finish(cq);
 
-    std::vector<uint32_t> dest_buffer_data;
-    {
-        auto* shard = output_dram_buffer->get_device_buffer(local_coord);
-        dest_buffer_data.resize(
-            shard->page_size() * shard->num_pages() /
-            sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{local_coord}.host_data(dest_buffer_data.data())}, output_dram_buffer, true);
-    };
+    auto* shard = output_dram_buffer->get_device_buffer(local_coord);
+    std::vector<uint32_t> dest_buffer_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{local_coord}.host_data(dest_buffer_data.data())}, output_dram_buffer, true);
 
     return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
 }

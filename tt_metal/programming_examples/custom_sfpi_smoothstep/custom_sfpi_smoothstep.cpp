@@ -143,8 +143,7 @@ int main(int /*argc*/, char** /*argv*/) {
         // NOTE: The above is equivalent to a blocking enqueue of the workload.
 
         // Read the output buffer and compare it with the expected output.
-        std::vector<bfloat16> result_vec;
-        result_vec.resize(dst_dram_buffer->size() / sizeof(bfloat16));
+        std::vector<bfloat16> result_vec(dst_dram_buffer->size() / sizeof(bfloat16));
         distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((result_vec).data(), dst_dram_buffer, true);
 
         constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16

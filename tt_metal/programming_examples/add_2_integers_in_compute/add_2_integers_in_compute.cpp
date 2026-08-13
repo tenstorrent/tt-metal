@@ -153,17 +153,7 @@ int main() {
     distributed::Finish(cq);
 
     // Read the destination MeshBuffer back to host (blocking).
-    std::vector<bfloat16> result_vec;
-    result_vec.resize(dst_dram_buffer->size() / sizeof(bfloat16));
-    if ((dst_dram_buffer)->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED) {
-        (result_vec)
-            .resize(
-                (dst_dram_buffer)->global_shard_spec().global_size /
-                sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-    } else {
-        (result_vec)
-            .resize((dst_dram_buffer)->size() / sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-    }
+    std::vector<bfloat16> result_vec(dst_dram_buffer->size() / sizeof(bfloat16));
     distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((result_vec).data(), dst_dram_buffer, true);
 
     // compare the results with the expected values.

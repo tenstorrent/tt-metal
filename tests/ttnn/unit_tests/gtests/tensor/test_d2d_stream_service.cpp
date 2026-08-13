@@ -282,16 +282,10 @@ void verify_transfer(
     while (std::chrono::steady_clock::now() < deadline) {
         all_match = true;
         for (const auto& coord : coords) {
-            readback.clear();
-            {
-                auto* shard = receiver_mesh_buffer->get_device_buffer(coord);
-                readback.resize(
-                    shard->page_size() * shard->num_pages() /
-                    sizeof(typename std::decay_t<decltype(readback)>::value_type));
-                tt::tt_metal::distributed::as_mesh_command_queue_base(receiver_mesh->mesh_command_queue())
-                    .enqueue_read_shards(
-                        {ShardDataTransfer{coord}.host_data(readback.data())}, receiver_mesh_buffer, true);
-            };
+            auto* shard = receiver_mesh_buffer->get_device_buffer(coord);
+            readback = std::vector<uint32_t>(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+            tt::tt_metal::distributed::as_mesh_command_queue_base(receiver_mesh->mesh_command_queue())
+                .enqueue_read_shards({ShardDataTransfer{coord}.host_data(readback.data())}, receiver_mesh_buffer, true);
             if (readback != iota) {
                 all_match = false;
                 break;
@@ -467,15 +461,10 @@ void expect_receiver_backing_iota(
     const std::vector<uint32_t> expected = make_iota_u32(num_u32, base);
     std::vector<uint32_t> readback;
     for (const auto& coord : receiver->get_backing_tensor().tensor_topology().mesh_coords()) {
-        readback.clear();
-        {
-            auto* shard = mesh_buffer->get_device_buffer(coord);
-            readback.resize(
-                shard->page_size() * shard->num_pages() /
-                sizeof(typename std::decay_t<decltype(readback)>::value_type));
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh->mesh_command_queue())
-                .enqueue_read_shards({ShardDataTransfer{coord}.host_data(readback.data())}, mesh_buffer, true);
-        };
+        auto* shard = mesh_buffer->get_device_buffer(coord);
+        readback = std::vector<uint32_t>(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh->mesh_command_queue())
+            .enqueue_read_shards({ShardDataTransfer{coord}.host_data(readback.data())}, mesh_buffer, true);
         EXPECT_EQ(readback, expected) << "receiver backing mismatch at " << coord << " (iota base " << base << ")";
     }
 }
@@ -827,15 +816,10 @@ void expect_output_tensor_iota(
     const std::vector<uint32_t> expected = make_iota_u32(num_u32, base);
     std::vector<uint32_t> readback;
     for (const auto& coord : output_tensor.tensor_topology().mesh_coords()) {
-        readback.clear();
-        {
-            auto* shard = mesh_buffer->get_device_buffer(coord);
-            readback.resize(
-                shard->page_size() * shard->num_pages() /
-                sizeof(typename std::decay_t<decltype(readback)>::value_type));
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh->mesh_command_queue())
-                .enqueue_read_shards({ShardDataTransfer{coord}.host_data(readback.data())}, mesh_buffer, true);
-        };
+        auto* shard = mesh_buffer->get_device_buffer(coord);
+        readback = std::vector<uint32_t>(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh->mesh_command_queue())
+            .enqueue_read_shards({ShardDataTransfer{coord}.host_data(readback.data())}, mesh_buffer, true);
         EXPECT_EQ(readback, expected) << "output tensor mismatch at " << coord << " (iota base " << base << ")";
     }
 }

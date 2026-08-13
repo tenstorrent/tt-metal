@@ -300,20 +300,8 @@ int main(int /*argc*/, char** argv) {
         this_thread::sleep_for(chrono::milliseconds(200));
 
         ////////// TILE MULTICAST VERIFICATION //////////
-        std::vector<bfloat16> received_tiles(num_dests * TILE_HW);
-
-        // We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1
-        //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
-        if ((output_dram_buffer)->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED) {
-            (received_tiles)
-                .resize(
-                    (output_dram_buffer)->global_shard_spec().global_size /
-                    sizeof(typename std::decay_t<decltype(received_tiles)>::value_type));
-        } else {
-            (received_tiles)
-                .resize(
-                    (output_dram_buffer)->size() / sizeof(typename std::decay_t<decltype(received_tiles)>::value_type));
-        }
+        // Read from shard on Device Coordinate 0,0 (unit mesh). On a 2D mesh this can target a specific device.
+        std::vector<bfloat16> received_tiles(output_dram_buffer->size() / sizeof(bfloat16));
         distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer(
             (received_tiles).data(), output_dram_buffer, true);
         bool verbose_verify =

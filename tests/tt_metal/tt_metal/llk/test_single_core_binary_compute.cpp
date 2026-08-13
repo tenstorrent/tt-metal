@@ -221,15 +221,10 @@ static bool read_and_validate_binary_result(
     const std::shared_ptr<distributed::MeshBuffer>& output_dram_buffer,
     const distributed::MeshCoordinate& zero_coord,
     const BinaryStimulus& stimulus) {
-    std::vector<uint32_t> dest_buffer_data;
-    {
-        auto* shard = output_dram_buffer->get_device_buffer(zero_coord);
-        dest_buffer_data.resize(
-            shard->page_size() * shard->num_pages() /
-            sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, output_dram_buffer, false);
-    };
+    auto* shard = output_dram_buffer->get_device_buffer(zero_coord);
+    std::vector<uint32_t> dest_buffer_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, output_dram_buffer, false);
 
     return is_close_packed_vectors<bfloat16, uint32_t>(
         dest_buffer_data, stimulus.packed_golden, [&](const bfloat16& a, const bfloat16& b) {

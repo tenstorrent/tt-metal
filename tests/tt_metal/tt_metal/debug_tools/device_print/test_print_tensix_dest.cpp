@@ -490,14 +490,10 @@ static bool reader_datacopy_writer(
     fixture->RunProgram(mesh_device, workload);
 
     // Read output data from output DRAM buffer
-    std::vector<uint32_t> output_data;
-    {
-        auto* shard = output_dram_buffer->get_device_buffer(zero_coord);
-        output_data.resize(
-            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(output_data)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero_coord}.host_data(output_data.data())}, output_dram_buffer, true);
-    };
+    auto* shard = output_dram_buffer->get_device_buffer(zero_coord);
+    std::vector<uint32_t> output_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{zero_coord}.host_data(output_data.data())}, output_dram_buffer, true);
 
     auto golden_output = generate_golden_output(input_data, config.data_format);
     // Check the print log against golden output.

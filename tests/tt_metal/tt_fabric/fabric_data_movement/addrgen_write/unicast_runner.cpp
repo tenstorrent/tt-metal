@@ -359,12 +359,8 @@ Notes:
 
     // Read back (single shard) and verify
     std::vector<uint32_t> rx(n_words, 0u);
-    {
-        auto* shard = dst_buf->get_device_buffer(dst_coord);
-        rx.resize(shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(rx)>::value_type));
-        tt::tt_metal::distributed::as_mesh_command_queue_base(mcq).enqueue_read_shards(
-            {Dist::ShardDataTransfer{dst_coord}.host_data(rx.data())}, dst_buf, /*blocking=*/true);
-    };
+    tt::tt_metal::distributed::as_mesh_command_queue_base(mcq).enqueue_read_shards(
+        {Dist::ShardDataTransfer{dst_coord}.host_data(rx.data())}, dst_buf, /*blocking=*/true);
     verify_payload_words(rx, tx);
 }
 

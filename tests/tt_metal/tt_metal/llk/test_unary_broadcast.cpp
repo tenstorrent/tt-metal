@@ -555,16 +555,10 @@ void run_single_core_unary_broadcast(
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     distributed::Finish(cq);
 
-    std::vector<uint32_t> dest_buffer_data;
-    {
-        auto* shard = dst_dram_buffer->get_device_buffer(zero_coord);
-        dest_buffer_data.resize(
-            shard->page_size() * shard->num_pages() /
-            sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, dst_dram_buffer, true);
-    };
-
+    auto* shard = dst_dram_buffer->get_device_buffer(zero_coord);
+    std::vector<uint32_t> dest_buffer_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, dst_dram_buffer, true);
     ASSERT_TRUE(check_is_close(golden_packed_tilized_output, dest_buffer_data, out_t, "unary_broadcast_dram_out"));
 }
 }  // namespace unit_tests::compute::unary_broadcast

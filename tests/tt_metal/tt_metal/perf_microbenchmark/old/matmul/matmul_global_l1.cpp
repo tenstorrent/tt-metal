@@ -1135,19 +1135,14 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
-        std::vector<uint32_t> result_vec;
-        {
-            auto* shard = out_buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0));
-            result_vec.resize(
-                shard->page_size() * shard->num_pages() /
-                sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-            tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue(0))
-                .enqueue_read_shards(
-                    {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}
-                         .host_data(result_vec.data())},
-                    out_buffer,
-                    true);
-        };
+        auto* shard = out_buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0));
+        std::vector<uint32_t> result_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+        tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue(0))
+            .enqueue_read_shards(
+                {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
+                    result_vec.data())},
+                out_buffer,
+                true);
         auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
         auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
         auto result_untilized = untilize_swizzled(result_flat_layout, Mt * 32, Nt * 32);

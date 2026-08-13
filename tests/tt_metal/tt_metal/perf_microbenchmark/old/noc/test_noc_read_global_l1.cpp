@@ -241,21 +241,15 @@ int main(int argc, char** argv) {
         // validation
         for (int r = 0; r < num_cores_r; ++r) {
             for (int c = 0; c < num_cores_c; ++c) {
-                std::vector<uint32_t> result_vec;
-                {
-                    auto* shard = l1_buffers[(r * num_cores_c) + c]->get_device_buffer(
-                        tt::tt_metal::distributed::MeshCoordinate(0, 0));
-                    result_vec.resize(
-                        shard->page_size() * shard->num_pages() /
-                        sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-                    tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue(0))
-                        .enqueue_read_shards(
-                            {tt::tt_metal::distributed::ShardDataTransfer{
-                                tt::tt_metal::distributed::MeshCoordinate(0, 0)}
-                                 .host_data(result_vec.data())},
-                            l1_buffers[(r * num_cores_c) + c],
-                            true);
-                };
+                auto* shard = l1_buffers[(r * num_cores_c) + c]->get_device_buffer(
+                    tt::tt_metal::distributed::MeshCoordinate(0, 0));
+                std::vector<uint32_t> result_vec(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+                tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue(0))
+                    .enqueue_read_shards(
+                        {tt::tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}
+                             .host_data(result_vec.data())},
+                        l1_buffers[(r * num_cores_c) + c],
+                        true);
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
 
                 if (print_tensor) {

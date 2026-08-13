@@ -610,14 +610,10 @@ TEST_F(MeshDeviceFixture, SlowDispatchFullGridAccess) {
             .enqueue_write_mesh_buffer(mesh_buffer, src_vec.data(), false);
         Finish(mesh_device->mesh_command_queue());
 
-        std::vector<uint32_t> dst_vec = {};
-        if ((mesh_buffer)->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED) {
-            (dst_vec).resize(
-                (mesh_buffer)->global_shard_spec().global_size /
-                sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
-        } else {
-            (dst_vec).resize((mesh_buffer)->size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
-        }
+        const size_t dst_vec_n = (mesh_buffer->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED)
+                                     ? mesh_buffer->global_shard_spec().global_size / sizeof(uint32_t)
+                                     : mesh_buffer->size() / sizeof(uint32_t);
+        std::vector<uint32_t> dst_vec(dst_vec_n);
         tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
             .enqueue_read_mesh_buffer((dst_vec).data(), mesh_buffer, true);
         EXPECT_EQ(dst_vec, src_vec) << "Buffer operations failed with full grid in slow dispatch mode";

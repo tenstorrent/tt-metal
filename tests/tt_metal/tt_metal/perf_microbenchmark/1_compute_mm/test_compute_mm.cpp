@@ -1487,15 +1487,11 @@ bool validation_single_core(
     const std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>& out_buffer) {
     bool pass = true;
 
-    std::vector<uint32_t> result;
-    {
-        auto* shard = out_buffer->get_device_buffer({0, 0});
-        result.resize(
-            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result)>::value_type));
-        tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue())
-            .enqueue_read_shards(
-                {tt_metal::distributed::ShardDataTransfer{{0, 0}}.host_data(result.data())}, out_buffer, true);
-    };
+    auto* shard = out_buffer->get_device_buffer({0, 0});
+    std::vector<uint32_t> result(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue())
+        .enqueue_read_shards(
+            {tt_metal::distributed::ShardDataTransfer{{0, 0}}.host_data(result.data())}, out_buffer, true);
 
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
     auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
@@ -1543,15 +1539,11 @@ bool validation_single_core_fp8(
     const std::shared_ptr<tt::tt_metal::distributed::MeshBuffer>& out_buffer) {
     bool pass = true;
 
-    std::vector<uint32_t> result;
-    {
-        auto* shard = out_buffer->get_device_buffer({0, 0});
-        result.resize(
-            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result)>::value_type));
-        tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue())
-            .enqueue_read_shards(
-                {tt_metal::distributed::ShardDataTransfer{{0, 0}}.host_data(result.data())}, out_buffer, true);
-    };
+    auto* shard = out_buffer->get_device_buffer({0, 0});
+    std::vector<uint32_t> result(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue())
+        .enqueue_read_shards(
+            {tt_metal::distributed::ShardDataTransfer{{0, 0}}.host_data(result.data())}, out_buffer, true);
 
     auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
     auto result_untilized = untilize_swizzled(result_bfp8, Mt * 32, Nt * 32);

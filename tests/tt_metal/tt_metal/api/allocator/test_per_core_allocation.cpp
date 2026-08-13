@@ -246,38 +246,27 @@ TEST_F(PerCoreAllocationTest, PerCoreSocketConfigMetadataUsesPerCoreAddress) {
         *recv_socket.get_data_buffer(), distributed::MeshCoordinate(0, 0), receiver_core);
 
     // The receiver's on-device config must point read_ptr/fifo_addr at the receiver core's per-core address.
-    std::vector<receiver_socket_md> recv_config_readback;
-    {
-        auto* shard = recv_socket.get_config_buffer()->get_device_buffer(distributed::MeshCoordinate(0, 0));
-        recv_config_readback.resize(
-            shard->page_size() * shard->num_pages() /
-            sizeof(typename std::decay_t<decltype(recv_config_readback)>::value_type));
-        distributed::as_mesh_command_queue_base(md->mesh_command_queue())
-            .enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(
-                    recv_config_readback.data())},
-                recv_socket.get_config_buffer(),
-                true);
-    };
+    auto* shard_read = recv_socket.get_config_buffer()->get_device_buffer(distributed::MeshCoordinate(0, 0));
+    std::vector<receiver_socket_md> recv_config_readback(
+        shard_read->page_size() * shard_read->num_pages() / sizeof(receiver_socket_md));
+    distributed::as_mesh_command_queue_base(md->mesh_command_queue())
+        .enqueue_read_shards(
+            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(recv_config_readback.data())},
+            recv_socket.get_config_buffer(),
+            true);
     ASSERT_EQ(recv_config_readback.size(), 1u);
     EXPECT_EQ(recv_config_readback[0].fifo_addr, pc_addr);
     EXPECT_EQ(recv_config_readback[0].read_ptr, pc_addr);
     EXPECT_EQ(recv_config_readback[0].fifo_total_size, fifo_size);
 
     // The sender's downstream_fifo_addr must match the same per-core address.
-    std::vector<uint8_t> sender_config_bytes;
-    {
-        auto* shard = send_socket.get_config_buffer()->get_device_buffer(distributed::MeshCoordinate(0, 0));
-        sender_config_bytes.resize(
-            shard->page_size() * shard->num_pages() /
-            sizeof(typename std::decay_t<decltype(sender_config_bytes)>::value_type));
-        distributed::as_mesh_command_queue_base(md->mesh_command_queue())
-            .enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(
-                    sender_config_bytes.data())},
-                send_socket.get_config_buffer(),
-                true);
-    };
+    auto* sender_shard = send_socket.get_config_buffer()->get_device_buffer(distributed::MeshCoordinate(0, 0));
+    std::vector<uint8_t> sender_config_bytes(sender_shard->page_size() * sender_shard->num_pages() / sizeof(uint8_t));
+    distributed::as_mesh_command_queue_base(md->mesh_command_queue())
+        .enqueue_read_shards(
+            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(sender_config_bytes.data())},
+            send_socket.get_config_buffer(),
+            true);
     ASSERT_GE(sender_config_bytes.size(), sizeof(sender_socket_md));
     sender_socket_md sender_md{};
     std::memcpy(&sender_md, sender_config_bytes.data(), sizeof(sender_socket_md));

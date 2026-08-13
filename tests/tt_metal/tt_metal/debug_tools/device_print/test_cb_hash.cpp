@@ -202,14 +202,10 @@ uint32_t run_once_sfpu(
         false);
     fixture->RunProgram(mesh_device, s.workload);
 
-    std::vector<uint32_t> result(NUM_TILES * 1024, 0u);
-    {
-        auto* shard = s.output_dram->get_device_buffer(s.zero);
-        result.resize(
-            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{s.zero}.host_data(result.data())}, s.output_dram, true);
-    };
+    auto* shard = s.output_dram->get_device_buffer(s.zero);
+    std::vector<uint32_t> result(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{s.zero}.host_data(result.data())}, s.output_dram, true);
 
     uint32_t h = 0u;
     for (uint32_t w : result) {

@@ -48,17 +48,7 @@ int main() {
         mesh_buffer, src_data.data(), false);
 
     // Enqueue a read from the distributed buffer (L1 banks across devices) to a local buffer.
-    std::vector<uint32_t> read_back_data{};
-    read_back_data.resize(mesh_buffer->size() / sizeof(uint32_t));
-    if ((mesh_buffer)->global_layout() == MeshBufferLayout::SHARDED) {
-        (read_back_data)
-            .resize(
-                (mesh_buffer)->global_shard_spec().global_size /
-                sizeof(typename std::decay_t<decltype(read_back_data)>::value_type));
-    } else {
-        (read_back_data)
-            .resize((mesh_buffer)->size() / sizeof(typename std::decay_t<decltype(read_back_data)>::value_type));
-    }
+    std::vector<uint32_t> read_back_data(mesh_buffer->size() / sizeof(uint32_t));
     tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer(
         (read_back_data).data(), mesh_buffer, true);
 

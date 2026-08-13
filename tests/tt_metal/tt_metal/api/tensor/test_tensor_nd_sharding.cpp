@@ -1278,18 +1278,11 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
     }
     EXPECT_EQ(tensor_data, partial_readback_data);
 
-    {
-        auto* shard = shared_mesh_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
-        full_readback_data.resize(
-            shard->page_size() * shard->num_pages() /
-            sizeof(typename std::decay_t<decltype(full_readback_data)>::value_type));
-        distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-            .enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(
-                    full_readback_data.data())},
-                shared_mesh_buffer,
-                true);
-    };
+    distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+        .enqueue_read_shards(
+            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(full_readback_data.data())},
+            shared_mesh_buffer,
+            true);
     EXPECT_EQ(tensor_data, full_readback_data);
 }
 

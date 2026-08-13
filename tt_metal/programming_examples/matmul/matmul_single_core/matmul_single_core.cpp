@@ -178,13 +178,10 @@ void matmul_single_core(
     distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src1_dram_buffer, b.data(), false);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    if ((dst_dram_buffer)->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED) {
-        (output).resize(
-            (dst_dram_buffer)->global_shard_spec().global_size /
-            sizeof(typename std::decay_t<decltype(output)>::value_type));
-    } else {
-        (output).resize((dst_dram_buffer)->size() / sizeof(typename std::decay_t<decltype(output)>::value_type));
-    }
+    output.resize(
+        (dst_dram_buffer->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED)
+            ? dst_dram_buffer->global_shard_spec().global_size / sizeof(bfloat16)
+            : dst_dram_buffer->size() / sizeof(bfloat16));
     distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((output).data(), dst_dram_buffer, true);
 }
 

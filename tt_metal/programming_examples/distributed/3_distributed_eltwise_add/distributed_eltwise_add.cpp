@@ -144,15 +144,7 @@ int main() {
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
     // Read back results
-    std::vector<uint32_t> result_data(a_data.size(), 0);
-    if ((c)->global_layout() == MeshBufferLayout::SHARDED) {
-        (result_data)
-            .resize(
-                (c)->global_shard_spec().global_size /
-                sizeof(typename std::decay_t<decltype(result_data)>::value_type));
-    } else {
-        (result_data).resize((c)->size() / sizeof(typename std::decay_t<decltype(result_data)>::value_type));
-    }
+    std::vector<uint32_t> result_data(c->size() / sizeof(uint32_t));
     tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((result_data).data(), c, true);
 
     // Verify results

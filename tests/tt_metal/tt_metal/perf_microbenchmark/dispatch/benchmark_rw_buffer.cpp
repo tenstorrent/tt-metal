@@ -358,15 +358,9 @@ static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& 
 
     for ([[maybe_unused]] auto _ : state) {
         // enqueue_read_mesh_buffer cannot read from a replicated buffer yet, have to use ReadShard
-        {
-            auto* shard = device_buffer->get_device_buffer(MeshCoordinate(0, 0));
-            host_buffer.resize(
-                shard->page_size() * shard->num_pages() /
-                sizeof(typename std::decay_t<decltype(host_buffer)>::value_type));
-            as_mesh_command_queue_base(mesh_device->mesh_command_queue())
-                .enqueue_read_shards(
-                    {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(host_buffer.data())}, device_buffer, true);
-        };
+        as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+            .enqueue_read_shards(
+                {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(host_buffer.data())}, device_buffer, true);
     }
 
     state.SetBytesProcessed(transfer_size * state.iterations());

@@ -390,13 +390,10 @@ bool validation_bfp8_b(
     auto num_datums_per_cb = kt * nt * 32 * 32 / num_blocks * cb_num_blocks;
 
     std::vector<float> result_untilized;
-    std::vector<uint32_t> result;
-    {
-        auto* shard = out_buffer->get_device_buffer(tt_metal::distributed::MeshCoordinate(0, 0));
-        result.resize(shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result)>::value_type));
-        tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue()).enqueue_read_shards(
-            {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(result.data())}, out_buffer, true);
-    };
+    auto* shard = out_buffer->get_device_buffer(tt_metal::distributed::MeshCoordinate(0, 0));
+    std::vector<uint32_t> result(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue()).enqueue_read_shards(
+        {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(result.data())}, out_buffer, true);
     auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
     result_untilized = untilize_swizzled(result_bfp8, kt * 32 / num_blocks * cb_num_blocks, nt * 32);
 
@@ -437,13 +434,10 @@ bool validation_fp16(
     std::vector<float> result_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0);
     auto num_datums_per_cb = kt * nt * 32 * 32 / num_blocks * cb_num_blocks;
 
-    std::vector<uint32_t> result;
-    {
-        auto* shard = out_buffer->get_device_buffer(tt_metal::distributed::MeshCoordinate(0, 0));
-        result.resize(shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result)>::value_type));
-        tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue()).enqueue_read_shards(
-            {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(result.data())}, out_buffer, true);
-    };
+    auto* shard = out_buffer->get_device_buffer(tt_metal::distributed::MeshCoordinate(0, 0));
+    std::vector<uint32_t> result(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue()).enqueue_read_shards(
+        {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(result.data())}, out_buffer, true);
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
     auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
     auto result_untilized = untilize_swizzled(result_flat_layout, kt * 32 / num_blocks * cb_num_blocks, nt * 32);
@@ -485,13 +479,10 @@ bool validation_mixed_df(
     tt_metal::distributed::MeshDevice* device) {
     bool pass = true;
 
-    std::vector<uint32_t> result;
-    {
-        auto* shard = out_buffer->get_device_buffer(tt_metal::distributed::MeshCoordinate(0, 0));
-        result.resize(shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result)>::value_type));
-        tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue()).enqueue_read_shards(
-            {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(result.data())}, out_buffer, true);
-    };
+    auto* shard = out_buffer->get_device_buffer(tt_metal::distributed::MeshCoordinate(0, 0));
+    std::vector<uint32_t> result(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
+    tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue()).enqueue_read_shards(
+        {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(result.data())}, out_buffer, true);
 
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
     auto result_untilized_fp16 = convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
