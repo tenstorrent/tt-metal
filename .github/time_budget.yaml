@@ -324,8 +324,8 @@ models:
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
   frequent:
-    wh_n150: 348
-    wh_n300: 330
+    wh_n150: 318
+    wh_n300: 300
     wh_n150_civ2: 30
     wh_n300_civ2: 30
     bh_p150b_civ2: 120
@@ -341,7 +341,7 @@ models:
   # Per-tier e2e budgets, consumed by the tiered model pipelines;
   # The plain `e2e` key is used for the non-tiered pipelines (blackhole-e2e, t3000-e2e).
   e2e_tier1:
-    wh_n150: 28
+    wh_n150: 31
     wh_galaxy_perf: 120
     bh_p150: 27
     bh_quietbox_2: 245
@@ -369,7 +369,7 @@ models:
   # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
   unit_tier1:
     wh_llmbox: 61
-    wh_n150: 110
+    wh_n150: 125
     wh_galaxy: 235
     wh_galaxy_perf: 45
     bh_p150: 20

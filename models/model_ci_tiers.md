@@ -64,6 +64,7 @@ it is classified differently on different systems.
 | Wan2.2-I2V-A14B | WH Galaxy, BH SC4 |
 | TT-DiT (shared) | WH N150, BH QuietBox 2 |
 | ResNet-50 | WH N150, WH LLMBox, BH P150b |
+| BGE-M3 | WH N150 |
 ## Tier 2 Models
 | Model | Systems |
 |-------|---------|

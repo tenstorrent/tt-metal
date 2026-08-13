@@ -32,6 +32,7 @@ on:
           - ltx-2.3-pro-i2v
           - ltx-2.3-fast-i2v
           - resnet50
+          - bge_m3
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false

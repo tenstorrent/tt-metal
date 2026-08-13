@@ -14,16 +14,6 @@
 # For max allowed timeout refer to .github/time_budget.yaml
 
 # Standard wormhole frequent model tests
-- name: bge_m3 nightly
-  cmd: $PYTEST_CMD tests/nightly/single_card/bge_m3
-  model: bge_m3
-  skus:
-    wh_n150:
-      timeout: 30
-    wh_n300:
-      timeout: 30
-  owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
-  team: models
 - name: openpdn_mnist nightly
   cmd: $PYTEST_CMD tests/nightly/single_card/openpdn_mnist
   model: openpdn_mnist

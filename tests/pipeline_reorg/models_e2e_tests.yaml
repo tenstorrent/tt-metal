@@ -1306,3 +1306,16 @@
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+
+- name: BGE-M3 e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    export HF_MODEL=BAAI/bge-m3
+    pytest --timeout 300 models/demos/wormhole/bge_m3/demo/demo.py
+  model: bge_m3
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 1
+  owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
+  team: models
