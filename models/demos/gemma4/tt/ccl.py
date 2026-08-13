@@ -26,6 +26,44 @@ def default_num_links():
     return 2 if is_blackhole() else 1
 
 
+def default_ccl_packet_bytes():
+    """Ideal Fabric packet for dense Gemma4 width-sharded CCL pages.
+
+    Matches ``validate_packet_size`` / runtime guidance (≈3× page):
+      WH 31B: 2048 B pages → 6144 (Fabric warns on the 4352 default)
+      BH 31B: 1344 B pages → 5376
+      12B:    960 B pages  → 3840
+    Other models leave Fabric's default (``None``).
+    """
+    model = os.environ.get("HF_MODEL", "").lower()
+    if "31b" in model:
+        return 5376 if is_blackhole() else 6144
+    if "12b" in model:
+        return 3840
+    return None
+
+
+def fabric_router_config_from_env():
+    """``FabricRouterConfig`` for mesh open, or ``None`` to keep Fabric defaults.
+
+    ``GEMMA4_CCL_PACKET_BYTES`` overrides: unset → :func:`default_ccl_packet_bytes`;
+    ``0`` / ``none`` / ``default`` → Fabric default; else ``max(4352, int)``.
+    Shared by demo ``_device_params`` and ``parametrize_mesh_with_fabric``.
+    """
+    pkt_env = os.environ.get("GEMMA4_CCL_PACKET_BYTES")
+    if pkt_env is None:
+        pkt_bytes = default_ccl_packet_bytes()
+    elif pkt_env.strip().lower() in ("0", "none", "default", ""):
+        pkt_bytes = None
+    else:
+        pkt_bytes = max(4352, int(pkt_env))
+    if pkt_bytes is None:
+        return None
+    router = ttnn.FabricRouterConfig()
+    router.max_packet_payload_size_bytes = pkt_bytes
+    return router
+
+
 def ccl_chunks_per_sync() -> int:
     """Async RS/AG ``chunks_per_sync`` (fabric packet grouping). Default 10."""
     return max(1, int(os.environ.get("GEMMA4_CCL_CHUNKS_PER_SYNC", "10")))
