@@ -241,7 +241,7 @@ You read the subagent's summary and decide what to do next. If you then need to 
 - The Legacy Inventory written in the previous step.
 - **The brief's TTNN factory analysis section** — the Metal 2.0 factory concept your port targets was confirmed during the audit. Plan against it; do not re-derive it.
 - The [migration guide — Design Principles](../shared/migration_guide.md#design-principles), especially Principle 2 (named bindings) which drives the "Dropped Plumbing" section below.
-- The [TTNN integration doc](../shared/ttnn_factory.md#the-metal-20-factory-concept) for the factory concept the ported op will satisfy and the entry point that returns the spec.
+- The [TTNN integration doc](../shared/ttnn_factory.md#the-base-concept-programspecfactoryconcept) for the factory concept the ported op will satisfy and the entry point that returns the spec.
 - The [patterns catalog](../shared/port_patterns.md).
 - The brief's **Watch for** notable constructs.
 
@@ -628,7 +628,7 @@ For each resource type, construct the spec entry and its run-args entry as a pai
   **First exercise of this path** — no production op has run op-owned tensors yet (compile-coverage only). conv2d / halo / pool are its shakedown; surface any friction (release ergonomics, binding identity, cache-hit re-patching) rather than trusting it blindly.
 - **`WorkUnitSpec`.** Build with `kernels` (by `unique_id`) and `target_nodes`. No per-execution counterpart.
 
-After all resources are built, assemble the `ProgramSpec` (collecting `kernels`, `dataflow_buffers`, `semaphores`, `tensor_parameters`, `work_units`) and the `ProgramRunArgs` (collecting `kernel_run_args`, `tensor_args`). Return them wrapped as `ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)}` from the factory's `create_program_artifacts` method — see the [TTNN integration doc](../shared/ttnn_factory.md#the-metal-20-factory-concept) for the method signature and the cache lifecycle the framework wraps around it. When the op has op-owned tensors, also `std::move` them into the artifact's `op_owned_tensors` field (built and bound during construction, per the op-owned step above); omit the field otherwise — it defaults empty.
+After all resources are built, assemble the `ProgramSpec` (collecting `kernels`, `dataflow_buffers`, `semaphores`, `tensor_parameters`, `work_units`) and the `ProgramRunArgs` (collecting `kernel_run_args`, `tensor_args`). Return them wrapped as `ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)}` from the factory's `create_program_artifacts` method — see the [TTNN integration doc](../shared/ttnn_factory.md#the-base-concept-programspecfactoryconcept) for the method signature and the cache lifecycle the framework wraps around it. When the op has op-owned tensors, also `std::move` them into the artifact's `op_owned_tensors` field (built and bound during construction, per the op-owned step above); omit the field otherwise — it defaults empty. If the plan's target concept is `CustomProgramSpecFactoryConcept`, one more method remains — see [Translating `override_runtime_arguments`](#translating-override_runtime_arguments-custom-concept-only).
 
 **Stop signals**: any urge to —
 
@@ -762,6 +762,37 @@ Nothing anywhere checks this: every level is legal on every kernel, no validator
 
 ---
 
+### Translating `override_runtime_arguments` (custom concept only)
+
+*Skip this subsection entirely if the plan's target concept is `ProgramSpecFactoryConcept`. It applies only when the audit routed the op to **`CustomProgramSpecFactoryConcept`**, which it does for exactly one reason: the ported-from factory has an `override_runtime_arguments`.*
+
+The ported-from override re-applies the op's per-dispatch state on every program-cache hit — every runtime arg **and** every tensor-backed address, because for such an op the descriptor framework does no address inference of its own. The Metal 2.0 override carries the identical responsibility. What changes is the form and the channel; see [the cache-hit contract](../shared/ttnn_factory.md#the-cache-hit-contract) for the shape, which this step assumes you have read.
+
+**The governing rule is fidelity, not analysis.** You are not deciding what needs refreshing — the ported-from override already decided, and its decisions (including any that look wrong) are behavior you preserve. Mirror its set exactly.
+
+**Step 1 — inventory what the ported-from override touches.** Go through it statement by statement and record every write, in three buckets:
+
+| What the ported-from override writes | Where it goes in Metal 2.0 |
+|---|---|
+| A per-node runtime-arg value | `kernel_run_args[…].runtime_arg_values`, keyed **name-first, then node** |
+| A value broadcast to every node | `kernel_run_args[…].common_runtime_arg_values` |
+| **A tensor's buffer address** (a CB address, an address written into an arg slot) | a `TensorArgument` in `tensor_args` — **not** a runtime arg |
+
+That third row is the one that changes shape. An address the ported-from override wrote as a number becomes a *binding*, because Metal 2.0 has no legitimate way to carry an address as a runtime-arg value — writing one there is the smuggling anti-pattern, and it is caught by the [anti-pattern self-audit](#anti-pattern-self-audit).
+
+**Step 2 — write the override, mirroring the inventory.** Same value, same node, same condition. Where the ported-from override computed a value only under some condition, keep the condition. Where it varied a value by device, use the `coord` parameter.
+
+**Step 3 — check the set, both directions.** Every address the ported-from override refreshed has a `TensorArgument`; every runtime arg it refreshed has an entry; and **nothing else does.** Both directions are load-bearing:
+
+- **Missing** an address is the silent one. On this concept the framework refreshes *nothing* on your behalf, so an omitted binding stays frozen at its cache-miss address for the life of the cache entry — wrong numerics, only on cache hits, only once incoming tensors stop landing where the first call's did. In the normal case the ported-from override refreshed everything, so your `tensor_args` should name **every** `TensorParameter`; if it doesn't, be able to point at the ported-from statement that justifies each omission.
+- **Adding** a refresh the ported-from override didn't do is equally a deviation, and a tempting one — it looks like a free bug fix. It changes cache-hit behavior, which the [porting invariant](#the-principle) says stays identical. If you believe an omission is a bug, that belief goes in the port report; it does not go in the diff.
+
+**Do not delete the ported-from override in place of translating it.** Deleting it drops the op back to `ProgramSpecFactoryConcept`, where the framework patches tensor bindings and nothing else — silently discarding every non-tensor refresh the op relied on. The concept is selected by the *presence* of a `ProgramRunArgs`-returning override, so a half-finished translation and a deliberate one are indistinguishable to the framework.
+
+**Guards move with it.** A `TT_FATAL` / `TT_ASSERT` inside the ported-from override is not being deleted — it is being carried across. The [TT_FATAL census](#anti-pattern-self-audit) treats a guard lost from a *deleted* override as the one legitimate loss; on this path there is no deletion, so a dropped guard is a real loss and must be restored.
+
+---
+
 ## Verification
 
 *Build, test, anti-pattern self-audit.*
@@ -781,7 +812,7 @@ This builds Metal plus **all** TTNN test binaries — the umbrella `unit_tests_t
 The helper returns SUCCESS / FAILURE + key errors. On FAILURE, common causes:
 
 - `AllFactoriesValid` `static_assert` fires → a factory satisfies two concepts (likely a stale `cached_program_t` declaration alongside the new `create_program_artifacts`). Audit for missed deletions in the header.
-- Unresolved symbol for `override_runtime_arguments` → some code path still calls it. Should only happen for the framework adapter, which doesn't for `ProgramSpecFactoryConcept` factories. Re-audit.
+- Unresolved symbol for `override_runtime_arguments` → some code path still calls it. On a **`ProgramSpecFactoryConcept`** port that should not happen; re-audit. On a **`CustomProgramSpecFactoryConcept`** port the method is supposed to exist — this means its signature doesn't match what the adapter calls, most often a return type that isn't `ProgramRunArgs` (see [Translating `override_runtime_arguments`](#translating-override_runtime_arguments-custom-concept-only)).
 - Error referencing `metal_v2_artifacts.hpp` (or other framework header) not found → the framework dependency is not on this branch. Stop and report; the framework PR was a precondition for the audit (which should have failed pre-port).
 - `kernel_args_generated.h` mentions a name that doesn't exist → host added a named CTA / RTA without the kernel referencing it (or vice versa). Reconcile.
 - Linker error `undefined reference to 'dfb::...'` inside a kernel TU → the kernel `#include`s the wrong generated header. `dfb::*` lives in `kernel_bindings_generated.h`, `args::*` in `kernel_args_generated.h` — both are injected by the framework, so a ported kernel must **not** `#include` them itself (for the headers a port *does* add, see the [kernel-side whitelist](#kernel-side-whitelist)).
@@ -848,7 +879,7 @@ Scan the ported code against this checklist. Each item is a Metal 2.0 design-int
        <(git grep -cE 'TT_FATAL|TT_ASSERT|TT_THROW' -- "$OP")
   ```
 
-  Expect **no output**; the right-hand side reads the working tree, so uncommitted port work counts. Compare counts rather than reading `git diff` output directly: these macros usually span several lines, so the removed line is a bare `TT_FATAL(` with its condition invisible — it tells you that one vanished, not which. For each file whose count dropped, list the pre-port checks (`git show "$BASE":<file> | grep -nE 'TT_FATAL|TT_ASSERT|TT_THROW'`) and place every one of them: **moved** (a sibling file's count rose — confirm it is the same check), **dropped in error** → restore it verbatim, since you may not loosen a guard that lives in the factory ([Host-side: stay in the lane](#host-side-stay-in-the-lane)), or **subject deleted** → the only legitimate loss, and it gets a line in `METAL2_PORT_REPORT.md`. The canonical legitimate case is a guard inside the deleted `override_runtime_arguments`; a guard on a raw `Buffer*` that a `TensorBinding` replaced is the other. A count delta **outside** the factory — the device-operation class, the op's top-level `.cpp` — is a scope violation on its own: that code is off-limits and should be byte-identical.
+  Expect **no output**; the right-hand side reads the working tree, so uncommitted port work counts. Compare counts rather than reading `git diff` output directly: these macros usually span several lines, so the removed line is a bare `TT_FATAL(` with its condition invisible — it tells you that one vanished, not which. For each file whose count dropped, list the pre-port checks (`git show "$BASE":<file> | grep -nE 'TT_FATAL|TT_ASSERT|TT_THROW'`) and place every one of them: **moved** (a sibling file's count rose — confirm it is the same check), **dropped in error** → restore it verbatim, since you may not loosen a guard that lives in the factory ([Host-side: stay in the lane](#host-side-stay-in-the-lane)), or **subject deleted** → the only legitimate loss, and it gets a line in `METAL2_PORT_REPORT.md`. The canonical legitimate case is a guard on a raw `Buffer*` that a `TensorBinding` replaced. **An `override_runtime_arguments` is never a subject-deleted case** — the port translates that method rather than removing it, so its guards come across with it and a guard dropped there is a real loss. A count delta **outside** the factory — the device-operation class, the op's top-level `.cpp` — is a scope violation on its own: that code is off-limits and should be byte-identical.
 - [ ] **Every `hw_config` reproduces the legacy op's resolved values.** For each kernel, diff the ported config against the legacy one: DM `(processor, noc, noc_mode)`, and the compute knobs — *including* the two fields the helper does not cover, `bfp_pack_precision_mode` and `unpack_modes`, swept from the legacy `ComputeConfig`. These are silent perf/precision settings with no test net; see [Hardware configuration](#hardware-configuration).
 - [ ] **Every `KernelSpec`'s `opt_level` matches its legacy kernel's.** Compute *and* DM: an explicit legacy level is carried verbatim; a compute kernel that set none gets an explicit `O3` (legacy `ComputeConfig` defaults to `O3`, Metal 2.0 to `O2`). Silent perf loss with no test net; see [Compiler options](#compiler-options).
 
