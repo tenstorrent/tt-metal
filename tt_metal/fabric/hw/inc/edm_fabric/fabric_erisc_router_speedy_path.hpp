@@ -164,6 +164,15 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
     // it cannot fire during normal traffic, only once the channel has been idle far longer than any gap
     // in the 100M-packet stream. It then re-samples periodically so we can see whether the value ever
     // changes while wedged.
+    //
+    // [TRAFFIC-VOLUME GATED] With this probe ungated the router wedges in the SENDER STEP
+    // (RESUME_PHASE_TX_STEP_ENTER 0x11) when a link is down -- the noc_async_read_barrier never completes on
+    // the recovering NOC. A link-up gate is NOT enough: the workers do a round-0 barrier BEFORE traffic, so
+    // the channel is idle AND the link is still up at startup, the probe fires, then the injected down wedges
+    // it -- so recovery never runs. The reliable discriminator is TRAFFIC VOLUME: only the END-of-run barrier
+    // hang has ~100M packets already sent, whereas the startup window has ~0. So fire only once TX_PKT_COUNT
+    // is large (post-recovery, post-traffic) AND the link is up. During the down/retrain window TX is tiny ->
+    // we skip -> recovery proceeds; at the end-of-run hang it fires and gives the real reading.
     {
         static uint32_t empty_streak = 0;
         static uint32_t loopback_samples = 0;
@@ -171,7 +180,10 @@ FORCE_INLINE bool run_sender_channel_step_speedy(
             empty_streak++;
             constexpr uint32_t LOOPBACK_FIRST = 1u << 20;
             constexpr uint32_t LOOPBACK_PERIOD_MASK = (1u << 18) - 1;
-            if (empty_streak >= LOOPBACK_FIRST && (empty_streak & LOOPBACK_PERIOD_MASK) == 0) {
+            constexpr uint32_t LOOPBACK_MIN_TX = 50000000u;  // only after most of the 100M-packet stream
+            if (empty_streak >= LOOPBACK_FIRST && (empty_streak & LOOPBACK_PERIOD_MASK) == 0 &&
+                *reinterpret_cast<volatile uint32_t*>(MEM_AERISC_TX_PKT_COUNT_ADDR) > LOOPBACK_MIN_TX &&
+                fabric_dbg_link_is_up()) {
                 // Destination must be real L1. A `static` here lands in ERISC local data memory
                 // (observed at 0xFFB014E0), which is not NOC-addressable -- the watcher rejects it as
                 // "Local L1 address overflow". The debug slot itself is L1 (the host reads it over NOC),
