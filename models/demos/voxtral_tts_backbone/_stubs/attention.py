@@ -133,7 +133,16 @@ class TtAttention:
         n_heads = int(q_w.shape[0]) // head_dim
         n_kv_heads = int(k_w.shape[0]) // head_dim
         scaling = getattr(torch_module, "scaling", None) or head_dim**-0.5
-        weights = (_stage(q_w, device), _stage(k_w, device), _stage(v_w, device), _stage(o_w, device))
+        # STORED as bfloat8_b: the four projections are ~63 MB of the ~233 MB a
+        # layer streams per decoded token, and decode is bound on those bytes.
+        # Q/K/V feed RoPE and the attention scores, which 02 §13 flags as the
+        # tensors not to push below bf8b -- bf8b is that floor, not past it.
+        weights = (
+            _stage(q_w, device, dtype=ttnn.bfloat8_b),
+            _stage(k_w, device, dtype=ttnn.bfloat8_b),
+            _stage(v_w, device, dtype=ttnn.bfloat8_b),
+            _stage(o_w, device, dtype=ttnn.bfloat8_b),
+        )
         return cls(device, weights, (n_heads, n_kv_heads, head_dim), float(scaling))
 
     # -------------------------------------------------------------- forward
