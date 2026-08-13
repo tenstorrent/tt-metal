@@ -108,6 +108,26 @@ and pack only the final sum. Seed DST with one copy only for an odd contributor 
 **Situation:** you build a running accumulator by summing a stream of tiles into it. Addition can happen at three distinct points in the pipeline — the **FPU adder** (`add_tiles(A, B)` → DEST, any FPU binary op), the **DEST accumulator** (`acc_to_dest` folds each FPU result into a held DEST tile), and the **L1 accumulator** (`pack_reconfig_l1_acc` folds DEST onto the resident L1 tile at pack). What you accumulate is incidental. The dominant cost is re-touching `acc` in L1 every step; the naive read-modify-write uses only the FPU adder, so `acc` round-trips L1 (unpack, add, pack) every step.
 **Measured win:** three mechanisms, each stripping more accumulator L1 traffic (64 fp32 single-tile steps, one Blackhole core, sharded L1). Baseline `rmw` (**975 µs**) round-trips `acc` through unpack+add+pack every tile. `pack_l1_acc` (**192 µs, 5.09×**) reads two tiles per step, sums them in DEST, and lets the **packer** fold that onto `acc` in place — `acc` is only packed, never unpacked (B/2 steps). `dest_acc` (**92 µs, 10.59×**) keeps the running sum in a sticky DEST tile and touches L1 once, at the end — the upper bound.
 **Gist:** the win tracks accumulator L1 traffic. Don't re-read `acc` every step: either **pack-L1-accumulate** onto it (`OutputLifecycle::L1AccumulationCallerManaged` — never unpacks `acc`), or if DEST is free keep the running sum **in DEST** (`BinaryFpu<…, DestAccumulation::Enabled>` → `OutputLifecycle::DestAccumulation`, one pack at the end). `dest_acc` is the upper bound — it camps DEST for the whole reduction, so it only applies when DEST isn't needed for per-step work; otherwise `pack_l1_acc` is the realistic win with `acc` resident in L1.
+**Syntax — the part that is not guessable.** `DestAccumulation` lives on `BinaryFpu`, which takes TWO CB
+inputs, so accumulating ONE stream looks impossible and the tempting fix is to pair every tile against a
+zero tile. Don't: that zero tile has to be filled, and the fill is never free. Instead point BOTH operands
+at the SAME CB and offset the second by half the run — the operands are the two **HALVES** of the stream
+(`x[i] + x[i + N/2]`), not adjacent pairs — so N tiles fold in N/2 FPU steps with no identity operand:
+```cpp
+constexpr uint32_t N = B / 2;                       // B tiles to sum; the SECOND operand starts at N
+ckl::eltwise_chain<ckl::SetupOwner::Caller>(
+    ckl::EltwiseShape::tiles(N),
+    ckl::BinaryFpu<cb_in, cb_in, Add, None, ..., D0,
+                   OperandKind::Block, OperandKind::Block,
+                   ckl::TileOffset::Unset, ckl::TileOffset::Set,
+                   ckl::DestAccumulation::Enabled>{0, N},        // <- {A base, B base} IS the trick
+    ckl::PackTile<cb_out, ckl::OutputLifecycle::DestAccumulation, ..., D0>{});
+```
+`tiles(...)` is one contiguous shape, so the accumulation scope is `WholeShape`/`Enabled` (`PerRow` is
+rejected there); a 2D walk uses `grid(H, W)` with `TileOffset::Strided` + a `StridedTileRange{base,
+row_stride}` per operand. **Odd N does not tile into halves.** For the specific case of summing tiles that
+are ALREADY reduced (per-core partials from an earlier `REDUCE_ROW`), `reduce_helpers_compute.hpp` does it
+for you — `ReduceAlgorithm::AccumulateViaAdd` + `ReduceWithinTile::Skip`.
 
 ## ⭐⭐ T2 — [`compute_fusion`](compute_fusion/README.md)
 **Concept:** fusing a small expression through DEST vs. computing it as separate helper calls that
@@ -261,6 +281,12 @@ Coarser fallbacks: a half-tile result → `VectorMode::R`/`::C`; a scalar → `V
 `recip_tile` takes `vector_mode` directly; `rsqrt_tile` hardcodes it (scope via the `SFPU_UNARY_CALL` macro);
 neither exposes `ITERATIONS` or a parity stride, so `r_iter2`/`c_skip` need the underlying calls.
 
+## ⭐⭐ T2 — [`mcast_topology`](mcast_topology/README.md)
+**Concept:** the multicast topology a **2-D (block-sharded) work split** requires — two **1-D** mcast families (`Mcast1D(PerRow)` + `Mcast1D(PerColumn)`) — vs. every core re-reading its own operand slices from DRAM.
+**Situation:** neither `M` nor `N` alone is long enough to fill the grid, so you split both at once (grid rows carry `M`, grid columns carry `N`). Core `(x=c, y=r)` then needs `A[M_r, :]` and `B[:, N_c]`. Written the obvious way every core fetches its own two slices, which is redundant *by construction* — all `Gc` cores in a row want the same A slice and all `Gr` cores in a column want the same B slice. This is exactly the point where "a 2-D split costs `P×` the operand traffic" gets written down as a reason to reject the 2-D split; it is only true if every core reads for itself.
+**Measured result:** delivering the same operands to the same 64 cores is **1.91× faster** with the two 1-D mcasts (Blackhole, 11×10 grid, 8×8 split, `M=8t N=32t K=4t`; **8512 ns → 4450 ns**). DRAM tile-reads drop `1280 → 160` (**8×**). As in `shared_input_reuse`, the device-time win is *much smaller than the read-count reduction* — each line's sender reads its slice serially and the bytes still cross the NoC.
+**Gist:** broadcast an operand along the axis it does **not** vary with. On a 2-D split that means **two** `Mcast1D` families on the same grid at disjoint `base_sem_id`s (0 and 2) — `PerRow` for the operand that is constant along a row, `PerColumn` for the one constant down a column — with each core a sender on one, both, or neither (four CT-specialized reader kernels, so every core hosts exactly one). **The naming inverts and this is the trap:** a 2-D work split needs **1-D** mcasts, while a 1-D work split (cut `M` only, every core needing all of `B`) is what needs a **2-D** mcast to a whole rectangle. "More sharded" means a *shorter, narrower* path per operand, not a bigger broadcast. Ordering is deadlock-free because every core completes its A phase before any core can block in its B phase.
+
 ## ⭐⭐⭐ T3 — [`shared_input_reuse`](shared_input_reuse/README.md)
 **Concept:** redundant-DRAM-read elimination — stream a shared input once and NoC-multicast it (the `mcast_pipe` helper) vs. every core re-reading it from DRAM.
 **Situation:** a grid of cores all need the **same** multi-MB input — a large shared matrix `[R, C]` (~2.4 MB) streamed in fixed-size chunks (larger than L1). Written the obvious way, every core streams the whole input from DRAM — `N×` the unique bytes.
@@ -282,16 +308,16 @@ geometry reversal: **3,066 → 20,097 cycles** for lines and **43,065 cycles** o
 incl. two grid-hierarchy vs. flat-root reducers).
 **Situation:** every core in each rectangular L1-sharded group contributes the same tile block,
 and every member needs the elementwise group sum.
-**Measured result:** with FPU destination-reuse reduction, two-phase worker reduction beats ring
+**Measured result:** with FPU destination-reuse reduction, reduce-scatter worker reduction beats ring
 push by **4.64–4.73×** on 8-core lines and **6.48×** on a 16-core `2x8` group (**8.36 µs** versus
 **54.18 µs**, 9.8% noise, WH B0). On 4-core groups, root reduction is fastest at **4.00 µs** because
-the extra two-phase handoff is not amortized. On **fully 2-D groups the best reducer is
+the extra reduce-scatter handoff is not amortized. On **fully 2-D groups the best reducer is
 regime-dependent** (Blackhole): under **grid-filling / multi-group NoC contention**,
-`two_stage_grid_reduce` (hierarchical reduce along one grid axis then the other: reduce x →
+`tree_reduce_mcast` (hierarchical reduce along one grid axis then the other: reduce x →
 row-leaders, reduce y → root, mcast back) wins — **1.45–1.60×** over flat root, **3.58–3.88 µs**, and
 the only steady variant (<1% vs 15–28% noise) because its per-axis fan-in stays small (`cols`, then
 `rows`) and its traffic is localized. But in an **isolated single group with several tiles/core** the
-tile-index `two_phase_reduce_mcast` wins instead (**~2×** over root) by parallelizing across tiles;
-at **1 tile/core** grid two-stage wins again (low fan-in; two-phase degenerates to one worker).
-Rule of thumb: **grid two-stage when the grid is busy or the payload is tiny; tile-index two-phase
-for an isolated, well-fed group.** On a 1-D group grid two-stage collapses to the single root reduce.
+tile-index `reduce_scatter_mcast` wins instead (**~2×** over root) by parallelizing across tiles;
+at **1 tile/core** tree reduce wins again (low fan-in; reduce-scatter degenerates to one worker).
+Rule of thumb: **tree reduce when the grid is busy or the payload is tiny; tile-index reduce-scatter
+for an isolated, well-fed group.** On a 1-D group tree reduce collapses to the single root reduce.
