@@ -24,9 +24,10 @@ error of 0.56 is more than half a cycle: the harmonic bank is randomised by the
 end of the utterance. At T=1024 and T=8192 the error is ~1e-5 and invisible.
 `phase_mod1()` fixes it by reducing each block total mod 1 before accumulating,
 which keeps every partial sum O(1) instead of O(T) -- measured 0.843 -> 0.99999745
-on the captured f0. (A previous version of this note claimed the blocked scan was
-unnecessary and would be *worse*. That was measured against torch on the host,
-where it is true; on device it is the difference between working and not.)
+on the captured f0, and it is also the *faster* path; see PERF.md. (A previous
+version of this note claimed the blocked scan was unnecessary and would be
+*worse*. That was measured against torch on the host, where it is true; on device
+it is the difference between working and not.)
 
 **2. f0 error integrates, so the excitation cannot be reproduced from scratch.**
 Phase drift is `sum(delta_f0)/sr` over samples, so holding it under 0.1 cycle
@@ -116,6 +117,10 @@ class TtSineGen:
         reducing each block total mod 1, and accumulating those keeps every partial
         sum O(1) -- and `(a + b) mod 1 == ((a mod 1) + (b mod 1)) mod 1` makes it
         exact. Precision then stops depending on the utterance length at all.
+
+        Do not "simplify" this back to one `ttnn.cumsum`: it is slower as well as
+        wrong. The op parallelises only over the axes it is not scanning, so a single
+        long scan gets one core; blocking is what gives it rows to spread. See PERF.md.
         """
         b, t, c = F.shape
         blk = self.BLOCK

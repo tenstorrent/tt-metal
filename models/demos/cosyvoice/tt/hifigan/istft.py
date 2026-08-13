@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import numpy as np
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -144,7 +145,12 @@ class TtIStft:
         w[torch.arange(n_fft), 0, 0, torch.arange(n_fft)] = torch.from_numpy(self.window)
         self.ola_weight = ttnn.from_torch(w, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
 
+        # prepare_conv_transpose2d_weights asserts conv_config.weights_dtype.has_value(),
+        # so the config exists for preparation's sake -- see the same note in upsample.py.
+        self.conv_config = ttnn.Conv2dConfig(weights_dtype=dtype)
+
         self._env_cache: dict[int, ttnn.Tensor] = {}
+        self._prep_cache: dict[tuple[int, int], tuple] = {}
 
     # -- constants ---------------------------------------------------------
     def _envelope(self, n_frames: int):
@@ -161,6 +167,53 @@ class TtIStft:
         return self._env_cache[n_frames]
 
     # -- forward -----------------------------------------------------------
+    _warned = False
+
+    def _prepared(self, nhwc, n_frames: int, batch_size: int):
+        """Pre-tilized overlap-add weight, cached per input geometry.
+
+        The mirror of `TtStft._prepared`, and for the same reason: `conv_transpose2d`
+        prepares a host-layout weight on every call, and that host traffic is what a
+        trace forbids. These two convolutions were the only things keeping
+        `TtHiFTGenerator.decode` from being captured.
+
+        Returns `(weight, conv_config)`. The config is `None` on the fallback path
+        because the unprepared call never passed one, and adding it there would change
+        an op that is working.
+        """
+        key = (n_frames, batch_size)
+        if key in self._prep_cache:
+            return self._prep_cache[key]
+        try:
+            w = ttnn.prepare_conv_transpose2d_weights(
+                weight_tensor=self.ola_weight,
+                weights_format="IOHW",
+                has_bias=False,
+                input_memory_config=nhwc.memory_config(),
+                input_layout=nhwc.layout,
+                in_channels=self.n_fft,
+                out_channels=1,
+                batch_size=batch_size,
+                input_height=1,
+                input_width=n_frames,
+                kernel_size=(1, self.n_fft),
+                stride=(1, self.hop),
+                padding=(0, 0),
+                dilation=(1, 1),
+                groups=1,
+                device=self.device,
+                input_dtype=self.dtype,
+                conv_config=self.conv_config,
+            )
+            entry = (w, self.conv_config)
+        except Exception as e:  # noqa: BLE001
+            if not TtIStft._warned:
+                TtIStft._warned = True
+                logger.warning(f"istft prepare_conv_transpose2d_weights unavailable, stays untraceable: {str(e)[:200]}")
+            entry = (self.ola_weight, None)
+        self._prep_cache[key] = entry
+        return entry
+
     def __call__(self, real, imag):
         """real, imag: ttnn [B, bins, T] -> waveform ttnn [B, 1, L, 1] (NHWC).
 
@@ -182,9 +235,10 @@ class TtIStft:
         ttnn.deallocate(frames)
         nhwc = ttnn.reshape(nhwc, (b, 1, n_frames, self.n_fft))
 
-        out = ttnn.conv_transpose2d(
+        weight, conv_config = self._prepared(nhwc, n_frames, b)
+        conv_kw = dict(
             input_tensor=nhwc,
-            weight_tensor=self.ola_weight,
+            weight_tensor=weight,
             device=self.device,
             in_channels=self.n_fft,
             out_channels=1,
@@ -198,6 +252,9 @@ class TtIStft:
             groups=1,
             dtype=self.dtype,
         )
+        if conv_config is not None:
+            conv_kw["conv_config"] = conv_config
+        out = ttnn.conv_transpose2d(**conv_kw)
         if isinstance(out, (tuple, list)):
             out = out[0]
         ttnn.deallocate(nhwc)
