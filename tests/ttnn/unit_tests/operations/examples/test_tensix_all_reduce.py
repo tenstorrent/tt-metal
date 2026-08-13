@@ -156,19 +156,21 @@ def _format_report(results, *, arch, box, num_tiles, trials, kernel_iters):
         "",
         f"box={box}  arch={arch}  N={trials} (median)  kernel-iters={kernel_iters}  num-tiles={num_tiles}",
         "",
-        "| Placement | Group | Groups | Cores | Method | Median ns/all-reduce | Std / median | vs ring push |",
+        "| Placement | Group | Groups | Cores | Method | Median ns/all-reduce | Std / median | vs best |",
         "|---|---:|---:|---:|---|---:|---:|---:|",
     ]
     for case_name, group_shape, num_groups, case_results in results:
-        baseline = case_results.get("ring_push")
-        if baseline is None:
-            baseline = next(iter(case_results.values()))
-        for variant, values in case_results.items():
+        # Ratio against the FASTEST variant in this case, never a fixed one. Anchoring on a
+        # known-slow method makes every other row look good and hides the real gap between the
+        # best algorithm and the second best.
+        best_median = min(statistics.median(v) for v in case_results.values())
+        # Best row first, so the table reads as a ranking.
+        for variant, values in sorted(case_results.items(), key=lambda kv: statistics.median(kv[1])):
             median = statistics.median(values)
             std = statistics.pstdev(values) if len(values) > 1 else 0.0
             noise = std / median * 100.0 if median else float("nan")
             noise_text = f"{noise:.1f}%" + (" (noisy)" if noise >= 5.0 else "")
-            ratio = baseline and statistics.median(baseline) / median
+            ratio = best_median / median
             rows, cols = group_shape
             lines.append(
                 f"| {case_name} | {rows}x{cols} | {num_groups} | {rows * cols * num_groups} | "
