@@ -87,6 +87,10 @@ public:
     // Defined in config.cpp (uses tt-logger).
     void validate(std::string_view name) const;
 
+    // Applies a JSON object of attribute overrides (the TTNN_CONFIG_OVERRIDES format).
+    // Unknown keys throw when strict, warn otherwise. Defined in config.cpp.
+    void apply_json_overrides(const std::string& json_text, bool strict = true);
+
     // Returns all config attributes as key-value pairs for Inspector.
     // Defined in config.cpp (uses reflection for_each).
     std::vector<std::pair<std::string, std::string>> get_config_entries() const;

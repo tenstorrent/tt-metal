@@ -73,6 +73,8 @@ void py_module(nb::module_& mod) {
             &ttnn::Config::set<I>);
     });
     py_config.def_prop_ro("report_path", &ttnn::Config::get<"report_path">);
+    py_config.def(
+        "apply_json_overrides", &ttnn::Config::apply_json_overrides, nb::arg("json_text"), nb::arg("strict") = true);
 
     nb::class_<lightmetal::LightMetalBinary>(mod, "LightMetalBinary")
         .def(nb::init<>())

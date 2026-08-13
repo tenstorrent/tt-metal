@@ -26,18 +26,7 @@ CONFIG_OVERRIDES = os.environ.get("TTNN_CONFIG_OVERRIDES", None)
 
 
 def load_config_from_dictionary(config, from_file=False):
-    global CONFIG
-    for key, value in config.items():
-        if hasattr(CONFIG, key):
-            if getattr(CONFIG, key) is not None:
-                value = type(getattr(CONFIG, key))(value)
-            setattr(CONFIG, key, value)
-        elif from_file:
-            logger.warning(
-                f"Unknown configuration key: {key}. Please update your configuration file: {CONFIG_PATH}. Or delete it to get the new default config"
-            )
-        else:
-            raise ValueError(f"Unknown configuration key: {key}")
+    CONFIG.apply_json_overrides(json.dumps(config, default=str), strict=not from_file)
 
 
 def load_config_from_json_file(json_path):
@@ -57,6 +46,8 @@ def save_config_to_json_file(json_path):
             if re.match("^_.+_$", key):
                 continue
             value = getattr(CONFIG, key)
+            if callable(value):
+                continue
             if isinstance(value, pathlib.Path):
                 value = str(value)
             normalized_config[key] = value
@@ -72,8 +63,9 @@ if CONFIG_PATH is not None:
         save_config_to_json_file(CONFIG_PATH)
 
 if CONFIG_OVERRIDES is not None:
+    # Already applied at _ttnn load; re-applied here so the env keeps precedence over TTNN_CONFIG_PATH.
     logger.debug(f"Loading ttnn configuration overrides from environment variable TTNN_CONFIG_OVERRIDES")
-    load_config_from_dictionary(json.loads(CONFIG_OVERRIDES))
+    CONFIG.apply_json_overrides(CONFIG_OVERRIDES)
 
 logger.debug(f"Initial ttnn.CONFIG:\n{CONFIG}")
 

@@ -6,19 +6,62 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <iomanip>
 #include <ostream>
 #include <sstream>
 
 #include <fmt/format.h>
+#include <nlohmann/json.hpp>
 #include <reflect>
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 #include <tt-metalium/experimental/inspector_config.hpp>
 
 namespace ttnn::core {
 
 Config CONFIG{};
+
+void Config::apply_json_overrides(const std::string& json_text, bool strict) {
+    auto json = nlohmann::json::parse(json_text);
+    TT_FATAL(json.is_object(), "TTNN config overrides must be a JSON object, got: {}", json_text);
+    reflect::for_each(
+        [&](auto I) {
+            auto name = reflect::member_name<I>(this->attributes);
+            auto it = json.find(std::string(name));
+            if (it == json.end()) {
+                return;
+            }
+            auto& member = reflect::get<I>(this->attributes);
+            using T = std::decay_t<decltype(member)>;
+            if constexpr (std::is_same_v<T, bool> || std::is_same_v<T, float>) {
+                member = it->template get<T>();
+            } else if constexpr (std::is_same_v<T, std::optional<std::filesystem::path>>) {
+                member = it->is_null() ? T{} : T{it->template get<std::string>()};
+            } else {
+                member = std::filesystem::path(it->template get<std::string>());
+            }
+            this->validate(name);
+            json.erase(it);
+        },
+        this->attributes);
+    for (const auto& [key, value] : json.items()) {
+        if (strict) {
+            TT_THROW("Unknown configuration key: {}", key);
+        }
+        log_warning(tt::LogAlways, "Unknown configuration key: {}", key);
+    }
+}
+
+// Parse TTNN_CONFIG_OVERRIDES at load so pure C++ consumers (e.g. the sanity-pipeline gtests) honor
+// it too; ttnn/__init__.py applies overrides through the same function.
+static const int apply_env_config_overrides = [] {
+    if (const char* overrides = std::getenv("TTNN_CONFIG_OVERRIDES")) {
+        CONFIG.apply_json_overrides(overrides, /*strict=*/true);
+    }
+    return 0;
+}();
 
 std::vector<std::pair<std::string, std::string>> Config::get_config_entries() const {
     std::vector<std::pair<std::string, std::string>> entries;
