@@ -633,8 +633,12 @@ become active again. Try resetting the board.
   --- tt::tt_metal::MetalContext::~MetalContext()
 ```
 
-Seen three times (18:48, 19:52 and 22:04 — the abort timestamps, from each run's
-`watcher_run.log`), every time closing the 1x4 `FABRIC_1D_RING` mesh
+Seen three times (18:48, 19:52 and 22:04 — abort timestamps). Only the last is
+still retrievable: `bench/run_watcher.sh` overwrites `logs/watcher_run.log`, so
+the committed one is the third run (22:04:18 in it) and the first two survive only
+in this log. The count the gate derives comes from this list, so that limit is
+worth stating plainly. Every time it was the close of the 1x4 `FABRIC_1D_RING`
+mesh
 with no submesh and no second mesh in the process -- so it is *not* the
 1x1-after-1x4 interaction documented in `test_multichip_vs_single_chip.py`, which
 an earlier version of this log wrongly conflated with it. It does not
@@ -655,10 +659,12 @@ times out on an Ethernet core (*"Timed out while waiting for active ethernet cor
 29-25 to become active again"*) and costs a `tt-smi -r`. That is a *different*
 signature from the teardown abort above even though the message is the same: this
 one fires when a 1x1 mesh **opens** after a 1x4 has closed, the other when the 1x4
-**closes**. It happened twice, once
-in the watcher chain and once when the two correctness modules shared a pytest
-invocation. Every op it dispatches is covered by the same layer on the same mesh
-in the 31 nodes above.
+**closes**. It happened twice: once when the two correctness modules shared a
+pytest invocation, and once inside the first watcher chain — and *that* one is the
+same reset already charged to that run's teardown abort in §9.2, not a fifth
+event. So the ledger is four resets: one for the shared invocation, one per
+teardown abort. Every op the comparison module dispatches is covered by the same
+layer on the same mesh in the 31 nodes above.
 
 ## 12. Review round 1, and the artifact it could not reproduce
 
@@ -1272,3 +1278,45 @@ reset ledgers that could not be reconciled: the 1x1-after-1x4 timeout in §9.4 a
 the teardown abort in §9.2 print the *same* ethernet-core message but are
 different events — one fires when a 1x1 mesh opens after a 1x4 has closed, the
 other when the 1x4 itself closes. §9.4 now says so.
+
+## 20. Review round 10: clean-pass
+
+The tenth `$stage-review` returned **`clean-pass`** with no required work, at
+commit `3d6f2acc352`. It re-ran round 9's plant itself rather than reading §19,
+plus four more of its own — including one the previous rounds had not tried
+(reverting the count in `context_contract.json`) — and all five failed the gate as
+they should. It re-derived the goal contract item by item and recorded every one
+as met.
+
+Two non-blocking accuracy notes came with it, both about the same paragraph pair,
+and both are now fixed:
+
+- **The timestamp list oversold its own evidence.** §9.4 said the three abort
+  timestamps came "from each run's `watcher_run.log`", but that file is
+  overwritten per run, so only the third is retrievable; the first two survive
+  only in this log. Since the gate derives the occurrence count from that list,
+  the limit is now stated where the list is.
+- **The two reset ledgers differed by one under a strict reading.** §9.4's
+  1x1-after-1x4 timeout "happened twice, once in the watcher chain" — and whether
+  that watcher-chain instance was a fifth event or the same reset already charged
+  to a teardown abort was never said. It is the same reset. §9.4 now says so, so
+  the ledger reconciles at four: one for the shared pytest invocation, one per
+  teardown abort.
+
+Ten rounds is a lot, and the shape of them is worth recording. Rounds 1-4 found
+real measurement problems: a rejection argument built on an invalid comparison, a
+confounded worker count, a probe that had never run at the shipped configuration,
+a capture whose numbers no artifact contained. Rounds 5-9 found none of that —
+`tt/multichip_decoder.py` last changed functionally in round 4, and everything
+after it was documentation drifting away from regenerated evidence, plus three
+occasions on which this log recorded a fix more confidently than the fix deserved.
+Each of those was caught by a reviewer planting the defect and watching the gate
+stay green, never by reading the prose. That is the practice worth carrying
+forward: a claim about what a checker covers is a claim about code, and the only
+way it was ever established here was by breaking it on purpose.
+
+Final state: 104 tests / 104 passed, 298 asserted PCC checks, worst
+multichip-vs-single-chip 0.999183 against a 0.999 bar, watcher clean over 31 node
+ids, 2.39x/2.49x traced decode and 2.30x/2.33x prefill against the single-chip
+baseline measured on this host in the same harness, capability held at 131072 with
+no reduction, and all three staleness checkers green.

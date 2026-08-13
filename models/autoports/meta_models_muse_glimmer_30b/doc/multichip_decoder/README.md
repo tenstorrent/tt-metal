@@ -720,6 +720,17 @@ the top calls the setting load-bearing only in the sense that dropping it silent
 gives back that half percent while the runtime advises the opposite. It is not a
 correctness constraint, unlike `l1_small_size`.
 
+## Stage review
+
+Ten rounds of `$stage-review`; the tenth returned **`clean-pass`** at
+`3d6f2acc352`, with the goal contract re-derived item by item and five
+planted-defect tests run against `bench/check_reported_figures.py`. Rounds 1-4
+found measurement defects (an invalid floor comparison behind the fractured
+rejection, a confounded worker count in the prefill boundary chain, probes that
+had never run at the shipped configuration); rounds 5-9 found documentation drift
+and three overstated fix claims, and each one hardened the figure gate. Work log
+§12-§20 records every round and what closed it.
+
 ## Measured and rejected
 
 | candidate | verdict | evidence |
