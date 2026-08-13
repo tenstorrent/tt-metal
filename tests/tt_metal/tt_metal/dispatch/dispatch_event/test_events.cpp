@@ -224,11 +224,11 @@ TEST_F(UnitMeshCQEventFixture, TestEventsEventsQueryBasic) {
     EXPECT_EQ(event_status, true);
 
     // Query a future event that hasn't completed and ensure it's not finished.
-    auto future_event = std::make_shared<distributed::MeshEvent>(distributed::make_mesh_event(
+    auto future_event = std::make_shared<distributed::MeshEvent>(
         0xffff,
         mesh_device.get(),
         cq.id(),
-        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0))));
+        distributed::MeshCoordinateRange(distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(0, 0)));
     cq.enqueue_record_event();
     event_status = distributed::EventQuery(*future_event);
     EXPECT_EQ(event_status, false);
