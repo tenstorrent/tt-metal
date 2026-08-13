@@ -92,7 +92,7 @@ def _kv_write_memory_config(n_kv_heads: int, head_dim: int):
 class TtAttention:
     def __init__(self, device, weights, dims, scaling):
         self.device = device
-        self.wq, self.wk, self.wv, self.wo = weights
+        self.wq, self.wk, self.wv, self.wo, self.wqkv = weights
         self.n_heads, self.n_kv_heads, self.head_dim = dims
         self.scaling = scaling
         self.kv_write_memory_config = _kv_write_memory_config(self.n_kv_heads, self.head_dim)
@@ -103,6 +103,10 @@ class TtAttention:
         self.kv_plan = build_plan(device, int(self.wk.shape[-2]), int(self.wk.shape[-1]), max_cores=16)
         self.o_plan = build_plan(device, int(self.wo.shape[-2]), int(self.wo.shape[-1]))
         self.q_plan = build_plan(device, int(self.wq.shape[-2]), int(self.wq.shape[-1]))
+        self.qkv_plan = build_plan(device, int(self.wqkv.shape[-2]), int(self.wqkv.shape[-1]), max_cores=32)
+        self._q_end = int(self.wq.shape[-1])
+        self._k_end = self._q_end + int(self.wk.shape[-1])
+        self._v_end = self._k_end + int(self.wv.shape[-1])
         # HiFi4 + fp32 accumulate: the projections and the SDPA feed a 0.99 PCC
         # gate, and bf16 LoFi accumulation is what usually costs those digits.
         try:
@@ -145,6 +149,12 @@ class TtAttention:
             _stage(k_w, device, dtype=ttnn.bfloat8_b),
             _stage(v_w, device, dtype=ttnn.bfloat8_b),
             _stage(o_w, device, dtype=ttnn.bfloat8_b),
+            # Q, K and V read the same activation, so their weights are also
+            # staged CONCATENATED (03 s1: always fuse QKV): one 3072x6144 read
+            # and one matmul per token instead of three, and one shard instead
+            # of two. The separate weights stay for prefill and for the
+            # per-component test, which pinned the unfused body.
+            _stage(torch.cat([q_w, k_w, v_w], dim=0), device, dtype=ttnn.bfloat8_b),
         )
         return cls(device, weights, (n_heads, n_kv_heads, head_dim), float(scaling))
 
@@ -240,7 +250,19 @@ class TtAttention:
         # their plans is opened once and reused. Q wants 32 cores and K/V want
         # 16 (each measured separately), so that is two conversions rather than
         # three -- and one if a future retune brings them back onto one grid.
-        if self.q_plan is not None and self.q_plan.matches(hidden_states) and self.kv_plan is not None:
+        if self.qkv_plan is not None and self.qkv_plan.matches(hidden_states):
+            # ONE fused projection, then split. The three weights are contiguous
+            # in one tensor, so this is a single wide read instead of three.
+            fused = self.qkv_plan(hidden_states, self.wqkv, self.compute_kernel_config)
+            rows = int(fused.shape[-2])
+            query = self._split_heads(ttnn.slice(fused, [0, 0, 0], [1, rows, self._q_end]), self.n_heads)
+            key = self._split_heads(
+                ttnn.slice(fused, [0, 0, self._q_end], [1, rows, self._k_end]), self.n_kv_heads
+            )
+            value = self._split_heads(
+                ttnn.slice(fused, [0, 0, self._k_end], [1, rows, self._v_end]), self.n_kv_heads
+            )
+        elif self.q_plan is not None and self.q_plan.matches(hidden_states) and self.kv_plan is not None:
             ckc = self.compute_kernel_config
             q_shard = self.q_plan.shard_input(hidden_states)
             kv_shard = q_shard if self.q_plan.shares_input_with(self.kv_plan) else self.kv_plan.shard_input(
