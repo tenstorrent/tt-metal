@@ -146,6 +146,12 @@ class TtAttention:
         second = ttnn.slice(x, [0, 0, 0, half], [shape[0], shape[1], shape[2], self.head_dim])
         return ttnn.concat([ttnn.neg(second), first], dim=-1)
 
+    def _q_proj(self, hidden_states, mm):
+        """Q projection for the shapes the shared-shard path does not cover."""
+        if self.q_plan is not None and self.q_plan.matches(hidden_states):
+            return self.q_plan(hidden_states, self.wq, self.compute_kernel_config)
+        return ttnn.linear(hidden_states, self.wq, **mm)
+
     def _kv_proj(self, hidden_states, weight, mm):
         """K/V projection, on the full grid for the decode shape.
 
@@ -213,12 +219,23 @@ class TtAttention:
 
         mm = {"compute_kernel_config": self.compute_kernel_config} if self.compute_kernel_config else {}
 
-        if self.q_plan is not None and self.q_plan.matches(hidden_states):
-            query = self._split_heads(self.q_plan(hidden_states, self.wq, self.compute_kernel_config), self.n_heads)
+        # Q, K and V all read the SAME activation. Their plans resolve to the
+        # same core grid, so the shard is opened ONCE and reused rather than
+        # converting the same tensor interleaved->sharded three times.
+        if (
+            self.q_plan is not None
+            and self.q_plan.matches(hidden_states)
+            and self.q_plan.shares_input_with(self.kv_plan)
+        ):
+            shared = self.q_plan.shard_input(hidden_states)
+            ckc = self.compute_kernel_config
+            query = self._split_heads(self.q_plan.run_presharded(shared, self.wq, ckc), self.n_heads)
+            key = self._split_heads(self.kv_plan.run_presharded(shared, self.wk, ckc), self.n_kv_heads)
+            value = self._split_heads(self.kv_plan.run_presharded(shared, self.wv, ckc), self.n_kv_heads)
         else:
-            query = self._split_heads(ttnn.linear(hidden_states, self.wq, **mm), self.n_heads)
-        key = self._split_heads(self._kv_proj(hidden_states, self.wk, mm), self.n_kv_heads)
-        value = self._split_heads(self._kv_proj(hidden_states, self.wv, mm), self.n_kv_heads)
+            query = self._split_heads(self._q_proj(hidden_states, mm), self.n_heads)
+            key = self._split_heads(self._kv_proj(hidden_states, self.wk, mm), self.n_kv_heads)
+            value = self._split_heads(self._kv_proj(hidden_states, self.wv, mm), self.n_kv_heads)
 
         query = self._apply_rope(query, cos, sin)
         key = self._apply_rope(key, cos, sin)

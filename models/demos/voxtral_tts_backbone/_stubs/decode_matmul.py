@@ -107,6 +107,38 @@ class DecodeMatmulPlan:
             batch *= int(dim)
         return batch == 1
 
+    def shares_input_with(self, other) -> bool:
+        """True when `other` consumes the SAME sharded activation as this plan.
+
+        Several projections read one activation (q/k/v all read the block's
+        normalized hidden state). When their plans resolve to the same K and the
+        same core grid their input shards are identical, so the caller can
+        reshard ONCE and hand the result to all of them instead of paying an
+        interleaved->sharded conversion per projection.
+        """
+        return (
+            other is not None
+            and other.k == self.k
+            and other.core_grid.x == self.core_grid.x
+            and other.core_grid.y == self.core_grid.y
+        )
+
+    def shard_input(self, x):
+        """Open the shard once, for a caller that will run several projections."""
+        return ttnn.to_memory_config(x, self.input_memory_config)
+
+    def run_presharded(self, x_sharded, weight, compute_kernel_config=None):
+        """The matmul itself, on an activation the caller already sharded."""
+        kwargs = {"compute_kernel_config": compute_kernel_config} if compute_kernel_config else {}
+        out = ttnn.linear(
+            x_sharded,
+            weight,
+            program_config=self.program_config,
+            memory_config=self.output_memory_config,
+            **kwargs,
+        )
+        return ttnn.sharded_to_interleaved(out)
+
     def __call__(self, x, weight, compute_kernel_config=None):
         """Run the projection, returning an INTERLEAVED result.
 
@@ -114,15 +146,7 @@ class DecodeMatmulPlan:
         closed around this matmul; keeping it open across ops is a separate
         (layout-chaining) change.
         """
-        kwargs = {"compute_kernel_config": compute_kernel_config} if compute_kernel_config else {}
-        out = ttnn.linear(
-            ttnn.to_memory_config(x, self.input_memory_config),
-            weight,
-            program_config=self.program_config,
-            memory_config=self.output_memory_config,
-            **kwargs,
-        )
-        return ttnn.sharded_to_interleaved(out)
+        return self.run_presharded(self.shard_input(x), weight, compute_kernel_config)
 
 
 def build_plan(device, k: int, n: int, max_cores: int = 0):
