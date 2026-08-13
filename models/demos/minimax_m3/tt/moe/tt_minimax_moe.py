@@ -35,39 +35,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.minimax_m3.tt.moe.tt_reduce import TtMiniMaxReduce
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 
-# Worker cores per dispatch sender. The dispatch op runs on `min(num_links, 4)` sender cores (2 on
-# Blackhole) each owning this many worker cores, so the whole op occupies num_senders * (1 + N) cores
-# — only 6 of Blackhole's 130 at the op's own default N=2, while accounting for ~14 % of the sparse
-# layer. Raising N is the one lever on that available without touching the kernel.
-#
-# THE REAL BOUND IS L1, NOT THE FACTORY'S CORE GUARD. The factory checks only that the sender row is
-# wide enough (13 >= (1 + N) * num_senders => N <= 5) and that CB indices remain (N <= 6). But each
-# sender allocates ONE FULL CB SET PER WORKER on its own core — route_info + payload + metadata, each
-# `read_batch_size` deep — and the payload dominates:
-#
-#     per-worker sender L1  ~=  read_batch_size * aligned_page(emb)      (+ ~1 KB metadata/route)
-#     M3, TILE input        ~=  32 * 12288 B  =  384 KiB per worker
-#
-# so N=4 needs 1536 KiB of payload CB alone against Blackhole's 1536 KiB TOTAL L1 — measured: it dies
-# with "circular buffers grow to 1694688 B which is beyond max L1 size of 1572864 B" on core (0,0).
-# N=3 fits at ~1.13 MiB of payload plus overhead. Unlike the FFN factory, dispatch has no adaptive
-# shrink, so this is a hard failure at program build, not a silent slowdown.
-#
-# The bound scales with emb, so this ceiling is model-specific: DeepSeek/Kimi at emb 7168 (14336 B
-# pages) need ~1.31 MiB at N=3 and are far closer to the edge than M3 is.
-#
-# Env-overridable because the win is NOT guaranteed even where it fits: the shared per-expert offset
-# counter is still handed between workers by a serialized baton in global batch order, so extra workers
-# parallelize the DRAM read and the untilize but not the allocation. A flat result at N=3 is therefore
-# evidence that the baton — not the core count — is the limit, which is the premise of the per-worker
-# offsets rework.
-DEFAULT_DISPATCH_WORKERS_PER_SENDER = 3
-
-
-def dispatch_workers_per_sender() -> int:
-    """Workers per dispatch sender. See above — values above 3 do not fit L1 at M3's emb."""
-    return int(os.environ.get("M3_DISPATCH_WORKERS", DEFAULT_DISPATCH_WORKERS_PER_SENDER))
-
 
 class TtMiniMaxMoE(LightweightModule):
     def __init__(
@@ -162,7 +129,6 @@ class TtMiniMaxMoE(LightweightModule):
             num_links=num_links,
             topology=topology,
             subdevice_id=None,
-            num_workers_per_sender=dispatch_workers_per_sender(),
         )
         self.combine_module = TtCombineModule(
             mesh_device=mesh_device,
