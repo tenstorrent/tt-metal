@@ -1,6 +1,6 @@
 ---
 description: 'PR review for GitHub Actions workflows and CI infrastructure — security, runner hygiene, time budget, and pipeline structure'
-applyTo: '.github/workflows/**,.github/actions/**'
+applyTo: '.github/workflows/**,.github/actions/**,.github/time_budget.yaml'
 excludeAgent: "cloud-agent"
 ---
 
