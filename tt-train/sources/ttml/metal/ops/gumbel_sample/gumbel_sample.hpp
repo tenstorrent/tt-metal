@@ -34,15 +34,24 @@ namespace ttml::metal {
  *                    noise everywhere, matching ttnn_fixed::sample's default.
  * @param logits_padding_mask Optional additive mask, same shape/dtype as `logits`, subtracted from
  *                    the scores.
+ * @param positions   Optional token position to sample for each batch row. Empty (default) samples
+ *                    every position. When supplied, ONLY row positions[b] of batch entry b is read,
+ *                    reduced and written, and the result is [B, 1, 1, 1] instead of
+ *                    [B, 1, tokens, 1]. Prefill wants exactly that -- one token per sequence, at
+ *                    that sequence's own prompt end -- and gets an Ht-fold cut in work for it. Pass
+ *                    either this device's own rows (B_local entries) or the whole job's list, which
+ *                    is sharded across the `seed_axes` the same way the batch is.
  *
  * @return ROW_MAJOR UINT32 token ids, [B, 1, tokens, 1] -- identical in shape, dtype and layout to
- *         what ttnn::argmax(..., dim=3, keepdim=true) returns today.
+ *         what ttnn::argmax(..., dim=3, keepdim=true) returns today -- or [B, 1, 1, 1] when
+ *         `positions` is supplied.
  */
 ttnn::Tensor gumbel_sample(
     const ttnn::Tensor& logits,
     float temperature,
     uint32_t seed,
     const std::vector<uint32_t>& seed_axes = {},
-    const std::optional<ttnn::Tensor>& logits_padding_mask = std::nullopt);
+    const std::optional<ttnn::Tensor>& logits_padding_mask = std::nullopt,
+    const std::vector<uint32_t>& positions = {});
 
 }  // namespace ttml::metal

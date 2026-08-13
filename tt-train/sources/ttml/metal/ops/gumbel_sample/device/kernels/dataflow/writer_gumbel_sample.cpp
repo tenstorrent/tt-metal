@@ -66,6 +66,20 @@ void kernel_main() {
     constexpr uint32_t origin_phys_x = get_compile_time_arg_val(6);
     constexpr uint32_t origin_phys_y = get_compile_time_arg_val(7);
 
+#ifdef DO_POSITIONS
+    constexpr bool do_positions = true;
+#else
+    constexpr bool do_positions = false;
+#endif
+
+    // Per-entry token positions, appended after the four fixed args (see kWriterPositionsArgBase).
+    // Every core holds the full local list, so the origin can re-derive the target row of any entry
+    // it merges without that row travelling in the record.
+    constexpr uint32_t positions_arg_base = 4U;
+    auto target_row_of = [](uint32_t entry) -> uint32_t {
+        return get_arg_val<uint32_t>(positions_arg_base + entry) & (kTileHeight - 1U);
+    };
+
     constexpr auto output_args = TensorAccessorArgs<8>();
     const auto output_address_generator = TensorAccessor(output_args, output_address);
 
@@ -79,6 +93,11 @@ void kernel_main() {
     // write-out: decode produces one token per step, so 31 of 32 rows are padding and scanning them
     // anyway costs 32x.
     auto valid_rows_of = [](uint32_t tile_row) -> uint32_t {
+        if constexpr (do_positions) {
+            // One row per batch entry, always real: the host validated every position against the
+            // logical token count.
+            return 1U;
+        }
         const uint32_t first_token = (tile_row % Ht) * kTileHeight;
         if (first_token >= logical_tokens) {
             return 0U;
@@ -87,8 +106,15 @@ void kernel_main() {
         return (remaining < kTileHeight) ? remaining : kTileHeight;
     };
 
-    // Emit a tile row's token ids. Output pages run row-major over [B, 1, tokens].
+    // Emit a group's token ids. Output pages run row-major over [B, 1, tokens] normally, and over
+    // [B, 1, 1] -- one page per batch entry -- when positions selected a single row each.
     auto write_row = [&](uint32_t tile_row, uint32_t valid_rows) {
+        if constexpr (do_positions) {
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging_address) = arg_max[target_row_of(tile_row)];
+            noc_async_write_page(tile_row, output_address_generator, staging_address);
+            noc_async_write_barrier();
+            return;
+        }
         const uint32_t page_base = (tile_row / Ht) * logical_tokens + (tile_row % Ht) * kTileHeight;
         for (uint32_t h = 0U; h < valid_rows; ++h) {
             const uint32_t slot = staging_address + h * kOutputSlotBytes;
@@ -100,13 +126,15 @@ void kernel_main() {
 
     uint32_t staged_records = 0U;
 
-    auto stage_record = [&](uint32_t tile_row, uint32_t valid_rows) {
+    // All 32 slots travel verbatim: rows this core never scanned are still NEG_INF from
+    // reset_accumulators, so the merge below leaves them alone whichever mode is compiled.
+    auto stage_record = [&](uint32_t tile_row, uint32_t /*valid_rows*/) {
         auto* rec = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
             records_base + (core_index * kRecordsPerCore + staged_records) * kRecordBytes);
         rec[0] = 1U;
         rec[1] = tile_row;
         for (uint32_t h = 0U; h < kTileHeight; ++h) {
-            rec[2U + h] = (h < valid_rows) ? max_values[h] : NEG_INF_FLOAT32;
+            rec[2U + h] = max_values[h];
             rec[2U + kTileHeight + h] = arg_max[h];
         }
         ++staged_records;
@@ -155,27 +183,36 @@ void kernel_main() {
         auto* tile_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_scores_idx));
         const uint32_t tile_col_base = (global_tile % Wt) * kTileWidth;
 
+        // Rows worth scanning in this tile. Normally that is every real token row; with positions
+        // it is the single row the entry asked for, and the accumulator it lands in is indexed by
+        // that same row so write_row and the merge need no extra bookkeeping.
+        const uint32_t row_begin = do_positions ? target_row_of(current_row) : 0U;
+        const uint32_t row_end = do_positions ? row_begin + 1U : current_valid;
+
         for (uint32_t face = 0U; face < 4U; ++face) {
             const uint32_t face_row_base = (face >= 2U) ? kFaceHeight : 0U;
             const uint32_t face_col_base = (face & 1U) ? kFaceWidth : 0U;
             const uint32_t global_col_base = tile_col_base + face_col_base;
 
-            // Columns past the logical vocab and rows past the logical tokens are tile padding.
-            if (global_col_base >= logical_vocab || face_row_base >= current_valid) {
+            // Columns past the logical vocab are tile padding; so are rows outside [begin, end).
+            if (global_col_base >= logical_vocab) {
+                continue;
+            }
+            const uint32_t first_row = (row_begin > face_row_base) ? row_begin : face_row_base;
+            const uint32_t face_row_end = face_row_base + kFaceHeight;
+            const uint32_t last_row = (row_end < face_row_end) ? row_end : face_row_end;
+            if (first_row >= last_row) {
                 continue;
             }
             const uint32_t cols_left = logical_vocab - global_col_base;
             const uint32_t cols_to_scan = (cols_left < kFaceWidth) ? cols_left : kFaceWidth;
-            const uint32_t rows_left = current_valid - face_row_base;
-            const uint32_t rows_to_scan = (rows_left < kFaceHeight) ? rows_left : kFaceHeight;
 
             const uint32_t face_offset = face * kFaceSize;
-            for (uint32_t rr = 0U; rr < rows_to_scan; ++rr) {
-                const uint32_t row_in_tile = face_row_base + rr;
+            for (uint32_t row_in_tile = first_row; row_in_tile < last_row; ++row_in_tile) {
                 uint32_t running_max = max_values[row_in_tile];
                 uint32_t running_arg = arg_max[row_in_tile];
 
-                const uint32_t row_offset = face_offset + rr * kFaceWidth;
+                const uint32_t row_offset = face_offset + (row_in_tile - face_row_base) * kFaceWidth;
                 for (uint32_t cc = 0U; cc < cols_to_scan; ++cc) {
                     const uint32_t value = tile_ptr[row_offset + cc];
                     // Strict greater, scanning columns in increasing global order, so ties keep the

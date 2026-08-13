@@ -91,7 +91,8 @@ ttnn::Tensor sample(
     float temperature,
     uint32_t seed,
     std::optional<ttnn::Tensor> logits_padding_mask,
-    std::optional<std::vector<uint32_t>> seed_axes) {
+    std::optional<std::vector<uint32_t>> seed_axes,
+    const std::vector<uint32_t>& positions) {
     // `seed_axes` lists the mesh axes whose devices hold DISTINCT data and must therefore draw
     // DISTINCT noise -- the data-parallel axes (dp / fsdp). Axes left out are treated as replicated
     // (tp) and draw IDENTICAL noise, which is what keeps a replica group agreeing on the token it
@@ -99,7 +100,7 @@ ttnn::Tensor sample(
     // Callers that need per-device sampling (e.g. GRPO, to avoid duplicate completions across data-
     // parallel ranks) MUST pass their sharded axes explicitly.
     return ttml::metal::gumbel_sample(
-        t, temperature, seed, seed_axes.value_or(std::vector<uint32_t>{}), logits_padding_mask);
+        t, temperature, seed, seed_axes.value_or(std::vector<uint32_t>{}), logits_padding_mask, positions);
 }
 
 ttnn::Tensor to_l1_interleaved(const ttnn::Tensor& t) {

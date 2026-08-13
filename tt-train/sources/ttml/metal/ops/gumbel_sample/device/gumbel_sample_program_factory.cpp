@@ -50,6 +50,21 @@ constexpr uint32_t kRecordsPerCore = 2U;
 
 const std::string kDoLogitsMaskDefineKey = "DO_LOGITS_MASK";
 const std::string kDoGumbelNoiseDefineKey = "DO_GUMBEL_NOISE";
+const std::string kDoPositionsDefineKey = "DO_POSITIONS";
+
+// The reader carries Ht as a runtime arg at slot 4 (see reader_gumbel_sample.cpp), so its positions
+// start one slot later than the writer's. These two MUST diverge -- bumping them together would make
+// the writer read its core_index as positions[0], so every core would write a different wrong row
+// with no fault raised.
+constexpr uint32_t kReaderHtIdx = 4U;
+
+// First runtime-arg slot of the per-entry token positions, which are appended to both dataflow
+// kernels' fixed args. Every core receives the FULL local list (B_local entries), not just the
+// entries it touches: the origin core has to re-derive the target row of any boundary entry it
+// merges, and B_local is a couple of dozen at most.
+constexpr uint32_t kReaderPositionsArgBase = 5U;
+constexpr uint32_t kWriterPositionsArgBase = 4U;
+static_assert(kReaderPositionsArgBase == kReaderHtIdx + 1U);
 
 // Uniform draw bounds for the Gumbel transform g = -log(-log(U)).
 //
@@ -121,13 +136,16 @@ struct GumbelSampleLayout {
     tt::tt_metal::CoreRangeSet all_cores;
     tt::tt_metal::CoreRangeSet core_group_1;
     tt::tt_metal::CoreRangeSet core_group_2;
-    uint32_t total_tiles{};  // total_rows * Wt -- the unit work is actually split over
+    uint32_t total_tiles{};  // the unit work is actually split over -- see below
     uint32_t tiles_per_core_group_1{};
     uint32_t tiles_per_core_group_2{};
+    bool position_aware{};   // sample one row per batch entry instead of every row
+    uint32_t num_entries{};  // NC -- one output row each, when position_aware
 };
 
-GumbelSampleLayout compute_layout(const ttnn::Tensor& logits) {
+GumbelSampleLayout compute_layout(const ttnn::Tensor& logits, bool position_aware) {
     GumbelSampleLayout layout;
+    layout.position_aware = position_aware;
 
     const auto padded_shape = logits.padded_shape();
     const auto logical_shape = logits.logical_shape();
@@ -136,6 +154,7 @@ GumbelSampleLayout compute_layout(const ttnn::Tensor& logits) {
     layout.Wt = padded_shape[-1] / tt::constants::TILE_WIDTH;
     layout.Ht = padded_shape[-2] / tt::constants::TILE_HEIGHT;
     const uint32_t NC = padded_shape[0] * padded_shape[1];
+    layout.num_entries = NC;
     layout.total_rows = NC * layout.Ht;
     layout.block_size = get_block_size(layout.Wt, 4U);
     layout.logical_vocab = logical_shape[-1];
@@ -149,7 +168,14 @@ GumbelSampleLayout compute_layout(const ttnn::Tensor& logits) {
     // (tokens == 1 => Ht == 1) that is just the local batch: a few dozen units on an ~80 core grid,
     // leaving most of it idle while each active core carried a whole vocabulary. Every ttnn op this
     // kernel replaces splits by tile, which is why six of them beat one of this.
-    layout.total_tiles = layout.total_rows * layout.Wt;
+    //
+    // When positions were supplied the tile space shrinks further, to one tile ROW per batch entry
+    // instead of Ht of them: a "virtual" tile vt maps to entry vt / Wt, column vt % Wt, and the
+    // reader turns that into the real page using the entry's position. Prefill hands this op the
+    // logits for every token position but only ever consumes one row per sequence, so this is an
+    // Ht-fold cut in tiles read, reduced and DRAM-touched -- at tokens = 448 that is 14x, and it
+    // brings prefill sampling down to decode cost regardless of context length.
+    layout.total_tiles = position_aware ? (NC * layout.Wt) : (layout.total_rows * layout.Wt);
 
     auto [num_cores, all_cores, group_1, group_2, tiles_1, tiles_2] =
         tt::tt_metal::split_work_to_cores(grid, layout.total_tiles);
@@ -196,6 +222,31 @@ std::vector<CoreWork> core_layout(const GumbelSampleLayout& layout) {
 // on a non-seeded axis) intentionally draw identical noise.
 uint32_t rand_stream_id(const GumbelSampleLayout& layout, uint32_t device_index, uint32_t start_tile) {
     return device_index * layout.total_tiles + start_tile;
+}
+
+// This device's slice of the caller's GLOBAL position list.
+//
+// A tensor's shape here is its LOCAL shard, so the op sees B_local rows and cannot tell on its own
+// which global rows those are. The mapping is exactly the one the RNG already uses: batch shards are
+// laid out along the SEEDED (data-parallel) axes, and devices that differ only on a replicated axis
+// hold the SAME rows -- so they must get the same slice, which is what seeded_linear_index returns.
+// A list already sized to B_local is taken as replicated and used verbatim.
+std::vector<uint32_t> local_positions_of(
+    const operation_attributes_t& args, const GumbelSampleLayout& layout, uint32_t device_index) {
+    if (!layout.position_aware) {
+        return {};
+    }
+    if (args.positions.size() == layout.num_entries) {
+        return args.positions;
+    }
+    const uint32_t offset = device_index * layout.num_entries;
+    TT_FATAL(
+        offset + layout.num_entries <= args.positions.size(),
+        "GumbelSample: positions list of {} is too short for batch shard {} of {} rows",
+        args.positions.size(),
+        device_index,
+        layout.num_entries);
+    return std::vector<uint32_t>(args.positions.begin() + offset, args.positions.begin() + offset + layout.num_entries);
 }
 
 tt::tt_metal::Program build_program(
@@ -266,8 +317,15 @@ tt::tt_metal::Program build_program(
     if (do_gumbel_noise) {
         defines[kDoGumbelNoiseDefineKey] = "1";
     }
+    if (layout.position_aware) {
+        defines[kDoPositionsDefineKey] = "1";
+    }
 
-    std::vector<uint32_t> reader_ct_args{layout.block_size, layout.Wt};
+    // Slot 2 held Ht, which is now a runtime arg so that one program serves every prompt length.
+    // The slot is kept (pinned) rather than removed: reader_gumbel_sample.cpp hard-codes
+    // TensorAccessorArgs<3> and chains the mask accessor off its offset, so shifting it would
+    // misdecode the accessor words instead of failing to compile.
+    std::vector<uint32_t> reader_ct_args{layout.block_size, layout.Wt, 1U};
     tt::tt_metal::TensorAccessorArgs(logits_buffer).append_to(reader_ct_args);
     if (has_mask) {
         tt::tt_metal::TensorAccessorArgs(mask_buffer).append_to(reader_ct_args);
@@ -285,8 +343,15 @@ tt::tt_metal::Program build_program(
     std::vector<uint32_t> writer_ct_args{
         layout.Wt,
         layout.logical_vocab,
-        layout.logical_tokens,
-        layout.Ht,
+        // Both of these are dead under DO_POSITIONS -- their only uses sit past unconditional
+        // returns -- but a compile-time arg is hashed into the kernel binary whether it is read or
+        // not, so they are pinned to keep the build independent of the token dimension. ONE, never
+        // zero: the dead fallback divides by Ht in code that is still compiled, and the JIT builds
+        // with -Wall -Werror, so a zero here is a -Werror=div-by-zero build failure. At 1 the dead
+        // path degenerates to exactly what the position path does, which keeps it harmless if the
+        // guard is ever refactored away.
+        layout.position_aware ? 1U : layout.logical_tokens,
+        layout.position_aware ? 1U : layout.Ht,
         layout.num_cores,
         reduction_sem_id,
         static_cast<uint32_t>(origin_phys.x),
@@ -314,16 +379,18 @@ tt::tt_metal::Program build_program(
     // but an inf sitting in a runtime arg is a trap for anyone who later makes it read it.
     const uint32_t inv_temperature_bits = do_gumbel_noise ? std::bit_cast<uint32_t>(1.0F / args.temperature) : 0U;
 
+    const auto local_positions = local_positions_of(args, layout, device_index);
+
     uint32_t core_index = 0U;
     for (const auto& [core, num_tiles, start_tile] : core_layout(layout)) {
-        SetRuntimeArgs(
-            program,
-            shared_vars.reader_kernel_id,
-            core,
-            {logits_buffer->address(), has_mask ? mask_buffer->address() : 0U, num_tiles, start_tile});
+        std::vector<uint32_t> reader_args{
+            logits_buffer->address(), has_mask ? mask_buffer->address() : 0U, num_tiles, start_tile, layout.Ht};
+        reader_args.insert(reader_args.end(), local_positions.begin(), local_positions.end());
+        SetRuntimeArgs(program, shared_vars.reader_kernel_id, core, reader_args);
 
-        SetRuntimeArgs(
-            program, shared_vars.writer_kernel_id, core, {output_buffer->address(), num_tiles, start_tile, core_index});
+        std::vector<uint32_t> writer_args{output_buffer->address(), num_tiles, start_tile, core_index};
+        writer_args.insert(writer_args.end(), local_positions.begin(), local_positions.end());
+        SetRuntimeArgs(program, shared_vars.writer_kernel_id, core, writer_args);
 
         const auto compute_kernel = layout.core_group_1.contains(core) ? shared_vars.compute_kernel_group_1_id
                                                                        : shared_vars.compute_kernel_group_2_id;
@@ -360,7 +427,7 @@ GumbelSampleProgramFactory::cached_mesh_workload_t GumbelSampleProgramFactory::c
     TT_FATAL(mesh_device != nullptr, "GumbelSample: logits must live on a mesh device");
 
     const auto mesh_shape = mesh_device->shape();
-    const auto layout = compute_layout(logits);
+    const auto layout = compute_layout(logits, !operation_attributes.positions.empty());
 
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, shared_variables_t> shared_vars;
@@ -390,7 +457,7 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
     const auto& logits = tensor_args.logits;
     const bool has_mask = tensor_args.logits_padding_mask.has_value();
 
-    const auto layout = compute_layout(logits);
+    const auto layout = compute_layout(logits, !operation_attributes.positions.empty());
     const auto work = core_layout(layout);
 
     const uint32_t logits_address = logits.buffer()->address();
@@ -407,6 +474,9 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
 
     for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
         auto& vars = cached_workload.shared_variables.at(coord_range);
+        // Positions are runtime-only and change on every prefill (each sequence's prompt ends
+        // somewhere different), so they must be re-applied here just like the seed.
+        const auto local_positions = local_positions_of(operation_attributes, layout, vars.device_seed_offset);
 
         auto& reader_args = GetRuntimeArgs(program, vars.reader_kernel_id);
         auto& writer_args = GetRuntimeArgs(program, vars.writer_kernel_id);
@@ -422,10 +492,22 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
                 auto& core_args = reader_args[core.x][core.y];
                 core_args[kReaderLogitsBufferIdx] = logits_address;
                 core_args[kReaderMaskBufferIdx] = mask_address;
+                // Ht is runtime-only (deliberately out of the program hash in position mode) so it
+                // must be re-applied on every cache hit. Unconditional, because the slot exists in
+                // both modes -- patching it only in position mode would run one past the end of the
+                // 4-word decode arg vector, and RuntimeArgsData's bounds check is a TT_ASSERT that
+                // compiles away in Release, so the write would land in the packed dispatch command.
+                core_args[kReaderHtIdx] = layout.Ht;
+                for (size_t i = 0; i < local_positions.size(); ++i) {
+                    core_args[kReaderPositionsArgBase + i] = local_positions[i];
+                }
             }
             {
                 auto& core_args = writer_args[core.x][core.y];
                 core_args[kWriterOutputBufferIdx] = output_address;
+                for (size_t i = 0; i < local_positions.size(); ++i) {
+                    core_args[kWriterPositionsArgBase + i] = local_positions[i];
+                }
             }
             {
                 auto& core_args = vars.core_group_1.contains(core) ? compute_g1_args[core.x][core.y]

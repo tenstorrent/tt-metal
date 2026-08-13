@@ -32,6 +32,18 @@ struct GumbelSampleParams {
     // device must draw different noise), axes omitted are treated as replicated (every device must
     // draw the SAME noise or the replicas desync). Empty => every device draws identical noise.
     std::vector<uint32_t> seed_axes{};
+
+    // OPTIONAL per-batch-entry token position to sample at, in GLOBAL batch order (size B, or empty).
+    //
+    // Empty (default): sample every token position, output [B, 1, tokens, 1].
+    //
+    // Non-empty: sample ONLY row positions[b] of batch entry b, output [B, 1, 1, 1]. Prefill needs
+    // exactly one token per sequence -- the position of that sequence's last real prompt token -- but
+    // the logits carry all `tokens` positions, so sampling everything does `tokens` times the
+    // necessary work and throws away all but one row. Those positions differ per row, so no uniform
+    // slice can express them and ttnn::gather would need a V-wide index tensor; carrying them as
+    // runtime args costs nothing and lets the op read only the tiles it needs.
+    std::vector<uint32_t> positions{};
 };
 
 struct GumbelSampleInputs {

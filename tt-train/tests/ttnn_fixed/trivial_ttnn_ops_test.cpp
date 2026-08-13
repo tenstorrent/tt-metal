@@ -565,6 +565,137 @@ TEST_F(TrivialTnnFixedTest, TestSamplingHonoursBufferPlacement) {
     EXPECT_EQ(masked_l1, expected) << "L1 mask must suppress the decoy exactly as a DRAM mask does";
 }
 
+TEST_F(TrivialTnnFixedTest, TestSamplingAtPerRowPositions) {
+    // Prefill wants ONE token per sequence, taken at that sequence's own prompt end -- a different
+    // row for every batch entry. Passing those positions makes the op read only the tiles holding
+    // them and return [B, 1, 1, 1]. What has to hold is that the shortcut is exactly equivalent:
+    // sampling at position p must give what sampling everything would have given at row p.
+    //
+    // The shapes are deliberately ragged (tokens and vocab both mid-tile) and the positions are
+    // spread across tile rows -- the first tile row, a middle one, and the partly-padded last one --
+    // because the position picks BOTH the source page and the row inside that tile, and a wrong
+    // row/tile split would still land on a real row for tile-aligned positions.
+    constexpr uint32_t kBatch = 3U;
+    constexpr uint32_t kTokens = 70U;  // Ht = 3; the last tile row has 6 valid rows
+    constexpr uint32_t kVocab = 77U;   // Wt = 3; the last tile has 13 valid columns
+
+    const std::vector<uint32_t> positions = {0U, 45U, 69U};  // tile rows 0, 1, 2; rows 0, 13, 5
+
+    xt::xarray<float>::shape_type shape = {kBatch, 1, kTokens, kVocab};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+    a.fill(-1.0F);
+
+    // Distinct winner per (batch, token), so reading the wrong row or the wrong batch entry lands on
+    // a different id rather than coincidentally matching.
+    std::vector<uint32_t> expected_all(kBatch * kTokens);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        for (uint32_t t = 0; t < kTokens; ++t) {
+            const uint32_t winner = ((b * kTokens + t) * 11U) % kVocab;
+            a(b, 0, t, winner) = -0.5F;
+            expected_all[b * kTokens + t] = winner;
+        }
+    }
+
+    auto tensor_a = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+
+    // Sample everything first. Besides producing the reference, this seeds the program cache with
+    // the no-positions program: the positioned call that follows has the same shapes, dtype and
+    // mask-ness, so it collides with it unless the cache key knows about positions -- and a
+    // collision would reuse a program whose output is [B, 1, tokens, 1].
+    auto greedy_all = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_a, 0.0F, 7));
+    ASSERT_EQ(greedy_all.size(), kBatch * kTokens);
+    EXPECT_EQ(greedy_all, expected_all);
+
+    std::vector<uint32_t> expected_at_positions(kBatch);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        expected_at_positions[b] = expected_all[b * kTokens + positions[b]];
+    }
+
+    auto greedy_at = ttml::core::to_vector<uint32_t>(
+        ttml::ttnn_fixed::sample(tensor_a, 0.0F, 7, /* mask */ std::nullopt, /* seed_axes */ std::nullopt, positions));
+    ASSERT_EQ(greedy_at.size(), kBatch) << "one sampled id per batch entry, not per token";
+    EXPECT_EQ(greedy_at, expected_at_positions);
+
+    // The scan bounds have to hold in the sampled kernel too, which is a separate binary
+    // (DO_GUMBEL_NOISE). The noise makes the winner unpredictable, but every real logit here is
+    // negative while from_xtensor zero-fills the padding, so any index that leaves the logical
+    // vocabulary means the scan walked into padding.
+    auto sampled_at = ttml::core::to_vector<uint32_t>(
+        ttml::ttnn_fixed::sample(tensor_a, 1.0F, 99, /* mask */ std::nullopt, /* seed_axes */ std::nullopt, positions));
+    ASSERT_EQ(sampled_at.size(), kBatch);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        EXPECT_LT(sampled_at[b], kVocab) << "batch entry " << b << " left the logical vocabulary";
+    }
+
+    // Every entry pointed at the SAME row exercises the other extreme of the work split: all three
+    // entries now read the same tile row of their own shard, and the boundary-merge path sees three
+    // groups that each span whatever cores the split handed them.
+    const std::vector<uint32_t> uniform(kBatch, kTokens - 1U);
+    auto greedy_uniform = ttml::core::to_vector<uint32_t>(
+        ttml::ttnn_fixed::sample(tensor_a, 0.0F, 7, /* mask */ std::nullopt, /* seed_axes */ std::nullopt, uniform));
+    ASSERT_EQ(greedy_uniform.size(), kBatch);
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        EXPECT_EQ(greedy_uniform[b], expected_all[b * kTokens + (kTokens - 1U)]);
+    }
+}
+
+TEST_F(TrivialTnnFixedTest, TestSamplingAtPerRowPositionsAcrossTokenCounts) {
+    // With positions supplied, the program is independent of the token dimension -- the work split
+    // is one tile row per batch entry however many tokens the logits carry -- so the cache key
+    // normalizes that dimension away and ONE program serves every prompt length. That is what makes
+    // prefill affordable: a GRPO rollout rounds its prompts to a new length most generates, and each
+    // distinct length used to cost a fresh JIT build of all three kernels (~6 s, against ~3 ms for
+    // the dispatch itself).
+    //
+    // The price is that the second call below reuses the first call's program with only its RUNTIME
+    // args patched -- and Ht is now one of those. If it is not re-applied, the reader resolves a
+    // batch entry's tile row as entry * Ht_stale + position / 32, which for a later entry still
+    // lands inside that entry's own data and inside the buffer: a real token row, no fault, just
+    // the wrong one. So this test needs all three of: two different token counts, a position in the
+    // last tile row, and assertions on a LATER batch entry. Entry 0 cannot see the bug at all,
+    // because entry * Ht is zero whatever Ht is.
+    constexpr uint32_t kBatch = 3U;
+    constexpr uint32_t kVocab = 77U;
+
+    auto run = [](uint32_t tokens, const std::vector<uint32_t>& positions) {
+        xt::xarray<float>::shape_type shape = {kBatch, 1U, tokens, kVocab};
+        xt::xarray<float> a = xt::zeros<float>(shape);
+        a.fill(-1.0F);
+
+        std::vector<uint32_t> expected_all(kBatch * tokens);
+        for (uint32_t b = 0; b < kBatch; ++b) {
+            for (uint32_t t = 0; t < tokens; ++t) {
+                const uint32_t winner = ((b * tokens + t) * 11U) % kVocab;
+                a(b, 0, t, winner) = -0.5F;
+                expected_all[b * tokens + t] = winner;
+            }
+        }
+
+        auto tensor = ttml::core::from_xtensor(a, &ttml::autograd::ctx().get_device());
+        auto got = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(
+            tensor, 0.0F, 7, /* mask */ std::nullopt, /* seed_axes */ std::nullopt, positions));
+
+        std::vector<uint32_t> expected(kBatch);
+        for (uint32_t b = 0; b < kBatch; ++b) {
+            expected[b] = expected_all[b * tokens + positions[b]];
+        }
+        return std::pair<std::vector<uint32_t>, std::vector<uint32_t>>{std::move(got), std::move(expected)};
+    };
+
+    // Builds the program at Ht = 3 (70 tokens pad to 96).
+    const auto first = run(70U, {0U, 37U, 69U});
+    ASSERT_EQ(first.first.size(), kBatch);
+    EXPECT_EQ(first.first, first.second) << "70-token call";
+
+    // Same batch and vocabulary, so under the normalized key this reuses the program above -- but it
+    // needs Ht = 5 (134 tokens pad to 160). Entry 2 at token 133 belongs to tile row 14; replayed
+    // with the stale Ht it would resolve to row 10, which is still entry 2 and still in bounds, but
+    // holds token 0.
+    const auto second = run(134U, {0U, 70U, 133U});
+    ASSERT_EQ(second.first.size(), kBatch);
+    EXPECT_EQ(second.first, second.second) << "134-token call reusing the 70-token program";
+}
+
 TEST_F(TrivialTnnFixedTest, TestSamplingGumbelMatchesSoftmaxDistribution) {
     // The Gumbel-max trick guarantees P(argmax == i) == softmax(logits / temperature)_i. This is the
     // only assertion in the suite that actually pins down the -log(-log(U)) chain: dropping or

@@ -538,7 +538,11 @@ void py_module(nb::module_& m) {
             nb::arg("temperature"),
             nb::arg("seed"),
             nb::arg("logits_padding_mask") = nb::none(),
-            nb::arg("seed_axes") = nb::none());
+            nb::arg("seed_axes") = nb::none(),
+            // `positions` (optional): one token position per batch row, in the job's global batch
+            // order. Prefill should pass the index of each sequence's last real prompt token; the op
+            // then samples only those rows and returns [B, 1, 1, 1].
+            nb::arg("positions") = std::vector<uint32_t>{});
     }
 
     {

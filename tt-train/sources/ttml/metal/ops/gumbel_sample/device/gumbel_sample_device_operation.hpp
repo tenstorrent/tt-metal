@@ -40,6 +40,7 @@ ttml::metal::ops::gumbel_sample::device::GumbelSampleDeviceOperation::tensor_ret
     uint32_t seed,
     const std::vector<uint32_t>& seed_axes = {},
     const std::optional<ttnn::Tensor>& logits_padding_mask = std::nullopt,
+    const std::vector<uint32_t>& positions = {},
     const std::optional<ttnn::Tensor>& preallocated_output = std::nullopt);
 
 }  // namespace ttnn::prim

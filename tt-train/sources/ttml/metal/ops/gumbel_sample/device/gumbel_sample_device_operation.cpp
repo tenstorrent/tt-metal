@@ -64,6 +64,48 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
     // LFSR whose only lock-up state is all-ones, and ckernel_sfpu_rand.h already rewrites
     // 0xFFFFFFFF to 0xFFFFFFFE. A zero seed therefore yields an ordinary reproducible stream.
 
+    if (!args.positions.empty()) {
+        // A device tensor's shape is its LOCAL shard, so `entries` is this device's batch, not the
+        // job's. The caller may hand over either: its own rows (already sharded) or the whole global
+        // list, which the program factory slices by the same seeded linear index the RNG uses. Any
+        // other length is a mismatch the kernel could not detect, so it is rejected here.
+        const auto& mesh_shape = device->shape();
+        uint32_t batch_shards = 1U;
+        for (uint32_t axis : args.seed_axes) {
+            if (axis < mesh_shape.dims() && mesh_shape[axis] > 1U) {
+                batch_shards *= static_cast<uint32_t>(mesh_shape[axis]);
+            }
+        }
+        const uint32_t entries = logits.padded_shape()[0] * logits.padded_shape()[1];
+        TT_FATAL(
+            args.positions.size() == entries || args.positions.size() == entries * batch_shards,
+            "GumbelSample: positions must hold either this device's {} batch rows or all {} rows "
+            "across the {} data-parallel shards, got {}",
+            entries,
+            entries * batch_shards,
+            batch_shards,
+            args.positions.size());
+
+        // Both dataflow kernels carry the full local list as runtime args (the origin core has to
+        // re-derive the target row of any entry it merges), so the batch has to fit alongside the
+        // fixed args in the 256-slot runtime-arg region -- five of them in the reader (it also
+        // carries Ht), four in the writer, so the worst case here is 205.
+        TT_FATAL(
+            entries <= 200U,
+            "GumbelSample: position-aware sampling supports up to 200 batch rows per device, got {}",
+            entries);
+
+        const uint32_t tokens = logits.logical_shape()[-2];
+        for (size_t i = 0; i < args.positions.size(); ++i) {
+            TT_FATAL(
+                args.positions[i] < tokens,
+                "GumbelSample: positions[{}] = {} is outside the {} token positions",
+                i,
+                args.positions[i],
+                tokens);
+        }
+    }
+
     if (tensor_args.logits_padding_mask.has_value()) {
         const auto& mask = tensor_args.logits_padding_mask.value();
         check_tensor(mask, "logits_padding_mask");
@@ -129,14 +171,18 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
 }
 
 GumbelSampleDeviceOperation::spec_return_value_t GumbelSampleDeviceOperation::compute_output_specs(
-    const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output->tensor_spec();
     }
 
-    // Match ttnn::argmax(dim=3, keepdim=true): [B, 1, tokens, 1], UINT32, ROW_MAJOR.
+    // Match ttnn::argmax(dim=3, keepdim=true): [B, 1, tokens, 1], UINT32, ROW_MAJOR -- or
+    // [B, 1, 1, 1] when a position per batch entry was given, since then only one row is sampled.
     auto output_shape = tensor_args.logits.logical_shape();
     output_shape[-1] = 1U;
+    if (!args.positions.empty()) {
+        output_shape[-2] = 1U;
+    }
     return tt::tt_metal::TensorSpec(
         ttnn::Shape(output_shape),
         tt::tt_metal::TensorLayout(
@@ -175,12 +221,41 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
         return tensor.has_value() ? static_cast<int>(tensor->memory_config().buffer_type()) : -1;
     };
 
+    // Whether positions were supplied changes the output spec and the kernel defines; the position
+    // VALUES are runtime args, re-applied per dispatch, so they stay out of the key.
+    const bool position_aware = !args.positions.empty();
+
+    // In position mode the program does not depend on the token dimension AT ALL: the work split is
+    // NC * Wt (see the program factory), the reader's Ht is a runtime arg, and the writer's
+    // token-dim compile-time args are pinned. Normalizing dim -2 out of the key is therefore what
+    // lets one program serve every prompt length. Without it, a rollout whose prompts round to a new
+    // Np missed the cache on every prefill and paid a fresh JIT build of all three kernels -- ~6 s
+    // against ~3 ms for the dispatch itself, measured across 17 generates.
+    //
+    // The dim is NORMALIZED rather than omitted because hash_operation forwards a variadic pack with
+    // no arity tag, and both shapes must be treated: the host tile-rounds Np, so padded == logical
+    // and normalizing one alone would leave the other as a live source of misses.
+    //
+    // Two invariants keep the relaxation sound, and both are load-bearing: the reader's Ht MUST be
+    // re-applied in override_runtime_arguments (a cached program is otherwise replayed with the Ht
+    // it was built at, reading a real but WRONG token row -- in bounds, no fault, silently wrong),
+    // and total_tiles MUST stay NC * Wt in position mode. It also means a captured trace would
+    // freeze Ht into its recorded runtime args; nothing in tt-train captures traces today, but a
+    // trace taken at one Np and replayed at another would read the wrong pages.
+    auto token_normalized = [position_aware](tt::tt_metal::Shape shape) {
+        if (position_aware) {
+            shape[-2] = 1U;
+        }
+        return shape;
+    };
+
     return tt::tt_metal::operation::hash_operation<GumbelSampleDeviceOperation>(
+        position_aware,
         args.temperature > 0.0F,
         args.seed_axes,
         logits.dtype(),
-        logits.logical_shape(),
-        logits.padded_shape(),
+        token_normalized(logits.logical_shape()),
+        token_normalized(logits.padded_shape()),
         static_cast<int>(logits.memory_config().buffer_type()),
         tensor_args.logits_padding_mask.has_value(),
         placement_of(tensor_args.logits_padding_mask),
@@ -197,6 +272,7 @@ ttml::metal::ops::gumbel_sample::device::GumbelSampleDeviceOperation::tensor_ret
     uint32_t seed,
     const std::vector<uint32_t>& seed_axes,
     const std::optional<ttnn::Tensor>& logits_padding_mask,
+    const std::vector<uint32_t>& positions,
     const std::optional<ttnn::Tensor>& preallocated_output) {
     using OperationType = ttml::metal::ops::gumbel_sample::device::GumbelSampleDeviceOperation;
 
@@ -204,6 +280,7 @@ ttml::metal::ops::gumbel_sample::device::GumbelSampleDeviceOperation::tensor_ret
         .temperature = temperature,
         .seed = seed,
         .seed_axes = seed_axes,
+        .positions = positions,
     };
     auto tensor_args = OperationType::tensor_args_t{
         .logits = logits,
