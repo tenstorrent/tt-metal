@@ -1,15 +1,3 @@
-# This file defines the maximum allowed timeout (in minutes) for tests
-# belonging to a given team and workflow.
-# These budgets are enforced during the load-test-matrix step in pipelines.
-
-# This is part of an effort to reorganize the pipelines for clearer resource allocation and ownership.
-
-# Entries are grouped by team -> pipeline -> sku (machine type in CI) : time_budget (in minutes)
-
-# Team names are currently assigned to tests by best guess.
-#   Please message #tt-metal-infra if there are any concerns.
-
-# Example:
 metal_infra:
   pr_gate:
     wh_n150_civ2: 0
@@ -23,7 +11,7 @@ metal_infra:
     wh_llmbox_civ2: 0
     bh_p150b_civ2_viommu: 0
     bh_p150b_civ2: 0
-  sanity: # APC and BHPC will be renamed to sanity
+  sanity:
     CPU: 0
     N150: 0
     N300: 0
@@ -68,8 +56,6 @@ metal_infra:
     wh_galaxy: 0
     bh_galaxy: 0
 
-# Current time budgets are based on sums of existing tests.
-# No official decision has been made yet for division of budgets per team.
 ttnn:
   pr_gate:
     wh_n150_civ2: 15
@@ -128,9 +114,6 @@ ttnn:
     wh_n150_civ2: 60
     bh_p100: 30
     bh_p150b_civ2_viommu: 30
-  # Profiler budgets are kept under their own subheading for now while team /
-  # test-framework assignment is being settled. Tracked in
-  # https://github.com/tenstorrent/tt-metal/issues/44285
   profiler:
     wh_llmbox: 90
     wh_galaxy: 50
@@ -139,33 +122,15 @@ ttnn:
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
   demo:
-    # 10 min for Blaze - high_bw_all_gather CCL perf and accuracy in
-    # tests/pipeline_reorg/blaze_models_prefill_tests.yaml.
     bh_sc1_high_power: 10
-  # Sweep budgets: per-SKU caps for the ttnn-run-sweeps and sweep-validation
-  # workflows.
   sweep:
-    # Each ceiling is the TOTAL time budget for a SKU for ONE run — the sum of
-    # every batch's timeout on that SKU — NOT a per-job number. The sweep matrix
-    # is dynamic (modules discovered at runtime, then batched), so per-job
-    # timeouts are built up per op from tests/pipeline_reorg/ttnn_sweep_tests.yaml
-    # (batch.overhead/default/overrides) and the whole-SKU total is enforced here.
-    # verify_time_budget.py sums skus.<sku>.timeout per (team, sku) from that file
-    # against these caps; compute_sweep_matrix.py additionally reports each run's
-    # live batch-timeout sum against the same budget. Seeded from observed
-    # wall-clock with ceiling headroom (Lead run 29559503564: 29 galaxy batches /
-    # ~4h28m total, no job hitting its ceiling; Model-Traced run 30553811243, where
-    # 42 of 119 jobs WERE killed by their ceiling and the model_traced per-op
-    # numbers had to roughly double — see that file's header). SKU names are the
-    # existing logical SKUs in sku_config.yaml. Shared SKUs cover both targets'
-    # entries, so wh_n150_civ2 carries lead + model_traced.
-    wh_galaxy: 640 # lead galaxy (obs ~4h28m total / 29 batches)
-    wh_n150_civ2: 1100 # lead(150) + model_traced(950)
-    wh_n300_civ2: 990 # model_traced
-    wh_llmbox: 920 # model_traced t3k
-    bh_p100a_civ2_viommu: 660 # model_traced
-    bh_p150b_civ2_viommu: 640 # model_traced
-    bh_p300_viommu: 720 # model_traced
+    wh_galaxy: 640
+    wh_n150_civ2: 1100
+    wh_n300_civ2: 990
+    wh_llmbox: 920
+    bh_p100a_civ2_viommu: 660
+    bh_p150b_civ2_viommu: 640
+    bh_p300_viommu: 720
   sweep_validation:
     wh_n150: 120
     wh_n300: 120
@@ -174,7 +139,7 @@ ttnn:
 
 train:
   merge_gate:
-    bh_p150b_civ2: 30 # 2 merge-gate shards × 15 min
+    bh_p150b_civ2: 30
   unit:
     bh_p100: 90
     bh_p150b_civ2: 90
@@ -210,13 +175,12 @@ shield:
     wh_n150: 100
     bh_p150: 60
 
-# Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
   merge_gate:
     cpu_medium: 10
     wh_n300_civ2: 10
   unit:
-    cpu_medium: 235 # fabric CPU-only shards: unit/sp4-glx/subtorus/pod-revAB/pod-revC ×15 + bh-slices ×25 + pod-llama ×55 + bh-subtorus-sc20 ×40 + bh-blitz-decode ×30 + bh-ring-stress ×10
+    cpu_medium: 235
     wh_llmbox: 60
     wh_galaxy: 25
   stress:
@@ -235,7 +199,7 @@ scaleout:
     wh_llmbox: 185
     wh_galaxy: 100
     bh_galaxy: 60
-    bh_sc1: 20 # single galaxy
+    bh_sc1: 20
     bh_sc4: 90
     bh_sc16: 150
     bh_loudbox: 80
@@ -275,9 +239,6 @@ runtime:
     wh_galaxy: 15
     bh_galaxy: 15
   perf:
-    # +10 min/SKU over the prior 55/40 to cover the new runtime_perf_jit_build job
-    # (JIT-build compile-throughput microbenchmark: 300 kernels x 3 reps, ~2-3 min
-    # measured, budgeted at 10 min in runtime_perf_tests.yaml).
     wh_n300_civ2: 65
     bh_p150_perf: 50
   perf_profiler:
@@ -337,9 +298,7 @@ models:
     bh_p300: 20
     bh_loudbox: 193
     bh_quietbox_2: 90
-    bh_sc1: 20 # single galaxy MLA chunked prefill
-  # Per-tier e2e budgets, consumed by the tiered model pipelines;
-  # The plain `e2e` key is used for the non-tiered pipelines (blackhole-e2e, t3000-e2e).
+    bh_sc1: 20
   e2e_tier1:
     wh_n150: 28
     wh_galaxy_perf: 120
@@ -365,8 +324,6 @@ models:
   unit:
     wh_llmbox: 80
     wh_galaxy_perf: 10
-  # Per-tier unit budgets. Consumed by the tiered model pipelines; the plain `unit`
-  # key is used for the non-tiered pipelines (galaxy-unit, t3000-unit).
   unit_tier1:
     wh_llmbox: 61
     wh_n150: 110
@@ -408,7 +365,6 @@ models:
     wh_galaxy: 345
     wh_galaxy_perf: 90
     bh_galaxy: 470
-    # blaze_models_prefill_tests.yaml sum of bh_sc1 job timeouts (tightened from 840)
     bh_sc1: 437
     bh_sc1_high_power: 143
     wh_n150: 500
