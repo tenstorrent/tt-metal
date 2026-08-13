@@ -914,21 +914,21 @@
     "note": "'e2e' is warmed host wall time from bench/layer_ab.py, min of 3 rounds, no profiler attached, with before and after from the same invocation (logs/final_layer_ab.log); 'device' is the Device Time column of tt-perf-report over a warmed signposted Tracy window, decode divided by its 8 trace replays, recaptured against the final default path (tracy/).",
     "traced_decode_ms_per_token_e2e": {
       "sliding@2048": 0.4547,
-      "full@2048": 0.4238
+      "full@2048": 0.4237
     },
     "traced_decode_ms_per_token_e2e_before": {
-      "sliding@2048": 0.4574,
-      "full@2048": 0.4259
+      "sliding@2048": 0.4573,
+      "full@2048": 0.4257
     },
     "traced_decode_pct_change": {
       "sliding@2048": -0.55,
       "full@2048": -0.5
     },
     "traced_decode_us_device": {
-      "sliding@2048": 439.4,
-      "full@2048": 416.8,
-      "sliding@131071": 437.5,
-      "full@131071": 521.3
+      "sliding@2048": 439.0,
+      "full@2048": 416.6,
+      "sliding@131071": 437.6,
+      "full@131071": 521.5
     },
     "traced_decode_us_device_before": {
       "sliding@2048": 441.5,
@@ -937,18 +937,18 @@
       "full@131071": 522.7
     },
     "prefill_ms_e2e": {
-      "8192_sliding": 17.93,
-      "8192_full": 17.85
+      "8192_sliding": 17.61,
+      "8192_full": 17.02
     },
     "prefill_ms_e2e_before": {
-      "8192_sliding": 19.22,
-      "8192_full": 19.31
+      "8192_sliding": 18.96,
+      "8192_full": 18.99
     },
     "prefill_us_device": {
-      "8192_sliding": 16930.7,
-      "8192_full": 16195.1,
-      "128_sliding": 837.9,
-      "128_full": 813.8
+      "8192_sliding": 16620.3,
+      "8192_full": 16123.3,
+      "128_sliding": 839.9,
+      "128_full": 816.0
     },
     "prefill_us_device_before": {
       "8192_sliding": 18211.6,
@@ -957,28 +957,28 @@
       "128_full": 814.6
     },
     "prefill_pct_change_device": {
-      "8192_sliding": -7.03,
-      "8192_full": -9.65,
-      "128_sliding": -0.22,
-      "128_full": -0.1
+      "8192_sliding": -8.74,
+      "8192_full": -10.05,
+      "128_sliding": 0.01,
+      "128_full": 0.18
     },
     "prefill_norm_us_device": {
-      "8192_sliding": 2422.5
+      "8192_sliding": 2454.8
     },
     "prefill_norm_us_device_before": {
       "8192_sliding": 3460.4
     },
     "single_chip_baseline_e2e": {
-      "traced_decode_sliding@2048": 1.091,
-      "traced_decode_full@2048": 1.0602,
-      "prefill_8192_sliding": 44.26,
-      "prefill_8192_full": 43.31
+      "traced_decode_sliding@2048": 1.0908,
+      "traced_decode_full@2048": 1.0601,
+      "prefill_8192_sliding": 43.8,
+      "prefill_8192_full": 43.12
     },
     "speedup_vs_single_chip": {
-      "traced_decode_sliding@2048": 2.4,
+      "traced_decode_sliding@2048": 2.399,
       "traced_decode_full@2048": 2.502,
-      "prefill_8192_sliding": 2.469,
-      "prefill_8192_full": 2.426
+      "prefill_8192_sliding": 2.488,
+      "prefill_8192_full": 2.515
     },
     "device_ops_per_iteration": {
       "decode_sliding": 45,
@@ -996,9 +996,9 @@
     "measurement_note": "Decode deltas are mean-of-repeats to mean-of-repeats from one invocation of bench/layer_ab.py; prefill e2e spans 3.1-4.2 % across repeats, so the prefill claim is the device-time window, which is the sharper instrument."
   },
   "tests": {
-    "total": 108,
-    "passed": 108,
-    "note": "104 in tests/test_multichip_decoder.py (the multichip stage's 100 plus 2 new contract tests x 2 layer kinds) and 4 in tests/test_multichip_vs_single_chip.py.",
+    "total": 112,
+    "passed": 112,
+    "note": "108 in tests/test_multichip_decoder.py and 4 in tests/test_multichip_vs_single_chip.py.",
     "junit": [
       "doc/optimized_multichip_decoder/test_results.xml",
       "doc/optimized_multichip_decoder/test_results_vs_single_chip.xml"
@@ -1006,17 +1006,15 @@
     "log": "doc/optimized_multichip_decoder/logs/full_test_run.log",
     "vs_single_chip_bar": 0.999,
     "vs_single_chip_pcc": {
-      "prefill_sliding": 0.999721,
+      "prefill_sliding": 0.999718,
       "prefill_full": 0.999609,
       "decode_sliding": 0.999843,
       "decode_full": 0.999183
     },
     "vs_single_chip_note": "Identical to the multichip stage's committed values to six decimals.",
     "real_weight_pcc_at_2049": {
-      "prefill_sliding": 0.997755,
-      "prefill_full": 0.997067,
-      "decode_sliding": 0.998429,
-      "decode_full": 0.997342
+      "prefill_sliding": 0.997736,
+      "prefill_full": 0.99708
     },
     "acceptance_bar_pcc_real_weights": 0.995
   },
@@ -1074,21 +1072,21 @@
       "note": "'e2e' is warmed host wall time from bench/layer_ab.py, min of 3 rounds, no profiler attached, with before and after from the same invocation (logs/final_layer_ab.log); 'device' is the Device Time column of tt-perf-report over a warmed signposted Tracy window, decode divided by its 8 trace replays, recaptured against the final default path (tracy/).",
       "traced_decode_ms_per_token_e2e": {
         "sliding@2048": 0.4547,
-        "full@2048": 0.4238
+        "full@2048": 0.4237
       },
       "traced_decode_ms_per_token_e2e_before": {
-        "sliding@2048": 0.4574,
-        "full@2048": 0.4259
+        "sliding@2048": 0.4573,
+        "full@2048": 0.4257
       },
       "traced_decode_pct_change": {
         "sliding@2048": -0.55,
         "full@2048": -0.5
       },
       "traced_decode_us_device": {
-        "sliding@2048": 439.4,
-        "full@2048": 416.8,
-        "sliding@131071": 437.5,
-        "full@131071": 521.3
+        "sliding@2048": 439.0,
+        "full@2048": 416.6,
+        "sliding@131071": 437.6,
+        "full@131071": 521.5
       },
       "traced_decode_us_device_before": {
         "sliding@2048": 441.5,
@@ -1097,18 +1095,18 @@
         "full@131071": 522.7
       },
       "prefill_ms_e2e": {
-        "8192_sliding": 17.93,
-        "8192_full": 17.85
+        "8192_sliding": 17.61,
+        "8192_full": 17.02
       },
       "prefill_ms_e2e_before": {
-        "8192_sliding": 19.22,
-        "8192_full": 19.31
+        "8192_sliding": 18.96,
+        "8192_full": 18.99
       },
       "prefill_us_device": {
-        "8192_sliding": 16930.7,
-        "8192_full": 16195.1,
-        "128_sliding": 837.9,
-        "128_full": 813.8
+        "8192_sliding": 16620.3,
+        "8192_full": 16123.3,
+        "128_sliding": 839.9,
+        "128_full": 816.0
       },
       "prefill_us_device_before": {
         "8192_sliding": 18211.6,
@@ -1117,28 +1115,28 @@
         "128_full": 814.6
       },
       "prefill_pct_change_device": {
-        "8192_sliding": -7.03,
-        "8192_full": -9.65,
-        "128_sliding": -0.22,
-        "128_full": -0.1
+        "8192_sliding": -8.74,
+        "8192_full": -10.05,
+        "128_sliding": 0.01,
+        "128_full": 0.18
       },
       "prefill_norm_us_device": {
-        "8192_sliding": 2422.5
+        "8192_sliding": 2454.8
       },
       "prefill_norm_us_device_before": {
         "8192_sliding": 3460.4
       },
       "single_chip_baseline_e2e": {
-        "traced_decode_sliding@2048": 1.091,
-        "traced_decode_full@2048": 1.0602,
-        "prefill_8192_sliding": 44.26,
-        "prefill_8192_full": 43.31
+        "traced_decode_sliding@2048": 1.0908,
+        "traced_decode_full@2048": 1.0601,
+        "prefill_8192_sliding": 43.8,
+        "prefill_8192_full": 43.12
       },
       "speedup_vs_single_chip": {
-        "traced_decode_sliding@2048": 2.4,
+        "traced_decode_sliding@2048": 2.399,
         "traced_decode_full@2048": 2.502,
-        "prefill_8192_sliding": 2.469,
-        "prefill_8192_full": 2.426
+        "prefill_8192_sliding": 2.488,
+        "prefill_8192_full": 2.515
       },
       "device_ops_per_iteration": {
         "decode_sliding": 45,
@@ -1156,9 +1154,9 @@
       "measurement_note": "Decode deltas are mean-of-repeats to mean-of-repeats from one invocation of bench/layer_ab.py; prefill e2e spans 3.1-4.2 % across repeats, so the prefill claim is the device-time window, which is the sharper instrument."
     },
     "tests": {
-      "total": 108,
-      "passed": 108,
-      "note": "104 in tests/test_multichip_decoder.py (the multichip stage's 100 plus 2 new contract tests x 2 layer kinds) and 4 in tests/test_multichip_vs_single_chip.py.",
+      "total": 112,
+      "passed": 112,
+      "note": "108 in tests/test_multichip_decoder.py and 4 in tests/test_multichip_vs_single_chip.py.",
       "junit": [
         "doc/optimized_multichip_decoder/test_results.xml",
         "doc/optimized_multichip_decoder/test_results_vs_single_chip.xml"
@@ -1166,17 +1164,15 @@
       "log": "doc/optimized_multichip_decoder/logs/full_test_run.log",
       "vs_single_chip_bar": 0.999,
       "vs_single_chip_pcc": {
-        "prefill_sliding": 0.999721,
+        "prefill_sliding": 0.999718,
         "prefill_full": 0.999609,
         "decode_sliding": 0.999843,
         "decode_full": 0.999183
       },
       "vs_single_chip_note": "Identical to the multichip stage's committed values to six decimals.",
       "real_weight_pcc_at_2049": {
-        "prefill_sliding": 0.997755,
-        "prefill_full": 0.997067,
-        "decode_sliding": 0.998429,
-        "decode_full": 0.997342
+        "prefill_sliding": 0.997736,
+        "prefill_full": 0.99708
       },
       "acceptance_bar_pcc_real_weights": 0.995
     },
@@ -1195,10 +1191,10 @@
       "min_rows_source": "PREFILL_FRACTURED_NORM_MIN_ROWS == PREFILL_NORM_SHARD_MAX_ROWS",
       "what": "The two prefill RMSNorms that follow a reduction (post_attention_layernorm after o_proj, post_feedforward_layernorm after mlp_down) run distributed at the 1664-wide reduce-scatter shard (rms_norm_pre_all_gather -> statistics all_gather -> rms_norm_post_all_gather), and the all_gather the reduction owed anyway carries the normalised tensor back to full width.",
       "why_it_needs_no_new_contract": "This model's prefill norms sit between the reduction and the residual add, so the norm is fractured while the residual stays 6656-wide and replicated. The layer's public prefill boundary is unchanged: DRAM-interleaved replicated in and out. This is doc/multichip_decoder limitation 1, which was deferred on the assumption that it required a second residual contract; it does not.",
-      "worth": "prefill device time -7.03 % (sliding) / -9.65 % (full) at 8192 rows; prefill norms 3460.4 -> 2422.5 us",
-      "gated_because": "ungated it cost the 128-row window +13.42 % / +13.58 %: the saving scales with rows, the statistics gather is fixed",
+      "worth": "prefill device time -8.74 % (sliding) / -10.05 % (full) at 8192 rows; prefill norms 3460.4 -> 2454.8 us",
+      "gated_because": "ungated it costs the 128-row window +22.9 % / +9.3 % of warmed prefill (logs/ab_frac_norm_gate.log)",
       "arithmetic": "identical to a full-width RMSNorm; the statistics gather combines per-device partial sums over all 6656 channels",
-      "pcc_effect": "prefill vs single-chip 0.999839 -> 0.999836; real-weight prefill 0.997755 -> 0.997736"
+      "pcc_effect": "prefill vs single-chip 0.999839 -> 0.999836; fractured-vs-full-width directly 0.999939 (sliding) / 0.999888 (full)"
     }
   }
 }

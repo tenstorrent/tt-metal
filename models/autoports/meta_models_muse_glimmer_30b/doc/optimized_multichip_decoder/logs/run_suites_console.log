@@ -1,5 +1,5 @@
-104 passed[0m, [33m[1m3 warnings[0m[33m in 529.91s (0:08:49)[0m[33m ==================[0m
-4 passed[0m, [33m[1m3 warnings[0m[33m in 35.06s[0m[33m ========================[0m
+108 passed[0m, [33m[1m3 warnings[0m[33m in 541.39s (0:09:01)[0m[33m ==================[0m
+4 passed[0m, [33m[1m3 warnings[0m[33m in 34.83s[0m[33m ========================[0m
 worst[sliding seq_len=2049 batch=1]: 0.999836 on prefill
 worst[full seq_len=2049 batch=1]: 0.999804 on prefill
 worst[sliding seq_len=12345 batch=4]: 0.999718 on prefill

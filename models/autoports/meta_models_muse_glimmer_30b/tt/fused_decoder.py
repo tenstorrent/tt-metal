@@ -502,6 +502,11 @@ class _FusedNorm(LightweightModule):
         self.weight_rm = weight_row_major
         self.eps = eps
         self.compute_kernel_config = compute_kernel_config
+        #: The per-device slice of ``weight``, for the distributed form of this
+        #: norm.  Only the multichip stage builds one, and only the two norms that
+        #: follow a reduction can use it; ``None`` means the distributed form is
+        #: not available and the caller must use the full-width one.
+        self.local_weight = None
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Interleaved (prefill) RMSNorm."""

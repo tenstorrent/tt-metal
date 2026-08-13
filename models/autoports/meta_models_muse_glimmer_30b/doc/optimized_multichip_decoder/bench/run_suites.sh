@@ -28,3 +28,9 @@ grep -aoE "[0-9]+ (passed|failed)[^|]*" "$D/logs/vs_single_chip_run.log" | tail 
 # The multichip-vs-single-chip worst values are the ones that can see a
 # parallelisation or scheduling fault; print them, not just the pass count.
 grep -haoE "worst\[[^]]*\]: [0-9.]+ on [a-z0-9]+" "$D/logs/vs_single_chip_run.log" || true
+
+# Every mechanically-sourced figure in README.md, work_log.md and
+# context_contract.json, re-derived from the committed CSVs and logs.  Three
+# rounds of $stage-review found the same class of defect -- a number from a
+# superseded run -- so it is now a gate rather than a habit.
+python "$D/bench/check_reported_figures.py"

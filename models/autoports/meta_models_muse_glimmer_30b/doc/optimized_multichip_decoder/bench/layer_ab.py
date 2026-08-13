@@ -115,6 +115,9 @@ CANDIDATES.update(
         # The prefill norms back at full width, i.e. the reduction finished before
         # the norm instead of around it.
         "no_frac_norm": {"prefill_fractured_norm": False},
+        # The fractured prefill norm with its row gate removed, which is what
+        # measures why the gate exists: run at --prefill-seq 128 against `tp4`.
+        "frac_norm_ungated": {"prefill_fractured_norm_min_rows": 0},
         "before": dict(_BEFORE),
         "beforeb": dict(_BEFORE),
     }

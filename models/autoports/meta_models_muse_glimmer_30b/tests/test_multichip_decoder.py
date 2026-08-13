@@ -98,6 +98,7 @@ from models.autoports.meta_models_muse_glimmer_30b.tests.test_functional_decoder
 )
 from models.autoports.meta_models_muse_glimmer_30b.tt.functional_decoder import LAYER_KIND_SLIDING, TILE_SIZE
 from models.autoports.meta_models_muse_glimmer_30b.tt.multichip_decoder import (
+    PREFILL_FRACTURED_NORM_MIN_ROWS,
     CCL_TOPOLOGY,
     DEFAULT_DECODE_CCL_DTYPE,
     DEFAULT_MESH_SHAPE,
@@ -184,6 +185,15 @@ UNPADDED_LOCAL_INTERMEDIATE = 4992
 
 #: Released-checkpoint prefill lengths, matching the single-chip stage's list.
 REAL_PREFILL_SEQ_LENS = (1, 100, 2049, 4097, 8193, 12345)
+
+#: The inherited lengths plus **256**, which this stage needs and the earlier ones
+#: did not: 256 is the largest row count that still uses the L1-sharded prefill
+#: norm (``PREFILL_NORM_SHARD_MAX_ROWS``), so it is both the L1-tightest window in
+#: the suite -- the one the ``L1_SMALL`` semaphore budget is sized against -- and
+#: the last row count at which the fractured prefill norm is gated *off*
+#: (``PREFILL_FRACTURED_NORM_MIN_ROWS``).  Both boundaries land on it, so it is the
+#: one length where getting either wrong is visible.
+MULTICHIP_PREFILL_SEQ_LENS = tuple(sorted(set(PREFILL_SEQ_LENS) | {256}))
 
 SOAK_STEPS = int(os.environ.get("MG_MULTICHIP_SOAK_STEPS", "64"))
 
@@ -638,7 +648,7 @@ class _CollectiveSpy:
 
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("kind", LAYER_KINDS)
-@pytest.mark.parametrize("seq_len", PREFILL_SEQ_LENS)
+@pytest.mark.parametrize("seq_len", MULTICHIP_PREFILL_SEQ_LENS)
 def test_prefill_pcc(multichip_mesh, decoder_cache, reference_layers, kind, seq_len):
     """The nine inherited lengths, including the non-aligned ones.
 
@@ -1710,6 +1720,69 @@ def test_collective_implementation_is_split_by_payload(multichip_mesh, decoder_c
     ttnn.deallocate(page_table)
     for tensor in (current_pos, rope_pos_ids):
         ttnn.deallocate(tensor)
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("kind", LAYER_KINDS)
+def test_fractured_prefill_norm_matches_the_full_width_one(multichip_mesh, decoder_cache, reference_layers, kind):
+    """The distributed norm inside the reduction computes what the full-width one does.
+
+    The shipped prefill path stops its two post-reduction reductions at the
+    reduce-scatter and normalises at 1664 wide, using the statistics gather to
+    recover the sum over all 6656 channels (DEFAULT_PREFILL_FRACTURED_NORM).  The
+    claim that this is *arithmetically* the same operation, and not merely close
+    enough to pass a 0.995 PCC bar against HF, is what this pins: the same layer
+    with ``prefill_fractured_norm=False`` is run on the same inputs and the two
+    outputs are compared directly, with no reference in between.
+
+    They are not bit-identical and are not expected to be -- a distributed RMSNorm
+    sums four per-device partial ``sum(x^2)`` where the full-width one does a
+    single 6656-wide reduction, so the two differ by BF16 re-association.  Measured
+    at 2048 rows: **0.999939** (``sliding``) and **0.999888** (``full``).  The bar
+    is set below both at 0.9998 -- tight enough to be discriminating (a locally
+    normalised shard, a wrong weight slice, or a mis-paired norm would each score
+    far below 0.99, because they change the normaliser rather than its rounding)
+    and loose enough not to pin a rounding order.
+
+    That 1e-4 does not reach the layer's own accuracy surface, which is dominated
+    by the BFP4/BFP8 precision policy an order of magnitude above it: the
+    multichip-vs-single-chip prefill check moves only 3e-6 (0.999839 -> 0.999836)
+    and the real-weight prefill checks by 2e-6.
+
+    Also checks the row gate: at or below ``prefill_fractured_norm_min_rows`` the
+    layer must produce the *same tensor as itself*, because the fractured path is
+    off there and the two configurations are the same code.
+    """
+    layer_idx, layer = reference_layers[kind]
+    fractured = build_multichip(multichip_mesh, decoder_cache, kind)
+    replicated = build_multichip(multichip_mesh, decoder_cache, kind, prefill_fractured_norm=False)
+    assert fractured.prefill_fractured_norm and not replicated.prefill_fractured_norm
+    page_table = make_page_table(multichip_mesh, 1, SHORT_MAX_SEQ, seed=717171)
+
+    for seq_len in (2048, PREFILL_FRACTURED_NORM_MIN_ROWS):
+        hidden = R.synthetic_hidden_states(1, seq_len, seed=717172 + seq_len)
+        outs = []
+        for decoder in (fractured, replicated):
+            out = decoder.prefill_forward(
+                to_device_hidden(multichip_mesh, hidden), page_table=page_table, user_id=0
+            )
+            outs.append(first_device(out).reshape(1, seq_len, -1))
+            ttnn.deallocate(out)
+        if seq_len > PREFILL_FRACTURED_NORM_MIN_ROWS:
+            assert_pcc(
+                f"multichip fractured-vs-full-width prefill norm[{kind}] seq_len={seq_len}",
+                outs[1],
+                outs[0],
+                threshold=0.9998,
+            )
+        else:
+            # Below the gate both configurations run the identical code path, so
+            # anything but equality means the gate is not doing what it says.
+            assert torch.equal(outs[0], outs[1]), (
+                f"at {seq_len} rows the fractured norm is gated off, so the two "
+                f"configurations must be the same computation"
+            )
+    ttnn.deallocate(page_table)
 
 
 @pytest.mark.timeout(1800)

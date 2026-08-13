@@ -922,6 +922,7 @@ class MultichipDecoder(OptimizedDecoder):
         ccl_num_links: int | None = None,
         ccl_ag_barrier: bool = True,
         prefill_fractured_norm: bool = DEFAULT_PREFILL_FRACTURED_NORM,
+        prefill_fractured_norm_min_rows: int = PREFILL_FRACTURED_NORM_MIN_ROWS,
         **kwargs,
     ) -> None:
         kwargs.setdefault("decode_matmul", MULTICHIP_DECODE_MATMUL)
@@ -961,6 +962,10 @@ class MultichipDecoder(OptimizedDecoder):
         #: collective, because it needs the reduce-scatter and the all-gather as
         #: separate ops with the norm between them.
         self.prefill_fractured_norm = prefill_fractured_norm and self.prefill_ccl_impl == "async"
+        #: Rows at or below which the reduction is finished before the norm.  A
+        #: knob rather than a constant so the ungated arm -- the one that measures
+        #: why the gate exists -- runs from committed code.
+        self.prefill_fractured_norm_min_rows = prefill_fractured_norm_min_rows
         #: Set by ``_prefill_projection`` when it hands back a *scattered* partial
         #: instead of a reduced one, and consumed by the very next
         #: ``_prefill_norm``.  The pairing is structural: both row-parallel prefill
@@ -1060,6 +1065,7 @@ class MultichipDecoder(OptimizedDecoder):
         ccl_num_links: int | None = None,
         ccl_ag_barrier: bool = True,
         prefill_fractured_norm: bool = DEFAULT_PREFILL_FRACTURED_NORM,
+        prefill_fractured_norm_min_rows: int = PREFILL_FRACTURED_NORM_MIN_ROWS,
         **kwargs,
     ) -> "MultichipDecoder":
         """Same contract as ``OptimizedDecoder.from_state_dict`` on a mesh.
@@ -1280,6 +1286,7 @@ class MultichipDecoder(OptimizedDecoder):
             ccl_num_links=ccl_num_links,
             ccl_ag_barrier=ccl_ag_barrier,
             prefill_fractured_norm=prefill_fractured_norm,
+            prefill_fractured_norm_min_rows=prefill_fractured_norm_min_rows,
             sharded_decode_io=sharded_decode_io,
             **({} if decode_fused_activation is None else {"decode_fused_activation": decode_fused_activation}),
         )
@@ -1390,16 +1397,17 @@ class MultichipDecoder(OptimizedDecoder):
             # barrier; see DEFAULT_DECODE_CCL_IMPL for what the all-gather's
             # barrier is and is not known to buy.
             #
-            # They are *not* double-buffered, because in this layer they cannot
-            # be reached concurrently: the two reductions are separated by the
-            # norm, the residual add and two matmuls that consume one's output to
-            # build the other's input, so they are ordered by data dependency
-            # rather than by convention.  The count matters because this region is
+            # They are *not* double-buffered, because every collective in this
+            # layer is ordered by data dependency rather than by convention: each
+            # consumes the previous one's output.  That includes the two gathers
+            # inside a fractured prefill norm, where the statistics gather's
+            # result is the post_all_gather's input and the post_all_gather's
+            # result is the payload gather's input.  A future edit that breaks
+            # that chain has to double-buffer these.  The count matters because this region is
             # shared with the wrapper collectives' one-semaphore-per-program
             # allocations, and every 256 B here is one fewer distinct wrapper CCL
             # program the mesh can hold before they spill into the main L1 pool
-            # and fragment it.  At fourteen, the 256-row prefill in
-            # test_collective_implementation_is_split_by_payload failed under
+            # and fragment it.  At fourteen, that test's prefill failed under
             # watcher with "Statically allocated circular buffers ... clash with
             # L1 buffers"; at seven it passes.
             sems = {
@@ -1644,7 +1652,7 @@ class MultichipDecoder(OptimizedDecoder):
             )
         if role not in ROW_PARALLEL_ROLES:
             return out
-        if self.prefill_fractured_norm and rows > PREFILL_FRACTURED_NORM_MIN_ROWS:
+        if self.prefill_fractured_norm and rows > self.prefill_fractured_norm_min_rows:
             # Stop at the scatter and hand the 1664-wide partial to the norm that
             # is structurally guaranteed to consume it next; ``_prefill_norm``
             # finishes the reduction with the gather it would have done anyway.
@@ -1680,10 +1688,9 @@ class MultichipDecoder(OptimizedDecoder):
         Identity of the tensor is checked rather than its width, so a norm that is
         *not* the paired consumer cannot accidentally take the fractured path.
         """
-        pending = self._pending_scatter
+        pending, self._pending_scatter = self._pending_scatter, None
         if pending is None or x is not pending:
             return super()._prefill_norm(norm, x)
-        self._pending_scatter = None
         stats = ttnn.rms_norm_pre_all_gather(x, compute_kernel_config=norm.compute_kernel_config, dtype=ttnn.bfloat16)
         gathered_stats = self._prefill_all_gather(stats)
         ttnn.deallocate(stats)

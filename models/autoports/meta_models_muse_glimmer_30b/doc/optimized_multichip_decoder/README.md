@@ -3,8 +3,8 @@
 An optimization pass over the [multichip decoder](../multichip_decoder/README.md),
 in place, on the same four Blackhole dies. Same public contract, same paged
 semantics, same 131072-token capability, the same correctness floor — and
-**7.0–9.7 % faster prefill device time** plus **0.5 % faster traced decode**,
-taking the prefill speedup against one chip from 2.30x/2.33x to **2.47x/2.43x**
+**8.7–10.1 % faster prefill device time** plus **0.6 % faster traced decode**,
+taking the prefill speedup against one chip from 2.30x/2.33x to **2.49x/2.51x**
 and decode from 2.39x/2.49x to **2.40x/2.50x**.
 
 Three things ship, and the largest is the last one this stage found: the two
@@ -33,21 +33,21 @@ two or three times in that same process as its own repeat control.
 
 | window | before | after | delta |
 | --- | --- | --- | --- |
-| traced decode, sliding @2048 | 0.4574 / 0.4571 | **0.4547 / 0.4545 / 0.4547** | **−0.57 %** |
-| traced decode, full @2048 | 0.4257 / 0.4264 | **0.4238 / 0.4239 / 0.4240** | **−0.51 %** |
-| prefill 8192, sliding | 19.17 / 19.27 ms | **18.00 / 18.17 / 17.62 ms** | **−6.7 %** |
-| prefill 8192, full | 19.84 / 18.77 ms | **17.37 / 18.09 / 18.10 ms** | **−7.5 %** |
+| traced decode, sliding @2048 | 0.4573 / 0.4569 | **0.4547 / 0.4546 / 0.4544** | **−0.55 %** |
+| traced decode, full @2048 | 0.4257 / 0.4261 | **0.4237 / 0.4238 / 0.4238** | **−0.50 %** |
+| prefill 8192, sliding | 18.96 / 18.81 ms | **17.61 / 17.49 / 17.71 ms** | **−6.8 %** |
+| prefill 8192, full | 18.99 / 18.48 ms | **17.02 / 17.25 / 17.17 ms** | **−8.5 %** |
 
-The delta quoted is **mean-of-the-repeats to mean-of-the-repeats** — (0.4574 +
-0.4571)/2 against (0.4547 + 0.4545 + 0.4547)/3, and likewise for `full` — and every
-other percentage in this document uses the same rule. Best-to-best gives −0.57 % /
-−0.45 %. Traced decode reproduces to 1e-4 within a run and across runs, so the
+The delta quoted is **mean-of-the-repeats to mean-of-the-repeats** — (0.4573 +
+0.4569)/2 against (0.4547 + 0.4546 + 0.4544)/3, and likewise for `full` — and every
+other percentage in this document uses the same rule. Best-to-best gives −0.55 % /
+−0.44 %. Traced decode reproduces to 1e-4 within a run and across runs, so the
 effect is an order of magnitude above the noise either way.
 
 Warmed prefill spans 3.1 % (`sliding`) / 4.2 % (`full`) across the repeats, so
 the prefill rows are quoted mean-to-mean and are only reportable because the
 effect is now larger than that spread. Device time, which is the sharper
-instrument, puts it at **−7.03 % (`sliding`) / −9.65 % (`full`)** on the
+instrument, puts it at **−8.74 % (`sliding`) / −10.05 % (`full`)** on the
 8192-token window.
 
 Against one chip, both measured in the same harness on the same host
@@ -61,10 +61,10 @@ tensor parallelism got better:
 
 | window | 1 chip | 4 chips | speedup | was |
 | --- | --- | --- | --- | --- |
-| traced decode, sliding @2048 | 1.0910 | **0.4547 ms/token** | **2.40x** | 2.39x |
-| traced decode, full @2048 | 1.0602 | **0.4238 ms/token** | **2.50x** | 2.49x |
-| prefill 8192, sliding | 44.26 | **17.93 ms** | **2.47x** | 2.30x |
-| prefill 8192, full | 43.31 | **17.85 ms** | **2.43x** | 2.33x |
+| traced decode, sliding @2048 | 1.0908 | **0.4546 ms/token** | **2.40x** | 2.39x |
+| traced decode, full @2048 | 1.0601 | **0.4238 ms/token** | **2.50x** | 2.49x |
+| prefill 8192, sliding | 43.80 | **17.60 ms** | **2.49x** | 2.30x |
+| prefill 8192, full | 43.12 | **17.15 ms** | **2.51x** | 2.33x |
 
 The two prefill rows are **not a claim**, for the same reason the Result table's
 prefill rows are not: at 3.4–4.1 % same-config spread this harness cannot resolve
@@ -77,21 +77,21 @@ replays, against the multichip stage's tables captured the same way:
 
 | window | before | after | delta | ops/iter |
 | --- | --- | --- | --- | --- |
-| decode sliding / full @2048 | 441.5 / 419.0 | **439.4 / 416.8** | −0.48 / −0.51 % | 46→45 / 36→35 |
-| decode sliding / full @131071 | 440.5 / 522.7 | **437.5 / 521.3** | −0.69 / −0.26 % | 46→45 / 36→35 |
-| prefill 8192 sliding / full | 18211.6 / 17925.2 | **16930.7 / 16195.1** | **−7.03 / −9.65 %** | 30→34 / 28→32 |
-| prefill 128 sliding / full | 839.8 / 814.6 | 837.9 / 813.8 | −0.22 / −0.10 % | unchanged |
+| decode sliding / full @2048 | 441.5 / 419.0 | **439.0 / 416.6** | −0.58 / −0.57 % | 46→45 / 36→35 |
+| decode sliding / full @131071 | 440.5 / 522.7 | **437.6 / 521.5** | −0.67 / −0.23 % | 46→45 / 36→35 |
+| prefill 8192 sliding / full | 18211.6 / 17925.2 | **16620.3 / 16123.3** | **−8.74 / −10.05 %** | 30→34 / 28→32 |
+| prefill 128 sliding / full | 839.8 / 814.6 | 839.9 / 816.0 | +0.01 / +0.18 % | unchanged |
 
 The 8192-row prefill window gains four ops and gets 7–10 % faster: the six
-RMSNorms fall from **3460.4 to 2422.5 μs** (−30 %) because the two that follow a
-reduction now run at 1664 wide, against **+130.9 μs** of extra collective for the
-two statistics gathers that buys. The 128-row window is unchanged because the
+RMSNorms fall from **3460.4 to 2454.8 μs** (−29 %) because the two that follow a
+reduction now run at 1664 wide, and the two statistics gathers that buys cost
+**121.1 μs** (the 67.7 and 53.4 μs `AllGatherAsync` rows, against the two payload gathers' 640.1 and 635.5). The 128-row window is unchanged because the
 fractured norm is gated off there — see below.
 
 The decode op count drops by exactly one — the `sharded_to_interleaved` the
 boundary contract removes — and `ShardedToInterleaved` falls from 5.85 μs over 5
-instances to **3.98 μs over 4**. The decode collectives are unchanged
-(`ReduceScatter` 29.36 + `AllGather` 24.09 = 53.45 μs against 53.24), which is the
+instances to **3.97 μs over 4**. The decode collectives are unchanged
+(`ReduceScatter` 29.25 + `AllGather` 24.13 = 53.38 μs against 53.24), which is the
 point: decode keeps the wrappers, so the whole device-time delta is the removed
 conversion.
 
@@ -101,10 +101,10 @@ Each knob measured on its own, in the same invocation, by turning exactly one of
 
 | change | sliding | full | worth |
 | --- | --- | --- | --- |
-| **fractured prefill norm** (`no_frac_norm` turns it off) | prefill 19.11 → 17.93 ms | prefill 18.10 → 17.85 ms | **the largest win in the stage**: −30 % of prefill norm time |
-| **sharded layer boundary** (`no_sharded_io` turns it off) | 0.4573 → 0.4547 | 0.4258 → 0.4238 | **0.57 % / 0.47 %** of decode |
+| **fractured prefill norm** (`no_frac_norm` turns it off) | prefill 18.32 → 17.61 ms | prefill 18.10 → 17.02 ms | **the largest win in the stage**: −29 % of prefill norm time |
+| **sharded layer boundary** (`no_sharded_io` turns it off) | 0.4571 → 0.4547 | 0.4258 → 0.4237 | **0.53 % / 0.49 %** of decode |
 | **async prefill collective** | not visible in decode | not visible in decode | **15.2 % of the prefill collective**, and a prerequisite for the fractured norm |
-| async collective on *decode* too (`ccl_async`) | 0.4555 | 0.4244 | **0.2 % slower** — rejected, below |
+| async collective on *decode* too (`ccl_async`) | 0.4554 | 0.4246 | **0.2 % slower** — rejected, below |
 | persistent CCL staging buffers | 0.31 % faster | 0.29 % faster | **rejected on correctness**, below |
 
 Decode and prefill were improved by different changes: decode by the boundary
@@ -170,7 +170,7 @@ on its own:
 | payload | async, with AG barrier | wrapper |
 | --- | --- | --- |
 | prefill, 8192 rows, BFP8 (op level) | **1348.0 μs** | 1588.7 (`all_reduce`) |
-| decode, 40 KB (traced whole layer, sliding / full) | 0.4555 / 0.4244 | **0.4545 / 0.4238** |
+| decode, 40 KB (traced whole layer, sliding / full) | 0.4554 / 0.4246 | **0.4545 / 0.4236** |
 
 The decode rows do not overlap across their three rounds
 (`logs/final_layer_ab.log`), so 0.2 % is a real ordering, not noise. **Prefill
@@ -230,15 +230,17 @@ They must be in `L1_SMALL`. Twelve of them in the main L1 pool (the first
 implementation) sit at the top of it for the life of the mesh, and the decode step
 has only 7,296 B of headroom there — it made the *next* sharded-norm program fail
 with *"Statically allocated circular buffers in program 8764 clash with L1
-buffers"* in 7 of the 104 acceptance tests.
+buffers"* in 7 of the acceptance tests.
 
 **The cost, stated plainly for the full-model stage**: those 1,792 B are 7 fewer
 distinct wrapper CCL programs the mesh can hold before they spill into the main L1
 pool and fragment it. A test session that builds hundreds hits this — the suite's
 `_bound_ccl_semaphores` floor had to move from 1,536 B to 2,560 B, and
 `test_collective_implementation_is_split_by_payload` clears the program cache up
-front because it runs the L1-tightest window (a 256-row prefill) *and* a decode in
-one test. A stacked model does not: it dispatches two CCL shapes per layer kind
+front because it runs a prefill *and* a decode in one test. Its prefill is 512
+rows, above the fractured-norm gate, so it exercises the shipped path; the 256-row
+window — the L1-tightest one, and the last row count at which the fractured norm
+is gated off — is covered by `MULTICHIP_PREFILL_SEQ_LENS`. A stacked model does not: it dispatches two CCL shapes per layer kind
 for decode and one per prefill chunk size.
 
 ### Persistent staging buffers — rejected, on correctness
@@ -313,24 +315,31 @@ stage's):
 
 | | before | after |
 | --- | --- | --- |
-| six RMSNorms | 3460.4 μs | **2422.5 μs** (−30 %) |
-| collectives | 3447.8 μs | 3578.7 μs (+130.9, the two statistics gathers) |
-| 8192-row window, sliding / full | 18211.6 / 17925.2 | **16930.7 / 16195.1** (−7.03 / −9.65 %) |
+| six RMSNorms | 3460.4 μs | **2454.8 μs** (−29 %) |
+| collectives | 3447.8 μs | **3214.5 μs** — *down* 233.3, because §Collectives' async pair is in the same capture; the two statistics gathers inside that total are 67.7 + 53.4 = **121.1 μs** |
+| 8192-row window, sliding / full | 18211.6 / 17925.2 | **16620.3 / 16123.3** (−8.74 / −10.05 %) |
 | ops per window | 30 / 28 | 34 / 32 |
 
-`bench/fractured_prefill_probe.py` priced the two arms as complete stackable
-chains before any of this was implemented — 4443.9 μs against 5902.1 for two
-sublayers at 8192 rows, i.e. 24.7 % — and the whole-layer result is consistent
-with it.
+`bench/fractured_prefill_probe.py` priced the family before any of this was
+implemented — 4443.9 μs against 5902.1 for two sublayers at 8192 rows, i.e.
+24.7 %. **It prices more than what ships**: its fractured arm also does the
+*residual add* at 1664, which the shipped path does not (the add stays 6656-wide
+and replicated, which is the whole reason no second residual contract is needed).
+The two full-width residual adds are 654.0 + 555.7 = 1209.7 μs in the committed
+after-capture, so roughly 0.9 ms of the probe's 1.46 ms gap is a saving the
+shipped norm does **not** take. What ships is the norm half; the residual half is
+[limitation 7](#limitations-and-known-issues).
 
 **It is gated at 256 rows** (`PREFILL_FRACTURED_NORM_MIN_ROWS`, equal to
 `PREFILL_NORM_SHARD_MAX_ROWS` by construction). The saving scales with the rows
 the norm reads while the statistics gather it adds is fixed and latency-bound, so
-below that the trade inverts: ungated, the 128-row window measured **+13.4 % /
-+13.6 %** of device time. Gated, it is −0.22 % / −0.10 %, i.e. untouched. That
-threshold is exactly where the inherited full-width norm stops being a cheap
-L1-sharded kernel and becomes a DRAM-interleaved one — which is the thing this
-replaces.
+below that the trade inverts. The `frac_norm_ungated` candidate removes the gate
+from committed code and measures it (`logs/ab_frac_norm_gate.log`): at 128 rows
+ungated prefill is **1.34 / 1.18 ms** against the gated **1.09 / 1.08**, i.e.
+**+22.9 % / +9.3 %**. Gated, the 128-row device window reads −0.22 % / −0.10 %,
+i.e. untouched. The threshold is exactly where the inherited full-width norm stops
+being a cheap L1-sharded kernel and becomes a DRAM-interleaved one — which is the
+thing this replaces.
 
 Decode is unchanged: its norms are already width-sharded in L1 and its residual is
 already sharded, and the multichip stage's floor-calibrated probe refutes the
@@ -403,7 +412,7 @@ Every row is a candidate this stage ran on this mesh, not a quotation.
 
 | candidate | verdict | evidence |
 | --- | --- | --- |
-| async collective on the **decode** payload | rejected: **0.4555 / 0.4244** against the wrappers' **0.4545 / 0.4238**, three non-overlapping rounds each | `logs/final_layer_ab.log` |
+| async collective on the **decode** payload | rejected: **0.4554 / 0.4246** against the wrappers' **0.4545 / 0.4236**, in one invocation on the shipped default | `logs/final_layer_ab.log` |
 | omitting the all-gather barrier semaphore | not taken: worth 0.13 % of the prefill collective (1346.3 vs 1348.0); a watcher trip was observed once on a build that also carried the rejected persistent buffers and has **not** reproduced since | `logs/prefill_ccl_probe.log`, `logs/watcher_no_ag_barrier.log` |
 | persistent CCL staging buffers | rejected: 0.31 % faster, intermittently wrong on the **first** decode step (PCC 0.7395 / 0.7749); two fixes moved the fault instead of removing it | `logs/regression_bisect.log`, `logs/regression_bisect_fixed.log` |
 | fused `matmul_reduce_scatter_async`, DRAM-sharded config | blocked, exact contract: *"Unsupported MatmulProgramConfig type for MatmulReduceScatterAsync. Needs to be 2D Multicast."* | `logs/fused_ccl_probe.log` |
@@ -411,7 +420,7 @@ Every row is a candidate this stage ran on this mesh, not a quotation.
 | `all_gather_matmul_async` (gathered-input `o_proj`, OPT-008) | rejected: 64.74 μs fused / 65.84 unfused against **44.91** for the shipped decomposition — 44 % slower *with* the fusion | `logs/fused_ccl_gathered_input.log` |
 | packed `wqkv`+`attn_gate` (OPT-001) | rejected: 41.05 vs **40.50** μs. `in0_block_w=13` is legal here, unlike on one chip, so this rejection is about the split cost, not the block size | `logs/packing_probe.log` |
 | packed MLP gate/up (OPT-010) | rejected: 145.66 vs **142.96** μs at `in0_block_w=13`; 4 and 2 are illegal (`(shard_shape[1]/tile_width) % in0_block_w == 0`), 1 costs 87 % | `logs/packing_probe.log` |
-| `o_proj` working shard at 8 cores, `in0_block_w=4` (OPT-011) | rejected **on the shipped path**: it *wins* on `sliding` (0.4541 / 0.4543 / 0.4538 against 0.4547 / 0.4545 / 0.4547, non-overlapping) and is inside the noise on `full` (0.4236 / 0.4237 / 0.4238 against 0.4238 / 0.4239 / 0.4240, overlapping at 0.4238) -- and costs an extra reshard op, the single-grid invariant three structural tests assert, and PCC headroom: shipping it moved the worst vs-single-chip check to **0.999159** against a 0.999 bar, from 0.999183. Not a good trade for a stacking baseline | `logs/ab_oproj_workshard_final.log` (the shipped-geometry rows are its `tp4`/`tp4b`/`tp4c`), `logs/ab_oproj_workshard.log` |
+| `o_proj` working shard at 8 cores, `in0_block_w=4` (OPT-011) | rejected **on the shipped path**: it *wins* by 0.11 % on `sliding` (0.4541 against 0.4547 / 0.4546 / 0.4544) and is inside the noise on `full` (0.4236 against 0.4237 / 0.4238 / 0.4238), in one invocation on the shipped default -- and costs an extra reshard op, the single-grid invariant three structural tests assert, and PCC headroom: shipping it moved the worst vs-single-chip check to **0.999159** against a 0.999 bar, from 0.999183. Not a good trade for a stacking baseline | `logs/final_layer_ab.log` — `oproj_c8_bw4` against `tp4`/`tp4b`/`tp4c` in one invocation on the current default — and `logs/ab_oproj_workshard.log` for the L1 wall |
 | `o_proj` at 4 / 2 / 1 cores | rejected: 4 cores slower; 2 and 1 fail L1 with the exact circular-buffer messages | `logs/ab_oproj_workshard.log` |
 | BFP4 attention weights (OPT-007) | rejected on the **released checkpoint, on this topology**: 0.49 % faster decode, prefill PCC 0.9695 / 0.9732 and decode PCC 0.9818 / 0.9748 against a 0.995 bar | `logs/real_weight_precision.log` |
 | BF16 attention weights | rejected: 57 % / 61 % slower decode, no PCC gain | `logs/real_weight_precision.log` |
@@ -428,29 +437,36 @@ Every row is a candidate this stage ran on this mesh, not a quotation.
 The multichip stage's two modules are the gate, **unchanged**: a faster layer does
 not get a lower bar.
 
-**104 passed** (`logs/full_test_run.log`, [`test_results.xml`](test_results.xml))
-and **4 passed** (`logs/vs_single_chip_run.log`). The four new tests are this
-stage's own contracts; the other 100 are the multichip stage's, with two updated
-where the *contract* changed rather than the behaviour.
+**108 passed** (`logs/full_test_run.log`, [`test_results.xml`](test_results.xml))
+and **4 passed** (`logs/vs_single_chip_run.log`). Eight of the 108 are this stage's
+own contracts — three new tests across two layer kinds, plus a 256-row prefill —
+and three of the multichip stage's were updated where the *contract* changed
+rather than the behaviour.
 
 The comparison that can actually see a parallelisation or scheduling fault —
 multichip against a single-chip `OptimizedDecoder` on identical weights, inputs,
-page tables and positions, at a 0.999 bar — reproduces the multichip stage's
-numbers **exactly**:
+page tables and positions, at a 0.999 bar:
 
-| case | worst | multichip stage |
-| --- | --- | --- |
-| sliding, 2049, batch 1 | 0.999839 | 0.999839 |
-| full, 2049, batch 1 | 0.999807 | 0.999807 |
-| sliding, 12345, batch 4 | 0.999721 | 0.999721 |
-| full, 12345, batch 4 | **0.999183** | 0.999183 |
+| case | worst | multichip stage | moved by |
+| --- | --- | --- | --- |
+| sliding, 2049, batch 1 | 0.999836 | 0.999839 | −3e-6 |
+| full, 2049, batch 1 | 0.999804 | 0.999807 | −3e-6 |
+| sliding, 12345, batch 4 | 0.999718 | 0.999721 | −3e-6 |
+| full, 12345, batch 4 | **0.999183** | 0.999183 | — |
 
-Not "within noise" — the same six decimals. The optimized path changes which ops
-dispatch and where tensors live, not what is computed.
+**Decode is bit-unchanged** (0.999183 to six decimals): nothing this stage does to
+decode changes what is computed, only which ops dispatch and where tensors live.
+**Prefill moves by 3e-6**, and that is the fractured norm: a distributed RMSNorm
+sums four per-device partial `sum(x²)` where the full-width one does a single
+6656-wide reduction, so the two differ by BF16 re-association.
+`test_fractured_prefill_norm_matches_the_full_width_one` measures that difference
+directly, with no reference in between — 0.999939 (`sliding`) / 0.999888 (`full`)
+— and it does not reach the layer's accuracy surface, which the BFP4/BFP8
+precision policy dominates an order of magnitude above it.
 
-Real-checkpoint PCC at 2049 tokens (`logs/real_weight_precision.log`): prefill
-0.997755 (`sliding`) / 0.997067 (`full`), decode 0.998429 / 0.997342, against the
-0.995 acceptance bar.
+Real-checkpoint PCC at 2049 tokens (`logs/full_test_run.log`): prefill 0.997736
+(`sliding`) / 0.997080 (`full`), against the 0.995 acceptance bar and against the
+baseline's 0.997738 / 0.997084 — the same 2e-6 movement, from the same cause.
 
 New tests:
 
@@ -519,14 +535,26 @@ against the optimized path.
    prefill belongs to the stage that owns the generator loop.
 8. **Whole-layer prefill A/B cannot resolve changes below ~4 %** on this harness.
    Every prefill decision in this stage is therefore made at the op level and
-   reported as such.
+   reported as such; the one prefill change large enough to clear that floor
+   end-to-end is the fractured norm.
+9. **The fractured prefill *residual* is still not taken** — only the norm is.
+   `bench/fractured_prefill_probe.py`'s fractured arm also does the residual add
+   at 1664 wide, and the two full-width residual adds are 654.0 + 555.7 =
+   **1209.7 μs** of the 16,620.3 μs prefill window, so roughly 0.9 ms of that
+   probe's 1.46 ms gap is still on the table. Taking it *would* need what the
+   multichip stage warned about and the norm did not: a fractured residual carried
+   across the sublayer, i.e. a second residual contract for the full-model stage,
+   or a slice at layer entry and a gather at layer exit that give most of it back.
+   Measured, sized, and declined here on that basis rather than deferred silently.
 
 ## Artifacts
 
 ```bash
 D=models/autoports/meta_models_muse_glimmer_30b/doc/optimized_multichip_decoder
-# the acceptance gate -- two pytest invocations, see the note in the script
+# the acceptance gate -- two pytest invocations plus the figure check
 bash $D/bench/run_suites.sh
+# the figure check on its own
+python $D/bench/check_reported_figures.py
 # the before/after A/B, the single-chip baseline, and the real-weight precision run
 python $D/bench/layer_ab.py --mesh 1x4 \
   --candidates before,tp4,tp4b,beforeb,tp4c,no_sharded_io,no_frac_norm
@@ -555,3 +583,4 @@ python $D/bench/layer_ab.py --list
 | `bench/regression_bisect.py` | which optimized knob broke the first decode step |
 | `bench/fractured_prefill_probe.py` | what a fractured prefill norm is worth, as a complete stackable chain, before implementing it |
 | `bench/run_tracy.sh` | the eight signposted device-time windows |
+| `bench/check_reported_figures.py` | re-derives every mechanically-sourced figure in this README, the work log and the context contract from the committed CSVs and logs; part of `run_suites.sh` |

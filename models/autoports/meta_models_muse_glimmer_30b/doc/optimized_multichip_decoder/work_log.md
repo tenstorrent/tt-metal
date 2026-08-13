@@ -436,10 +436,10 @@ Whole-layer and device-time result:
 
 | | before | after |
 | --- | --- | --- |
-| six prefill RMSNorms (8192, sliding) | 3460.4 μs | **2422.5** (−30 %) |
-| prefill collectives | 3447.8 μs | 3578.7 (+130.9 — the two stats gathers) |
-| 8192-row device window, sliding / full | 18211.6 / 17925.2 | **16930.7 / 16195.1** (−7.03 / −9.65 %) |
-| 8192-row e2e, sliding / full | 19.17 / 19.84 ms | **17.93 / 17.85 ms** (−6.7 / −7.5 %) |
+| six prefill RMSNorms (8192, sliding) | 3460.4 μs | **2454.8** (−29 %) |
+| prefill collectives | 3447.8 μs | **3214.5** — *down* 233.3, because the async pair (§8) is in the same capture; the two statistics gathers inside that total are 67.7 + 53.4 = **121.1 μs** |
+| 8192-row device window, sliding / full | 18211.6 / 17925.2 | **16620.3 / 16123.3** (−8.74 / −10.05 %) |
+| 8192-row e2e, sliding / full | 18.96 / 18.99 ms | **17.61 / 17.02 ms** (−6.8 / −8.5 %) |
 
 Arithmetically identical, and the correctness surface says so: prefill PCC moves
 by 3e-6 (`0.999839 → 0.999836` against the single-chip baseline) and the
@@ -448,11 +448,13 @@ distributed norm rather than from anything structural.
 
 **Gated at 256 rows.** The saving scales with the rows the norm reads while the
 statistics gather is fixed and latency-bound, so at small row counts the trade
-inverts. Ungated it cost the 128-row window **+13.42 % / +13.58 %** of device
-time; that regression is the reason the gate exists, and
+inverts. Ungated it costs the 128-row window **+22.9 % / +9.3 %** of warmed prefill --
+1.34 / 1.18 ms against 1.09 / 1.08 (`logs/ab_frac_norm_gate.log`, the
+`frac_norm_ungated` candidate, which removes the gate from committed code).  That
+regression is the reason the gate exists, and
 `PREFILL_FRACTURED_NORM_MIN_ROWS` is set to `PREFILL_NORM_SHARD_MAX_ROWS` because
 that is exactly where the full-width norm stops being a cheap L1-sharded kernel.
-Gated, the 128-row window reads −0.22 % / −0.10 %, i.e. untouched.
+Gated, the 128-row device window reads −0.22 % / −0.10 %, i.e. untouched.
 
 Two op-count contracts moved with it and were updated rather than relaxed: the
 prefill reduction now dispatches two reduce-scatters and **four** all-gathers (two
@@ -472,13 +474,13 @@ the half of it that was still open.
 kinds, one invocation (`logs/real_weight_precision.log`).  PCC is against the HF
 reference layer; the acceptance bar is the functional stage's **0.995**.
 
-**A note on the latency column.** This run was taken before §10.1 changed the
-default, so its baseline row is 0.4501 / 0.4192 rather than the shipped
-0.4545 / 0.4238 — the collective implementation moved underneath it. That does not
-affect a single conclusion here, because the collective is *identical arithmetic*
-in every arm: decode PCC is 0.993488 / 0.992188 in every A/B row regardless of
-implementation, and each precision candidate is compared against the baseline
-measured **in its own invocation**. The latencies are therefore ratios against a
+**A note on this run.** It was taken before §8.1 and §10.1 changed the default, so its baseline row is 0.4501 / 0.4192 rather than the shipped
+0.4545 / 0.4238 — the collective implementation moved underneath it. That does not affect a single conclusion here, because each precision candidate is
+compared against the baseline measured **in its own invocation**, and because the
+collective and norm changes since are worth 2e-6 to 3e-6 of PCC -- four orders of
+magnitude below the 2.4e-2 that decides the BFP4-attention row.  The current
+real-weight prefill PCCs, from `logs/full_test_run.log`, are 0.997736 / 0.997080
+against the 0.997755 / 0.997067 below. The latencies are therefore ratios against a
 0.4501 / 0.4192 baseline, not absolute shipped numbers.
 
 | candidate | decode ms/token (sliding / full) | prefill PCC | decode PCC | verdict |
@@ -612,13 +614,15 @@ produces an all-zero counter table that looks exactly like a clean one.
 
 ### 10.3 Acceptance suite
 
-The multichip stage's two modules, unchanged as a gate: **104 passed** and
-**4 passed**.  The vs-single-chip comparison -- the only population that can see a
+The multichip stage's two modules, plus this stage's own contract tests:
+**108 passed** and **4 passed**.  The vs-single-chip comparison -- the only population that can see a
 parallelisation or scheduling fault, at a 0.999 bar -- reproduces the multichip
 stage's worst values to six decimals (0.999839 / 0.999807 / 0.999721 /
 **0.999183**).
 
-Four tests changed, two updated and two new; see the README's Correctness section.
+Seven tests changed: three new (the payload split, the boundary fixed point, and
+the fractured-vs-full-width norm equivalence), three updated where the contract
+moved, and a 256-row prefill added.  See the README's Correctness section.
 Runtime fallback audit clean, 64-step soak, 3-repeat determinism and traced replay
 all pass.
 
@@ -629,35 +633,32 @@ watcher (`bench/run_tracy.sh`, `tracy/`).  Device time from the `Device Time`
 column, decode divided by its 8 replays, against the multichip stage's committed
 tables captured the same way:
 
-Recaptured against the **final** default after §8 changed it, so these are the
-shipped path's numbers and not an earlier candidate's:
+Recaptured against the final default, after §8.1 landed:
 
 | window | before | after | delta | ops/iter |
 | --- | --- | --- | --- | --- |
-| decode sliding @2048 | 441.5 | **438.8** | −0.62 % | 46 → 45 |
-| decode sliding @131071 | 440.5 | **438.2** | −0.53 % | 46 → 45 |
-| decode full @2048 | 419.0 | **416.4** | −0.62 % | 36 → 35 |
-| decode full @131071 | 522.7 | **520.6** | −0.39 % | 36 → 35 |
-| prefill 128 sliding / full | 839.8 / 814.6 | 840.1 / 812.5 | +0.03 / −0.26 % | 38 / 36 |
-| prefill 8192 sliding / full | 18211.6 / 17925.2 | **17687.1 / 17272.0** | **−2.88 / −3.64 %** | 30 / 28 |
+| decode sliding @2048 | 441.5 | **439.0** | −0.58 % | 46 → 45 |
+| decode sliding @131071 | 440.5 | **437.6** | −0.67 % | 46 → 45 |
+| decode full @2048 | 419.0 | **416.6** | −0.57 % | 36 → 35 |
+| decode full @131071 | 522.7 | **521.5** | −0.23 % | 36 → 35 |
+| prefill 128 sliding / full | 839.8 / 814.6 | 839.9 / 816.0 | +0.01 / +0.18 % | 38 / 36 |
+| prefill 8192 sliding / full | 18211.6 / 17925.2 | **16620.3 / 16123.3** | **−8.74 / −10.05 %** | 30 → 34 / 28 → 32 |
 
-The prefill row is the important one: whole-layer end-to-end could not resolve the
-prefill change at all (§8), and device time shows it plainly at 2.88-3.64 %, which
-is close to the 2.6 % the collective arithmetic predicts (2 x 241 us saved on an
-18,200 us chunk) and in the same direction.  The decode op count drops by exactly one -- the
-`sharded_to_interleaved` the boundary contract removes.
+The 8192-row window is where this stage's work lands, and it lands through §8.1:
+the six prefill RMSNorms fall from **3460.4 to 2454.8 μs**.  The decode windows
+move by one removed layout conversion and nothing else.
 
 Per-op, `sliding` decode @2048, μs per replay:
 
 | op | before | after |
 | --- | --- | --- |
 | both reductions | 53.24 | 53.45 — **unchanged**, decode keeps the wrappers |
-| `ShardedToInterleaved` | 5.85 (x5) | **3.98** (x4) — the layer-exit one is gone |
+| `ShardedToInterleaved` | 5.85 (x5) | **3.97** (x4) — the layer-exit one is gone |
 | six matmuls, norms, SDPA, elementwise | unchanged to <1 % | unchanged |
 
 The whole decode delta is one removed layout conversion, which is exactly what the
-end-to-end A/B attributes to it (`no_sharded_io` measures 0.4573 / 0.4260 against
-the default's 0.4545 / 0.4238).
+end-to-end A/B attributes to it (`no_sharded_io` measures 0.4571 / 0.4258 against
+the default's 0.4547 / 0.4237).
 
 ### 10.5 `tt-perf-report` advice
 
@@ -678,44 +679,43 @@ Three items on the decode window, all addressed:
    `SdpaDecode`.  The measured window **is** a traced replay
    (`ttnn.execute_trace`), so the advice is a profiler artifact: the device
    profiler inflates dispatch gaps, which is why this stage reports device time
-   and end-to-end from separate runs.  The reconciliation is the proof -- 438.8 μs
-   of device time against 454.5 μs end-to-end for `sliding` decode, a 15.7 μs
-   (3.5 %) gap across 45 ops, where the profiled window claims 10 μs on one op.
+   and end-to-end from separate runs.  The reconciliation is the proof -- 439.0 μs
+   of device time against 454.6 μs end-to-end for `sliding` decode, a 15.6 μs
+   (3.4 %) gap across 45 ops, where the profiled window claims 10 μs on one op.
 
 ## 11. Rejected, deferred and remaining
 
 The full rejection table is in the README; it has 20 rows and every one is a
 candidate run on this mesh in this stage.  What is *not* done, and why:
 
-### 11.1 The fractured prefill residual
+### 11.1 The fractured prefill residual — the half that is still open
 
-`doc/multichip_decoder/README.md` limitation 1 leaves this as the largest
-remaining prefill lever, "worth an estimated 11 % of the prefill layer", deferred
-to the stage that owns the layer stack.  This stage priced it rather than
-inheriting the estimate, and the price has changed:
+§8.1 took the **norm** half of `doc/multichip_decoder/README.md` limitation 1 and
+shipped it, because this model's prefill norms sit between the reduction and the
+residual add and so the norm can be fractured while the residual stays replicated.
+The **residual** half is a different change and is not taken.
 
-* the 11 % estimate came from `bench/topology_probe.py`, whose `fractured` arm
-  beat `replicated` by 12.5 % at 8192 rows (7212.19 vs 8242.22 μs).  That arm's
-  saving is **not** in the collective -- the multichip stage established that a
-  fractured residual moves identical bytes on a ring -- it is in running the norm
-  and the residual add at 1664 wide instead of 6656;
-* the collectives in that comparison were the *wrappers*.  This stage's async
-  prefill pair is **15.2 %** faster than the `all_reduce` the `replicated` arm
-  used, and the whole `replicated` arm is 8242 μs of which the two reductions are
-  ~3170.  Re-pricing the arm with the collective this stage ships removes ~485 μs
-  from `replicated` and the same ~485 from `fractured`, so the *absolute* gap
-  survives but the *fraction* it is worth shrinks;
-* against that, a fractured prefill residual introduces a **second residual
-  contract** for the full-model stage to carry -- prefill fractured, decode
-  replicated -- at the same time as this stage has just written down a decode
-  boundary contract that a stack should preserve, and on a layer whose
-  real-weight PCC margin is 2.8e-3.
+What it would buy, from the committed evidence: `bench/fractured_prefill_probe.py`
+prices a chain that fractures both, at 4443.9 μs against 5902.1 for two sublayers.
+The shipped norm accounts for part of that; the two full-width residual adds it
+leaves alone are 654.0 + 555.7 = **1209.7 μs** of the 16,620.3 μs prefill window
+(`tracy/sliding/prefill_8192_perf_report.csv`, the two hidden-size `BinaryNg`
+rows), so roughly
+0.9 ms of the probe's 1.46 ms gap is still on the table — about 5 % of the window.
 
-It is recorded, with its measured size, as [README limitation 4](README.md) rather
-than taken.  The honest statement is that it is a *prefill* optimization whose
-value this stage reduced and whose cost is a contract split, and that the decision
-belongs with the stack -- which is what the multichip stage concluded, for a
-different reason, and this stage's numbers do not overturn.
+What it would cost is exactly what the multichip stage warned about and the norm
+avoided: to add at 1664 the *residual itself* has to be fractured, which means
+either carrying a fractured residual across the sublayer boundary — a second
+residual contract for the full-model stage, at the same time as this stage has
+just written down a decode boundary contract for it to preserve — or slicing at
+layer entry and gathering at layer exit, and the exit gather alone is ~810 μs of
+the ~900 μs it would save.
+
+So this one is declined on its own arithmetic rather than on contract taste, and
+it is recorded as [README limitation 9](README.md) with its measured size. It is
+also the reason §8.1's probe is described there as pricing *more* than what ships:
+the probe is the residual family, and this stage took the part of it that needed
+no new contract.
 
 ### 11.2 Not applicable to this model or stage
 
