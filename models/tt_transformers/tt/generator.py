@@ -491,8 +491,22 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         if self._prealloc_decode_inputs is None:
             self._prealloc_decode_inputs = self._prealloc_decode_trace_inputs(page_table)
 
+    def _uses_prefetcher(self):
+        """Whether any model instance drives the DRAM prefetcher.
+
+        The prefetcher owns sub-device managers that differ per mode, so hoisting decode setup into the
+        prefill phase cannot work for it: switching to DECODE and back reaches the prefetcher's
+        Mode.PREFILL branch, which has never run on main and is not functional, while staying in DECODE
+        leaves prefill running against decode sub-devices ("Kernel group cores do not match sub device
+        cores", program.cpp:2205). The prefetcher is Blackhole-only and GPT-OSS does not use it, so
+        keeping these models on the original non-hoisted path costs this change nothing it targets.
+        """
+        return any(getattr(m, "prefetcher", None) is not None for m in self.model)
+
     def _prepare_decode_trace_once(self, kv_cache, page_table, on_device_sampling):
         """Prepare the decode trace unless it is already prepared. Safe to call from either hoist point."""
+        if self._uses_prefetcher():
+            return
         if self._pending_decode_trace is None:
             self._pending_decode_trace = self._prepare_decode_trace_for_warmup(
                 kv_cache=kv_cache,
@@ -884,7 +898,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # The transient buffers of decode's compile pass are not hoisted with them: compiling decode
             # here makes the capture below deadlock, so that pass stays in the decode loop. Its allocations
             # are freed before anything replays, which is why they are the tolerable half of this.
-            before_capture = lambda: self._stage_prealloc_decode_inputs(page_table)  # noqa: E731
+            # Same prefetcher exclusion as _prepare_decode_trace_once: staging decode inputs from inside
+            # the prefill capture window is not safe for prefetcher-driven models.
+            if not self._uses_prefetcher():
+                before_capture = lambda: self._stage_prealloc_decode_inputs(page_table)  # noqa: E731
         return self.model[0].row_sharded_batched_prefill(
             tokens,
             page_table,
