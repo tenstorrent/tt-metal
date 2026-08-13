@@ -255,7 +255,12 @@ def render_plain(report, meta):
     else:
         out.append("(none)")
 
-    out += ["", "--- Requirements with no passing evidence in this release ---"]
+    out += [
+        "",
+        "--- Requirements with no passing evidence in this release ---",
+        "Evidence means executed and passed in this release. A test that exists, or that CI",
+        "only compiles, is not evidence.",
+    ]
     for req in without:
         why = req.get("_evidence") or "no test executed by the release gate"
         note = " FAILED this run." if req["failed"] else ""
@@ -343,7 +348,13 @@ def render_markdown(report, meta):
         out.append("_None._")
     out.append("")
 
-    out += ["## Requirements with no passing evidence in this release", ""]
+    out += [
+        "## Requirements with no passing evidence in this release",
+        "",
+        "_Evidence means executed and passed in this release. A test that merely exists, or "
+        "that CI only compiles, is not evidence._",
+        "",
+    ]
     out += ["| Requirement | Milestone | Owner | Why |", "|---|---|---|---|"]
     for req in [r for r in report["requirements"] if not r["passed"]]:
         why = req.get("_evidence") or "no test executed by the release gate"
