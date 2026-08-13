@@ -379,9 +379,7 @@ void kernel_main() {
                 // descriptor limit -> Risc IB interrupt (0x19), with the fault address creeping run-to-run as
                 // base_l1 grew. Each c-block packs its channel slice into this shared stick below; the whole
                 // stick is pushed once on the last c-block so the DM reader consumes exactly one stick per pop.
-                if (first_c_block) {
-                    curr_scratch_cb.reserve_back(scratch_npages);
-                }
+                curr_scratch_cb.reserve_back(scratch_npages);
                 // QSR fix (split-reader second stream): the top-of-kernel pack_untilize_dest_init targets
                 // scratch_cb_0 only, so odd (reader1) sticks packing into scratch_cb_1 used a packer
                 // descriptor still bound to scratch_cb_0 -> the pack landed nowhere and reader1 read an
@@ -399,15 +397,14 @@ void kernel_main() {
                 //   c1 -> block_c_index 4/2 = 2      -> tiles 4..5
                 // Init width must equal pack width per c-block (pack_untilize.h contract), so init per c-block.
                 if (last_c_block) {
-                    pack_untilize_dest_init<partial_iter_output_tiles, in_ntiles_c>(curr_scratch_cb_id);
-                    pack_untilize_dest<partial_iter_output_tiles, in_ntiles_c>(
-                        curr_scratch_cb_id, 1, (c_i * max_tiles_per_iter) / partial_iter_output_tiles);
+                    pack_untilize_dest_init<partial_iter_output_tiles>(curr_scratch_cb_id);
+                    pack_untilize_dest<partial_iter_output_tiles>(curr_scratch_cb_id, 1, 0);
                 } else {
-                    pack_untilize_dest_init<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id);
-                    pack_untilize_dest<max_tiles_per_iter, in_ntiles_c>(curr_scratch_cb_id, 1, c_i);
+                    pack_untilize_dest_init<max_tiles_per_iter>(curr_scratch_cb_id);
+                    pack_untilize_dest<max_tiles_per_iter>(curr_scratch_cb_id, 1, 0);
                 }
                 tile_regs_release();
-                if (last_c_block) {
+
                     // Push the whole stick once, after every c-block has packed its slice, so the DM reader
                     // consumes exactly one full stick per wait_front/pop_front(scratch_npages) -- the previous
                     // per-c-block push overran the ring (see the reserve note above).
@@ -433,7 +430,6 @@ void kernel_main() {
                     PACK(TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::NOTHING, p_stall::PACK));
 #endif
                     curr_scratch_cb.push_back(scratch_npages);  // hand off to the DM reader, which writes the output
-                }
 #else
                 // Production RM path: narrow pack straight into out_cb (already reserved above). Pair the
                 // pack-untilize init with a matching width per c-block (same contract as the scratch path).

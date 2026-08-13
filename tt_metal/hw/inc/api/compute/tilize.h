@@ -162,15 +162,6 @@ ALWI void tilize_block(
 #else
         MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
         PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, t + output_tile_index)));
-        // [#48552] Per-tile FPU dest-dvalid clear. The MOVA2D datacopy above SETS the FPU dest-dvalid, but
-        // _llk_math_dest_section_done_ (below) only SEMPOSTs MATH_PACK + advances the bank -- it never clears
-        // the FPU dvalid. Over a batched tilize the ~4-deep FPU dvalid ring laps at t~4 -> ERROR_TRISC1 0x0119
-        // (MEM_READ_NO_RESPONSE), or with timing shifted, silent tile corruption (first blocks OK then
-        // diverge). Pulse-clear it each tile (TTI_CLEARDVALID for the FPU client). Independent of the MATH<->
-        // PACK semaphore scheme that already syncs DEST: dvalid is a sync bit, the DEST data persists, PACK
-        // reads via the semaphore (not dvalid), and the semaphore bounds the next datacopy -- this only frees
-        // the FPU ring. NOT the "dest-dvalid CTRL-mask scheme" (set_up_dest_dvalid_per_thread); no mixing.
-        MATH((llk_math_set_dvalid<p_cleardvalid::FPU>()));
 #endif
         // Release dest
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
