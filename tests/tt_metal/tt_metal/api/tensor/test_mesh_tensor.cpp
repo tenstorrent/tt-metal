@@ -32,7 +32,6 @@
 #include <tt-metalium/tensor/spec/layout/page_config.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include "distributed/mesh_buffer_impl.hpp"
 #include <tt-metalium/math.hpp>
 
 #include <tt-metalium/buffer.hpp>
@@ -112,7 +111,7 @@ TEST_F(MeshTensorDeviceTest, ConstructionWithMeshBuffer) {
 
     auto mesh_buffer = create_mesh_buffer(*mesh_device_, spec);
     ASSERT_NE(mesh_buffer, nullptr);
-    ASSERT_TRUE(mesh_buffer->impl().is_allocated());
+    ASSERT_TRUE(mesh_buffer->is_allocated());
 
     auto topology = TensorTopology();
 
@@ -247,7 +246,7 @@ TEST_F(MeshTensorDeviceTest, ConstructionWithTooSmallBufferFails) {
     // Create a buffer at half the required size (rounded to page boundary).
     auto mesh_buffer = create_mesh_buffer(*mesh_device_, spec, 0.5f);
     ASSERT_NE(mesh_buffer, nullptr);
-    ASSERT_TRUE(mesh_buffer->impl().is_allocated());
+    ASSERT_TRUE(mesh_buffer->is_allocated());
     ASSERT_LT(mesh_buffer->size(), required_size);
 
     auto topology = TensorTopology();

@@ -16,7 +16,6 @@
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
-#include "distributed/mesh_buffer_impl.hpp"
 #include <tt-metalium/buffer_types.hpp>
 #include "command_queue_fixture.hpp"
 #include "gtest/gtest.h"
@@ -125,8 +124,8 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
         distributed::MeshBuffer::create(replicated_config_1, local_config_1, mesh_device.get()), std::exception);
     EXPECT_THROW(mesh_device->clear_loaded_sub_device_manager(), std::exception);
     EXPECT_THROW(mesh_device->load_sub_device_manager(sub_device_manager_2), std::exception);
-    buffer_1->impl().deallocate();
-    buffer_2->impl().deallocate();
+    buffer_1->deallocate();
+    buffer_2->deallocate();
     mesh_device->clear_loaded_sub_device_manager();
     mesh_device->load_sub_device_manager(sub_device_manager_2);
 

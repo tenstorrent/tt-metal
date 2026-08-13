@@ -27,7 +27,6 @@
 #include "hal_types.hpp"
 #include "math.hpp"
 #include "mesh_buffer.hpp"
-#include "mesh_buffer_impl.hpp"
 #include "mesh_device.hpp"
 #include "mesh_trace_id.hpp"
 #include "dispatch/system_memory_manager.hpp"
@@ -167,7 +166,7 @@ void MeshTrace::populate_mesh_buffer(
 }
 
 MeshTraceBuffer::~MeshTraceBuffer() {
-    if (this->mesh_buffer && this->mesh_buffer->impl().is_allocated() && this->mesh_buffer->device()) {
+    if (this->mesh_buffer && this->mesh_buffer->is_allocated() && this->mesh_buffer->device()) {
         auto current_trace_buffers_size = this->mesh_buffer->device()->get_trace_buffers_size();
         this->mesh_buffer->device()->set_trace_buffers_size(current_trace_buffers_size - this->mesh_buffer->size());
     }

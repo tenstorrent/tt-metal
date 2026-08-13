@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include "impl/buffers/buffer_impl.hpp"
-#include "distributed/mesh_buffer_impl.hpp"
 #include <cstdlib>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -449,9 +447,9 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
         auto buffer = distributed::MeshBuffer::create(buffer_config, local_config, mock_device.get());
         ASSERT_GT(buffer->address(), 0);
-        ASSERT_TRUE(buffer->impl().is_allocated());
-        buffer->impl().deallocate();
-        ASSERT_FALSE(buffer->impl().is_allocated());
+        ASSERT_TRUE(buffer->is_allocated());
+        buffer->deallocate();
+        ASSERT_FALSE(buffer->is_allocated());
 
         // Test command queue operations. Source vector is sized to fill the entire buffer so
         // EnqueueWriteMeshBuffer's precondition (src bytes >= mesh buffer bytes, added in #43429)
