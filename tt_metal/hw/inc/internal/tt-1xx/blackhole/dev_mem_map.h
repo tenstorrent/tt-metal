@@ -336,9 +336,9 @@
 // insert-delays, ring buffer), DPRINT (204B = 1 processor * 204) and the kernel profiler (2304B = 256B
 // control vector + 1 processor * 2KB marker buffer). Nothing else in the DRISC map is conditional either:
 // the fabric routing tables/packet-header pool are Tensix/ERISC-only, and the realtime profiler message
-// lives in the CQ region rather than the mailbox. The remaining 1492B is the launch ring (8 * 144B) + go
+// lives in the CQ region rather than the mailbox. The remaining 1508B is the launch ring (8 * 144B) + go
 // messages + core info + sync/ready flags.
-#define MEM_DRISC_MAILBOX_SIZE 4288
+#define MEM_DRISC_MAILBOX_SIZE 4304
 #define MEM_DRISC_MAILBOX_END (MEM_DRISC_MAILBOX_BASE + MEM_DRISC_MAILBOX_SIZE)
 #define MEM_DRISC_L1_INLINE_BASE MEM_DRISC_MAILBOX_END
 #define MEM_DRISC_L1_INLINE_END (MEM_DRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)
