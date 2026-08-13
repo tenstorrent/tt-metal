@@ -369,6 +369,7 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
     // Clear counter(s) on host to reflect update device state
     for (auto sub_device_id : sub_device_ids) {
         expected_num_workers_completed_[*sub_device_id] = 0;
+        cross_node_program_completion_counts_[*sub_device_id].clear();
     }
 
     // Block after clearing counter(s) on dispatcher
@@ -449,6 +450,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     // Need to stall and reset counters if host wraps
     if (updated_worker_counts.wrapped) [[unlikely]] {
         get_config_buffer_mgr(*sub_device_id).mark_completely_full(0);
+        cross_node_program_completion_counts_[*sub_device_id].clear();
         for (auto* device : mesh_device_->get_devices()) {
             program_dispatch::reset_expected_num_workers_completed_on_device(
                 static_cast<Device*>(device),  // NOLINT(cppcoreguidelines-pro-type-static-cast-downcast)
@@ -461,6 +463,20 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     expected_num_workers_completed_[*sub_device_id] = updated_worker_counts.current;
     expected_num_workers_completed = updated_worker_counts.previous;
 
+    // Only order CrossNode config Buffer rewrites when this workload re-launches a
+    // program that previously used CrossNode on this CQ. Non-zero sync_count means "wait until that prior launch."
+    uint32_t program_ordering_sync_count = 0;
+    for (const auto& [device_range, program] : mesh_workload.get_programs()) {
+        (void)device_range;
+        if (program.impl().get_per_core_cross_node_dfbs().empty()) {
+            continue;
+        }
+        const auto it = cross_node_program_completion_counts_[*sub_device_id].find(program.impl().get_id());
+        if (it != cross_node_program_completion_counts_[*sub_device_id].end()) {
+            program_ordering_sync_count = std::max(program_ordering_sync_count, it->second);
+        }
+    }
+
     // Reserve space in the L1 Kernel Config Ring Buffer for this workload.
     program_dispatch::reserve_space_in_kernel_config_buffer(
         this->get_config_buffer_mgr(*sub_device_id),
@@ -468,6 +484,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         mesh_workload.impl().get_program_binary_status(mesh_device_id),
         num_workers,
         expected_num_workers_completed,
+        program_ordering_sync_count,
         dispatch_metadata);
 
     std::unordered_set<uint32_t> chip_ids_in_workload = {};
@@ -531,6 +548,17 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             TracyMessage(msg.c_str(), msg.size());
         }
     }
+
+    // Remember when this CrossNode launch will complete so a later re-enqueue of the
+    // same program can wait only for that launch.
+    for (const auto& [device_range, program] : mesh_workload.get_programs()) {
+        (void)device_range;
+        if (!program.impl().get_per_core_cross_node_dfbs().empty()) {
+            cross_node_program_completion_counts_[*sub_device_id][program.impl().get_id()] =
+                updated_worker_counts.current;
+        }
+    }
+
     // Send go signals to devices not running a program to ensure consistent global state
     this->write_go_signal_to_unused_sub_grids(
         chip_ids_in_workload,

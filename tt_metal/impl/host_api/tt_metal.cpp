@@ -25,6 +25,7 @@
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <unordered_set>
@@ -55,7 +56,9 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt_metal_profiler.hpp>
 #include <program.hpp>
+#include "program/dispatch.hpp"
 #include "program/program_impl.hpp"
+#include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
 #include <umd/device/types/xy_pair.hpp>
@@ -1163,6 +1166,45 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         bytes_written);
                     MetalContext::instance().get_cluster().write_core(
                         device_id, physical_core, std::span<const uint8_t>(dfb_config_vec.data(), bytes_written), addr);
+                }
+
+                // CrossNodeDFB dense index in the worker kernel-config window. Full host
+                // pages (including zeroed credits) are materialized into the dedicated
+                // program-owned config Buffers at launch.
+                const auto& program_config = program.impl().get_program_config(index);
+                const uint32_t cross_node_dfb_offset = program_config.cross_node_dfb_offset;
+                const auto& per_core_cross_node_dfbs = program.impl().get_per_core_cross_node_dfbs();
+                auto it = per_core_cross_node_dfbs.find(logical_core);
+                if (it != per_core_cross_node_dfbs.end() && !it->second.empty()) {
+                    TT_FATAL(
+                        cross_node_dfb_offset != CROSS_NODE_DFB_OFFSET_NONE,
+                        "CrossNodeDFB participants present but cross_node_dfb_offset is NONE");
+                    const uint8_t num_program_slots = program.impl().num_cross_node_dfb_slots();
+                    const uint32_t payload_words = cross_node_dfb_config_region_words(num_program_slots);
+                    std::vector<uint32_t> cross_node_dfb_vec(payload_words, 0u);
+                    cross_node_dfb_vec[0] = num_program_slots;
+                    for (const auto& participant : it->second) {
+                        TT_FATAL(
+                            participant.remote_dfb_id < num_program_slots,
+                            "CrossNodeDFB sparse participant remote_dfb_id {} exceeds program slot count {}",
+                            participant.remote_dfb_id,
+                            num_program_slots);
+                        const uint32_t base = CROSS_NODE_DFB_REGION_HEADER_WORDS +
+                                              participant.remote_dfb_id * CROSS_NODE_DFB_CONFIG_WORDS;
+                        cross_node_dfb_vec[base + 0] = participant.config_page_addr;
+                        cross_node_dfb_vec[base + 1] = participant.entry_size;
+                        cross_node_dfb_vec[base + 2] = participant.relay_dfb_id;
+
+                        // Write the full host config page (credits already zero) to this
+                        // core's shard of the dedicated config Buffer.
+                        const auto& page =
+                            program.impl().get_cross_node_dfb(participant.remote_dfb_id).config_page(logical_core);
+                        MetalContext::instance().get_cluster().write_core(
+                            device_id, physical_core, page, participant.config_page_addr);
+                    }
+                    uint64_t addr = kernel_config_base + cross_node_dfb_offset;
+                    MetalContext::instance().get_cluster().write_core(
+                        device_id, physical_core, cross_node_dfb_vec, addr);
                 }
             }
             program.impl().init_semaphores(*device, logical_core, index);
