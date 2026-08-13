@@ -351,6 +351,45 @@ std::vector<std::uint32_t> gold_standard_tilize_w_reduce_col_max(
     return tt::test_utils::pack_vector<std::uint32_t, bfloat16>(result);
 }
 
+std::vector<std::uint32_t> gold_standard_tilize_w_reduce_col_max_untilize(
+    const std::vector<std::uint32_t>& src0_vec,
+    const std::vector<std::uint32_t>& src1_vec,
+    const GoldenConfig& config) {
+    // Extract scaler from src1_vec (first bfloat16 element)
+    float scaler = 1.0f;
+    if (!src1_vec.empty()) {
+        std::vector<bfloat16> scaler_unpacked = tt::test_utils::unpack_vector<bfloat16, std::uint32_t>(src1_vec);
+        scaler = static_cast<float>(scaler_unpacked[0]);
+    }
+
+    const int num_tile_rows = config.num_tiles_r_dim;
+    const int num_tile_cols = config.num_tiles_c_dim;
+    const int face_r_dim = config.face_r_dim;
+    const int face_c_dim = config.face_c_dim;
+    const int num_faces_c = (config.num_faces >= 2) ? 2 : 1;
+    const int num_faces_r = (config.num_faces > 2) ? 2 : 1;
+    const int tile_r_dim = face_r_dim * num_faces_r;
+    const int tile_c_dim = num_faces_c * face_c_dim;
+    const int width = num_tile_cols * tile_c_dim;
+
+    // Reduce col max per tile row over row-major input; emit one untilized 1xW row per tile row
+    std::vector<bfloat16> src_unpacked = tt::test_utils::unpack_vector<bfloat16, std::uint32_t>(src0_vec);
+    std::vector<bfloat16> result(num_tile_rows * width, bfloat16(0.0f));
+
+    for (int tr = 0; tr < num_tile_rows; tr++) {
+        for (int c = 0; c < width; c++) {
+            float col_max = -std::numeric_limits<float>::max();
+            for (int r = 0; r < tile_r_dim; r++) {
+                float val = static_cast<float>(src_unpacked[(tr * tile_r_dim + r) * width + c]);
+                col_max = fmaxf(col_max, val);
+            }
+            result[tr * width + c] = bfloat16(col_max * scaler);
+        }
+    }
+
+    return tt::test_utils::pack_vector<std::uint32_t, bfloat16>(result);
+}
+
 std::vector<std::uint32_t> gold_standard_pack_rows(
     const std::vector<std::uint32_t>& src_vec, const PackRowsConfig& config) {
     // Each row = 16 datums = 8 uint32_t (bfloat16 pairs)
