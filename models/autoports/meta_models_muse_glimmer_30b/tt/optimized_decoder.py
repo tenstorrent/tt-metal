@@ -1677,6 +1677,16 @@ class OptimizedDecoder(FusedDecoder):
         # conversion and no collective.  An interleaved input is still accepted so
         # the public contract is unchanged.
         aliased_input = hidden_states.is_sharded()
+        if aliased_input and hidden_states.memory_config() != norm_memcfg:
+            # A sharded input is taken as the residual as-is, so it has to *be*
+            # the boundary contract rather than merely be sharded.  Silently
+            # accepting a different shard spec here would hand the next layer a
+            # wrong answer with no failing test, and this contract is the one
+            # full-model bringup is being asked to preserve.
+            raise ValueError(
+                f"a sharded decode input must use the boundary memory config {norm_memcfg}, got "
+                f"{hidden_states.memory_config()}; see doc/optimized_multichip_decoder/README.md"
+            )
         residual = hidden_states if aliased_input else ttnn.interleaved_to_sharded(hidden_states, norm_memcfg)
         normed = self.input_layernorm.sharded_forward(residual, norm_prg, norm_memcfg)
 

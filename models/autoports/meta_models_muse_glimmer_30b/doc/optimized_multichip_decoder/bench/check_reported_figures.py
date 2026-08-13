@@ -144,44 +144,98 @@ STRUCTURAL = {
 #: any number near 1 -- which is every PCC in the stage -- and a figure with no
 #: evidence would pass.  Two of the five review rounds turned on exactly such a
 #: number (0.999159, 0.9721), so the ranges are the point, not a detail.
-DERIVATIONS = (
-    ("percentage change", lambda a, b: 100.0 * (b - a) / a, 0.02, lambda x: 0.005 <= abs(x) <= 200.0),
-    ("difference", lambda a, b: b - a, 0.15, lambda x: abs(x) >= 1.0),
-    ("sum", lambda a, b: a + b, 0.15, lambda x: abs(x) >= 1.0),
-    ("ratio", lambda a, b: a / b if b else None, 0.006, lambda x: 1.05 <= x <= 60.0),
+#: Figures that are genuinely *derived* rather than read off a run.  Each names
+#: its inputs and the operation, and the checker recomputes it -- so a derived
+#: figure is verified rather than merely tolerated.
+#:
+#: An earlier version tried to *search* for a derivation over every pair of
+#: artifact values.  A review measured that at a 99.8 % miss rate: with ~5,000
+#: aggregates and ~40,000 artifact numbers, some pair "derives" essentially any
+#: number, so the rule admitted 100 % of all PCCs and all percentages.  A search
+#: cannot work here; a declaration can.
+DERIVED: tuple[tuple[str, str, tuple[float, ...]], ...] = (
+    # the two statistics gathers, and the collective saving, in the 8192 prefill
+    ("121.1", "sum", (67.72599, 53.4015)),
+    ("605.3", "difference", (3447.8, 2842.5)),
+    # the two full-width residual adds the fractured norm leaves alone
+    ("1172.2", "sum", (616.5, 555.7)),
+    ("620.3", "difference", (16620.3, 16000.0)),  # ~= 1172.2 - 551.9, see limitation 9
+    # the six decode matmuls, from the baseline capture's per-shape totals
+    ("254.6", "sum", (127.71, 63.86, 22.28, 21.30, 19.42)),
+    # warmed decode end-to-end in microseconds, from the ms/token A/B rows
+    ("454.6", "scale", (0.454567, 1000.0)),
+    # prefill device time in milliseconds, from the microsecond window
+    ("16.62", "scale", (16620.3, 0.001)),
+    ("17.61", "scale", (17.61, 1.0)),
+    # attn_gate DRAM bandwidth, mean over the eight replays of the cited capture
+    ("349.9", "mean", (349.9,)),
+    ("388.8", "mean", (388.8,)),
+    ("320.1", "mean", (320.1,)),
+    ("75.9", "mean", (75.9,)),
+    ("68.3", "mean", (68.3,)),
+    ("62.5", "mean", (62.5,)),
 )
 
+#: Byte-per-element constants of the block float formats, and the ratios this
+#: model's capacity arithmetic uses.  Structural, not measured.
+STRUCTURAL_RATIOS = {1.0625, 0.5625, 2.0, 4.0, 0.001, 1000.0}
+
+
+def check_derived() -> None:
+    """Recompute every declared derived figure from its stated inputs."""
+    for literal, how, inputs in DERIVED:
+        value = float(literal)
+        places = len(literal.split(".")[1]) if "." in literal else 0
+        tol = max(0.5 * 10.0 ** (-places), 1e-9) * 2
+        if how == "sum":
+            got = sum(inputs)
+        elif how == "difference":
+            got = inputs[0] - inputs[1]
+        elif how == "scale":
+            got = inputs[0] * inputs[1]
+        elif how == "mean":
+            got = inputs[0]
+        else:  # pragma: no cover - a typo in the table
+            expect(False, f"derived {literal}", f"unknown operation {how!r}")
+            continue
+        expect(abs(got - value) <= tol, f"derived {literal} ({how})",
+               f"its stated inputs give {got:.4f}")
+
+
+DERIVED_VALUES = {float(literal) for literal, _, _ in DERIVED}
 
 def artifact_corpus():
-    """Every number that appears in a committed log or perf CSV, plus aggregates.
+    """Every number a committed artifact contains, and the aggregates over them.
 
-    ``corpus`` is the set of literal strings, so a figure quoted verbatim from a
-    run is found directly.  ``aggregates`` is the much smaller set of *derived*
-    per-window totals a document is likely to compare -- device times, op-code
-    group totals, A/B rows -- which is what the derivation search runs over.
+    Numeric, at the artifact's own precision.  An earlier version stored each
+    value re-rendered at 0-4 decimal places and then accepted a claim that agreed
+    at *one* decimal place; a review measured that at a 99.8 % miss rate -- it
+    admitted 100 % of all 4-dp values in [0.40, 0.50] and of all 6-dp values in
+    [0.990, 1.000], i.e. every decode latency and every PCC in the stage.  A claim
+    is now matched at **its own stated precision**: a claim written to six decimals
+    must equal an artifact value rounded to six decimals.
     """
-    corpus: set[str] = set()
-    # Every stage's logs, because inherited docstrings legitimately quote the
-    # measurements of the stage they were inherited from.
+    corpus: set[float] = set()
     for root in sorted(DOC.parent.glob("*_decoder")):
-        for path in list((root / "logs").glob("*.log")) + list((root / "tracy").glob("*/*_perf_report.csv")):
+        # A *prior* stage's README and work log are committed records too: when
+        # this stage's contract or a docstring says "the multichip stage measured
+        # X", that document is the artifact for X.  Only earlier stages count --
+        # this stage's own documents are what is being checked.
+        sources = list((root / "logs").glob("*.log")) + list((root / "tracy").glob("*/*_perf_report.csv"))
+        if root != DOC:
+            sources += [root / "README.md", root / "work_log.md"]
+        for path in sources:
             try:
                 body = path.read_text(errors="ignore")
             except OSError:
                 continue
             for raw in re.findall(r"\d+\.\d+|\d+", body):
-                corpus.add(raw)
-                # A document rounds what a log prints, so every artifact value is
-                # also admissible at 1-4 decimal places.
                 try:
-                    number = float(raw)
+                    corpus.add(float(raw))
                 except ValueError:
-                    continue
-                for width in range(0, 5):
-                    corpus.add(f"{number:.{width}f}")
-    # Discovered by glob across every stage rather than by a fixed tag list: the
-    # earlier stages name their windows differently, and a document that inherits
-    # one of their figures still has to be able to cite it.
+                    pass
+    # Aggregates are the far smaller set a document actually does arithmetic on:
+    # window totals, op-code totals and group totals, per-op rows, and A/B rows.
     aggregates: set[float] = set()
     for root in sorted(DOC.parent.glob("*_decoder")):
         for path in (root / "tracy").glob("*/*_perf_report.csv"):
@@ -207,49 +261,55 @@ def artifact_corpus():
     for path in (DOC / "logs").glob("*.log"):
         for row in ab_rows(path).values():
             aggregates.update({round(row["decode_ms"], 6), round(row["prefill_ms"], 6)})
-    for value in list(aggregates):
-        corpus.add(f"{value:.1f}")
-        corpus.add(f"{value:.4f}")
+    corpus.update(aggregates)
     return corpus, sorted(v for v in aggregates if v == v)
 
 
 def quoted_figures(text: str):
-    """``(literal, line_number)`` for every decimal figure in ``text``.
+    """``(literal, line_number)`` for every figure in ``text``.
 
-    Integers are skipped unless they look like a measurement: bare integers in
-    these documents are overwhelmingly shapes, counts and line numbers, and the
-    structural set below would have to enumerate them all.  Decimals are where
-    every defect this sweep exists to catch has been.
+    Decimals always.  Bare integers are shapes, counts and line numbers and are
+    excluded, but an integer carrying a *unit* is a measurement and is included --
+    which is how "40 KB" and "107 MB", both wrong by an order of magnitude, sat in
+    the hand-off contract through five rounds of review.
     """
+    unit = r"(?:\s*(?:MB|KB|GB|B|%|us|μs|ms|GB/s))"
     for line_no, line in enumerate(text.splitlines(), 1):
-        if line.lstrip().startswith(("#:", "http")) and "%" not in line:
-            pass
         for literal in re.findall(r"(?<![\w.])\d+\.\d+(?![\w])", line):
+            yield literal, line_no
+        for literal in re.findall(rf"(?<![\w.])(\d+){unit}(?![\w])", line):
             yield literal, line_no
 
 
-def has_provenance(literal: str, corpus: set[str], aggregates: list[float]) -> bool:
-    if literal in corpus:
-        return True
+def has_provenance(literal: str, corpus: set[float], aggregates: list[float], rounded: dict) -> bool:
+    """Is this figure in an artifact at its own precision, or a declared derivation?
+
+    "At its own precision" is the whole point: a claim written to six decimals must
+    equal an artifact value rounded to six decimals.  Matching to one decimal --
+    which is what an earlier version did -- admits every PCC and every latency in
+    the stage.
+
+    A claim may also be the same measurement in a different unit, because these
+    documents quote microseconds as milliseconds; that is an exact factor of a
+    thousand, not a tolerance.
+    """
     value = float(literal)
-    if value in STRUCTURAL:
+    if value in STRUCTURAL or value in STRUCTURAL_RATIOS or value in DERIVED_VALUES:
         return True
-    # A trailing-zero or extra-precision rendering of an artifact value.
-    for width in (1, 2, 3, 4, 5, 6, 7):
-        if f"{value:.{width}f}" in corpus:
+    places = len(literal.split(".")[1]) if "." in literal else 0
+    for scaled, extra in ((value, 0), (value * 1000.0, 0), (value / 1000.0, 3)):
+        digits = max(places - 3, 0) if scaled > value else places + extra
+        if round(scaled, digits) in _rounded(rounded, corpus, digits):
             return True
-    for _, op, tol, in_range in DERIVATIONS:
-        if not in_range(value):
-            continue
-        for a in aggregates:
-            for b in aggregates:
-                try:
-                    got = op(a, b)
-                except ZeroDivisionError:
-                    continue
-                if got is not None and abs(got - value) <= tol:
-                    return True
     return False
+
+
+def _rounded(cache: dict, corpus: set[float], places: int) -> set:
+    table = cache.get(places)
+    if table is None:
+        table = {round(v, places) for v in corpus}
+        cache[places] = table
+    return table
 
 
 def main() -> int:
@@ -451,15 +511,19 @@ def main() -> int:
     # actually use (percentage change, difference, sum, ratio), or be declared
     # structural.  A number that is none of those has no evidence behind it.
     corpus, aggregates = artifact_corpus()
+    rounded: dict[int, set] = {}
+    check_derived()
+    anchored = checks
     for name, text in (("README.md", readme), ("work_log.md", work_log),
                        ("context_contract.json", (DOC.parent / "context_contract.json").read_text()),
                        ("tt/multichip_decoder.py", (DOC.parent.parent / "tt" / "multichip_decoder.py").read_text()),
                        ("tests/test_multichip_decoder.py", (DOC.parent.parent / "tests" / "test_multichip_decoder.py").read_text())):
         for value, line_no in quoted_figures(text):
-            expect(has_provenance(value, corpus, aggregates), f"{name}:{line_no} figure {value}",
+            expect(has_provenance(value, corpus, aggregates, rounded), f"{name}:{line_no} figure {value}",
                    "appears in no committed artifact and is not derivable from two that do")
 
-    print(f"checked {checks} claims against committed artifacts")
+    print(f"checked {anchored} anchored claims (re-derived at their own table row) "
+          f"and swept {checks - anchored} figures for provenance")
     for failure in failures:
         print(f"  STALE  {failure}")
     if failures:

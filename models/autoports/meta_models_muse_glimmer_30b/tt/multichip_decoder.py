@@ -293,8 +293,10 @@ MULTICHIP_DECODE_MATMUL: dict[tuple[str, ttnn.DataType], tuple[int, int]] = {
     # on ``full``.  It is 0.11 % / 0.05 %, and
     # it costs an extra reshard op, the single-grid invariant three structural
     # tests assert, and 13 % of the multichip-vs-single-chip PCC headroom
-    # (0.999183 -> 0.999159 against a 0.999 bar).  For a layer whose job is to be
-    # a stacking baseline that is not a good trade.  4 cores is neutral or worse
+    # -- shipping it moved the worst check below 0.999183 against a 0.999 bar,
+    # into the 1.83e-4 that check has left, though that run was not committed so
+    # it is the weakest of the three.  For a layer whose job is to be a stacking
+    # baseline this is not a good trade.  4 cores is neutral or worse
     # and 2 and 1 fail L1; see ``logs/ab_oproj_workshard.log`` for the exact
     # circular-buffer errors.
     ("o_proj", ttnn.bfloat8_b): (MULTICHIP_BOUNDARY_CORES, 2),
@@ -642,11 +644,12 @@ DEFAULT_PREFILL_CCL_AG_WORKERS: int | None = None
 #: fresh buffers, then that plus a ``synchronize_device`` and eager allocation at
 #: build time (:meth:`MultichipDecoder._prewarm_decode_ccl_buffers`).  Each moved
 #: the fault rather than removing it: the first left the *default* configuration
-#: at 0.9721 on the first ``sliding`` decode step, the second left the
-#: wrapper-prefill/async-decode combination at 0.9605 on the first ``full`` one
+#: wrong on the first ``sliding`` decode step -- that run was not committed -- and
+#: the second left the wrapper-prefill/async-decode combination at 0.9605 on the
+#: first ``full`` one
 #: (``logs/regression_bisect_fixed.log``).  A fault that moves between arms and
 #: between runs of the same arm is a race, and an intermittently wrong first token
-#: is not a defect a *stacking baseline* may ship for 0.36 % -- 52 layers compose
+#: is not a defect a *stacking baseline* may ship for half a percent -- 52 layers compose
 #: it, and the full-model and vLLM stages both decode without prefilling through
 #: this layer.
 #:
@@ -1498,8 +1501,8 @@ class MultichipDecoder(OptimizedDecoder):
         )
         # Drain it.  The warm-up and the real call that follows share a semaphore
         # set, and without a barrier between them the real call can observe the
-        # warm-up's counts: leaving this out measured PCC 0.9721 on the first
-        # ``sliding`` decode step (``logs/regression_bisect_fixed.log``) where the
+        # warm-up's counts: leaving this out left the first
+        # ``sliding`` decode step wrong (``logs/regression_bisect_fixed.log``) where the
         # drained version is bit-identical.  Only ever reached outside trace
         # capture, because :meth:`_prewarm_decode_ccl_buffers` has already run.
         ttnn.synchronize_device(self.mesh_device)

@@ -1738,7 +1738,7 @@ def test_fractured_prefill_norm_matches_the_full_width_one(multichip_mesh, decod
     They are not bit-identical and are not expected to be -- a distributed RMSNorm
     sums four per-device partial ``sum(x^2)`` where the full-width one does a
     single 6656-wide reduction, so the two differ by BF16 re-association.  Measured
-    at 2048 rows: **0.999939** (``sliding``) and **0.999888** (``full``).  The bar
+    at 2048 rows: **0.999908** (``sliding``) and **0.999888** (``full``).  The bar
     is set below both at 0.9998 -- tight enough to be discriminating (a locally
     normalised shard, a wrong weight slice, or a mis-paired norm would each score
     far below 0.99, because they change the normaliser rather than its rounding)

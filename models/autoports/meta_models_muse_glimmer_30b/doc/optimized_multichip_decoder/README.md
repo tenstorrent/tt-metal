@@ -369,7 +369,7 @@ layer *boundary* as well:
 | fixed point | layer *n*'s output is exactly what layer *n+1* returns, asserted by `test_decode_boundary_layout_is_a_fixed_point` and `test_two_layers_stack` |
 | ownership | the layer **does not free** a sharded input; the caller still owns it |
 | compatibility | a DRAM-interleaved input is still accepted and still produces the boundary layout, so the contract is a superset of the multichip one |
-| **not validated** | a sharded input is taken as the residual **without** checking its memory config against the boundary spec (`aliased_input = hidden_states.is_sharded()`). A caller handing in a differently-sharded tensor gets undefined behaviour rather than an error. `test_decode_boundary_layout_is_a_fixed_point` only exercises the matching config, so full-model bringup must hand in exactly the layout in this table |
+| validated | a sharded input whose memory config is not this one raises rather than being taken as the residual, so a stack that hands in the wrong shard spec fails loudly instead of returning a wrong answer |
 
 `prefill_forward` is unchanged: DRAM-interleaved in, DRAM-interleaved out, which is
 right for its regime (its activations are large and interleaved) and is already a
@@ -392,6 +392,26 @@ layer-to-layer *join* — isolating it gives **4.7 μs per join on `sliding`** a
 **10.7 μs on `full`**, against 1.9–2.0 μs for the tail conversion a one-layer
 measurement sees. Over 52 layers that is the difference between paying the join
 and not.
+
+## Performance accounting
+
+Three numbers from the same shipped path, `sliding` decode at 2048:
+
+| term | value | source |
+| --- | --- | --- |
+| roofline floor | **158 μs** | 81,043,456 B of per-device weight traffic at this part's ~512 GB/s; unchanged, because this stage moves no weight bytes and no dtypes |
+| device time | **439.0 μs** | `tracy/sliding/decode_2048_perf_report.csv`, 36 % of roofline |
+| end-to-end | **454.6 μs** | `logs/final_layer_ab.log`, mean of the three repeats |
+
+The device-to-end-to-end gap is **15.6 μs (3.4 %)** across 45 ops, measured in
+separate runs because the profiler inflates dispatch gaps. There is no material
+host term left in the decode loop.
+
+The 36 % of roofline is the multichip stage's number and its explanation still
+holds: the gap is the part of a decoder layer that does not shrink with tensor
+parallelism, and the largest single lever inside it is the BFP4 MLP rows at 52 %
+of peak DRAM — 43.4 % of the decode step — which needs a TTNN change, not a model
+one. See [limitation 4](#limitations-and-known-issues).
 
 ## Operation-topology audit
 

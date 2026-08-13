@@ -1,9 +1,9 @@
-108 passed[0m, [33m[1m3 warnings[0m[33m in 540.53s (0:09:00)[0m[33m ==================[0m
-4 passed[0m, [33m[1m3 warnings[0m[33m in 34.74s[0m[33m ========================[0m
+108 passed[0m, [33m[1m3 warnings[0m[33m in 533.87s (0:08:53)[0m[33m ==================[0m
+4 passed[0m, [33m[1m3 warnings[0m[33m in 34.69s[0m[33m ========================[0m
 worst[sliding seq_len=2049 batch=1]: 0.999836 on prefill
 worst[full seq_len=2049 batch=1]: 0.999804 on prefill
 worst[sliding seq_len=12345 batch=4]: 0.999718 on prefill
 worst[full seq_len=12345 batch=4]: 0.999183 on decode2
-checked 1431 claims against committed artifacts
+checked 194 anchored claims (re-derived at their own table row) and swept 1485 figures for provenance
 every checked claim matches the artifact it cites
 GATE PASSED

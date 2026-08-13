@@ -16,6 +16,10 @@ cd "$(dirname "$0")/../../../../../.."          # repo root
 D=$PWD/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_multichip_decoder
 T=models/autoports/meta_models_muse_glimmer_30b/tests
 mkdir -p "$D/logs"
+# Delete the previous run's XML first.  A session that aborts at teardown -- which
+# this mesh does, three times on record (work_log section 10.2) -- would otherwise
+# leave a passing XML behind and the gate would read it as this run's.
+rm -f "$D/test_results.xml" "$D/test_results_vs_single_chip.xml"
 
 # Read the JUnit XML pytest already writes, not its console output.  Three
 # separate defects in this stage came from grepping ANSI-coloured pytest text
