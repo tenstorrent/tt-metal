@@ -94,6 +94,7 @@ class TtAttention:
         # K and V share a shape, so one plan serves both.
         self.kv_plan = build_plan(device, int(self.wk.shape[-2]), int(self.wk.shape[-1]))
         self.o_plan = build_plan(device, int(self.wo.shape[-2]), int(self.wo.shape[-1]))
+        self.q_plan = build_plan(device, int(self.wq.shape[-2]), int(self.wq.shape[-1]))
         # HiFi4 + fp32 accumulate: the projections and the SDPA feed a 0.99 PCC
         # gate, and bf16 LoFi accumulation is what usually costs those digits.
         try:
@@ -212,7 +213,10 @@ class TtAttention:
 
         mm = {"compute_kernel_config": self.compute_kernel_config} if self.compute_kernel_config else {}
 
-        query = self._split_heads(ttnn.linear(hidden_states, self.wq, **mm), self.n_heads)
+        if self.q_plan is not None and self.q_plan.matches(hidden_states):
+            query = self._split_heads(self.q_plan(hidden_states, self.wq, self.compute_kernel_config), self.n_heads)
+        else:
+            query = self._split_heads(ttnn.linear(hidden_states, self.wq, **mm), self.n_heads)
         key = self._split_heads(self._kv_proj(hidden_states, self.wk, mm), self.n_kv_heads)
         value = self._split_heads(self._kv_proj(hidden_states, self.wv, mm), self.n_kv_heads)
 
