@@ -85,8 +85,13 @@
 # catch a regression, and the arch-gates in this suite are exactly the kind of thing that
 # regresses quietly.
 #
-# These groups are the same tests with the same markers and the same 5-way split, minus
-# --coverage, so the broad profile actually executes. They carry `coverage: false`, so
+# These groups run the same 5-way split with the same markers, minus --coverage, so the
+# broad profile actually executes.
+#
+# Targeted at test_sfpu_unary.py rather than the whole directory. BROAD_SWEEP_OPS and
+# _skip_coverage_unsupported live only there, so pointing these at `.` would re-run every
+# other suite a second time per arch per night for no coverage that the instrumented
+# groups do not already have. They carry `coverage: false`, so
 # llk-e2e-impl skips the .info upload for them and the merge job still sees only the five
 # instrumented groups per arch. split_group is 6-10 rather than 1-5 because the artifact
 # names are keyed on it (`junit-report-<arch>-<split_group>`) and would otherwise collide.
@@ -104,16 +109,16 @@
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 1 --timeout=60 \
-      --junitxml=pytest-report-wormhole-6-compile.xml .
+      --junitxml=pytest-report-wormhole-6-compile.xml test_sfpu_unary.py
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 1 \
       --timeout=60 \
-      --junitxml=pytest-report-wormhole-6-run.xml .
+      --junitxml=pytest-report-wormhole-6-run.xml test_sfpu_unary.py
     junitparser merge pytest-report-wormhole-6-compile.xml pytest-report-wormhole-6-run.xml pytest-report-wormhole-6.xml
   skus:
     wh_n150_civ2:
-      timeout: 38
+      timeout: 25
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_e2e_wormhole_nocov group 2/5
@@ -128,16 +133,16 @@
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 2 --timeout=60 \
-      --junitxml=pytest-report-wormhole-7-compile.xml .
+      --junitxml=pytest-report-wormhole-7-compile.xml test_sfpu_unary.py
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 2 \
       --timeout=60 \
-      --junitxml=pytest-report-wormhole-7-run.xml .
+      --junitxml=pytest-report-wormhole-7-run.xml test_sfpu_unary.py
     junitparser merge pytest-report-wormhole-7-compile.xml pytest-report-wormhole-7-run.xml pytest-report-wormhole-7.xml
   skus:
     wh_n150_civ2:
-      timeout: 38
+      timeout: 25
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_e2e_wormhole_nocov group 3/5
@@ -152,16 +157,16 @@
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 3 --timeout=60 \
-      --junitxml=pytest-report-wormhole-8-compile.xml .
+      --junitxml=pytest-report-wormhole-8-compile.xml test_sfpu_unary.py
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 3 \
       --timeout=60 \
-      --junitxml=pytest-report-wormhole-8-run.xml .
+      --junitxml=pytest-report-wormhole-8-run.xml test_sfpu_unary.py
     junitparser merge pytest-report-wormhole-8-compile.xml pytest-report-wormhole-8-run.xml pytest-report-wormhole-8.xml
   skus:
     wh_n150_civ2:
-      timeout: 38
+      timeout: 25
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_e2e_wormhole_nocov group 4/5
@@ -176,16 +181,16 @@
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 4 --timeout=60 \
-      --junitxml=pytest-report-wormhole-9-compile.xml .
+      --junitxml=pytest-report-wormhole-9-compile.xml test_sfpu_unary.py
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 4 \
       --timeout=60 \
-      --junitxml=pytest-report-wormhole-9-run.xml .
+      --junitxml=pytest-report-wormhole-9-run.xml test_sfpu_unary.py
     junitparser merge pytest-report-wormhole-9-compile.xml pytest-report-wormhole-9-run.xml pytest-report-wormhole-9.xml
   skus:
     wh_n150_civ2:
-      timeout: 38
+      timeout: 25
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_e2e_wormhole_nocov group 5/5
@@ -200,16 +205,16 @@
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 5 --timeout=60 \
-      --junitxml=pytest-report-wormhole-10-compile.xml .
+      --junitxml=pytest-report-wormhole-10-compile.xml test_sfpu_unary.py
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 5 \
       --timeout=60 \
-      --junitxml=pytest-report-wormhole-10-run.xml .
+      --junitxml=pytest-report-wormhole-10-run.xml test_sfpu_unary.py
     junitparser merge pytest-report-wormhole-10-compile.xml pytest-report-wormhole-10-run.xml pytest-report-wormhole-10.xml
   skus:
     wh_n150_civ2:
-      timeout: 38
+      timeout: 25
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_e2e_blackhole_nocov group 1/5
@@ -224,16 +229,16 @@
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 1 --timeout=60 \
-      --junitxml=pytest-report-blackhole-6-compile.xml .
+      --junitxml=pytest-report-blackhole-6-compile.xml test_sfpu_unary.py
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 1 \
       --timeout=60 \
-      --junitxml=pytest-report-blackhole-6-run.xml .
+      --junitxml=pytest-report-blackhole-6-run.xml test_sfpu_unary.py
     junitparser merge pytest-report-blackhole-6-compile.xml pytest-report-blackhole-6-run.xml pytest-report-blackhole-6.xml
   skus:
     bh_p150b_civ2:
-      timeout: 55
+      timeout: 25
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_e2e_blackhole_nocov group 2/5
@@ -248,16 +253,16 @@
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 2 --timeout=60 \
-      --junitxml=pytest-report-blackhole-7-compile.xml .
+      --junitxml=pytest-report-blackhole-7-compile.xml test_sfpu_unary.py
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 2 \
       --timeout=60 \
-      --junitxml=pytest-report-blackhole-7-run.xml .
+      --junitxml=pytest-report-blackhole-7-run.xml test_sfpu_unary.py
     junitparser merge pytest-report-blackhole-7-compile.xml pytest-report-blackhole-7-run.xml pytest-report-blackhole-7.xml
   skus:
     bh_p150b_civ2:
-      timeout: 55
+      timeout: 25
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_e2e_blackhole_nocov group 3/5
@@ -272,16 +277,16 @@
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 3 --timeout=60 \
-      --junitxml=pytest-report-blackhole-8-compile.xml .
+      --junitxml=pytest-report-blackhole-8-compile.xml test_sfpu_unary.py
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 3 \
       --timeout=60 \
-      --junitxml=pytest-report-blackhole-8-run.xml .
+      --junitxml=pytest-report-blackhole-8-run.xml test_sfpu_unary.py
     junitparser merge pytest-report-blackhole-8-compile.xml pytest-report-blackhole-8-run.xml pytest-report-blackhole-8.xml
   skus:
     bh_p150b_civ2:
-      timeout: 55
+      timeout: 25
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_e2e_blackhole_nocov group 4/5
@@ -296,16 +301,16 @@
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 4 --timeout=60 \
-      --junitxml=pytest-report-blackhole-9-compile.xml .
+      --junitxml=pytest-report-blackhole-9-compile.xml test_sfpu_unary.py
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 4 \
       --timeout=60 \
-      --junitxml=pytest-report-blackhole-9-run.xml .
+      --junitxml=pytest-report-blackhole-9-run.xml test_sfpu_unary.py
     junitparser merge pytest-report-blackhole-9-compile.xml pytest-report-blackhole-9-run.xml pytest-report-blackhole-9.xml
   skus:
     bh_p150b_civ2:
-      timeout: 55
+      timeout: 25
   owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_e2e_blackhole_nocov group 5/5
@@ -320,14 +325,14 @@
     pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 5 --timeout=60 \
-      --junitxml=pytest-report-blackhole-10-compile.xml .
+      --junitxml=pytest-report-blackhole-10-compile.xml test_sfpu_unary.py
     pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
       -m "$PYTEST_MARKERS" \
       --splits 5 --group 5 \
       --timeout=60 \
-      --junitxml=pytest-report-blackhole-10-run.xml .
+      --junitxml=pytest-report-blackhole-10-run.xml test_sfpu_unary.py
     junitparser merge pytest-report-blackhole-10-compile.xml pytest-report-blackhole-10-run.xml pytest-report-blackhole-10.xml
   skus:
     bh_p150b_civ2:
-      timeout: 55
+      timeout: 25
   owner_id: U09UC143684 # Nemanja Divnic

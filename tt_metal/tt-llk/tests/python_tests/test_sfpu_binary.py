@@ -137,8 +137,36 @@ _ELEMENTS_PER_TILE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 #   the kernel. atol=0.6 covers x<=8 with 20% margin.
 BINARY_CUSTOM_TOLERANCES = {
     MathOperation.SfpuElwpow: (None, 0.15),
-    MathOperation.SfpuXlogy: (0.6, None),
+    # xlogy is keyed by *output format*, because the measurement above splits by nearly 5x:
+    # 0.50 max_abs at Float16_b against 0.116 at Float32. Most of the bf16 number is output
+    # quantization -- at |golden| ~ 72 a bfloat16 ULP is already 0.5 -- so applying its atol
+    # to Float32 would accept five times the error that format was measured to produce, on a
+    # sweep whose whole point is the higher-precision regression coverage.
+    #
+    # Only the two measured formats are listed. Float16 and Bfp8_b keep the conservative 0.6
+    # via the default below rather than inheriting a bound nobody measured for them, which
+    # makes this change a pure tightening of Float32 and nothing else. Measure before
+    # narrowing either of those.
+    MathOperation.SfpuXlogy: {
+        DataFormat.Float32: (0.14, None),  # 0.116 measured, same ~20% margin as bf16
+        DataFormat.Float16_b: (0.6, None),
+    },
 }
+
+# Fallback for an output format the per-format table does not list. Deliberately the widest
+# measured value, so an unlisted format keeps the behaviour it had rather than being handed a
+# tight bound derived from a different format's error.
+_XLOGY_DEFAULT_TOLERANCE = (0.6, None)
+
+
+def _custom_tolerances(mathop, output_format):
+    """The (atol, rtol) override for *mathop*, per output format where it has one."""
+    entry = BINARY_CUSTOM_TOLERANCES.get(mathop)
+    if entry is None:
+        return (None, None)
+    if isinstance(entry, dict):
+        return entry.get(output_format, _XLOGY_DEFAULT_TOLERANCE)
+    return entry
 
 
 def _build_paired_tile_override(pairs, dtype):
@@ -627,8 +655,9 @@ def sfpu_binary(
     ), "Result tensor and golden tensor are not of the same length"
 
     # Per-op tolerances, for the two ops whose error is a property of the op's own
-    # composition rather than of the stimuli. See BINARY_CUSTOM_TOLERANCES.
-    custom_atol, custom_rtol = BINARY_CUSTOM_TOLERANCES.get(mathop, (None, None))
+    # composition rather than of the stimuli, and per output format where the error splits by
+    # format. See BINARY_CUSTOM_TOLERANCES.
+    custom_atol, custom_rtol = _custom_tolerances(mathop, formats.output_format)
 
     assert passed_test(
         golden_tensor,

@@ -134,15 +134,27 @@ def _two_state_flag(value: Union[bool, Enum, None], param: str, enum_name: str) 
     behaviour. Read ``.value`` when handed an enum, take a bool as-is, and reject anything
     else rather than guessing.
 
-    The enums themselves are not imported here: this module deliberately carries no
-    llk_params test-side types beyond MathOperation, and duck-typing on ``.value`` keeps it
-    that way.
+    Duck-typing on ``.value`` alone is not enough, because it accepts the *wrong* two-state
+    enum: DestAccumulation.Yes and ApproximationMode.Yes both wrap True, so passing one where
+    the other is expected would satisfy a bool check and select a valid but unintended branch
+    -- exactly the swap this helper exists to catch. An enum argument therefore has to be a
+    member of the enum *named* by the caller.
+
+    Matched on the class name rather than the class itself, because the enums are deliberately
+    not imported here: this module carries no llk_params test-side types beyond MathOperation,
+    and a name comparison keeps it that way.
     """
     flag = getattr(value, "value", value)
     if not isinstance(flag, bool):
         raise TypeError(
             f"{param} must be a bool or a {enum_name} member, got "
             f"{value!r} ({type(value).__name__})"
+        )
+    if isinstance(value, Enum) and type(value).__name__ != enum_name:
+        raise TypeError(
+            f"{param} must be a bool or a {enum_name} member, got the "
+            f"{type(value).__name__} member {value!r} -- both wrap a bool, so this would "
+            f"otherwise select a branch silently"
         )
     return flag
 
@@ -1006,9 +1018,13 @@ def for_op_pipeline(
         return by_input
 
     by_range = for_op(op, range_format, **kwargs)
+    # C as well as A and B. Rebuilding only A and B would drop a registered third-operand
+    # domain here just as silently as _ternary_default_specs used to, and __post_init__ would
+    # then refill spec_C from spec_B -- a wrong answer that looks like a default.
     return OperandSpecs(
         spec_A=_tighter_spec(by_input.spec_A, by_range.spec_A),
         spec_B=_tighter_spec(by_input.spec_B, by_range.spec_B),
+        spec_C=_tighter_spec(by_input.spec_C, by_range.spec_C),
     )
 
 
@@ -1628,7 +1644,7 @@ def boundary_probes(
 
     *step_fmt* widens that step where the datapath is coarser than *fmt* — pass
     probe_spacing_format(fmt, dest_acc) to account for a 16-bit DEST holding a 32-bit
-    format. It defaults to *fmt*, which is the format-only behaviour. See probe_step().
+    format. It defaults to *fmt*, which is the format-only behaviour. See probe_beside().
 
     Returns a sorted list with format-indistinguishable duplicates removed. Values are
     *not* clipped to what *fmt* can represent or to the op's registered domain — that is
@@ -1679,6 +1695,20 @@ UINT32_MAX = 2**32 - 1
 # op where they disagree most visibly (1/+0 = +inf against 1/-0 = -inf, and the SFPU
 # returns +inf for both — that sign disagreement is what forced Bfp4_b's tighter
 # reciprocal domain).
+FLOAT_SPECIALS: Tuple[float, ...] = (
+    float("inf"),
+    float("-inf"),
+    float("nan"),
+    0.0,
+    -0.0,
+)
+
+
+def _is_negative_zero(value: float) -> bool:
+    """True only for -0.0. `value == -0.0` is also true for +0.0, so read the sign bit."""
+    return value == 0.0 and math.copysign(1.0, value) < 0.0
+
+
 # Shift amounts worth driving on purpose, shared by the unary and binary shift sweeps.
 #
 # Spans the in-range ends (0, 31), the first out-of-range value (32), larger out-of-range
@@ -1720,20 +1750,6 @@ SHIFT_EDGE_AMOUNTS: Tuple[int, ...] = (
     -5,
     -32,
     -1000,  # < 0 -> 0
-)
-
-
-def _is_negative_zero(value: float) -> bool:
-    """True only for -0.0. `value == -0.0` is also true for +0.0, so read the sign bit."""
-    return value == 0.0 and math.copysign(1.0, value) < 0.0
-
-
-FLOAT_SPECIALS: Tuple[float, ...] = (
-    float("inf"),
-    float("-inf"),
-    float("nan"),
-    0.0,
-    -0.0,
 )
 
 
@@ -2398,7 +2414,16 @@ def edge_values(
     # binary op's B-side knees, where they exist, are domain boundaries and come from cat A
     # instead -- but a *ternary* op's third operand can have real knees of its own (lerp's
     # weight), so op_edge_points() is asked about every operand rather than only A.
-    vals += list(op_edge_points(op, operand))
+    edge_points = list(op_edge_points(op, operand))
+    if not range_fmt.is_integer() and not negative_zero_delivered(
+        input_format, dest_acc
+    ):
+        # The same gate the cat-B injection below uses, applied to cat D's zero knees. The
+        # comparison-to-zero ops list -0.0 as a knee, and on the datacopy path it arrives as
+        # +0.0 -- so sending it there asserts nothing and, for Signbit, produced six standing
+        # xfails that recorded a stimulus limitation as a kernel divergence.
+        edge_points = [v for v in edge_points if not _is_negative_zero(v)]
+    vals += edge_points
     if specials:
         # Specials are an exponent-range property, so they key off range_fmt: it is what
         # decides integer extremes vs IEEE non-finites, and what clip_to_format honours.

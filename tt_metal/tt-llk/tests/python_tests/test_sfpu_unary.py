@@ -576,14 +576,6 @@ _EDGE_SWEEP_OPS = sorted(
 #   Erfinv at ±1: golden ∓inf/±inf against a saturated result, on the two fp32-dest
 #   combinations only, so tolerance-shaped rather than semantic.
 _EDGE_KNOWN_DIVERGENCES = {
-    MathOperation.Signbit: (
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.No),
-        (DataFormat.Float16_b, DataFormat.Float32, DestAccumulation.Yes),
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.No),
-        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.No),
-    ),
     MathOperation.Sign: (
         (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
         (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
@@ -643,12 +635,6 @@ _EDGE_KNOWN_DIVERGENCES.update(
 )
 
 _EDGE_DIVERGENCE_REASON = {
-    MathOperation.Signbit: "The -0.0 probe is not delivered on this pipeline: "
-    "unpack_to_dest is False here, so the datum passes through SrcA and the datacopy and "
-    "the LREG holds +0.0. signbit(+0.0) is 0 against the golden's 1 for -0.0. This is a "
-    "stimulus limitation, not a kernel defect — it cannot XPASS, because no kernel change "
-    "can make an input arrive. Signbit is correct on the 2 combinations where -0.0 does "
-    "arrive. See the signed-zero section above.",
     MathOperation.Sign: "sign(-0.0) returns -1; torch and IEEE give 0. Outside the "
     "documented contract: SFPSETCC is specified only for inputs that are not negative "
     "zero (tt-isa-documentation WormholeB0/.../VectorUnit.md). These are the 2 "
@@ -703,12 +689,21 @@ def _assert_signed_zero_partition_valid():
     ]
 
     expectations = {
-        # -0.0 never reaches the LREG on the datacopy path, so signbit reads +0.0 there.
-        MathOperation.Signbit: False,
         # SFPSETCC mishandles a -0.0 that does arrive, which is the unpack-to-dest path.
         MathOperation.Sign: True,
         MathOperation.Heaviside: True,
     }
+
+    # Signbit used to hold the other side of this partition: six xfails recording that the
+    # -0.0 probe never arrived on the datacopy path. negative_zero_delivered() now keeps the
+    # probe off those pipelines entirely, so there is nothing left to xfail -- and an entry
+    # here would be a standing non-strict xfail that can never fire, which is the shape of
+    # thing that masks a regression rather than recording one.
+    assert MathOperation.Signbit not in _EDGE_KNOWN_DIVERGENCES, (
+        "Signbit's divergences were a stimulus limitation, not a kernel defect. The -0.0 "
+        "probe is no longer sent where it cannot be delivered, so re-adding entries here "
+        "means the delivery gate changed -- re-derive it rather than restoring the table."
+    )
 
     for op, diverges_when_unpack_to_dest in expectations.items():
         expected = {
@@ -913,7 +908,8 @@ _UNARY_SHIFT_AMOUNTS = [n for n in SHIFT_EDGE_AMOUNTS if n >= 0] + [-1]
 
 # A shift is exact, so the stimulus only has to reach the interesting magnitudes rather than
 # straddle a boundary: powers of two around a byte and a half-word, a few odd values to catch
-# a lost low bit, both signs, and zero.
+# a lost low bit, and zero. Magnitudes only -- these are all non-negative, and the docstring
+# below says why no negative counterpart is drivable.
 _SHIFT_STIMULUS_MAGNITUDES = [0, 1, 2, 3, 7, 255, 256, 1023, 65535, 65536]
 
 _INT32_MAX = 2**31 - 1
@@ -923,13 +919,14 @@ def _shift_stimulus_values(mathop, shift_amount):
     """Values that stay representable after *mathop* shifts them by *shift_amount*.
 
     A left shift is the only one that can leave int32, and the amount is a compile-time
-    immediate here, so the value set has to be chosen per variant rather than once. Two
-    bounds, not one: the result must fit in int32 *and* must not be INT32_MIN, which Dst
-    stores as sign-magnitude and cannot represent -- the same pair the binary shift sweep
-    filters its (value, shift) product on.
+    immediate here, so the value set has to be chosen per variant rather than once. One bound
+    suffices, because the magnitudes are non-negative: keeping the result <= INT32_MAX also
+    keeps it clear of INT32_MIN, which Dst stores as sign-magnitude and cannot represent. The
+    binary sweep needs both bounds on its (value, shift) product only because its value list
+    really does carry negatives.
 
-    Out-of-range amounts need no filter because the kernel defines them as producing 0
-    whatever the input was, which is the contract that half the sweep exists to assert.
+    Out-of-range amounts need no filter at all: neither kernel can overflow there. Left shift
+    returns 0, and right shift clamps to 31, which lands on 0 or -1.
 
     Positive-only, for the reason _int_unary_stimuli_spec gives: Dst stores integers as
     sign-magnitude, so a negative operand does not survive the round trip the way two's

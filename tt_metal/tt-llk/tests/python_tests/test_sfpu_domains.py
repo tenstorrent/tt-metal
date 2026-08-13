@@ -477,3 +477,32 @@ def test_for_op_rejects_non_flag_approx_mode(bad):
         TypeError
     ):
         for_op(MathOperation.Exp, DataFormat.Float32, approx_mode=bad)
+
+
+def test_two_state_flag_rejects_the_other_two_state_enum():
+    """A bool check alone cannot tell the two-state enums apart.
+
+    DestAccumulation and ApproximationMode both wrap True/False, so passing one where the
+    other is expected satisfies any `.value is a bool` test and selects a valid but
+    unintended branch. That is the swap the guard exists to catch, and it is invisible in a
+    result -- both arguments are legal, the answer is just quietly the wrong one.
+    """
+    for wrong, call in (
+        (
+            DestAccumulation.Yes,
+            lambda v: for_op(MathOperation.Exp, DataFormat.Float32, approx_mode=v),
+        ),
+        (
+            ApproximationMode.Yes,
+            lambda v: specials_safe(DataFormat.Float32, DataFormat.Float32, v),
+        ),
+    ):
+        with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+            TypeError
+        ):
+            call(wrong)
+
+    # The right enum, and a bare bool, still pass.
+    for_op(MathOperation.Exp, DataFormat.Float32, approx_mode=ApproximationMode.Yes)
+    specials_safe(DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes)
+    specials_safe(DataFormat.Float32, DataFormat.Float32, True)
