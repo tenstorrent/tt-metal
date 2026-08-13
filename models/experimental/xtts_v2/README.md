@@ -36,12 +36,8 @@ without pip — a bare `pip install` falls through to the system Python and fail
 `externally-managed-environment`):
 
 ```bash
-# with python_env activated
 uv pip install -r models/experimental/xtts_v2/requirements.txt
 ```
-
-(`num2words` is used by the text normalizer to expand digits; without it, texts containing
-digits raise.)
 
 ### Checkpoint
 
@@ -54,11 +50,9 @@ export XTTS_CKPT=$(pwd)/xtts_ref/model.pth
 ```
 
 > **License note:** the XTTS-v2 *weights* are released under the
-> [Coqui Public Model License (CPML)](https://coqui.ai/cpml) — **non-commercial use only**.
+> Coqui Public Model License (CPML) — **non-commercial use only**.
 > Coqui's own tooling gates the download behind an explicit terms-of-service acceptance
-> (`COQUI_TOS_AGREED=1`); by downloading the checkpoint you accept the CPML. The code in
-> this directory is Apache-2.0, but anything you synthesize with these weights is bound by
-> the CPML.
+> (`COQUI_TOS_AGREED=1`); by downloading the checkpoint you accept the CPML.
 
 ## Quick Start
 
@@ -129,8 +123,6 @@ on a first-ever run when kernels build from scratch.
   `en` — extend `frontend.py` for other languages.
 - **Model hard caps:** text ≤ 402 GPT tokens per utterance; audio ≤ 605 codes ≈ ~28 s of
   speech per utterance.
-- **Single chip.** This class targets one N150. Data-parallel multi-chip decode exists as
-  bringup scripts (`pipeline/phase_tt_mesh.py`) but is not part of the serving class.
 - Sampling is stochastic (coqui defaults: temperature 0.75, top-k 50, top-p 0.85,
   repetition penalty 10); fix `seed` for reproducible output.
 - **Reference-clip quality drives output quality.** Use a clean, mono clip of **~6 s**
@@ -150,4 +142,3 @@ on a first-ever run when kernels build from scratch.
 | `reference/` | CPU reference implementations (PCC oracles) |
 | `tests/` | per-block PCC tests (self-contained) |
 | `demo/` | one-shot CLI + interactive REPL server |
-| `pipeline/` | bringup/validation harness (coqui-in-the-loop, benches, mesh DP scripts) |
