@@ -28,6 +28,8 @@ from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
+from .vision_ccl import all_reduce_replicated
+
 
 class VisionAttention(LightweightModule):
     def __init__(self, *args, **kwargs):
@@ -112,6 +114,9 @@ class VisionAttention(LightweightModule):
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
+        # True when TP cannot split `dim` into whole tiles per device, so activations stay replicated
+        # and the out-projection all-reduces instead of reduce-scattering (see vision_ccl).
+        self.replicated_acts = getattr(configuration, "vision_replicated_acts", False)
         self.activation_dtype = self.decoders_optimizations.get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
         )
@@ -246,17 +251,19 @@ class VisionAttention(LightweightModule):
         )
 
         if f"{wo_str}.bias" in self.state_dict:
-            # The block output is fractured along dim=3 (post reduce_scatter),
-            # so the bias has to be fractured to match. Each device gets dim/TP
-            # contiguous channels.
+            # The bias must match how the block output is distributed: fractured along dim=3 (each
+            # device gets dim/TP contiguous channels) after a reduce_scatter, or replicated when the
+            # out-projection all-reduces to full width instead (see vision_ccl).
             self.wo_bias_prefill = ttnn.as_tensor(
                 self.state_dict[f"{wo_str}.bias"],
                 device=self.mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device)
+                if self.replicated_acts
+                else ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, -1), mesh_shape=self.cluster_shape),
                 dtype=self.dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("wo_bias_frac"),
+                cache_file_name=cache_name("wo_bias_repl" if self.replicated_acts else "wo_bias_frac"),
             )
 
         self.scale = self.head_dim**-0.5
@@ -414,20 +421,23 @@ class VisionAttention(LightweightModule):
         if seq_len > 1024:
             output_partial = ttnn.reshape(output_partial, [1, 1, seq_len, -1])
 
-        # On T3K/QB2 `tt_all_reduce(dim=3)` is implemented as a
-        # reduce_scatter, so the result is fractured along dim=3 -- exactly
-        # the block I/O contract that the LLM uses.
-        output_frac = tt_all_reduce(
-            output_partial,
-            self.mesh_device,
-            self.tt_ccl,
-            cluster_axis=self.ccl_cluster_axis,
-            dim=3,
-            sharded=False,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            dtype=self.ccl_dtype,
-            topology=self.ccl_topology,
-        )
+        # On T3K/QB2 `tt_all_reduce(dim=3)` is implemented as a reduce_scatter, so the result is
+        # fractured along dim=3 -- exactly the block I/O contract that the LLM uses. When dim cannot
+        # be split into whole tiles per device, all-reduce to a replicated full-width tensor instead.
+        if self.replicated_acts:
+            output_frac = all_reduce_replicated(output_partial, self.tt_ccl, self.ccl_topology)
+        else:
+            output_frac = tt_all_reduce(
+                output_partial,
+                self.mesh_device,
+                self.tt_ccl,
+                cluster_axis=self.ccl_cluster_axis,
+                dim=3,
+                sharded=False,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=self.ccl_dtype,
+                topology=self.ccl_topology,
+            )
         if output_frac is not output_partial:
             ttnn.deallocate(output_partial)
 
