@@ -48,6 +48,11 @@ on:
         type: boolean
         default: true
         description: "Make resulting debian packages available in the workflow"
+      use-system-sfpi:
+        required: false
+        type: boolean
+        default: false
+        description: "Use the SFPI toolchain already staged in the docker image instead of downloading it. Only safe for internal CI consumption: skips producing the tt-metalium-jit package, so leave false for release/publish builds whose packages need to be self-contained."
       build-ttnn-import-artifact:
         required: false
         type: boolean
@@ -222,6 +227,11 @@ on:
         type: boolean
         default: false
         description: "Package the wheel from the compiled tree (no second compile) instead of the manylinux build-wheel job; in-family CI consumers only"
+      use-system-sfpi:
+        required: false
+        type: boolean
+        default: false
+        description: "Use the SFPI toolchain already staged in the docker image instead of downloading it. Only safe for internal CI consumption: skips producing the tt-metalium-jit package, so leave false for release/publish builds whose packages need to be self-contained."
       architecture:
         required: false
         type: string
@@ -648,8 +658,12 @@ jobs:
             ${args_fixme}
             "--enable-ccache"
             "--configure-only"
-            "--use-system-sfpi"
           )
+
+          echo "Use system SFPI: ${{ inputs.use-system-sfpi }}"
+          if [ "${{ inputs.use-system-sfpi }}" = "true" ]; then
+            build_args+=("--use-system-sfpi")
+          fi
 
           echo "Build tracy: ${{ inputs.tracy }}"
           if [ "${{ inputs.tracy }}" = "false" ]; then
