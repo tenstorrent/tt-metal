@@ -32,11 +32,14 @@ from models.common.modules.rope.rope_1d import Rope1DConfig, _resolve_rope_confi
 
 
 class _FakeMesh:
+    def __init__(self, dram_grid_width=8):
+        self.dram_grid_width = dram_grid_width
+
     def compute_with_storage_grid_size(self):
         return ttnn.CoreCoord(8, 8)
 
     def dram_grid_size(self):
-        return ttnn.CoreCoord(8, 1)
+        return ttnn.CoreCoord(self.dram_grid_width, 1)
 
 
 def _kernel_semantics(config):
@@ -103,7 +106,9 @@ def test_wormhole_t3k_overlay_preserves_baseline(monkeypatch):
         arch=ttnn.device.Arch.WORMHOLE_B0,
         cluster_type=ttnn.cluster.ClusterType.T3K,
         num_dev=8,
-        mesh_device=_FakeMesh(),
+        # Real Wormhole reports 12 physical DRAM cores, while the approved
+        # Qwen T3K recipe intentionally shards over 8.
+        mesh_device=_FakeMesh(dram_grid_width=12),
     )
 
     assert overlay.architecture == "wormhole"
