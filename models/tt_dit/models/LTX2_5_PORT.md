@@ -6,36 +6,39 @@ Status and plan for bringing [LTX-2.5](https://github.com/Lightricks/LTX-2) (ups
 
 ## Status
 
-The text path is complete and verified on device. Nothing else is ported yet, so no 2.5
-video has been generated — that waits on the pipeline and split-checkpoint loading work
-below.
+**Distilled T2V is the bring-up target.** Text path + distilled pipeline + stage-1 ancestral
+Euler are in; I2V / DiffVAE / DFR are out of scope until T2V is solid.
 
 | Component | State |
 |---|---|
 | Gemma-4 encoder (`encoders/gemma4/`) | Done — 48 layers on shipped weights, PCC-verified |
 | Encoder pair, tokenizer, projection | Done — prompt to video/audio embeddings end to end |
 | Feature extractor, connectors | Reused from `gemma3/` unchanged, verified against 2.5 weights |
-| Pipelines + split-checkpoint loading | Not started — next blocker |
-| Conv video VAE | Not started |
-| Transformer config flags | Not started |
-| Audio VAE | Not started (reuse verbatim; adapter repoint only) |
+| Distilled T2V pipeline | `pipeline_ltx25_distilled.py` + `test_pipeline_ltx25_distilled.py` — Gemma-4, split DiT/audio/upsampler, stage-1 ancestral |
+| Conv video VAE | Loader accepts monolith `vae.decoder.*` and bare `decoder.*` / PCS; prefer `*-conv-bf16` (gated HF — falls back to 2.3 monolith) |
+| Transformer config flags | `ff_bias` auto-detected from checkpoint; keyframes abs-pos dropped on load (DFR later) |
+| Audio VAE | Split `*-audio-vae-bf16` wired (decoder + vocoder prefixes match loader) |
 | Duration head | Not started, optional |
-| DiffVAE, DFR pipeline | Deferred |
+| I2V / DiffVAE / DFR | Deferred |
 
 ## Structure
 
-Suffix only what diverges. The wan precedent is narrower than it first appears:
-`pipelines/wan/` is one directory, only `models/transformers/wan2_2/` is version-suffixed,
-and `models/vae/vae_wan2_1.py` kept its 2.1 name with 2.2 importing it directly.
+**Rule:** share a file only when it is identical; otherwise give the new version its own
+file (even temporarily) so later versions do not grow into `if version` forests inside
+2.3 code. Deduplicate into helpers later once a second/third version is real.
 
-Accordingly the only rename made so far is `encoders/gemma` to `encoders/gemma3`, which the
-Gemma-3/Gemma-4 divergence genuinely justifies. An earlier full `ltx2_3` rename covering
-pipelines, VAE, audio, upsampler and patchifiers was abandoned; it is kept on
-`backup/ltx-full-rename-2026-08-12` if ever needed.
+| Piece | Layout |
+|---|---|
+| Gemma encoders | Split — `encoders/gemma3/` (2.3), `encoders/gemma4/` (2.5) |
+| Pipelines + checkpoint wiring | Split — `pipeline_ltx*.py` (2.3), `pipeline_ltx25_*.py` (2.5) |
+| Conv video VAE / audio VAE **classes** | Shared — arch/dispatch identical; do not fork the hand-tuned conv3d/halo tables |
+| Transformer | Soft — same `LTXModel` class for now; version flags / thin wrappers as needed |
 
-The conv video VAE should **not** be forked. Every 2.3→2.5 difference there is a config
-branch, and a fork would duplicate the hand-tuned conv3d blocking table and halo dispatch
-for zero architectural divergence.
+An earlier full `ltx2_3` rename covering pipelines, VAE, audio, upsampler and patchifiers
+was abandoned; it is kept on `backup/ltx-full-rename-2026-08-12` if ever needed.
+
+Distilled 2.5 scaffold: `pipelines/ltx/pipeline_ltx25_distilled.py` +
+`tests/models/ltx/test_pipeline_ltx25_distilled.py`.
 
 ## Gemma-4 encoder
 
@@ -148,16 +151,18 @@ Two tokenizer traps:
   rejects as kwargs. Both are vocab tokens regardless, so skipping the keys costs only an
   attribute alias.
 
-## Remaining work
+## Remaining work (distilled T2V)
 
-| | Effort | Notes |
+| | State | Notes |
 |---|---|---|
-| Pipelines + split-checkpoint loading | 1-2 weeks | Dominated by the per-component path/metadata/cache contract, not file-path plumbing. |
-| Conv video VAE | 2-4 days | Config branches, loader/prefix work only. |
-| Transformer flags | 1-2 days | Same `LTXModel`; needs `ff_bias=false` and `use_keyframes_abs_pos_embedding=true`. |
-| Audio VAE | <1 day | Reuse verbatim; only work is pointing the adapter at a separate audio-VAE file. |
-| Duration head | S, optional | `config.duration_head` ships empty, so the JAX-matching defaults run. 15 tensors. |
-| Spatial upsampler | Weight swap | `mid_channels=1024`, `spatial_scale=2.0`, spatial-only — exactly what the port already guards for. |
+| Pipelines + split loading | Landed | Paths, Gemma-4, generate; smoke on 4×8 (`4x8sp1tp0nl2_ring_is_fsdp0`). |
+| Stage-1 ancestral Euler | Landed | On-device ttnn math; host only draws seeded noise (`seed+10000`) and uploads. |
+| Conv video VAE file | Blocked on HF | Gated `*-conv-bf16`; interim = 2.3 monolith (arch-identical). Do **not** use DiffVAE `video-vae-bf16`. |
+| Transformer `ff_bias` | Landed | Auto from checkpoint metadata. |
+| Audio VAE | Landed | Split file loads on device. |
+| Spatial upsampler | Landed | 2.5 spatial-x2 path. |
+| Duration head | Optional | Empty in shipped config. |
+| I2V CRF 18 / DiffVAE / DFR / keyframes | Deferred | Not needed for distilled T2V. |
 
 Checkpoint headers settled the expensive questions in the cheap direction:
 
@@ -185,22 +190,19 @@ temporal upsampler is DFR-only and deferred with it.
 
 ## Correctness traps
 
-Found in the upstream source diff; all still open.
-
-- **Image-conditioning CRF.** `_PARAMS_SINCE_VERSION` has no 2.5 row, so a 2.5 checkpoint
-  inherits the 2.4 row and gets **CRF 18, not 33**. Our port hardcodes 33, which would feed
-  out-of-distribution conditioning latents on I2V.
-- **Euler-ancestral sampler.** Gated on `model_version >= (2,5)` for distilled stage 1 only
-  (`distilled.py:60-84`), seeded `seed + 10000`; stage 2 stays deterministic. This is the one
-  genuine inference-path sampler change. The delicate part is adding a per-step changing
-  noise tensor inside our captured, address-baked trace.
+- **Image-conditioning CRF (I2V only).** `_PARAMS_SINCE_VERSION` has no 2.5 row, so a 2.5
+  checkpoint inherits the 2.4 row and gets **CRF 18, not 33**. Our port still hardcodes 33 —
+  fix when I2V is brought up; irrelevant to distilled T2V.
+- **Euler-ancestral sampler (landed for distilled).** Stage 1 only when
+  `model_version >= (2,5)`, seeded `seed + 10000`; stage 2 deterministic. Implemented as a
+  host gather → ancestral step → write-back so changing noise stays outside the address-baked
+  `inner_step` trace (`use_ancestral_sampler=True` on `LTX25DistilledPipeline`).
 - **`use_prompt_adaln_single`.** Absent from the 2.5 config, so it defaults true — same as
-  2.3, no work, and no KV-cache opportunity from that flag. Separately, our `None` branch
-  skips the static `prompt_scale_shift_table` entirely, which is not upstream's `false`
-  behaviour.
-- **Key layouts in the split files.** Upstream's video-VAE filter accepts both `vae.decoder.`
-  and bare `decoder.`; transformer and audio filters keep monolith prefixes. Our loaders
-  handle only the monolith spelling. Failure mode for audio is a silently empty state dict.
+  2.3, no work. Separately, our `None` branch skips the static `prompt_scale_shift_table`,
+  which is not upstream's `false` behaviour.
+- **Video VAE keys (landed).** Loader accepts `vae.decoder.*` and bare `decoder.*` (+ PCS
+  both spellings). Audio/transformer still expect monolith-style prefixes (split files ship
+  them).
 
 Two audit-stage worries that turned out not to exist: multishot generation is absent from
 2.5 (repo-wide search returns zero hits; the adjacent feature is generated interior keyframe

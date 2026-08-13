@@ -28,6 +28,103 @@ from .pipeline_ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, LTXPipeline
 DISTILLED_SIGMA_VALUES = [1.0, 0.99375, 0.9875, 0.98125, 0.975, 0.909375, 0.725, 0.421875, 0.0]
 STAGE_2_DISTILLED_SIGMA_VALUES = [0.909375, 0.725, 0.421875, 0.0]
 
+# LTX-2.5+ distilled stage 1 uses ancestral Euler (eta=1, s_noise=1). Stage 2 stays deterministic —
+# its 3-step schedule is too short to clear freshly injected noise. Seed offset keeps the loop's
+# first randn distinct from the initial GaussianNoiser draw (same shape/dtype/seed would collide).
+ANCESTRAL_ETA = 1.0
+ANCESTRAL_S_NOISE = 1.0
+ANCESTRAL_NOISE_SEED_OFFSET = 10000
+
+
+def _euler_ancestral_step(
+    sample: torch.Tensor,
+    velocity: torch.Tensor,
+    sigma: float,
+    sigma_next: float,
+    noise: torch.Tensor | None,
+    *,
+    eta: float = ANCESTRAL_ETA,
+    s_noise: float = ANCESTRAL_S_NOISE,
+) -> torch.Tensor:
+    """Rectified-flow ancestral Euler step (ltx_core ``EulerAncestralDiffusionStep``).
+
+    ``velocity`` is the flow-matching velocity; ``denoised = sample - sigma * velocity``.
+    Host float32 in/out; caller owns dtype cast. Kept for parity checks; the denoise loop
+    uses ``_euler_ancestral_step_tt`` on device.
+    """
+    x = sample.float()
+    vel = velocity.float()
+    denoised = x - sigma * vel
+    if sigma_next == 0.0:
+        return denoised
+    if eta > 0.0 and noise is None:
+        raise ValueError("ancestral Euler requires noise when eta > 0")
+    downstep_ratio = 1.0 + (sigma_next / sigma - 1.0) * eta
+    sigma_down = sigma_next * downstep_ratio
+    sigma_down_ratio = sigma_down / sigma
+    x_next = sigma_down_ratio * x + (1.0 - sigma_down_ratio) * denoised
+    if eta > 0.0:
+        alpha_next = 1.0 - sigma_next
+        alpha_down = 1.0 - sigma_down
+        renoise_coeff = sigma_next**2 - sigma_down**2 * (alpha_next / alpha_down) ** 2
+        renoise_coeff = max(0.0, renoise_coeff) ** 0.5
+        x_next = (alpha_next / alpha_down) * x_next + noise.float() * s_noise * renoise_coeff
+    return x_next
+
+
+def _ancestral_step_coeffs(
+    sigma: float,
+    sigma_next: float,
+    *,
+    eta: float = ANCESTRAL_ETA,
+    s_noise: float = ANCESTRAL_S_NOISE,
+) -> tuple[float, float, float] | None:
+    """Return ``(sigma_down_ratio, alpha_scale, noise_scale)``, or ``None`` when σ_next==0 (x0 only)."""
+    if sigma_next == 0.0:
+        return None
+    downstep_ratio = 1.0 + (sigma_next / sigma - 1.0) * eta
+    sigma_down = sigma_next * downstep_ratio
+    sigma_down_ratio = sigma_down / sigma
+    alpha_next = 1.0 - sigma_next
+    alpha_down = 1.0 - sigma_down
+    renoise_coeff = max(0.0, sigma_next**2 - sigma_down**2 * (alpha_next / alpha_down) ** 2) ** 0.5
+    return sigma_down_ratio, alpha_next / alpha_down, s_noise * renoise_coeff
+
+
+def _euler_ancestral_step_tt(
+    tt_x: ttnn.Tensor,
+    tt_vel: ttnn.Tensor,
+    pad_mask: ttnn.Tensor,
+    sigma: float,
+    sigma_next: float,
+    tt_noise: ttnn.Tensor | None,
+) -> None:
+    """In-place ancestral Euler into ``tt_x`` (SP-sharded). Matches ``_euler_ancestral_step``."""
+    vel = ttnn.typecast(tt_vel, ttnn.bfloat16)
+    ttnn.multiply_(vel, pad_mask)
+    coeffs = _ancestral_step_coeffs(sigma, sigma_next)
+    if coeffs is None:
+        # x0 estimate: x - sigma * vel
+        x_next = ttnn.subtract(tt_x, ttnn.multiply(vel, sigma))
+    else:
+        sigma_down_ratio, alpha_scale, noise_scale = coeffs
+        denoised = ttnn.subtract(tt_x, ttnn.multiply(vel, sigma))
+        x_next = ttnn.add(
+            ttnn.multiply(tt_x, sigma_down_ratio),
+            ttnn.multiply(denoised, 1.0 - sigma_down_ratio),
+        )
+        ttnn.deallocate(denoised)
+        scaled = ttnn.multiply(x_next, alpha_scale)
+        ttnn.deallocate(x_next)
+        if tt_noise is not None and noise_scale != 0.0:
+            x_next = ttnn.add(scaled, ttnn.multiply(tt_noise, noise_scale))
+            ttnn.deallocate(scaled)
+        else:
+            x_next = scaled
+    ttnn.multiply_(x_next, pad_mask)
+    ttnn.copy(x_next, tt_x)
+    ttnn.deallocate(x_next)
+
 
 @dataclass
 class _I2VConditioning:
@@ -43,6 +140,7 @@ class LTXDistilledPipeline(LTXPipeline):
     """Distilled 2-stage AV pipeline: half-res denoise → upsample → full-res refine."""
 
     HAS_UPSAMPLER = True
+    DEFERS_ENCODE_TRACE = True
 
     @staticmethod
     def _post_process_latent_tt(
@@ -359,6 +457,8 @@ class LTXDistilledPipeline(LTXPipeline):
         image_cond_strength: float = 1.0,
         traced: bool = False,
         trace_key: str | None = None,
+        ancestral: bool = False,
+        ancestral_noise_seed: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         B = 1
         latent_frames, latent_h, latent_w = latent_grid(num_frames, height, width)
@@ -475,6 +575,14 @@ class LTXDistilledPipeline(LTXPipeline):
             )
             tt_i2v_mask, tt_i2v_clean = state.tt_i2v_mask, state.tt_i2v_clean
 
+        ancestral_gen = None
+        if ancestral:
+            noise_seed = (
+                ancestral_noise_seed if ancestral_noise_seed is not None else seed + ANCESTRAL_NOISE_SEED_OFFSET
+            )
+            ancestral_gen = torch.Generator().manual_seed(noise_seed)
+            logger.info(f"  ancestral Euler on-device (eta={ANCESTRAL_ETA}) noise_seed={noise_seed}")
+
         for step_idx in range(num_steps):
             sigma = sigmas[step_idx].item()
             sigma_next = sigmas[step_idx + 1].item()
@@ -529,28 +637,53 @@ class LTXDistilledPipeline(LTXPipeline):
                 traced=traced,
                 tracer_trace_key=trace_key,
             )
-            # Flow-matching Euler (latents += dt*velocity, SP-padding slots zeroed) so the trace's
-            # baked latent address holds across replays.
-            dt = sigma_next - sigma
-            v_vel = ttnn.typecast(v_out, ttnn.bfloat16)
-            ttnn.multiply_(v_vel, state.tt_video_pad_mask)
-            if image_cond:
-                # Reference-parity: pin the x0 estimate pre-step, then Euler-step it. Stepping the
-                # pinned x0 (not overwriting the latent after) tracks the reference under partial
-                # image_cond_strength; equal at strength 1.0. sigma is never 0 in-loop, so dt/sigma is safe.
-                x0 = ttnn.subtract(state.tt_video_lat, ttnn.multiply(v_vel, sigma))
-                x0 = self._post_process_latent_tt(x0, tt_i2v_mask, tt_i2v_clean)
-                v_pin = ttnn.multiply(ttnn.subtract(state.tt_video_lat, x0), dt / sigma)
-                ttnn.add_(state.tt_video_lat, v_pin)
+            if ancestral:
+                # Noise is drawn on host (seeded RNG parity with upstream); the Euler math stays
+                # on-device so latents/velocities never round-trip. Video then audio from one
+                # generator (upstream euler_ancestral_denoising_loop order).
+                tt_noise_v = tt_noise_a = None
+                if sigma_next != 0.0:
+                    noise_v = torch.randn(1, 1, video_N, self.in_channels, generator=ancestral_gen, dtype=torch.float32)
+                    noise_a = torch.randn(1, 1, audio_N, self.in_channels, generator=ancestral_gen, dtype=torch.float32)
+                    if video_N > video_N_real:
+                        noise_v[:, :, video_N_real:, :] = 0.0
+                    if audio_N > audio_N_real:
+                        noise_a[:, :, audio_N_real:, :] = 0.0
+                    tt_noise_v = bf16_tensor(noise_v, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=2)
+                    tt_noise_a = bf16_tensor(noise_a, device=self.mesh_device, mesh_axis=sp_axis, shard_dim=2)
+                _euler_ancestral_step_tt(
+                    state.tt_video_lat, v_out, state.tt_video_pad_mask, sigma, sigma_next, tt_noise_v
+                )
+                _euler_ancestral_step_tt(
+                    state.tt_audio_lat, a_out, state.tt_audio_pad_mask, sigma, sigma_next, tt_noise_a
+                )
+                if tt_noise_v is not None:
+                    ttnn.deallocate(tt_noise_v)
+                if tt_noise_a is not None:
+                    ttnn.deallocate(tt_noise_a)
             else:
-                ttnn.multiply_(v_vel, dt)
-                ttnn.add_(state.tt_video_lat, v_vel)
-            ttnn.multiply_(state.tt_video_lat, state.tt_video_pad_mask)
-            a_vel = ttnn.typecast(a_out, ttnn.bfloat16)
-            ttnn.multiply_(a_vel, state.tt_audio_pad_mask)
-            ttnn.multiply_(a_vel, dt)
-            ttnn.add_(state.tt_audio_lat, a_vel)
-            ttnn.multiply_(state.tt_audio_lat, state.tt_audio_pad_mask)
+                # Flow-matching Euler (latents += dt*velocity, SP-padding slots zeroed) so the trace's
+                # baked latent address holds across replays.
+                dt = sigma_next - sigma
+                v_vel = ttnn.typecast(v_out, ttnn.bfloat16)
+                ttnn.multiply_(v_vel, state.tt_video_pad_mask)
+                if image_cond:
+                    # Reference-parity: pin the x0 estimate pre-step, then Euler-step it. Stepping the
+                    # pinned x0 (not overwriting the latent after) tracks the reference under partial
+                    # image_cond_strength; equal at strength 1.0. sigma is never 0 in-loop, so dt/sigma is safe.
+                    x0 = ttnn.subtract(state.tt_video_lat, ttnn.multiply(v_vel, sigma))
+                    x0 = self._post_process_latent_tt(x0, tt_i2v_mask, tt_i2v_clean)
+                    v_pin = ttnn.multiply(ttnn.subtract(state.tt_video_lat, x0), dt / sigma)
+                    ttnn.add_(state.tt_video_lat, v_pin)
+                else:
+                    ttnn.multiply_(v_vel, dt)
+                    ttnn.add_(state.tt_video_lat, v_vel)
+                ttnn.multiply_(state.tt_video_lat, state.tt_video_pad_mask)
+                a_vel = ttnn.typecast(a_out, ttnn.bfloat16)
+                ttnn.multiply_(a_vel, state.tt_audio_pad_mask)
+                ttnn.multiply_(a_vel, dt)
+                ttnn.add_(state.tt_audio_lat, a_vel)
+                ttnn.multiply_(state.tt_audio_lat, state.tt_audio_pad_mask)
             logger.info(f"  Step {step_idx + 1}/{num_steps}: σ {sigma:.4f} → {sigma_next:.4f}")
 
         v_final = LTXTransformerModel.device_to_host(
@@ -598,11 +731,14 @@ class LTXDistilledPipeline(LTXPipeline):
         timings: list[tuple[str, float]] = []
 
         t0 = time.time()
-        # Only load the Gemma encoder (coresident-evicts DiT/VAE) on a cache miss.
-        cached = os.path.exists(self._device_embed_cache_path([prompt]))
+        # A served request encodes a prompt nothing has seen, so a cache hit would drop the encoder
+        # out of the reported total and out of the traced path it belongs in. dynamic_load keeps the
+        # cache: there the encoder is coresident-excluded from the DiT, so re-encoding every request
+        # would reload it and evict the captured model state.
+        cached = self.dynamic_load and os.path.exists(self._device_embed_cache_path([prompt]))
         if not cached:
             self.gemma_encoder_pair.ensure_loaded()
-        enc = self.encode_prompts([prompt])
+        enc = self.encode_prompts([prompt], use_cache=self.dynamic_load)
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         t_encode = time.time() - t0
         timings.append(("Encoder (cache)" if cached else "Encoder", t_encode))
@@ -728,4 +864,8 @@ class LTXDistilledPipeline(LTXPipeline):
             export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
         logger.info(f"Video export: {time.time() - t0:.1f}s")
         logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | Output: {output_path}")
+        # Every trace this pipeline takes is captured by now, so the encoder can start tracing: its
+        # capture is last and nothing left will reclaim its activation region.
+        if self._traced and not self.dynamic_load:
+            self.gemma_encoder_pair.open_trace_gate()
         return output_path

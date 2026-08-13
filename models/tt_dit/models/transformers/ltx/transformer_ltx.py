@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 
 import torch
@@ -120,6 +121,7 @@ class LTXTransformerBlock(Module):
         has_audio: bool = False,
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
+        ff_bias: bool = True,
         quant_config: LtxQuantProfile | None = None,
         lora_enabled: bool = False,
     ) -> None:
@@ -174,11 +176,12 @@ class LTXTransformerBlock(Module):
             **attn_kwargs,
         )
         self.norm3 = DistributedRMSNorm(embedding_dim=video_dim, **rms_norm_kwargs)
+        # LTX-2.5 sets ``ff_bias=false`` on the video FFN; audio keeps bias (checkpoint still ships it).
         self.ffn = ParallelFeedForward(
             video_dim,
             inner_dim=video_ffn_dim,
             activation_fn="gelu_tanh",
-            bias=True,
+            bias=ff_bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
@@ -567,6 +570,7 @@ class LTXTransformerModel(Module):
         has_audio: bool = False,
         apply_gated_attention: bool = False,
         cross_attention_adaln: bool = True,
+        ff_bias: bool = True,
         lora_enabled: bool = False,
         image_conditioning: bool = False,
         quant_config: LtxQuantProfile | None = None,
@@ -579,6 +583,7 @@ class LTXTransformerModel(Module):
         self.num_layers = num_layers
         self.has_audio = has_audio
         self.cross_attention_adaln = cross_attention_adaln
+        self.ff_bias = ff_bias
         self.lora_enabled = lora_enabled
         # I2V: video AdaLN modulation is per-token (denoise_mask * sigma) instead of batch-scalar.
         # Audio / prompt / A<->V cross AdaLN stay batch-scalar regardless.
@@ -716,6 +721,7 @@ class LTXTransformerModel(Module):
                     has_audio=has_audio,
                     apply_gated_attention=apply_gated_attention,
                     cross_attention_adaln=cross_attention_adaln,
+                    ff_bias=ff_bias,
                     quant_config=quant_config,
                     lora_enabled=lora_enabled,
                 )
@@ -753,6 +759,9 @@ class LTXTransformerModel(Module):
             pop_substate(state, "prompt_adaln_single")
             if self.has_audio:
                 pop_substate(state, "audio_prompt_adaln_single")
+        # 2.5 keyframe absolute-pos table — only used by generated-keyframe / DFR paths; T2V distilled
+        # does not consume it yet, so drop it rather than fail strict load.
+        state.pop("keyframes_abs_pos_embedding", None)
 
     def forward(
         self,
@@ -1143,7 +1152,15 @@ class LTXTransformerCheckpoint:
             else:
                 self.cross_attention_adaln = True
             self.has_gate = any("to_gate_logits" in k for k in keys)
-        logger.info(f"Detected: has_gate={self.has_gate}, cross_attention_adaln={self.cross_attention_adaln}")
+            # 2.3 omits the flag (True); 2.5 ships ``ff_bias: false`` and drops video-FF bias tensors.
+            meta = f.metadata() or {}
+            cfg = json.loads(meta["config"]) if "config" in meta else {}
+            tcfg = cfg.get("transformer", cfg)
+            self.ff_bias = bool(tcfg.get("ff_bias", True))
+        logger.info(
+            f"Detected: has_gate={self.has_gate}, cross_attention_adaln={self.cross_attention_adaln}, "
+            f"ff_bias={self.ff_bias}"
+        )
 
     def state_dict(self, lora_specs: list[LoraSpec]) -> dict[str, torch.Tensor]:
         """Load + LoRA-fuse the transformer state dict from safetensors. Only
@@ -1206,6 +1223,7 @@ class LTXTransformerCheckpoint:
             has_audio=has_audio,
             apply_gated_attention=self.has_gate,
             cross_attention_adaln=self.cross_attention_adaln,
+            ff_bias=self.ff_bias,
             image_conditioning=image_conditioning,
             quant_config=quant_config,
             lora_enabled=lora_enabled,

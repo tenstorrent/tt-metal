@@ -181,6 +181,9 @@ class Gemma4TokenizerEncoderPair:
         # Tracing only pays off while the encoder stays resident; under dynamic_load it is
         # evicted after every encode, so each one would be a cold capture.
         self._encoder_trace = not dynamic_load
+        # Encode capture must be last when the pipeline also traces denoise/VAE/audio — see
+        # ``defer_trace_capture`` / ``open_trace_gate`` (same contract as the Gemma-3 pair).
+        self._trace_gate_open = True
 
     @property
     def sequence_length(self) -> int:
@@ -193,6 +196,19 @@ class Gemma4TokenizerEncoderPair:
     @property
     def audio_dim(self) -> int:
         return self._audio_dim
+
+    @property
+    def gemma_path(self) -> str:
+        """Alias for the packed text-encoder path — matches the 2.3 pair's ``gemma_path`` field."""
+        return self.text_encoder_path
+
+    def defer_trace_capture(self) -> None:
+        """Hold the encode trace back until ``open_trace_gate`` (see ``_trace_gate_open``)."""
+        self._trace_gate_open = False
+
+    def open_trace_gate(self) -> None:
+        """Allow the next encode to capture/replay its trace (see ``_trace_gate_open``)."""
+        self._trace_gate_open = True
 
     def register_coresident_peers(self, peers: list) -> None:
         """Store the DiT/VAE peers the encoder modules must not be L1-coresident with.
@@ -381,7 +397,12 @@ class Gemma4TokenizerEncoderPair:
             src_idx, keep_mask = self.video_connector.build_indices(attention_mask, seq)
 
             video_dev, audio_dev = self._encode_device(
-                tt_ids, tt_gemma_mask, fe_mask, src_idx, keep_mask, traced=self._encoder_trace
+                tt_ids,
+                tt_gemma_mask,
+                fe_mask,
+                src_idx,
+                keep_mask,
+                traced=self._encoder_trace and self._trace_gate_open,
             )
             video_embeds = ttnn.to_torch(ttnn.get_device_tensors(video_dev)[0]).float()
             audio_embeds = (

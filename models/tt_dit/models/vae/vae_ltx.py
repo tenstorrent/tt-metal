@@ -1523,11 +1523,33 @@ class LTXVideoEncoder(Module):
 
 def read_vae_per_channel_stats(checkpoint_path: str) -> tuple[torch.Tensor, torch.Tensor]:
     """Read ``(mean-of-means, std-of-means)`` from a checkpoint and reshape for ``(B, C, F, H, W)``
-    broadcast — the un_normalize/normalize bookends matching ``ltx_core.upsample_video``."""
+    broadcast — the un_normalize/normalize bookends matching ``ltx_core.upsample_video``.
+
+    Accepts monolith ``vae.per_channel_statistics.*`` and split-file bare ``per_channel_statistics.*``.
+    """
     with safe_open(checkpoint_path, framework="pt") as f:
-        mean = f.get_tensor("vae.per_channel_statistics.mean-of-means").float()
-        std = f.get_tensor("vae.per_channel_statistics.std-of-means").float()
+        keys = set(f.keys())
+        mean_key = (
+            "vae.per_channel_statistics.mean-of-means"
+            if "vae.per_channel_statistics.mean-of-means" in keys
+            else "per_channel_statistics.mean-of-means"
+        )
+        std_key = (
+            "vae.per_channel_statistics.std-of-means"
+            if "vae.per_channel_statistics.std-of-means" in keys
+            else "per_channel_statistics.std-of-means"
+        )
+        mean = f.get_tensor(mean_key).float()
+        std = f.get_tensor(std_key).float()
     return mean.view(1, -1, 1, 1, 1), std.view(1, -1, 1, 1, 1)
+
+
+def _strip_vae_prefix(key: str, *prefixes: str) -> str | None:
+    """Return ``key`` with the first matching prefix removed, else ``None``."""
+    for prefix in prefixes:
+        if key.startswith(prefix):
+            return key[len(prefix) :]
+    return None
 
 
 class LTXVideoVAEAdapter:
@@ -1631,12 +1653,14 @@ class LTXVideoVAEAdapter:
             raw = load_file(self._checkpoint_path)
             vae_state = {}
             for k, v in raw.items():
-                if k.startswith("vae.decoder."):
-                    vae_state[k.removeprefix("vae.decoder.")] = v
-                elif k.startswith("vae.per_channel_statistics."):
-                    short_key = k.removeprefix("vae.")
-                    if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
-                        vae_state[short_key] = v
+                # Monolith ``vae.decoder.*`` and split-file bare ``decoder.*``.
+                short = _strip_vae_prefix(k, "vae.decoder.", "decoder.")
+                if short is not None:
+                    vae_state[short] = v
+                    continue
+                pcs = _strip_vae_prefix(k, "vae.per_channel_statistics.", "per_channel_statistics.")
+                if pcs in ("mean-of-means", "std-of-means"):
+                    vae_state[f"per_channel_statistics.{pcs}"] = v
             return vae_state
 
         blocking_key = conv3d_blocking_hash(self._decoder)
@@ -1663,12 +1687,13 @@ class LTXVideoVAEAdapter:
             raw = load_file(self._checkpoint_path)
             enc_state = {}
             for k, v in raw.items():
-                if k.startswith("vae.encoder."):
-                    enc_state[k.removeprefix("vae.encoder.")] = v
-                elif k.startswith("vae.per_channel_statistics."):
-                    short_key = k.removeprefix("vae.")
-                    if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
-                        enc_state[short_key] = v
+                short = _strip_vae_prefix(k, "vae.encoder.", "encoder.")
+                if short is not None:
+                    enc_state[short] = v
+                    continue
+                pcs = _strip_vae_prefix(k, "vae.per_channel_statistics.", "per_channel_statistics.")
+                if pcs in ("mean-of-means", "std-of-means"):
+                    enc_state[f"per_channel_statistics.{pcs}"] = v
             return enc_state
 
         blocking_key = conv3d_blocking_hash(self._encoder)

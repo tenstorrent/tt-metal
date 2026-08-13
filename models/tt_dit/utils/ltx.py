@@ -18,6 +18,33 @@ TEMPORAL_COMPRESSION = 8
 SPATIAL_COMPRESSION = 32
 
 DEFAULT_LTX_PROMPT = (
+    "A confident rapper in a black leather jacket and gold chain leans toward camera "
+    "in a dimly lit studio. The camera holds a dynamic medium shot, slightly below eye "
+    "level for powerful framing. Purple and blue LED strips create moody rim lighting "
+    "while a key light illuminates his face from the right. He delivers lyrics with "
+    'precise articulation: "I rise up from the basement, now Im elevated / Success is '
+    'what Im chasin, never been debated." His hands gesture naturally - right hand '
+    'emphasizing the beat near his chest, left hand spreading outward on "elevated." '
+    "Facial expressions shift from focused intensity to confident smirk. Head nods "
+    "match the rhythm while maintaining eye contact with lens. Deep bass and crisp "
+    "hi-hats underscore his clear vocal delivery. Subtle breath control visible "
+    "between bars. Shot with 50mm lens at f/1.8, shallow depth of field blurring the "
+    "urban studio background. Color grading emphasizes cool tones with warm skin "
+    "highlights. Handheld stabilization adds subtle energy without excessive movement. "
+    "Natural motion blur on hand gestures, synchronized audio-visual performance."
+)
+
+# Distinct prompts for traced distilled steady-state (gen #1 / #2) so the encoder is measured
+# instead of hitting the embed cache written by gen #0. Mirror of main #52968.
+STEADY_STATE_LTX_PROMPT = (
+    "A grey tabby cat sits on a windowsill in afternoon light, tail curled around its paws. "
+    "The camera holds a steady medium shot as the cat blinks slowly and turns its head toward "
+    "the window. Dust drifts through the sunbeam behind it. Shot with a 50mm lens at f/2.0, "
+    "shallow depth of field, natural warm color grade. "
+    "Audio: faint birdsong through glass, a quiet purr, soft room tone."
+)
+
+STEADY_STATE_REPLAY_LTX_PROMPT = (
     "A young woman with shoulder-length wavy brown hair sits on a wooden stool, "
     "cradling an acoustic guitar. The camera holds a steady medium close-up, "
     "framing her face and guitar neck. Warm key light illuminates her left side "
@@ -70,6 +97,70 @@ def default_ltx_checkpoint(filename: str) -> str:
 
 def default_ltx_gemma() -> str:
     return os.environ.get("GEMMA_PATH") or "google/gemma-3-12b-it-qat-q4_0-unquantized"
+
+
+# Relative paths under an LTX-2.5 split checkpoint root (HF hub layout).
+LTX25_TEXT_ENCODER = "text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors"
+LTX25_DISTILLED_TRANSFORMER = "diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors"
+# Conv decoder (runnable with our VAE). The plain ``video-vae-bf16`` file is DiffVAE — deferred.
+LTX25_VIDEO_VAE_CONV = "vae/ltx-2.5-video-vae-conv-bf16.safetensors"
+LTX25_VIDEO_VAE = LTX25_VIDEO_VAE_CONV  # alias used by the distilled pipeline
+LTX25_AUDIO_VAE = "vae/ltx-2.5-audio-vae-bf16.safetensors"
+LTX25_SPATIAL_UPSAMPLER = "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
+
+_MLPERF_LTX25_HUB = "/mnt/MLPerf/huggingface/hub/models--Lightricks--LTX-2.5"
+
+
+def default_ltx25_root() -> str | None:
+    """Resolve an LTX-2.5 split-checkpoint root, or ``None`` if none is present.
+
+    Order: ``LTX25_ROOT`` → ``~/.cache/ltx-checkpoints/ltx-2.5`` → MLPerf HF hub snapshot.
+    """
+    explicit = os.environ.get("LTX25_ROOT")
+    if explicit:
+        root = os.path.expanduser(explicit)
+        if os.path.isdir(root):
+            return root
+    local = os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.5")
+    if os.path.isdir(local):
+        return local
+    refs = os.path.join(_MLPERF_LTX25_HUB, "refs", "main")
+    if os.path.isfile(refs):
+        with open(refs) as f:
+            snap = f.read().strip()
+        snap_root = os.path.join(_MLPERF_LTX25_HUB, "snapshots", snap)
+        if os.path.isdir(snap_root):
+            return snap_root
+    return None
+
+
+def default_ltx25_path(rel: str) -> str | None:
+    """Join ``rel`` onto ``default_ltx25_root()``; ``None`` if the root (or file) is missing."""
+    root = default_ltx25_root()
+    if root is None:
+        return None
+    path = os.path.join(root, rel)
+    return path if os.path.exists(path) else None
+
+
+def default_ltx25_video_vae() -> str | None:
+    """Conv video VAE for 2.5 decode.
+
+    Prefer the split ``*-video-vae-conv-bf16`` file. If it is not on disk yet (gated HF /
+    incomplete MLPerf mirror), fall back to a local 2.3 monolith — PORT notes the conv VAE
+    arch is identical, so this unblocks generate until the 2.5 conv file is available.
+    """
+    conv = default_ltx25_path(LTX25_VIDEO_VAE_CONV)
+    if conv:
+        return conv
+    for name in ("ltx-2.3-22b-distilled-1.1.safetensors", "ltx-2.3-22b-dev.safetensors"):
+        local = os.path.expanduser(f"~/.cache/ltx-checkpoints/{name}")
+        if os.path.exists(local):
+            return local
+        hub = default_ltx_checkpoint(name)
+        if os.path.exists(hub):
+            return hub
+    return None
 
 
 def print_ltx_timing_table(

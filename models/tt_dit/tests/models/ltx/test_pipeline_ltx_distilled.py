@@ -22,6 +22,8 @@ from models.tt_dit.models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdap
 from models.tt_dit.pipelines.ltx.pipeline_ltx_distilled import LTXDistilledPipeline
 from models.tt_dit.utils.ltx import (
     DEFAULT_LTX_PROMPT,
+    STEADY_STATE_LTX_PROMPT,
+    STEADY_STATE_REPLAY_LTX_PROMPT,
     default_ltx_checkpoint,
     default_ltx_gemma,
     print_ltx_timing_table,
@@ -137,6 +139,11 @@ def test_pipeline_distilled(
     )
 
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
+    # Gen #1/#2 use distinct prompts so the encoder stays in the measured path (main #52968).
+    # Under dynamic_load reuse the same prompt — a second encode would reload the encoder and
+    # clobber captured DiT traces.
+    steady_state_prompt = prompt if dynamic_load else os.environ.get("PROMPT_STEADY_STATE", STEADY_STATE_LTX_PROMPT)
+    replay_prompt = prompt if dynamic_load else STEADY_STATE_REPLAY_LTX_PROMPT
 
     def run(*, prompt, number, seed):
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
@@ -287,13 +294,17 @@ def test_pipeline_distilled(
     if no_prompt:
         seed = int(os.environ.get("SEED", "10"))
         run(prompt=prompt, number=0, seed=seed)
-        # Traced: gen #0 captures (lazily, on first step of each stage); gen #1 is pure
-        # replay — its Stage 1/2 denoise times are the steady-state measurement.
+        # Traced: gen #0 captures the denoise/VAE/audio traces (lazily, on first step of each stage).
         if traced:
-            logger.info("=== traced steady-state pass (gen #1, pure replay) ===")
-            run(prompt=prompt, number=1, seed=seed)
-            check_output_with_clip(prompt, 1)
-            check_output_with_vbench(prompt, 1, seed=seed)
+            # Gen #1 captures the encode trace (the pipeline opens that gate once its own captures
+            # are done), so gen #2 is the first pass where every trace replays — the one whose
+            # Stage times are the steady-state measurement (includes Encoder).
+            logger.info("=== gen #1: encode trace capture ===")
+            run(prompt=steady_state_prompt, number=1, seed=seed)
+            logger.info("=== traced steady-state pass (gen #2, pure replay) ===")
+            run(prompt=replay_prompt, number=2, seed=seed)
+            check_output_with_clip(replay_prompt, 2)
+            check_output_with_vbench(replay_prompt, 2, seed=seed)
         else:
             check_output_with_clip(prompt, 0)
             check_output_with_vbench(prompt, 0)

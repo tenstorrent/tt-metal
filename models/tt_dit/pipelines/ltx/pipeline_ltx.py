@@ -204,6 +204,10 @@ class LTXPipeline:
     """
 
     HAS_UPSAMPLER: bool = False
+    # Set by subclasses that capture traces of their own after construction: the encode trace has to
+    # be the last one taken, or a later capture reclaims its activation region. See
+    # ``GemmaTokenizerEncoderPair.defer_trace_capture``.
+    DEFERS_ENCODE_TRACE: bool = False
 
     def __init__(
         self,
@@ -289,15 +293,9 @@ class LTXPipeline:
         self.checkpoint_name: str | None = (
             LTXPipeline._resolve_checkpoint_file(checkpoint_name) if checkpoint_name else None
         )
-        self.gemma_encoder_pair = GemmaTokenizerEncoderPair(
-            gemma_path,
-            mesh_device=self.mesh_device,
-            ccl_manager=self.vae_ccl_manager,
-            parallel_config=self.encoder_parallel_config,
-            checkpoint_name=self.checkpoint_name,
-            mode=self.mode,
-            dynamic_load=self.dynamic_load,
-        )
+        self.gemma_encoder_pair = self._make_gemma_encoder_pair(gemma_path)
+        if self._traced and not self.dynamic_load and self.DEFERS_ENCODE_TRACE:
+            self.gemma_encoder_pair.defer_trace_capture()
         self.gemma_path: str | None = self.gemma_encoder_pair.gemma_path
 
         self.transformer: LTXTransformerModel | None = None
@@ -371,6 +369,18 @@ class LTXPipeline:
         """Underlying vocoder+BWE ``Module`` (or ``None``) — used by ``release_traces`` and
         ``decode_audio``."""
         return self._audio_adapter.vocoder_with_bwe if self._audio_adapter is not None else None
+
+    def _make_gemma_encoder_pair(self, gemma_path: str | None):
+        """Build the text encoder pair. 2.3 uses Gemma-3; LTX-2.5 overrides for Gemma-4."""
+        return GemmaTokenizerEncoderPair(
+            gemma_path,
+            mesh_device=self.mesh_device,
+            ccl_manager=self.vae_ccl_manager,
+            parallel_config=self.encoder_parallel_config,
+            checkpoint_name=self.checkpoint_name,
+            mode=self.mode,
+            dynamic_load=self.dynamic_load,
+        )
 
     @staticmethod
     def _resolve_checkpoint_file(checkpoint: str, default_filename: str = "ltx-2.3-22b-dev.safetensors") -> str:
