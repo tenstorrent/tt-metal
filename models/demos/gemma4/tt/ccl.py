@@ -107,8 +107,8 @@ def ccl_sync_split_enabled() -> bool:
     ``num_buffers_per_channel``. Splitting therefore costs nothing and unlocks
     the knobs -- see ``ccl_sync_rs_workers``.
 
-    This is NOT the async path (``GEMMA4_CCL_ASYNC``), which uses
-    ``reduce_scatter_minimal_async`` and loses in every arm.
+    Tall prefill may take the async path instead (``ccl_async_enabled``); this
+    flag only applies when async is off.
     """
     return os.environ.get("GEMMA4_CCL_SPLIT", "1").lower() not in ("0", "false", "no")
 
@@ -116,6 +116,11 @@ def ccl_sync_split_enabled() -> bool:
 # Prefill RS worker/chunk switch: decode and short prefill stay latency-bound
 # (w=1,c=1). T3K chunk height 2048 (~22 MB) is bandwidth-bound and wants w=2,c=2.
 _PREFILL_RS_TALL_HEIGHT = 2048
+
+# Metal-trace isolate (WH 1x8, 31B [1,1,M,5376] bf16, torch.equal vs fused):
+#   M=2048 sync split 3078 us → async w=2 c=10 2310 us (−25%).
+# Decode / short prefill stay sync (small-payload async lost; L1 gather path).
+_CCL_ASYNC_MIN_HEIGHT = 2048
 
 
 def ccl_sync_rs_workers(padded_height: int | None = None) -> int:
@@ -240,20 +245,29 @@ def default_ccl_topology(mesh_device=None, is_moe: bool = False):
     return ttnn.Topology.Linear
 
 
-def ccl_async_enabled() -> bool:
-    """True when prefill/decode allreduce should use async RS+AG.
+def ccl_async_enabled(padded_height: int | None = None) -> bool:
+    """True when TP all-reduce / all-gather should use async RS+AG.
 
-    Default off until measured green on the target board; enable with
-    ``GEMMA4_CCL_ASYNC=1``.
+    ``GEMMA4_CCL_ASYNC=1/0`` forces on/off for every height. When unset, async
+    auto-enables only for ``padded_height >= 2048`` (bandwidth-bound prefill
+    chunks) — isolate bit-exact −25% vs sync split on WH 1x8 / 31B. Opt out of
+    that auto path with ``GEMMA4_CCL_ASYNC_PREFILL=0`` without enabling decode
+    async. Decode and short prefill stay on the sync split + L1-gather path.
     """
-    return os.environ.get("GEMMA4_CCL_ASYNC", "0").lower() in ("1", "true", "yes")
+    env = os.environ.get("GEMMA4_CCL_ASYNC")
+    if env is not None:
+        return env.lower() in ("1", "true", "yes")
+    if padded_height is not None and int(padded_height) >= _CCL_ASYNC_MIN_HEIGHT:
+        return os.environ.get("GEMMA4_CCL_ASYNC_PREFILL", "1").lower() not in ("0", "false", "no")
+    return False
 
 
 class CCLManager:
     """CCL manager for Gemma4 tensor parallelism.
 
     Stores mesh_device, num_links, and topology for CCL operations.
-    Semaphores support the async RS+AG path (``GEMMA4_CCL_ASYNC=1``).
+    Semaphores support the async RS+AG path (forced via ``GEMMA4_CCL_ASYNC=1``
+    or auto for tall prefill — see ``ccl_async_enabled``).
     Persistent DRAM buffers (``GEMMA4_CCL_PERSISTENT_BUF``) are keyed by shape
     so repeated collectives of the same activation shape skip realloc+barrier.
     """
@@ -268,9 +282,16 @@ class CCLManager:
         self.topology = topology
         self.num_devices = mesh_device.get_num_devices()
         topo_name = "Ring" if topology == ttnn.Topology.Ring else "Linear"
+        async_env = os.environ.get("GEMMA4_CCL_ASYNC")
+        if async_env is not None and async_env.lower() in ("1", "true", "yes"):
+            async_mode = "force-on"
+        elif async_env is not None:
+            async_mode = "force-off"
+        else:
+            async_mode = f"auto(h>={_CCL_ASYNC_MIN_HEIGHT})"
         logger.info(
             f"Gemma4 CCLManager: devices={self.num_devices} num_links={num_links} "
-            f"topology={topo_name} async={int(ccl_async_enabled())} "
+            f"topology={topo_name} async={async_mode} "
             f"persistent_buf={int(ccl_persistent_buffers_enabled())}"
         )
 
@@ -452,10 +473,9 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     fused ``ttnn.all_reduce``, which is bit-identical but 6.6 us/call slower --
     see ``ccl_sync_split_enabled`` / ``ccl_sync_rs_workers``).
 
-    With ``GEMMA4_CCL_ASYNC=1``, uses reduce_scatter_minimal_async +
-    all_gather_async (tt_transformers composite pattern) on
-    ``ccl_manager.topology`` (Ring on P150x8). That path loses in every measured
-    arm; it is kept for the record, not as a default.
+    Async RS+AG (``reduce_scatter_minimal_async`` + ``all_gather_async``) is
+    auto-selected for tall prefill (``ccl_async_enabled``); force with
+    ``GEMMA4_CCL_ASYNC=1``. Decode / short prefill stay on the sync split.
     """
     if mesh_config is None or mesh_config.tp <= 1:
         return tensor
@@ -472,10 +492,12 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     if caller_memory_config is None:
         gather_memory_config = _short_seq_l1_gather_memcfg(tensor, ccl_manager) or memory_config
 
+    h = int(tensor.shape[-2])
+    padded_h = ((h + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
     chunks = ccl_chunks_per_sync()
     workers = ccl_num_workers_per_link()
     nbuf = ccl_num_buffers_per_channel()
-    if ccl_async_enabled():
+    if ccl_async_enabled(padded_h):
         tp = mesh_config.tp
         rs_bufs = ccl_manager.get_persistent_rs_buffers(tensor, memory_config, tp)
         scattered = ttnn.experimental.reduce_scatter_minimal_async(
@@ -497,6 +519,8 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
         # Do not pass a persistent AG buffer: the gather result is returned as a
         # normal activation and force-deallocated by callers. Persistent RS out
         # aliases ``scattered`` when rs_bufs is set — do not free it either.
+        # Prefer gather_memory_config so a future short-seq async path can still
+        # L1-gather; at M>=2048 that helper returns DRAM.
         gathered = ttnn.experimental.all_gather_async(
             scattered,
             persistent_output_buffer=None,
@@ -505,7 +529,7 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             num_links=ccl_manager.num_links,
             cluster_axis=tp_axis,
             topology=topology,
-            memory_config=memory_config,
+            memory_config=gather_memory_config,
             barrier_semaphore=ccl_manager.get_barrier_semaphore(),
             chunks_per_sync=chunks,
             num_workers_per_link=workers,
@@ -516,8 +540,6 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
         return gathered
 
     if ccl_sync_split_enabled():
-        h = int(tensor.shape[-2])
-        padded_h = ((h + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         scattered = ttnn.reduce_scatter(
             tensor,
             dim=3,
@@ -565,8 +587,10 @@ def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
     chunks = ccl_chunks_per_sync()
     workers = ccl_num_workers_per_link()
     nbuf = ccl_num_buffers_per_channel()
+    h = int(tensor.shape[-2]) if len(tensor.shape) >= 2 else 0
+    padded_h = ((h + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE if h else None
 
-    if ccl_async_enabled():
+    if ccl_async_enabled(padded_h):
         # Fresh AG output each call (caller-owned); see ccl_allreduce note.
         gathered = ttnn.experimental.all_gather_async(
             tensor,
