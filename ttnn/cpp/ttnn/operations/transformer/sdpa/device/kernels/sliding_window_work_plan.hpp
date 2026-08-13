@@ -41,7 +41,13 @@ constexpr uint32_t chunked_sliding_halo_source_start_tile(
     uint32_t logical_k_tile_rows,
     uint32_t halo_tile_rows) {
     const uint32_t q_group_tile_rows = q_local_tile_rows * ring_size;
-    if (q_group_tile_rows == 0 || logical_k_tile_rows < 2 * q_group_tile_rows || halo_tile_rows > q_local_tile_rows) {
+    // One group, matching build_sliding_q_work_plan's bound. Below one group current_group would
+    // underflow. Requiring two -- as this did -- returned 0 for EVERY source in the first group,
+    // not just the wrap, and 0 is the right start only when the halo happens to be the whole slab
+    // (halo_tile_rows == q_local_tile_rows, i.e. a window at least as long as a device's slab).
+    // With a shorter window the caller's compact index came out (q_local_tile_rows - halo_tile_rows)
+    // / k_chunk chunks too high and read the wrong tiles out of the gathered buffer.
+    if (q_group_tile_rows == 0 || logical_k_tile_rows < q_group_tile_rows || halo_tile_rows > q_local_tile_rows) {
         return 0;
     }
     const uint32_t current_group = logical_k_tile_rows / q_group_tile_rows - 1;

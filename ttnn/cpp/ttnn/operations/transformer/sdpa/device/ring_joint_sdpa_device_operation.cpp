@@ -263,9 +263,15 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
 
     if (args.has_sliding_window() && tensor_args.is_chunked()) {
         const auto q_group_size = tensor_args.input_q.logical_shape()[2] * args.ring_size;
+        // One complete group, the same bound build_sliding_q_work_plan uses. Keep the check rather
+        // than drop it: below the plan's bound the plan comes back empty, total_k_chunk_count is 0,
+        // the reader never pushes Q and compute waits on it forever -- a hang instead of an error.
         TT_FATAL(
-            args.logical_n >= 2 * q_group_size,
-            "Chunked sliding attention requires a complete predecessor and current Q group");
+            args.logical_n >= q_group_size,
+            "Chunked sliding attention requires at least one complete Q group. Got logical_n={}, group "
+            "size={}",
+            args.logical_n,
+            q_group_size);
         TT_FATAL(
             args.logical_n % q_group_size == 0,
             "Chunked sliding attention requires logical_n to end on a complete ring-group boundary. Got "

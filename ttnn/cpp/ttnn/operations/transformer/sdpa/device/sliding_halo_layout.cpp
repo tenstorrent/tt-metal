@@ -25,7 +25,11 @@ ChunkedSlidingHaloLayout build_chunked_sliding_halo_layout(
     layout.logical_k_tile_rows = logical_k_tile_rows;
     layout.ring_size = ring_size;
     const uint32_t q_group_tile_rows = q_local_tile_rows * ring_size;
-    if (q_group_tile_rows == 0 || logical_k_tile_rows < 2 * q_group_tile_rows) {
+    // One group, matching build_sliding_q_work_plan and chunked_sliding_halo_source_start_tile.
+    // Requiring two left halo_tile_rows at 0 for the first chunk, so uses_neighbor_halo() was false
+    // and the program factory rejected it -- the first chunk still needs the halo, since every
+    // device but 0 reads its predecessor's slab within the group.
+    if (q_group_tile_rows == 0 || logical_k_tile_rows < q_group_tile_rows) {
         return layout;
     }
 
