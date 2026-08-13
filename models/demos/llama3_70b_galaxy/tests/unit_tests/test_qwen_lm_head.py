@@ -4,13 +4,10 @@
 
 """Isolated accuracy test for the Qwen3 LM head on Galaxy.
 
-Runs LMHead.forward in decode mode against a torch reference. With QWEN_BH_PREFETCHER=1 this
+Runs LMHead.forward in decode mode against a torch reference. On the BH prefetcher path this
 exercises the ring (gather_in0) lm_head matmul + BH gather-reduce path used by the full model in
-decode — the component the decoder-layer unit test never touches. Diagnostic for the ~27% top-1
-accuracy regression seen on the BH prefetcher path.
+decode — the component the decoder-layer unit test never touches.
 """
-
-import os
 
 import torch
 import pytest
@@ -105,7 +102,7 @@ def test_qwen_lm_head_inference(mesh_device, reset_seeds):
 
     # Repeat to catch sporadic corruption (the full model shows intermittent junk logits in
     # specific ring slices, not a static offset bug).
-    n_iters = int(os.environ.get("QWEN_LM_HEAD_TEST_ITERS", "10"))
+    n_iters = 10
     pcc_required = 0.99
     worst_pcc = 1.0
     all_pass = True

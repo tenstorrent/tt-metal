@@ -2,16 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
-
-# Interim Blackhole-prefetcher bring-up: route the distributed-norm collective through the unfused,
-# 2D-torus-aware stable all_gather instead of the fused RMSAllGather (fused_rms_minimal), which uses a
-# 1D-multicast writer that no-ops on the BH 2D-torus fabric. Opt-in (default on) so it only affects the
-# QWEN_BH_PREFETCHER path; Wormhole and BH no-prefetcher are untouched.
-BH_UNFUSED_CCL = os.environ.get("QWEN_BH_UNFUSED_CCL", "1") == "1"
 
 
 class DistributedNorm(LightweightModule):
@@ -101,7 +94,7 @@ class DistributedNorm(LightweightModule):
             mode == "decode"
             and self.use_sharded_decode
             and getattr(self.args, "is_blackhole", False)
-            and BH_UNFUSED_CCL
+            and getattr(self.args, "use_unfused_ccl", False)
         )
         if mode == "decode":
             if (not self.use_sharded_decode) or bh_unfused_norm:
@@ -114,7 +107,8 @@ class DistributedNorm(LightweightModule):
                 #
                 # On the BH prefetcher path (bh_unfused_norm) the resident dram_prefetcher owns the
                 # sender column, so the norm compute must be confined to the worker sub-device grid.
-                # Reshard the input onto gather_in_mem_cfg (cols 1-2) and hand the sharded LayerNorm
+                # Reshard the input onto gather_in_mem_cfg (LN grid origin, cols 7+ on BH prefetcher)
+                # and hand the sharded LayerNorm
                 # program config to the pre/post ops so their compute never lands on a sender core.
                 if bh_unfused_norm:
                     norm_input_memcfg = self.gather_in_mem_cfg

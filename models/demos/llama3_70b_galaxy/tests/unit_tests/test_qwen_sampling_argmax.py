@@ -2,16 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Isolated repro for the BH prefetcher-path force-argmax corruption.
+"""Isolated repro for the BH prefetcher-path force-argmax stale-token race.
 
-The full Qwen accuracy run with QWEN_BH_PREFETCHER=1 returns argmax indices displaced by exactly
-+3 vocab chunks (3*19456) whenever the winning logit lives in device column 0. Host-composed
-logits are correct, and untilize/argmax are correct in isolation, so the suspect is the sampling
-path's cross-column all_gather_async. This drives TTSampling exactly as the model does, on
-synthetic column-sharded logits with known per-row maxima.
+Under decode trace replay, the sampling all_gather + untilize/argmax can return the previous
+step's tokens if the gather is not pinned to the worker sub-device or if the argmax kernel
+does not reset its semaphores. Eager mode masks this because per-op host dispatch latency
+exceeds the gather time. This test always compiles eagerly, captures a trace, and replays
+it with fresh column-sharded logits whose per-row maxima are known.
 """
-
-import os
 
 import pytest
 import torch
@@ -75,13 +73,11 @@ def test_qwen_sampling_argmax(mesh_device, reset_seeds):
     padded_vocab = model_args.padded_vocab_size  # 155648
     chunk = padded_vocab // 8  # 19456 per device column
 
-    # Known max positions covering all 8 vocab chunks, including the low-id (chunk 0) region where
-    # the model shows the +3-chunk displacement. Shift positions per iteration so a stale gather
-    # buffer (previous iteration's data) also fails the check.
+    # Known max positions covering all 8 vocab chunks. Shift positions per iteration so a stale
+    # gather buffer (previous iteration's data) also fails the check.
     positions = [198, 257, 11, 279, chunk + 5, 2 * chunk + 100, 3 * chunk + 7, 5 * chunk + 3000]
 
-    n_iters = int(os.environ.get("QWEN_SAMPLING_TEST_ITERS", "5"))
-    use_trace = os.environ.get("QWEN_SAMPLING_TEST_TRACE", "0") == "1"
+    n_iters = 5
     all_pass = True
 
     def make_input(it):
@@ -117,44 +113,30 @@ def test_qwen_sampling_argmax(mesh_device, reset_seeds):
         if errs:
             all_pass = False
 
-    if not use_trace:
-        for it in range(n_iters):
-            x, expected = make_input(it)
-            tok, _ = tt_sampling(to_dev(x))
-            score(it, tok, expected)
-    else:
-        # Mirror the model's trace lifecycle: eager compile call on a persistent input buffer, then
-        # capture sampling into a trace and replay it with fresh data copied into the same buffer.
-        x0, expected0 = make_input(0)
-        x_dev = to_dev(x0)
-        tok, _ = tt_sampling(x_dev)
-        score(0, tok, expected0, tag=" [compile]")
+    # Mirror the model's trace lifecycle: eager compile call on a persistent input buffer, then
+    # capture sampling into a trace and replay it with fresh data copied into the same buffer.
+    x0, expected0 = make_input(0)
+    x_dev = to_dev(x0)
+    tok, _ = tt_sampling(x_dev)
+    score(0, tok, expected0, tag=" [compile]")
 
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        tok, _ = tt_sampling(x_dev)
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    tok, _ = tt_sampling(x_dev)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
 
-        for it in range(1, n_iters):
-            x, expected = make_input(it)
-            x_host = ttnn.from_torch(
-                x,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, None), mesh_shape=model_args.cluster_shape),
-                dtype=ttnn.bfloat8_b,
-                layout=ttnn.TILE_LAYOUT,
-            )
-            ttnn.copy_host_to_device_tensor(x_host, x_dev)
-            if os.environ.get("QWEN_SAMPLING_TEST_SYNC_BEFORE", "0") == "1":
-                # Drain the input copy before launching the replay (tests whether the trace's
-                # first consumer races the host->device write of its input buffer).
-                ttnn.synchronize_device(mesh_device)
-            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-            if os.environ.get("QWEN_SAMPLING_TEST_FULL_SYNC", "0") == "1":
-                # Block until every device in the mesh finished this replay before scoring and
-                # before enqueueing the next replay (rules out cross-replay device skew).
-                ttnn.synchronize_device(mesh_device)
-            score(it, tok, expected, tag=" [replay]")
+    for it in range(1, n_iters):
+        x, expected = make_input(it)
+        x_host = ttnn.from_torch(
+            x,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(3, None), mesh_shape=model_args.cluster_shape),
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        ttnn.copy_host_to_device_tensor(x_host, x_dev)
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        score(it, tok, expected, tag=" [replay]")
 
-        ttnn.release_trace(mesh_device, trace_id)
+    ttnn.release_trace(mesh_device, trace_id)
 
     tt_ccl.close()
     assert all_pass, "on-device sampling argmax returned displaced indices"

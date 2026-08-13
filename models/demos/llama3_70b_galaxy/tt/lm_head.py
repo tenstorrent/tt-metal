@@ -3,8 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
-
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -63,9 +61,7 @@ class LMHead(LightweightModule):
         # On Blackhole (no prefetcher) decode uses a per-device matmul on the unpadded
         # column-fractured K (matching the attention QKV no-prefetch path), so it does not
         # require the ring-padded weight.
-        # QWEN_BH_LMHEAD_NO_RING=1 forces this plain-matmul decode branch even when the
-        # prefetcher is on (accuracy-diagnostic: isolates the decode ring lm_head matmul).
-        self.no_prefetcher = (not args.use_prefetcher) or os.environ.get("QWEN_BH_LMHEAD_NO_RING", "0") == "1"
+        self.no_prefetcher = not args.use_prefetcher
         padded_lm_head = torch.zeros(1, 1, args.dim, self.padded_vocab_size)
         padded_lm_head[:, :, :, : self.vocab_size] = torch_output_weights
 

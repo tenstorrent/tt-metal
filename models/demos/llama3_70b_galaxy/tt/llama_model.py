@@ -194,10 +194,7 @@ class TtTransformer(LightweightModule):
             if self.use_prefetcher:
                 # A decode run may have left the prefetcher (worker/prefetcher) sub-device manager loaded;
                 # clear it so prefill + sampling run on the default sub-device.
-                try:
-                    self.mesh_device.clear_loaded_sub_device_manager()
-                except Exception:
-                    pass
+                self.mesh_device.clear_loaded_sub_device_manager()
             self.prefetcher_setup = None
             self.mesh_sub_device_manager_id_prefill = mesh_sub_device_manager_id_prefill
             if self.tt_ccl_prefill is not None:

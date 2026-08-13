@@ -217,9 +217,9 @@ class TtQwenModelArgs(TtModelArgs):
 
         if self.num_devices == 32:
             self.use_prefetcher = not self.is_blackhole
-            # Opt-in bring-up of the Blackhole galaxy prefetcher (off by default so the working
-            # no-prefetcher path is untouched). Enable with QWEN_BH_PREFETCHER=1.
-            if self.is_blackhole and os.environ.get("QWEN_BH_PREFETCHER", "0") == "1":
+            # Blackhole galaxy decode uses the dram_prefetcher by default. Set QWEN_BH_PREFETCHER=0
+            # to fall back to the no-prefetcher path.
+            if self.is_blackhole and os.environ.get("QWEN_BH_PREFETCHER", "1") == "1":
                 self.use_prefetcher = True
 
         # On Blackhole galaxy the fused galaxy CCLs (fused_rms_minimal, llama_rs_create_heads,
@@ -243,7 +243,7 @@ class TtQwenModelArgs(TtModelArgs):
         if self.use_prefetcher and self.is_blackhole:
             # The sampling top-k allocates large static circular buffers (padded vocab = 32768) on its
             # sub-core grid. On Blackhole the prefetcher keeps a big resident global circular buffer
-            # (728*1088 ~= 774 KB) on the receiver columns 1-3, plus other worker-core buffers, so the
+            # (656*1088 ~= 697 KB) on the receiver columns 1-3, plus other worker-core buffers, so the
             # 24-core top-k footprint no longer leaves enough contiguous L1 there ("static circular buffers
             # clash with L1 buffers ... region ends at 809536"). Spread top-k across a much wider grid
             # (columns 4-10, all 10 rows = 70 cores, clear of the prefetcher's global-CB columns 0-3 and
@@ -361,11 +361,9 @@ class TtQwenModelArgs(TtModelArgs):
         # through it (with correct sub_core_grids), so force-argmax must stay disabled there.
         self.model_config["SAMPLING_AG_CONFIG"] = {
             "allow_force_argmax": self.is_blackhole,
-            "num_links": int(os.getenv("QWEN_SAMPLING_AG_LINKS", str(self.model_config["GALAXY_NUM_LINKS"]))),
-            "chunks_per_sync": int(os.getenv("QWEN_SAMPLING_AG_CHUNKS_PER_SYNC", "10")),
-            "topology": ttnn.Topology.Linear
-            if os.getenv("QWEN_SAMPLING_AG_TOPOLOGY", "ring").lower() == "linear"
-            else ttnn.Topology.Ring,
+            "num_links": self.model_config["GALAXY_NUM_LINKS"],
+            "chunks_per_sync": 10,
+            "topology": ttnn.Topology.Ring,
         }
         if device is not None:
             self.n_local_heads = self.n_heads // self.cluster_shape[1]

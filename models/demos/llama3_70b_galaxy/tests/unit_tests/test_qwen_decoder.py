@@ -83,7 +83,7 @@ def test_llama_decoder_inference(
 
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
     model_args.n_layers = 1
-    # Prefetcher is on for Wormhole and for Blackhole only when QWEN_BH_PREFETCHER=1 (bring-up).
+    # Prefetcher is on for Wormhole and for Blackhole (opt out with QWEN_BH_PREFETCHER=0).
     use_prefetcher = model_args.use_prefetcher
 
     state_dict = model_args.load_state_dict()
