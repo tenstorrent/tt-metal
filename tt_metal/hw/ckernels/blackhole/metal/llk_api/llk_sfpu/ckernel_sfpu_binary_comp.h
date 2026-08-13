@@ -44,12 +44,26 @@ inline constexpr bool unsupported_fp32_compare_v = false;
 //     need no such clause only because their answer for a tie is already 0, and the
 //     manufactured NaN has a clear sign bit so it fails their LT0 test.
 //  2. The subtract is exact except when a - b underflows into the flushed denormal
-//     range, so operands that differ by less than 2^-126 compare as equal. This is
-//     the remaining reason test_sfpu_binary_float keeps Lt/Gt/Le/Ge disabled.
+//     range, so operands that differ by less than 2^-126 compare as equal. The
+//     reachable case is adjacent normals near the bottom of the exponent range,
+//     where one ULP is itself subnormal; the raw SFPGT/SFPLE sequences compared
+//     sign-magnitude bit patterns and were exact there, so this is a behaviour
+//     regression against them. Nothing in CI exercises it: the special-float grid in
+//     test_binary_comp_fp32.py has no near-ties, its adjacent-ULP cases sit at ±1.0
+//     (difference 2^-23, subtracts exactly), and tt-llk's
+//     test_sfpu_binary_float_comparison pairs exact ties with ±1.0 gaps. The one
+//     xfail'd case, test_binary_comp_fp32_denormal_window_ties, pins it.
 //
 // Closing both properly needs an sfpi total-order compare or a return to raw
 // SFPGT/SFPLE, which is a perf tradeoff on these hot kernels.
+//
+// On the tt-llk side: test_sfpu_binary_float excludes Eq/Ne and Lt/Gt/Le/Ge from its
+// random sweep for an unrelated reason (independent draws are never equal, so the Eq/Ne
+// golden collapses to a constant). The crafted paired stimuli in test_sfpu_binary_eq_ne
+// and test_sfpu_binary_float_comparison cover all six ops, exact ties included, and both
+// run on Blackhole in the PR-gate llk smoke job.
 constexpr int FP32_INF_BITS = 0x7F800000;
+// dst_reg[] indexes in sfpi row units (32/tile), unlike the raw TT_SFPLOAD immediate (64).
 constexpr std::uint32_t dst_tile_size_sfpi_comp = 32;
 
 // Clear the sign bit at the bit level, as the raw-TTI original did with SFPSETSGN.
@@ -215,13 +229,10 @@ inline void calculate_binary_comp_int32(
     const std::uint32_t dst_index_a = swap_operands ? dst_index_in1 : dst_index_in0;
     const std::uint32_t dst_index_b = swap_operands ? dst_index_in0 : dst_index_in1;
 
-    // dst_reg[] indexes in sfpi row units (32/tile), unlike the raw TT_SFPLOAD immediate (64).
-    constexpr std::uint32_t dst_tile_size_sfpi = 32;
-
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vInt a = sfpi::dst_reg[dst_index_a * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
-        sfpi::vInt b = sfpi::dst_reg[dst_index_b * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>();
+        sfpi::vInt a = sfpi::dst_reg[dst_index_a * dst_tile_size_sfpi_comp].mode<sfpi::DataLayout::I32>();
+        sfpi::vInt b = sfpi::dst_reg[dst_index_b * dst_tile_size_sfpi_comp].mode<sfpi::DataLayout::I32>();
 
         sfpi::vInt fold = a - sfpi::as<sfpi::vInt>(sfpi::setsgn(sfpi::as<sfpi::vUInt>(b), fold_sign));
 
@@ -236,7 +247,7 @@ inline void calculate_binary_comp_int32(
             a = a ^ b;
         }
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi].mode<sfpi::DataLayout::I32>() =
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi_comp].mode<sfpi::DataLayout::I32>() =
             sfpi::as<sfpi::vInt>(sfpi::as<sfpi::vUInt>(a) >> 31);
         sfpi::dst_reg++;
     }
@@ -250,10 +261,13 @@ inline void calculate_binary_comp_int32(
 //
 // NOTE (sfpi conversion): still raw TTI. The metal/tt-llk binary-comparison dispatch
 // (sfpu_operations.h) only routes Int32 -> calculate_binary_comp_int32 and everything
-// else -> calculate_binary_comp_fp32, so this uint ordering path (and calculate_binary_eq_int
-// below) are ttnn-only and are neither instantiated nor testable by the tt-llk harness.
-// The uint32 case additionally needs an MSB-fold to emulate unsigned ordering with signed
-// sfpi compares; convert together with ttnn-level validation.
+// else -> calculate_binary_comp_fp32, so this uint ordering path is ttnn-only: the tt-llk
+// harness never instantiates it, at either data format. calculate_binary_eq_int below is
+// different — the harness does instantiate it, but only at DataFormat::Int32 (via
+// BinaryOp::EQ_INT/NE_INT, exercised by test_sfpu_binary_int), so only its UInt16/UInt32
+// instantiations are ttnn-only. The uint32 case here additionally needs an MSB-fold to
+// emulate unsigned ordering with signed sfpi compares; convert together with ttnn-level
+// validation.
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, DataFormat DATA_FORMAT>
 inline void calculate_binary_comp_uint(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out) {

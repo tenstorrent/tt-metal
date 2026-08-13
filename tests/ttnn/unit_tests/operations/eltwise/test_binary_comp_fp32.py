@@ -126,6 +126,41 @@ def test_binary_comp_fp32_adjacent_ulps(ttnn_op, device):
     _assert_matches_torch(ttnn_op, a, b, device)
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "Known Blackhole gap: sfpi lowers the vFloat relational operators to a subtract plus a "
+        "sign test, and a - b underflows into the flushed denormal range for adjacent normals "
+        "near 2^-126, so those pairs read as equal. The raw SFPGT/SFPLE sequences this replaced "
+        "compared sign-magnitude bit patterns and were exact. Wormhole keeps the raw path and "
+        "passes. If this xpasses on Blackhole, revisit the flush note in ckernel_sfpu_binary_comp.h."
+    ),
+)
+@pytest.mark.parametrize(
+    "ttnn_op",
+    (ttnn.gt, ttnn.lt, ttnn.ge, ttnn.le),
+)
+def test_binary_comp_fp32_denormal_window_ties(ttnn_op, device):
+    """Adjacent normals one ULP apart near the bottom of the exponent range, where the ULP itself
+    is subnormal (2^-149 at 2^-126, 2^-143 at 2^-120) so the difference flushes to zero."""
+    f32 = torch.float32
+    pos_inf = torch.tensor(float("inf"), dtype=f32)
+    neg_inf = torch.tensor(float("-inf"), dtype=f32)
+
+    vals_a, vals_b = [], []
+    for magnitude in (2.0**-126, 2.0**-120):
+        v = torch.tensor(magnitude, dtype=f32)
+        v_up = torch.nextafter(v, pos_inf)
+        m_v = -v
+        m_v_dn = torch.nextafter(m_v, neg_inf)
+        vals_a += [v_up, v, m_v, m_v_dn]
+        vals_b += [v, v_up, m_v_dn, m_v]
+
+    a = torch.stack(vals_a).unsqueeze(0).expand(32, -1)
+    b = torch.stack(vals_b).unsqueeze(0).expand(32, -1)
+    _assert_matches_torch(ttnn_op, a, b, device)
+
+
 @pytest.mark.parametrize(
     "ttnn_op",
     (ttnn.eq, ttnn.ne, ttnn.gt, ttnn.lt, ttnn.ge, ttnn.le),

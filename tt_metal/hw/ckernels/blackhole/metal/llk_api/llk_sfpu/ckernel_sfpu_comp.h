@@ -47,6 +47,16 @@ inline void not_equal_zero_init() {
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp() {
+    // The store below is unconditional, unlike the raw-TTI original which emitted no
+    // store at all for an unhandled COMP_MODE. Without this assert an unhandled mode
+    // would write the uninitialized `result` LReg into DEST instead of doing nothing.
+    static_assert(
+        COMP_MODE == SfpuType::equal_zero || COMP_MODE == SfpuType::not_equal_zero ||
+            COMP_MODE == SfpuType::less_than_zero || COMP_MODE == SfpuType::greater_than_zero ||
+            COMP_MODE == SfpuType::less_than_equal_zero || COMP_MODE == SfpuType::greater_than_equal_zero,
+        "Supported operation types: equal_zero, not_equal_zero, less_than_zero, greater_than_zero, "
+        "less_than_equal_zero, greater_than_equal_zero");
+
     // fp32 total-order comparison-to-zero. |v| is used to fold ±0 together and to
     // detect NaN: a NaN has |v| whose fp32 bit pattern is strictly greater than +inf
     // (0x7F800000), so `as<vInt>(|v|) > 0x7F800000` isolates it.
@@ -171,13 +181,25 @@ inline void calculate_comp_int() {
     }
 }
 
-// NOTE: the uint16/uint32 comparison-to-zero paths below have no tt-llk python-test
-// coverage (the comp-to-zero suite only exercises Float16_b/Float32). They mirror the
-// original raw-TTI load/store modes (LO16 for uint16, INT32 for uint32) so behaviour is
-// preserved; validate at the ttnn level before relying on them.
+// NOTE on coverage for every comparison-to-zero kernel above and below (calculate_comp,
+// calculate_comp_int, calculate_comp_uint16, calculate_eqz_uint32, calculate_nez_uint32):
+// the tt-llk harness routes the six *_zero SfpuTypes here (sfpu_operations.h dispatches on
+// the runtime math_format), but no functional BH or WH python test enrols those types — the
+// only correctness sweep is quasar/test_eltwise_unary_sfpu_quasar.py, which covers
+// Float16/Float32/Float16_b plus Int32/Int16/Int8/UInt16/UInt8 and does not run on
+// Blackhole, and perf_sfpu_comp.py measures cycles on Wormhole only (and is marker-excluded
+// from correctness runs). BH coverage is ttnn-level only: test_unary_zero_comp_ttnn and
+// test_unary_zero_comp_uint_ttnn in tests/ttnn/unit_tests/operations/eltwise/test_unary.py.
+// (calculate_comp_unary_int at the bottom of this file is the exception — unary_eq/unary_ne
+// on Int32 reach it from tt-llk's test_sfpu_unary.py.)
+//
+// The uint16/uint32 paths mirror the original raw-TTI load/store modes (LO16 for uint16,
+// INT32 for uint32), so behaviour is preserved across the sfpi conversion.
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_uint16() {
     static_assert((COMP_MODE == SfpuType::equal_zero) or (COMP_MODE == SfpuType::not_equal_zero));
+    // UInt16 values live in the low 16 bits of the dest word; DataLayout::U16 loads/stores them
+    // directly (SFPLOAD/SFPSTORE mod = UINT16), matching the InstrModLoadStore::LO16 path.
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vUInt v = dst_reg[0].mode<sfpi::DataLayout::U16>();
@@ -186,8 +208,7 @@ inline void calculate_comp_uint16() {
             v_if(v == 0) { result = 1; }
             v_endif;
         } else {
-            v_if(v == 0) { result = 0; }
-            v_else { result = 1; }
+            v_if(v != 0) { result = 1; }
             v_endif;
         }
         dst_reg[0].mode<sfpi::DataLayout::U16>() = result;
