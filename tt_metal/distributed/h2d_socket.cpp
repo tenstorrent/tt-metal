@@ -53,6 +53,41 @@ void advance_h2d_simulator_socket_device(MeshDevice* mesh_device, const MeshCoor
 
 }  // namespace
 
+void H2DSocket::apply_mock_self_ack(const MeshDevice* mesh_device) {
+    // Owner-only. A connector has no MeshDevice, and resolving the target type from
+    // process-global state would be wrong twice over: MetalContext::instance() *creates* a
+    // default context (and a MetalEnv, opening the driver) when none exists, which is exactly
+    // what a connector process is documented to avoid; and the answer would describe the
+    // connector's own process rather than the owner's target. Cross-process mock is not
+    // reachable anyway -- PCIeCoreWriter enumerates real PCIe devices and throws when the
+    // descriptor's device is absent -- so a connector is silicon by construction. Supporting it
+    // would mean carrying the owner's target type in the descriptor as versioned metadata.
+    if (mesh_device == nullptr) {
+        return;
+    }
+    // Mock only. Emule is deliberately excluded: it really runs the receiver kernel and really
+    // drains the FIFO (advance_h2d_simulator_socket_device pumps its scheduler for exactly this
+    // wait), so faking acks there would let the host overwrite bytes the device has not read.
+    if (MetalContext::instance(extract_context_id(mesh_device)).get_cluster().get_target_device_type() !=
+        tt::TargetDevice::Mock) {
+        return;
+    }
+
+    // A mock device never executes, so it never writes the bytes_acked counter that the host
+    // polls for FIFO credit. The counter stays 0, and once the host has written fifo_size_ bytes
+    // every credit wait blocks forever. Model mock as an infinitely fast consumer instead:
+    // point the ack counter at our own bytes_sent_, so acked always equals sent and the FIFO
+    // always reads as empty.
+    //
+    // Repointing rather than branching in the data path fixes all four readers at once
+    // (reserve_bytes / has_space / acked_past / barrier) and costs nothing on silicon -- this is
+    // a pointer store at construction, not a per-write check. Every host-side use of
+    // bytes_acked_ptr_ is a read (only the device writes it, over PCIe), so aliasing it onto a
+    // host counter cannot corrupt socket state. H2DSocket is neither copyable nor movable, so
+    // the self-pointer stays valid for the object's lifetime.
+    bytes_acked_ptr_ = &bytes_sent_;
+}
+
 H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const MeshCoordinateRangeSet& device_range,
@@ -364,6 +399,7 @@ H2DSocket::H2DSocket(
         bytes_acked_info = init_bytes_acked_buffer(mesh_device, recv_device_range_set, pcie_alignment, shm_name);
         bytes_acked_ptr_ = host_buffer_.get();
     }
+    apply_mock_self_ack(mesh_device.get());
 
     init_config_buffer(mesh_device);
     init_data_buffer(mesh_device, pcie_alignment);
@@ -407,6 +443,7 @@ H2DSocket::H2DSocket(
     PinnedBufferInfo bytes_acked_info =
         init_bytes_acked_buffer(mesh_device, recv_device_range_set, pcie_alignment_, shm_name);
     bytes_acked_ptr_ = host_buffer_.get();
+    apply_mock_self_ack(mesh_device.get());
 
     // Take the caller-supplied DRISC L1 offsets verbatim. No MeshBuffer allocation:
     // the framework's L1 allocator is worker-only, and host writes to DRAM-L1 go

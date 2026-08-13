@@ -285,7 +285,15 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
     const uint32_t pcie_alignment = pcie_alignment_;
     TT_FATAL(fifo_size_ % pcie_alignment == 0, "FIFO size must be PCIe-aligned.");
 
-    bool can_use_pinned_memory = !d2h_uses_hugepage_fallback(MetalContext::instance());
+    // Mock must not take the hugepage fallback: SystemMemoryManager::allocate_region is stubbed
+    // there and hands back a null region, which init_host_buffer_hugepage then memsets (segfault
+    // during construction, before any transfer is attempted). Mock only reaches that branch as an
+    // artifact of the predicate -- iommu_enabled_ is only ever probed for Silicon, so it reads
+    // false on mock and, on an arch without 64-bit PCIe addressing, forces the fallback. The
+    // pinned path works on mock (PinnedMemory has a Mock-only no-mapping path), so use it.
+    auto& ctx = MetalContext::instance(extract_context_id(mesh_device.get()));
+    bool can_use_pinned_memory =
+        !d2h_uses_hugepage_fallback(ctx) || ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock;
 
     PinnedBufferInfo data_info;
     PinnedBufferInfo bytes_sent_info;
@@ -329,6 +337,8 @@ void D2HSocket::init_common(const std::shared_ptr<MeshDevice>& mesh_device) {
 
     const SocketSenderSize sender_size;
     bytes_acked_device_offset_ = sender_size.md_size_bytes;
+
+    apply_mock_self_feed(mesh_device.get());
 }
 
 D2HSocket::D2HSocket(
@@ -433,6 +443,12 @@ void D2HSocket::set_page_size(uint32_t page_size) {
         uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
 
         while (bytes_recv < bytes_adjustment) {
+            // Mock: grant the tail bytes this wrap is waiting on. The bytes_acked_ advance just
+            // below consumes them, leaving the socket drained. Free on silicon -- this body only
+            // runs when the host would otherwise block.
+            if (mock_self_feed_) {
+                mock_grant(bytes_adjustment);
+            }
             volatile uint32_t bytes_sent_value = using_hugepage_ ? *hugepage_bytes_sent_host_ptr_ : bytes_sent_ptr_[0];
             bytes_recv = bytes_sent_value - bytes_acked_;
             bytes_sent_ = bytes_sent_value;
@@ -470,6 +486,13 @@ void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
     }
     uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
     while (bytes_recv < num_bytes) {
+        // Mock: grant exactly what this read is blocked on -- no more, so the socket reads as
+        // drained again once the caller pops it. `num_bytes` is already wrap-adjusted above by
+        // the same rule pop_bytes uses to advance bytes_acked_, so the two land level. Free on
+        // silicon: this body only runs when the host would otherwise block.
+        if (mock_self_feed_) {
+            mock_grant(num_bytes);
+        }
         advance_d2h_simulator_socket_device(mesh_device_, sender_core_.device_coord);
         if (using_hugepage_) {
             _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
@@ -484,6 +507,65 @@ void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
             bytes_sent_ = bytes_sent_value;
         }
     }
+}
+
+void D2HSocket::apply_mock_self_feed(const MeshDevice* mesh_device) {
+    // Owner-only. A connector has no MeshDevice, and resolving the target type from
+    // process-global state would be wrong twice over: MetalContext::instance() *creates* a
+    // default context (and a MetalEnv, opening the driver) when none exists, which is exactly
+    // what a connector process is documented to avoid; and the answer would describe the
+    // connector's own process rather than the owner's target. Cross-process mock is not
+    // reachable anyway -- PCIeCoreWriter enumerates real PCIe devices and throws when the
+    // descriptor's device is absent -- so a connector is silicon by construction. Supporting it
+    // would mean carrying the owner's target type in the descriptor as versioned metadata.
+    if (mesh_device == nullptr) {
+        return;
+    }
+    // Mock only. Emule is deliberately excluded: it really runs the sender kernel and really
+    // fills the FIFO (advance_d2h_simulator_socket_device pumps its scheduler for exactly this
+    // wait), so synthesizing data there would replace real device output with stale bytes.
+    if (MetalContext::instance(extract_context_id(mesh_device)).get_cluster().get_target_device_type() !=
+        tt::TargetDevice::Mock) {
+        return;
+    }
+
+    // A mock device never executes, so it never writes the bytes_sent counter the host polls for
+    // available data, and every read() blocks forever.
+    //
+    // Unlike the H2D direction there is no honest value to converge on: the device is the
+    // producer here, so a mock read necessarily returns whatever happens to be in the FIFO
+    // (zeros, from the zero-initialized SHM). That is the same contract every other device read
+    // already has under mock -- ReadFromDeviceL1 and EnqueueReadBuffer leave the caller's buffer
+    // untouched -- so it introduces no new class of lie. What it buys is that the host code path
+    // runs to completion instead of wedging.
+    //
+    // The contract, deliberately narrow: mock satisfies *blocking* waits and nothing else.
+    // A blocking wait grants itself exactly the bytes it is waiting on (mock_grant), the caller
+    // consumes them, and bytes_acked_ ends up level with the stand-in counter again. So between
+    // calls the socket reads as drained, which is the truthful answer -- no device produced
+    // anything -- and is what the non-blocking queries report:
+    //
+    //   has_data()              -> false
+    //   pages_available()       -> 0
+    //   discard_pending_pages() -> 0
+    //   barrier()               -> returns immediately, no mock special case needed
+    //
+    // The alternative, holding the counter permanently one FIFO ahead, would make every one of
+    // those advertise unbounded device output and would livelock the ordinary drain loops
+    // (`while (has_data()) read();`, `while (discard_pending_pages()) ;`). Trading a blocking
+    // hang for a spinning one is not an improvement, so availability is scoped to the blocking
+    // call that asked for it.
+    //
+    // The residual sharp edge is a caller that polls *for* data (`while (!has_data()) ;`) instead
+    // of blocking in read(): no mock policy can satisfy both that and a drain loop, and such a
+    // caller is explicitly waiting on a device that mock does not have.
+    //
+    // Safe for the same reasons as the H2D alias: every host-side use of bytes_sent_ptr_ is a
+    // read (only the device writes it, over PCIe), and D2HSocket is neither copyable nor movable,
+    // so the self-pointer stays valid for the object's lifetime.
+    mock_self_feed_ = true;
+    bytes_sent_ptr_ = &mock_bytes_sent_;
+    mock_bytes_sent_ = bytes_acked_;
 }
 
 void D2HSocket::pop_bytes(uint32_t num_bytes) {
@@ -575,6 +657,8 @@ void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
             }
         }
     }
+    // No mock case here: a mock socket is always level (each grant is consumed by the read that
+    // triggered it), so the loop above is never entered.
 }
 
 void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
