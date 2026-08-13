@@ -7,20 +7,22 @@ audit, and the record of every finding to date
 **Scope:** Wormhole B0 and Blackhole. Quasar keeps its own inline stimulus definitions under
 `quasar/` and is tracked separately.
 
-**Revision 11 — 2026-08-12.** This document now contains **only work that is not done**. Completed
-phases and items have been removed rather than ticked off, because their results live in two places
-that cannot drift from the code: the code itself, and the coverage audit.
+**Revision 14 — 2026-08-13.** This document contains **only work that is not done**. Completed items
+are deleted rather than ticked off, because their results live in two places that cannot drift from the
+code: the code itself, and the coverage audit. For what a finished item established, read the audit —
+§5 has the findings, §4 has the per-op state.
 
-Removed in this revision because it is finished: phases 0–4, the per-op tolerances for `pow` and
-`xlogy`, the ternary operand-C poles, the first cat-B tranche, and the Blackhole verification of all of
-it. If you need to know what a completed item established, the coverage audit §5 has the findings and
-§4 has the per-op state.
+Deleted in this revision because they are finished: **cat E** (the unary shift amount now sweeps its
+full axis), **the scalar tensor-operand edges** (the five scalar binops are enrolled and the wrapper
+that was a comment is a live test), and **the CI gap** (the broad unary profile now runs in
+non-coverage companion groups instead of nowhere). Earlier revisions deleted the cat-B tranches the
+same way; 60 of the 97 unary ops are enrolled and green on Blackhole. What survived from all of it is
+not history but advice, and it is in §8.
 
-**One thing worth carrying forward from all of it.** Every completed item assumed the *stimulus* was
-the hard part, and in every case the binding constraint turned out to be the **golden**. The most
-recent tranche is the clearest case: of ten cat-B ops attempted, five were already correct, two needed
-a golden fix to run at all, and three are still blocked because their goldens are wrong. Budget for
-that, not for the mechanism.
+**What is left divides cleanly in three, and only one part is ordinary work.** Of the 37 unary ops
+still outside cat B, 33 are waiting on the three questions in §3 — judgement calls that belong to
+kernel owners, not to this document. One item needs hardware nobody here has. That leaves cat F, which
+is large but unblocked, and one number to tune after the next nightly.
 
 ---
 
@@ -28,66 +30,61 @@ that, not for the mechanism.
 
 | # | Item | Blocked on | Size | Where |
 |---|---|---|---|---|
-| 1 | **Cat B, next tranche** — 5 ops measured, 3 blocked on one golden fix | golden semantics | medium | §2 |
-| 2 | **Two questions for kernel owners** — `Log` input saturation, `RsqrtCompat(0)` | judgement, not code | two emails | §3 |
-| 3 | **Cat B, the long tail** — the remaining 87 unary ops | as item 1, repeated | large, divisible | §2.3 |
-| 4 | **Wormhole re-measurement** — `specials_safe()`'s four unreachable rows | Wormhole hardware | one sweep | §4 |
-| 5 | **Cat E** — the unary shift amount | C++ `constexpr` → `TemplateParameter` | cross-language | §5 |
-| 6 | **Cat F** — harnesses for 11 kernels with no enum entry | new C++ source + golden each | large, per kernel | §6 |
-| 7 | **Scalar tensor-operand edges** | cat B reaching the scalar goldens | thin wrapper | §7 |
-| 8 | **CI runs none of this** | a scheduling decision | one workflow change | §8 |
+| 1 | **Three questions for kernel owners** — approximation contract, `NaN` comparisons, `RsqrtCompat(0)` | judgement, not code | drafted, need sending | §3 |
+| 2 | **Cat B, the last 37 ops** — 33 of them blocked on item 1's answers | see §2 | small, once answered | §2 |
+| 3 | **Wormhole re-measurement** — `specials_safe()`'s four unreachable rows | Wormhole hardware | one sweep | §4 |
+| 4 | **Cat F** — harnesses for 11 kernels with no enum entry | new C++ source + golden each | large, per kernel | §5 |
+| 5 | **Tune the new non-coverage CI groups' timeouts** | one nightly run's data | one YAML edit | §6 |
 
-**Start with item 2.** It is two questions to two people, it costs nothing, and one of them (`Log`)
-blocks an op in item 1. **Item 1 is the only item that unblocks other work.** Item 8 bounds the value
-of everything else on the list.
+**Start with item 1.** Those questions looked like two one-op curiosities when they were written.
+Driving the full unary set showed they are two *kernel behaviours* that between them decide **32 of the
+37 ops still outside cat B**, so they are no longer the cheap item on the list — they are the one that
+unblocks almost everything else. Nothing else here is blocked on anything but hardware and effort.
 
 ---
 
-## 2. Cat B — IEEE specials for the other 92 ops
+## 2. Cat B — IEEE specials for the other 37 ops
 
-Five ops are enrolled and green (`Identity`, `Abs`, `Exp`, `Sin`, `Cos`). The gate is two-sided and per
-op, so an op joins on its own:
+**60 of the 97 unary ops are enrolled and green.** The gate is two-sided and per op, so an op joins on its own:
 
 - `specials_safe(input, output, dest_acc)` — does the *pipeline* deliver a special intact. Measured;
-  7 of 40 triples; pinned by `test_sfpu_domains.py`.
+  7 cells of 50; pinned by `test_sfpu_domains.py`.
 - `SPECIALS_READY_OPS` — does the *golden* define a result for one, carrying the reason.
 
-Both must pass. What follows is per-op golden work, not stimulus work.
+There is now a third gate, and it is narrower than either: `negative_zero_delivered(input, dest_acc)`.
+A `-0.0` only survives on the unpack-to-dest path — a 32-bit input at `dest_acc=Yes` — and everywhere
+else the datacopy hands the kernel `+0.0`. The `-0` probe is no longer sent where it cannot arrive,
+because an xfail for an undelivered datum blames the kernel for the stimulus. That is what scopes
+`Sqrt`'s and `Rsqrt`'s xfails, and it is the same reasoning `Signbit`'s six entries already carried.
 
-### 2.1 The next five, and the one fix that unblocks three of them
+Both of the first two must pass. What follows is per-op golden work, not stimulus work.
 
-`_SPECIALS_NEXT_TRANCHE` in `sfpu_domains.py` carries this table in a comment. Measured on Blackhole
-with a Float32 input, the only specials-carrying input format reachable there:
+### 2.1 The 37 that are left, and what each is waiting for
 
-| Op | Probe | Golden | Hardware | Whose bug |
-|---|---|---|---|---|
-| `Neg` | `NaN` | `+inf` | `-inf` | **golden** — NaN mangled at `dest_acc=No` |
-| `Neg` | `+0` | `+0` | `-0` | **golden** — the hardware is IEEE-correct |
-| `Reciprocal` | `NaN` | `+inf` / `NaN` | `+0` | kernel — NaN not propagated |
-| `Reciprocal` | `-inf` | `+0` | `-0` | **golden** — hardware IEEE-correct |
-| `Sqrt` | `-0` | `+0` | `NaN` | kernel |
-| `Rsqrt` | `-0` | `-inf` | `NaN` | kernel |
-| `Log` | `±inf`, `NaN` | `±inf` / `NaN` | `88.5`, `84.3`, `89.1` | kernel — §3 |
+Every one has been driven over the full specials set on every Blackhole-reachable triple, so this is a
+measured list, not a to-do list of unknowns. **32 of the 37 are two kernel behaviours.**
 
-None is enrolled, deliberately. **Enrolling an op whose golden is wrong launders a test bug into a
-permanent "known hardware divergence"** — the xfail reason blames the kernel for the golden's error,
-and nobody re-derives a reason string once it is written.
+| Waiting on | Ops | Which |
+|---|---|---|
+| **§3 Q1** — approximation contract | 23 | `CastFp32ToFp16a`, `Digamma`, `Erf`, `Erfc`, `Erfinv`, `Expm1Cw`, `Frac`, `Gelu`, `GeluDerivative`, `I1`, `Lgamma`, `Log`, `LogWithBase`, `Polygamma`, `Rdiv`, `Rpow`, `Sigmoid`, `SigmoidAppx`, `SqrtCustom`, `Tanh`, `TanhDerivative`, `TanhDerivativeLut`, `UnaryPower` |
+| **§3 Q3** — `NaN` comparison ordering | 9 | `Clamp`, `Hardsigmoid`, `Hardtanh`, `Heaviside`, `ReluMax`, `Sign`, `UnaryGe`, `UnaryGt`, `UnaryMin` |
+| §5 — no `MathOperation` golden at all | 3 | `TopKLocalSort`, `TopKMerge`, `TopKRebuild` (perf-only) |
+| tt-llk#1120 | 1 | `ReluMin` (skipped outright) |
+| Already fully xfailed at its pole | 1 | `RsqrtCompat` (§3 Q2) |
 
-**Do them in this order.** The dependency is real: step 1 unblocks three rows.
+**Neither blocked group needs per-op work — each needs one answer**, and the measured tables are in
+[KERNEL_OWNER_QUESTIONS.md](KERNEL_OWNER_QUESTIONS.md). Once answered, a group enrols together: as
+plain passes if the goldens should model the behaviour, with one shared xfail reason if it is a
+documented kernel contract, or as one bug report if it is not intended.
 
-1. **Fix the golden's NaN handling through the 16-bit dest path.** `Neg(NaN) → +inf` and
-   `Log(NaN) → +inf` are one defect seen twice, and both appear only at `dest_acc=No`. This is a single
-   fix in the golden's quantization path and the prerequisite for everything below.
-2. **Decide whether the golden models signed zero at all.** `Neg(+0) → -0` and
-   `Reciprocal(-inf) → -0` are cases where the *hardware* is right. Either the golden learns signed
-   zero, or those probes are excluded with a recorded reason — but "xfail the hardware" is not
-   available when the hardware is the correct party.
-3. **Enrol `Neg` and `Reciprocal`**, recording `Reciprocal(NaN) → +0` as a genuine kernel xfail.
-4. **Enrol `Sqrt` and `Rsqrt`.** Both are clean kernel divergences: IEEE says `sqrt(-0) = -0` and
-   `rsqrt(-0) = -inf`, the golden agrees, the hardware returns `NaN`. Non-strict xfails, and
-   **`dest_acc=Yes` only** — at `dest_acc=No` the `-0` probe is not delivered at all (coverage audit
-   §5.2), so those cells would be vacuous.
-5. **`Log` last**, and only after §3 answers whether its input saturation is intended.
+**Do not enrol any of them on a guess.** A reason string written to make a variant green becomes a
+permanent, plausible-looking claim about the hardware, and nobody re-derives one once it is written.
+
+**`I1` is the case to read before starting.** Its golden *was* wrong — torch returns `NaN` at `±inf`
+where `I1` is odd and unbounded, so `I1(±inf) = ±inf` — and it has been fixed. It still stays out,
+because its *kernel* saturates to `±1.1547668e37`, which is Q1. **Fixing a golden is not a reason to
+enrol an op.** Keeping those two decisions apart is exactly what stops a kernel divergence being
+laundered into a golden that agrees with it.
 
 **Acceptance per op:** it is in `SPECIALS_READY_OPS` with a reason; the unary edge sweep runs it on
 every safe triple with no unexplained failure; each divergence is either an ISA-cross-checked
@@ -108,40 +105,67 @@ g = UnarySFPUGolden()
 t = torch.zeros(1024, dtype=torch.float32)
 for i, v in enumerate([float('inf'), float('-inf'), float('nan'), 0.0, -0.0]): t[i] = v
 for op in [M.Neg, M.Sqrt]:                      # <- the ops you are about to enrol
-    out = torch.as_tensor(g(op, t.clone(), F.Float32, D.Yes, F.Float32, [32,32])).flatten()
-    print(op.name, [float(out[i]) for i in range(5)])
+    for dest_acc in [D.No, D.Yes]:              # <- BOTH: they are different code paths
+        out = torch.as_tensor(g(op, t.clone(), F.Float32, dest_acc, F.Float32, [32,32])).flatten()
+        print(op.name, dest_acc.name, [float(out[i]) for i in range(5)])
 "
 ```
 
 An op that raises here is a golden fix. An op that returns the wrong value here is a golden fix. Only
 an op that returns the *right* value is ready for hardware.
 
-### 2.3 The long tail
+**Run both `dest_acc` values, and read the `No` row carefully.** That is the 16-bit-Dest path, the only
+one where a NaN is replaced by a *signed* infinity — so it is the only place a wrong NaN sign is
+visible at all. At `dest_acc=Yes` the NaN stays a NaN and the comparator's both-NaN clause accepts
+anything. **Every golden defect found so far has lived in the `No` row**, and a check that ran only
+`Yes` would have passed all of them straight onto hardware.
 
-87 unary ops remain outside the gate, and **47 of them are smooth everywhere** — no knee, no pole — so
-`edge_spec()` returns `None` for them and cat B is their *entire* edge story. That is the single
-largest remaining coverage gap in the suite.
+### 2.3 Drive the whole category at once, not op by op
 
-Measured rate from the first tranche, for estimating: **half the ops are free** (the golden already
-routes through torch and torch is IEEE-correct), about a fifth need a small mechanical golden fix, and
-the rest need a real decision about semantics. Each op is one small reviewable commit.
+This is method, not history: it applies to cat F in §5 as much as it did to cat B and cat E.
+
+Per-op work is right only while the *shared machinery* is still suspect — a defect in the golden
+framework will otherwise be misattributed to whichever op is in hand, which happened twice. Once the
+machinery is trustworthy, driving the whole category in one sweep is strictly better: it costs a single
+run, and it is the only way the families become visible at all. **A cause that shows up in 9 or 23 ops
+at once is invisible when you look at one op at a time** — both of §3's blocking questions were found
+that way, and both had previously been written up as one-op curiosities.
+
+The corresponding trap is in §8: a sweep that changes shared machinery must be diffed against a
+baseline across *every* op, not just the ones being enrolled.
 
 ---
 
-## 3. Two questions for kernel owners
+## 3. Three questions for kernel owners
 
-Neither has been filed. Both are divergences the ISA does not explain, cheap for an owner to adjudicate
-and expensive for a test to keep guessing about.
+**All three are drafted and ready to send:** [KERNEL_OWNER_QUESTIONS.md](KERNEL_OWNER_QUESTIONS.md) has
+each one written up with its measured table, a reproduce command, and what would settle it. What is left
+is the part a test cannot do — putting them in front of the owners. **None has been filed.**
 
-1. **`Log` saturates a non-finite input.** `log(+inf)` returns `88.5`, `log(-inf)` `84.3`, `log(NaN)`
-   `89.1`, `log(-0)` `-92.5` — all finite, all near `ln(FLT_MAX) = 88.7`. The kernel appears to clamp
-   its input to the format maximum and take the log of that, so no non-finite input survives it. **Is
-   that intended, and should it be documented?** `Log` cannot be enrolled in cat B until this is
-   answered, because there is no way to know whether the right outcome is a pass, an xfail or a bug
-   report.
+Each is a divergence the ISA does not explain, cheap for an owner to adjudicate and expensive for a test
+to keep guessing about. Between them they decide 33 of the 37 ops still outside cat B:
+
+| # | Question | Ops it decides |
+|---|---|---|
+| 1 | What should an approximation kernel do with an input outside its series' range? | **23** |
+| 2 | Why does `RsqrtCompat` saturate at the pole where `Rsqrt` does not? | 1 |
+| 3 | Are SFPU comparisons defined for a `NaN` operand? | **9** |
+
+1. **Approximation kernels do not propagate non-finite inputs.** `Log` is the clearest case —
+   `log(+inf)` returns `88.5`, `log(-inf)` `84.3`, `log(NaN)` `89.1`, all near `ln(FLT_MAX) = 88.7`, so
+   the kernel appears to clamp its input to the format maximum and take the log of that. **It is not
+   about `Log`:** 22 further ops do the same thing, either saturating to an asymptote or returning
+   `NaN` where a value is defined. `LogWithBase` returns exactly `Log`'s values scaled by the dispatch
+   constant `1/ln(2)`, which is the evidence the cause is shared rather than per-op.
 2. **`RsqrtCompat(0)` saturates to `1.7014118e38`** (`0x7F000000`) instead of returning `inf`, on all 8
    combinations — while plain `Rsqrt` over the same probe does not diverge. Two implementations of one
    function disagreeing at their shared pole, with nothing in the ISA prescribing either answer.
+3. **SFPU comparisons rank `NaN` above every finite value**, where IEEE makes every ordered comparison
+   with a `NaN` false. Derived rather than guessed: the six unary comparison ops split exactly along
+   the predicted line — `UnaryLt`, `UnaryLe` and `UnaryMax` agree with their goldens while `UnaryGt`,
+   `UnaryGe` and `UnaryMin` do not — and `Clamp`, `Hardtanh`, `Hardsigmoid`, `ReluMax`, `Sign` and
+   `Heaviside` each return their own dispatch constant at `NaN`. The ISA already declines to specify
+   `SFPSETCC` for a negative-zero operand; `NaN` looks like the same gap.
 
 **The `signbit(-0.0)` question that used to head this list is withdrawn.** It was read as a
 kernel-contract bug; the delivery measurement shows the probe never arrives on the six combinations
@@ -167,26 +191,26 @@ parametrized by arch too; it currently pins one verdict per cell.
 
 ---
 
-## 5. Cat E — the unary shift amount
-
-`LeftShift` and `RightShift` still run at a **fixed shift of 3** with small positive inputs.
-`SHIFT_AMOUNT` is a `constexpr std::uint32_t SHIFT_AMOUNT = 3u` inside `call_unary_sfpu_operation`
-(`helpers/include/sfpu_operations.h`), paired with `_int_shift_amount` on the golden side. Sweeping it
-needs a new `TemplateParameter` plus matching golden plumbing — cross-language, not test wiring.
-
-The Python side is already written and reusable: `_SHIFT_EDGE_AMOUNTS` covers
-`{0..31, 32, 33, 40, 63, 100, 1000, −1, −5, −32, −1000}`, `_shift_reference` is the golden, and
-`_build_paired_tile_override` is the delivery. The binary shift ops are fully covered by contrast, so
-this is the last gap in cat E.
-
----
-
-## 6. Cat F — the 11 kernels with no `MathOperation` entry
+## 5. Cat F — the 11 kernels with no `MathOperation` entry
 
 A header exists; nothing in the Python infra can reach them. Confirmed still absent: `welfords`,
 `dropout`, `quant`, `cumsum`, `reshuffle_rows`, `int_sum`, `tiled_prod`, `copy_dest_values`,
 `generalized_moe_gate_topk`, `max_pool_indices`, `rand`. Each needs a new C++ source and golden, so none
 is reachable by the shared mechanism.
+
+**Where the headers actually are, and why it does not save you anything.** Only `welfords`,
+`generalized_moe_gate_topk` and `rand` live under `tt_llk_<arch>/`; the other eight are in the metal
+CKernels layer at `tt_metal/hw/ckernels/<arch>/metal/llk_api/llk_sfpu/`. That looks like it should
+block them, and it does not — `TestConfig.INCLUDES` puts that directory on the compile line for every
+LLK test, so a harness can include them today. Check that before concluding a kernel is out of reach.
+
+**What the harness cost actually is.** Not the include path and not the golden — it is the *call
+shape*. `call_unary_sfpu_operation` dispatches on one `dst_index`, and these kernels do not fit it.
+`quant` is the clearest case: `calculate_quant_int32`, `calculate_requant_int32` and
+`calculate_dequant_int32` each take **three** dest indices (two inputs and an output), so driving them
+needs a source that unpacks two operands into separate Dest slots and packs from a third — a harness
+shape the unary suite does not have, rather than another entry in an existing dispatch. Budget per
+kernel accordingly, and expect the first one to pay for the shape that the rest can then share.
 
 | Priority | Kernels | Why |
 |---|---|---|
@@ -199,44 +223,28 @@ is reachable by the shared mechanism.
 
 ---
 
-## 7. Scalar tensor-operand edges
+## 6. Tune the new non-coverage CI groups' timeouts
 
-Do **not** start this one on its own. All five scalar ops are `x (+|-|*|/) c` for a compile-time `c`, so
-they are smooth in `x`: cat A and cat D contribute nothing and their only edge is cat B. None is in
-`SPECIALS_READY_OPS`, so a wrapper today collects 20 nightly variants and skips all 20.
+The broad unary profile used to run in no automated job at all: every LLK python job either
+excluded the `nightly` marker or ran with coverage, and coverage skips `BROAD_SWEEP_OPS`
+wholesale. `llk_e2e_tests.yaml` now carries non-coverage companion groups (`split_group` 6–10,
+`llk_e2e_*_nocov`) that run the same tests without `--coverage`, so it executes.
 
-It goes live as one of §2's commits, when cat B reaches the scalar goldens. The `spec_A` hook on
-`_run_sfpu_binop_scalar` is already in place and the wrapper sketch sits in a comment where the test
-was.
+**What is left is one number per group.** Their timeouts were copied from the instrumented
+groups — 38 min on `wh_n150_civ2`, 55 on `bh_p150b_civ2` — which is a starting point, not a
+measurement: a non-coverage run has more variants to execute but no instrumentation overhead.
+After the first nightly, read the actual durations and set them. Budget is not the constraint
+(`verify_time_budget.py` allows 1800 min per SKU for team `llk`; this took `wh_n150_civ2` to
+380 and `bh_p150b_civ2` to 550), so err high until there is data.
 
-Widening the *scalar* axis beyond `|scalar| ≤ 8`, and `±tiny` / `±large` on the tensor operand, is a
-separate matter and needs a per-op tolerance on the scalar suite first — the same pattern
-`BINARY_CUSTOM_TOLERANCES` uses for `pow` and `xlogy`.
-
----
-
-## 8. CI runs none of this
-
-**The broad unary profile runs in no automated job on any architecture.** Every LLK pytest job either
-excludes `nightly` (pr-gate smoke, bit-exact) or runs `--coverage`, under which the broad profile is
-skipped wholesale. That leaves the large majority of the sweep's parametrizations running nowhere, and
-it predates all of this work.
-
-Either `llk-e2e` needs a non-coverage companion group, or the broad profile has to stop being
-coverage-gated. **This bounds the value of every other item on the list**: coverage that no job runs can
-regress silently, and the two arch-gates added recently are exactly the kind of thing that regresses
-quietly.
-
-**One citation to check first.** The live skip reason in `test_sfpu_unary.py` attributes the
-coverage-gating to [tt-llk#1435](https://github.com/tenstorrent/tt-llk/issues/1435). That issue is
-open, but its title is about `test_eltwise_unary_sfpu.py` failing on a mismatch when it runs after
-`test_eltwise_binary` — test *ordering*, not coverage. Either the citation is wrong and has propagated
-into the source, or the issue has been repurposed in its comments. Resolve it before filing anything
-that cites it, since the skip reason points readers there.
+**Do not re-cite tt-llk#1435 for the coverage skip.** That issue is about test *ordering*, and
+its one mention of coverage is an observation of the skip's effect rather than a reason for it —
+the citation was circular and has been removed. The actual rationale for excluding the broad
+profile from the instrumented run is recorded nowhere; if you find out, write it down.
 
 ---
 
-## 9. How to verify your work
+## 7. How to verify your work
 
 **Host-side, no device.** The metadata and gates are pinned by tests; run these before touching
 hardware:
@@ -253,7 +261,8 @@ u = sorted(sfpu_unary_ops(), key=lambda o: o.name)
 e = [o for o in u if edge_spec(o, F.Float32, F.Float32) is not None]
 print(len(_OP_SINGULARITIES), len(_OP_EDGE_POINTS), len(u), len(e), len(SPECIALS_READY_OPS))
 "
-# 21 43 97 50 5 — bump the last number as ops join SPECIALS_READY_OPS
+# 21 43 97 50 65 — the last number counts the 5 scalar binops too, so it runs
+#                  ahead of the 60 *unary* ops enrolled; bump it as ops join
 ```
 
 **On hardware.** Never call `pytest` directly — use the repo's runner, which serialises silicon access
@@ -265,19 +274,26 @@ cd tt_metal/tt-llk
     --test test_sfpu_unary.py --k test_eltwise_unary_sfpu_edges
 ```
 
-Current baseline on a Blackhole p150b, all four suites green through the two-phase flow:
+Current baseline on a Blackhole p300a, all four suites green through the two-phase flow:
 
 | Suite | Result |
 |---|---|
-| `test_sfpu_unary.py` | 4932 passed · 1666 skipped · 14 xfailed |
+| `test_sfpu_unary.py` | 5030 passed · 1601 skipped · 21 xfailed |
 | `test_sfpu_binary.py` | 739 passed · 531 skipped · 36 xfailed · **0 xpassed** |
 | `test_sfpu_ternary.py` | 39 passed · 25 skipped |
-| `test_sfpu_binop_scalar.py` | 58 passed · 62 skipped |
+| `test_sfpu_binop_scalar.py` | 68 passed · 72 skipped |
 
 **A non-zero `xpassed` count is a signal, not noise.** Both arch-gates in this tree were derived from
 one: 16 XPASS in the binary suite became the signed-zero gate, 4 in the unary suite became the
 approximate-exp gate. If a run reports XPASS again, something the tables call arch-specific has
 changed, and that is worth more than most deliberate work.
+
+**Diff the whole op set against a baseline, not just the ops you touched.** Any change to a shared
+golden reaches every op that can produce the value it touches. Stash the change, run the sweep, unstash,
+run it again, and compare per-variant outcomes; a `PASSED -> FAILED` on an op you never edited is the
+signal that the fix was aimed one level too low. Both defects in this section's first two entries were
+found exactly this way — a four-op enrolment regressed `Acosh`, `Cos`, `Sin` and `Exp`, none of which
+the change was about — and neither would have appeared in a run of the ops being enrolled.
 
 **Environment.** `tests/requirements.txt` pins `tt-exalens==0.3.29` and `run_test.sh` expects a venv at
 `tests/.venv`, which `setup_testing_env.sh` does **not** create — that script installs SFPI and
@@ -285,13 +301,38 @@ pre-commit only.
 
 ---
 
-## 10. Traps to know before starting
+## 8. Traps to know before starting
 
 Every one of these has already cost time once.
 
-- **Check the golden before blaming the kernel.** Three of the five ops in §2.1 diverge because the
-  *golden* is wrong, and in two of those the hardware is the IEEE-correct party. An xfail written the
-  wrong way round is worse than no test: it is a permanent, plausible-looking lie about the hardware.
+- **Check the golden before blaming the kernel.** Of the seven divergences booked against the second
+  tranche, four were the golden's and one of those was really the *test framework's*, shared by 24 ops.
+  An xfail written the wrong way round is worse than no test: it is a permanent, plausible-looking lie
+  about the hardware.
+- **Check that the comparator can see the divergence before designing around it.** `passed_test()`
+  compares with `torch.isclose`, a both-NaN clause and PCC, and `-0.0 == +0.0` under every one of them.
+  Two rows sat on the blocking list for a revision because nobody checked whether a failing test could
+  even exist for them. The corollary: a probe whose whole point is a zero's sign needs a bitwise
+  comparator first, and that is a suite-wide change.
+- **A probe that cannot be delivered is not a test.** `specials_safe()` answers whether a pipeline
+  carries non-finites, which is *not* the same question as whether it carries a `-0.0`; several triples
+  do the first and not the second. Sending the probe anyway costs an xfail per variant that blames the
+  kernel for a datum it never received. `negative_zero_delivered()` is the second gate.
+- **`torch`'s fp32 → bfloat16 cast destroys a NaN's sign.** Every NaN becomes `0xFFFF`, sign bit set,
+  whatever it started as — while `.to(float16)` preserves the sign correctly, so the bug hides on
+  three quarters of the format axis. It is invisible until a NaN crosses a 16-bit Dest, where the pack
+  path substitutes a *signed* infinity and turns the invented sign into a `+inf`/`-inf` mismatch.
+  `cast_to_dest_dtype` models the Dest write as the bit truncation it actually is. Note the cast runs
+  in two places per call — the Dest write *and* the store into the result buffer, whose dtype follows
+  `input_format` through `tilize_block` and is not always the Dest dtype. Fixing only the first one
+  looks like it works and silently does nothing on the pipelines where the two differ.
+- **The sign of a *generated* NaN is not a fact about anything.** IEEE 754 leaves it unspecified for
+  an invalid operation, and torch inherits the host libm, which picks inconsistently: `cos(inf)`,
+  `acosh(0.5)`, `rsqrt(-1)` and `acos(2)` give `0xFFC00000` while `sqrt(-1)` and `log(-1)` give
+  `0x7FC00000`. The SFPU emits a positive one. A golden that exports libm's choice will disagree with
+  hardware on whichever ops libm happened to sign negatively — 24 of the 97, found only because they
+  regressed a hardware run. Canonicalise; assert a NaN's sign only for the ops that *move* the sign bit
+  (`Neg`, `Abs`, `Identity`).
 - **A `math.*` call in a golden is a latent cat-B failure.** `math.sin` / `math.cos` *raise*
   `ValueError("math domain error")` on a non-finite input rather than returning NaN, so a golden using
   them turns a special-value probe into a test error. Both carried a comment asserting the input was
@@ -331,9 +372,12 @@ Every one of these has already cost time once.
   exponent shared across the 16-element block. Safe direction, but a block-float probe *pair* cannot be
   assumed distinct.
 - **`TestConfig` calls `shutil.rmtree()` on the fixed path `/tmp/tt-llk-build` at session setup.** Any
-  second pytest session on the same host — including a one-op `-k` run started to triage something —
-  deletes the build tree out from under a running sweep. The victim reports `ld: cannot open output
-  file`, which in a log reads exactly like a real kernel bug. Worth fixing separately: key the artefact
+  second pytest session on the same host deletes the build tree out from under a running sweep. The
+  victim reports `ld: cannot open output file`, which in a log reads exactly like a real kernel bug —
+  and it lands on whichever variants happened to be linking, so the failures look scattered and
+  unrelated to anything you changed. **`pytest --collect-only` counts**: it runs session setup, so a
+  collection check started to answer a quick question while a sweep is running will corrupt it. Wait,
+  or use a plain `python -c` import, which does not. Worth fixing separately: key the artefact
   root by session, or take the existing `/tmp/tt-llk-build-shared.lock` around the rmtree.
 - **The pinned test environment drifts, and the direction matters.** A venv carrying an **older**
   exalens than the pin fails at `conftest` import with a missing-symbol `ImportError`

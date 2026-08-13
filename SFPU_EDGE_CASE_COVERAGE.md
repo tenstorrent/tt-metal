@@ -2,13 +2,65 @@
 
 **Issue:** [tenstorrent/tt-metal#49739 — [LLK] SFPU testing edge cases](https://github.com/tenstorrent/tt-metal/issues/49739)
 **Plan for what is left:** [SFPU_EDGE_CASE_EXPANSION_PLAN.md](SFPU_EDGE_CASE_EXPANSION_PLAN.md)
-**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-12 (revision 7)
+**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-13 (revision 10)
 **Scope:** All SFPU LLK kernels in `tt-metal/tt_metal/tt-llk`, audited through the tt-llk Python test
 infra (`tests/python_tests/`). Wormhole B0 and Blackhole share essentially the same SFPU kernel set
 (BH adds only `topk_xl`), so this audit treats them together and notes arch-specific gaps inline.
 Quasar has its own suite under `quasar/` and is **out of scope** — an op driven only from `quasar/`
 counts as untested here.
 
+> ### Revision 10 — cat E closed, the scalar binops enrolled, and the CI hole shut
+>
+> Three of the plan's items are gone, and one of them was quietly undermining all the others.
+>
+> * **CI ran none of this.** Every LLK python job either excluded the `nightly` marker or ran with
+>   coverage, which skips the broad profile wholesale — so the largest part of the sweep executed in
+>   no job on any architecture, and every gain in this document was unguarded. `llk-e2e` now has
+>   non-coverage companion groups. §2.8.
+> * **Cat E is closed.** The unary shift amount sweeps its full axis, including the out-of-range half
+>   the fixed shift of 3 could never reach. §2.3.
+> * **The five scalar binops are enrolled**, and the edge test that had been a comment is live. Their
+>   golden was modelling neither Dest nor the pack path, which only showed once a NaN was driven
+>   through it.
+>
+> ### Revision 9 — cat B goes from 9 ops to 60, and the rest reduces to two questions
+>
+> The remaining tail was driven all at once — all 84 unenrolled ops with a golden, over the full
+> specials set, on every Blackhole-reachable triple — instead of op by op. That was the right call only
+> because revision 8 had finished fixing the shared machinery; before that, each tranche's framework
+> defect would have been misattributed to whichever op was in hand.
+>
+> * **48 ops agreed with their goldens everywhere** and are enrolled with no change.
+> * **7 golden defects total, none of them per-op.** Three shared patterns: `math.*` raising on a
+>   non-finite input (`sin`, `cos`, `acos`, `asin`, `tan` — one defect found three separate times), a
+>   finite-input guard answering false for `NaN` (`Square`'s overflow test, `Hardshrink`'s band test),
+>   and taking torch at face value where torch is not the mathematics (`I0`, `I1` at `±inf`).
+> * **The 32 remaining divergences are two kernel behaviours, not 32 decisions.** §5.9: 23 ops where an
+>   approximation kernel saturates or NaNs an input outside its series' range — the `Log` finding was
+>   never about `Log`. §5.8: 9 ops where SFPU comparisons rank `NaN` above every finite value, derived
+>   from the exact pass/fail split across the six unary comparison ops.
+> * Both are written up for owners in `KERNEL_OWNER_QUESTIONS.md`. Between them they decide 31 of the
+>   37 ops still outside.
+>
+> ### Revision 8 — the second cat-B tranche, and the golden defect it was really about
+>
+> `Neg`, `Reciprocal`, `Sqrt` and `Rsqrt` are enrolled and green on Blackhole (p300a), taking
+> `SPECIALS_READY_OPS` from 5 ops to 9. `Log` is the only one of the tranche still out, and only
+> because §5.6's question about its input saturation is unanswered.
+>
+> * **The blocking defect was in the test framework, not in four goldens.** torch's fp32 → bfloat16
+>   cast canonicalises every NaN to `0xFFFF`, sign bit set. That is the whole of "`Neg(NaN)` is
+>   mangled at `dest_acc=No`" — and it was also silently wrong for 24 other ops, found only because
+>   enrolling four ops regressed `Acosh`, `Cos`, `Sin` and `Exp`. §5.7.
+> * **A second, independent sign bug in the same area:** the goldens were exporting the host libm's
+>   arbitrary choice of sign for a *generated* NaN, which IEEE leaves unspecified. §5.7.
+> * **Two rows left the blocking list without any work**, because the comparator cannot see a zero's
+>   sign at all. §5.2.
+> * **`-0.0` scoping is now enforced**, not advised: `negative_zero_delivered()` keeps the probe off
+>   the pipelines that flatten it, which is a strictly narrower gate than `specials_safe()`. §5.2.
+> * **Three genuine kernel divergences recorded**, derived from the delivery rules rather than listed:
+>   `1/NaN → +0`, `sqrt(-0) → NaN`, `rsqrt(-0) → NaN`. §2.1.
+>
 > ### Revision 7 — cat B is live, and Blackhole answered three open questions
 >
 > The plan's items 1–4 have been implemented and **verified on Blackhole silicon** (p150b). What
@@ -56,6 +108,10 @@ edge, using the six categories the work was organised around:
 Symbols in §4: **✅** the edge sweep drives this op; **⬜** it does not (with the reason);
 **⚠️** the op diverges from its golden at a driven edge (§5).
 
+In the **Cat B** column specifically, **🟡 §5.8** and **🟡 §5.9** are not "unknown" — they name the
+single kernel behaviour holding that op out. Every 🟡 row is waiting on one of two answers (§5.6), not
+on work of its own, which is why the 37 unenrolled ops are a shorter list than they look.
+
 ---
 
 ## 1. Coverage at a glance
@@ -74,22 +130,26 @@ All figures re-derived from the tree on 2026-08-12 (see §7 for the commands).
 | Binary integer / ternary / scalar / reduce / FPU-binary ops | 5 / 5 / 5 / 3 / 3 |
 | `_OP_SINGULARITIES` entries | **21** — +2 for the ternary operand-C poles |
 | `_OP_EDGE_POINTS` entries | 43, plus `_OP_OPERAND_EDGE_POINTS` for `lerp`'s operand-C knees |
-| `SPECIALS_READY_OPS` (cat B opt-in) | **5** — `Identity`, `Abs`, `Exp`, `Sin`, `Cos`; 5 more measured and deferred |
-| `(format, dest_acc)` triples that can carry specials | 7 of 40 (Wormhole); **3 of those 7 reachable and confirmed on Blackhole** |
-| Ops diverging from their golden at a driven edge | 10 over 42 cells, of which **16 cells now arch-gated to Wormhole** |
+| `SPECIALS_READY_OPS` (cat B opt-in) | **60 of 97 unary**, plus all **5 scalar binops**; of the 37 unary still outside, 32 are blocked on two kernel questions (§5.8, §5.9) rather than on per-op work |
+| `(format, dest_acc)` triples that can carry specials | 7 cells of 50 (Wormhole); **3 of those 7 reachable and confirmed on Blackhole**. Carrying a `-0.0` is a strictly narrower gate — see §5.2 |
+| Ops diverging from their golden at a driven edge | 13 over 52 cells, of which **16 cells now arch-gated to Wormhole**; the 3 newest are cat-B and derived from the delivery rules rather than listed |
 | Host-side guards over the gates and metadata | 107 tests (`test_sfpu_domains.py`) |
 
 **Category status:** A ✅ closed for every op that has a boundary, unary **and ternary** · B 🟡 live
-for 5 ops of 97, mechanism proven on silicon · C ✅ closed for the 5 ops whose kernels claim the full
-int32 range · D ✅ closed for all 43 knees, plus `lerp`'s weight boundaries · E ⬜ blocked on C++ ·
-F ⬜ 11 kernels untouched.
+for 60 of the 97 unary ops plus all 5 scalar binops; of the 37 still outside, 32 are held by two
+kernel behaviours (§5.8, §5.9) rather than by per-op work · C ✅ closed for the 5 ops whose kernels
+claim the full int32 range · D ✅ closed for all 43 knees, plus `lerp`'s weight boundaries · E ✅
+closed, unary and binary · F ⬜ 11 kernels untouched.
 
-**Blackhole status (p150b, 2026-08-12).** All four suites pass, through the two-phase
+**So five of the six categories are closed or bounded**, and what is left is one large build (F) and
+two questions someone else has to answer.
+
+**Blackhole status (p300a, 2026-08-13).** All four suites pass, through the two-phase
 compile-producer / compile-consumer flow that CI uses:
 
 | Suite | Result |
 |---|---|
-| `test_sfpu_unary.py` | 4932 passed · 1666 skipped · 14 xfailed · 0 failed |
+| `test_sfpu_unary.py` | 4995 passed · 1600 skipped · 21 xfailed · **0 xpassed** · 0 failed |
 | `test_sfpu_binary.py` | 739 passed · 531 skipped · 36 xfailed · **0 xpassed** · 0 failed |
 | `test_sfpu_ternary.py` | 39 passed · 25 skipped · 0 failed |
 | `test_sfpu_binop_scalar.py` | 58 passed · 62 skipped · 0 failed |
@@ -106,24 +166,44 @@ The same happened to approximate `exp` in the unary suite (4 XPASS → 4 pass). 
 Ordered by how much coverage each item is worth. This is the list to work from; §1 of the plan
 sequences it.
 
-### 2.1 Cat B — IEEE specials for the other 87 unary ops (still the largest gap)
+### 2.1 Cat B — IEEE specials for the other 37 unary ops
 
-**No longer zero.** Five ops — `Identity`, `Abs`, `Exp`, `Sin`, `Cos` — now inject `±inf`, `NaN` and
-signed zeros through `SPECIALS_READY_OPS` and are green on Blackhole across every specials-safe triple
-the sweep reaches. The mechanism is proven end to end on silicon; what remains is per-op work.
+**No longer zero.** Nine ops — `Identity`, `Abs`, `Exp`, `Sin`, `Cos`, and now `Neg`, `Reciprocal`,
+`Sqrt` and `Rsqrt` — inject `±inf`, `NaN` and signed zeros through `SPECIALS_READY_OPS` and are green
+on Blackhole across every specials-safe triple the sweep reaches. The mechanism is proven end to end
+on silicon; what remains is per-op work.
 
-**The next five are measured and deliberately not enrolled.** `Neg`, `Reciprocal`, `Sqrt`, `Rsqrt` and
-`Log` all diverge, but the majority of those divergences are **golden** defects rather than kernel
-ones — `Neg(NaN) → +inf` and `Log(NaN) → +inf` are the golden mangling NaN through the 16-bit dest
-path, and `Neg(+0) → -0` and `Reciprocal(-inf) → -0` are cases where the *hardware* is IEEE-correct and
-the golden is not. Enrolling an op whose golden is wrong would launder a test bug into a permanent
-"known hardware divergence". The full per-probe table is in `_SPECIALS_NEXT_TRANCHE` and the plan's
-§2.1, which also gives the order to fix them in.
+**The second tranche is in, and it was one framework defect wearing four disguises.** Every divergence
+that had been booked against those goldens — `Neg(NaN) → +inf` chief among them — traced to torch's
+fp32 → bfloat16 cast, which canonicalises every NaN to `0xFFFF`, sign bit set, whatever sign it
+started with. That is why the defect appeared only at `dest_acc=No`: it takes a 16-bit Dest for the
+pack path to substitute a *signed* infinity and make the invented sign visible. `Neg` is simply the
+one op whose NaN is genuinely negative, so it was the op the artefact disagreed with. See §5.7.
 
-**87 unary ops remain, and 47 of them are smooth everywhere** (§4.2), so cat B is still their entire
-edge story. Measured cost from the first tranche: of 10 ops attempted, 5 were already correct, 2
-needed a small golden fix (`_sin` / `_cos` called `math.sin` / `math.cos`, which *raise* on a
-non-finite input), and 3 need a real golden decision.
+Three kernel divergences survived the fix and are now recorded as non-strict xfails, derived from the
+delivery rules rather than listed (`_cat_b_divergences` in `test_sfpu_unary.py`):
+
+| Op | Probe | Golden | Hardware | Scope |
+|---|---|---|---|---|
+| `Reciprocal` | `NaN` | `NaN` | `+0` | every combination that delivers a NaN — 6 |
+| `Sqrt` | `-0` | `-0` | `NaN` | unpack-to-dest only — 2 |
+| `Rsqrt` | `-0` | `-inf` | `NaN` | unpack-to-dest only — 2 |
+
+`Log` is the only op left out of the tranche, and not for a golden reason: it saturates its input
+(§5.5), which no ISA text prescribes, so §5.6's question has to be answered before it can be enrolled.
+
+**37 unary ops remain outside**, and 31 of them are held there by the two kernel behaviours in §5.8 and
+§5.9 rather than by anything op-specific — so the remaining cat-B work is two answers, not 31
+investigations. The other 6 are the three `TopK*` stages with no golden entry (§2.5), `ReluMin`
+(skipped on tt-llk#1120), `RsqrtCompat` (already fully xfailed), and `I1`.
+
+`I1` is worth reading closely, because it is the case that keeps the two gates honest: its golden **was**
+wrong and has been fixed, but it stays out of `SPECIALS_READY_OPS` because its *kernel* saturates to
+`±1.1547668e37`. Fixing a golden is not a reason to enrol an op — if it were, a kernel divergence would
+be laundered into a golden that agrees with it, which is the failure mode this whole gate exists to
+prevent.
+
+47 of the 97 unary ops are smooth everywhere (§4.2), and for those cat B is their entire edge story.
 
 The five predicates (`Isinf`, `Isposinf`, `Isneginf`, `Isnan`, `Isfinite`) still inject specials via
 `test_eltwise_unary_sfpu_isinf_isnan`, which is also the instrument that measured the safe matrix in
@@ -141,12 +221,29 @@ numerator off zero makes the variant assert the pole (4064 of 4096 elements, all
 tolerating a case already recorded against `div`, `fmod`, `remainder` and `xlogy`. If it is ever worth
 driving here it wants its own variant and its own xfail.
 
-### 2.3 Cat E — the unary shift amount
+### 2.3 ~~Cat E — the unary shift amount~~ ✅ closed
 
-`LeftShift` and `RightShift` run at a **fixed shift of 3** with small positive inputs.
-`SHIFT_AMOUNT` is a C++ `constexpr` paired with a golden constant, so sweeping it needs a
-`TemplateParameter`, not test wiring. The binary side is fully covered by contrast
-(`_SHIFT_EDGE_AMOUNTS` drives `{0..31, 32, 33, 40, 63, 100, 1000, −1, −5, −32, −1000}`).
+`LeftShift` and `RightShift` sweep the full amount axis, so cat E has no remaining gap on either
+the unary or the binary side. `SHIFT_AMOUNT` is no longer a fixed `constexpr`: the
+`SFPU_SHIFT_AMOUNT` template parameter emits it as a macro and `sfpu_operations.h` selects on
+`#ifdef`, so the sweep can vary it while every other unary test keeps the original 3.
+
+Both suites now read `sfpu_domains.SHIFT_EDGE_AMOUNTS` — `{0, 1, 2, 7, 15, 16, 30, 31, 32, 33, 40,
+63, 100, 1000, −1, −5, −32, −1000}` — rather than each holding a copy, so "interesting shift"
+cannot come to mean two different things.
+
+**The half that was completely untested is the out-of-range half.** The kernel defines any amount
+outside `[0, 31]` as producing 0, which a fixed shift of 3 could never reach; it is now asserted for
+the unary path. Two constraints the fixed amount had been hiding, both recorded in the test:
+
+- **The stimulus has to depend on the amount.** A left shift is the only one that can leave int32,
+  so values are filtered per variant against two bounds — the result must fit, and must not be
+  `INT32_MIN`, which Dst stores as sign-magnitude and cannot represent. At a shift of 31 only 0
+  survives, so that variant skips with a reason rather than passing vacuously.
+- **Positive-only stimuli**, for the reason §4.3's int sweep already gave: sign-magnitude Dst does
+  not round-trip a negative the way two's complement would. Driving negatives made every
+  `RightShift` variant except a shift of 0 disagree — a stimulus limitation that would have been
+  recorded as a kernel divergence.
 
 ### 2.4 Ops with no WH/BH correctness test at all
 
@@ -211,9 +308,16 @@ mechanism currently prevents this rather than enabling it. Untouched since the o
   reasons depend on the answer.
 - **`WITH_COVERAGE` builds** and **Bfp4_b output formats** (`Float16 -> Bfp4_b` fails 100% at
   `dest_acc=No` on Wormhole and is unexplained; every neighbouring cell is clean).
-- **CI runs none of this.** The broad unary profile runs in no automated job on any arch — every LLK
-  pytest job either excludes `nightly` or runs `--coverage`, under which the broad profile is skipped
-  wholesale. So these gains are currently unguarded. See the plan §8.
+- **~~CI runs none of this~~ ✅ closed.** The broad unary profile used to run in no automated job on
+  any arch — every LLK pytest job either excluded `nightly` or ran `--coverage`, under which the broad
+  profile is skipped wholesale, so every gain recorded in this document was unguarded. `llk-e2e` now
+  carries non-coverage companion groups (`llk_e2e_*_nocov`, `split_group` 6–10) that run the same
+  tests without instrumentation. Their timeouts were copied from the instrumented groups and want one
+  nightly's data to tune — plan §6.
+- **Whether the coverage skip is justified at all.** The `BROAD_SWEEP_OPS` skip cited tt-llk#1435,
+  which is about test *ordering*; its one mention of coverage is an observation of the skip's own
+  effect. The citation was circular and is gone, but no recorded rationale replaced it — the exclusion
+  is presumably cost under instrumentation, and nobody has written that down.
 
 ---
 
@@ -254,108 +358,112 @@ registered domain at all, so neither sweep reaches it and coverage depends on a 
 
 | Op | Kernel | Random sweep | Cat A boundary (side defined on) | Cat D knees / ties | Cat B | Edge sweep | Other test | ⚠️ |
 |---|---|---|---|---|---|---|---|---|
-| `Acos` | `acos` | standard | -1.0 (abo); 1.0 (bel) | — | ⬜ | ✅ | — |  |
-| `Acosh` | `acosh` | broad | 1.0 (abo) | — | ⬜ | ✅ | — |  |
-| `Asin` | `asin` | standard | -1.0 (abo); 1.0 (bel) | — | ⬜ | ✅ | — |  |
-| `Atanh` | `atanh` | broad | -1.0 (abo); 1.0 (bel) | — | ⬜ | ✅ | — |  |
-| `Ceil` | `ceil` | broad | — | `-2, -1, 0, 1, 2` | ⬜ | ✅ | — |  |
-| `Celu` | `celu` | broad | — | `0, -0` | ⬜ | ✅ | — |  |
-| `Clamp` | `clamp` | standard | — | `-1, 1` | ⬜ | ✅ | — |  |
-| `Elu` | `elu` | broad | — | `0, -0` | ⬜ | ✅ | — |  |
-| `EqualZero` | `equal_zero` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
-| `Erfinv` | `erfinv` | standard | -1.0 (abo); 1.0 (bel) | — | ⬜ | ✅ | — | ⚠️ |
-| `Floor` | `floor` | broad | — | `-2, -1, 0, 1, 2` | ⬜ | ✅ | — |  |
-| `Frac` | `frac` | broad | — | `-1.5, -1, 1, 1.5` | ⬜ | ✅ | — |  |
-| `GreaterThanEqualZero` | `greater_than_equal_zero` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
-| `GreaterThanZero` | `greater_than_zero` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
-| `Hardmish` | `hardmish` | standard | — | `-2, 0` | ⬜ | ✅ | — |  |
-| `Hardshrink` | `hardshrink` | standard | — | `-0.5, 0.5` | ⬜ | ✅ | — |  |
-| `Hardsigmoid` | `hardsigmoid` | broad | — | `-3, 3` | ⬜ | ✅ | — |  |
-| `Hardtanh` | `hardtanh` | standard | — | `-1, 1` | ⬜ | ✅ | — |  |
-| `Heaviside` | `heaviside` | standard | — | `0, -0` | ⬜ | ✅ | — | ⚠️ |
-| `LessThanEqualZero` | `less_than_equal_zero` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
-| `LessThanZero` | `less_than_zero` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
-| `Log` | `log` | broad | 0.0 (abo) | — | 🟡 measured | ✅ | — |  |
-| `Log1p` | `log1p` | broad | -1.0 (abo) | — | ⬜ | ✅ | — |  |
-| `LogWithBase` | `log_with_base` | standard | 0.0 (abo) | — | ⬜ | ✅ | — |  |
-| `Lrelu` | `lrelu` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
-| `NotEqualZero` | `not_equal_zero` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
-| `Prelu` | `prelu` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
-| `Rdiv` | `rdiv` | standard | 0.0 (bot) | — | ⬜ | ✅ | — |  |
-| `Reciprocal` | `reciprocal` | broad | 0.0 (bot) | — | 🟡 measured | ✅ | — |  |
-| `ReluMax` | `relu_max` | broad | — | `0, 5` | ⬜ | ✅ | — |  |
+| `Acos` | `acos` | standard | -1.0 (abo); 1.0 (bel) | — | ✅ driven | ✅ | — |  |
+| `Acosh` | `acosh` | broad | 1.0 (abo) | — | ✅ driven | ✅ | — |  |
+| `Asin` | `asin` | standard | -1.0 (abo); 1.0 (bel) | — | ✅ driven | ✅ | — |  |
+| `Atanh` | `atanh` | broad | -1.0 (abo); 1.0 (bel) | — | ✅ driven | ✅ | — |  |
+| `Ceil` | `ceil` | broad | — | `-2, -1, 0, 1, 2` | ✅ driven | ✅ | — |  |
+| `Celu` | `celu` | broad | — | `0, -0` | ✅ driven | ✅ | — |  |
+| `Clamp` | `clamp` | standard | — | `-1, 1` | 🟡 §5.8 | ✅ | — |  |
+| `Elu` | `elu` | broad | — | `0, -0` | ✅ driven | ✅ | — |  |
+| `EqualZero` | `equal_zero` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
+| `Erfinv` | `erfinv` | standard | -1.0 (abo); 1.0 (bel) | — | 🟡 §5.9 | ✅ | — | ⚠️ |
+| `Floor` | `floor` | broad | — | `-2, -1, 0, 1, 2` | ✅ driven | ✅ | — |  |
+| `Frac` | `frac` | broad | — | `-1.5, -1, 1, 1.5` | 🟡 §5.9 | ✅ | — |  |
+| `GreaterThanEqualZero` | `greater_than_equal_zero` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
+| `GreaterThanZero` | `greater_than_zero` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
+| `Hardmish` | `hardmish` | standard | — | `-2, 0` | ✅ driven | ✅ | — |  |
+| `Hardshrink` | `hardshrink` | standard | — | `-0.5, 0.5` | ✅ driven | ✅ | — |  |
+| `Hardsigmoid` | `hardsigmoid` | broad | — | `-3, 3` | 🟡 §5.8 | ✅ | — |  |
+| `Hardtanh` | `hardtanh` | standard | — | `-1, 1` | 🟡 §5.8 | ✅ | — |  |
+| `Heaviside` | `heaviside` | standard | — | `0, -0` | 🟡 §5.8 | ✅ | — | ⚠️ |
+| `LessThanEqualZero` | `less_than_equal_zero` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
+| `LessThanZero` | `less_than_zero` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
+| `Log` | `log` | broad | 0.0 (abo) | — | 🟡 §5.9 | ✅ | — |  |
+| `Log1p` | `log1p` | broad | -1.0 (abo) | — | ✅ driven | ✅ | — |  |
+| `LogWithBase` | `log_with_base` | standard | 0.0 (abo) | — | 🟡 §5.9 | ✅ | — |  |
+| `Lrelu` | `lrelu` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
+| `NotEqualZero` | `not_equal_zero` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
+| `Prelu` | `prelu` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
+| `Rdiv` | `rdiv` | standard | 0.0 (bot) | — | 🟡 §5.9 | ✅ | — |  |
+| `Reciprocal` | `reciprocal` | broad | 0.0 (bot) | — | ✅ driven | ✅ | — | ⚠️ `1/NaN` xfail |
+| `ReluMax` | `relu_max` | broad | — | `0, 5` | 🟡 §5.8 | ✅ | — |  |
 | `ReluMin` | `relu_min` | broad | — | `5` | ⬜ | ✅ | — |  |
-| `Round` | `round` | standard | — | `-2.5, -1.5, -0.5, 0.5, 1.5, 2.5` | ⬜ | ✅ | — |  |
-| `Rsqrt` | `rsqrt` | broad | 0.0 (abo) | — | 🟡 measured | ✅ | — |  |
+| `Round` | `round` | standard | — | `-2.5, -1.5, -0.5, 0.5, 1.5, 2.5` | ✅ driven | ✅ | — |  |
+| `Rsqrt` | `rsqrt` | broad | 0.0 (abo) | — | ✅ driven | ✅ | — | ⚠️ `rsqrt(-0)` xfail |
 | `RsqrtCompat` | `rsqrt_compat` | standard | 0.0 (abo) | — | ⬜ | ✅ | — | ⚠️ |
-| `Selu` | `selu` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
-| `Sign` | `sign` | standard | — | `0, -0` | ⬜ | ✅ | — | ⚠️ |
-| `Signbit` | `signbit` | standard | — | `0, -0` | ⬜ | ✅ | — | ⚠️ |
-| `Softplus` | `softplus` | standard | — | `20` | ⬜ | ✅ | — |  |
-| `Softshrink` | `softshrink` | standard | — | `-0.5, 0.5` | ⬜ | ✅ | — |  |
-| `Sqrt` | `sqrt` | broad | 0.0 (abo) | — | 🟡 measured | ✅ | — |  |
-| `SqrtCustom` | `sqrt_custom` | standard | 0.0 (abo) | — | ⬜ | ✅ | — |  |
-| `Threshold` | `threshold` | broad | — | `5` | ⬜ | ✅ | — |  |
-| `Trunc` | `trunc` | broad | — | `-1, 0, 1` | ⬜ | ✅ | — |  |
-| `UnaryGe` | `unary_ge` | standard | — | `0.5` | ⬜ | ✅ | — |  |
-| `UnaryGt` | `unary_gt` | standard | — | `0.5` | ⬜ | ✅ | — |  |
-| `UnaryLe` | `unary_le` | standard | — | `0.5` | ⬜ | ✅ | — |  |
-| `UnaryLt` | `unary_lt` | standard | — | `0.5` | ⬜ | ✅ | — |  |
-| `UnaryMax` | `unary_max` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
-| `UnaryMin` | `unary_min` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
-| `Xielu` | `xielu` | standard | — | `0, -0` | ⬜ | ✅ | — |  |
+| `Selu` | `selu` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
+| `Sign` | `sign` | standard | — | `0, -0` | 🟡 §5.8 | ✅ | — | ⚠️ |
+| `Signbit` | `signbit` | standard | — | `0, -0` | ✅ driven | ✅ | — | ⚠️ |
+| `Softplus` | `softplus` | standard | — | `20` | ✅ driven | ✅ | — |  |
+| `Softshrink` | `softshrink` | standard | — | `-0.5, 0.5` | ✅ driven | ✅ | — |  |
+| `Sqrt` | `sqrt` | broad | 0.0 (abo) | — | ✅ driven | ✅ | — | ⚠️ `sqrt(-0)` xfail |
+| `SqrtCustom` | `sqrt_custom` | standard | 0.0 (abo) | — | 🟡 §5.9 | ✅ | — |  |
+| `Threshold` | `threshold` | broad | — | `5` | ✅ driven | ✅ | — |  |
+| `Trunc` | `trunc` | broad | — | `-1, 0, 1` | ✅ driven | ✅ | — |  |
+| `UnaryGe` | `unary_ge` | standard | — | `0.5` | 🟡 §5.8 | ✅ | — |  |
+| `UnaryGt` | `unary_gt` | standard | — | `0.5` | 🟡 §5.8 | ✅ | — |  |
+| `UnaryLe` | `unary_le` | standard | — | `0.5` | ✅ driven | ✅ | — |  |
+| `UnaryLt` | `unary_lt` | standard | — | `0.5` | ✅ driven | ✅ | — |  |
+| `UnaryMax` | `unary_max` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
+| `UnaryMin` | `unary_min` | standard | — | `0, -0` | 🟡 §5.8 | ✅ | — |  |
+| `Xielu` | `xielu` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
 
 #### 4.2 Unary ops smooth everywhere — cat B is their **entire** edge story (47 ops)
+
+**27 of the 47 now run**, which is the largest single change in this revision: an op here has no knee
+and no pole, so before cat B reached it the edge sweep skipped it outright and its only coverage was
+the random sweep. The remaining 20 are all 🟡 — held by §5.8 or §5.9, not by anything op-specific.
 
 | Op | Kernel | Random sweep | Registered domain | Cat B | Edge sweep | Other test |
 |---|---|---|---|---|---|---|
 | `Abs` | `abs` | broad | yes | ✅ driven | ✅ cat B only | — |
-| `Add1` | `add1` | standard | yes | ⬜ | ⬜ skips | — |
-| `Asinh` | `asinh` | broad | yes | ⬜ | ⬜ skips | — |
-| `Atan` | `atan` | standard | yes | ⬜ | ⬜ skips | — |
-| `CastFp32ToFp16a` | `cast_fp32_to_fp16a` | standard | yes | ⬜ | ⬜ skips | — |
-| `Cbrt` | `cbrt` | standard | yes | ⬜ | ⬜ skips | — |
+| `Add1` | `add1` | standard | yes | ✅ driven | ✅ cat B only | — |
+| `Asinh` | `asinh` | broad | yes | ✅ driven | ✅ cat B only | — |
+| `Atan` | `atan` | standard | yes | ✅ driven | ✅ cat B only | — |
+| `CastFp32ToFp16a` | `cast_fp32_to_fp16a` | standard | yes | 🟡 §5.9 | ⬜ skips | — |
+| `Cbrt` | `cbrt` | standard | yes | ✅ driven | ✅ cat B only | — |
 | `Cos` | `cosine` | broad | yes | ✅ driven | ✅ cat B only | — |
-| `Cosh` | `cosh` | standard | yes | ⬜ | ⬜ skips | — |
-| `Digamma` | `digamma` | standard | yes | ⬜ | ⬜ skips | — |
-| `Erf` | `erf` | standard | yes | ⬜ | ⬜ skips | — |
-| `Erfc` | `erfc` | standard | yes | ⬜ | ⬜ skips | — |
+| `Cosh` | `cosh` | standard | yes | ✅ driven | ✅ cat B only | — |
+| `Digamma` | `digamma` | standard | yes | 🟡 §5.9 | ⬜ skips | — |
+| `Erf` | `erf` | standard | yes | 🟡 §5.9 | ⬜ skips | — |
+| `Erfc` | `erfc` | standard | yes | 🟡 §5.9 | ⬜ skips | — |
 | `Exp` | `exponential` | broad | yes | ✅ driven | ✅ cat B only | — |
-| `Exp2` | `exp2` | broad | yes | ⬜ | ⬜ skips | — |
-| `ExpWithBase` | `exp_with_base` | standard | yes | ⬜ | ⬜ skips | — |
-| `Expm1` | `expm1` | standard | yes | ⬜ | ⬜ skips | — |
-| `Expm1Cw` | `expm1_cw` | standard | yes | ⬜ | ⬜ skips | — |
-| `Fill` | `fill` | broad | yes | ⬜ | ⬜ skips | — |
-| `Fmod` | `fmod` | standard | yes | ⬜ | ⬜ skips | — |
-| `Gelu` | `gelu` | broad | yes | ⬜ | ⬜ skips | — |
-| `GeluAppx` | `gelu_appx` | standard | yes | ⬜ | ⬜ skips | — |
-| `GeluDerivative` | `gelu_derivative` | standard | yes | ⬜ | ⬜ skips | — |
-| `GeluTanh` | `gelu_tanh` | broad | yes | ⬜ | ⬜ skips | — |
-| `I0` | `i0` | standard | yes | ⬜ | ⬜ skips | — |
-| `I1` | `i1` | standard | yes | ⬜ | ⬜ skips | — |
+| `Exp2` | `exp2` | broad | yes | ✅ driven | ✅ cat B only | — |
+| `ExpWithBase` | `exp_with_base` | standard | yes | ✅ driven | ✅ cat B only | — |
+| `Expm1` | `expm1` | standard | yes | ✅ driven | ✅ cat B only | — |
+| `Expm1Cw` | `expm1_cw` | standard | yes | 🟡 §5.9 | ⬜ skips | — |
+| `Fill` | `fill` | broad | yes | ✅ driven | ✅ cat B only | — |
+| `Fmod` | `fmod` | standard | yes | ✅ driven | ✅ cat B only | — |
+| `Gelu` | `gelu` | broad | yes | 🟡 §5.9 | ⬜ skips | — |
+| `GeluAppx` | `gelu_appx` | standard | yes | ✅ driven | ✅ cat B only | — |
+| `GeluDerivative` | `gelu_derivative` | standard | yes | 🟡 §5.9 | ⬜ skips | — |
+| `GeluTanh` | `gelu_tanh` | broad | yes | ✅ driven | ✅ cat B only | — |
+| `I0` | `i0` | standard | yes | ✅ driven | ✅ cat B only | — |
+| `I1` | `i1` | standard | yes | 🟡 §5.9 | ⬜ skips | — |
 | `Identity` | `identity` | standard | yes | ✅ driven | ✅ cat B only | — |
-| `Lgamma` | `lgamma` | standard | yes | ⬜ | ⬜ skips | — |
-| `Mish` | `mish` | standard | yes | ⬜ | ⬜ skips | — |
-| `Neg` | `negative` | broad | yes | 🟡 measured | ⬜ skips | — |
-| `Polygamma` | `polygamma` | standard | yes | ⬜ | ⬜ skips | — |
-| `Remainder` | `remainder` | standard | yes | ⬜ | ⬜ skips | — |
-| `Rpow` | `rpow` | standard | yes | ⬜ | ⬜ skips | — |
-| `Sigmoid` | `sigmoid` | standard | yes | ⬜ | ⬜ skips | — |
-| `SigmoidAppx` | `sigmoid_appx` | standard | yes | ⬜ | ⬜ skips | — |
-| `Silu` | `silu` | broad | yes | ⬜ | ⬜ skips | — |
+| `Lgamma` | `lgamma` | standard | yes | 🟡 §5.9 | ⬜ skips | — |
+| `Mish` | `mish` | standard | yes | ✅ driven | ✅ cat B only | — |
+| `Neg` | `negative` | broad | yes | ✅ driven | ✅ cat B only | — |
+| `Polygamma` | `polygamma` | standard | yes | 🟡 §5.9 | ⬜ skips | — |
+| `Remainder` | `remainder` | standard | yes | ✅ driven | ✅ cat B only | — |
+| `Rpow` | `rpow` | standard | yes | 🟡 §5.9 | ⬜ skips | — |
+| `Sigmoid` | `sigmoid` | standard | yes | 🟡 §5.9 | ⬜ skips | — |
+| `SigmoidAppx` | `sigmoid_appx` | standard | yes | 🟡 §5.9 | ⬜ skips | — |
+| `Silu` | `silu` | broad | yes | ✅ driven | ✅ cat B only | — |
 | `Sin` | `sine` | broad | yes | ✅ driven | ✅ cat B only | — |
-| `Sinh` | `sinh` | standard | yes | ⬜ | ⬜ skips | — |
-| `Softsign` | `softsign` | standard | yes | ⬜ | ⬜ skips | — |
-| `Square` | `square` | broad | yes | ⬜ | ⬜ skips | — |
-| `Tan` | `tan` | standard | yes | ⬜ | ⬜ skips | — |
-| `Tanh` | `tanh` | broad | yes | ⬜ | ⬜ skips | — |
-| `TanhDerivative` | `tanh_derivative` | standard | yes | ⬜ | ⬜ skips | — |
-| `TanhDerivativeLut` | `tanh_derivative_lut` | standard | yes | ⬜ | ⬜ skips | — |
-| `Tanhshrink` | `tanhshrink` | broad | yes | ⬜ | ⬜ skips | — |
+| `Sinh` | `sinh` | standard | yes | ✅ driven | ✅ cat B only | — |
+| `Softsign` | `softsign` | standard | yes | ✅ driven | ✅ cat B only | — |
+| `Square` | `square` | broad | yes | ✅ driven | ✅ cat B only | — |
+| `Tan` | `tan` | standard | yes | ✅ driven | ✅ cat B only | — |
+| `Tanh` | `tanh` | broad | yes | 🟡 §5.9 | ⬜ skips | — |
+| `TanhDerivative` | `tanh_derivative` | standard | yes | 🟡 §5.9 | ⬜ skips | — |
+| `TanhDerivativeLut` | `tanh_derivative_lut` | standard | yes | 🟡 §5.9 | ⬜ skips | — |
+| `Tanhshrink` | `tanhshrink` | broad | yes | ✅ driven | ✅ cat B only | — |
 | `TopKLocalSort` | `topk_local_sort` | **perf-only** | yes | ⬜ | ⬜ skips | — |
 | `TopKMerge` | `topk_merge` | **perf-only** | yes | ⬜ | ⬜ skips | — |
 | `TopKRebuild` | `topk_rebuild` | **perf-only** | yes | ⬜ | ⬜ skips | — |
-| `UnaryPower` | `power` | standard | yes | ⬜ | ⬜ skips | — |
+| `UnaryPower` | `power` | standard | yes | 🟡 §5.9 | ⬜ skips | — |
 
 #### 4.3 Unary ops outside `_OP_DOMAIN_REGISTRY` — not in either sweep (21 ops)
 
@@ -373,10 +481,10 @@ unreachable, or genuinely uncovered — the last column says which.
 | `Isnan` | `isnan` | — | `unary` | ✅ cat B — as `Isinf` |
 | `Isneginf` | `isneginf` | — | `unary` | ✅ cat B — as `Isinf` |
 | `Isposinf` | `isposinf` | — | `unary` | ✅ cat B — as `Isinf` |
-| `LeftShift` | `left_shift` | — | `unary` | 🟡 **cat E open** — fixed shift of 3, positive inputs; needs a C++ `TemplateParameter` (§2.3) |
+| `LeftShift` | `left_shift` | — | `unary` | ✅ cat E — full shift axis via `SFPU_SHIFT_AMOUNT`, in range and out (§2.3) |
 | `LogicalNot` | `logical_not_unary` | `0, -0` | `unary` | ✅ cat D — exact threshold forced by `test_eltwise_unary_sfpu_threshold`, which names it `LogicalNotUnary` |
 | `Relu` | `relu` | — | `plot` | ➖ unreachable by design — applied by the packer (`STACC_RELU`), not a `SfpuType`. The only reference is a plotting script |
-| `RightShift` | `right_shift` | — | `unary` | 🟡 **cat E open** — as `LeftShift` |
+| `RightShift` | `right_shift` | — | `unary` | ✅ cat E — as `LeftShift` |
 | `SfpuSwiGLU` | `swiglu` | — | **none (WH/BH)** | ⬜ **Quasar-only** — §2.4 |
 | `SubInt32` | `sub_int32` | — | **none (WH/BH)** | ⬜ **perf-only** (tt-llk#495) — §2.4 |
 | `Typecast` | `typecast` | — | `eltwise_unary_typecast` | 🟡 value coverage only; no special or format-extreme injection |
@@ -472,13 +580,30 @@ asserts the pole instead of the `0/0` indeterminate form -- see the coverage not
 
 #### 4.7 Scalar-binop ops (5 ops)
 
-| Op | Kernel | Registered domain | Cat A pole | Edge sweep | Driven by |
-|---|---|---|---|---|---|
-| `ScalarAdd` | `ADD` | no (format default) | — | ⬜ | `binop_scalar` |
-| `ScalarDiv` | `DIV` | no (format default) | — | ⬜ | `binop_scalar` |
-| `ScalarMul` | `MUL` | no (format default) | — | ⬜ | `binop_scalar` |
-| `ScalarRsub` | `RSUB` | no (format default) | — | ⬜ | `binop_scalar` |
-| `ScalarSub` | `SUB` | no (format default) | — | ⬜ | `binop_scalar` |
+All five are `x (+|-|*|/) c` for a compile-time `c`, so they are smooth in `x`: no pole, no knee, and
+`edge_spec()` returns `None` unless specials are on. **Cat B is their entire edge story**, and all five
+are now enrolled — the tensor-operand edge sweep runs them where the pipeline delivers specials.
+
+Two of the eight (format, `dest_acc`) pairs survive both gates, and they are complementary rather than
+redundant: `Float32`/`dest_acc=Yes` is unpack-to-dest so a real `-0.0` arrives, and
+`Float16_b`/`dest_acc=No` is the datacopy path where it does not. The other six are excluded by
+`_skip_unsupported` (Float32 needs a 32-bit Dest, Float16_b cannot use one).
+
+| Op | Kernel | Registered domain | Cat A pole | Cat B | Edge sweep | Driven by |
+|---|---|---|---|---|---|---|
+| `ScalarAdd` | `ADD` | no (format default) | — | ✅ driven | ✅ cat B only | `binop_scalar` |
+| `ScalarDiv` | `DIV` | no (format default) | — | ✅ driven | ✅ cat B only | `binop_scalar` |
+| `ScalarMul` | `MUL` | no (format default) | — | ✅ driven | ✅ cat B only | `binop_scalar` |
+| `ScalarRsub` | `RSUB` | no (format default) | — | ✅ driven | ✅ cat B only | `binop_scalar` |
+| `ScalarSub` | `SUB` | no (format default) | — | ✅ driven | ✅ cat B only | `binop_scalar` |
+
+`ScalarDiv` has no reachable divide-by-zero: the host inverts the divisor at compile time and the
+kernel only multiplies, so `d` never reaches the device. That is a property of the dispatch, not an
+untested edge.
+
+Still out of scope, both needing a per-op tolerance first (the default bf16 tolerance is only
+meaningful while the result stays in range): `|scalar| > 8`, and `±tiny` / `±large` on the tensor
+operand.
 
 #### 4.8 Reduce ops (3 ops)
 
@@ -583,7 +708,20 @@ predicates — and gave the same answer:
 
 So `-0.0` genuinely is **not delivered** on the datacopy path. `Signbit`'s six xfails are confirmed as
 a stimulus limitation that can never XPASS, and `Sign`'s and `Heaviside`'s six passes there are
-confirmed vacuous. Any future `-0` probe should be scoped to the unpack-to-dest combinations.
+confirmed vacuous.
+
+**That scoping is now enforced rather than advised.** `negative_zero_delivered(input_format, dest_acc)`
+gates the `-0` probe out of the cat-B injection wherever the datacopy path would substitute `+0.0`,
+and it is deliberately a *second* gate rather than a tightening of `specials_safe()`: several triples
+carry `±inf` and `NaN` intact while flattening `-0.0`, so one predicate cannot answer both questions.
+Without it, `Rsqrt` at `dest_acc=No` failed for a probe that never arrived — an xfail there would have
+blamed the kernel for the stimulus, which is the exact mistake `Signbit`'s entries document.
+
+**A related non-finding, worth recording so it is not rediscovered.** The *sign of a zero result* —
+`Neg(+0) → -0`, `Reciprocal(-inf) → -0` — cannot fail a test at all. `passed_test()` judges by
+`torch.isclose`, a both-NaN clause and PCC, and `-0.0 == +0.0` under all three. Those rows spent a
+revision on the blocking list before anyone checked whether a failing test could exist for them.
+Asserting a zero's sign needs a bitwise comparator, which is a suite-wide change, not a per-op one.
 
 ### 5.3 Still open — not explained by the ISA
 
@@ -608,6 +746,92 @@ Found by enabling cat B. On Blackhole, with a Float32 input:
 All finite, and all near `ln(FLT_MAX) = 88.7`. The kernel clamps its input to the format maximum and
 takes the log of *that*, so a non-finite input cannot produce a non-finite output. This is a kernel
 behaviour rather than a golden one and it is the largest cat-B finding so far.
+
+### 5.7 New: the golden invented NaN signs, twice, for two different reasons
+
+Not a hardware finding — a test-framework one, and the largest single cause of cat-B divergence so far.
+It only becomes visible when a NaN crosses a **16-bit Dest**, because that is where the pack path
+substitutes an infinity *of the NaN's own sign*; at `dest_acc=Yes` the NaN stays a NaN and the
+comparator's both-NaN clause hides the sign entirely.
+
+1. **The cast destroyed the sign.** `torch`'s fp32 → bfloat16 cast maps every NaN to `0xFFFF`, sign bit
+   set, whatever it started as — while `.to(float16)` preserves it correctly, so the defect hid on
+   three quarters of the format axis. Hardware does nothing of the kind: a 16-bit Dest holds the top
+   half of the fp32 pattern, so the sign survives verbatim. `cast_to_dest_dtype` models it as the
+   truncation it is. The cast runs in **two** places per call — the Dest write, and the store into the
+   result buffer, whose dtype follows `input_format` through `tilize_block` and is not always the Dest
+   dtype. Repairing only the first appears to work and changes nothing on the pipelines where the two
+   differ.
+2. **libm invented a sign the golden then asserted.** IEEE 754 leaves the sign of a NaN produced by an
+   invalid operation unspecified, and torch inherits the host libm, which picks inconsistently:
+   `cos(inf)`, `acosh(0.5)`, `rsqrt(-1)` and `acos(2)` give `0xFFC00000` while `sqrt(-1)` and `log(-1)`
+   give `0x7FC00000`. The SFPU emits a positive one. 24 of the 97 unary goldens were exporting libm's
+   choice; `UnarySFPUGolden._NAN_SIGN_TRANSPARENT_OPS` now canonicalises all of them except the three
+   ops that genuinely *move* the sign bit (`Neg` flips it, `Abs` clears it, `Identity` passes it on).
+
+**The rule is confirmed on silicon in both directions**, which matters because a sign convention is
+easy to get exactly backwards and still pass half the cases. `Neg(NaN)` packs to `-inf` — its NaN is
+genuinely negative, and the variant only goes green with the sign preserved. `Sqrt(NaN)` packs to
+`+inf` on the same pipeline — its NaN is positive, and that variant only goes green with the sign
+*not* flipped. One measurement alone would have been consistent with "always negate".
+
+Both defects were found the same way: enrolling four ops regressed **`Acosh`, `Cos`, `Sin` and `Exp`**,
+none of which the change was about. A golden defect that only shows on ops you were not editing is the
+argument for diffing the whole op set against a baseline before and after, rather than checking the
+ops in hand.
+
+**One silent fix fell out of it.** `Signbit(NaN)` returned `1.0` at `dest_acc=No` — reading a sign the
+cast had invented. Nothing was failing, because `Signbit` is not enrolled for specials; it was waiting
+to.
+
+### 5.8 New: SFPU comparisons rank `NaN` above every finite value
+
+IEEE 754 makes every ordered comparison with a `NaN` operand false. The SFPU behaves as though `NaN`
+were larger than everything — which is what an unsigned magnitude comparison gives, since a `NaN` has an
+all-ones exponent and a set mantissa and so outranks any finite bit pattern.
+
+**Derived from the pass/fail split, not inferred from one case.** The six unary comparison ops divide
+exactly along the predicted line, and the ones that agree are as informative as the ones that do not:
+
+| Op | Expression | Golden | Hardware | Consistent with "NaN is greatest"? |
+|---|---|---|---|---|
+| `UnaryLt` | `x < 0.5` | `0.0` | `0.0` | ✅ false either way — passes |
+| `UnaryLe` | `x <= 0.5` | `0.0` | `0.0` | ✅ false either way — passes |
+| `UnaryMax` | `max(x, 0.0)` | `NaN` | `NaN` | ✅ keeps the NaN — passes |
+| `UnaryGt` | `x > 0.5` | `0.0` | **`1.0`** | ✅ true only under this rule |
+| `UnaryGe` | `x >= 0.5` | `0.0` | **`1.0`** | ✅ same |
+| `UnaryMin` | `min(x, 0.0)` | `NaN` | **`0.0`** | ✅ takes the *other* operand |
+
+Six more ops follow from the same rule, each returning its upper bound where IEEE gives `NaN`:
+`Clamp` → `1.0` (`CLAMP_MAX`), `Hardtanh` → `1.0`, `Hardsigmoid` → `1.0`, `ReluMax` → `5.0`
+(`RELU_MAX_THRESHOLD`), `Sign` → `1.0` (the "not `<0`, not `==0`" branch), `Heaviside` → `1.0`
+(the `x > 0` branch). Every value is that op's own dispatch constant, which is what makes the
+explanation checkable rather than plausible.
+
+Nine ops are held out of `SPECIALS_READY_OPS` by this one behaviour. It is unresolved for the same
+reason as `Sign`'s `-0.0` case: the ISA specifies `SFPSETCC` only for inputs that are not negative zero
+(`tt-isa-documentation WormholeB0/.../VectorUnit.md`), and says nothing about `NaN`. See §5.6.
+
+### 5.9 The `Log` saturation is a whole-family behaviour, not one op
+
+§5.5 recorded `Log` clamping its input to the format maximum. Driving the full unary set shows **22
+further ops** doing the same kind of thing — every one a polynomial or LUT approximation evaluated
+outside the range its series covers. They split two ways, and neither is IEEE:
+
+- **Saturating to the asymptote or a magic constant:** `LogWithBase` (`127.9` / `121.6` / `128.5`),
+  `Digamma` (`89.09` at `NaN`; `≈ -337920` at `±0`), `I1` (`±1.1547668e37`), `Erf` (`1.0`), `Erfc`
+  (`2.94e-12`), `Tanh` (`1.0`), `Sigmoid` / `TanhDerivative` / `Rdiv` / `Polygamma` (`0.0`), `Gelu` and
+  `GeluDerivative` (`0.0` / `1.0`), `Lgamma` (`-0.00051` at `±0`), `UnaryPower` / `Rpow` /
+  `CastFp32ToFp16a` (`+inf`).
+- **Returning `NaN` where a value is defined** — the same failure from the other side: `Frac` at `±inf`,
+  `SigmoidAppx` at `±inf`, `TanhDerivativeLut`, `Expm1Cw` at `+inf`, `Lgamma` at `±inf`, `SqrtCustom`
+  (which manages `NaN` at `+inf` *and* `+inf` at `-inf`, both backwards), and `Erfinv` at `±1`.
+
+**`LogWithBase` is the evidence that the cause is shared.** Its results are `Log`'s multiplied by the
+dispatch scale `1/ln(2) ≈ 1.4427` — `88.7 × 1.4427 = 128.0`. Same clamp, seen through a scale factor.
+
+So §5.6's first question is not about `Log`: it is a contract question about approximation kernels, and
+one answer settles 23 held-out ops.
 
 ### 5.6 What to raise with kernel owners
 
@@ -650,7 +874,7 @@ saw one. Those rows are excluded rather than trusted. Block-float *outputs* are 
 golden's behalf: an `inf` inside a block whose shared exponent is finite is not a value the format can
 express, so neither the lattice nor the tolerance criterion means anything for it.
 
-**Safe surface — 7 of 40 triples:**
+**Safe surface — 7 cells of 50** (5 formats × 5 × both `dest_acc`; revisions before 12 said "of 40"):
 
 | `dest_acc` | Safe `input -> output` |
 |---|---|
@@ -667,7 +891,11 @@ omission. `_skip_bh_unless_fp32` allows only `Float32->Float32` at `dest_acc=No`
 row's four triples to one, and the edge sweep's format axis is `Float16_b`/`Float32`, so
 `Float32->Float16` at `dest_acc=Yes` is never collected. The three reachable cells
 (`Float32->Float32` at both `dest_acc`, `Float32->Float16_b` at `dest_acc=Yes`) **do** carry specials
-on Blackhole — the five enrolled cat-B ops pass there.
+on Blackhole — all nine enrolled cat-B ops pass there, modulo the three recorded kernel xfails in §2.1.
+
+One caveat the three cells do **not** cover: carrying `±inf` and `NaN` is not the same as carrying a
+`-0.0`, and only the two `dest_acc=Yes` cells do the latter. `negative_zero_delivered()` is the second
+gate; see §5.2.
 
 The table is therefore **not** arch-keyed, and should not be until the rows that differ can actually be
 run. What that needs is a Wormhole re-measurement of the same predicate sweep, not more Blackhole time.
@@ -691,7 +919,13 @@ print('singularities', len(_OP_SINGULARITIES), '| edge points', len(_OP_EDGE_POI
 print('unary', len(u), '| with an edge', len(e), '| smooth', len(u) - len(e))
 print('specials-ready', len(SPECIALS_READY_OPS))
 "
-# expect: 19 / 43 / 97 / 50 / 47 / 0
+# expect: 21 / 43 / 97 / 50 / 47 / 65
+# The last number is len(SPECIALS_READY_OPS), which counts the 5 scalar binops as well
+# as the 60 enrolled *unary* ops -- the scalar family is not in sfpu_unary_ops(), so it
+# does not appear in any of the other five figures. Do not read 65 as a unary count.
+# (Revisions before 12 said 19 / ... / 0 here, which contradicted §1's own table: the
+#  singularity count gained the two ternary operand-C poles, and specials-ready has not
+#  been 0 since revision 7.)
 python3 -m pytest test_sfpu_domains.py -q --noconftest   # expect 107 passed
 ```
 
