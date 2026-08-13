@@ -34,6 +34,7 @@ observed rather than inferred.
 from __future__ import annotations
 
 import ast
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -295,19 +296,37 @@ def _c_trace_authority(src: Source) -> list:
 
 
 def _c_depth_knob(src: Source) -> list:
-    """A depth cap the builder honours, so coverage can be profiled at a fraction of the model."""
-    if not any(re.search(r"TT_PERF_LAYERS|num_layers\s*=|n_layers\s*=|layers\s*=", t) for t in src.texts.values()):
-        return [
-            Finding(
-                "depth-knob",
-                "no layer-count parameter reaches the builder",
-                "thread a layer count (TT_PERF_LAYERS, or build_pipeline(layers=...)) through to "
-                "model construction. Without it every profile runs the whole model, and a coverage "
-                "window cannot be measured",
-                severity="warn",
-            )
-        ]
-    return []
+    """A depth cap the FACTORY accepts, so coverage can be profiled at a fraction of the model.
+
+    THE OLD CHECK WAS A REGEX FOR `layers=` ANYWHERE IN THE MODEL, and that is how Voxtral-Mini-3B
+    passed it while the knob did nothing at all. The string occurs in any pipeline that writes
+    `n_layers = cfg.num_hidden_layers`; meanwhile build_pipeline's signature was
+    `(device, model=None, **kwargs)` and it filtered kwargs to {batch_size, prefill_capacity,
+    kv_capacity}, dropping `layers` silently. The generated perf test recorded the consequence in
+    its own comment -- "No depth argument on this builder" -- and every profile built all 32 layers.
+
+    The factory's SIGNATURE is the checkable thing: emit-e2e specifies `layers` as a build argument,
+    so a builder that does not accept one cannot honour a cap however many times the string appears.
+    **kwargs alone does not count: it is what silently swallowed the argument.
+    """
+    fac = list(src.functions("build_pipeline"))
+    if not fac:
+        return []  # a missing factory is the build-pipeline clause's finding, not this one
+    for _path, fn in fac:
+        names = {a.arg for a in list(fn.args.args) + list(fn.args.kwonlyargs)}
+        if names & {"layers", "n_layers", "num_layers", "depth"}:
+            return []
+    return [
+        Finding(
+            "depth-knob",
+            "build_pipeline does not accept a depth argument",
+            "accept `layers` (None = every layer, never 0) and thread it into the block count of "
+            "EVERY repeated stack. Without it every profile builds the whole model: on a 3B "
+            "multimodal pipeline that is 35M tracy zones and a baseline killed at its budget. "
+            "**kwargs does not satisfy this -- a filtered kwargs dict is what dropped it silently",
+            kind="compatibility",
+        )
+    ]
 
 
 def _c_selftests(src: Source) -> list:
@@ -414,12 +433,137 @@ def _c_build_returns(src: Source) -> list:
     return out
 
 
+def _c_weights_present(src: Source) -> list:
+    """The model's weights are on this machine, checked BEFORE the device is opened.
+
+    A DEMO SHIPS CODE, NOT WEIGHTS. tt-metal model directories hold the pipeline, the stubs and the
+    tests; `from_pretrained(<repo id>)` pulls several GB into a shared HF cache once and every demo
+    reads it from there. Measured 2026-08-13: zero weight files under the Voxtral demo, ~9 GB in
+    ~/.cache/huggingface/hub/models--mistralai--Voxtral-Mini-3B-2507/.
+
+    Without them nothing can be optimized -- and the failure lands badly. The run gets through
+    discovery, perf-test generation (~10 minutes of agent work) and a device open before the build
+    tries to load weights, at which point it either dies far from the cause or silently downloads
+    gigabytes in the middle of a profiling run, with whatever timing that produces recorded as a
+    measurement.
+
+    The repo id is read from the model's own source -- the from_pretrained call it already makes --
+    so this needs no configuration and no network. Missing weights are a COMPATIBILITY defect: the
+    model cannot be measured as this tool measures, and it must be said before the device is touched.
+
+    NOT A DOWNLOAD TRIGGER. This only looks. Fetching several GB is the operator's decision, not a
+    side effect of asking whether a model is ready.
+    """
+    try:
+        from .checkpoint_sections import checkpoint_keys, hf_cache_dir
+    except Exception:  # noqa: BLE001 -- never take the contract down over an optional witness
+        return []
+    if checkpoint_keys(src.root):
+        return []  # weights sit beside the model
+
+    # NOT EVERY MODEL NAMES A HUB REPO. tt-metal also has path-configured models that read a
+    # directory out of the environment (LLAMA_DIR and the like). Checking the env vars the model
+    # ITSELF reads keeps this general without a naming heuristic: if any of them currently points at
+    # a directory holding weight files, the model is provisioned, whatever the variable is called.
+    for var in _env_vars_read(src):
+        val = os.environ.get(var)
+        if val and Path(val).is_dir() and checkpoint_keys(val):
+            return []
+
+    ids = _hf_repo_ids(src)
+    if not ids:
+        # NOTHING IS CLAIMED, SO NOTHING IS OWED. No repo named and no configured path resolved: the
+        # model may well take its weights from an argument the operator supplies. Reporting that as a
+        # finding turns a readiness gate into noise -- it fires on every model whose provisioning
+        # this cannot see, which is not the same as a model that is missing something. Only a stated
+        # requirement (a repo the source names) can be checked, and only that is flagged.
+        return []
+    missing = [rid for rid in ids if hf_cache_dir(rid) is None]
+    if not missing:
+        return []
+    return [
+        Finding(
+            "weights-present",
+            "the model loads %s but no local weights were found for %s"
+            % (", ".join(sorted(ids)), ", ".join(sorted(missing))),
+            "fetch the weights before optimizing (they are not in the demo directory -- a tt-metal "
+            "demo ships code only, and from_pretrained reads a shared HF cache). Without them the "
+            "run reaches perf-test generation and a device open before failing, or downloads "
+            "gigabytes mid-profile and records the result as a measurement.",
+            severity="error",
+            kind="compatibility",
+        )
+    ]
+
+
+def _env_vars_read(src: Source) -> set:
+    """Every environment variable the model's own source reads."""
+    out = set()
+    for _path, tree in src.trees.items():
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+            if name not in ("getenv", "get"):
+                continue
+            if name == "get" and not (
+                isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Attribute) and fn.value.attr == "environ"
+            ):
+                continue
+            for arg in node.args[:1]:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    out.add(arg.value)
+    return out
+
+
+def _hf_repo_ids(src: Source) -> set:
+    """Every hub repo id the model's own source names. Static: no import, no network."""
+    ids = set()
+    for _path, tree in src.trees.items():
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                fn = node.func
+                name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+                if name != "from_pretrained":
+                    continue
+                for arg in node.args[:1]:
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and "/" in arg.value:
+                        ids.add(arg.value)
+                    elif isinstance(arg, ast.Name):
+                        ids |= _const_str(tree, arg.id)
+            elif isinstance(node, ast.Assign):
+                for t in node.targets:
+                    if (
+                        isinstance(t, ast.Name)
+                        and "REPO" in t.id.upper()
+                        or (isinstance(t, ast.Name) and "MODEL_ID" in t.id.upper())
+                    ):
+                        if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                            if "/" in node.value.value:
+                                ids.add(node.value.value)
+    return ids
+
+
+def _const_str(tree, name: str) -> set:
+    """Module-level `NAME = "..."` bindings, so from_pretrained(HF_REPO_ID) resolves."""
+    out = set()
+    for node in getattr(tree, "body", []):
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if isinstance(t, ast.Name) and t.id == name:
+                    if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
+                        out.add(node.value.value)
+    return out
+
+
 CLAUSES = (
     ("sources", _c_parses),
     ("build-pipeline", _c_build_pipeline),
     ("stages", _c_stages),
     ("trace-authority", _c_trace_authority),
     ("depth-knob", _c_depth_knob),
+    ("weights-present", _c_weights_present),
     ("selftests", _c_selftests),
     ("decode-contract", _c_decode_contract),
     ("build-returns", _c_build_returns),

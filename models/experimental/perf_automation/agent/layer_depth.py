@@ -210,3 +210,48 @@ def read_depth(environ=None):
     except ValueError:
         return None
     return d if d > 0 else None
+
+
+def declared_section_depths(model_id: str = "", model_dir=None) -> list:
+    """EVERY declared block depth, per section, without collapsing to one number.
+
+    THE INFORMATION WAS ALWAYS COLLECTED AND ALWAYS DISCARDED. _walk_depths returns every depth a
+    config declares -- for Voxtral-Mini-3B that is the audio tower's 32 AND the text decoder's 32 --
+    and _depth_from_mapping reduces it with max() one line later, because both of its callers wanted
+    a single ceiling.
+
+    Multi-section models need the list. Voxtral has three sections and two independent stacks; the
+    tool sized ONE depth, capped the text decoder to 2 and left both encoders at 32, and nothing
+    could notice because "how many sections does this model have" was never asked. The config
+    answers it for free, before the device is touched: no markers, no walk, no naming convention,
+    and no per-model code -- transformers already parsed it.
+
+    Sorted descending so the caller reads the deepest first; empty when nothing declares a depth.
+    """
+    if model_id:
+        try:
+            from transformers import AutoConfig
+
+            cfg = AutoConfig.from_pretrained(str(model_id), trust_remote_code=True)
+            found = _walk_depths(getattr(cfg, "__dict__", {}) or {})
+            if found:
+                return sorted(found, reverse=True)
+        except Exception:  # noqa: BLE001
+            pass
+    if model_dir:
+        from pathlib import Path as _P
+
+        root = _P(model_dir)
+        for name in ("config.json", "params.json", "model_config.json"):
+            p = root / name
+            if not p.is_file():
+                continue
+            try:
+                import json as _j
+
+                found = _walk_depths(_j.loads(p.read_text()))
+                if found:
+                    return sorted(found, reverse=True)
+            except Exception:  # noqa: BLE001
+                continue
+    return []
