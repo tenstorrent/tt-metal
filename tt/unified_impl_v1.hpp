@@ -243,6 +243,19 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, uin
     return NocAsyncReadTx<thread>(storage);
 }
 
+template <int thread, typename Fn>
+NocAsyncReadTx<thread> noc_load(const Storage& storage, Fn fn) {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+    if constexpr (thread == TT_DM_THREAD_ID) {
+        cb_reserve_back(storage.cb_id, storage.num_tiles);
+        fn(get_write_ptr(storage.cb_id), cb_page_bytes(storage.cb_id));
+    }
+#else
+    (void)fn;
+#endif
+    return NocAsyncReadTx<thread>(storage);
+}
+
 template <int thread, typename Accessor>
 NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, uint32_t block_idx) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
@@ -259,6 +272,19 @@ NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, uint32_t blo
 #else
     (void)acc;
     (void)block_idx;
+#endif
+    return NocAsyncWriteTx<thread>(block.cb_id, block.num_tiles);
+}
+
+template <int thread, typename Fn>
+NocAsyncWriteTx<thread> noc_store(Block block, Fn fn) {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+    if constexpr (thread == TT_DM_THREAD_ID) {
+        cb_wait_front(block.cb_id, block.num_tiles);
+        fn(get_read_ptr(block.cb_id), cb_page_bytes(block.cb_id));
+    }
+#else
+    (void)fn;
 #endif
     return NocAsyncWriteTx<thread>(block.cb_id, block.num_tiles);
 }
