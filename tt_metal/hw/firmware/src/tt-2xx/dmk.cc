@@ -17,6 +17,7 @@
 #include "hostdev/dev_msgs.h"
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "tools/profiler/noc_debugging_profiler.hpp"  // RECORD_DFB_REGION_CLEAR
 #include "internal/debug/stack_usage.h"
 #include <kernel_includes.hpp>
 #include "api/kernel_thread_globals.h"
@@ -106,6 +107,9 @@ uint32_t _start() {
         WAYPOINT("K");
         kernel_main();
         WAYPOINT("KD");
+        // Unregister all the DFB L1 extents this RISC declared in the DFB ctor. Done here rather than in the dtor so
+        // DFBs stays trivially copyable.
+        RECORD_DFB_REGION_CLEAR();
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");
             // TODO enable once NOC is ready

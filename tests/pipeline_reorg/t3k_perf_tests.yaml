@@ -11,37 +11,6 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: t3k_CNN_resnet50_model_perf_tests
-  cmd: run_t3000_resnet50_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 75
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  model-name: resnet50
-  model-type: CNN
-
-- name: t3k_CNN_sentence_bert_model_perf_tests
-  cmd: run_t3000_sentence_bert_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 75
-  owner_id: U0491KT8MNY # Mohamed Bahnas (Aniruddha Tupe)
-  team: models
-  model-name: sentence_bert
-  model-type: LLM
-
-- name: t3k_DiT_SD3.5_model_perf_tests
-  cmd: run_t3000_stable_diffusion_35_large_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 75
-  owner_id: U06UEFWB4P9 # Colman Glagovich
-  team: models
-  model-name: stable_diffusion_35_large
-  model-type: DiT
-  save-perf-data: true
-
 - name: t3k_DiT_Mochi_model_perf_tests
   cmd: run_t3000_mochi_tests
   skus:

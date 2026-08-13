@@ -10,10 +10,6 @@ on:
         default: all
         options:
           - all
-          - resnet50
-          - sentence_bert
-          - sd35_large
-          - flux1-dev
           - motif
           - qwenimage
           - mochi
@@ -52,7 +48,7 @@ on:
   workflow_call:
     inputs:
       model:
-        description: "Select model to test (all, resnet50, sd35_large, mochi, etc.)"
+        description: "Select model to test (all, mochi, etc.)"
         required: false
         type: string
         default: "all"

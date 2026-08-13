@@ -15,6 +15,7 @@
 #include <tt_stl/assert.hpp>
 
 #include <tt-metalium/core_coord.hpp>
+#include "impl/context/context_types.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
@@ -63,11 +64,15 @@ struct DfbGroup {
 struct DataflowBufferImpl {
     // Unique, program-wide handle
     uint32_t id{};
+    // Owning MetalContext; set from ProgramImpl at add_dataflow_buffer.
+    ContextId context_id_{DEFAULT_CONTEXT_ID};
     // Device-facing slot number, baked into kernel binaries as the dfb::<name> accessor value and
     // used as the config-table index in the dispatch payload.
     uint32_t device_slot{};
     CoreRangeSet core_ranges;
     DataflowBufferConfig config;
+
+    ContextId get_context_id() const { return context_id_; }
 
     uint16_t risc_mask = 0;  // bits 0-7 = DM riscs, bits 8-15 = Tensix riscs
     uint8_t tensix_trisc_mask = 0;  // bits 0-3: which TRISC(s) use DFB (producer=bit2, consumer=bit0 or bit3)
