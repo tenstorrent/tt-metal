@@ -311,6 +311,21 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Qwen2.5-Coder-32B e2e tests (Blackhole)
+  cmd: |
+    export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-Coder-32B-Instruct
+    pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+  model: qwen2.5-coder-32b
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+      tier: 2
+      release_ready: false
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: Qwen2.5-7B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-7B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-7B-Instruct MESH_DEVICE=N300
