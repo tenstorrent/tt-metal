@@ -843,6 +843,7 @@ def test_moreh_layer_norm_rstd_only_mean_none(device):
 # configuration that binds mask_h_w on the large path; normalized_dims=2 is what lets do_mask_h fire at
 # all (it is gated on !is_lastdim_layer_norm). fp32_dest_acc_en=True additionally puts the intermediate
 # buffers in Float32, the case that requires explicit unpack modes.
+@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("eps", [1e-5], ids=["1e-5"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bfloat16"])
 @pytest.mark.parametrize(
