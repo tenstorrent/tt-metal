@@ -519,6 +519,44 @@ def postprocess_global_golden_function_outputs(outputs, golden_outputs):
         TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[output.tensor_id] = golden_output
 
 
+# Keyword argument names through which an operation writes into a caller-supplied tensor in
+# place; the tensor's contents are overwritten so any pre-existing global golden becomes stale.
+INPLACE_OUTPUT_KWARG_NAMES = (
+    "output_tensor",
+    "optional_tensor",
+    "optional_output_tensor",
+    "out",
+    "output_tensors",
+    "optional_output_tensors",
+)
+
+
+def get_inplace_output_tensors(function_kwargs):
+    tensors = []
+    for name in INPLACE_OUTPUT_KWARG_NAMES:
+        if name in function_kwargs:
+            tensors += get_ttnn_tensors(function_kwargs[name])
+    return tensors
+
+
+def refresh_or_invalidate_global_goldens(inplace_tensors, global_golden_output):
+    # Re-key the fresh golden onto a caller tensor an op wrote in place, or drop its stale
+    # entry when no golden exists so the next read rebuilds the golden from device data.
+    import torch
+
+    if not inplace_tensors:
+        return
+    golden_tensors = get_tensors(global_golden_output, torch.Tensor) if global_golden_output is not None else []
+    for index, tensor in enumerate(inplace_tensors):
+        tensor_id = getattr(tensor, "tensor_id", None)
+        if tensor_id is None:
+            continue
+        if len(golden_tensors) == len(inplace_tensors):
+            TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR[tensor_id] = golden_tensors[index]
+        else:
+            TENSOR_ID_TO_GLOBAL_LEVEL_GOLDEN_TENSOR.pop(tensor_id, None)
+
+
 @dataclasses.dataclass
 class FastOperation:
     python_fully_qualified_name: str
@@ -748,6 +786,10 @@ class Operation:
                     logger.debug(
                         f"{self.python_fully_qualified_name}: Skipping comparison against CPU because golden_function is not provided"
                     )
+                    # An op without a golden (e.g. dropout) can still mutate a caller tensor in
+                    # place; invalidate its stale global golden so later reads don't mismatch.
+                    if ttnn.CONFIG.report_path is not None:
+                        refresh_or_invalidate_global_goldens(get_inplace_output_tensors(function_kwargs), None)
                     TENSOR_IDS_PRODUCED_BY_OPERATION.update(get_output_tensor_ids(function_return_value))
                     return function_return_value, (
                         local_tensor_comparison_records,
@@ -829,6 +871,13 @@ class Operation:
                             f"{self.python_fully_qualified_name}: Failed global tensor comparison: {e}. "
                             "Global comparison will be skipped"
                         )
+
+                # An in-place op (optional_tensor/output_tensor) returns a new wrapper, so re-key
+                # the fresh global golden onto the caller's tensor to keep later reads consistent.
+                if ttnn.CONFIG.report_path is not None:
+                    refresh_or_invalidate_global_goldens(
+                        get_inplace_output_tensors(function_kwargs), global_golden_function_output
+                    )
 
                 if isinstance(local_golden_function_output, torch.Tensor):
                     local_golden_function_output = [local_golden_function_output]
