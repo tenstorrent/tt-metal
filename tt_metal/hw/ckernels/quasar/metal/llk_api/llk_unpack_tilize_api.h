@@ -150,6 +150,8 @@ inline void llk_unpack_tilizeA_B_init(
         ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
         ct_dim,
         tensor_shape_A);
+#else
+    static_assert(false, "REDUCE_OP must be defined for tilizeA_B");
 #endif
 }
 
