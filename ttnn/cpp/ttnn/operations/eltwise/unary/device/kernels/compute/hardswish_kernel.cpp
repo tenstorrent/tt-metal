@@ -12,7 +12,8 @@
 namespace ckl = compute_kernel_lib;
 
 constexpr bool kIsFloat32 = get_compile_time_arg_val(0) == 1;
-constexpr bool kIsFloat = get_compile_time_arg_val(1) == 1;
+constexpr bool kIsInt = get_compile_time_arg_val(1) == 1;
+constexpr bool kIsFloat = !kIsFloat32 && !kIsInt;
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -25,7 +26,11 @@ void kernel_main() {
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(num_tiles),
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::input(
+                dfb_input_id,
+                ckl::WaitPolicy::PerTile,
+                kIsInt ? ckl::PopPolicy::PerTile : ckl::PopPolicy::None,
+                ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},
         ckl::Hardsigmoid<ckl::Dst::D0>{},
         ckl::Optional<

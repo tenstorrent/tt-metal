@@ -24,8 +24,10 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_lhs_id, dfb_rhs_id, dfb_out_id);
 
 #ifdef BCAST_SCALAR
+    constexpr auto rhs_wait = ckl::WaitPolicy::Upfront;
     constexpr auto rhs_pop = ckl::PopPolicy::None;
 #else
+    constexpr auto rhs_wait = ckl::WaitPolicy::PerTile;
     constexpr auto rhs_pop = ckl::PopPolicy::PerTile;
 #endif
 
@@ -35,8 +37,7 @@ void kernel_main() {
             CHAIN_BCAST_OP,
             ckl::input(
                 dfb_lhs_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::input(
-                dfb_rhs_id, CHAIN_BCAST_DIM, ckl::WaitPolicy::PerTile, rhs_pop, ckl::DataFormatReconfig::Disabled)>{},
+            ckl::input(dfb_rhs_id, CHAIN_BCAST_DIM, rhs_wait, rhs_pop, ckl::DataFormatReconfig::Disabled)>{},
         ckl::PackTile<ckl::output(
             dfb_out_id, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, ckl::DataFormatReconfig::Disabled)>{});
 }

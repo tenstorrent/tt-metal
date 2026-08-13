@@ -46,26 +46,12 @@ ELTWISE_DECLARE_UNARY(Digamma, digamma)
 // Where — ternary y = where(cond, a, b). DEST-only chain element with compile-time
 // slot binding. Out may alias an input (a/b) — TernaryOp does not enforce slot-distinctness.
 template <DataFormat DF, Dst Cond, Dst A, Dst B, Dst Out>
-struct Where : DestOnlyTag {
-    static constexpr uint32_t lane_width = []() {
-        uint32_t m = to_u32(Cond);
-        if (to_u32(A) > m) {
-            m = to_u32(A);
-        }
-        if (to_u32(B) > m) {
-            m = to_u32(B);
-        }
-        if (to_u32(Out) > m) {
-            m = to_u32(Out);
-        }
-        return m + 1;
-    }();
+struct Where : TernaryOp<Where<DF, Cond, A, B, Out>, Cond, A, B, Out> {
     static ALWI void init() { where_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) {
         where_tile<DF>(
             to_u32(Cond) + slot_offset, to_u32(A) + slot_offset, to_u32(B) + slot_offset, to_u32(Out) + slot_offset);
     }
-    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { exec_impl(slot_offset); }
 };
 
 // ---------------------------------------------------------------------------
@@ -90,29 +76,14 @@ struct LgammaStirlingFloat : BinaryOp<LgammaStirlingFloat<In0, In1, Out>, In0, I
 };
 
 // lgamma_adjusted_tile takes 4 explicit DEST args (stirling, logsin, x, out); Out
-// may alias an input (the kernel uses (D0,D1,D2,D0)). Hand-rolled DestOnlyTag like
-// Where so the 4th arg is the output slot directly (no CRTP single-Out shape).
+// may alias an input (the kernel uses (D0,D1,D2,D0)).
 template <Dst In0, Dst In1, Dst In2, Dst Out>
-struct LgammaAdjusted : DestOnlyTag {
-    static constexpr uint32_t lane_width = []() {
-        uint32_t m = to_u32(In0);
-        if (to_u32(In1) > m) {
-            m = to_u32(In1);
-        }
-        if (to_u32(In2) > m) {
-            m = to_u32(In2);
-        }
-        if (to_u32(Out) > m) {
-            m = to_u32(Out);
-        }
-        return m + 1;
-    }();
+struct LgammaAdjusted : TernaryOp<LgammaAdjusted<In0, In1, In2, Out>, In0, In1, In2, Out> {
     static ALWI void init() { lgamma_adjusted_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) {
         lgamma_adjusted_tile(
             to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(In2) + slot_offset, to_u32(Out) + slot_offset);
     }
-    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { exec_impl(slot_offset); }
 };
 
 }  // namespace compute_kernel_lib

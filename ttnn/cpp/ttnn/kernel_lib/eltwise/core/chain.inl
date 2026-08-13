@@ -1457,26 +1457,42 @@ struct chain_max_block<EltwiseChain<Es...>> : std::integral_constant<uint32_t, d
 template <class Chain>
 inline constexpr uint32_t chain_max_block_v = chain_max_block<Chain>::value;
 
-// chain_supports_block — N-element fold. True when every CB-reader element uses a policy that
-// stages a multi-tile window per outer iter (an upfront Bulk-family policy or PerBlockSize).
-// Per-tile policies (Streaming / HeldStream) consume ONE tile per iter and can't do block_size > 1;
-// for such chains the chain clamps block_size to 1 at runtime (not a static_assert).
+// chain_supports_block — N-element fold. True when every CB lifecycle is compatible with a
+// multi-tile iteration. A block-invariant operand may stay held across the walk; a block-managed
+// operand synchronizes the block. Per-tile policies, however, synchronize one page while a blocked
+// iteration touches several, so those chains are safely clamped to block_size=1 at runtime (the
+// requested size is not a compile-time value).
 namespace detail {
 template <class E>
 constexpr InputSpec b_input_of();  // defined below (defaults to caller-managed)
 
 constexpr bool input_supports_block(InputSpec spec) {
-    return spec.wait == WaitPolicy::Upfront || spec.wait == WaitPolicy::Cumulative ||
-           (spec.wait == WaitPolicy::None && spec.pop == PopPolicy::None) ||
+    return (spec.wait == WaitPolicy::Upfront && (spec.pop == PopPolicy::None || spec.pop == PopPolicy::AtEnd)) ||
+           (spec.wait == WaitPolicy::Cumulative && (spec.pop == PopPolicy::None || spec.pop == PopPolicy::AtEnd)) ||
+           (spec.wait == WaitPolicy::None && (spec.pop == PopPolicy::None || spec.pop == PopPolicy::AtEnd)) ||
            (spec.wait == WaitPolicy::PerBlockSize && spec.pop == PopPolicy::PerBlockSize);
+}
+
+constexpr bool output_supports_block(OutputSpec spec) {
+    switch (spec.reserve) {
+        case ReservePolicy::None: return spec.push == PushPolicy::None || spec.push == PushPolicy::AtEnd;
+        case ReservePolicy::PerTile: return false;
+        case ReservePolicy::PerBlockSize: return spec.push == PushPolicy::PerBlockSize;
+        case ReservePolicy::Upfront: return spec.push == PushPolicy::PerBlockSize || spec.push == PushPolicy::AtEnd;
+        case ReservePolicy::PerOuter: return spec.push == PushPolicy::PerOuter;
+        case ReservePolicy::OneUpfront: return spec.push == PushPolicy::OneAtEnd;
+    }
+    return false;
 }
 
 template <class E>
 constexpr bool element_supports_block() {
     if constexpr (is_cb_reader_op_v<E>) {
         return input_supports_block(E::a_input()) && input_supports_block(b_input_of<E>());
+    } else if constexpr (is_cb_writer_op_v<E>) {
+        return output_supports_block(E::Output);
     } else {
-        return true;  // non-CB-reader elements don't constrain block_size
+        return true;  // DEST-only elements do not own a CB lifecycle
     }
 }
 

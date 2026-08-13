@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/bcast.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/core/chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
@@ -28,7 +29,8 @@ void kernel_main() {
 
     constexpr auto dfb_id_src_id = get_compile_time_arg_val(0);
     constexpr auto dfb_id_dst_id = get_compile_time_arg_val(1);
-    unary_bcast_init<BroadcastType::SCALAR>(dfb_id_src_id, dfb_id_dst_id);
+    compute_kernel_hw_startup(dfb_id_src_id, dfb_id_dst_id);
+    unary_bcast_init<BroadcastType::SCALAR>(dfb_id_src_id);
 
     uint32_t HtWt = Ht * Wt;
     uint32_t num_tiles_read = 0;

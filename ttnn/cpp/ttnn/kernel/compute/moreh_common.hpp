@@ -163,8 +163,6 @@ public:
 
 template <uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
 ALWI void mul_tiles_to_dfb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
-    constexpr uint32_t onetile = 1;
-
     DataflowBuffer(Dfb0).wait_front(itile0 + 1);
     DataflowBuffer(Dfb1).wait_front(itile1 + 1);
 
@@ -184,8 +182,6 @@ ALWI void mul_tiles_to_dfb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t po
 template <uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
 ALWI void mul_tiles_and_negative_to_dfb(
     uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
-    constexpr uint32_t onetile = 1;
-
     DataflowBuffer(Dfb0).wait_front(itile0 + 1);
     DataflowBuffer(Dfb1).wait_front(itile1 + 1);
 
@@ -211,8 +207,6 @@ ALWI void mul_tiles_and_mask_tile_to_dfb(
     uint32_t pop0 = 1,
     uint32_t pop1 = 1,
     uint32_t popm = 1) {
-    constexpr uint32_t onetile = 1;
-
     DataflowBuffer(Dfb0).wait_front(itile0 + 1);
     DataflowBuffer(Dfb1).wait_front(itile1 + 1);
     DataflowBuffer(DfbMask).wait_front(mtile + 1);
@@ -237,8 +231,6 @@ ALWI void mul_tiles_and_mask_tile_to_dfb(
 
 template <uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
 ALWI void mul_tiles_log_to_dfb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
-    constexpr uint32_t onetile = 1;
-
     DataflowBuffer(Dfb0).wait_front(itile0 + 1);
     DataflowBuffer(Dfb1).wait_front(itile1 + 1);
 
@@ -258,8 +250,6 @@ ALWI void mul_tiles_log_to_dfb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_
 
 template <ckl::BroadcastDim Bcast, uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut, bool ApplyLog = false>
 ALWI void mul_tiles_bcast_to_dfb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
-    constexpr uint32_t onetile = 1;
-
     DataflowBuffer(Dfb0).wait_front(itile0 + 1);
     DataflowBuffer(Dfb1).wait_front(itile1 + 1);
 
@@ -310,8 +300,6 @@ ALWI void mul_tiles_bcast_cols_log_to_dfb(
 
 template <uint32_t DfbIn, uint32_t DfbOut>
 ALWI void copy_tile_to_dfb(uint32_t itile = 0, uint32_t pop = 1) {
-    constexpr uint32_t onetile = 1;
-
     DataflowBuffer(DfbIn).wait_front(itile + 1);
 
     ckl::eltwise_chain(
@@ -326,8 +314,6 @@ ALWI void copy_tile_to_dfb(uint32_t itile = 0, uint32_t pop = 1) {
 
 template <uint32_t DfbIn, uint32_t DfbOut>
 ALWI void sign_tile_to_dfb(uint32_t itile = 0, uint32_t pop = 1) {
-    constexpr uint32_t onetile = 1;
-
     DataflowBuffer(DfbIn).wait_front(itile + 1);
 
     ckl::eltwise_chain(
@@ -343,8 +329,6 @@ ALWI void sign_tile_to_dfb(uint32_t itile = 0, uint32_t pop = 1) {
 
 template <uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
 ALWI void add_tiles_to_dfb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
-    constexpr uint32_t onetile = 1;
-
     DataflowBuffer(Dfb0).wait_front(itile0 + 1);
     DataflowBuffer(Dfb1).wait_front(itile1 + 1);
 
@@ -363,8 +347,6 @@ ALWI void add_tiles_to_dfb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t po
 
 template <uint32_t DfbIn, uint32_t DfbMask, uint32_t DfbOut>
 ALWI void mask_tile_to_dfb(uint32_t itile = 0, uint32_t mtile = 0, uint32_t pop = 1, uint32_t popm = 1) {
-    constexpr uint32_t onetile = 1;
-
     DataflowBuffer(DfbIn).wait_front(itile + 1);
     DataflowBuffer(DfbMask).wait_front(mtile + 1);
 
@@ -385,8 +367,6 @@ ALWI void mask_tile_to_dfb(uint32_t itile = 0, uint32_t mtile = 0, uint32_t pop 
 
 template <ckl::BroadcastDim Bcast, uint32_t Dfb0, uint32_t Dfb1, uint32_t DfbOut>
 ALWI void sub_tiles_bcast_to_dfb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t pop0 = 1, uint32_t pop1 = 1) {
-    constexpr uint32_t onetile = 1;
-
     DataflowBuffer(Dfb0).wait_front(itile0 + 1);
     DataflowBuffer(Dfb1).wait_front(itile1 + 1);
 
@@ -420,8 +400,6 @@ ALWI void sub_tiles_to_dfb(uint32_t itile0 = 0, uint32_t itile1 = 0, uint32_t po
 
 template <bool Negative, uint32_t DfbIn, uint32_t DfbOut>
 ALWI void exp_tile_to_dfb_impl(uint32_t itile = 0, uint32_t pop = 1) {
-    constexpr uint32_t onetile = 1;
-
     DataflowBuffer(DfbIn).wait_front(itile + 1);
 
     if constexpr (Negative) {
@@ -457,8 +435,6 @@ ALWI void rexp_tile_to_dfb(uint32_t itile = 0, uint32_t pop = 1) {
 template <bool Negative, uint32_t DfbIn, uint32_t DfbMask, uint32_t DfbOut>
 ALWI void exp_tile_and_mask_tile_to_dfb_impl(
     uint32_t itile = 0, uint32_t mtile = 0, uint32_t pop = 1, uint32_t popm = 1) {
-    constexpr uint32_t onetile = 1;
-
     DataflowBuffer(DfbIn).wait_front(itile + 1);
     DataflowBuffer(DfbMask).wait_front(mtile + 1);
 
@@ -501,8 +477,6 @@ ALWI void rexp_tile_and_mask_tile_to_dfb(uint32_t itile = 0, uint32_t mtile = 0,
 
 template <uint32_t DfbIn, uint32_t DfbOut>
 ALWI void recip_tile_to_dfb(uint32_t itile = 0, uint32_t pop = 1) {
-    constexpr uint32_t onetile = 1;
-
     DataflowBuffer(DfbIn).wait_front(itile + 1);
 
     ckl::eltwise_chain(
@@ -518,8 +492,6 @@ ALWI void recip_tile_to_dfb(uint32_t itile = 0, uint32_t pop = 1) {
 
 template <uint32_t DfbIn, uint32_t DfbOut>
 ALWI void log_tile_to_dfb(uint32_t itile = 0, uint32_t pop = 1) {
-    constexpr uint32_t onetile = 1;
-
     DataflowBuffer(DfbIn).wait_front(itile + 1);
 
     ckl::eltwise_chain(

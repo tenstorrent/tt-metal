@@ -1924,6 +1924,20 @@ def test_unary_hardswish_ttnn(input_shapes, low, high, torch_dtype, ttnn_dtype, 
     assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=atol)
 
 
+@pytest.mark.parametrize("torch_dtype,ttnn_dtype", [(torch.int32, ttnn.int32), (torch.uint32, ttnn.uint32)])
+def test_unary_hardswish_integer_releases_every_input_tile(torch_dtype, ttnn_dtype, device):
+    """The integer path is hardsigmoid-only, but must still pop all input pages across a multi-tile tensor."""
+    input_data = torch.zeros((1, 1, 32, 96), dtype=torch_dtype)
+    input_tensor = ttnn.from_torch(input_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.to_torch(ttnn.hardswish(input_tensor), dtype=torch_dtype)
+    # Integer hardswish preserves the existing integer-path contract: the hardsigmoid result is
+    # packed as Float32 bits. hardsigmoid(0) is 0.5f == 0x3f000000.
+    golden = torch.full_like(input_data, 0x3F000000)
+
+    assert torch.equal(output, golden)
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (

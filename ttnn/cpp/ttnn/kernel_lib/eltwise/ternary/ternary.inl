@@ -13,56 +13,33 @@
 
 namespace compute_kernel_lib {
 
-namespace detail {
-// Max DEST slot index + 1 across the four ternary slots (per-lane footprint).
-template <Dst In0, Dst In1, Dst In2, Dst Out>
-inline constexpr uint32_t ternary_lane_width() {
-    uint32_t m = to_u32(In0);
-    if (to_u32(In1) > m) {
-        m = to_u32(In1);
-    }
-    if (to_u32(In2) > m) {
-        m = to_u32(In2);
-    }
-    if (to_u32(Out) > m) {
-        m = to_u32(Out);
-    }
-    return m + 1;
-}
-}  // namespace detail
-
 // Lerp — y = start + weight * (end - start). lerp_tile<DF>(start, end, weight, out).
 template <DataFormat DF, Dst In0, Dst In1, Dst In2, Dst Out>
-struct Lerp : DestOnlyTag {
-    static constexpr uint32_t lane_width = detail::ternary_lane_width<In0, In1, In2, Out>();
+struct Lerp : TernaryOp<Lerp<DF, In0, In1, In2, Out>, In0, In1, In2, Out> {
     static ALWI void init() { lerp_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) {
         lerp_tile<DF>(
             to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(In2) + slot_offset, to_u32(Out) + slot_offset);
     }
-    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { exec_impl(slot_offset); }
 };
 
 // SnakeBeta — snake_beta_tile<DF>(x, alpha, beta, out).
 template <DataFormat DF, Dst In0, Dst In1, Dst In2, Dst Out>
-struct SnakeBeta : DestOnlyTag {
-    static constexpr uint32_t lane_width = detail::ternary_lane_width<In0, In1, In2, Out>();
+struct SnakeBeta : TernaryOp<SnakeBeta<DF, In0, In1, In2, Out>, In0, In1, In2, Out> {
     static ALWI void init() { snake_beta_tile_init(); }
     static ALWI void exec_impl(uint32_t slot_offset) {
         snake_beta_tile<DF>(
             to_u32(In0) + slot_offset, to_u32(In1) + slot_offset, to_u32(In2) + slot_offset, to_u32(Out) + slot_offset);
     }
-    ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const { exec_impl(slot_offset); }
 };
 
 // Addcmul — out = in0 + value * (in1 * in2). addcmul_tile<DF>(in0, in1, in2, out, value).
 // Runtime `value` (uint32 bits) => instance exec, like FillScalar.
 template <DataFormat DF, Dst In0, Dst In1, Dst In2, Dst Out>
-struct Addcmul : DestOnlyTag {
+struct Addcmul : TernaryOp<Addcmul<DF, In0, In1, In2, Out>, In0, In1, In2, Out> {
     uint32_t value;
     constexpr explicit Addcmul(uint32_t v) noexcept : value(v) {}
     constexpr Addcmul() noexcept : value(0) {}
-    static constexpr uint32_t lane_width = detail::ternary_lane_width<In0, In1, In2, Out>();
     static ALWI void init() { addcmul_tile_init(); }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
         addcmul_tile<DF>(
@@ -76,11 +53,10 @@ struct Addcmul : DestOnlyTag {
 
 // Addcdiv — out = in0 + value * (in1 / in2). addcdiv_tile<DF>(in0, in1, in2, out, value).
 template <DataFormat DF, Dst In0, Dst In1, Dst In2, Dst Out>
-struct Addcdiv : DestOnlyTag {
+struct Addcdiv : TernaryOp<Addcdiv<DF, In0, In1, In2, Out>, In0, In1, In2, Out> {
     uint32_t value;
     constexpr explicit Addcdiv(uint32_t v) noexcept : value(v) {}
     constexpr Addcdiv() noexcept : value(0) {}
-    static constexpr uint32_t lane_width = detail::ternary_lane_width<In0, In1, In2, Out>();
     static ALWI void init() { addcdiv_tile_init(); }
     ALWI void exec(uint32_t /*i*/, uint32_t slot_offset) const {
         addcdiv_tile<DF>(

@@ -534,9 +534,9 @@ using PackTile = detail::PackTileImpl<Output.cb_id, detail::pack_tile_config_bit
 // one boot per stage for multi-stage kernels); the chain owns only per-element init.
 
 /// Run the chain over an (Ht, Wt) tile grid with optional per-outer-iter block size.
-/// `IterationShape` covers both walks: `tiles(n[, blk])` (1D, Ht=1),
-/// `tiles(n, blk, BlockTailSync::FullBlock)` for a fixed-block 1D CB contract, or
-/// `grid(H, W, blk, BlockTailSync::FullBlock)` for a row-blocked 2D contract.
+/// `IterationShape` covers both walks: `tiles(n)` (1D, Ht=1),
+/// `tiles(n).block_size(blk, BlockTailSync::FullBlock)` for a fixed-block 1D CB contract, or
+/// `grid(H, W).block_size(blk, BlockTailSync::FullBlock)` for a row-blocked 2D contract.
 /// A bare number is not accepted — write `IterationShape::tiles(n)` (or
 /// `IterationShape::one_tile()` for one tile) so the iteration shape is always explicit.
 ///
@@ -546,7 +546,7 @@ using PackTile = detail::PackTileImpl<Output.cb_id, detail::pack_tile_config_bit
 ///
 /// Index-mode (OperandKind) and block-mode behavior match the enum docs above: Block /
 /// Row / Col / Scalar pick the per-iter tile index; input policies that own a staged CB
-/// window take the upfront-block path; Streaming chains clamp block_size to 1.
+/// window take the upfront-block path; chains with per-tile input or output lifecycles clamp block_size to 1.
 /// `BlockTailSync` affects only per-block-size synchronization counts. Row/Col need a non-streaming policy.
 template <InitReconfigOwner Owner = InitReconfigOwner::Chain, IterationShapeKind Kind, class... Es>
 ALWI void eltwise_chain(TypedIterationShape<Kind> shape, Es... elts);
