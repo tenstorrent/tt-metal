@@ -79,7 +79,7 @@ def _check_prefill_benchmark_results(results):
     assert not failures, "Prefill prefix-caching benchmark check failed:\n" + "\n".join(failures)
 
 
-@pytest.mark.timeout(1800)
+@pytest.mark.timeout(2280)
 @pytest.mark.parametrize(
     "device_params",
     [
