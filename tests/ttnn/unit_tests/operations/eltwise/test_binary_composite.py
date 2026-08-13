@@ -901,6 +901,13 @@ def test_unary_right_shift(input_shapes, device):
 SITU_GLU_BETA1 = 4.0
 SITU_GLU_BETA2 = 25.0
 
+# The bf16 arm is gated in ULP (measured worst case: 3.0 across three composed ops). bfp8_b
+# re-quantizes every intermediate and shares one exponent per 16-element block, which costs
+# hundreds of bf16 ULP on small elements regardless of op accuracy, so that arm is gated by PCC.
+SITU_GLU_ULP = 6
+SITU_GLU_BF16_PCC = 0.999
+SITU_GLU_BFP8_PCC = 0.99
+
 # One case per intermediate-memory branch, also covering both dtypes.
 SITU_GLU_CASES = [
     (torch.Size([1, 1, 512, 3072]), ttnn.bfloat16),  # K3 routed expert (3072) <= 3072 -> L1
@@ -931,7 +938,11 @@ def test_situ_glu(input_shape, ttnn_dtype, device):
     max_abs = tt_res.to(torch.float32).abs().max().item()
     assert max_abs <= bound, f"situ_glu overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
 
-    assert_with_pcc(golden, tt_res, pcc=0.99 if is_bfp8 else 0.999)
+    if is_bfp8:
+        assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BFP8_PCC)
+    else:
+        assert_with_ulp(golden, tt_res, ulp_threshold=SITU_GLU_ULP)
+        assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BF16_PCC)
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="situ_glu builds on softcap, which is Blackhole only")

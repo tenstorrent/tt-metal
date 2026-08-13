@@ -2793,10 +2793,14 @@ SOFTCAP_BETA = 25.0
 # 5.9e-3, so a normal input can drive a subnormal intermediate the SFPU flushes to zero.
 SOFTCAP_FLUSH_FLOOR = 1e-30
 
-# bf16 is the near-exact reference; bfp8_b shares one exponent per 16-element block, so it is
-# slightly less accurate and its near-beta output lands on a coarser grid (hence the wider
-# overshoot margin). Both are the dtypes Kimi K3 actually runs.
-SOFTCAP_PCC = {ttnn.bfloat16: 0.9999, ttnn.bfloat8_b: 0.999}
+# bf16 output rounds the polynomial's ~2.3e-3 relative error to well under half a bf16 ULP, so
+# accuracy is gated in ULP (measured worst case: 0.35). bfp8_b shares one exponent per 16-element
+# block, so a small element next to a large one in the same block carries tens of bf16 ULP through
+# no fault of the op; that arm is gated by PCC instead, and its near-beta output lands on a coarser
+# grid (hence the wider overshoot margin). Both are the dtypes Kimi K3 actually runs.
+SOFTCAP_ULP = 2
+SOFTCAP_BF16_PCC = 0.9999
+SOFTCAP_BFP8_PCC = 0.999
 SOFTCAP_BOUND_TOL = {ttnn.bfloat16: 1e-3, ttnn.bfloat8_b: 5e-2}
 
 
@@ -2810,16 +2814,15 @@ SOFTCAP_BOUND_TOL = {ttnn.bfloat16: 1e-3, ttnn.bfloat8_b: 5e-2}
 )
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_unary_softcap(input_shapes, ttnn_dtype, device):
+    torch.manual_seed(0)
     if ttnn_dtype == ttnn.bfloat8_b:
         # bfp8_b shares one exponent per 16-element block, so the full-range stress input
         # (1e-5 .. 3e38 in a single tile) is neither representable nor a realistic activation.
         # Use a bounded range that still spans the near-linear and saturated (|x| >> beta) regions.
-        torch.manual_seed(0)
         in_data = torch.empty(input_shapes, dtype=torch.bfloat16).uniform_(-100.0, 100.0)
     else:
         # No range limiting: x/beta may overflow the polynomial's Horner chain to inf,
         # but the min(., 1.0) clamp that bounds tanh turns that back into exactly beta.
-        torch.manual_seed(0)
         in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
 
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -2832,16 +2835,21 @@ def test_unary_softcap(input_shapes, ttnn_dtype, device):
     max_abs = tt_res.to(torch.float32).abs().max().item()
     bound = SOFTCAP_BETA * (1.0 + SOFTCAP_BOUND_TOL[ttnn_dtype])
     assert max_abs <= bound, f"softcap overshoot: max |out| {max_abs:.4f} > bound {bound:.4f}"
-    assert_with_pcc(golden, tt_res, pcc=SOFTCAP_PCC[ttnn_dtype])
+
+    if ttnn_dtype == ttnn.bfloat8_b:
+        assert_with_pcc(golden, tt_res, pcc=SOFTCAP_BFP8_PCC)
+    else:
+        assert_with_ulp(golden, tt_res, ulp_threshold=SOFTCAP_ULP)
+        assert_with_pcc(golden, tt_res, pcc=SOFTCAP_BF16_PCC)
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")
 def test_softcap_bfloat16_full_domain(device):
     """Every representable bfloat16 value.
 
-    Not a ULP test: softcap goes through the Sollya polynomial tanh, whose ~2.3e-3
-    relative error is thousands of fp32 ULP. The bound below is sized to the
-    approximation instead.
+    The Sollya polynomial tanh carries ~2.3e-3 relative error, which is thousands of
+    fp32 ULP but under half a bf16 ULP, so the bf16 output is gated in ULP. The
+    subnormal-flush region is excluded and checked separately.
     """
     all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
     input_tensor = all_bitpatterns.view(torch.bfloat16)
@@ -2865,16 +2873,12 @@ def test_softcap_bfloat16_full_domain(device):
     assert max_abs <= fd_bound, f"softcap overshoot: max |out| {max_abs:.4f} > bound {fd_bound:.4f}"
     assert not torch.isnan(result).any(), "finite input produced NaN"
 
-    g = golden.to(torch.float32)
-    r = result.to(torch.float32)
-    mask = g.abs() > SOFTCAP_FLUSH_FLOOR
-    rel_err = ((r[mask] - g[mask]).abs() / g[mask].abs()).max().item()
-    assert rel_err < 1.5e-2, f"full bf16 domain max rel err {rel_err:.4e}"
+    mask = golden.abs() > SOFTCAP_FLUSH_FLOOR
+    assert_with_ulp(golden[mask], result[mask], ulp_threshold=SOFTCAP_ULP)
+    assert_with_pcc(golden[mask], result[mask], pcc=SOFTCAP_BF16_PCC)
 
-    tiny_max = r[~mask].abs().max().item()
+    tiny_max = result[~mask].to(torch.float32).abs().max().item()
     assert tiny_max <= 4.0 * SOFTCAP_FLUSH_FLOOR, f"negligible-reference region returned {tiny_max:.4e}"
-
-    assert_with_pcc(g, r, pcc=0.9999)
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="softcap is implemented for Blackhole only")

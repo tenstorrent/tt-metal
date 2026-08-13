@@ -18,7 +18,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 from models.common.utility_functions import is_blackhole
 
 BETA_GATE = 4.0  # Kimi K3 gate-half beta
@@ -31,6 +31,11 @@ IN_DTYPES = {
     "bfp8_b": (ttnn.bfloat8_b, TILE_ELEMS + TILE_ELEMS // 16),
 }
 OUT_PAGE_BYTES = TILE_ELEMS * 2  # op rounds its result to bf16
+
+# The op always packs bf16, so the bf16 arm is gated in ULP (measured worst case: 1.4).
+BF16_ULP = 4
+BF16_PCC = 0.999
+BFP8_PCC = 0.99
 
 
 def situ_glu_reference(gate, up):
@@ -140,13 +145,19 @@ def test_situ_glu_sfpu(device, in_name, fp32_dest):
     golden = situ_glu_reference(gate_t, up_t)
     actual = _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest)
 
+    is_bfp8 = in_name == "bfp8_b"
     # |situ_a| <= beta_gate, |up_half| <= beta_up -> |result| <= their product.
-    bound = BETA_GATE * BETA_UP * (1.0 + (5e-2 if in_name == "bfp8_b" else 1e-3))
+    bound = BETA_GATE * BETA_UP * (1.0 + (5e-2 if is_bfp8 else 1e-3))
     assert actual.to(torch.float32).abs().max().item() <= bound
 
     g = golden.to(torch.float32)
     a = actual.to(torch.float32)
-    logger.info(f"{in_name} fp32_dst={fp32_dest}: max abs err {(a - g).abs().max().item():.4e}")
+    logger.debug(f"{in_name} fp32_dst={fp32_dest}: max abs err {(a - g).abs().max().item():.4e}")
 
-    pcc = 0.99 if in_name == "bfp8_b" else 0.999
-    assert_with_pcc(g, a, pcc=pcc)
+    if is_bfp8:
+        # bfp8_b inputs quantize before the op runs, so the output carries hundreds of bf16 ULP
+        # no matter how accurate the SFPU is; ULP only says something about the bf16 arm.
+        assert_with_pcc(g, a, pcc=BFP8_PCC)
+    else:
+        assert_with_ulp(golden, actual, ulp_threshold=BF16_ULP)
+        assert_with_pcc(g, a, pcc=BF16_PCC)
