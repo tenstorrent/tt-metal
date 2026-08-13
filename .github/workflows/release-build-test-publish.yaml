@@ -159,8 +159,8 @@ jobs:
       tests-yaml-gist-url: ${{ inputs.tests-yaml-gist-url }}
 
   # Run-level aggregate of per-job AI summaries from release-demo-tests-impl.
-  # expected-jobs is the filtered matrix so legs with no ai_job_summary artifact
-  # are reconciled as INFRA_FAILURE (same pattern as blaze-models-prefill-tests).
+  # expected-jobs is the union of single-host and exabox multihost legs so a
+  # missing ai_job_summary artifact is reconciled as INFRA_FAILURE.
   ai-run-summary:
     name: "AI Run Summary"
     needs: [release-demo-tests]
@@ -169,6 +169,18 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
+      - name: Merge single-host and multihost expected jobs
+        id: merge
+        env:
+          SINGLE: ${{ needs.release-demo-tests.outputs.matrix }}
+          MULTI: ${{ needs.release-demo-tests.outputs.matrix_multihost }}
+        run: |
+          SINGLE=${SINGLE:-[]}
+          MULTI=${MULTI:-[]}
+          merged=$(jq -cn --argjson s "$SINGLE" --argjson m "$MULTI" '$s + $m')
+          echo "matrix<<EOF" >> $GITHUB_OUTPUT
+          echo "$merged" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
       - id: ai-run-summary
         continue-on-error: true
         uses: tenstorrent/tt-github-actions/.github/actions/ai_summary/run@main
@@ -182,7 +194,7 @@ jobs:
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
-          expected-jobs: ${{ needs.release-demo-tests.outputs.matrix }}
+          expected-jobs: ${{ steps.merge.outputs.matrix }}
           run-result: ${{ needs.release-demo-tests.result }}
       - name: Show report
         if: always() && steps.ai-run-summary.outputs.report-file != ''
