@@ -56,7 +56,12 @@ from models.common.models.qwen3_32b.model import QWEN3_32B_ACCURACY, QWEN3_32B_P
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.common.tests.demos.run_helpers import (
+    assert_cross_cardinality_consistency,
+    decode_eval_output,
+    eval_decode_trace_mode,
+    hf_stop_ids,
     load_eval_repeat_prompts_batch32,
+    require_canonical_eval_modes_in_ci,
     run_eval_repeat_batch32,
     run_perf_benchmark,
     run_teacher_forcing,
@@ -558,6 +563,7 @@ def create_model(
     *,
     max_batch_size: int = 32,
     max_seq_len: int | None = None,
+    disable_batched_prefill: bool | None = None,
 ):
     """Build ``Qwen3_32B`` in executor (paged KV) mode on T3K or P150x4.
 
@@ -595,6 +601,7 @@ def create_model(
             cache_dir=cache_dir,
             precision=precision,
             executor_mode=True,
+            disable_batched_prefill=disable_batched_prefill,
         )
     except Exception as e:
         # BH qualification nodes are required gates: construction failures must surface as failures,
@@ -932,6 +939,97 @@ def test_qwen3_32b(test_config, mesh_device, optimizations):
         cleanup_model_case(model, mesh_device)
 
 
+_CROSS_CARDINALITY_REQUEST_IDS = tuple(f"qwen3-32b-request-{index:02d}" for index in range(32))
+_CROSS_CARDINALITIES = (1, 2, 4, 32)
+
+
+@pytest.mark.parametrize("prefill_mode", ["batched", "sequential"])
+def test_qwen3_32b_p150x4_cross_cardinality(mesh_device, prefill_mode):
+    """Plan experiment: fixed requests must not change at cardinalities 1/2/4/32.
+
+    Host argmax is intentionally used, so the experiment has no stochastic sampler and therefore
+    needs no per-request seeds. Each cardinality gets a fresh executor and KV cache. This standalone
+    node cannot weaken the canonical eval gate or silently change the P150x4 construction default.
+    """
+    if get_device_name(mesh_device) != "P150x4":
+        pytest.skip("cross-cardinality qualification requires a physical P150x4")
+
+    hf_model = os.environ.get("HF_MODEL", "Qwen/Qwen3-32B")
+    cache_dir = lazy_weight_cache_dir_for_demo(mesh_device, hf_model)
+    disable_batched_prefill = prefill_mode == "sequential"
+    model = None
+    try:
+        model = create_model(
+            mesh_device,
+            "accuracy",
+            cache_dir,
+            max_batch_size=32,
+            max_seq_len=1024,
+            disable_batched_prefill=disable_batched_prefill,
+        )
+        ma = model.model_args
+        assert ma is not None
+        assert (
+            ma.disable_batched_prefill is disable_batched_prefill
+        ), "DISABLE_BATCHED_PREFILL must be unset for the explicit experiment mode"
+
+        tokenizer = _load_tokenizer(hf_model)
+        prompts = load_eval_repeat_prompts_batch32()
+        assert len(prompts) == len(_CROSS_CARDINALITY_REQUEST_IDS) == 32
+        stop_ids = hf_stop_ids(tokenizer, hf_model)
+        block_size = 32
+        blocks_per_user = ma.max_seq_len // block_size
+        num_blocks = blocks_per_user * ma.max_batch_size
+        page_table = torch.arange(num_blocks, dtype=torch.int32).reshape(ma.max_batch_size, blocks_per_user)
+        kv_cache_shape = (
+            num_blocks,
+            ma.n_kv_heads // mesh_device.get_num_devices(),
+            block_size,
+            ma.head_dim,
+        )
+        outputs_by_cardinality: dict[int, dict[str, str]] = {}
+        for cardinality in _CROSS_CARDINALITIES:
+            input_tokens, prompt_lens = tokenize_prompts(prompts[:cardinality], tokenizer)
+            executor = TracedQwen3_32BExecutor(
+                model,
+                mesh_device,
+                ondevice_decode_loop=False,
+                trace_mode=eval_decode_trace_mode("traced"),
+            )
+            try:
+                kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
+                # Compile this cardinality's regular-batched prefill signature before decode trace
+                # activation. The executor deliberately rejects new program keys after tracing.
+                _warmup_demo_executor(
+                    executor,
+                    kv_cache=kv_cache,
+                    page_table=page_table[:cardinality],
+                    prefill_compile_case=(input_tokens, prompt_lens),
+                )
+                result = run_perf_benchmark(
+                    executor,
+                    tokens=input_tokens,
+                    kv_cache=kv_cache,
+                    page_table=page_table,
+                    num_decode_tokens=32,
+                    max_batch_size=ma.max_batch_size,
+                    prompt_lens=prompt_lens,
+                    sampling_params=None,
+                )
+            finally:
+                executor.cleanup()
+            outputs_by_cardinality[cardinality] = {
+                request_id: decode_eval_output(tokenizer, token_ids, stop_ids)
+                for request_id, token_ids in zip(
+                    _CROSS_CARDINALITY_REQUEST_IDS[:cardinality], result.generated_token_ids, strict=True
+                )
+            }
+
+        assert_cross_cardinality_consistency(outputs_by_cardinality)
+    finally:
+        cleanup_model_case(model, mesh_device)
+
+
 def _run_token_accuracy(model, mesh_device, expected):
     """Teacher-forcing token accuracy vs ``.refpt`` (HF-generated)."""
     hf_model = os.environ.get("HF_MODEL", "Qwen/Qwen3-32B")
@@ -1258,6 +1356,7 @@ def _run_eval_repeat_batch32(
     """
     hf_model = os.environ.get("HF_MODEL", "Qwen/Qwen3-32B")
     tokenizer = _load_tokenizer(hf_model)
+    require_canonical_eval_modes_in_ci(os.environ)
 
     # Qwen3 chat generation ends at <|im_end|>; the model opening a NEW turn (<|im_start|>) is a de-facto
     # response terminator as well (Qwen serving stacks list both as stops), but Qwen's HF
@@ -1320,7 +1419,7 @@ def _run_eval_repeat_batch32(
             model,
             mesh_device,
             ondevice_decode_loop=sampling_params is not None,
-            trace_mode="decode_only",
+            trace_mode=eval_decode_trace_mode(os.environ.get("EVAL_DECODE_MODE", "traced")),
         )
 
     def allocate_kv_cache(executor):
@@ -1351,6 +1450,7 @@ def _run_eval_repeat_batch32(
             repeat_batches=_EVAL_REPEAT_BATCHES,
             hf_model_id=hf_model,
             first_repeat_profiler=profiler,
+            page_table_mode=os.environ.get("EVAL_PAGE_TABLE_MODE", "slot-stable"),
         )
     finally:
         if profiler is not None:

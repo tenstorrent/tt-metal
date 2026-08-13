@@ -61,6 +61,14 @@ def test_llama3_8b_p150_prefill_policy_matches_tttv1_candidate(monkeypatch):
     assert _trace_prefill_supported_seq_lens("P150", 4 * 1024, 128 * 1024) == (128, 1024)
 
 
+def test_llama3_8b_p300_prefill_policy_matches_two_chip_bh_candidate(monkeypatch):
+    monkeypatch.delenv("MAX_PREFILL_CHUNK_SIZE", raising=False)
+    monkeypatch.setattr(hf_adaptor, "get_device_name", lambda mesh_device: "P300")
+
+    assert _max_prefill_chunk_size(object()) == 4 * 1024
+    assert _trace_prefill_supported_seq_lens("P300", 4 * 1024, 128 * 1024) == (128, 1024)
+
+
 def test_llama3_8b_prefill_chunk_size_override_applies_to_n150x4(monkeypatch):
     monkeypatch.setenv("MAX_PREFILL_CHUNK_SIZE", "16")
 

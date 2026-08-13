@@ -335,10 +335,17 @@ def create_llama3_for_causal_lm(mesh_device, optimizations="performance", max_ba
 
 
 mesh_device_name = os.environ.get("MESH_DEVICE", "").strip().upper()
-mesh_device_shape = {"P150": (1, 1), "N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (4, 8)}.get(mesh_device_name)
+mesh_device_shape = {
+    "P150": (1, 1),
+    "P300": (1, 2),
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "T3K": (1, 8),
+    "TG": (4, 8),
+}.get(mesh_device_name)
 if mesh_device_shape is None:
     pytest.skip(
-        f"Unsupported MESH_DEVICE={mesh_device_name!r}; use P150, N150, N300, T3K, or TG.",
+        f"Unsupported MESH_DEVICE={mesh_device_name!r}; use P150, P300, N150, N300, T3K, or TG.",
         allow_module_level=True,
     )
 ttnn_mesh_device_params = {
@@ -346,6 +353,8 @@ ttnn_mesh_device_params = {
     "trace_region_size": resolve_trace_region_size("llama3.1-8b", mesh_device_name),
     "num_command_queues": 1,
 }
+if mesh_device_name == "P300":
+    ttnn_mesh_device_params["fabric_config"] = ttnn.FabricConfig.FABRIC_1D_RING
 pytestmark = pytest.mark.parametrize(
     "ttnn_mesh_device",
     [ttnn_mesh_device_params],

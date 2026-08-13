@@ -819,6 +819,7 @@ class Qwen3_32B(LightweightModule):
         precision: Qwen3_32BPrecisionConfig = QWEN3_32B_ACCURACY,
         block_size: int = 32,
         executor_mode: bool = False,
+        disable_batched_prefill: bool | None = None,
     ) -> Qwen3_32B:
         """
         Load HF weights on host and build TTNN modules (weights materialize on first forward).
@@ -942,6 +943,7 @@ class Qwen3_32B(LightweightModule):
                 head_dim=head_dim,
                 device=mesh_device,
                 use_qk_fused=False,
+                core_grid=sku.attention_decode_transformation_grid,
             )
         )
 
@@ -1004,7 +1006,10 @@ class Qwen3_32B(LightweightModule):
                 kv_cache_dtype=precision.kv_cache_dtype,
                 # Match TTTv1's P150x4 policy. The cross-cardinality experiment in the
                 # approval plan must pass before this construction-time guard is removed.
-                disable_batched_prefill=sku.disable_batched_prefill or bool(os.environ.get("DISABLE_BATCHED_PREFILL")),
+                disable_batched_prefill=(
+                    sku.disable_batched_prefill if disable_batched_prefill is None else disable_batched_prefill
+                )
+                or bool(os.environ.get("DISABLE_BATCHED_PREFILL")),
                 # A/B escape hatch: DISABLE_BATCHED_EXTRACT=1 forces the per-slot last-token extract
                 # (one lm_head per user, bit-identical to the sequential path) instead of the default
                 # gathered extract (one lm_head over the whole group).

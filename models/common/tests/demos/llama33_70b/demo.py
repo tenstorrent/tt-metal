@@ -65,14 +65,17 @@ from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.common.tests.demos.run_helpers import (
     assert_no_special_tokens,
+    eval_decode_trace_mode,
     load_eval_repeat_prompts_batch32,
     make_contiguous_page_table,
+    require_canonical_eval_modes_in_ci,
     run_eval_repeat_batch32,
     run_perf_benchmark,
     run_teacher_forcing,
 )
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.utils.model_targets import resolve_accuracy_targets
+from models.demos.utils.trace_region_sizes import resolve_trace_region_size
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 # =============================================================================
@@ -200,7 +203,7 @@ def _ttnn_mesh_device_param_from_env() -> dict:
         )
     param = {
         "mesh_shape": shape,
-        "trace_region_size": 50_000_000,
+        "trace_region_size": resolve_trace_region_size("llama3.3-70b", env),
         "num_command_queues": 1,
     }
     # TTTv2 multi-device executor dispatch (and the on-device sampling all-gather) stalls without
@@ -778,8 +781,8 @@ def _run_perf_benchmark(
     # sequential per-user prefill loop (the pre-feature baseline) for before/after TTFT comparison.
     # Companion knob (PLAN_01): DISABLE_MINIMAL_MATMUL=1 forces QKV/W2 prefill back to ttnn.linear
     # (read at model build time, so it must be in the env before from_pretrained — it already is).
-    if os.environ.get("DISABLE_BATCHED_PREFILL") and model.model_args is not None:
-        model.model_args.disable_batched_prefill = True
+    # The shared prefill runtime reads DISABLE_BATCHED_PREFILL for each prepare call.
+    # Do not mutate model_args here: Llama33_70BRuntimeConfig is intentionally frozen.
 
     # On-device sampling toggle for SKU evidence-gathering:
     #   host            -> sampling_params=None (host-argmax, the default shipped path)
@@ -930,11 +933,12 @@ def _run_eval_repeat_batch32(model: Llama33_70BTransformer1D, mesh_device):
     """
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.3-70B-Instruct")
     tokenizer = model.demo_tokenizer
+    require_canonical_eval_modes_in_ci(os.environ)
 
     # Batched-prefill A/B knob (parity caveat #12): DISABLE_BATCHED_PREFILL=1 forces the pure
     # per-bucket sequential prefill (the Phase-1 path) so eval-32 can be validated both ON and OFF.
-    if os.environ.get("DISABLE_BATCHED_PREFILL") and model.model_args is not None:
-        model.model_args.disable_batched_prefill = True
+    # The shared prefill runtime reads DISABLE_BATCHED_PREFILL for each prepare call.
+    # Do not mutate model_args here: Llama33_70BRuntimeConfig is intentionally frozen.
 
     block_size = 32
     max_seq_len = model.config.max_seq_len
@@ -949,7 +953,7 @@ def _run_eval_repeat_batch32(model: Llama33_70BTransformer1D, mesh_device):
             model,
             traced=True,
             device_sampling_enabled=sampling_params is not None,
-            trace_mode="decode_only",
+            trace_mode=eval_decode_trace_mode(os.environ.get("EVAL_DECODE_MODE", "traced")),
         )
 
     def allocate_kv_cache(executor):
@@ -994,6 +998,13 @@ def _run_eval_repeat_batch32(model: Llama33_70BTransformer1D, mesh_device):
         num_decode_tokens=_EVAL_NUM_DECODE_TOKENS,
         max_batch_size=max_batch_size,
         sampling_params=sampling_params,
-        repeat_batches=_EVAL_REPEAT_BATCHES,
+        repeat_batches=(1 if "EVAL_IDENTICAL_PROMPT_INDEX" in os.environ else _EVAL_REPEAT_BATCHES),
         hf_model_id=hf_model,
+        page_table_mode=os.environ.get("EVAL_PAGE_TABLE_MODE", "slot-stable"),
+        identical_prompt_index=(
+            int(os.environ["EVAL_IDENTICAL_PROMPT_INDEX"]) if "EVAL_IDENTICAL_PROMPT_INDEX" in os.environ else None
+        ),
+        active_batch_size=(
+            int(os.environ["EVAL_ACTIVE_BATCH_SIZE"]) if "EVAL_ACTIVE_BATCH_SIZE" in os.environ else None
+        ),
     )

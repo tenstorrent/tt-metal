@@ -841,6 +841,11 @@ def build_llama33_70b_transformer_1d_config(
         head_dim=params.head_dim,
         device=mesh_device,
         use_qk_fused=False,
+        # Keep decode cos/sin rows on the same 8-wide batch-core mapping as
+        # create_qkv_heads and Attention's rotary transformation matrix.  A
+        # physical P150 grid is 12-wide; allowing Rope1D to infer that grid
+        # remaps slot 24 to a different core row than Attention.
+        core_grid=profile.sku.decode_transformation_core_grid,
     )
     block_configs = [
         _build_decoder_layer(

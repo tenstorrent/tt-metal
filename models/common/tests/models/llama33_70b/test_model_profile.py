@@ -3,6 +3,7 @@
 
 """Pure semantic snapshots for the Llama-3.3-70B architecture/SKU profile."""
 
+import inspect
 from types import SimpleNamespace
 
 import pytest
@@ -17,10 +18,13 @@ from models.common.models.llama33_70b.model import (
     Llama33_70BPagedAttentionConfig,
     _build_decoder_layer,
     _resolve_llama33_70b_profile,
+    build_llama33_70b_transformer_1d_config,
 )
 from models.common.modules.attention.attention_1d import Attention1DConfig
+from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.mlp.mlp_1d import MLP1DConfig
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1DConfig
+from models.common.modules.rope.rope_1d import Rope1DConfig, _resolve_rope_config
 
 
 def _semantics(config):
@@ -98,6 +102,38 @@ def test_performance_profile_makes_all_four_mlp_slots_explicit():
     assert _semantics(profile.model.decode_ff1_ff3) == (ttnn.MathFidelity.LoFi, False, False, True)
     assert _semantics(profile.model.prefill_ff2) == (ttnn.MathFidelity.HiFi2, False, False, True)
     assert _semantics(profile.model.decode_ff2) == (ttnn.MathFidelity.HiFi2, False, False, True)
+
+
+def test_rope_uses_attention_decode_transformation_grid():
+    source = inspect.getsource(build_llama33_70b_transformer_1d_config)
+
+    assert "core_grid=profile.sku.decode_transformation_core_grid" in source
+
+
+def test_blackhole_rope_resolves_to_attention_row_major_8x4_lane_grid():
+    profile = _resolve_llama33_70b_profile(
+        arch=ttnn.device.Arch.BLACKHOLE,
+        cluster_type=ttnn.cluster.ClusterType.P150_X4,
+        num_devices=4,
+        dram_width=8,
+        precision=LLAMA33_70B_ACCURACY,
+    )
+    table = LazyWeight(torch.zeros(1, 1, 128, 128))
+    resolved = _resolve_rope_config(
+        Rope1DConfig(
+            cos_matrix=table,
+            sin_matrix=table,
+            max_batch_size=32,
+            head_dim=128,
+            device=object(),
+            core_grid=profile.sku.decode_transformation_core_grid,
+        )
+    )
+    expected = ttnn.num_cores_to_corerangeset(32, ttnn.CoreCoord(8, 8), row_wise=True)
+
+    assert resolved.batch_grid == expected
+    assert resolved.decode_trans_mat_mem_config.shard_spec.grid == expected
+    assert resolved.cos_sin_shard_mem_config.shard_spec.grid == expected
 
 
 @pytest.mark.parametrize(

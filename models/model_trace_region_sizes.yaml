@@ -17,7 +17,9 @@ sizes:
       wh_galaxy_perf:
         trace_region_size: 50000000
       bh_p150:
-        trace_region_size: 52000000
+        # TTTv2 P150 batch-32 captures measured 55,787,520 and 70,017,024
+        # bytes for the same gate. Use dynamic allocation while unstable.
+        trace_region_size: 0
       bh_p300:
         trace_region_size: 52000000
       p300x2:
