@@ -754,13 +754,13 @@ def test_embed_routes_the_tp_gather_through_dg_not_the_shared_allgather(monkeypa
     assert out == seen["dg_gather"]
 
 
-def test_dg_allgather_rejects_composite_broadcast_fallbacks():
+def test_dg_allgather_rejects_composite_broadcast_fallbacks(expect_error):
     row_major = SimpleNamespace(shape=[1, 1, 32, 2816], layout=ttnn.ROW_MAJOR_LAYOUT)
-    with pytest.raises(ValueError, match="composite all_broadcast"):
+    with expect_error(ValueError, match="composite all_broadcast"):
         dg_ccl._validate_minimal_allgather_input(row_major, 3)
 
     unaligned_tile = SimpleNamespace(shape=[1, 1, 32, 2815], layout=ttnn.TILE_LAYOUT)
-    with pytest.raises(ValueError, match="tile-aligned"):
+    with expect_error(ValueError, match="tile-aligned"):
         dg_ccl._validate_minimal_allgather_input(unaligned_tile, 3)
 
 
