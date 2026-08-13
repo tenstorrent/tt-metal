@@ -6,10 +6,12 @@
 # tt-perf-report tables/CSVs, advice enabled.  One device job at a time;
 # TT_METAL_WATCHER must NOT be set for any of this ($tt-device-usage).
 #
-# On a mesh capture, tt-perf-report sees every device's ops.  The tables are
-# rendered per device via --device-id so a per-op row is one chip's work rather
-# than four chips summed, and device 0 is the one quoted in the README (all four
-# run the same program on the same shapes; the spread is reported).
+# On a mesh capture, tt-perf-report sees all four devices' ops and merges them:
+# it prints "Detected data from 4 devices. Merging device data..." and emits one
+# row per op *instance*, attributed to the device that ran it, rather than four
+# summed rows.  So a Device Time column is already one chip's work -- verified by
+# summing it over a decode window and dividing by the 8 replays, which reproduces
+# the end-to-end ms/token to within the host gap.  No --device-id is passed.
 set -euo pipefail
 cd "$(dirname "$0")/../../../../../.."          # repo root
 D=$PWD/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder

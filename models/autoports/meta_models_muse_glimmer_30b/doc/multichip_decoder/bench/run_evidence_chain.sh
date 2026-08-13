@@ -33,6 +33,8 @@ grep -E '^AB|^FAILED' "$D/logs/layer_ab_single_baseline.log"
 echo "=== 3/5 device-time profiles (no watcher in this run)"
 bash "$D/bench/run_tracy.sh" > "$D/logs/run_tracy_console.log" 2>&1
 tail -3 "$D/logs/run_tracy_console.log"
+# ~700 KB of Tracy chatter, over the repo's 500 KB file hook.
+gzip -9 -f "$D/logs/run_tracy_console.log"
 
 echo "=== 4/5 watcher (no profiler in this run)"
 # The watcher script exits with pytest's code, and a 1x4 FABRIC_1D_RING mesh

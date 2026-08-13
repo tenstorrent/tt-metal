@@ -264,7 +264,7 @@ prefill number ($optimize OPT-012):
 | evidence | worst real-weight check | BF16 for comparison |
 | --- | --- | --- |
 | `logs/real_weight_ccl_dtype_gate.log`, 8-step decode off a real 3000-token prefill, both kinds | 0.995354 | 0.995440 |
-| `logs/real_weight_decode_bfp8_experiment.log`, the suite's whole real-weight surface with the payload flipped | **0.9950028** (`decode[sliding] step=6 pos=3006`) | 0.995105 |
+| `logs/real_weight_decode_bfp8_experiment.log`, the suite's whole real-weight surface with the payload flipped (`MG_MULTICHIP_DECODE_CCL_DTYPE=bfloat8_b`, reproducible from committed code) | **0.9950028** (`decode[sliding] step=6 pos=3006`) | 0.995105 |
 
 It passes, by 2.8e-6, where BF16 passes by 1.05e-4 — 97 % of the layer's
 remaining accuracy budget for 1.6 % of the decode step, on a layer whose whole
@@ -598,3 +598,37 @@ times out on an Ethernet core (*"Timed out while waiting for active ethernet cor
 in the watcher chain and once when the two correctness modules shared a pytest
 invocation. Every op it dispatches is covered by the same layer on the same mesh
 in the 31 nodes above.
+
+## 12. Review round 1, and the artifact it could not reproduce
+
+The first `$stage-review` returned `more-work-needed` on six required items; §7.4,
+§7.5 and §10 above are the measurements that closed them (the fractured-residual
+rejection rebuilt on decode-regime numbers, the fabric packet size measured per
+payload dtype, the "cannot allocate on this part" claim corrected to "the probe
+exhausted its own L1_SMALL region", the `l1_small` ladder recorded, per-payload
+`num_workers_per_link`, and the BFP8 decode-payload rejection restated with both
+margins). Two smaller notes were also fixed: `bench/run_tracy.sh` no longer claims
+per-device rendering "via `--device-id`" -- a flag it never passes -- and instead
+records what tt-perf-report actually does with a 4-device capture ("Detected data
+from 4 devices. Merging device data...", one row per op instance, verified by
+summing Device Time over a decode window and dividing by the 8 replays); and
+`bench/run_evidence_chain.sh` gzips its ~700 KB Tracy console log, which the
+repo's file-size hook rejects.
+
+The last one was a reproducibility hole rather than a wording bug.
+`logs/real_weight_decode_bfp8_experiment.log` -- the whole real-weight surface
+re-run with the **decode** collective payload flipped to BFP8, which is the
+measurement that rejects that payload -- had been produced by editing
+`DEFAULT_DECODE_CCL_DTYPE` in the source and reverting it. Nothing committed could
+regenerate it. `build_multichip` in the suite now reads
+`MG_MULTICHIP_DECODE_CCL_DTYPE`, so the artifact regenerates from committed code:
+
+    MG_MULTICHIP_DECODE_CCL_DTYPE=bfloat8_b python -m pytest \
+      models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_decoder.py \
+      -k real_weights -q
+
+Re-running it that way reproduced the number the rejection rests on to every
+printed digit -- 16 passed, worst real-weight PCC **0.9950028290443281** on
+`decode[sliding] step=6 pos=3006`, against 0.995105 for the shipped BF16 payload.
+The env var is test-only plumbing; it is not read by `multichip_decoder.py` and
+changes no default.

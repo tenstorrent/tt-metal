@@ -274,7 +274,7 @@ the BFP8 decode payload was measured twice on the **released checkpoint**:
 | evidence | worst real-weight check | against |
 | --- | --- | --- |
 | `logs/real_weight_ccl_dtype_gate.log` — 8-step decode off a real 3000-token prefill, both kinds | 0.995354 | 0.995440 for BF16 |
-| `logs/real_weight_decode_bfp8_experiment.log` — the suite's *whole* real-weight surface with the payload flipped | **0.9950028** on `decode[sliding] step=6 pos=3006` | 0.995105 for BF16 |
+| `logs/real_weight_decode_bfp8_experiment.log` — the suite's *whole* real-weight surface with the payload flipped, via `MG_MULTICHIP_DECODE_CCL_DTYPE=bfloat8_b` | **0.9950028** on `decode[sliding] step=6 pos=3006` | 0.995105 for BF16 |
 
 So it **passes**, by 2.8e-6, where the shipped BF16 payload passes by 1.05e-4. It
 spends 97 % of the layer's remaining accuracy budget to buy 1.6 % of the decode
@@ -680,6 +680,9 @@ python $D/bench/summarize_pcc.py --check
 # every mechanically-sourced number in README.md and context_contract.json,
 # re-derived from the committed CSVs/logs
 python $D/bench/check_reported_figures.py
+# the rejected BFP8 decode collective payload, over the whole real-weight surface
+MG_MULTICHIP_DECODE_CCL_DTYPE=bfloat8_b python -m pytest \
+  models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_decoder.py -k real_weights -q
 ```
 
 | probe | question it answers |

@@ -395,6 +395,15 @@ def build_multichip(
     **build_kwargs,
 ) -> MultichipDecoder:
     layer_idx = layer_idx_for(kind)
+    # ``MG_MULTICHIP_DECODE_CCL_DTYPE=bfloat8_b`` re-runs this whole surface with
+    # the **decode** collective payload flipped, which is how
+    # ``logs/real_weight_decode_bfp8_experiment.log`` was produced.  That
+    # measurement is what rejects the BFP8 decode payload (it clears the 0.995
+    # real-weight bar by 2.8e-6 against 1.05e-4 for BF16), so it has to be
+    # reproducible from committed code rather than from a source edit.
+    payload = os.environ.get("MG_MULTICHIP_DECODE_CCL_DTYPE")
+    if payload and "decode_ccl_dtype" not in build_kwargs:
+        build_kwargs["decode_ccl_dtype"] = {"bfloat16": ttnn.bfloat16, "bfloat8_b": ttnn.bfloat8_b}[payload]
     # Values, not just names: keying on the kwarg names alone would let two builds
     # that differ only in a value (e.g. ``ccl_dtype``) share a cached decoder.
     key = (
