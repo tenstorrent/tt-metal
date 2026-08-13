@@ -1,0 +1,344 @@
+2026-08-12 14:51:11.751 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 14:51:13.187 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 14:51:13.187 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 14:51:13.187 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 14:51:13.187 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 14:51:13.199 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 14:51:13.199 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 14:51:13.277 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 14:51:13.277 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 14:51:13.277 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 14:51:13.277 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 14:51:13.278 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 14:51:13.423 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:322)
+2026-08-12 14:51:13.424 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 14:51:13.545 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 14:51:13.545 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 14:51:13.545 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 14:51:13.545 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 14:51:13.545 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 14:51:13.585 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 14:51:13.585 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 14:51:13.586 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 14:51:13.586 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 14:51:13.587 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 14:51:13.587 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 14:51:13.588 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 14:51:13.588 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 14:51:13.589 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-12 14:51:13.617 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-12 14:51:13.618 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-12 14:51:13.619 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-12 14:51:13.619 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-12 14:51:13.619 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-12 14:51:13.619 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-12 14:51:19.671 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-12 14:51:19.672 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:51:19.672 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:51:19.672 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:51:19.672 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:51:19.742 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-12 14:51:19.742 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:51:19.742 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:51:19.742 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:51:19.742 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:51:20.682 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-12 14:51:20.684 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:51:20.684 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:51:20.685 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:51:20.685 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+MESH MeshShape([1, 4]) devices=4 grid=11-10
+AB       mlp16            kind=sliding  mesh=1x4 batch=1 prefill8192=   21.16 ms  traced_decode@2048= 0.4885 ms/token  prefill_pcc=0.993777 decode_pcc=0.993410  (0.4886/0.4885/0.4886)
+AB       mlp16_bw1        kind=sliding  mesh=1x4 batch=1 prefill8192=   21.20 ms  traced_decode@2048= 0.6680 ms/token  prefill_pcc=0.993777 decode_pcc=0.993384  (0.6680/0.6680/0.6681)
+2026-08-12 14:51:28.079 | critical |          Always | TT_THROW: Statically allocated circular buffers in program 226 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1084864 and static circular buffer region ends at 1149312 (assert.hpp:104)
+FAILED mlp4             kind=sliding  TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception | info: | Statically allocated circular buffers in program 226 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1084864 and static circular buffer region ends at 1149312 | backtrace: | --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023) [
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/layer_ab.py", line 293, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/layer_ab.py", line 201, in run_candidate
+    tt_dec = dec.decode_forward(to_dev(mesh, token), current_pos=cur, page_table=pt, rope_pos_ids=rope)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 1732, in decode_forward
+    mlp_out = self.mlp.decode_forward(mlp_in, rows)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 858, in decode_forward
+    out = dec._decode_projection(hidden, self.down, role="mlp_down", rows=rows)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py", line 743, in _decode_projection
+    out = ttnn.linear(
+          ^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception
+info:
+Statically allocated circular buffers in program 226 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1084864 and static circular buffer region ends at 1149312
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023) [0x7dd73e98d023]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x7dd740526cd9]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xf34ff8) [0x7dd740534ff8]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x7dd7405255ef]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x19b) [0x7dd74052396b]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x7dd740508e68]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xe9b304) [0x7dd74049b304]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x25a) [0x7dd74049c93a]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764ef3) [0x7dd742364ef3]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764bcb) [0x7dd742364bcb]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x7dd741f52bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7dd78642a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7dd78642a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+2026-08-12 14:51:33.725 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-12 14:51:33.725 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:51:33.725 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:51:33.725 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:51:33.725 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:51:34.653 | critical |          Always | TT_THROW: Statically allocated circular buffers in program 222 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1113536 and static circular buffer region ends at 1159552 (assert.hpp:104)
+FAILED boundary4        kind=sliding  TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception | info: | Statically allocated circular buffers in program 222 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1113536 and static circular buffer region ends at 1159552 | backtrace: | --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023) [
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/layer_ab.py", line 293, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/layer_ab.py", line 201, in run_candidate
+    tt_dec = dec.decode_forward(to_dev(mesh, token), current_pos=cur, page_table=pt, rope_pos_ids=rope)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 1732, in decode_forward
+    mlp_out = self.mlp.decode_forward(mlp_in, rows)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 848, in decode_forward
+    up = dec._decode_projection(x_sharded, self.up, role="mlp_up", rows=rows)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py", line 743, in _decode_projection
+    out = ttnn.linear(
+          ^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception
+info:
+Statically allocated circular buffers in program 222 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1113536 and static circular buffer region ends at 1159552
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023) [0x7dd73e98d023]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x7dd740526cd9]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29handle_mesh_adapter_cache_hitITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xb8) [0x7dd740525488]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x180) [0x7dd740523950]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x7dd740508e68]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xe9b304) [0x7dd74049b304]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x25a) [0x7dd74049c93a]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764ef3) [0x7dd742364ef3]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764bcb) [0x7dd742364bcb]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x7dd741f52bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7dd78642a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7dd78642a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+AB       fused_act        kind=sliding  mesh=1x4 batch=1 prefill8192=   21.40 ms  traced_decode@2048= 0.4972 ms/token  prefill_pcc=0.993777 decode_pcc=0.993393  (0.4973/0.4972/0.4973)
+2026-08-12 14:51:43.759 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-12 14:51:47.983 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-12 14:51:51.768 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+AB       ccl_bfp8         kind=sliding  mesh=1x4 batch=1 prefill8192=   19.04 ms  traced_decode@2048= 0.4949 ms/token  prefill_pcc=0.993700 decode_pcc=0.993321  (0.4950/0.4953/0.4949)
+AB       mlp16            kind=full     mesh=1x4 batch=1 prefill8192=   21.00 ms  traced_decode@2048= 0.4579 ms/token  prefill_pcc=0.992310 decode_pcc=0.992126  (0.4581/0.4581/0.4579)
+AB       mlp16_bw1        kind=full     mesh=1x4 batch=1 prefill8192=   20.99 ms  traced_decode@2048= 0.6375 ms/token  prefill_pcc=0.992310 decode_pcc=0.992073  (0.6375/0.6375/0.6375)
+2026-08-12 14:52:05.529 | critical |          Always | TT_THROW: Statically allocated circular buffers in program 226 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1084864 and static circular buffer region ends at 1149312 (assert.hpp:104)
+FAILED mlp4             kind=full     TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception | info: | Statically allocated circular buffers in program 226 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1084864 and static circular buffer region ends at 1149312 | backtrace: | --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023) [
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/layer_ab.py", line 293, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/layer_ab.py", line 201, in run_candidate
+    tt_dec = dec.decode_forward(to_dev(mesh, token), current_pos=cur, page_table=pt, rope_pos_ids=rope)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 1732, in decode_forward
+    mlp_out = self.mlp.decode_forward(mlp_in, rows)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 858, in decode_forward
+    out = dec._decode_projection(hidden, self.down, role="mlp_down", rows=rows)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py", line 743, in _decode_projection
+    out = ttnn.linear(
+          ^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception
+info:
+Statically allocated circular buffers in program 226 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1084864 and static circular buffer region ends at 1149312
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023) [0x7dd73e98d023]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x7dd740526cd9]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29handle_mesh_adapter_cache_hitITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xb8) [0x7dd740525488]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x180) [0x7dd740523950]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x7dd740508e68]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xe9b304) [0x7dd74049b304]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x25a) [0x7dd74049c93a]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764ef3) [0x7dd742364ef3]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764bcb) [0x7dd742364bcb]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x7dd741f52bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7dd78642a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7dd78642a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+2026-08-12 14:52:08.347 | critical |          Always | TT_THROW: Statically allocated circular buffers in program 222 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1113536 and static circular buffer region ends at 1159552 (assert.hpp:104)
+FAILED boundary4        kind=full     TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception | info: | Statically allocated circular buffers in program 222 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1113536 and static circular buffer region ends at 1159552 | backtrace: | --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023) [
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/layer_ab.py", line 293, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/layer_ab.py", line 201, in run_candidate
+    tt_dec = dec.decode_forward(to_dev(mesh, token), current_pos=cur, page_table=pt, rope_pos_ids=rope)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 1732, in decode_forward
+    mlp_out = self.mlp.decode_forward(mlp_in, rows)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 848, in decode_forward
+    up = dec._decode_projection(x_sharded, self.up, role="mlp_up", rows=rows)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py", line 743, in _decode_projection
+    out = ttnn.linear(
+          ^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception
+info:
+Statically allocated circular buffers in program 222 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1113536 and static circular buffer region ends at 1159552
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023) [0x7dd73e98d023]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x7dd740526cd9]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29handle_mesh_adapter_cache_hitITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xb8) [0x7dd740525488]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x180) [0x7dd740523950]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x7dd740508e68]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xe9b304) [0x7dd74049b304]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x25a) [0x7dd74049c93a]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764ef3) [0x7dd742364ef3]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764bcb) [0x7dd742364bcb]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x7dd741f52bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7dd78642a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7dd78642a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+AB       fused_act        kind=full     mesh=1x4 batch=1 prefill8192=   20.81 ms  traced_decode@2048= 0.4660 ms/token  prefill_pcc=0.992310 decode_pcc=0.992104  (0.4662/0.4660/0.4662)
+AB       ccl_bfp8         kind=full     mesh=1x4 batch=1 prefill8192=   19.58 ms  traced_decode@2048= 0.4629 ms/token  prefill_pcc=0.992220 decode_pcc=0.992034  (0.4638/0.4630/0.4629)
+nanobind: leaked 3 instances!
+ - leaked instance 0x7dd7425be078 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7dd7425bde98 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7dd6ee662b38 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 24 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 282 functions!
+ - leaked function "buffer_num_pages"
+ - leaked function "to_json"
+ - leaked function "dram_grid_size"
+ - leaked function "experimental_set_per_core_allocation"
+ - leaked function ""
+ - leaked function "create_descriptor"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 14:52:15.897 | info     |    BuildKernels | JIT cache stats: 402/565 hits (71.2%) [402 cached, 412 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 14:52:15.897 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 14:52:15.914 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 14:52:15.914 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 14:52:16.290 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 14:52:16.290 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 14:52:16.290 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

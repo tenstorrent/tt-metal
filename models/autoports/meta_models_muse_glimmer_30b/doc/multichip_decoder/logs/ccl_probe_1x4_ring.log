@@ -1,0 +1,178 @@
+2026-08-12 14:35:16.480 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 14:35:16.599 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 14:35:16.599 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 14:35:16.600 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 14:35:16.600 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 14:35:16.612 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 14:35:16.612 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 14:35:16.689 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 14:35:16.689 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 14:35:16.689 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 14:35:16.690 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 14:35:16.691 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 14:35:16.912 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 14:35:17.030 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 14:35:17.030 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 14:35:17.030 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 14:35:17.030 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 14:35:17.030 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 14:35:17.071 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 14:35:17.072 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 14:35:17.072 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 14:35:17.073 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 14:35:17.073 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 14:35:17.074 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 14:35:17.074 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 14:35:17.075 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 14:35:17.076 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-12 14:35:21.135 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-12 14:35:21.136 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-12 14:35:21.137 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-12 14:35:21.138 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-12 14:35:21.138 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-12 14:35:21.138 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-12 14:35:23.941 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-12 14:35:23.946 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:23.946 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:23.946 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:23.946 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:27.609 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-12 14:35:27.609 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:27.609 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:27.609 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:27.609 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:29.934 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-12 14:35:29.934 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:29.934 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:29.934 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:29.934 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:32.307 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-12 14:35:32.307 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:32.307 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:32.307 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:32.307 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:33.952 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-12 14:35:33.952 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:33.952 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:33.952 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:33.953 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:35.926 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-12 14:35:35.926 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:35.927 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:35.927 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:35.927 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:38.610 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-12 14:35:38.611 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:38.611 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:38.611 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:38.612 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:41.029 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-12 14:35:41.030 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:41.030 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:41.030 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:41.030 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:43.927 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-12 14:35:43.928 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:43.928 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:43.929 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:43.929 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:46.886 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-12 14:35:46.887 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:46.888 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:46.888 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:46.889 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:49.474 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-12 14:35:49.475 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:49.475 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:49.476 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:49.476 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:54.319 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-12 14:35:54.319 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:54.320 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:54.320 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 14:35:54.321 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+FABRIC 1d_ring
+MESH 1x4 devices=4 topology=ring
+CCL rows=   32 hidden w=  6656 all_gather[fractured->full]              88.92 us  moved=    312.0 KiB     3.59 GB/s
+CCL rows=   32 hidden w=  6656 reduce_scatter[partial->fractured]       93.71 us  moved=    312.0 KiB     3.41 GB/s
+CCL rows=   32 hidden w=  6656 all_reduce[partial->full]               134.50 us  moved=    624.0 KiB     4.75 GB/s
+CCL rows=   32 hidden w=  6656 all_broadcast[fractured]                108.06 us  moved=    312.0 KiB     2.96 GB/s
+CCL rows=   32 attn   w=  4096 all_gather[fractured->full]             111.04 us  moved=    192.0 KiB     1.77 GB/s
+CCL rows=   32 attn   w=  4096 reduce_scatter[partial->fractured]      109.48 us  moved=    192.0 KiB     1.80 GB/s
+CCL rows=   32 attn   w=  4096 all_reduce[partial->full]               169.55 us  moved=    384.0 KiB     2.32 GB/s
+CCL rows=   32 attn   w=  4096 all_broadcast[fractured]                107.82 us  moved=    192.0 KiB     1.82 GB/s
+CCL rows=   32 inter  w= 19968 all_gather[fractured->full]             113.33 us  moved=    936.0 KiB     8.46 GB/s
+CCL rows=   32 inter  w= 19968 reduce_scatter[partial->fractured]      106.07 us  moved=    936.0 KiB     9.04 GB/s
+CCL rows=   32 inter  w= 19968 all_reduce[partial->full]               175.47 us  moved=   1872.0 KiB    10.92 GB/s
+CCL rows=   32 inter  w= 19968 all_broadcast[fractured]                106.25 us  moved=    936.0 KiB     9.02 GB/s
+CCL rows=  128 hidden w=  6656 all_gather[fractured->full]             113.17 us  moved=   1248.0 KiB    11.29 GB/s
+CCL rows=  128 hidden w=  6656 reduce_scatter[partial->fractured]      113.19 us  moved=   1248.0 KiB    11.29 GB/s
+CCL rows=  128 hidden w=  6656 all_reduce[partial->full]               170.07 us  moved=   2496.0 KiB    15.03 GB/s
+CCL rows=  128 hidden w=  6656 all_broadcast[fractured]                109.46 us  moved=   1248.0 KiB    11.68 GB/s
+CCL rows=  128 attn   w=  4096 all_gather[fractured->full]              83.86 us  moved=    768.0 KiB     9.38 GB/s
+CCL rows=  128 attn   w=  4096 reduce_scatter[partial->fractured]      105.59 us  moved=    768.0 KiB     7.45 GB/s
+CCL rows=  128 attn   w=  4096 all_reduce[partial->full]               141.44 us  moved=   1536.0 KiB    11.12 GB/s
+CCL rows=  128 attn   w=  4096 all_broadcast[fractured]                 81.01 us  moved=    768.0 KiB     9.71 GB/s
+CCL rows=  128 inter  w= 19968 all_gather[fractured->full]             118.69 us  moved=   3744.0 KiB    32.30 GB/s
+CCL rows=  128 inter  w= 19968 reduce_scatter[partial->fractured]      139.18 us  moved=   3744.0 KiB    27.55 GB/s
+CCL rows=  128 inter  w= 19968 all_reduce[partial->full]               221.38 us  moved=   7488.0 KiB    34.64 GB/s
+CCL rows=  128 inter  w= 19968 all_broadcast[fractured]                234.81 us  moved=   3744.0 KiB    16.33 GB/s
+CCL rows= 1024 hidden w=  6656 all_gather[fractured->full]             208.82 us  moved=   9984.0 KiB    48.96 GB/s
+CCL rows= 1024 hidden w=  6656 reduce_scatter[partial->fractured]      240.51 us  moved=   9984.0 KiB    42.51 GB/s
+CCL rows= 1024 hidden w=  6656 all_reduce[partial->full]               394.81 us  moved=  19968.0 KiB    51.79 GB/s
+CCL rows= 1024 hidden w=  6656 all_broadcast[fractured]                503.43 us  moved=   9984.0 KiB    20.31 GB/s
+CCL rows= 1024 attn   w=  4096 all_gather[fractured->full]             163.34 us  moved=   6144.0 KiB    38.52 GB/s
+CCL rows= 1024 attn   w=  4096 reduce_scatter[partial->fractured]      168.56 us  moved=   6144.0 KiB    37.32 GB/s
+CCL rows= 1024 attn   w=  4096 all_reduce[partial->full]               264.42 us  moved=  12288.0 KiB    47.59 GB/s
+CCL rows= 1024 attn   w=  4096 all_broadcast[fractured]                313.52 us  moved=   6144.0 KiB    20.07 GB/s
+CCL rows= 1024 inter  w= 19968 all_gather[fractured->full]             457.79 us  moved=  29952.0 KiB    67.00 GB/s
+CCL rows= 1024 inter  w= 19968 reduce_scatter[partial->fractured]      545.46 us  moved=  29952.0 KiB    56.23 GB/s
+CCL rows= 1024 inter  w= 19968 all_reduce[partial->full]               982.80 us  moved=  59904.0 KiB    62.42 GB/s
+CCL rows= 1024 inter  w= 19968 all_broadcast[fractured]               1386.92 us  moved=  29952.0 KiB    22.11 GB/s
+CCL rows= 8192 hidden w=  6656 all_gather[fractured->full]            1060.21 us  moved=  79872.0 KiB    77.14 GB/s
+CCL rows= 8192 hidden w=  6656 reduce_scatter[partial->fractured]     1301.74 us  moved=  79872.0 KiB    62.83 GB/s
+CCL rows= 8192 hidden w=  6656 all_reduce[partial->full]              2279.26 us  moved= 159744.0 KiB    71.77 GB/s
+CCL rows= 8192 hidden w=  6656 all_broadcast[fractured]               3605.56 us  moved=  79872.0 KiB    22.68 GB/s
+CCL rows= 8192 attn   w=  4096 all_gather[fractured->full]             732.34 us  moved=  49152.0 KiB    68.73 GB/s
+CCL rows= 8192 attn   w=  4096 reduce_scatter[partial->fractured]      849.15 us  moved=  49152.0 KiB    59.27 GB/s
+CCL rows= 8192 attn   w=  4096 all_reduce[partial->full]              1461.86 us  moved=  98304.0 KiB    68.86 GB/s
+CCL rows= 8192 attn   w=  4096 all_broadcast[fractured]               2253.05 us  moved=  49152.0 KiB    22.34 GB/s
+CCL rows= 8192 inter  w= 19968 all_gather[fractured->full]            3057.86 us  moved= 239616.0 KiB    80.24 GB/s
+CCL rows= 8192 inter  w= 19968 reduce_scatter[partial->fractured]     3601.14 us  moved= 239616.0 KiB    68.14 GB/s
+CCL rows= 8192 inter  w= 19968 all_reduce[partial->full]              6425.74 us  moved= 479232.0 KiB    76.37 GB/s
+CCL rows= 8192 inter  w= 19968 all_broadcast[fractured]              10735.52 us  moved= 239616.0 KiB    22.86 GB/s
+nanobind: leaked 1 instances!
+ - leaked instance 0x7a4c0a8900d8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 347 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "is_sharded"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 14:35:57.714 | info     |    BuildKernels | JIT cache stats: 105/310 hits (33.9%) [105 cached, 660 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 14:35:57.714 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 14:35:57.728 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 14:35:57.728 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 14:35:58.172 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 14:35:58.172 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 14:35:58.172 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

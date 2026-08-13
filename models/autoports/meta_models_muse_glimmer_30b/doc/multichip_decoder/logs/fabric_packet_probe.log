@@ -1,0 +1,247 @@
+2026-08-12 19:33:14.958 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 19:33:15.146 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 19:33:15.146 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 19:33:15.146 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 19:33:15.146 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 19:33:15.158 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 19:33:15.158 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 19:33:15.236 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 19:33:15.236 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 19:33:15.236 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 19:33:15.236 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 19:33:15.237 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 19:33:15.480 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 19:33:15.602 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 19:33:15.602 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 19:33:15.602 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 19:33:15.602 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 19:33:15.602 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 19:33:15.642 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:15.643 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:15.643 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:15.644 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:15.644 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:15.645 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:15.646 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:15.646 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:15.646 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-12 19:33:15.665 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-12 19:33:15.671 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-12 19:33:15.673 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-12 19:33:15.674 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-12 19:33:15.674 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-12 19:33:15.674 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-12 19:33:16.349 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+PACKET packet=default(4352)  rows=   32 dtype=BFLOAT16   workers=1 reduce_scatter      19.03 us
+2026-08-12 19:33:16.368 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 19:33:16.368 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 19:33:16.368 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 19:33:16.368 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+PACKET packet=default(4352)  rows=   32 dtype=BFLOAT16   workers=1 all_gather          16.77 us
+PACKET packet=default(4352)  rows=   32 dtype=BFLOAT16   workers=1 all_reduce          50.12 us
+2026-08-12 19:33:16.384 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+PACKET packet=default(4352)  rows=   32 dtype=BFLOAT16   workers=2 reduce_scatter      34.21 us
+PACKET packet=default(4352)  rows= 8192 dtype=BFLOAT16   workers=1 reduce_scatter    2033.32 us
+2026-08-12 19:33:17.873 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 19:33:17.874 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 19:33:17.874 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 19:33:17.874 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+PACKET packet=default(4352)  rows= 8192 dtype=BFLOAT16   workers=1 all_gather         982.19 us
+PACKET packet=default(4352)  rows= 8192 dtype=BFLOAT16   workers=1 all_reduce        2197.80 us
+PACKET packet=default(4352)  rows= 8192 dtype=BFLOAT16   workers=2 reduce_scatter    1739.86 us
+PACKET packet=default(4352)  rows= 8192 dtype=BFLOAT16   workers=4 reduce_scatter    1222.19 us
+PACKET packet=default(4352)  rows= 8192 dtype=BFLOAT8_B  workers=1 reduce_scatter    1814.89 us
+PACKET packet=default(4352)  rows= 8192 dtype=BFLOAT8_B  workers=1 all_gather         810.18 us
+PACKET packet=default(4352)  rows= 8192 dtype=BFLOAT8_B  workers=1 all_reduce        1563.71 us
+PACKET packet=default(4352)  rows= 8192 dtype=BFLOAT8_B  workers=4 reduce_scatter     759.92 us
+2026-08-12 19:33:24.366 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-12 19:33:24.366 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 19:33:24.366 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 19:33:24.366 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 19:33:24.366 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 19:33:24.415 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:24.416 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:24.416 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:24.416 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:24.416 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:24.416 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:24.417 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:24.417 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:24.417 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-12 19:33:24.455 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-12 19:33:24.456 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-12 19:33:24.457 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-12 19:33:24.458 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-12 19:33:24.458 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-12 19:33:24.458 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-12 19:33:24.532 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+PACKET packet=8192           rows=   32 dtype=BFLOAT16   workers=1 reduce_scatter      19.23 us
+PACKET packet=8192           rows=   32 dtype=BFLOAT16   workers=1 all_gather          15.59 us
+PACKET packet=8192           rows=   32 dtype=BFLOAT16   workers=1 all_reduce          48.63 us
+2026-08-12 19:33:24.572 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+PACKET packet=8192           rows=   32 dtype=BFLOAT16   workers=2 reduce_scatter      33.72 us
+PACKET packet=8192           rows= 8192 dtype=BFLOAT16   workers=1 reduce_scatter    1935.64 us
+PACKET packet=8192           rows= 8192 dtype=BFLOAT16   workers=1 all_gather         678.41 us
+PACKET packet=8192           rows= 8192 dtype=BFLOAT16   workers=1 all_reduce        1928.31 us
+PACKET packet=8192           rows= 8192 dtype=BFLOAT16   workers=2 reduce_scatter    1394.12 us
+PACKET packet=8192           rows= 8192 dtype=BFLOAT16   workers=4 reduce_scatter    1255.15 us
+PACKET packet=8192           rows= 8192 dtype=BFLOAT8_B  workers=1 reduce_scatter    1815.37 us
+2026-08-12 19:33:31.567 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 19:33:31.567 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 19:33:31.567 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 19:33:31.567 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+PACKET packet=8192           rows= 8192 dtype=BFLOAT8_B  workers=1 all_gather         809.15 us
+PACKET packet=8192           rows= 8192 dtype=BFLOAT8_B  workers=1 all_reduce        1581.06 us
+PACKET packet=8192           rows= 8192 dtype=BFLOAT8_B  workers=4 reduce_scatter     775.76 us
+2026-08-12 19:33:34.995 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-12 19:33:34.995 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 19:33:34.995 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 19:33:34.995 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 19:33:34.995 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 19:33:35.044 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:35.044 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:35.044 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:35.045 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:35.045 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:35.045 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:35.045 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:35.045 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:35.045 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-12 19:33:35.056 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-12 19:33:35.057 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-12 19:33:35.058 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-12 19:33:35.058 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-12 19:33:35.058 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-12 19:33:35.058 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-12 19:33:35.131 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+2026-08-12 19:33:35.593 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":7,"y":0}], shape=[32, 640], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 640],"grid":[{"start":{"x":0,"y":0},"end":{"x":7,"y":0}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 320], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+L1SMALL size= 4096 pool=1457280 semaphores= 16 decode_mlp_matmul=ok
+2026-08-12 19:33:35.718 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-12 19:33:35.718 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 19:33:35.718 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 19:33:35.718 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 19:33:35.718 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 19:33:35.769 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:35.769 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:35.769 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:35.769 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:35.769 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:35.769 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:35.769 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:35.769 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:35.770 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-12 19:33:35.780 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-12 19:33:35.781 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-12 19:33:35.782 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-12 19:33:35.782 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-12 19:33:35.782 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-12 19:33:35.782 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-12 19:33:35.852 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+2026-08-12 19:33:36.322 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":7,"y":0}], shape=[32, 640], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 640],"grid":[{"start":{"x":0,"y":0},"end":{"x":7,"y":0}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 320], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+L1SMALL size= 5120 pool=1456256 semaphores= 20 decode_mlp_matmul=ok
+2026-08-12 19:33:36.445 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-12 19:33:36.445 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 19:33:36.445 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 19:33:36.445 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 19:33:36.445 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 19:33:36.495 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:36.495 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:36.495 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:36.496 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:36.496 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:36.496 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:36.496 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:36.496 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:36.496 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-12 19:33:36.507 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-12 19:33:36.508 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-12 19:33:36.509 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-12 19:33:36.509 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-12 19:33:36.509 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-12 19:33:36.509 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-12 19:33:36.579 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+2026-08-12 19:33:37.046 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":7,"y":0}], shape=[32, 640], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 640],"grid":[{"start":{"x":0,"y":0},"end":{"x":7,"y":0}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 320], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+L1SMALL size= 6144 pool=1455232 semaphores= 24 decode_mlp_matmul=ok
+2026-08-12 19:33:37.169 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-12 19:33:37.169 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 19:33:37.169 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 19:33:37.169 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 19:33:37.169 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 19:33:37.219 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:37.219 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:37.220 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:37.220 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:37.220 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:37.220 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:37.220 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:37.220 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:37.221 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-12 19:33:37.231 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-12 19:33:37.232 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-12 19:33:37.233 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-12 19:33:37.233 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-12 19:33:37.233 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-12 19:33:37.233 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-12 19:33:37.305 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+2026-08-12 19:33:37.774 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":7,"y":0}], shape=[32, 640], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 640],"grid":[{"start":{"x":0,"y":0},"end":{"x":7,"y":0}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 320], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+L1SMALL size= 7168 pool=1454208 semaphores= 28 decode_mlp_matmul=ok
+2026-08-12 19:33:37.898 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-12 19:33:37.898 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 19:33:37.898 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 19:33:37.898 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 19:33:37.898 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 19:33:37.948 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:37.948 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:37.948 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:37.948 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:37.948 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:37.948 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:37.949 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:37.949 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:33:37.949 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-12 19:33:37.960 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-12 19:33:37.960 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-12 19:33:37.961 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-12 19:33:37.962 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-12 19:33:37.962 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-12 19:33:37.962 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-12 19:33:38.033 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+2026-08-12 19:33:38.502 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":7,"y":0}], shape=[32, 640], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 640],"grid":[{"start":{"x":0,"y":0},"end":{"x":7,"y":0}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 320], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+L1SMALL size= 8192 pool=1453184 semaphores= 32 decode_mlp_matmul=ok
+nanobind: leaked 3 instances!
+ - leaked instance 0x7d8402342748 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7d84561c1b78 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7d84561c1998 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 45 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - ... skipped remainder
+nanobind: leaked 372 functions!
+ - leaked function "__eq__"
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function "storage_type"
+ - leaked function ""
+ - leaked function "__ne__"
+ - leaked function "buffer_address"
+ - leaked function "__ne__"
+ - leaked function "empty"
+ - leaked function "to_list"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 19:33:39.013 | info     |    BuildKernels | JIT cache stats: 196/205 hits (95.6%) [196 cached, 1029 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 19:33:39.013 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 19:33:39.027 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 19:33:39.027 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 19:33:39.603 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 19:33:39.603 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 19:33:39.603 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

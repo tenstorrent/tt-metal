@@ -1,0 +1,93 @@
+2026-08-12 19:24:23.185 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 19:24:23.378 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 19:24:23.378 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 19:24:23.378 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 19:24:23.378 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 19:24:23.389 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 19:24:23.390 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 19:24:23.467 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 19:24:23.467 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 19:24:23.467 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 19:24:23.467 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 19:24:23.469 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 19:24:23.716 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 19:24:23.836 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 19:24:23.836 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 19:24:23.836 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 19:24:23.836 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 19:24:23.836 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 19:24:23.876 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:24:23.877 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:24:23.877 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:24:23.878 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:24:23.878 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:24:23.879 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:24:23.879 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:24:23.880 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 19:24:23.880 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-12 19:24:23.898 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-12 19:24:23.903 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-12 19:24:23.906 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-12 19:24:23.907 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-12 19:24:23.907 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-12 19:24:23.907 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-12 19:24:24.576 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+FRAC rows=32 full=6656 fractured=1664 devices=4
+FRAC norm      width= 6656 cores= 16   15.46 us
+FRAC add       width= 6656 cores= 16    8.44 us
+2026-08-12 19:24:24.866 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+FRAC norm      width= 1664 cores=  4   10.83 us
+FRAC add       width= 1664 cores=  4    8.44 us
+2026-08-12 19:24:25.879 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+FRAC norm      width= 1664 cores= 13   12.88 us
+FRAC add       width= 1664 cores= 13    8.16 us
+2026-08-12 19:24:27.155 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+FRAC norm      width= 1664 cores= 26   15.55 us
+FRAC add       width= 1664 cores= 26    8.09 us
+2026-08-12 19:24:28.591 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+FRAC norm      width= 1664 cores= 52   19.24 us
+FRAC add       width= 1664 cores= 52    8.08 us
+2026-08-12 19:24:30.002 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 19:24:30.002 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 19:24:30.002 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 19:24:30.002 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+FRAC stats shape=(1, 1, 32, 32)
+FRAC stats_ag  width=   32 cores=  -   10.42 us
+FRAC stats_pre width= 1664 cores=  -   27.01 us
+nanobind: leaked 3 instances!
+ - leaked instance 0x7c1aca3b9448 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7c1a764206a8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7c1aca3b9268 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 46 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "ttnn._ttnn.types.iterator"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - ... skipped remainder
+nanobind: leaked 374 functions!
+ - leaked function "buffer_address"
+ - leaked function ""
+ - leaked function "__next__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "reset_sub_device_stall_group"
+ - leaked function "pop_current_command_queue_id_for_thread"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 19:24:30.512 | info     |    BuildKernels | JIT cache stats: 84/153 hits (54.9%) [84 cached, 41 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 19:24:30.512 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 19:24:30.526 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 19:24:30.526 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 19:24:31.135 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 19:24:31.135 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 19:24:31.135 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

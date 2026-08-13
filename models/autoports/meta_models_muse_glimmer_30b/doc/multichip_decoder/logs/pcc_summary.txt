@@ -1,0 +1,306 @@
+Muse-Glimmer-30B multichip decoder - every asserted PCC check
+source: doc/multichip_decoder/logs/full_test_run.log, doc/multichip_decoder/logs/vs_single_chip_run.log
+
+290 asserted checks
+    20 multichip vs single-chip TTNN, bar 0.999, worst 0.999183
+    30 vs HF on the released bf16 checkpoint, bar 0.995, worst 0.995105
+   238 vs HF on i.i.d.-Gaussian synthetic weights, single layer, bar 0.99, worst 0.990516
+     2 vs HF chained through two layers, bar 0.96, worst 0.967946
+
+-- multichip vs single-chip TTNN (the only population that sees the fracture) --
+0.999183  multichip vs single-chip TTNN decode2[full seq_len=12345 batch=4]
+0.999183  multichip vs single-chip TTNN decode1[full seq_len=12345 batch=4]
+0.999192  multichip vs single-chip TTNN decode0[full seq_len=12345 batch=4]
+0.999202  multichip vs single-chip TTNN decode3[full seq_len=12345 batch=4]
+0.999609  multichip vs single-chip TTNN prefill[full seq_len=12345 batch=4]
+0.999721  multichip vs single-chip TTNN prefill[sliding seq_len=12345 batch=4]
+0.999807  multichip vs single-chip TTNN prefill[full seq_len=2049 batch=1]
+0.999816  multichip vs single-chip TTNN decode1[full seq_len=2049 batch=1]
+0.999817  multichip vs single-chip TTNN decode2[full seq_len=2049 batch=1]
+0.999818  multichip vs single-chip TTNN decode0[full seq_len=2049 batch=1]
+0.999825  multichip vs single-chip TTNN decode3[full seq_len=2049 batch=1]
+0.999839  multichip vs single-chip TTNN prefill[sliding seq_len=2049 batch=1]
+0.999843  multichip vs single-chip TTNN decode3[sliding seq_len=12345 batch=4]
+0.999843  multichip vs single-chip TTNN decode2[sliding seq_len=12345 batch=4]
+0.999844  multichip vs single-chip TTNN decode0[sliding seq_len=12345 batch=4]
+0.999844  multichip vs single-chip TTNN decode1[sliding seq_len=12345 batch=4]
+0.999851  multichip vs single-chip TTNN decode3[sliding seq_len=2049 batch=1]
+0.999853  multichip vs single-chip TTNN decode2[sliding seq_len=2049 batch=1]
+0.999858  multichip vs single-chip TTNN decode0[sliding seq_len=2049 batch=1]
+0.999860  multichip vs single-chip TTNN decode1[sliding seq_len=2049 batch=1]
+
+-- released checkpoint (the acceptance bar) --
+0.995105  multichip real-weight decode[sliding] step=6 pos=3006
+0.995193  multichip real-weight decode[full] step=0 pos=3000
+0.995832  multichip real-weight decode[full] step=1 pos=3001
+0.995860  multichip real-weight traced decode[full] batch=8
+0.996386  multichip real-weight decode[full] step=5 pos=3005
+0.996606  multichip real-weight decode[full] step=7 pos=3007
+0.996975  multichip real-weight decode[full] step=6 pos=3006
+0.996992  multichip real-weight prefill[full] seq_len=12345
+0.997026  multichip real-weight prefill[full] seq_len=8193
+0.997036  multichip real-weight prefill[full] seq_len=4097
+0.997048  multichip real-weight decode[sliding] step=5 pos=3005
+0.997057  multichip real-weight decode[sliding] step=3 pos=3003
+0.997081  multichip real-weight decode[sliding] step=7 pos=3007
+0.997084  multichip real-weight prefill[full] seq_len=2049
+0.997130  multichip real-weight traced decode[sliding] batch=8
+0.997265  multichip real-weight prefill[full] seq_len=100
+0.997286  multichip real-weight decode[sliding] step=4 pos=3004
+0.997366  multichip real-weight decode[sliding] step=2 pos=3002
+0.997541  multichip real-weight decode[sliding] step=1 pos=3001
+0.997738  multichip real-weight prefill[sliding] seq_len=2049
+0.997747  multichip real-weight prefill[sliding] seq_len=100
+0.997749  multichip real-weight prefill[sliding] seq_len=4097
+0.997759  multichip real-weight prefill[sliding] seq_len=8193
+0.997763  multichip real-weight prefill[sliding] seq_len=12345
+0.997821  multichip real-weight decode[full] step=4 pos=3004
+0.997962  multichip real-weight decode[full] step=3 pos=3003
+0.998245  multichip real-weight prefill[full] seq_len=1
+0.998308  multichip real-weight decode[full] step=2 pos=3002
+0.998475  multichip real-weight prefill[sliding] seq_len=1
+0.998689  multichip real-weight decode[sliding] step=0 pos=3000
+
+-- two chained layers (bar 0.96: two layers compose two layers' error) --
+0.967946  multichip two-layer stack decode
+0.971975  multichip two-layer stack prefill
+
+-- synthetic weights, single layer --
+0.990516  multichip decode[full] prompt=3000 step=1 pos=3001
+0.990582  multichip decode[full] prompt=3000 step=7 pos=3007
+0.990823  multichip decode[full] prompt=2048 step=1 pos=2049
+0.990932  multichip decode[full] prompt=3000 step=3 pos=3003
+0.990980  multichip decode[full] full-context pos=131071
+0.990991  multichip decode[full] full-context pos=130073
+0.991072  multichip decode[full] prompt=3000 step=0 pos=3000
+0.991159  multichip decode[full] prompt=2048 step=5 pos=2053
+0.991288  multichip decode after continuation[full] 1024+1024 pos=2048
+0.991289  multichip decode[full] ccl_dtype=bfloat8_b pos=2048
+0.991305  multichip decode[full] prompt=2048 step=7 pos=2055
+0.991355  multichip soak decode[full] step=16 pos=1040
+0.991401  multichip decode[full] prompt=100 step=1 pos=101
+0.991408  multichip decode[full] prompt=2048 step=6 pos=2054
+0.991455  multichip decode[full] prompt=3000 step=2 pos=3002
+0.991471  multichip soak decode[full] step=63 pos=1087
+0.991481  multichip soak decode[full] step=0 pos=1024
+0.991481  multichip soak decode[full] step=32 pos=1056
+0.991493  multichip decode[full] prompt=2048 step=3 pos=2051
+0.991506  multichip decode[full] prompt=100 step=6 pos=106
+0.991528  multichip prefill[full] full-context seq_len=131072 (interior @65536 32 rows)
+0.991556  multichip prefill[full] full-context seq_len=131072 (last 32 rows)
+0.991568  multichip prefill[full] full-context seq_len=130073 (last 32 rows)
+0.991582  multichip decode[full] with the padded QKV output shard
+0.991589  multichip decode after continuation[full] 4096+3000 pos=7096
+0.991605  multichip decode[full] user_id=2 pos=12345
+0.991608  multichip decode[full] batch=32 ragged positions
+0.991610  multichip traced decode replay[full] pos=2048
+0.991617  multichip decode[full] prompt=2048 step=0 pos=2048
+0.991633  multichip decode[full] prompt=3000 step=6 pos=3006
+0.991677  multichip decode[full] batch=13 ragged positions
+0.991735  multichip decode after continuation[full] 64+100 pos=164
+0.991797  multichip decode[full] batch=4 ragged positions
+0.991805  multichip decode[full] vs FP32 HF reference pos=2049
+0.991811  multichip continuation prefill[full] 1024+1024
+0.991954  multichip decode[full] prompt=100 step=0 pos=100
+0.991961  multichip prefill[full] seq_len=12345
+0.991963  multichip multi-chunk prefill[full] user_id=2 seq_len=12345
+0.991972  multichip soak decode[full] step=48 pos=1072
+0.991973  multichip decode[full] prompt=3000 step=5 pos=3005
+0.991981  multichip decode[full] prompt=2048 step=4 pos=2052
+0.991985  multichip decode[full] prompt=100 step=3 pos=103
+0.992009  multichip continuation prefill[full] 4096+3000
+0.992010  multichip decode[full] prompt=3000 step=4 pos=3004
+0.992031  multichip prefill[full] seq_len=8193
+0.992034  multichip prefill[full] seq_len=8192
+0.992038  multichip decode[full] prompt=2048 step=2 pos=2050
+0.992080  multichip continuation prefill[full] 64+100
+0.992092  multichip prefill[full] seq_len=4097
+0.992119  multichip prefill[full] batch=32 user=16 seq_len=2000
+0.992124  multichip prefill[full] batch=32 user=23 seq_len=2259
+0.992127  multichip prefill[full] batch=32 user=21 seq_len=2185
+0.992128  multichip prefill[full] batch=32 user=30 seq_len=2222
+0.992129  multichip prefill[full] batch=13 user=12 seq_len=2148
+0.992129  multichip prefill[full] batch=32 user=12 seq_len=2148
+0.992129  multichip prefill[full] batch=4 user=2 seq_len=2074
+0.992129  multichip prefill[full] batch=13 user=2 seq_len=2074
+0.992129  multichip prefill[full] batch=32 user=2 seq_len=2074
+0.992131  multichip prefill[full] batch=32 user=15 seq_len=2259
+0.992131  multichip prefill[full] batch=32 user=31 seq_len=2259
+0.992132  multichip prefill[full] batch=13 user=9 seq_len=2037
+0.992132  multichip prefill[full] batch=32 user=9 seq_len=2037
+0.992132  multichip prefill[full] batch=32 user=20 seq_len=2148
+0.992133  multichip prefill[full] seq_len=2049
+0.992133  multichip prefill[full] batch=13 user=6 seq_len=2222
+0.992133  multichip prefill[full] batch=32 user=6 seq_len=2222
+0.992134  multichip prefill[full] batch=32 user=24 seq_len=2000
+0.992135  multichip prefill[full] batch=13 user=5 seq_len=2185
+0.992135  multichip prefill[full] batch=32 user=5 seq_len=2185
+0.992135  multichip prefill[full] batch=4 user=1 seq_len=2037
+0.992135  multichip prefill[full] batch=13 user=1 seq_len=2037
+0.992135  multichip prefill[full] batch=32 user=1 seq_len=2037
+0.992135  multichip prefill[full] batch=32 user=22 seq_len=2222
+0.992136  multichip prefill[full] batch=32 user=14 seq_len=2222
+0.992136  multichip prefill[full] batch=13 user=7 seq_len=2259
+0.992136  multichip prefill[full] batch=32 user=7 seq_len=2259
+0.992137  multichip prefill[full] batch=4 user=3 seq_len=2111
+0.992137  multichip prefill[full] batch=13 user=3 seq_len=2111
+0.992137  multichip prefill[full] batch=32 user=3 seq_len=2111
+0.992137  multichip prefill[full] batch=13 user=8 seq_len=2000
+0.992137  multichip prefill[full] batch=32 user=8 seq_len=2000
+0.992138  multichip prefill[full] batch=32 user=27 seq_len=2111
+0.992139  multichip prefill[full] batch=32 user=26 seq_len=2074
+0.992140  multichip prefill[full] batch=13 user=11 seq_len=2111
+0.992140  multichip prefill[full] batch=32 user=11 seq_len=2111
+0.992141  multichip prefill[full] batch=32 user=17 seq_len=2037
+0.992141  multichip prefill[full] batch=13 user=10 seq_len=2074
+0.992141  multichip prefill[full] batch=32 user=10 seq_len=2074
+0.992142  multichip prefill[full] batch=32 user=29 seq_len=2185
+0.992142  multichip prefill[full] batch=4 user=0 seq_len=2000
+0.992142  multichip prefill[full] batch=13 user=0 seq_len=2000
+0.992142  multichip prefill[full] batch=32 user=0 seq_len=2000
+0.992143  multichip prefill[full] batch=13 user=4 seq_len=2148
+0.992143  multichip prefill[full] batch=32 user=4 seq_len=2148
+0.992143  multichip prefill[full] batch=32 user=25 seq_len=2037
+0.992143  multichip prefill[full] batch=32 user=19 seq_len=2111
+0.992143  multichip prefill[full] batch=32 user=28 seq_len=2148
+0.992144  multichip prefill[full] batch=32 user=13 seq_len=2185
+0.992146  multichip prefill[full] batch=32 user=18 seq_len=2074
+0.992147  multichip prefill[full] vs FP32 HF reference seq_len=2049
+0.992147  multichip prefill[full] seq_len=2048
+0.992150  multichip prefill[full] ccl_dtype=bfloat8_b seq_len=2048
+0.992171  multichip prefill[full] seq_len=128
+0.992174  multichip decode[full] prompt=100 step=2 pos=102
+0.992210  multichip prefill[full] seq_len=100
+0.992257  multichip decode[sliding] prompt=100 step=7 pos=107
+0.992264  multichip decode[full] prompt=100 step=7 pos=107
+0.992353  multichip soak decode[sliding] step=48 pos=1072
+0.992383  multichip decode[sliding] prompt=3000 step=5 pos=3005
+0.992409  multichip soak decode[sliding] step=32 pos=1056
+0.992465  multichip decode[sliding] vs FP32 HF reference pos=2049
+0.992501  multichip decode[full] prompt=100 step=5 pos=105
+0.992508  multichip decode[full] prompt=100 step=4 pos=104
+0.992590  multichip decode[sliding] prompt=2048 step=0 pos=2048
+0.992626  multichip decode[sliding] prompt=2048 step=4 pos=2052
+0.992698  multichip decode[sliding] prompt=3000 step=7 pos=3007
+0.992732  multichip traced decode replay[sliding] pos=2048
+0.992839  multichip decode[sliding] prompt=3000 step=0 pos=3000
+0.992857  multichip decode[sliding] ccl_mode=all_reduce pos=1024
+0.992857  multichip decode[sliding] ccl_mode=rs_ag pos=1024
+0.992864  multichip decode[sliding] batch=4 ragged positions
+0.992886  multichip decode[sliding] prompt=3000 step=2 pos=3002
+0.992957  multichip decode after continuation[sliding] 4096+3000 pos=7096
+0.992990  multichip decode[sliding] prompt=3000 step=6 pos=3006
+0.993027  multichip decode[sliding] prompt=2048 step=6 pos=2054
+0.993033  multichip decode[sliding] batch=13 ragged positions
+0.993069  multichip decode[sliding] prompt=2048 step=2 pos=2050
+0.993080  multichip decode[sliding] user_id=2 pos=12345
+0.993083  multichip decode[sliding] prompt=3000 step=4 pos=3004
+0.993102  multichip soak decode[sliding] step=63 pos=1087
+0.993150  multichip decode[sliding] batch=32 ragged positions
+0.993151  multichip soak decode[sliding] step=0 pos=1024
+0.993226  multichip prefill[full] seq_len=1
+0.993265  multichip decode[sliding] prompt=100 step=3 pos=103
+0.993267  multichip decode[sliding] prompt=2048 step=3 pos=2051
+0.993277  multichip decode after continuation[sliding] 64+100 pos=164
+0.993285  multichip decode[sliding] prompt=2048 step=7 pos=2055
+0.993288  multichip decode[sliding] prompt=3000 step=3 pos=3003
+0.993292  multichip decode[sliding] prompt=100 step=4 pos=104
+0.993303  multichip decode[sliding] ccl_dtype=bfloat8_b pos=2048
+0.993329  multichip continuation prefill[sliding] 1024+1024
+0.993331  multichip decode[sliding] full-context pos=130073
+0.993360  multichip decode after continuation[sliding] 1024+1024 pos=2048
+0.993370  multichip decode[sliding] prompt=2048 step=1 pos=2049
+0.993407  multichip decode[sliding] prompt=3000 step=1 pos=3001
+0.993418  multichip prefill[sliding] ccl_mode=all_reduce seq_len=1024
+0.993418  multichip prefill[sliding] ccl_mode=rs_ag seq_len=1024
+0.993448  multichip decode[sliding] prompt=100 step=5 pos=105
+0.993460  multichip decode[sliding] prompt=100 step=2 pos=102
+0.993492  multichip decode[sliding] with the padded QKV output shard
+0.993517  multichip prefill[sliding] full-context seq_len=131072 (last 32 rows)
+0.993526  multichip multi-chunk prefill[sliding] user_id=2 seq_len=12345
+0.993527  multichip prefill[sliding] seq_len=12345
+0.993527  multichip decode[sliding] full-context pos=131071
+0.993531  multichip prefill[sliding] seq_len=8193
+0.993534  multichip prefill[sliding] full-context seq_len=131072 (interior @65536 32 rows)
+0.993536  multichip prefill[sliding] seq_len=8192
+0.993540  multichip continuation prefill[sliding] 4096+3000
+0.993551  multichip prefill[sliding] seq_len=4097
+0.993573  multichip prefill[sliding] batch=32 user=24 seq_len=2000
+0.993578  multichip prefill[sliding] batch=32 user=13 seq_len=2185
+0.993580  multichip prefill[sliding] batch=32 user=22 seq_len=2222
+0.993582  multichip prefill[sliding] ccl_dtype=bfloat8_b seq_len=2048
+0.993583  multichip prefill[sliding] batch=32 user=21 seq_len=2185
+0.993583  multichip prefill[sliding] batch=13 user=6 seq_len=2222
+0.993583  multichip prefill[sliding] batch=32 user=6 seq_len=2222
+0.993583  multichip prefill[sliding] batch=32 user=20 seq_len=2148
+0.993583  multichip prefill[sliding] batch=13 user=4 seq_len=2148
+0.993583  multichip prefill[sliding] batch=32 user=4 seq_len=2148
+0.993584  multichip prefill[sliding] batch=32 user=14 seq_len=2222
+0.993584  multichip prefill[sliding] batch=32 user=30 seq_len=2222
+0.993585  multichip prefill[sliding] seq_len=2048
+0.993586  multichip prefill[sliding] batch=13 user=8 seq_len=2000
+0.993586  multichip prefill[sliding] batch=32 user=8 seq_len=2000
+0.993586  multichip prefill[sliding] batch=32 user=28 seq_len=2148
+0.993587  multichip prefill[sliding] batch=32 user=17 seq_len=2037
+0.993588  multichip prefill[sliding] batch=13 user=7 seq_len=2259
+0.993588  multichip prefill[sliding] batch=32 user=7 seq_len=2259
+0.993588  multichip prefill[sliding] batch=32 user=18 seq_len=2074
+0.993590  multichip prefill[sliding] batch=13 user=12 seq_len=2148
+0.993590  multichip prefill[sliding] batch=32 user=12 seq_len=2148
+0.993591  multichip prefill[sliding] batch=4 user=1 seq_len=2037
+0.993591  multichip prefill[sliding] batch=13 user=1 seq_len=2037
+0.993591  multichip prefill[sliding] batch=32 user=1 seq_len=2037
+0.993591  multichip prefill[sliding] batch=4 user=2 seq_len=2074
+0.993591  multichip prefill[sliding] batch=13 user=2 seq_len=2074
+0.993591  multichip prefill[sliding] batch=32 user=2 seq_len=2074
+0.993591  multichip prefill[sliding] batch=32 user=23 seq_len=2259
+0.993592  multichip prefill[sliding] batch=32 user=15 seq_len=2259
+0.993592  multichip prefill[sliding] batch=4 user=3 seq_len=2111
+0.993592  multichip prefill[sliding] batch=13 user=3 seq_len=2111
+0.993592  multichip prefill[sliding] batch=32 user=3 seq_len=2111
+0.993592  multichip prefill[sliding] batch=32 user=31 seq_len=2259
+0.993592  multichip prefill[sliding] batch=32 user=26 seq_len=2074
+0.993592  multichip prefill[sliding] batch=32 user=19 seq_len=2111
+0.993593  multichip prefill[sliding] batch=13 user=11 seq_len=2111
+0.993593  multichip prefill[sliding] batch=32 user=11 seq_len=2111
+0.993594  multichip prefill[sliding] batch=13 user=10 seq_len=2074
+0.993594  multichip prefill[sliding] batch=32 user=10 seq_len=2074
+0.993595  multichip prefill[sliding] seq_len=2049
+0.993595  multichip prefill[sliding] batch=32 user=25 seq_len=2037
+0.993595  multichip prefill[sliding] batch=4 user=0 seq_len=2000
+0.993595  multichip prefill[sliding] batch=13 user=0 seq_len=2000
+0.993595  multichip prefill[sliding] batch=32 user=0 seq_len=2000
+0.993595  multichip prefill[sliding] batch=32 user=16 seq_len=2000
+0.993596  multichip prefill[sliding] batch=13 user=9 seq_len=2037
+0.993596  multichip prefill[sliding] batch=32 user=9 seq_len=2037
+0.993596  multichip prefill[sliding] batch=32 user=27 seq_len=2111
+0.993596  multichip prefill[sliding] batch=32 user=29 seq_len=2185
+0.993599  multichip prefill[sliding] batch=13 user=5 seq_len=2185
+0.993599  multichip prefill[sliding] batch=32 user=5 seq_len=2185
+0.993602  multichip continuation prefill[sliding] 64+100
+0.993611  multichip decode[sliding] prompt=100 step=1 pos=101
+0.993627  multichip prefill[sliding] vs FP32 HF reference seq_len=2049
+0.993630  multichip decode[sliding] prompt=100 step=0 pos=100
+0.993640  multichip prefill[sliding] full-context seq_len=130073 (last 32 rows)
+0.993661  multichip prefill[sliding] seq_len=128
+0.993668  multichip decode[sliding] prompt=2048 step=5 pos=2053
+0.993669  multichip prefill[sliding] seq_len=100
+0.993718  multichip decode[sliding] prompt=100 step=6 pos=106
+0.993906  multichip soak decode[sliding] step=16 pos=1040
+0.994223  multichip prefill[sliding] seq_len=1
+0.999772  multichip K cache[sliding] device=2 holds global KV head 1
+0.999772  multichip K cache[sliding] device=3 holds global KV head 1
+0.999774  multichip K cache[sliding] device=0 holds global KV head 0
+0.999774  multichip K cache[sliding] device=1 holds global KV head 0
+0.999782  multichip K cache[full] device=2 holds global KV head 1
+0.999782  multichip K cache[full] device=3 holds global KV head 1
+0.999783  multichip K cache[full] device=0 holds global KV head 0
+0.999783  multichip K cache[full] device=1 holds global KV head 0
+0.999973  multichip wqkv[sliding] device=3 (q heads 24..32, kv head 1)
+0.999973  multichip wqkv[full] device=3 (q heads 24..32, kv head 1)
+0.999973  multichip wqkv[sliding] device=0 (q heads 0..8, kv head 0)
+0.999973  multichip wqkv[full] device=0 (q heads 0..8, kv head 0)
+0.999973  multichip wqkv[sliding] device=2 (q heads 16..24, kv head 1)
+0.999973  multichip wqkv[full] device=2 (q heads 16..24, kv head 1)
+0.999973  multichip wqkv[full] device=1 (q heads 8..16, kv head 0)
+0.999973  multichip wqkv[sliding] device=1 (q heads 8..16, kv head 0)
