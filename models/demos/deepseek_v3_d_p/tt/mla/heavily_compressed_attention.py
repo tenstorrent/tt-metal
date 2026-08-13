@@ -332,44 +332,46 @@ class TtHCACompressor(_TtHCABase):
         usable = (seq_len // self.compress_rate) * self.compress_rate
         n_windows = usable // self.compress_rate  # windows this chip owns
         t_real = seq_len_actual // self.compress_rate
-        if n_windows > 0:
-            gate = ttnn.slice(gate, [0, 0, 0, 0], [batch, 1, usable, self.head_dim])
-            gate = ttnn.reshape(gate, [batch, n_windows, self.compress_rate, self.head_dim])
-            gate = ttnn.add(gate, self.position_bias)
-            weights = ttnn.softmax(gate, dim=2, numeric_stable=True)
+        # prepare_input pads the sequence to a multiple of compress_rate * sp_factor, so every chip is
+        # left with at least one whole window. Asserted and not handled: the empty-slab branch this
+        # replaces was the last thing building a host tensor inside forward.
+        assert n_windows > 0, (
+            f"each chip needs at least one whole compression window: {seq_len} rows is under "
+            f"compress_rate {self.compress_rate}; run prepare_input on the hidden states first"
+        )
+        gate = ttnn.slice(gate, [0, 0, 0, 0], [batch, 1, usable, self.head_dim])
+        gate = ttnn.reshape(gate, [batch, n_windows, self.compress_rate, self.head_dim])
+        gate = ttnn.add(gate, self.position_bias)
+        weights = ttnn.softmax(gate, dim=2, numeric_stable=True)
 
-            kv = ttnn.slice(kv, [0, 0, 0, 0], [batch, 1, usable, self.head_dim])
-            kv = ttnn.reshape(kv, [batch, n_windows, self.compress_rate, self.head_dim])
-            pooled = ttnn.sum(ttnn.multiply(kv, weights), dim=2)
+        kv = ttnn.slice(kv, [0, 0, 0, 0], [batch, 1, usable, self.head_dim])
+        kv = ttnn.reshape(kv, [batch, n_windows, self.compress_rate, self.head_dim])
+        pooled = ttnn.sum(ttnn.multiply(kv, weights), dim=2)
 
-            compressed = ttnn.reshape(pooled, [batch, 1, n_windows, self.head_dim])
-            compressed = ttnn.rms_norm(compressed, weight=self.kv_norm_weight, epsilon=self.rms_norm_eps)
+        compressed = ttnn.reshape(pooled, [batch, 1, n_windows, self.head_dim])
+        compressed = ttnn.rms_norm(compressed, weight=self.kv_norm_weight, epsilon=self.rms_norm_eps)
 
-            nope_dim = self.head_dim - self.rope_head_dim
-            nope = ttnn.slice(compressed, [0, 0, 0, 0], [batch, 1, n_windows, nope_dim])
-            rope = ttnn.slice(compressed, [0, 0, 0, nope_dim], [batch, 1, n_windows, self.head_dim])
-            # Index is in ENTRIES: table row k carries position k*compress_rate, so the window's position
-            # has to be divided back down.
-            idx = self._rope_index(self._entry_index, first_window_position // self.compress_rate)
-            cos, sin = self._rope_gather(self._entry_rope, idx)
-            rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
-            compressed_kv = ttnn.concat([nope, rope], dim=-1)
+        nope_dim = self.head_dim - self.rope_head_dim
+        nope = ttnn.slice(compressed, [0, 0, 0, 0], [batch, 1, n_windows, nope_dim])
+        rope = ttnn.slice(compressed, [0, 0, 0, nope_dim], [batch, 1, n_windows, self.head_dim])
+        # Index is in ENTRIES: table row k carries position k*compress_rate, so the window's position
+        # has to be divided back down.
+        idx = self._rope_index(self._entry_index, first_window_position // self.compress_rate)
+        cos, sin = self._rope_gather(self._entry_rope, idx)
+        rope = ttnn.experimental.rotary_embedding_llama(rope, cos, sin, self.trans_mat, is_decode_mode=False)
+        compressed_kv = ttnn.concat([nope, rope], dim=-1)
 
-            if self.sp_factor > 1:
-                compressed_kv = ttnn.experimental.all_gather_async(
-                    compressed_kv,
-                    dim=2,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(
-                        cluster_axis=self.sp_axis
-                    ),
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
-                    num_links=self.ccl_num_links,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    topology=self.ccl_topology,
-                    cluster_axis=self.sp_axis,
-                )
-        else:
-            compressed_kv = self._from_torch(torch.zeros(batch, 1, 0, self.head_dim))
+        if self.sp_factor > 1:
+            compressed_kv = ttnn.experimental.all_gather_async(
+                compressed_kv,
+                dim=2,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.ccl_topology,
+                cluster_axis=self.sp_axis,
+            )
 
         # Spans the whole cache, not just this call's entries: the queries can see earlier chunks' too,
         # and a fixed width is what keeps the shape constant.
