@@ -263,14 +263,19 @@ def generate_refined_face_assignment(K, N, stats, switch_mult=2.0, seed=0):
 
 
 class CompressedStimuliConfig(StimuliConfig):
-    def __init__(self, kt, ct, packed_a, packed_b, packed_meta):
+    # extra_b_tiles pads buffer_B's allocation, which shifts every buffer after it --
+    # including buffer_C, the meta buffer. data_follows_meta derives the data base from
+    # the meta buffer's runtime address, so varying this relocates the blob and proves
+    # the derivation is not tied to one fixed address. Bfp8_b tiles are 16B-multiples,
+    # so buffer_C stays 16B-aligned as required.
+    def __init__(self, kt, ct, packed_a, packed_b, packed_meta, extra_b_tiles=0):
         super().__init__(
             buffer_A=torch.zeros(1, dtype=torch.float32),  # placeholder
             stimuli_A_format=DataFormat.Float16_b,
             tile_count_A=kt,
             buffer_B=torch.zeros(1, dtype=torch.float32),  # placeholder
             stimuli_B_format=DataFormat.Bfp8_b,
-            tile_count_B=kt * ct,
+            tile_count_B=kt * ct + extra_b_tiles,
             buffer_C=torch.zeros(1, dtype=torch.int32),  # placeholder
             stimuli_C_format=DataFormat.UInt32,
             tile_count_C=(len(packed_meta) + 4095) // 4096,
@@ -333,6 +338,7 @@ def run_compressed(
     pack_b,
     make_meta,
     pcc_threshold=None,
+    extra_b_tiles=0,
 ):
     # Shared driver for both compressed-matmul tests. Kernel-specific parts are passed
     # flat: kernel (C++ source), granularity (assignment unit — 32 tile / 16 face),
@@ -426,6 +432,11 @@ def run_compressed(
         input_B_format=DataFormat.Float16_b,
     ).reshape(M, N)
 
+    stimuli = CompressedStimuliConfig(
+        kt, ct, packed_a, packed_b, meta, extra_b_tiles=extra_b_tiles
+    )
+    logger.info("meta buffer (buffer_C) at 0x{:08X}", stimuli.buf_c_addr)
+
     configuration = TestConfig(
         kernel,
         InputOutputFormat(
@@ -440,7 +451,7 @@ def run_compressed(
             NUM_FACES(num_faces=2, num_faces_A=2, num_faces_B=4),
             IN_FACE_DIMS(in0_face_r_dim=M),
         ],
-        variant_stimuli=CompressedStimuliConfig(kt, ct, packed_a, packed_b, meta),
+        variant_stimuli=stimuli,
         dest_acc=DestAccumulation.No,
     )
 

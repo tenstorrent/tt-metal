@@ -131,20 +131,26 @@ def meta_math_header(m, ct):
         return {0: 1, 1: 1, 2: 1, 3: 2}[rows[3] % 4]  # 0/1/2 incB, 3 clrB
 
 
-def encode_meta(assignment, ct, kt, chunk_info):
+def encode_meta(assignment, ct, kt, chunk_info, base_words=None):
     # Build the face-compressed meta buffer, laid out as:
     #   math_words | iters | address_words | index_words
     # ct/kt are face columns/rows (N//16, K//16); chunk_info is pack_b's per-chunk
     # (bfp2, bfp4) exp-section offset + Y_OFF.
-
-    # buffer_B base in L1_ADDRESS units (= byte/16 - 1): B follows A, which
-    # is kt//2 (= K//32) 32x32 Float16_b tiles of 2048 B each.
-    buf_a_addr = (
-        StimuliConfig.STIMULI_L1_ADDRESS_DEBUG
-        if StimuliConfig.WITH_COVERAGE
-        else StimuliConfig.STIMULI_L1_ADDRESS_PERF
-    )
-    buf_b_words = (buf_a_addr + 2048 * (kt // 2)) // 16 - 1
+    #
+    # base_words is what each chunk offset is measured from, in L1_ADDRESS units.
+    # Default (data_follows_meta=false): buffer_B's absolute base, baked in here.
+    # For data_follows_meta=true pass -1: the kernel adds data_base16 =
+    # align16(meta_end)>>4 at runtime, which is a plain byte/16 with no -1, so the
+    # -1 the L1_ADDRESS encoding needs has to come from the stored word instead.
+    if base_words is None:
+        # buffer_B base in L1_ADDRESS units (= byte/16 - 1): B follows A, which
+        # is kt//2 (= K//32) 32x32 Float16_b tiles of 2048 B each.
+        buf_a_addr = (
+            StimuliConfig.STIMULI_L1_ADDRESS_DEBUG
+            if StimuliConfig.WITH_COVERAGE
+            else StimuliConfig.STIMULI_L1_ADDRESS_PERF
+        )
+        base_words = (buf_a_addr + 2048 * (kt // 2)) // 16 - 1
 
     # Math region: one 6-bit meta per 4-face block, 5 metas per 32-bit word. A meta is
     # (face_bits << 2) | header — face_bits marks its non-zero faces, header is the
@@ -188,7 +194,7 @@ def encode_meta(assignment, ct, kt, chunk_info):
     # base = buf_b_words + chunk offset; the kernel re-adds Y_OFF via SETADC SET_Y so the
     # read starts at the exp-section base (absent format -> (0,0) = base, no stride).
     def addr_word(off, y_off):
-        base = buf_b_words + off  # absolute 16B-word base
+        base = base_words + off  # 16B-word base (absolute, or data-relative)
         return (y_off << 24) | ((base - y_off) & 0x00FFFFFF)
 
     address_words = []
@@ -439,3 +445,90 @@ def test_matmul_face_compressed_deepseek(shape, switch_mult, seed):
         K, N, DEEPSEEK_T420, switch_mult=switch_mult, seed=seed
     )
     run_face_compressed(M, K, N, assignment)
+
+
+# ---------------------------------------------------------------------------
+# data_follows_meta
+# ---------------------------------------------------------------------------
+# The tests above write the weight data and the metadata to two independent L1
+# buffers and bake buffer_B's absolute address into the chunk words. That only
+# works when the producer knows where the data will land. A consumer that DMAs a
+# packed expert into a rotating circular-buffer slot does not: the blob has to be
+# position independent. data_follows_meta=true covers that -- meta and data are one
+# contiguous blob, chunk offsets are data-section relative, and the kernel derives
+# the data base from the end of the metadata at runtime.
+#
+# Everything is shared with the tests above except the blob layout: same assignment
+# generators, same pack_b, same encode_meta (parameterized on the address base), same
+# golden and PCC gate. Only the two layout hooks and the kernel source differ.
+
+_TENSIX_WORD_BYTES = 16  # metadata must end 16B-aligned so align16(meta_end) is exact
+
+
+def pack_b_dfm(faces, chunk_faces=192):
+    # Same packing, but the data is carried forward for encode_meta_dfm to append
+    # rather than written to its own buffer. buffer_B goes unread by this kernel;
+    # write_to_device rejects an empty payload, so leave a one-word placeholder (its
+    # length does not move buf_c_addr, which is sized from tile_count_B).
+    data, chunk_info = pack_b(faces, chunk_faces=chunk_faces)
+    return b"\x00" * _TENSIX_WORD_BYTES, (chunk_info, data)
+
+
+def encode_meta_dfm(assignment, ct, kt, aux):
+    # base_words=-1 makes each chunk word data-section relative: the kernel adds
+    # data_base16 = align16(meta_end) >> 4, a plain byte/16, so the -1 that the
+    # L1_ADDRESS encoding (= byte/16 - 1) requires is folded in here.
+    chunk_info, data = aux
+    meta = encode_meta(assignment, ct, kt, chunk_info, base_words=-1)
+    pad = (-len(meta)) % _TENSIX_WORD_BYTES
+    return meta + b"\x00" * pad + data
+
+
+def run_face_compressed_dfm(M, K, N, assignment, pcc_threshold=None, extra_b_tiles=0):
+    run_compressed(
+        M,
+        K,
+        N,
+        assignment,
+        "sources/matmul_face_compressed_dfm_test.cpp",
+        COMPRESSION_GRANULARITY,
+        SUPPORTED_M,
+        SUPPORTED_FORMATS,
+        promote_assignment,
+        pack_b_dfm,
+        encode_meta_dfm,
+        pcc_threshold=pcc_threshold,
+        extra_b_tiles=extra_b_tiles,
+    )
+
+
+# ct_dim 1 and >1, kt_dim at the minimum and well past it, and a multi-chunk shape
+# (a chunk is 192 non-zero faces, so 7168x32 = 448x2 faces spans several and
+# exercises the address-word reload).
+DFM_SHAPES = [(1, 64, 32), (1, 64, 64), (1, 512, 256), (1, 7168, 32)]
+
+
+@blackhole_only
+@parametrize(
+    shape=DFM_SHAPES, formats=[("bfp4",), ("bfp2", "bfp4"), ("bfp0", "bfp2", "bfp4")]
+)
+def test_matmul_face_compressed_dfm(shape, formats):
+    """Uniform, mixed and sparse assignments through the one-blob layout."""
+    M, K, N = shape
+    assignment = assign_random(K, N, formats, COMPRESSION_GRANULARITY)
+    run_face_compressed_dfm(M, K, N, assignment)
+
+
+@blackhole_only
+@parametrize(shape=DFM_SHAPES, slot=[0, 1, 3, 7])
+def test_matmul_face_compressed_dfm_relocatable(shape, slot):
+    """The point of data_follows_meta: one blob, valid wherever it lands.
+
+    Each slot value pads buffer_B, moving buffer_C -- and with it the blob -- to a
+    different L1 address. The bytes written are byte-identical across slots; only the
+    address changes, so a pass means the kernel really derives the data base from the
+    runtime meta pointer rather than from anything the producer assumed.
+    """
+    M, K, N = shape
+    assignment = assign_random(K, N, ("bfp2", "bfp4"), COMPRESSION_GRANULARITY)
+    run_face_compressed_dfm(M, K, N, assignment, extra_b_tiles=slot)
