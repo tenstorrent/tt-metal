@@ -369,6 +369,29 @@ bool ReadFromDeviceL1(
     CoreType core_type = CoreType::WORKER);
 
 /**
+ * The kernel config a core currently runs, read back from its launch message.
+ *
+ * Circular buffers, runtime args, semaphores and text are all addressed as kernel_config_base
+ * plus offset, so these offsets and the bytes at that base describe the program on a core. The
+ * runtime binary reload captures both and replays them at another base.
+ */
+struct CoreKernelConfig {
+    std::vector<uint32_t> kernel_config_base;  // per programmable core type
+    std::vector<uint32_t> kernel_text_offset;  // per processor
+    std::vector<uint32_t> kernel_text_size;    // per processor
+    std::vector<uint32_t> sem_offset;          // per programmable core type
+    std::vector<uint32_t> rta_offset;          // per processor
+    std::vector<uint32_t> crta_offset;         // per processor
+    uint32_t local_cb_offset = 0;
+    uint32_t remote_cb_offset = 0;
+    uint64_t local_cb_mask = 0;
+    uint32_t enables = 0;
+    uint32_t min_remote_cb_start_index = 0;
+};
+
+CoreKernelConfig ReadKernelConfig(IDevice* device, const CoreCoord& logical_core);
+
+/**
  * Copy data from an L1 buffer into a host buffer. Must be a buffer, and not a CB.
  *
  * Return value: bool
