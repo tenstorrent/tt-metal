@@ -17,6 +17,7 @@ kernel recompiles).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import time
@@ -46,6 +47,69 @@ from ttml.models.qwen3.kv_cache import KVCache
 # steps for stop-token detection. The check thus lags compute by CHUNK steps,
 # which is the cost of keeping the device pipeline full.
 CHUNK = 32
+
+# Tile height: the granularity every tiled tensor pads its token dimension to.
+TILE = 32
+
+
+_SAMPLE_PROFILE_ENV = "GRPO_SAMPLE_PROFILE"
+
+
+def _sample_profiling_enabled() -> bool:
+    return os.environ.get(_SAMPLE_PROFILE_ENV, "0") == "1"
+
+
+@contextlib.contextmanager
+def _profile_sample(mesh_device, label: str):
+    """Time one ``sample_op`` call and capture the device memory it peaks at.
+
+    OFF unless ``GRPO_SAMPLE_PROFILE=1``, because measuring costs more than the op does:
+
+      * Dispatch is ASYNCHRONOUS. Without a synchronize on both sides the timer measures how
+        long it took to enqueue the program, which is roughly constant and says nothing about
+        the kernel. The two syncs make the number real, and simultaneously serialize a decode
+        loop that is otherwise pipelined -- so the surrounding tok/s figures degrade while
+        this is on. Read the per-call number, not the throughput, when profiling.
+      * The graph capture behind the memory numbers traces every allocation in the region.
+
+    ``peak_dram`` is the high-water mark of DRAM allocated during the call, and ``peak_l1``
+    the per-core L1 total (CBs plus program-scope buffers) -- for this op that is the handful
+    of streamed tiles, not anything proportional to the vocabulary.
+    """
+    if not _sample_profiling_enabled():
+        yield
+        return
+
+    tracker = ttml.core.utils.MemoryUsageTracker
+    ttnn.synchronize_device(mesh_device)
+    guard = tracker.begin_capture()
+    started = time.perf_counter()
+    try:
+        yield
+    finally:
+        # Sync BEFORE stopping the clock: the op is only enqueued when the body returns.
+        ttnn.synchronize_device(mesh_device)
+        elapsed_ms = (time.perf_counter() - started) * 1e3
+        tracker.end_capture(label)
+        try:
+            dram = tracker.get_dram_usage(label)
+            l1 = tracker.get_l1_usage(label)
+            # print, not logging: logging writes to stderr, which the sbatch scripts route to the
+            # .err file, while stdout goes to .out alongside the rest of the run. flush because a
+            # redirected stdout is block-buffered, so without it these lines land late (or not at
+            # all, if the job is killed).
+            print(
+                f"[qwen3][sample] {label:<16} {elapsed_ms:8.3f} ms"
+                f" | peak DRAM {dram.peak / 2**20:9.3f} MB"
+                f" (alloc {dram.total_allocations / 2**20:.3f} MB,"
+                f" free {dram.total_deallocations / 2**20:.3f} MB)"
+                f" | peak L1/core {l1.peak_total / 2**10:8.3f} KB"
+                f" (cb {l1.peak_cb / 2**10:.3f} KB)",
+                flush=True,
+            )
+        finally:
+            tracker.clear()
+            guard.release()
 
 
 @dataclass
@@ -356,15 +420,44 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                 logits = self._model(input_tensor, prefill_mask, past_key_values=kv)
 
                 seed = int(np.random.randint(low=1, high=int(1e7)))
+
+                # The model emits logits for all Np prompt positions, but only ONE per row is ever
+                # read below (pred_pos[b] = len_b - 1). Sampling the full [B, 1, Np, V] therefore
+                # does Np times the necessary work, and it dominates the whole generate: measured at
+                # ~2.9 s per prefill against ~7 ms per decode step, i.e. one prefill costs as much as
+                # ~400 decode steps to produce a single token per row.
+                #
+                # Narrow to the tile-aligned span that actually contains the prediction positions.
+                # The bounds come from the GLOBAL pred_pos list, so they are identical on every
+                # device and the slice stays uniform across the batch-sharded shards -- a per-row
+                # gather would not be, since row b lives on one device but ttnn.slice applies the
+                # same indices to every shard.
+                span_lo = (min(pred_pos) // TILE) * TILE
+                span_hi = min(Np, ((max(pred_pos) // TILE) + 1) * TILE)
+                logits_for_sample = logits
+                sliced_logits = None
+                if span_hi - span_lo < Np:
+                    logits_v = logits.get_value()
+                    sliced_logits = ttnn.slice(
+                        logits_v,
+                        [0, 0, span_lo, 0],
+                        [int(logits_v.shape[0]), 1, span_hi, int(logits_v.shape[3])],
+                    )
+                    logits_for_sample = ttml.autograd.Tensor(sliced_logits, False)
+                span = span_hi - span_lo
+
                 # Seed uniquely only over the batch-sharded axes (dp/fsdp) so each device's rollout
                 # draws independent noise; a replicated (tp) axis, if any, is excluded via _seed_axes.
-                sampled = ttml.ops.sample.sample_op(logits, ctx.temperature, seed, None, self._seed_axes)
+                with _profile_sample(mesh_device, "prefill"):
+                    sampled = ttml.ops.sample.sample_op(logits_for_sample, ctx.temperature, seed, None, self._seed_axes)
+                if sliced_logits is not None:
+                    deallocate_tensors([sliced_logits])
                 # Per-row prediction position: read the whole sampled column once
-                # on host and pick row b's token at pred_pos[b].
+                # on host and pick row b's token at pred_pos[b], rebased into the span.
                 sampled_host = ttnn.to_torch(sampled.get_value(), mesh_composer=composer)
-                sampled_host = sampled_host.reshape(B, 1, Np, 1).to(int).numpy()
+                sampled_host = sampled_host.reshape(B, 1, span, 1).to(int).numpy()
                 for b in range(B):
-                    tok = int(sampled_host[b, 0, pred_pos[b], 0])
+                    tok = int(sampled_host[b, 0, pred_pos[b] - span_lo, 0])
                     first_tokens[b] = tok
                     if tok in stop_ids:
                         done[b] = True
@@ -385,7 +478,8 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                     logits = self._model(last_input, decode_mask, past_key_values=kv)
 
                     seed = int(np.random.randint(low=1, high=int(1e7)))
-                    sampled = ttml.ops.sample.sample_op(logits, ctx.temperature, seed, None, self._seed_axes)
+                    with _profile_sample(mesh_device, f"decode[{i}]"):
+                        sampled = ttml.ops.sample.sample_op(logits, ctx.temperature, seed, None, self._seed_axes)
                     # Clone so the column is independent of the deallocated sampled.
                     last_token_column = ttnn.clone(ttnn.slice(sampled.get_value(), [0, 0, 0, 0], [B_local, 1, 1, 1]))
                     generated_columns.append(last_token_column)
