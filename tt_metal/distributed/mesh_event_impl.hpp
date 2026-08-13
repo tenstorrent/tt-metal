@@ -29,8 +29,4 @@ private:
     MeshCoordinateRange device_range_;
 };
 
-// Internal factory used by mesh command queues / tests.
-MeshEvent make_mesh_event(
-    uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range);
-
 }  // namespace tt::tt_metal::distributed

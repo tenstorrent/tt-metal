@@ -44,11 +44,6 @@ const MeshEventImpl& MeshEvent::impl() const {
     return *impl_;
 }
 
-MeshEvent make_mesh_event(
-    uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range) {
-    return MeshEvent(id, device, mesh_cq_id, device_range);
-}
-
 std::ostream& operator<<(std::ostream& os, const MeshEvent& event) {
     os << "MeshEvent(id=" << event.impl().id() << ", device_id=" << event.device()->id()
        << ", mesh_cq_id=" << event.impl().mesh_cq_id() << ", device_range=" << event.impl().device_range() << ")";
