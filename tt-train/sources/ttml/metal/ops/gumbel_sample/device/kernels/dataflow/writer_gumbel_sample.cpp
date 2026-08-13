@@ -58,7 +58,21 @@ void kernel_main() {
     for (uint32_t i = 0U; i < num_rows_to_process; ++i) {
         const uint32_t global_row = start_row + i;
 
-        for (uint32_t h = 0U; h < kTileHeight; ++h) {
+        // How many of this tile row's 32 rows are real tokens rather than tile padding. Computed up
+        // front because it bounds the SCAN, not just the write-out: a tile row is 32 tokens wide, but
+        // decode produces ONE new token per step, so 31 of every 32 rows are padding. Scanning them
+        // anyway costs 32x -- over a 151936-wide vocabulary that is ~4.9M scalar compares per token
+        // where ~152k suffice, and this scan is the op's dominant cost.
+        const uint32_t batch_index = global_row / Ht;
+        const uint32_t tile_row_in_batch = global_row % Ht;
+        const uint32_t first_token = tile_row_in_batch * kTileHeight;
+        uint32_t valid_rows = 0U;
+        if (first_token < logical_tokens) {
+            const uint32_t remaining_tokens = logical_tokens - first_token;
+            valid_rows = (remaining_tokens < kTileHeight) ? remaining_tokens : kTileHeight;
+        }
+
+        for (uint32_t h = 0U; h < valid_rows; ++h) {
             max_values[h] = NEG_INF_FLOAT32;
             arg_max[h] = 0U;
         }
@@ -83,9 +97,17 @@ void kernel_main() {
                 const uint32_t remaining = logical_vocab - global_col_base;
                 const uint32_t cols_to_scan = (remaining < kFaceWidth) ? remaining : kFaceWidth;
 
+                // Same bound on the row axis. Faces 2 and 3 hold rows 16..31, so in decode
+                // (valid_rows == 1) they are skipped entirely and face 1 scans a single row.
+                if (face_row_base >= valid_rows) {
+                    continue;
+                }
+                const uint32_t rows_remaining = valid_rows - face_row_base;
+                const uint32_t rows_to_scan = (rows_remaining < kFaceHeight) ? rows_remaining : kFaceHeight;
+
                 const uint32_t face_offset = face * kFaceSize;
 
-                for (uint32_t rr = 0U; rr < kFaceHeight; ++rr) {
+                for (uint32_t rr = 0U; rr < rows_to_scan; ++rr) {
                     const uint32_t row_in_tile = face_row_base + rr;
 
                     uint32_t running_max = max_values[row_in_tile];
@@ -112,18 +134,7 @@ void kernel_main() {
 
         // ---- emit one token id per valid row ----
         // Output is ROW_MAJOR UINT32 [B, 1, tokens, 1], so one page is one token id and page ids run
-        // row-major over [B, 1, tokens].
-        const uint32_t batch_index = global_row / Ht;
-        const uint32_t tile_row_in_batch = global_row % Ht;
-        const uint32_t first_token = tile_row_in_batch * kTileHeight;
-
-        // The final tile row of each batch entry is partly padding when tokens % 32 != 0.
-        uint32_t valid_rows = 0U;
-        if (first_token < logical_tokens) {
-            const uint32_t remaining_tokens = logical_tokens - first_token;
-            valid_rows = (remaining_tokens < kTileHeight) ? remaining_tokens : kTileHeight;
-        }
-
+        // row-major over [B, 1, tokens]. batch_index / first_token / valid_rows were derived above.
         const uint32_t page_base = batch_index * logical_tokens + first_token;
         for (uint32_t h = 0U; h < valid_rows; ++h) {
             const uint32_t slot_address = staging_address + h * kOutputSlotBytes;
