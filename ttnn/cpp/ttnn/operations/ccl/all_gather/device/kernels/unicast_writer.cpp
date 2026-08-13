@@ -6,6 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/page.h"
 #include "api/core_local_mem.h"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -14,7 +15,6 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 
 #include <cstdint>
-#include <utility>
 
 #include "unicast_common.hpp"
 
@@ -38,9 +38,15 @@ void kernel_main() {
     constexpr uint32_t packet_size = get_compile_time_arg_val(6);
     constexpr bool do_init_barrier = get_compile_time_arg_val(7) != 0;
     constexpr uint32_t data_valid_granularity = get_compile_time_arg_val(8);
-    constexpr auto output_tensor_args = TensorAccessorArgs<9>();
+    constexpr uint32_t walk_stride = get_compile_time_arg_val(9);
+    constexpr bool merge_runs = get_compile_time_arg_val(10) != 0;
+    constexpr auto output_tensor_args = TensorAccessorArgs<11>();
 
     constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
+
+    // A merged run is emitted as one scatter chunk starting at the run's source offset within the
+    // packet, so every chunk size has to keep source and destination NoC-write aligned.
+    static_assert(output_chunk_size % 16 == 0, "chunk size must be a multiple of the NoC write alignment");
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
@@ -52,8 +58,8 @@ void kernel_main() {
     const uint32_t num_iters = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t slice_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t slice_count = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t final_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t final_count = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t final_skip = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t final_take = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t do_local_write = get_arg_val<uint32_t>(arg_idx++);
     [[maybe_unused]] const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);  // used only if do_init_barrier
     const address_t data_valid_sem = get_arg_val<uint32_t>(arg_idx++);
@@ -99,7 +105,7 @@ void kernel_main() {
     SenderT* sender = &fabric_connection.get(0).sender;
 #endif
 
-    FabricWriter<output_chunk_size, packet_size, SenderT> fabric(noc, sender, neighbor_chip_id, neighbor_mesh_id);
+    FabricWriter<packet_size, SenderT> fabric(noc, sender, neighbor_chip_id, neighbor_mesh_id);
 
     // Init handshake (send only): tell the neighbor's opposite-direction reader we're alive, so it lets its
     // paired writer start writing into our output. Our own reader does the matching wait.
@@ -115,42 +121,79 @@ void kernel_main() {
     // MAIN
     ///////////////////////////////////////////////////
 
-    OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices> it;
+    // Two coalescers because the fabric address is encoded for the ERISC's NoC while a local write
+    // needs our own; they cover the same bytes and are flushed together.
+    auto to_fabric = [&](uint32_t l1_addr, uint64_t dst, uint32_t bytes) { fabric.async_write(l1_addr, dst, bytes); };
+    RunCoalescer<packet_size, merge_runs, decltype(to_fabric)> fabric_runs{to_fabric};
+
+    auto to_local = [&](uint32_t l1_addr, uint64_t dst, uint32_t bytes) {
+        // Posted write on a separate VC so it doesn't contend with the fabric writes on the same NOC.
+        // The coalescer caps a run at NOC_MAX_BURST_SIZE, so the one-packet path always applies.
+        noc.async_write<NocOptions::POSTED | NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+            CoreLocalMem<uint32_t>(l1_addr),
+            tensor_accessor::Page(dst, 0),
+            bytes,
+            {},
+            {},
+            {.vc = NOC_UNICAST_WRITE_VC + 1});
+    };
+    RunCoalescer<NOC_MAX_BURST_SIZE, merge_runs, decltype(to_local)> local_runs{to_local};
+
+    OutputStripeIterator<
+        output_chunks_per_stripe,
+        output_chunks_per_page,
+        output_chunk_size,
+        num_devices,
+        walk_stride>
+        it;
 
     uint32_t stripe = initial_stripe;
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         const bool last = (iter == num_iters - 1);
-        const uint32_t start = last ? final_start : slice_start;
-        const uint32_t count = last ? final_count : slice_count;
+        // An even ring splits the antipode stripe between the two directions. The split is by walk
+        // position, not chunk index, so that data_valid positions still line up downstream.
+        const uint32_t skip = last ? final_skip : 0;
+        const uint32_t count = last ? final_take : slice_count;
         const bool granular = (iter < num_granular_sends);  // downstream relays this stripe -> signal fine-grained
         const bool local_copy = (iter == 0) && (do_local_write != 0);
-        it.init(stripe, start, count);
+        it.init(stripe, slice_start, slice_count, skip, count);
 
         uint32_t pending_chunks = 0, pending_pages = 0;
         for (uint32_t chunks_sent = 0; chunks_sent < count;) {
             const uint32_t batch = std::min(outputs_per_cb_page, count - chunks_sent);
             cb.wait_front(1);
             uint32_t l1_read_addr = cb.get_read_ptr();
-            for (uint32_t i = 0; i < batch; ++i) {
-                auto [page_id, byte_off] = it.next();
-                uint64_t neighbor_addr =
-                    tt::tt_fabric::addrgen_detail::get_noc_address(output_tensor_accessor, page_id, byte_off);
-                fabric.async_write(l1_read_addr, neighbor_addr);
-
-                if (local_copy) {
-                    // Local data -> our output stripe (same address). Posted write on a separate VC so it
-                    // doesn't contend with the fabric writes on the same NOC.
-                    noc.async_write<NocOptions::POSTED | NocOptions::CUSTOM_VC>(
-                        CoreLocalMem<uint32_t>(l1_read_addr),
-                        output_tensor_accessor,
-                        output_chunk_size,
-                        {},
-                        {.page_id = page_id, .offset_bytes = byte_off},
-                        {.vc = NOC_UNICAST_WRITE_VC + 1});
-                }
-                l1_read_addr += output_chunk_size;
-            }
+            // local_copy is fixed for the whole iteration, so keep it out of the inner loop.
             if (local_copy) {
+                for (uint32_t i = 0; i < batch; ++i) {
+                    const auto chunk = it.next();
+                    fabric_runs.add(
+                        l1_read_addr,
+                        tt::tt_fabric::addrgen_detail::get_noc_address(
+                            output_tensor_accessor, chunk.page_id, chunk.byte_off),
+                        output_chunk_size);
+                    // Local data -> our output stripe (same address).
+                    local_runs.add(
+                        l1_read_addr,
+                        output_tensor_accessor.get_noc_addr(chunk.page_id, chunk.byte_off, noc.get_noc_id()),
+                        output_chunk_size);
+                    l1_read_addr += output_chunk_size;
+                }
+            } else {
+                for (uint32_t i = 0; i < batch; ++i) {
+                    const auto chunk = it.next();
+                    fabric_runs.add(
+                        l1_read_addr,
+                        tt::tt_fabric::addrgen_detail::get_noc_address(
+                            output_tensor_accessor, chunk.page_id, chunk.byte_off),
+                        output_chunk_size);
+                    l1_read_addr += output_chunk_size;
+                }
+            }
+            // Runs never span a CB entry: the source would move out from under them on pop_front.
+            fabric_runs.flush();
+            if (local_copy) {
+                local_runs.flush();
                 noc.async_writes_flushed<NocOptions::POSTED>();
             }
             fabric.async_writes_flushed();

@@ -6,10 +6,10 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "api/tensor/page.h"
 #include "api/core_local_mem.h"
 
 #include <cstdint>
-#include <utility>
 
 #include "unicast_common.hpp"
 
@@ -18,11 +18,16 @@ using address_t = uint32_t;
 // Store-and-forward reader: CB producer, no fabric. It owns every data_valid wait (see the protocol note in
 // unicast_common.hpp). Iteration 0 fills the CB from this device's local data; later iterations relay the
 // stripe upstream delivered into our output, gated on data_valid.
+//
+// Both cases walk the same chunks in the same order the writer will drain them; only where a chunk is read
+// from differs. Reads go through the same RunCoalescer, so contiguous ones merge: on a relay that is the
+// writer's runs exactly, and on iteration 0 a split input page reassembles into the single page read it
+// always was.
 void kernel_main() {
     ///////////////////////////////////////////////////
     // COMPILE TIME ARGS
     ///////////////////////////////////////////////////
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(0);
+    constexpr uint32_t split_factor = get_compile_time_arg_val(0);
     constexpr uint32_t output_chunk_size = get_compile_time_arg_val(1);
     constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(2);
     constexpr uint32_t output_chunks_per_stripe = get_compile_time_arg_val(3);
@@ -30,10 +35,11 @@ void kernel_main() {
     constexpr uint32_t cb0_id = get_compile_time_arg_val(5);
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(6);
     constexpr bool do_init_barrier = get_compile_time_arg_val(7) != 0;
-    constexpr auto input_tensor_args = TensorAccessorArgs<8>();
+    constexpr uint32_t walk_stride = get_compile_time_arg_val(8);
+    constexpr bool merge_runs = get_compile_time_arg_val(9) != 0;
+    constexpr auto input_tensor_args = TensorAccessorArgs<10>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
-    constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
     constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
 
     ///////////////////////////////////////////////////
@@ -48,10 +54,8 @@ void kernel_main() {
     const uint32_t total_chunks = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t slice_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t slice_count = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t final_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t final_count = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t input_page_id_start = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t input_page_id_end = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t final_skip = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t final_take = get_arg_val<uint32_t>(arg_idx++);
     [[maybe_unused]] const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);  // used only if do_init_barrier
     const address_t data_valid_sem = get_arg_val<uint32_t>(arg_idx++);
 
@@ -62,7 +66,20 @@ void kernel_main() {
     CircularBuffer cb(cb0_id);
     auto* data_valid_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(data_valid_sem);
 
-    OutputStripeIterator<output_chunks_per_stripe, output_chunks_per_page, output_chunk_size, num_devices> it;
+    OutputStripeIterator<
+        output_chunks_per_stripe,
+        output_chunks_per_page,
+        output_chunk_size,
+        num_devices,
+        walk_stride>
+        it;
+
+    auto to_cb = [&](uint32_t l1_addr, uint64_t src, uint32_t bytes) {
+        // The coalescer caps a run at NOC_MAX_BURST_SIZE, so the one-packet path always applies.
+        noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+            tensor_accessor::Page(src, 0), CoreLocalMem<uint32_t>(l1_addr), bytes, {}, {}, {});
+    };
+    RunCoalescer<NOC_MAX_BURST_SIZE, merge_runs, decltype(to_cb)> read_runs{to_cb};
 
     ///////////////////////////////////////////////////
     // MAIN
@@ -80,56 +97,49 @@ void kernel_main() {
 
     uint32_t stripe = initial_stripe;
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
-        if (iter == 0) {
-            // Local data (our own input tensor)
-            uint32_t page = input_page_id_start;
-            while (page < input_page_id_end) {
-                cb.reserve_back(1);
-                uint32_t l1_write_addr = cb.get_write_ptr();
-                for (uint32_t i = 0; i < inputs_per_cb_page && page < input_page_id_end; ++i) {
-                    noc.async_read(
-                        input_tensor_accessor,
-                        CoreLocalMem<uint32_t>(l1_write_addr),
-                        input_page_size,
-                        {.page_id = page},
-                        {},
-                        {});
-                    l1_write_addr += input_page_size;
-                    ++page;
-                }
-                noc.async_read_barrier();
-                cb.push_back(1);
-            }
-        } else {
-            // Relay: read the stripe upstream delivered into our output, waiting per CB-page batch for its
-            // chunks to arrive. base_chunk is where this read begins in the delivered-chunk stream: 0 for a full
-            // stripe or an even-ring prefix half, `half` for a suffix half.
-            const bool last = (iter == num_iters - 1);
-            const uint32_t start = last ? final_start : slice_start;
-            const uint32_t count = last ? final_count : slice_count;
-            const uint32_t base_chunk = (iter - 1) * slice_count + (start - slice_start);
-            it.init(stripe, start, count);
-            for (uint32_t chunks_read = 0; chunks_read < count;) {
-                const uint32_t batch = std::min(outputs_per_cb_page, count - chunks_read);
-                noc_semaphore_wait_min(data_valid_ptr, base_chunk + chunks_read + batch);
+        const bool last = (iter == num_iters - 1);
+        const uint32_t skip = last ? final_skip : 0;
+        const uint32_t count = last ? final_take : slice_count;
+        const bool from_input = (iter == 0);
+        // Where this read begins in the delivered-chunk stream: 0 for a full stripe or an even-ring
+        // prefix half, `half` for a suffix half. Iteration 0 reads local data and waits on nothing.
+        const uint32_t base_chunk = from_input ? 0 : (iter - 1) * slice_count + skip;
+        it.init(stripe, slice_start, slice_count, skip, count);
 
-                cb.reserve_back(1);
-                uint32_t l1_write_addr = cb.get_write_ptr();
+        for (uint32_t chunks_read = 0; chunks_read < count;) {
+            const uint32_t batch = std::min(outputs_per_cb_page, count - chunks_read);
+            if (!from_input) {
+                noc_semaphore_wait_min(data_valid_ptr, base_chunk + chunks_read + batch);
+            }
+
+            cb.reserve_back(1);
+            uint32_t l1_write_addr = cb.get_write_ptr();
+            // from_input is fixed for the whole iteration, so resolve it outside the inner loop.
+            auto fill = [&](auto source_of) {
                 for (uint32_t i = 0; i < batch; ++i) {
-                    auto [page_id, byte_off] = it.next();
-                    noc.async_read(
-                        output_tensor_accessor,
-                        CoreLocalMem<uint32_t>(l1_write_addr),
-                        output_chunk_size,
-                        {.page_id = page_id, .offset_bytes = byte_off},
-                        {},
-                        {});
+                    const auto chunk = it.next();
+                    read_runs.add(l1_write_addr, source_of(chunk), output_chunk_size);
                     l1_write_addr += output_chunk_size;
                 }
-                noc.async_read_barrier();
-                cb.push_back(1);
-                chunks_read += batch;
+            };
+            if (from_input) {
+                // Our own input, where chunk c is input page c / split_factor.
+                fill([&](const auto& chunk) {
+                    return input_tensor_accessor.get_noc_addr(
+                        chunk.index / split_factor,
+                        (chunk.index % split_factor) * output_chunk_size,
+                        noc.get_noc_id());
+                });
+            } else {
+                // What upstream relayed into our output.
+                fill([&](const auto& chunk) {
+                    return output_tensor_accessor.get_noc_addr(chunk.page_id, chunk.byte_off, noc.get_noc_id());
+                });
             }
+            read_runs.flush();
+            noc.async_read_barrier();
+            cb.push_back(1);
+            chunks_read += batch;
         }
         stripe = (stripe + stripe_step) % num_devices;
     }
