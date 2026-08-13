@@ -1580,11 +1580,21 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBIssue) {
             writer_core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
 
+        // The locker stages the locked remote-CB base here and NOCs it to the same offset on the writer, so the
+        // writer can target the locked region directly (same protocol as the CB tests above).
+        uint32_t scratch_addr = unreserved_addr + 0x20000;
+
         SetRuntimeArgs(
             program,
             locker_kernel,
             receiver_core,
-            {remote_cb_index, receiver_sem_id, writer_sem_id, writer_virtual_core.x, writer_virtual_core.y});
+            {remote_cb_index,
+             receiver_sem_id,
+             writer_sem_id,
+             writer_virtual_core.x,
+             writer_virtual_core.y,
+             scratch_addr,
+             scratch_addr});
         SetRuntimeArgs(
             program,
             writer_kernel,
@@ -1593,9 +1603,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBIssue) {
              write_size,
              receiver_virtual_core.x,
              receiver_virtual_core.y,
-             gcb_addr,
-             gcb_addr + write_size,
-             write_size,
+             scratch_addr,
              writer_sem_id,
              receiver_sem_id,
              receiver_virtual_core.x,
@@ -1668,10 +1676,6 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBNoIssue) {
             mc.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
         // NOC records sub-32B writes rounded up, so use a 32B-aligned size for an exact issue_size check.
         uint32_t write_size = 2 * alignment;
-        uint32_t l1_size = mesh_device->l1_size_per_core();
-        // Sweep the whole L1: the receiver's remote-CB region (gcb_size bytes) is much larger than the
-        // stride, so the sweep is guaranteed to hit it wherever the allocator placed it.
-        uint32_t stride = alignment * 64;
 
         KernelHandle locker_kernel = CreateKernel(
             program,
@@ -1680,15 +1684,24 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBNoIssue) {
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
         KernelHandle writer_kernel = CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_cb_writer_kernel_no_issue.cpp",
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/scoped_lock_cb_writer_kernel.cpp",
             writer_core,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::NOC_0});
+
+        // Same publish/inbox protocol as the Issue variant; here the lock is only taken while the writer is idle.
+        uint32_t scratch_addr = unreserved_addr + 0x20000;
 
         SetRuntimeArgs(
             program,
             locker_kernel,
             receiver_core,
-            {remote_cb_index, receiver_sem_id, writer_sem_id, writer_virtual_core.x, writer_virtual_core.y});
+            {remote_cb_index,
+             receiver_sem_id,
+             writer_sem_id,
+             writer_virtual_core.x,
+             writer_virtual_core.y,
+             scratch_addr,
+             scratch_addr});
         SetRuntimeArgs(
             program,
             writer_kernel,
@@ -1697,9 +1710,7 @@ TEST_F(NOCDebuggingFixture, ScopedLockConcurrentAccessRemoteCBNoIssue) {
              write_size,
              receiver_virtual_core.x,
              receiver_virtual_core.y,
-             unreserved_addr,
-             l1_size,
-             stride,
+             scratch_addr,
              writer_sem_id,
              receiver_sem_id,
              receiver_virtual_core.x,
