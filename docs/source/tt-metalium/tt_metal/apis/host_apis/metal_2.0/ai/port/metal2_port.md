@@ -128,7 +128,7 @@ Before starting, confirm you have the following. If any is missing or unclear, a
 - **Legacy op source path** — the directory containing the op's legacy program-factory `.cpp`/`.hpp` files and kernel sources.
 - **Tests** — *not* invoker-supplied. You locate the op's tests yourself and confirm the set with the invoker before relying on it; see [Locate and confirm the op's tests](#locate-and-confirm-the-ops-tests) below.
 - **`METAL2_PORT_BRIEF.md`** (with the team-facing **`METAL2_PREPORT_AUDIT.md`** alongside it) — present in the op directory; the brief is issued only when the audit cleared (precondition above). The brief is your actionable input: its **TTNN factory analysis** section records the Metal 2.0 factory concept the port targets, inherited not re-derived. See the [TTNN integration doc](../shared/ttnn_factory.md) for the concept and the device-op-class edits the port forces.
-- **(Optional) Reference port** — a recently-completed similar op the invoker recommends studying for shape. The invoker may not always have one; absence is not a blocker. The first worked end-to-end `create_program_artifacts` port is **accumulation** (cumsum/cumprod) on branch `akertesz/porting-experiment-accumulation-jun10` — a small single-program op exercising tensor bindings, a self-loop DFB, work-split multiplicity, and the custom-hash deletion. A good shape reference when no closer op exists. It lives on that sibling branch, **not** your port branch — read it with `git show origin/akertesz/porting-experiment-accumulation-jun10:<path>` rather than expecting it in your working tree. (The `origin/` prefix is required: a fresh clone has the branch only as a remote-tracking ref, and the bare name fails with *"unknown revision"*.)
+- **(Optional) Reference port** — a recently-completed similar op the invoker recommends studying for shape. The invoker may not always have one; absence is not a blocker. **Take one only from the invoker**, and prefer a recent port: a port made under an older revision of this recipe can differ from what you are being asked to do, and the divergence is invisible from the diff alone. Where the reference and this recipe disagree, the recipe wins — read a reference for spec *shape*, never for *scope*.
 
 ### Locate and confirm the op's tests
 
@@ -919,7 +919,7 @@ If the command prints nothing, the recipe docs are not from a tracked doc-branch
 
 ### TTNN ProgramFactory
 
-Confirms the realized factory shape against the audit's decision, and records the device-op-class edits the port forced. Filled out per the [TTNN integration doc — Port report deliverable](../shared/ttnn_factory.md#port-report-deliverable-porter-facing): concept realized, custom-hash deletion (file:line or none), pybind entry points removed (or none), and open items (relaxation candidates, capabilities not yet on main the op would benefit from, friction with the concept fit).
+Confirms the realized factory shape against the audit's decision, and records the device-op-class edits the port forced. Filled out per the [TTNN integration doc — Port report deliverable](../shared/ttnn_factory.md#port-report-deliverable-porter-facing): concept realized, custom hash left intact (file:line or none), pybind entry points removed (or none), and open items (relaxation candidates, capabilities not yet on main the op would benefit from, friction with the concept fit).
 
 If the port stayed on the default concept with no device-op edits, this section is short — that's the success case.
 
