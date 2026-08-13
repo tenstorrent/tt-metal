@@ -25,7 +25,9 @@ model:
 
 workload:
   num_users: 2
-  chunks: "11"
+  slot_prompts:
+    - /data/lgalas/gpt_oss_tt_cache/golden/longbook_qa_eng_prefill_56320
+    - /data/lgalas/gpt_oss_tt_cache/golden/longbook_qa_eng_prefill_56320
   max_requests: 2
   interleave: round_robin
   check_pcc: true
@@ -43,3 +45,4 @@ migration:
 
 env:
   PREFILL_MIGRATION_TABLE_PATH: /tmp/prefill_kv_chunk_table.pb
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.82"
