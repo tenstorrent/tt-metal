@@ -1090,6 +1090,9 @@ def import_graph(
 
     # Track function start nodes to pair with function end
     function_stack = []
+    # (name, reason) of the innermost C++ scope that was left by an exception, held until the
+    # enclosing reported operation closes so the diagnostic lands on the row users actually see.
+    pending_abort = None
     operation_counter = 1
     tensor_ids_seen = set()
     active_buffers = []
@@ -1196,6 +1199,7 @@ def import_graph(
             if not is_nested:
                 real_function_depth += 1
                 op_nesting_depth += 1
+                pending_abort = None
                 current_op_nodes = [node]
                 nested_input_tensor_ids = []
                 nested_output_tensor_ids = []
@@ -1211,9 +1215,14 @@ def import_graph(
 
         elif node_type == "function_end":
             name = params.get("name", "unknown")
+            # Set by GraphProcessor::track_function_abort: this scope was left by an exception.
+            is_aborted = params.get("aborted") == "true"
+            abort_reason = params.get("abort_reason", "")
 
             start_node = function_stack.pop() if function_stack else None
             if start_node and start_node.get("nested"):
+                if is_aborted and pending_abort is None:
+                    pending_abort = (name, abort_reason)
                 op_nesting_depth -= 1
 
                 # Gather this op's own input tensor IDs so we can detect in-place ops
@@ -1290,6 +1299,22 @@ def import_graph(
                         rank,
                     )
                 )
+            elif is_aborted or pending_abort:
+                # No Python-side record, so this is a C++-initiated capture or an op with no Python
+                # wrapper. The abort marker is then the only evidence that the operation failed.
+                failing_name, reason = (name, abort_reason) if is_aborted else pending_abort
+                errors_batch.append(
+                    (
+                        operation_id,
+                        name,
+                        "aborted_operation",
+                        reason or f"Operation '{failing_name}' was aborted by an exception",
+                        "\n".join(py_io.get("python_stack_trace", [])) if py_io else "",
+                        "",
+                        rank,
+                    )
+                )
+            pending_abort = None
 
             if py_io and py_io.get("arguments"):
                 for key, val in py_io["arguments"].items():

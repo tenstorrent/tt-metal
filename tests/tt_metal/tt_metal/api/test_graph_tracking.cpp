@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Host-only tests for tt::tt_metal::GraphTracker focused on its multi-threading
-// contract: `processors` and `hook` are thread_local, so a graph capture pushed
-// on thread A only observes ops dispatched on thread A, and concurrent
-// push/pop on another thread cannot race with the dispatch hot path.
+// Host-only tests for tt::tt_metal::GraphTracker. Two areas are covered: its
+// multi-threading contract (`processors` and `hook` are thread_local, so a graph
+// capture pushed on thread A only observes ops dispatched on thread A, and
+// concurrent push/pop on another thread cannot race with the dispatch hot path),
+// and ScopedTrackedFunction's guarantee that a tracked scope is always closed,
+// including when it is left by an exception.
 
 #include <gtest/gtest.h>
 
@@ -13,8 +15,11 @@
 #include <chrono>
 #include <memory>
 #include <span>
+#include <stdexcept>
+#include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 #include <tt-metalium/graph_tracking.hpp>
 
@@ -26,6 +31,8 @@ class CountingProcessor : public IGraphProcessor {
 public:
     std::atomic<int> function_starts{0};
     std::atomic<int> function_ends{0};
+    std::atomic<int> function_aborts{0};
+    std::vector<std::string> abort_reasons;
 
     void track_function_start(
         std::string_view /*function_name*/, std::span<TrackedArgument> /*input_parameters*/) override {
@@ -35,6 +42,27 @@ public:
     void track_function_end() override { function_ends.fetch_add(1); }
 
     void track_function_end(const std::any& /*output_tensors*/) override { function_ends.fetch_add(1); }
+
+    void track_function_abort(std::string_view reason) override {
+        function_aborts.fetch_add(1);
+        abort_reasons.emplace_back(reason);
+    }
+};
+
+// Scoped push/pop so a failing expectation cannot leave a processor registered for later tests.
+class ScopedProcessor {
+public:
+    explicit ScopedProcessor(std::shared_ptr<CountingProcessor> processor) : processor_(std::move(processor)) {
+        GraphTracker::instance().clear();
+        GraphTracker::instance().push_processor(processor_);
+    }
+    ~ScopedProcessor() { GraphTracker::instance().clear(); }
+
+    ScopedProcessor(const ScopedProcessor&) = delete;
+    ScopedProcessor& operator=(const ScopedProcessor&) = delete;
+
+private:
+    std::shared_ptr<CountingProcessor> processor_;
 };
 
 }  // namespace
@@ -148,6 +176,152 @@ TEST(GraphTrackerThreading, CPU_ConcurrentPushPopAndTrackDoNotRace) {
         EXPECT_GT(dispatcher_proc->function_starts.load(), 0);
     }
     EXPECT_EQ(dispatcher_proc->function_starts.load(), dispatcher_proc->function_ends.load());
+}
+
+TEST(ScopedTrackedFunction, ReportsOutputOnTheSuccessPath) {
+    auto processor = std::make_shared<CountingProcessor>();
+    const ScopedProcessor registration(processor);
+
+    int output = 0;
+    {
+        ScopedTrackedFunction tracked("op");
+        tracked.end(output);
+    }
+
+    EXPECT_EQ(processor->function_starts.load(), 1);
+    EXPECT_EQ(processor->function_ends.load(), 1);
+    EXPECT_EQ(processor->function_aborts.load(), 0);
+}
+
+TEST(ScopedTrackedFunction, ClosesTheScopeWhenLeftWithoutAnExplicitEnd) {
+    auto processor = std::make_shared<CountingProcessor>();
+    const ScopedProcessor registration(processor);
+
+    {
+        ScopedTrackedFunction tracked("op");
+    }
+
+    EXPECT_EQ(processor->function_starts.load(), 1);
+    EXPECT_EQ(processor->function_ends.load(), 1);
+    EXPECT_EQ(processor->function_aborts.load(), 0);
+}
+
+// The regression behind #28836: a scope left by an exception used to emit no end at all.
+TEST(ScopedTrackedFunction, AbortsWhenUnwinding) {
+    auto processor = std::make_shared<CountingProcessor>();
+    const ScopedProcessor registration(processor);
+
+    EXPECT_THROW(
+        {
+            ScopedTrackedFunction tracked("op");
+            throw std::runtime_error("circular buffers clash with L1 buffers");
+        },
+        std::runtime_error);
+
+    EXPECT_EQ(processor->function_starts.load(), 1);
+    EXPECT_EQ(processor->function_ends.load(), 0);
+    ASSERT_EQ(processor->function_aborts.load(), 1);
+    // The destructor runs during unwinding, before any handler, so the message is out of reach
+    // there. Pinned so the reason stays a documented gap rather than a surprise.
+    EXPECT_EQ(processor->abort_reasons.front(), "");
+}
+
+// A catch block does have the message, and abort() is how it reaches the trace.
+TEST(ScopedTrackedFunction, ExplicitAbortCarriesTheReason) {
+    auto processor = std::make_shared<CountingProcessor>();
+    const ScopedProcessor registration(processor);
+
+    try {
+        ScopedTrackedFunction tracked("op");
+        try {
+            throw std::runtime_error("circular buffers clash with L1 buffers");
+        } catch (const std::exception& e) {
+            tracked.abort(e.what());
+            throw;
+        }
+    } catch (const std::runtime_error&) {
+    }
+
+    EXPECT_EQ(processor->function_ends.load(), 0);
+    ASSERT_EQ(processor->function_aborts.load(), 1);
+    EXPECT_EQ(processor->abort_reasons.front(), "circular buffers clash with L1 buffers");
+}
+
+// An explicit abort must not be doubled by the destructor.
+TEST(ScopedTrackedFunction, ExplicitAbortClosesTheScopeOnlyOnce) {
+    auto processor = std::make_shared<CountingProcessor>();
+    const ScopedProcessor registration(processor);
+
+    EXPECT_THROW(
+        {
+            ScopedTrackedFunction tracked("op");
+            tracked.abort("already reported");
+            throw std::runtime_error("boom");
+        },
+        std::runtime_error);
+
+    EXPECT_EQ(processor->function_ends.load(), 0);
+    EXPECT_EQ(processor->function_aborts.load(), 1);
+}
+
+// Nested scopes must each close exactly once, innermost first, so the processor's scope stack
+// unwinds to the same depth it started at.
+TEST(ScopedTrackedFunction, AbortsEveryOpenScopeWhileUnwinding) {
+    auto processor = std::make_shared<CountingProcessor>();
+    const ScopedProcessor registration(processor);
+
+    EXPECT_THROW(
+        {
+            ScopedTrackedFunction outer("outer");
+            ScopedTrackedFunction inner("inner");
+            throw std::runtime_error("boom");
+        },
+        std::runtime_error);
+
+    EXPECT_EQ(processor->function_starts.load(), 2);
+    EXPECT_EQ(processor->function_ends.load(), 0);
+    EXPECT_EQ(processor->function_aborts.load(), 2);
+}
+
+// A scope that returns normally while an unrelated exception is already unwinding elsewhere on the
+// stack must still be reported as a normal end, which is why the guard compares uncaught-exception
+// counts rather than merely testing std::uncaught_exceptions() != 0.
+TEST(ScopedTrackedFunction, EndsNormallyWhenAnUnrelatedExceptionIsAlreadyInFlight) {
+    auto processor = std::make_shared<CountingProcessor>();
+    const ScopedProcessor registration(processor);
+
+    struct Unwinder {
+        ~Unwinder() { ScopedTrackedFunction tracked("cleanup op"); }
+    };
+
+    EXPECT_THROW(
+        {
+            Unwinder unwinder;
+            throw std::runtime_error("unrelated");
+        },
+        std::runtime_error);
+
+    EXPECT_EQ(processor->function_starts.load(), 1);
+    EXPECT_EQ(processor->function_ends.load(), 1);
+    EXPECT_EQ(processor->function_aborts.load(), 0);
+}
+
+// A capture pushed inside an already-open scope never saw the start, so it must not be handed the
+// end either: that would pop a scope it does not own.
+TEST(ScopedTrackedFunction, DoesNotEndAProcessorThatMissedTheStart) {
+    auto processor = std::make_shared<CountingProcessor>();
+    auto& tracker = GraphTracker::instance();
+    tracker.clear();
+
+    {
+        ScopedTrackedFunction tracked("op");
+        tracker.push_processor(processor);
+    }
+    tracker.clear();
+
+    EXPECT_EQ(processor->function_starts.load(), 0);
+    EXPECT_EQ(processor->function_ends.load(), 0);
+    EXPECT_EQ(processor->function_aborts.load(), 0);
 }
 
 }  // namespace tt::tt_metal::graph_tracking_test

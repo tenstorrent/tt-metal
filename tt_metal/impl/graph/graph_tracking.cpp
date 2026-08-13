@@ -30,6 +30,17 @@ bool GraphTracker::is_enabled() const {
     return std::any_of(processors.begin(), processors.end(), [](const auto& p) { return p->is_capture_processor(); });
 }
 
+bool GraphTracker::has_processors() const { return !processors.empty(); }
+
+void GraphTracker::track_function_abort(std::string_view reason) {
+    if (processors.empty()) {
+        return;
+    }
+    for (auto& it : processors) {
+        it->track_function_abort(reason);
+    }
+}
+
 void GraphTracker::push_processor(const std::shared_ptr<IGraphProcessor>& new_processor) {
     processors.push_back(new_processor);
 }
