@@ -289,7 +289,15 @@ void kernel_main() {
             }
             uint32_t distance = route_info[1];
             uint32_t output_page_idx = route_info[2];
+#ifdef ENABLE_SCATTER_PAIRING
+            // Widened header (see reader_combine / the c_3 sizing in the program factory):
+            // [4] = second row's output page index, [5] = rows carried in this entry (1 or 2).
+            uint32_t output_page_idx1 = route_info[4];
+            uint32_t chunk_count = route_info[5];
+            uint32_t output_data_addr = cb_base + 2 * l1_alignment;
+#else
             uint32_t output_data_addr = cb_base + l1_alignment;
+#endif
 
             DPRINT_COMBINE("Fabric send: route={} distance={} page_idx={}\n", route, distance, output_page_idx);
 
@@ -324,14 +332,30 @@ void kernel_main() {
 #endif
                 ccl_routing_utils::fabric_set_line_unicast_route(
                     pkt_hdr_for_route_helper(unicast_packet_header), pkt_route_info);
-                fabric_send_noc_unicast<fabric_max_packet_size>(
-                    output_addr_gen,
-                    payload_sender,
-                    unicast_packet_header,
-                    output_data_addr,
-                    output_page_idx,
-                    (int)aligned_output_page_size,
-                    l1_alignment);
+#ifdef ENABLE_SCATTER_PAIRING
+                if (chunk_count == 2) {
+                    // Two same-destination rows in one packet: the receiving router scatters the
+                    // 2-page payload to output_page_idx and output_page_idx1.
+                    fabric_send_noc_unicast_scatter<fabric_max_packet_size>(
+                        output_addr_gen,
+                        payload_sender,
+                        unicast_packet_header,
+                        output_data_addr,
+                        output_page_idx,
+                        output_page_idx1,
+                        aligned_output_page_size);
+                } else
+#endif
+                {
+                    fabric_send_noc_unicast<fabric_max_packet_size>(
+                        output_addr_gen,
+                        payload_sender,
+                        unicast_packet_header,
+                        output_data_addr,
+                        output_page_idx,
+                        (int)aligned_output_page_size,
+                        l1_alignment);
+                }
                 noc_async_writes_flushed();  // Ensure output data departed L1 before freeing CB slot
             }
 #endif

@@ -64,6 +64,7 @@ def run_combine(
     run_pcc_check,
     dispatched_buffer_layout,
     use_fp8_output,
+    pair_tokens_per_packet,
     is_ci_env,
     is_ci_v2_env,
 ):
@@ -95,6 +96,20 @@ def run_combine(
     if use_fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
         pytest.skip("fp8 combine output requires Blackhole hardware")
 
+    # Two-rows-per-packet coalescing needs two output rows to fit one fabric packet. That holds for
+    # K3's 3584-wide bf16 row on Blackhole (2 x 7168 B = the 14336 B limit) but not on Wormhole, whose
+    # limit is 7168 B. Drop the optimization rather than the test case: it is a perf feature, and the
+    # correctness it affects is covered by the same param on BH.
+    if pair_tokens_per_packet:
+        row_bytes = emb_dim * (1 if use_fp8_output else 2)
+        fabric_limit = ttnn.get_tt_fabric_max_payload_size_bytes()
+        if 2 * row_bytes > fabric_limit:
+            logger.warning(
+                f"disabling pair_tokens_per_packet: 2 rows ({2 * row_bytes} B) exceed the fabric "
+                f"packet limit ({fabric_limit} B)"
+            )
+            pair_tokens_per_packet = False
+
     # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
     if (is_ci_env or is_ci_v2_env) and not run_pcc_check and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("ROW_MAJOR perf coverage does not run in CI")
@@ -121,7 +136,8 @@ def run_combine(
 
     signpost(
         f"Combine {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} {seq_len_per_chip=} {emb_dim=} "
-        f"{num_routed_experts=} {num_experts_per_tok=} {use_predictable_data=} {num_links=} {topology=}"
+        f"{num_routed_experts=} {num_experts_per_tok=} {use_predictable_data=} {num_links=} {topology=} "
+        f"{pair_tokens_per_packet=}"
     )
 
     # Compute configuration
@@ -272,6 +288,7 @@ def run_combine(
         topology=topology,
         init_zeros=False,
         fp8_output=use_fp8_output,
+        pair_tokens_per_packet=pair_tokens_per_packet,
     )
 
     tt_output = tt_combine(
@@ -377,6 +394,15 @@ COMBINE_MODELS = [
     ("dsv4_flash", DeepSeekV4FlashConfig, True, SINGLE_GLX_AND_PROXY_MESHES),
     ("gptoss_120b", GptOss120BConfig, True, SINGLE_GLX_AND_PROXY_MESHES),
 ]
+
+
+# Models that opt into combine's two-rows-per-packet coalescing (reader_combine pairs two
+# same-destination rows into one NOC scatter-write packet). Only legal when two output rows fit a
+# single fabric packet, so it is a property of the routed-expert row width: Kimi K3's 3584 bf16 row
+# is 7168 B and two fit Blackhole's 14336 B packet exactly, while DeepSeek V3 / V4-Pro / K2.6 (7168)
+# and GLM 5.1 (6144) are too wide to ever pair. Narrow-row models other than K3 are deliberately
+# left out until someone measures them.
+PACKET_PAIRING_MODELS = {"kimi_k3"}
 
 
 # The embedding axis combine moves is the *routed expert* hidden dim, not the model's residual
@@ -486,6 +512,7 @@ def _cross_product_conflated_cmb_test_dimensions():
                         topk,
                         dispatch_buffer_capacity_factor,
                         run_pcc,
+                        model_name in PACKET_PAIRING_MODELS,
                         marks=marks,
                         id=f"{model_name}-{_mesh_id(target_mesh, fabric_cfg)}-{test_scenario_id}",
                     )
@@ -519,7 +546,8 @@ def _cross_product_conflated_cmb_test_dimensions():
 #    test-code cross product calculation, or are skipped in the body of the test, depending on where it was less cumbersome to implement it.
 #
 @pytest.mark.parametrize(
-    "mesh_device, device_params, topology, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    "mesh_device, device_params, topology, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, "
+    "dispatch_buffer_capacity_factor, run_pcc_check, pair_tokens_per_packet",
     _cross_product_conflated_cmb_test_dimensions(),
     indirect=["mesh_device", "device_params"],
 )
@@ -544,6 +572,7 @@ def test_ttnn_combine(
     run_pcc_check,
     dispatched_buffer_layout,
     use_fp8_output,
+    pair_tokens_per_packet,
     is_ci_env,
     is_ci_v2_env,
 ):
@@ -560,6 +589,7 @@ def test_ttnn_combine(
         run_pcc_check,
         dispatched_buffer_layout,
         use_fp8_output,
+        pair_tokens_per_packet,
         is_ci_env,
         is_ci_v2_env,
     )

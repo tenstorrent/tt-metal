@@ -31,7 +31,6 @@ from other dispatch groups contain uninitialized values. The per-device output s
 TtDispatchModule produces the dispatched_buffer and metadata consumed here.
 """
 
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
@@ -60,6 +59,7 @@ class TtCombineModule(LightweightModule):
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
         init_zeros: bool = True,
         fp8_output: bool = False,
+        pair_tokens_per_packet: bool = False,
     ):
         """
         Initialize combine module with configuration parameters.
@@ -77,6 +77,12 @@ class TtCombineModule(LightweightModule):
             memory_config: Output memory configuration. Must be interleaved (L1 or DRAM).
             init_zeros: Whether to zero-initialize the output buffer before writing.
             fp8_output: Emit the combined output in fp8_e4m3. Requires Blackhole hardware.
+            pair_tokens_per_packet: Coalesce two same-destination token rows into one fabric packet
+                (NOC scatter-write), halving the packet count for the rows that pair. Only legal when
+                two output rows fit one fabric packet: with bf16 output that means a routed-expert
+                hidden dim of at most a quarter of the fabric payload limit — Kimi K3's 3584
+                (2 x 7168 B = the 14336 B Blackhole limit) qualifies, DeepSeek V3's 7168 does not.
+                The device op raises if the rows do not fit.
         """
         if fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
             raise ValueError("fp8_output requires Blackhole hardware")
@@ -93,6 +99,7 @@ class TtCombineModule(LightweightModule):
         self.memory_config = memory_config
         self.init_zeros = init_zeros
         self.fp8_output = fp8_output
+        self.pair_tokens_per_packet = pair_tokens_per_packet
 
     def forward(
         self,
@@ -155,6 +162,7 @@ class TtCombineModule(LightweightModule):
             memory_config=self.memory_config,
             init_zeros=self.init_zeros,
             use_fp8_combine=self.fp8_output,
+            pair_tokens_per_packet=self.pair_tokens_per_packet,
         )
 
         return output

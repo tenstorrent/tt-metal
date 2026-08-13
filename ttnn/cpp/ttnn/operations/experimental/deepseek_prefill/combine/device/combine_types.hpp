@@ -25,6 +25,10 @@ struct CombineParams {
     bool init_zeros;
     bool use_l1_small_for_semaphores = false;
     bool use_fp8_combine = false;
+    // Coalesce two same-destination token rows into one fabric packet (NOC scatter-write).
+    // Opt-in: only legal when 2 * output page size fits one fabric packet, which in bf16 means
+    // a routed-expert hidden dim <= fabric_max_payload / 4 (Kimi K3's 3584 on Blackhole).
+    bool pair_tokens_per_packet = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dispatch_group_size",
@@ -38,7 +42,8 @@ struct CombineParams {
         "worker_core_range_set",
         "init_zeros",
         "use_l1_small_for_semaphores",
-        "use_fp8_combine");
+        "use_fp8_combine",
+        "pair_tokens_per_packet");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -53,7 +58,8 @@ struct CombineParams {
             worker_core_range_set,
             init_zeros,
             use_l1_small_for_semaphores,
-            use_fp8_combine);
+            use_fp8_combine,
+            pair_tokens_per_packet);
     };
 };
 

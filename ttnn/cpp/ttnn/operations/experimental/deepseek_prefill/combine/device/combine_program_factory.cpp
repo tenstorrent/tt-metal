@@ -478,12 +478,29 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     //   Per-page layout: [0..l1_alignment) = route_info (4 x uint32_t)
     //                    [l1_alignment..page_size) = output data
     //   One reserve/push per row replaces the previous c_3 + c_4 pair.
+    //
+    //   With pair_tokens_per_packet the entry can carry TWO same-destination rows: the header
+    //   widens to 2 * l1_alignment (room for slots [4]=page_idx1 and [5]=chunk_count) and the
+    //   payload region holds two output pages back to back, which is what the writer's scatter
+    //   send streams out as one packet. Layout must stay in sync with reader_combine /
+    //   writer_combine, which gate the same shape on the ENABLE_SCATTER_PAIRING define.
     {
         constexpr uint32_t rw_buffering = 2;
 
-        uint32_t route_info_page_size = l1_alignment;
+        const bool scatter_pairing = operation_attributes.pair_tokens_per_packet;
+        uint32_t route_info_page_size = scatter_pairing ? 2 * l1_alignment : l1_alignment;
         uint32_t output_payload_page_size = detail::get_aligned_page_size(output_tensor);
-        uint32_t merged_page_size = route_info_page_size + output_payload_page_size;
+        // A coalesced 2-page payload must fit one fabric packet: the scatter send has no chunk
+        // loop, so an oversized payload would overrun the EDM channel buffer. Fail loud at build
+        // time rather than corrupting data on device.
+        TT_FATAL(
+            !scatter_pairing || 2 * output_payload_page_size <= fabric_max_packet_size,
+            "pair_tokens_per_packet=true requires two output pages ({} B) to fit one fabric packet "
+            "({} B). The hidden dim {} is too wide for packet pairing at this output dtype.",
+            2 * output_payload_page_size,
+            fabric_max_packet_size,
+            hidden_size);
+        uint32_t merged_page_size = route_info_page_size + (scatter_pairing ? 2 : 1) * output_payload_page_size;
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
             .total_size = rw_buffering * merged_page_size,
             .core_ranges = sender_core_grid,
@@ -634,6 +651,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     std::map<std::string, std::string> reader_defines = fabric_defines;
     reader_defines["INIT_ZEROS"] = operation_attributes.init_zeros ? "1" : "0";
     reader_defines["IS_TILE_LAYOUT"] = is_tile_layout ? "1" : "0";
+    // #ifdef-gated in reader_combine / writer_combine: both must agree, since the define selects the
+    // c_3 header width sized above. Off by default, so every other model keeps the 1-row layout.
+    if (operation_attributes.pair_tokens_per_packet) {
+        reader_defines["ENABLE_SCATTER_PAIRING"] = "1";
+    }
 
     const bool init_zeros = operation_attributes.init_zeros;
     tt::tt_metal::KernelHandle writer_untilize_kernel_id = 0;
@@ -893,6 +915,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     std::map<std::string, std::string> writer_defines = fabric_defines;
     writer_defines["INIT_ZEROS"] = operation_attributes.init_zeros ? "1" : "0";
+    // Must match reader_combine's gating: same c_3 header width, plus the scatter send itself.
+    if (operation_attributes.pair_tokens_per_packet) {
+        writer_defines["ENABLE_SCATTER_PAIRING"] = "1";
+    }
 
     // writer_untilize runs on untilizer cores for BOTH layouts now: it consumes cb_untilize_id
     // (c_2 — produced by the compute kernel in TILE, or directly by reader_untilize in ROW_MAJOR)

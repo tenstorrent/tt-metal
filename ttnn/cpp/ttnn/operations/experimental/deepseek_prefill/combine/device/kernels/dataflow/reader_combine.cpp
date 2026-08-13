@@ -342,6 +342,37 @@ void kernel_main() {
                     uint32_t distance =
                         manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, dst_chip);
 
+                    uint32_t chunk_count = 1;
+                    [[maybe_unused]] uint32_t output_page_idx1 = 0;
+                    [[maybe_unused]] uint64_t buffer_scratch_noc_addr1 = 0;
+#ifdef ENABLE_SCATTER_PAIRING
+                    // Look ahead exactly one slot in THIS untilizer's ring: if the next row is
+                    // already staged and targets the same dst_chip, carry both in one c_3 entry so
+                    // the writer can ship them as a single scatter packet. Never block to form a
+                    // pair — if nothing is staged yet, or it is the sentinel, or it goes elsewhere,
+                    // fall through to the ordinary one-row unicast. Pairing is therefore a pure
+                    // opportunistic win: worst case it never fires and behaviour is unchanged.
+                    invalidate_l1_cache();
+                    if (*data_ready_sem_ptrs[c] != consumed[c]) {
+                        uint32_t slot_next = read_slots[c];
+                        volatile tt_l1_ptr uint32_t* ring_meta_next =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ring_meta_addr[c][slot_next]);
+                        uint32_t next_meta0 = ring_meta_next[0];
+                        if (next_meta0 != ROUTE_INFO_SENTINEL && next_meta0 == dst_chip) {
+                            output_page_idx1 = ring_meta_next[1] * num_experts_per_tok + ring_meta_next[2];
+                            buffer_scratch_noc_addr1 = buffer_scratch_noc_addr_table[c][slot_next];
+                            read_slots[c] = (slot_next + 1) & SLOTS_PER_UNTILIZER_MASK;
+                            consumed[c]++;
+                            chunk_count = 2;
+                        }
+                    }
+                    // Header widened to two alignment units to fit slots [4] and [5]; the program
+                    // factory sized the c_3 page to match.
+                    constexpr uint32_t route_info_header_bytes = 2 * l1_alignment;
+#else
+                    constexpr uint32_t route_info_header_bytes = l1_alignment;
+#endif
+
                     cb_reserve_back(cb_route_info_id, 1);
                     uint32_t cb_base = get_write_ptr(cb_route_info_id);
                     volatile tt_l1_ptr uint32_t* route_info = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_base);
@@ -352,13 +383,31 @@ void kernel_main() {
                     // and ignores slots [0..1]. All four slots are written unconditionally so the
                     // 2D writer doesn't see uninitialized garbage in the dst_chip slot.
                     route_info[3] = dst_chip;
+#ifdef ENABLE_SCATTER_PAIRING
+                    route_info[4] = output_page_idx1;  // meaningful only when chunk_count == 2
+                    route_info[5] = chunk_count;
+#endif
                     {
                         // DeviceZoneScopedN("sending-for-FABRIC-write");
-                        uint32_t output_dst = cb_base + l1_alignment;
+                        uint32_t output_dst = cb_base + route_info_header_bytes;
                         noc_async_read(buffer_scratch_noc_addr, output_dst, aligned_output_page_size);
+                        if (chunk_count == 2) {
+                            // Second row lands immediately after the first: the scatter send streams
+                            // both pages as one contiguous payload.
+                            noc_async_read(
+                                buffer_scratch_noc_addr1,
+                                output_dst + aligned_output_page_size,
+                                aligned_output_page_size);
+                        }
                         noc_async_read_barrier();
                     }
                     cb_push_back(cb_route_info_id, 1);
+
+                    if (chunk_count == 2) {
+                        // Release the paired slot's receive_buf credit too — its data has been copied
+                        // out by the read barrier above. The base credit is returned below.
+                        noc_semaphore_inc<true>(untilizer_credits_noc_addrs[c], 1);
+                    }
                 }
                 noc_semaphore_inc<true>(untilizer_credits_noc_addrs[c], 1);
             }

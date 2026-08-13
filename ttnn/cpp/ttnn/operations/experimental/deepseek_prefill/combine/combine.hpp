@@ -27,7 +27,8 @@ ttnn::Tensor combine(
     std::optional<tt::tt_fabric::Topology> topology = tt::tt_fabric::Topology::Linear,
     bool init_zeros = true,
     bool use_l1_small_for_semaphores = false,
-    bool use_fp8_combine = false);
+    bool use_fp8_combine = false,
+    bool pair_tokens_per_packet = false);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine
 

@@ -452,6 +452,30 @@ inline void fabric_send_noc_unicast(
     }
 }
 
+// Scatter-write sibling of fabric_send_noc_unicast: sends TWO equal-sized pages in ONE fabric
+// packet (payload = 2 * page_size_bytes). The receiving router splits the payload and NOC-writes
+// each half to its own page (noc_page0, noc_page1), which need not be adjacent on the destination.
+// Used to coalesce two combine contributions bound for the same destination chip, halving the
+// per-row fabric packet count.
+//
+// Caller must guarantee 2 * page_size_bytes <= FabricMaxPacketSzBytes, so one send suffices and
+// there is no chunk loop (the combine program factory TT_FATALs on this). The two source pages
+// must be contiguous in L1 at payload_l1_address, page0 first.
+template <uint32_t FabricMaxPacketSzBytes, typename AddrGenType, class SenderType>
+inline void fabric_send_noc_unicast_scatter(
+    AddrGenType addrgen,
+    SenderType& fabric_connection,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t payload_l1_address,
+    uint32_t noc_page0,
+    uint32_t noc_page1,
+    uint32_t page_size_bytes) {
+    ASSERT(2 * page_size_bytes <= FabricMaxPacketSzBytes);
+    tt::tt_fabric::linear::to_noc_unicast_scatter_write(page_size_bytes, packet_header, noc_page0, noc_page1, addrgen);
+    perform_payload_send<true, true, SenderType>(
+        fabric_connection, payload_l1_address, 2 * page_size_bytes, packet_header);
+}
+
 /*
 enum eth_chan_directions {
     EAST = 0,

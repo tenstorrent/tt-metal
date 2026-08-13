@@ -68,6 +68,11 @@ void bind_combine(nb::module_& mod) {
                 Defaults to True.
             use_fp8_combine (bool, optional): When True, emit the combined output in fp8_e4m3.
                 Requires Blackhole hardware. Defaults to False.
+            pair_tokens_per_packet (bool, optional): When True, two token rows headed for the same
+                destination chip are coalesced into a single fabric packet via NOC scatter-write,
+                halving the packet count for the paired rows. Requires 2 * output page size to fit
+                one fabric packet, i.e. a narrow hidden dim (Kimi K3's 3584 in bf16 on Blackhole:
+                2 * 7168 B = the 14336 B max). Raises otherwise. Defaults to False.
 
         Returns:
             ttnn.Tensor:
@@ -94,7 +99,8 @@ void bind_combine(nb::module_& mod) {
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("init_zeros") = true,
         nb::arg("use_l1_small_for_semaphores") = false,
-        nb::arg("use_fp8_combine") = false);
+        nb::arg("use_fp8_combine") = false,
+        nb::arg("pair_tokens_per_packet") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine::detail
