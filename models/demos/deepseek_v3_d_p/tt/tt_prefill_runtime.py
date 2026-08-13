@@ -170,6 +170,8 @@ class TtPrefillRuntime:
                 # to look for the latent-projection cache files and would call an incomplete cache
                 # complete. model_cfg is already in hand two lines up.
                 model_cfg=model_cfg,
+                mesh_device=self.mesh_device,
+                tp_axis=self.config.tp_axis,
             ):
                 logger.info(f"TTNN weight cache complete at {self.config.weight_cache_path}; loading from disk")
             else:

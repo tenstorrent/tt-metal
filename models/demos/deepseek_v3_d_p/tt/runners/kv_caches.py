@@ -11,6 +11,7 @@ import ttnn
 from models.demos.common.prefill.adapter import KvCaches
 
 if TYPE_CHECKING:
+    from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache
 
 
@@ -24,3 +25,11 @@ class MlaKvCaches(KvCaches):
 
     kvpe: MlaKvCache
     index: Optional[ttnn.Tensor] = None
+
+
+@dataclass
+class KimiK3Caches(KvCaches):
+    """Compact MLA KV plus per-user, per-model-layer KDA carries for one K3 rank."""
+
+    mla: MlaKvCaches
+    kda: list[dict[int, KdaState]]

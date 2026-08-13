@@ -1,17 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
-"""Kimi-K3 component adapter (test-only).
+"""Kimi-K3 hybrid-prefill adapter integration surface.
 
 Kimi-K3 is a **hybrid**: 93 layers, of which only 24 are full-attention (MLA) layers and 69 are KDA
 linear-attention layers. The TT KDA, MLA, AttnRes, and LatentMoE components exist, but no production
-runtime composes their hybrid layer schedule and state ownership yet. K3 therefore cannot be served
-end to end; a serving adapter must subclass ``PrefillModelAdapter`` directly and build that runtime.
+runtime is registered for production serving because KDA carry migration and full checkpoint
+cache construction are still fail-closed boundaries.
 
-This adapter gives the existing component tests a first-class ``variant``. It remains deliberately
-absent from ``models/demos/common/prefill/adapter.py:ADAPTER_PATHS`` until ``build_runtime`` supplies
-the complete hybrid model, compact MLA cache, AttnRes rank transport, and migration/ack contract;
-production therefore cannot select ``PREFILL_MODEL=kimi_k3`` and receive a partial runtime.
+This adapter gives existing tests and the future production-shape Galaxy composition row one
+construction surface. It remains deliberately absent from
+``models/demos/common/prefill/adapter.py:ADAPTER_PATHS`` until the remaining contracts close, so
+production cannot select a partial runtime.
 
 MoE scope (issue #51336): the latent-MoE structure -- routed experts at the reduced 3584 hidden,
 896 experts / top-16, a latent RMSNorm, and one shared expert at 6144. Two deliberate limits:
@@ -23,6 +23,7 @@ MoE scope (issue #51336): the latent-MoE structure -- routed experts at the redu
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -43,7 +44,13 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # Repo-local, dot-free (transformers' trust_remote_code import chokes on "." in a path). The dir
     # holds the TRIMMED upstream MLA reference, not a loadable full-model checkpoint.
     hf_model_default = "models/demos/deepseek_v3_d_p/reference/kimi_k3"
+    # No complete TTNN cache exists yet; require PREFILL_TTNN_CACHE explicitly rather than selecting
+    # a plausible but incomplete component cache.
+    ttnn_cache_default = ""
+    prefill_trace_default = ""
     default_gate_mode = "DEVICE_FP32"  # single expert group, as Kimi-K2.6
+    supports_kv_only_last_layer = False
+    required_pipeline_ranks = 3
 
     # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL. Inherited
     # from the Kimi family; inert for the MLA-only tests but correct if a runtime is ever built.
@@ -99,6 +106,10 @@ class KimiK3Adapter(MLAPrefillAdapter):
         ``fla-core``, so ``AutoConfig`` cannot load ``model_type: kimi_linear`` here."""
         return kimi_k3_hf_config
 
+    def load_hf_config(self):
+        """Use the pinned hand-built dimensions; importing upstream K3 requires unavailable fla-core."""
+        return kimi_k3_hf_config(max_seq=int(os.environ.get("PREFILL_MAX_SEQ_LEN", "8192")))
+
     @property
     def reference_attention_cls(self):
         from models.demos.deepseek_v3_d_p.reference.kimi_k3.modeling_kimi_k3_mla import KimiMLAAttention
@@ -117,12 +128,10 @@ class KimiK3Adapter(MLAPrefillAdapter):
 
         return KimiSparseMoeBlock
 
-    def allocate_kv_cache(self, **kwargs):
-        raise NotImplementedError(
-            "Kimi-K3 KV-cache allocation needs the 24-of-93 model-layer -> kv-slot map; the "
-            "inherited MLA allocator would size the cache to the full 93-layer count. Use "
-            "KimiK3Config.mla_kv_slot() when wiring this up."
-        )
+    def allocate_kv_cache(self, *, mesh_device, hf_config, params):
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import allocate_kimi_k3_caches
+
+        return allocate_kimi_k3_caches(mesh_device=mesh_device, hf_config=hf_config, params=params)
 
     def layer_split_boundaries(self, num_layers):
         """Admit only the AttnRes segment starts certified by the 31/31/31 handoff gate."""
@@ -134,9 +143,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
         """Pack sealed AttnRes snapshots plus the live prefix into the one D2D tensor."""
         return KimiK3Config.attn_res_candidate_count_at_boundary(next_first_layer_idx)
 
-    def build_runtime(self, **kwargs):
-        raise NotImplementedError(
-            "Kimi-K3 has no composed prefill runtime: its KDA, MLA, AttnRes, and LatentMoE "
-            "components are implemented, but their 93-layer hybrid schedule, KDA state, and "
-            "compact 24-slot MLA cache are not yet wired together. This adapter is test-only."
-        )
+    def build_runtime(self, *, mesh_device, hf_config, params):
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import KimiK3Runtime
+
+        return KimiK3Runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)

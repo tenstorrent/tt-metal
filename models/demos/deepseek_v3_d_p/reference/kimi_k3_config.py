@@ -141,9 +141,9 @@ class KimiK3Config:
 
     # AttnRes (attention-side, out of scope here; recorded so the delta is not lost)
     ATTN_RES_BLOCK_SIZE = 12
-    # The segmented-handoff prerequisite certifies the natural three-rank 31/31/31
-    # cuts. A single-rank run also starts at 0. Arbitrary cuts stay rejected
-    # until the successor-fragment issue tracked by #53029 is understood.
+    # The segmented-handoff prerequisite certifies exactly the natural three-rank 31/31/31
+    # cuts. Other pipeline widths stay rejected until the successor-fragment issue tracked by
+    # #53029 is understood.
     PIPELINE_RANK_STARTS = frozenset({0, 31, 62})
 
     # LatentMoE norm + SiTU-GLU activation.
@@ -164,6 +164,24 @@ class KimiK3Config:
         wants: ``[3, 7, 11, ..., 87, 91, 92]``.
         """
         return sorted(layer - 1 for layer in cls.FULL_ATTN_LAYERS_1BASED)
+
+    @classmethod
+    def is_kda_layer(cls, layer_idx: int) -> bool:
+        """Return whether a zero-indexed model layer uses KDA rather than MLA."""
+        if not 0 <= layer_idx < cls.NUM_LAYERS:
+            raise ValueError(f"Kimi-K3 layer index {layer_idx} is outside [0, {cls.NUM_LAYERS})")
+        return layer_idx not in cls.mla_layer_ids()
+
+    @classmethod
+    def kda_layer_ids(cls) -> list[int]:
+        """Zero-indexed model-layer indices whose attention module is KDA."""
+        mla = set(cls.mla_layer_ids())
+        return [layer_idx for layer_idx in range(cls.NUM_LAYERS) if layer_idx not in mla]
+
+    @classmethod
+    def build_kda_config(cls) -> KDAConfig:
+        """Build the KDA cache/device contract used by generic block preflight code."""
+        return kimi_k3_kda_config()
 
     @classmethod
     def mla_kv_slot(cls, layer_idx: int) -> int:

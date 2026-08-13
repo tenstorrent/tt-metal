@@ -92,6 +92,51 @@ class KdaState:
     recurrent: ttnn.Tensor
     convolution: ttnn.Tensor
 
+    def deallocate(self) -> None:
+        """Release both caller-owned KDA carries."""
+        ttnn.deallocate(self.recurrent)
+        ttnn.deallocate(self.convolution)
+
+
+def allocate_kda_state(
+    mesh_device: ttnn.Device | ttnn.MeshDevice,
+    config: KDAConfig,
+    program_config: KDAProgramConfig,
+    *,
+    tp_axis: int = 1,
+    batch_size: int = 1,
+) -> KdaState:
+    """Allocate one zeroed KDA carry set without constructing or loading layer weights."""
+    if batch_size != 1:
+        raise ValueError(f"KDA prefill currently requires batch_size=1, got {batch_size}")
+    if tp_axis not in (0, 1):
+        raise ValueError(f"tensor-parallel axis must be 0 or 1, got {tp_axis}")
+    tp_factor = tuple(mesh_device.shape)[tp_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
+    if config.num_heads % tp_factor:
+        raise ValueError(f"KDA num_heads {config.num_heads} must divide TP factor {tp_factor}")
+    local_config = replace(config, num_heads=config.num_heads // tp_factor)
+    recurrence = program_config.recurrence
+    return KdaState(
+        recurrent=ttnn.zeros(
+            (batch_size, local_config.num_heads, local_config.head_k_dim, local_config.head_v_dim),
+            dtype=recurrence.recurrent_state_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=recurrence.output_memory_config,
+        ),
+        convolution=ttnn.zeros(
+            (
+                batch_size,
+                local_config.conv_kernel_size - 1,
+                local_config.q_dim + local_config.k_dim + local_config.v_dim,
+            ),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        ),
+    )
+
 
 class ttKDA:
     """Prefill-only KDA layer with immutable, caller-owned logical state."""
@@ -139,6 +184,7 @@ class ttKDA:
         if tp_axis not in (0, 1) or sp_axis not in (0, 1) or sp_axis == tp_axis:
             raise ValueError(f"KDA requires distinct 2D SP/TP axes, got SP={sp_axis}, TP={tp_axis}")
         program_config = program_config or KDAProgramConfig()
+        self.program_config = program_config
         self.device = mesh_device
         self.layer_idx = layer_idx
         self.tensor_parallel_axis = tp_axis
@@ -222,23 +268,12 @@ class ttKDA:
 
     def allocate_state(self, batch_size: int = 1) -> KdaState:
         """Allocate the canonical device-resident KDA carries for one prefill stream."""
-        if batch_size != 1:
-            raise ValueError(f"KDA prefill currently requires batch_size=1, got {batch_size}")
-        return KdaState(
-            recurrent=ttnn.zeros(
-                (batch_size, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim),
-                dtype=self.recurrence_config.recurrent_state_dtype,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.device,
-                memory_config=self.recurrence_config.output_memory_config,
-            ),
-            convolution=ttnn.zeros(
-                (batch_size, self.config.conv_kernel_size - 1, self._convolution_width),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            ),
+        return allocate_kda_state(
+            self.device,
+            self.global_config,
+            self.program_config,
+            tp_axis=self.tensor_parallel_axis,
+            batch_size=batch_size,
         )
 
     def _validate_forward(

@@ -57,6 +57,8 @@ class TtPrefillTransformer(LightweightModule):
         is_last_rank: bool = True,
         kv_only_last_layer: bool = False,
         model_cfg: type | None = None,
+        mesh_device: ttnn.MeshDevice | None = None,
+        tp_axis: int = 1,
     ) -> bool:
         """
         Top-level cache completeness check for the full transformer.
@@ -80,6 +82,8 @@ class TtPrefillTransformer(LightweightModule):
                 so existing callers are unaffected, but MUST be passed for a LatentMoE model
                 (Kimi-K3): without it the block check cannot know to look for the
                 latent-projection cache files and reports a cache missing them as complete.
+            mesh_device / tp_axis: Placement needed to validate KDA cache shards. Required only
+                when ``model_cfg`` selects KDA layers.
 
         Returns:
             True if all expected cache files exist, False otherwise
@@ -100,7 +104,13 @@ class TtPrefillTransformer(LightweightModule):
             layer_idx = first_layer_idx + local_idx
             is_dense = layer_idx < first_k_dense
             if not TtPrefillBlock.check_cache_complete(
-                cache_path, layer_idx, is_dense, experts_per_chip, model_cfg=model_cfg
+                cache_path,
+                layer_idx,
+                is_dense,
+                experts_per_chip,
+                model_cfg=model_cfg,
+                mesh_device=mesh_device,
+                tp_axis=tp_axis,
             ):
                 return False
 

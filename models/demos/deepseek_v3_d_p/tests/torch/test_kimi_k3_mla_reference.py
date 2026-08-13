@@ -36,10 +36,11 @@ import torch
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc
-from models.demos.common.prefill.runners.runner_utils import activation_global_spec
+from models.demos.common.prefill.runners.runner_utils import activation_global_spec, compute_layer_split
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.modeling_kimi_k3_mla import KimiMLAAttention
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.segment import KimiK3SegmentLayout
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
 
 # Absorbed vs unabsorbed differ only by bf16 rounding through two extra matmuls.
@@ -192,6 +193,7 @@ def test_k3_constants_match_the_vendored_checkpoint_config():
     # quantization -- both load-bearing for the MLA work.
     assert len(linear_attn["kda_layers"]) + len(linear_attn["full_attn_layers"]) == KimiK3Config.NUM_LAYERS
     assert len(linear_attn["full_attn_layers"]) == len(KimiK3Config.mla_layer_ids()) == 24
+    assert KimiK3Config.kda_layer_ids() == [layer_idx - 1 for layer_idx in linear_attn["kda_layers"]]
     assert any("self_attn" in pattern for pattern in text_config["quantization_config"]["ignore"])
 
 
@@ -203,6 +205,9 @@ def test_k3_layer_schedule(expect_error):
     # 91 and 92 are adjacent -- the 3 KDA : 1 MLA pattern breaks at the end of the model.
     assert ids[-2] == 91, "the last two layers are both MLA; a strict stride-4 map would be wrong"
     assert KimiK3Config.mla_kv_slot(3) == 0 and KimiK3Config.mla_kv_slot(92) == 23
+    assert len(KimiK3Config.kda_layer_ids()) == 69
+    assert set(ids).isdisjoint(KimiK3Config.kda_layer_ids())
+    assert sorted(ids + KimiK3Config.kda_layer_ids()) == list(range(KimiK3Config.NUM_LAYERS))
     # A KDA layer index must raise rather than return a plausible-but-wrong slot.
     with expect_error(ValueError, "KDA layer"):
         KimiK3Config.mla_kv_slot(0)  # layer 0 is KDA
@@ -210,9 +215,28 @@ def test_k3_layer_schedule(expect_error):
     # The packed D2D contract is derived from the already-certified 31/31/31
     # AttnRes cuts. Ordinary models retain the one-candidate global shape.
     adapter = KimiK3Adapter()
+    adapter.validate_pipeline_rank_count(3)
+    with expect_error(ValueError, "requires exactly 3 pipeline ranks"):
+        adapter.validate_pipeline_rank_count(1)
     assert adapter.layer_split_boundaries(KimiK3Config.NUM_LAYERS) == {0, 31, 62}
+    assert compute_layer_split(KimiK3Config.NUM_LAYERS, 3, adapter.layer_split_boundaries(KimiK3Config.NUM_LAYERS)) == [
+        (0, 31),
+        (31, 31),
+        (62, 31),
+    ]
     assert adapter.pipeline_activation_candidate_count(31) == 4
     assert adapter.pipeline_activation_candidate_count(62) == 7
+    layouts = tuple(KimiK3SegmentLayout.build(start, 31) for start in (0, 31, 62))
+    assert tuple(layout.num_sealed_before for layout in layouts) == (0, 3, 6)
+    assert sum(len(layout.mla_layer_indices) for layout in layouts) == 24
+    assert sum(len(layout.kda_layer_indices) for layout in layouts) == 69
+    for layout in layouts:
+        assert layout.layer_indices == tuple(range(layout.first_layer_idx, layout.first_layer_idx + 31))
+        assert layout.mla_slot_by_layer == {
+            layer_idx: KimiK3Config.mla_kv_slot(layer_idx) for layer_idx in layout.mla_layer_indices
+        }
+    with expect_error(ValueError, "not one of the certified 31-layer production segments"):
+        KimiK3SegmentLayout.build(0, 62)
     assert tuple(activation_global_spec(512, KimiK3Config.EMB_SIZE).shape) == (1, 1, 512, 7168)
     assert tuple(activation_global_spec(512, KimiK3Config.EMB_SIZE, 4).shape) == (1, 4, 512, 7168)
     with expect_error(ValueError, "not a certified rank start"):

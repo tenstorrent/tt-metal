@@ -121,6 +121,12 @@ class PrefillModelAdapter(ABC):
     # Route the MoE routing all-gather's global semaphores to L1_SMALL instead of
     # pinning the main-L1 floor. Requires l1_small_size > 0.
     routing_use_l1_small_for_semaphores: bool = False
+    # Some architectures need the final layer's non-KV outputs to complete model-owned residual
+    # bookkeeping even though the common prefill runner discards the final hidden state.
+    supports_kv_only_last_layer: bool = True
+    # Exact pipeline width required by a model whose cross-rank state is certified only for a
+    # particular segmentation. None keeps the common runner's existing arbitrary-rank behavior.
+    required_pipeline_ranks: Optional[int] = None
     # Emb-axis sharding of the cross-rank D2D hidden state (seq is always SP-sharded). True (default):
     # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
     # Must match the layout the model's decoder layer consumes/produces.
@@ -182,6 +188,13 @@ class PrefillModelAdapter(ABC):
         ``tt_prefill_transformer``). The runner (``compute_layer_split``) snaps the default even split
         onto these and rejects any split whose rank starts fall off them."""
         return None
+
+    def validate_pipeline_rank_count(self, num_ranks: int) -> None:
+        """Reject a pipeline width this adapter cannot represent before opening the mesh."""
+        if self.required_pipeline_ranks is not None and num_ranks != self.required_pipeline_ranks:
+            raise ValueError(
+                f"{self.name} requires exactly {self.required_pipeline_ranks} pipeline ranks, got {num_ranks}"
+            )
 
     @abstractmethod
     def build_runtime(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams):

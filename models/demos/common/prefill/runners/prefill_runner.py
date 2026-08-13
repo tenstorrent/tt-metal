@@ -756,6 +756,7 @@ def main() -> None:
         ttnn.init_distributed_context()
     rank = int(ttnn.distributed_context_get_rank())
     num_ranks = int(ttnn.distributed_context_get_size())
+    ADAPTER.validate_pipeline_rank_count(num_ranks)
     topology_profile = resolve_prefill_topology_profile(GLOBAL_MESH_SHAPE, PREFILL_MODEL)
     _assert_ranks_agree_on_config(rank, num_ranks, topology_profile)
 
@@ -794,8 +795,9 @@ def main() -> None:
         gate_mode_name=_gate_mode_name,
         # Chunked prefill never samples (the populated KV cache is the output), so the final stage is
         # headless: its last layer runs KV-only and no norm/LM-head is built. Only the last rank does
-        # this (single-rank inherits it); PREFILL_KV_ONLY_LAST_LAYER can force it off.
-        kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER,
+        # this (single-rank inherits it). PREFILL_KV_ONLY_LAST_LAYER can force it off, and an adapter
+        # can reject the shortcut when its model-owned residual schedule needs the final module output.
+        kv_only_last_layer=is_last_rank and KV_ONLY_LAST_LAYER and ADAPTER.supports_kv_only_last_layer,
         weight_cache_path=ADAPTER.weight_cache_path(GLOBAL_MESH_SHAPE),
         sparse_kv_cache_format=ADAPTER.default_sparse_kv_cache_format,
         use_trace=USE_TRACE,

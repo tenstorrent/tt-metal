@@ -75,6 +75,9 @@ class TtPrefillBlock(LightweightModule):
         experts_per_chip: int = 8,
         *,
         model_cfg: type | None = None,
+        mesh_device: ttnn.MeshDevice | None = None,
+        tp_axis: int = 1,
+        kda_config=None,
     ) -> bool:
         """Check if block cache is complete (norms + MLA + FFN/MoE).
 
@@ -86,7 +89,18 @@ class TtPrefillBlock(LightweightModule):
 
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.attn_norm"):
             return False
-        if not ttMLA.check_cache_complete(cache_path, f"{prefix}.mla"):
+        is_kda = bool(model_cfg and getattr(model_cfg, "is_kda_layer", lambda _layer_idx: False)(layer_idx))
+        if is_kda:
+            if kda_config is None:
+                config_builder = getattr(model_cfg, "build_kda_config", None)
+                kda_config = config_builder() if config_builder is not None else None
+            if mesh_device is None or kda_config is None:
+                raise ValueError("checking a KDA block cache requires mesh_device and kda_config")
+            from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
+
+            if not ttKDA.check_cache_complete(cache_path, mesh_device, kda_config, layer_idx, tp_axis=tp_axis):
+                return False
+        elif not ttMLA.check_cache_complete(cache_path, f"{prefix}.mla"):
             return False
         if not TtDistributedRmsNorm.check_cache_complete(cache_path, f"{prefix}.ffn_norm"):
             return False
@@ -128,9 +142,10 @@ class TtPrefillBlock(LightweightModule):
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         kv_only: bool = False,
+        kda_config=None,
     ):
         """
-        Build TTNN cache for this block (norms + MLA + FFN/MoE) without device copy.
+        Build TTNN cache for this block (norms + KDA/MLA + FFN/MoE) without device copy.
 
         Args:
             state_dict: Layer weights dict
@@ -142,6 +157,9 @@ class TtPrefillBlock(LightweightModule):
             ... other args for sub-components
         """
         is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
+        is_kda = bool(getattr(model_cfg, "is_kda_layer", lambda _layer_idx: False)(layer_idx))
+        if is_kda and kv_only:
+            raise ValueError("KDA layers cannot use the MLA-only kv_only shortcut")
         emb_dim = config.hidden_size
 
         logger.info(f"Building TTNN cache for TtPrefillBlock layer {layer_idx} ({'MoE' if is_moe else 'dense'})")
@@ -155,18 +173,37 @@ class TtPrefillBlock(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
         )
 
-        # Build MLA cache
-        ttMLA.build_ttnn_cache(
-            state_dict=state_dict.get("mla_weights", {}),
-            cache_path=cache_path,
-            mesh_device=mesh_device,
-            config=config,
-            layer_idx=layer_idx,
-            seq_len=seq_len,
-            sp_axis=sp_axis,
-            tp_axis=tp_axis,
-            kv_only=kv_only,
-        )
+        if is_kda:
+            if kda_config is None:
+                config_builder = getattr(model_cfg, "build_kda_config", None)
+                kda_config = config_builder() if config_builder is not None else None
+            if kda_config is None:
+                raise ValueError("building a KDA block cache requires kda_config")
+            kda_weights = state_dict.get("kda_weights")
+            if not kda_weights:
+                raise ValueError(f"building KDA layer {layer_idx} cache requires non-empty kda_weights")
+            from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
+
+            ttKDA.build_ttnn_cache(
+                kda_weights,
+                cache_path,
+                mesh_device,
+                kda_config,
+                layer_idx,
+                tp_axis=tp_axis,
+            )
+        else:
+            ttMLA.build_ttnn_cache(
+                state_dict=state_dict.get("mla_weights", {}),
+                cache_path=cache_path,
+                mesh_device=mesh_device,
+                config=config,
+                layer_idx=layer_idx,
+                seq_len=seq_len,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                kv_only=kv_only,
+            )
 
         if kv_only:
             # The kv-only last layer has no ffn_norm / FFN / MoE.
@@ -258,6 +295,8 @@ class TtPrefillBlock(LightweightModule):
         routing_use_l1_small_for_semaphores: bool = False,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
+        kda_config=None,
+        kda_program_config=None,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -270,6 +309,8 @@ class TtPrefillBlock(LightweightModule):
         assert not is_chunked or layer_num is not None, "chunked prefill requires layer_num (model layer count)"
         self.mesh_device = mesh_device
         self.num_links = num_links
+        self.layer_idx = layer_idx
+        self.tp_axis = tp_axis
         if topology is None:
             topology = per_axis_topology()
         # Per-axis CCL topology. A (row=SP-axis-0, col=TP-axis-1) tuple configures each mesh
@@ -286,6 +327,9 @@ class TtPrefillBlock(LightweightModule):
         self.topology = tp_topology  # forward()'s dense-FFN all-gather is on the TP axis (cluster_axis=1)
         self.kv_only = kv_only
         self.is_moe = layer_idx >= model_cfg.NUM_DENSE_LAYERS
+        self.is_kda = bool(getattr(model_cfg, "is_kda_layer", lambda _layer_idx: False)(layer_idx))
+        if self.is_kda and kv_only:
+            raise ValueError("KDA layers cannot use the MLA-only kv_only shortcut")
 
         emb_dim = config.hidden_size
 
@@ -307,30 +351,52 @@ class TtPrefillBlock(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
         )
 
-        # --- MLA ---
-        # In chunked prefill the MLA's seq_len sizes the gathered-KV ring buffer (= full per-user
-        # cache length), while the block's seq_len is the per-chunk size used by the MoE/FFN dispatch
-        # buffers. They are equal in the single-shot path (max_seq_len is None).
-        self.mla = ttMLA(
-            config,
-            state_dict.get("mla_weights", {}),  # Empty dict if cache exists
-            mesh_device,
-            layer_idx=layer_idx,
-            seq_len=max_seq_len if max_seq_len is not None else seq_len,
-            sp_axis=sp_axis,
-            tp_axis=tp_axis,
-            # Pass the full per-axis topology: MLA's q/kv/wo CCLs use the TP element (cluster_axis=
-            # tp_axis), but its ring-attention SDPA runs on the SP axis and needs the SP element.
-            topology=topology,
-            is_balanced=is_balanced,
-            weight_cache_path=weight_cache_path,
-            is_chunked=is_chunked,
-            active_seq_len=seq_len,
-            slot_num=slot_num,
-            layer_num=layer_num,
-            kv_only=kv_only,
-            sparse_kv_cache_format=sparse_kv_cache_format,
-        )
+        # --- Attention ---
+        # K3 selects KDA or MLA from the real global layer schedule. Other models do not expose
+        # ``is_kda_layer`` and retain the established all-MLA construction path.
+        if self.is_kda:
+            if kda_config is None or kda_program_config is None:
+                raise ValueError("KDA block construction requires kda_config and kda_program_config")
+            from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
+            from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
+
+            self.mla = None
+            self.kda = ttKDA(
+                mesh_device,
+                kda_config,
+                state_dict.get("kda_weights") or None,
+                layer_idx=layer_idx,
+                weight_cache_path=weight_cache_path,
+                tt_ccl=get_tt_ccl(mesh_device),
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                program_config=kda_program_config,
+            )
+        else:
+            self.kda = None
+            # In chunked prefill MLA's seq_len sizes the gathered-KV ring buffer (= full per-user
+            # cache length), while the block's seq_len is the per-chunk size used by the MoE/FFN dispatch
+            # buffers. They are equal in the single-shot path (max_seq_len is None).
+            self.mla = ttMLA(
+                config,
+                state_dict.get("mla_weights", {}),  # Empty dict if cache exists
+                mesh_device,
+                layer_idx=layer_idx,
+                seq_len=max_seq_len if max_seq_len is not None else seq_len,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                # Pass the full per-axis topology: MLA's q/kv/wo CCLs use the TP element (cluster_axis=
+                # tp_axis), but its ring-attention SDPA runs on the SP axis and needs the SP element.
+                topology=topology,
+                is_balanced=is_balanced,
+                weight_cache_path=weight_cache_path,
+                is_chunked=is_chunked,
+                active_seq_len=seq_len,
+                slot_num=slot_num,
+                layer_num=layer_num,
+                kv_only=kv_only,
+                sparse_kv_cache_format=sparse_kv_cache_format,
+            )
 
         if kv_only:
             # Last layer: no FFN norm, no FFN/MoE. Forward returns after MLA.
@@ -514,6 +580,92 @@ class TtPrefillBlock(LightweightModule):
         if ffn is not None and hasattr(ffn, "release_sub_device_manager"):
             ffn.release_sub_device_manager()
 
+    def forward_attention_module(
+        self,
+        x: ttnn.Tensor,
+        *,
+        rope_tensors: Optional[dict] = None,
+        kvpe_cache: Optional[MlaKvCache] = None,
+        cache_layer_idx: Optional[int] = None,
+        kda_state=None,
+        actual_start: Optional[int] = None,
+        cache_user_id: int = 0,
+        metadata: Optional[ttnn.Tensor] = None,
+    ):
+        """Run only this layer's normalized attention module, without a residual add.
+
+        Kimi-K3 AttnRes owns both residual writes, so its composer needs the attention and MLP
+        outputs separately. MLA consumes the compact MLA cache slot supplied by the composer. KDA
+        consumes and returns the caller-owned recurrent/convolution state; its input is gathered
+        across TP because KDA shards heads internally, while its output is TP-reduced back to the
+        same hidden-sharded 4D representation AttnRes carries.
+        """
+        attn_norm_out = self.attn_norm(x)
+        if self.is_kda:
+            if kda_state is None:
+                ttnn.deallocate(attn_norm_out)
+                raise ValueError(f"KDA layer {self.layer_idx} requires caller-owned state")
+            gathered = attn_norm_out
+            if self.mesh_device.shape[self.tp_axis] > 1:
+                gathered = ttnn.all_gather(
+                    attn_norm_out,
+                    dim=-1,
+                    cluster_axis=self.tp_axis,
+                    num_links=self.num_links,
+                    topology=self.topology,
+                )
+            kda_input = ttnn.squeeze(gathered, dim=0)
+            try:
+                output, next_state = self.kda.forward(kda_input, kda_state)
+            finally:
+                if gathered is not attn_norm_out:
+                    ttnn.deallocate(gathered)
+                ttnn.deallocate(attn_norm_out)
+            if len(output.shape) == 3:
+                output = ttnn.unsqueeze(output, dim=0)
+            return output, next_state
+
+        if kvpe_cache is None or cache_layer_idx is None:
+            ttnn.deallocate(attn_norm_out)
+            raise ValueError(f"MLA layer {self.layer_idx} requires a compact KV cache slot")
+        try:
+            output = self.mla.forward(
+                attn_norm_out,
+                rope_tensors or {},
+                kvpe_cache,
+                cache_layer_idx=cache_layer_idx,
+                actual_start=actual_start,
+                cache_user_id=cache_user_id,
+                metadata=metadata,
+            )
+        finally:
+            ttnn.deallocate(attn_norm_out)
+        return output, None
+
+    def forward_mlp_module(
+        self,
+        x: ttnn.Tensor,
+        *,
+        actual_isl: Optional[int] = None,
+        padding_side: str = "right",
+        actual_start: Optional[int] = None,
+        metadata: Optional[ttnn.Tensor] = None,
+    ) -> ttnn.Tensor:
+        """Run only this layer's normalized dense/LatentMoE module, without a residual add."""
+        ffn_norm_out = self.ffn_norm(x)
+        try:
+            if self.is_moe:
+                return self._moe_path(
+                    ffn_norm_out,
+                    actual_isl=actual_isl,
+                    padding_side=padding_side,
+                    actual_start=actual_start,
+                    metadata=metadata,
+                )
+            return self._dense_ffn_path(ffn_norm_out)
+        finally:
+            ttnn.deallocate(ffn_norm_out)
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -579,6 +731,8 @@ class TtPrefillBlock(LightweightModule):
             (output_tensor, kv_cache) where kv_cache is a host tensor or None, or
             (output_tensor, kv_intermediates_dict) when return_kv_intermediates=True.
         """
+        if self.is_kda:
+            raise RuntimeError("KDA blocks must be driven by the Kimi-K3 AttnRes composer")
         # Optional MLA-vs-FFN host timing (TT_PREFILL_BLOCK_TIMING=1). Bracket each region with a device
         # sync so the wall-clock reflects device work; disabled by default (no sync, no perturbation).
         # Skip kv_only layers (they run no FFN and return early below).
