@@ -465,6 +465,7 @@ def test_hift_trace_is_bit_identical(device):
     from models.demos.cosyvoice.tt.hifigan.generator import TtHiFTGenerator
 
     model = TtHiFTGenerator.from_export(device)
+    model.enable_trace(True)  # off by default; streaming is what opts in
     mel, s, mel_frames = _hift_inputs(device, ttnn)
     try:
         want = ttnn.to_torch(model._decode_impl(mel, s, mel_frames)).float()
@@ -497,17 +498,23 @@ def test_hift_trace_is_bit_identical(device):
 @needs_hift_golden
 @needs_hift_trace
 def test_hift_trace_is_faster(device):
-    """How much the capture is worth, and what it costs to take it.
+    """How much a replay is worth, and what it costs to take the trace.
 
-    Capture is more expensive than a single untraced call, which is why `decode` waits
-    for a geometry to repeat. The break-even printed here is the number that decides
-    whether tracing helps a given workload: streaming reuses its chunk geometry and
-    clears it easily, one-shot synthesis never does.
+    **The capture figure printed here flatters itself, and the break-even derived from it
+    is wrong.** The test above has already captured and released a trace for this same
+    geometry, and a second capture of a geometry the process has seen costs `~110-160 ms`
+    where the first costs `~980 ms`. Reading `break-even at 5 replays` off this line is
+    exactly the mistake that put a 30-chunk crossover into the code as a 3-chunk one.
+
+    The replay number is the trustworthy one, and it is the point: `~3x` at this geometry.
+    For the honest capture cost and crossover see PERF.md, measured with a fresh geometry
+    in a fresh process.
     """
     import ttnn
     from models.demos.cosyvoice.tt.hifigan.generator import TtHiFTGenerator
 
     model = TtHiFTGenerator.from_export(device)
+    model.enable_trace(True)
     mel, s, mel_frames = _hift_inputs(device, ttnn)
     n = 5
     try:
