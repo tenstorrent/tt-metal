@@ -439,6 +439,24 @@ class VoxtralTtsBackbonePipeline:
             return ttnn.linear(hidden, self.w_lm_head, compute_kernel_config=self.compute_kernel_config)
         return ttnn.linear(hidden, self.w_lm_head)
 
+    def _greedy_token(self, logits):
+        """On-device greedy sample over the vocab, on the MULTI-CORE argmax path.
+
+        `ttnn.argmax` picks its parallel path from the INPUT LAYOUT, not from a
+        flag: `uses_multicore_path` (argmax_device_operation.cpp) bails out to
+        the single-core kernel for anything that is not ROW_MAJOR, so feeding it
+        the TILE tensor `ttnn.linear` produces puts the whole 131072-wide vocab
+        scan on ONE core. TILE layout also pads this [1, 1, vocab] decode row up
+        to the 32-row tile height, so that one core reads ~32x the bytes the
+        reduction actually needs.
+
+        Untilizing first fixes both: the scan fans out across the grid and reads
+        the unpadded row. Output contract is unchanged either way -- argmax
+        returns UINT32 ROW_MAJOR -- so the token still feeds `ttnn.embedding`
+        straight back with no host round-trip.
+        """
+        return ttnn.argmax(ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT), dim=-1)
+
     def _prompt_tail_logits(self, logits, prompt_len: int):
         """The last REAL prompt position — the one that predicts the first new
         token (rows at and after `prompt_len` are padding)."""
@@ -460,7 +478,7 @@ class VoxtralTtsBackbonePipeline:
         staged = self._as_staged(inputs)
         logits = self.run_prefill_logits(staged)
         tail_logits = self._prompt_tail_logits(logits, staged["prompt_len"])
-        first_token = ttnn.argmax(tail_logits, dim=-1)
+        first_token = self._greedy_token(tail_logits)
         ttnn.copy(first_token, self.token_buffer)
         ttnn.copy(staged["seed_position"], self.position_buffer)
         ttnn.copy(staged["seed_cache_index"], self.cache_index)
@@ -497,7 +515,7 @@ class VoxtralTtsBackbonePipeline:
             )
         hidden = self.final_norm(hidden)
         logits = self._lm_head(hidden)
-        next_token = ttnn.argmax(logits, dim=-1)
+        next_token = self._greedy_token(logits)
         # On-device token feed + position advance: nothing leaves the device.
         ttnn.copy(next_token, self.token_buffer)
         ttnn.add(self.position_buffer, 1.0, output_tensor=self.position_buffer)

@@ -1,0 +1,5 @@
+{
+  "trace_1cq": true,
+  "trace_1cq_path": "trace+1cq+trace_tokens_per_sec=30.31+batch=1+warmup=3+iters=16",
+  "eager_terminal": false
+}
