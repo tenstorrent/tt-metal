@@ -127,6 +127,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/host_api.hpp
     api/tt-metalium/host_buffer.hpp
     api/tt-metalium/internal/cluster.hpp
+    api/tt-metalium/internal/cluster_noc_helpers.hpp
     api/tt-metalium/internal/disaggregation/kv_chunk_address_table.hpp
     api/tt-metalium/kernel_types.hpp
     api/tt-metalium/math.hpp
