@@ -6,10 +6,16 @@
 
 #include <algorithm>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::data_movement::untilize_codegen {
+
+uint32_t usable_l1_bytes(const tt::tt_metal::IDevice* device) {
+    return device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+}
 
 // Correctness scope of the ported builders: TILE input, interleaved (non-sharded) input AND
 // requested output memory config, dtype in the nightly sweep's coverage (bfloat16, bfloat8_b).
@@ -48,11 +54,12 @@ bool supported_by_codegen(const Tensor& input, const tt::tt_metal::MemoryConfig&
     // single-buffer plan (cb_in + cb_out, one slot per tile each) exceeds the L1 budget. Reject
     // here so "auto" falls back to native instead of aborting inside program creation.
     auto column_parallel_plan_fits = [&](uint32_t wt) {
-        auto grid = input.device()->compute_with_storage_grid_size();
+        auto* device = input.device();
+        auto grid = device->compute_with_storage_grid_size();
         auto split = tt::tt_metal::split_work_to_cores(grid, wt, /*row_wise=*/true);
         uint32_t max_tiles_per_core =
             std::max(std::get<4>(split), std::get<3>(split).empty() ? 0u : std::get<5>(split));
-        return 2ull * max_tiles_per_core * kTileSize <= kUsableL1;
+        return 2ull * max_tiles_per_core * kTileSize <= usable_l1_bytes(device);
     };
 
     const auto& logical = input.logical_shape();

@@ -11,11 +11,17 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 
+namespace tt::tt_metal {
+class IDevice;
+}  // namespace tt::tt_metal
+
 namespace ttnn::operations::data_movement::untilize_codegen {
 
 // Mirrors codegen builder_utils.USABLE_L1: the CB budget every codegen builder plans against.
-// Shared with the program factory so the gate and the factory cannot disagree about what fits.
-constexpr uint64_t kUsableL1 = 1'400'000;
+// Queried from the device's actual L1 budget (total L1 minus the allocator's reserved base)
+// rather than a hardcoded constant, so the gate and the factory can never disagree with what
+// the allocator will actually hand out. Shared between the two so they stay in lockstep.
+uint32_t usable_l1_bytes(const tt::tt_metal::IDevice* device);
 
 // Correctness-only: true iff the codegen build_untilize_tile path can produce a bit-exact
 // result for this (input, output_mem_config) case. Consulted by the free function's forced

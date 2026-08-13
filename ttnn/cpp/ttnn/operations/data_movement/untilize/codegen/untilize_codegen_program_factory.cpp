@@ -29,7 +29,7 @@ constexpr const char* kKernelDir = "ttnn/cpp/ttnn/operations/data_movement/until
 constexpr uint32_t kCbIn = tt::CBIndex::c_0;
 constexpr uint32_t kCbOut = tt::CBIndex::c_16;
 constexpr uint32_t kSeqIdentity = 0;  // mirrors common/templates/sequencers.h SEQ_IDENTITY
-using ttnn::operations::data_movement::untilize_codegen::kUsableL1;
+using ttnn::operations::data_movement::untilize_codegen::usable_l1_bytes;
 
 std::string kernel_path(const char* name) { return std::string(kKernelDir) + "/" + name; }
 
@@ -61,24 +61,26 @@ struct CbPlan {
 
 // Mirrors codegen_common.factory.cb_policy.plan_cb_depths exactly: 3-tier asymmetric CB
 // depth selection (double-buffer both -> double-buffer input only -> single-buffer both),
-// budgeted against a fixed 1.4MB usable-L1 constant (matches source). The Python source has
-// no 4th "chunked" tier -- it raises when even the single-buffer plan overflows, because the
-// caller (ops/untilize/untilize.py's wide-tensor guard, transcribed into supported_by_codegen's
-// wide-chunk-threshold check) is expected to have already routed such shapes away from this
-// builder entirely. Fail the same way rather than inventing an untraceable fallback depth.
-CbPlan plan_cb_depths(uint32_t pages_per_unit, uint32_t page_size, uint32_t block_units) {
+// budgeted against the device's actual usable-L1 (queried, not a hardcoded constant -- see
+// usable_l1_bytes()). The Python source has no 4th "chunked" tier -- it raises when even the
+// single-buffer plan overflows, because the caller (ops/untilize/untilize.py's wide-tensor
+// guard, transcribed into supported_by_codegen's wide-chunk-threshold check) is expected to
+// have already routed such shapes away from this builder entirely. Fail the same way rather
+// than inventing an untraceable fallback depth.
+CbPlan plan_cb_depths(const IDevice* device, uint32_t pages_per_unit, uint32_t page_size, uint32_t block_units) {
     uint64_t p = pages_per_unit;
     uint64_t ts = page_size;
     uint64_t double_both = (2 * p + 2 * p) * ts;
     uint64_t double_in = (2 * p + p) * ts;
     uint64_t single_both = (p + p) * ts;
-    if (double_both <= kUsableL1) {
+    uint64_t usable_l1 = usable_l1_bytes(device);
+    if (double_both <= usable_l1) {
         return CbPlan{static_cast<uint32_t>(2 * p), static_cast<uint32_t>(2 * p), pages_per_unit};
     }
-    if (double_in <= kUsableL1) {
+    if (double_in <= usable_l1) {
         return CbPlan{static_cast<uint32_t>(2 * p), pages_per_unit, pages_per_unit};
     }
-    if (single_both <= kUsableL1) {
+    if (single_both <= usable_l1) {
         return CbPlan{pages_per_unit, pages_per_unit, block_units};
     }
     TT_THROW(
@@ -88,7 +90,7 @@ CbPlan plan_cb_depths(uint32_t pages_per_unit, uint32_t page_size, uint32_t bloc
         pages_per_unit,
         page_size,
         single_both,
-        kUsableL1);
+        usable_l1);
     return CbPlan{};
 }
 
@@ -183,7 +185,7 @@ ProgramDescriptor build_main_split(const CommonArgs& a, uint32_t wt, uint32_t to
         tt::tt_metal::split_work_to_cores(grid, total_tile_rows, /*row_wise=*/true);
 
     uint32_t block_ct_dim = compute_block_ct_dim(wt, a.fp32);
-    CbPlan plan = plan_cb_depths(wt, a.tile_size_for_planning, block_ct_dim);
+    CbPlan plan = plan_cb_depths(a.device, wt, a.tile_size_for_planning, block_ct_dim);
 
     // Row stride used both as the writer's TensorAccessor page pitch and the CB byte stride
     // between physical tile-rows: the FULL padded row (Wt tiles wide), never the logical
@@ -246,7 +248,7 @@ ProgramDescriptor build_column_parallel(const CommonArgs& a, uint32_t wt) {
 
     uint32_t max_tpc = std::max(tpc1, cg2.empty() ? 0u : tpc2);
     uint32_t block_ct_dim = compute_block_ct_dim(max_tpc, a.fp32);
-    CbPlan plan = plan_cb_depths(max_tpc, a.tile_size_for_planning, block_ct_dim);
+    CbPlan plan = plan_cb_depths(a.device, max_tpc, a.tile_size_for_planning, block_ct_dim);
 
     uint32_t full_stick_size = wt * TILE_WIDTH * a.out_elem_size;
 
@@ -311,7 +313,7 @@ ProgramDescriptor build_2d_column(const CommonArgs& a, uint32_t wt, uint32_t tot
         tt::tt_metal::split_work_to_cores(grid, num_units, /*row_wise=*/true);
 
     uint32_t block_ct_dim = compute_block_ct_dim(tpc, a.fp32);
-    CbPlan plan = plan_cb_depths(tpc, a.tile_size_for_planning, block_ct_dim);
+    CbPlan plan = plan_cb_depths(a.device, tpc, a.tile_size_for_planning, block_ct_dim);
 
     uint32_t full_stick_size = wt * TILE_WIDTH * a.out_elem_size;
     uint32_t col_chunk_bytes = tpc * TILE_WIDTH * a.out_elem_size;
@@ -387,7 +389,7 @@ ProgramDescriptor build_with_unpadding(
         tt::tt_metal::split_work_to_cores(grid, total_tile_rows, /*row_wise=*/true);
 
     uint32_t block_ct_dim = compute_block_ct_dim(wt, a.fp32);
-    CbPlan plan = plan_cb_depths(wt, a.tile_size_for_planning, block_ct_dim);
+    CbPlan plan = plan_cb_depths(a.device, wt, a.tile_size_for_planning, block_ct_dim);
 
     uint32_t unpadded_row_bytes = w_unpadded * a.out_elem_size;
     uint32_t padded_row_bytes = wt * TILE_WIDTH * a.out_elem_size;
