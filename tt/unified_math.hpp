@@ -483,14 +483,6 @@ struct Strategy<FPUFusion> {
                 ckernel::reconfig_data_format_srca(acc_cb, node.in1_cb);
                 ckernel::matmul_block_init(node.in0_cb, node.in1_cb, kTranspose, G::ct_dim, G::rt_dim, G::kt_dim);
             }
-            ckernel::tile_regs_wait();
-            ckernel::pack_reconfig_l1_acc(reload ? 1 : 0);
-            ckernel::pack_block(0, out_cb, kAccTiles);
-            ckernel::tile_regs_release();
-            if (finish) {
-                ckernel::pack_reconfig_l1_acc(0);  // leave the packer as we found it
-                cb_push_back(out_cb, kAccTiles);
-            }
         }
 #else
         (void)node;

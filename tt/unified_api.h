@@ -87,21 +87,60 @@ struct Storage {
 // exactly one consumer; consumers take it by value.
 // ---------------------------------------------------------------------------
 
+template <AccumulatorMode Mode = AccumulatorMode::Dst>
+class Accumulator;
+
 struct Block {
     explicit Block(const Storage& storage);
     Block(uint32_t cb_id, uint32_t num_tiles);
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    ~Block();
+#endif
 
     Block(const Block&) = delete;
     Block& operator=(const Block&) = delete;
 
-    // TODO: does not disengage the source, so a moved-from Block is
-    // indistinguishable from a live one and a second consumer silently issues a
-    // duplicate cb_pop_front.
     Block(Block&& o);
     Block& operator=(Block&& o);
 
+    // Part of the CONSUMER contract, not user API: every consumer that takes a
+    // Block by value must call this once, to record that the pages were really
+    // used. The destructor asserts on a Block that owed consumption and never
+    // got it, which is how a dropped output block is caught.
+    //
+    // It cannot be folded into the move, because C++17 guaranteed elision means
+    // a prvalue handed straight to a by-value parameter initializes it directly
+    // and no move ever runs. Only the consumer knows consumption happened.
+    //
+    // Compiles to nothing when asserts are off.
+    void consume();
+
     uint32_t cb_id;
     uint32_t num_tiles;  // This could eventually be N dimensional (maybe via template params?)
+
+private:
+    // A RETAINED block: one the Accumulator hands back mid-accumulation. Its
+    // pages still belong to the accumulator, so it must neither be transferred
+    // to another thread nor consumed -- only the next accumulate() call may
+    // touch them. Only Accumulator can make one.
+    struct Retained {};
+    Block(const Storage& storage, Retained);
+
+    template <AccumulatorMode M>
+    friend class Accumulator;
+
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    // Two independent facts, deliberately not folded into one flag:
+    //   must_consume -- this Block owes a consumer (false for retained blocks)
+    //   consumed     -- a consumer has taken it
+    // A moved-from Block has must_consume=false and consumed=true, so it is
+    // silent at destruction and asserts if used again.
+    bool must_consume = true;
+    bool consumed = false;
+
+    // Poison value stamped into a moved-from Block's fields.
+    static constexpr uint32_t kMovedFrom = ~uint32_t(0);
+#endif
 };
 
 // ---------------------------------------------------------------------------
@@ -127,7 +166,7 @@ struct Block {
 // the warning in api/compute/cb_api.h).
 // ---------------------------------------------------------------------------
 
-template <AccumulatorMode Mode = AccumulatorMode::Dst>
+template <AccumulatorMode Mode>
 class Accumulator {
 public:
     Accumulator(const Storage& acc_storage, const Storage& out_storage);
