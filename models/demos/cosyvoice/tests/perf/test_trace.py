@@ -26,6 +26,7 @@ import time
 import pytest
 import torch
 
+from models.demos.cosyvoice.tt.common import GOLDEN_DIR
 from models.demos.cosyvoice.tt.weights import default_weights_path
 
 LLM_WEIGHTS = default_weights_path().replace("hift_", "llm_")
@@ -417,3 +418,128 @@ def test_device_traced_throughput(device):
     print(f"    P4 wants >= 30 tok/s; P6 wants >= 60")
     print(f"    LLM RTF contribution at 50 tok/s of speech: {50 * traced_ms / 1e3:.3f}")
     assert traced_ms > 0
+
+
+# ---------------------------------------------------------------- HiFT vocoder
+
+# The vocoder captures one trace per (mel_frames, batch_size). 400 MB covers the
+# 282-frame utterance with room for a second geometry; an exhausted region shows up
+# as a capture failure and a fallback to the untraced path, not as a wrong answer.
+needs_hift_trace = pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768, "trace_region_size": 402653184}], indirect=True
+)
+HIFT_WEIGHTS = default_weights_path()
+needs_hift_weights = pytest.mark.skipif(not os.path.exists(HIFT_WEIGHTS), reason="run scripts/export_weights.py first")
+needs_hift_golden = pytest.mark.skipif(
+    not os.path.exists(os.path.join(GOLDEN_DIR, "hift.decode.npz")),
+    reason="run scripts/gen_golden.py first",
+)
+
+
+def _hift_inputs(device, ttnn):
+    from models.demos.cosyvoice.tt.common import as_torch, load_golden
+
+    g = load_golden("hift.decode")
+    mel_t = as_torch(g["call0.in_x"])  # [1, 80, T_mel]
+    s_t = as_torch(g["call0.in_s"])  # [1, 1, T_audio]
+
+    def dev(v):
+        return ttnn.from_torch(v, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    return dev(mel_t.permute(0, 2, 1).contiguous()), dev(s_t.permute(0, 2, 1).contiguous()), mel_t.shape[-1]
+
+
+@needs_hift_weights
+@needs_hift_golden
+@needs_hift_trace
+def test_hift_trace_is_bit_identical(device):
+    """The traced vocoder must return exactly what the untraced one does.
+
+    Bit-identical rather than a PCC gate, because there is nothing here that should
+    differ: the trace replays the same kernels on the same data. Anything short of
+    `max|d| == 0` means the replay is reading a buffer it should not be -- the failure
+    mode that cost the CFM a `PCC 0.0017` before its output was moved inside the
+    capture.
+    """
+    import ttnn
+    from models.demos.cosyvoice.tt.hifigan.generator import TtHiFTGenerator
+
+    model = TtHiFTGenerator.from_export(device)
+    mel, s, mel_frames = _hift_inputs(device, ttnn)
+    try:
+        want = ttnn.to_torch(model._decode_impl(mel, s, mel_frames)).float()
+
+        # First sighting runs untraced by design; the second captures and replays.
+        runs = [("untraced", ttnn.to_torch(model.decode(mel, s, mel_frames)).float())]
+        assert model._trace_id is None, "a geometry seen once must not be captured"
+        runs.append(("captured", ttnn.to_torch(model.decode(mel, s, mel_frames)).float()))
+        assert model._trace_id is not None, "second sighting should have captured"
+
+        # Repeated replays, not just one. Each `decode` clones its result out of the
+        # trace's output buffer, and TTNN warns that buffers allocated while a trace
+        # is alive may collide with addresses the replay baked in. That is not
+        # hypothetical -- it is what scored the CFM `PCC 0.0017` before its output was
+        # moved inside the capture -- and it shows up on the fourth or fifth call, not
+        # the second. A streamed utterance replays this many times per second.
+        for i in range(6):
+            runs.append((f"replay {i}", ttnn.to_torch(model.decode(mel, s, mel_frames)).float()))
+
+        for name, got in runs:
+            d = (got - want).abs().max()
+            print(f"  {name:>9}  max|d| {d:.3e}")
+            assert got.shape == want.shape, (name, got.shape, want.shape)
+            assert d == 0, (name, float(d))
+    finally:
+        model.release()
+
+
+@needs_hift_weights
+@needs_hift_golden
+@needs_hift_trace
+def test_hift_trace_is_faster(device):
+    """How much the capture is worth, and what it costs to take it.
+
+    Capture is more expensive than a single untraced call, which is why `decode` waits
+    for a geometry to repeat. The break-even printed here is the number that decides
+    whether tracing helps a given workload: streaming reuses its chunk geometry and
+    clears it easily, one-shot synthesis never does.
+    """
+    import ttnn
+    from models.demos.cosyvoice.tt.hifigan.generator import TtHiFTGenerator
+
+    model = TtHiFTGenerator.from_export(device)
+    mel, s, mel_frames = _hift_inputs(device, ttnn)
+    n = 5
+    try:
+        for _ in range(2):
+            ttnn.deallocate(model._decode_impl(mel, s, mel_frames))
+        ttnn.synchronize_device(device)
+
+        t0 = time.perf_counter()
+        for _ in range(n):
+            ttnn.deallocate(model._decode_impl(mel, s, mel_frames))
+            ttnn.synchronize_device(device)
+        untraced_ms = (time.perf_counter() - t0) / n * 1e3
+
+        t0 = time.perf_counter()
+        assert model._capture(mel, s, (mel_frames, 1)), "capture failed"
+        ttnn.synchronize_device(device)
+        capture_ms = (time.perf_counter() - t0) * 1e3
+
+        ttnn.deallocate(model._replay(mel, s))
+        ttnn.synchronize_device(device)
+        t0 = time.perf_counter()
+        for _ in range(n):
+            ttnn.deallocate(model._replay(mel, s))
+            ttnn.synchronize_device(device)
+        traced_ms = (time.perf_counter() - t0) / n * 1e3
+
+        saved = untraced_ms - traced_ms
+        breakeven = f"break-even at {capture_ms / saved:.1f} replays" if saved > 0 else "never pays back"
+        print(f"\n  HiFT decode, {mel_frames} mel frames, mean of {n}")
+        print(f"    untraced   {untraced_ms:7.2f} ms")
+        print(f"    traced     {traced_ms:7.2f} ms   ({untraced_ms / traced_ms:.2f}x)")
+        print(f"    capture    {capture_ms:7.2f} ms   ({breakeven})")
+        assert traced_ms > 0
+    finally:
+        model.release()
