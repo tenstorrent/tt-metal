@@ -1073,7 +1073,7 @@
     bh_sc4:
       timeout: 40
       tier: 1
-      release_ready: false
+      release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
@@ -1115,7 +1115,7 @@
     bh_sc4:
       timeout: 80
       tier: 1
-      release_ready: false
+      release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
@@ -1392,7 +1392,6 @@
       release_ready: true
   owner_id: U08E1JCMAJF
   team: scaleout
-
 # TODO: re-enable after SC16 Stress Test when it is fixed
 # - name: Stress Test (DeepSeek V3 B1 Supercluster 16 aka Superpod 4)
 #   cmd: |
