@@ -174,12 +174,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         _exp_init_loadmacro_<2 * srcs_dims::ydim(false)>(load_base_addr, num_sfpu_iterations, load_sfpmem, store_sfpmem);
     }
-    const std::uint32_t exp_replay_len = _exp_loadmacro_replay_len_(num_sfpu_iterations);
-
     // One MOP run issues one REPLAY per SrcS slice of a tile. The `done` bit on the final
     // LOADMACRO of each replay swaps the SrcS banks and resets the dvalids in hardware, so the
     // SFPU is paced purely by the dvalid handshake with the unpacker and packer.
-    ckernel_template mop(PARAM_SRCS_SLICE_COUNT, 1, TT_OP_REPLAY(0, exp_replay_len, 0, 0, 0, 0));
+    ckernel_template mop(PARAM_SRCS_SLICE_COUNT, 1, _exp_loadmacro_op_(num_sfpu_iterations));
     mop.program(instrn_buffer);
 
     // Full TRISC3 path: UNP_S -> SFPU exp (self-contained SFPLOADMACRO replay) -> PACK1.

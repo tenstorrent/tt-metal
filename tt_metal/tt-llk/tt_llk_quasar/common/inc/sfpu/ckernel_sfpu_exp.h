@@ -63,11 +63,18 @@ inline void _exp_init_loadmacro_(
         {
             for (int d = 0; d < num_sfpu_iterations; d++)
             {
-                const std::uint32_t done = (d == num_sfpu_iterations - 1) ? 1 : 0;
+                const std::uint32_t done = (d == num_sfpu_iterations - 1);
                 // addr is the [10:1] field, hence >> 1
                 TT_SFPLOADMACRO(0, d & 3, load_sfpmem, ADDR_MOD_1, done, (load_base_addr + (d << 1)) >> 1, 0);
             }
         });
+}
+
+// Op-word that executes the LOADMACRO replay recorded by `_exp_init_loadmacro_`.
+// Replay slot 0 and length stay private to this header; use with MOP / programmed paths.
+inline std::uint32_t _exp_loadmacro_op_(const int num_sfpu_iterations)
+{
+    return TT_OP_REPLAY(0, _exp_loadmacro_replay_len_(num_sfpu_iterations), 0, 0, 0, 0);
 }
 
 } // namespace sfpu
