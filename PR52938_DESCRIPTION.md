@@ -66,9 +66,11 @@ Derived from the delivery rules rather than listed, so they cannot drift from th
 The broad unary profile ran in **no automated job on any architecture** — every LLK python job either
 excludes `nightly` or runs with coverage, under which `BROAD_SWEEP_OPS` is skipped wholesale. Every
 gain above was therefore unguarded. `llk_e2e_tests.yaml` gains non-coverage companion groups
-(`split_group` 6–10). Cost: `wh_n150_civ2` 190 → 380 min, `bh_p150b_civ2` 275 → 550, against an 1800
-min per-SKU budget. **The timeouts are copied from the instrumented groups and want one nightly's data
-to tune.**
+(`split_group` 6–10), targeted at `test_sfpu_unary.py` rather than the whole directory — `BROAD_SWEEP_OPS`
+lives only there, so pointing them at `.` would re-run every other suite a second time per arch per night
+for no added coverage. Cost: `wh_n150_civ2` 190 → 315 min, `bh_p150b_civ2` 275 → 400, against an 1800 min
+per-SKU budget. **The timeouts are a reserved ceiling, not a measurement, and want one nightly's data to
+tune.**
 
 The `BROAD_SWEEP_OPS` skip cited tt-llk#1435, which is circular — that issue is about test *ordering*,
 and its one mention of coverage is an observation of this skip's own effect. Citation removed; no
@@ -119,15 +121,18 @@ plausible-looking claim with an ISA sentence against it. Full record and both re
 
 ## Verification
 
-Blackhole p300a, all four suites green, `0 xpassed`:
+Blackhole p300a, all four suites green, `0 xpassed`. These figures are post-review-round: the 12 review
+comments were addressed and re-verified, which moved unary from `5030 / 21 xfailed` to `5027 / 18` —
+`Signbit`'s six xfails were deleted rather than kept, since the `-0.0` probe they recorded is no longer
+sent where it cannot arrive, and the shift sweep dropped six redundant variants.
 
 | Suite | Result |
 |---|---|
-| `test_sfpu_unary.py` | 5030 passed · 1601 skipped · 21 xfailed |
+| `test_sfpu_unary.py` | 5027 passed · 1601 skipped · 18 xfailed |
 | `test_sfpu_binary.py` | 739 passed · 531 skipped · 36 xfailed · 0 xpassed |
 | `test_sfpu_binop_scalar.py` | 68 passed · 72 skipped |
 | `test_sfpu_ternary.py` | 39 passed · 25 skipped |
-| `test_sfpu_domains.py` | 107 passed (host-side) |
+| `test_sfpu_domains.py` | 108 passed (host-side) |
 
 Wormhole n300 — the first run of these suites on that arch, same two-phase flow:
 
