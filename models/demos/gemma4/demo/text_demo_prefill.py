@@ -1236,15 +1236,16 @@ def test_prefill_long_context_chunked(mesh_device, context_len, reset_seeds, req
     # The ring read must not drift as the prefix grows: a halo pointing at the wrong
     # predecessor slab, or a cache offset walking off, shows up as the last chunk's
     # scale departing from the first's rather than as an outright failure.
-    # Every chunk after the first must have read history through the ring, on every
-    # layer. A silent fallback to the mask path would leave the assertions above
-    # intact while each chunk attended only within itself.
-    expected_ring_calls = (n_chunks - 1) * len(model.layers)
+    # Every chunk on every layer must have gone through the ring. A silent fallback to the
+    # mask path would leave the assertions above intact while each chunk attended only
+    # within itself. Chunk 0 counts too: it has no history to read, but it takes the ring
+    # path for its own group, which is what lets one captured trace serve every chunk.
+    expected_ring_calls = n_chunks * len(model.layers)
     actual_ring_calls = ring_prefill.ring_attention_calls()
     logger.info(f"[long_ctx] ring history reads: {actual_ring_calls} (expected {expected_ring_calls})")
     assert actual_ring_calls == expected_ring_calls, (
         f"ring attention ran {actual_ring_calls} times, expected {expected_ring_calls} "
-        f"(({n_chunks} - 1) chunks x {len(model.layers)} layers) — history was not read through the ring"
+        f"({n_chunks} chunks x {len(model.layers)} layers) — a chunk did not go through the ring"
     )
 
     first_std, last_std = stats[0][2], stats[-1][2]
@@ -1760,48 +1761,33 @@ def test_prefill_long_context_traced(mesh_device, context_len, readback_all, res
                 user_id=0,
             )
 
-    # One trace for the whole prefill by default. Chunk 0 differs from the rest only in
-    # kv_actual_isl == 0, which the kernels derive on-device, so the ring graph serves it
-    # too — halving trace memory and warmup, and dropping the mask path's ~80ms premium on
-    # chunk 0 (277ms -> 189ms). GEMMA4_ONE_TRACE=0 restores the two-trace split.
-    # Default 0: the deadlock this used to work around is fixed at the source (the halo no
-    # longer shares — or clears — the all-gather's semaphore). Kept as a knob for bisecting
+    # One trace for the whole prefill: every chunk takes the ring path, and chunk 0 differs
+    # from the rest only in kv_actual_isl == 0, which the kernels derive on-device. Capture at
+    # chunk 0, which used to be rejected host-side because the halo layout demanded a complete
+    # predecessor group; it now builds from one group, so the first chunk is capturable like
+    # any other and the warmup that compiles the graph is also the chunk being captured.
+    # settle_ms default 0: the deadlock it used to work around is fixed at the source (the halo
+    # no longer shares — or clears — the all-gather's semaphore). Kept as a knob for bisecting
     # if a similar stall ever reappears.
     settle_ms = float(os.environ.get("GEMMA4_TRACE_SETTLE_MS", "0"))
-    one_trace = os.environ.get("GEMMA4_ONE_TRACE", "1") == "1"
-    # The ring trace must be captured at a chunk that HAS a predecessor: the halo layout is
-    # built host-side at create time and needs a complete predecessor group. Replaying it
-    # for chunk 0 is fine because the work plan is rebuilt on-device per chunk.
-    cap_idx = int(os.environ.get("GEMMA4_TRACE_CAPTURE_CHUNK", "1"))
 
-    # ── Warm up: compile the graphs that will be captured ─────────────────────
-    warm_indices = (cap_idx,) if one_trace else (0, cap_idx)
+    # ── Warm up: compile the graph that will be captured ──────────────────────
     t0 = time.time()
-    for warm_idx in warm_indices:
-        out = _forward(_stage(warm_idx))
-        ttnn.synchronize_device(mesh_device)
-        out.deallocate(True)
+    out = _forward(_stage(0))
+    ttnn.synchronize_device(mesh_device)
+    out.deallocate(True)
     warmup_s = time.time() - t0
 
     # ── Capture ───────────────────────────────────────────────────────────────
     t0 = time.time()
     ring_prefill.reset_ring_attention_calls()
-    tid_first, out_first = None, None
-    if not one_trace:
-        start0 = _stage(0)
-        tid_first = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        out_first = _forward(start0)
-        ttnn.end_trace_capture(mesh_device, tid_first, cq_id=0)
-
-    start1 = _stage(cap_idx)
+    cap_start = _stage(0)
     tid_ring = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    out_ring = _forward(start1)
+    out_ring = _forward(cap_start)
     ttnn.end_trace_capture(mesh_device, tid_ring, cq_id=0)
     ttnn.synchronize_device(mesh_device)
     capture_s = time.time() - t0
-    logger.info(
-        f"[traced] warmup(compile)={warmup_s:.1f}s capture={capture_s:.1f}s for " f"{1 if one_trace else 2} trace(s)"
-    )
+    logger.info(f"[traced] warmup(compile)={warmup_s:.1f}s capture={capture_s:.1f}s for 1 trace")
 
     # Ring reads are counted in Python, and a replay runs no Python — so the counter can
     # only be read at capture, where it confirms the ring graph really is inside the
@@ -1813,10 +1799,9 @@ def test_prefill_long_context_traced(mesh_device, context_len, readback_all, res
         f"(one per layer) — the ring path is not in the captured trace"
     )
 
-    # Warm replay of each, so the measured pass excludes one-off dispatch setup.
-    for tid, idx in ((tid_ring, cap_idx),) if one_trace else ((tid_first, 0), (tid_ring, cap_idx)):
-        _stage(idx)
-        ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+    # Warm replay, so the measured pass excludes one-off dispatch setup.
+    _stage(0)
+    ttnn.execute_trace(mesh_device, tid_ring, cq_id=0, blocking=False)
     ttnn.synchronize_device(mesh_device)
 
     try:
@@ -1833,12 +1818,10 @@ def test_prefill_long_context_traced(mesh_device, context_len, readback_all, res
             t_stage = time.time()
             chunk_start = _stage(chunk_idx)
             stage_s += time.time() - t_stage
-            # GEMMA4_ONE_TRACE: replay the ring trace for chunk 0 too. Chunk 0 differs only in
-            # kv_actual_isl == 0, which the kernels now derive on-device, so one capture can serve
-            # the whole prefill — halving trace memory and dropping the mask path's ~80ms premium.
-            tid = tid_ring if (one_trace or chunk_idx > 0) else tid_first
+            # One capture serves every chunk, chunk 0 included: it differs only in
+            # kv_actual_isl == 0, which the kernels derive on-device.
             t_c = time.time()
-            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+            ttnn.execute_trace(mesh_device, tid_ring, cq_id=0, blocking=False)
             ttnn.synchronize_device(mesh_device)
             per_chunk.append(time.time() - t_c)
             # Optional settle between replays. No longer needed — kept only as a bisect
@@ -1855,7 +1838,7 @@ def test_prefill_long_context_traced(mesh_device, context_len, readback_all, res
             # The real fix belongs in the ring/fabric completion path.
             if settle_ms:
                 time.sleep(settle_ms / 1000.0)
-            out = out_ring if (one_trace or chunk_idx > 0) else out_first
+            out = out_ring
             # Reading every chunk's hidden states to host is a test artifact — a prefill
             # server leaves the KV cache on device and reads back only the last chunk,
             # whose final row seeds the first decode step. readback="final" measures that
@@ -1875,13 +1858,11 @@ def test_prefill_long_context_traced(mesh_device, context_len, readback_all, res
             logger.info(
                 f"[traced_perf] chunk {chunk_idx + 1}/{n_chunks} [{chunk_start}, {chunk_start + chunk}) "
                 f"device={per_chunk[-1] * 1000:.1f}ms ({chunk / per_chunk[-1]:.0f} tok/s) | "
-                f"{'ring trace' if (one_trace or chunk_idx > 0) else 'mask-path trace'} | "
+                f"ring trace | "
                 f"ring_depth={chunk_idx}"
             )
         total_s = time.time() - t_run
     finally:
-        if tid_first is not None:
-            ttnn.release_trace(mesh_device, tid_first)
         ttnn.release_trace(mesh_device, tid_ring)
 
     ring_chunks = per_chunk[1:]
@@ -1904,7 +1885,7 @@ def test_prefill_long_context_traced(mesh_device, context_len, readback_all, res
     )
     logger.info(
         f"[traced_perf] TOTAL {context_len} tokens in {total_s:.1f}s ({context_len / total_s:.0f} tok/s) "
-        f"| chunk0({'ring' if one_trace else 'mask'})={per_chunk[0] * 1000:.1f}ms | ring chunks mean={sum(ring_chunks) / len(ring_chunks) * 1000:.1f}ms "
+        f"| chunk0(ring)={per_chunk[0] * 1000:.1f}ms | ring chunks mean={sum(ring_chunks) / len(ring_chunks) * 1000:.1f}ms "
         f"min={min(ring_chunks) * 1000:.1f}ms max={max(ring_chunks) * 1000:.1f}ms"
     )
     logger.info(
@@ -2215,18 +2196,17 @@ def test_prefill_long_context_repeated(mesh_device, context_len, reset_seeds, re
                 user_id=0,
             )
 
-    # Warm and capture ONCE, as a server would at startup. Chunk 0 shares the ring graph,
-    # so a single trace serves the whole prefill; capture at a chunk that has a predecessor
-    # because the halo layout is built host-side at create time.
-    cap_idx = 1
+    # Warm and capture ONCE, as a server would at startup. Every chunk takes the ring path and
+    # the halo layout builds from a single group, so chunk 0 is capturable and one trace serves
+    # the whole prefill.
     t0 = time.time()
-    out = _forward(_stage(cap_idx))
+    out = _forward(_stage(0))
     ttnn.synchronize_device(mesh_device)
     out.deallocate(True)
     warmup_s = time.time() - t0
 
     t0 = time.time()
-    cap_start = _stage(cap_idx)
+    cap_start = _stage(0)
     tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     out_ring = _forward(cap_start)
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
