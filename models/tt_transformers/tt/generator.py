@@ -455,9 +455,14 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 on_device_sampling=on_device_sampling,
             )
         finally:
+            # Restore only the generator's own mode. Deliberately no switch_mode(Mode.PREFILL) here:
+            # switch_mode drives Prefetcher.init(), whose Mode.PREFILL branch has never executed on main
+            # (main only ever calls switch_mode(Mode.DECODE)) and is not functional -- it reads an
+            # unassigned all_core_range_set, and supplying one instead trips
+            # "Statically allocated circular buffers ... clash with L1 buffers on core range".
+            # The prefetcher is not needed for prefill; main runs prefill with it left in whatever mode
+            # it was last initialized for, so leaving it in DECODE matches main's behaviour.
             self.mode = previous_mode
-            for i in range(len(self.model)):
-                self.model[i].switch_mode(Mode.PREFILL)
 
     def _will_row_shard_prefill(self, tokens, sampling_params):
         """Whether this prefill will be dispatched to the model's row-sharded batched path.
@@ -668,9 +673,8 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             try:
                 trace_ids, tt_out_trace, *device_inputs = self._record_decode_trace_text(prepared)
             finally:
+                # See _prepare_decode_trace_for_warmup: no switch_mode(Mode.PREFILL) here either.
                 self.mode = previous_mode
-                for i in range(len(self.model)):
-                    self.model[i].switch_mode(Mode.PREFILL)
             self.trace_ids_decode[on_device_sampling] = trace_ids
             self.trace_inputs_decode[on_device_sampling] = device_inputs
             self.trace_output_decode[on_device_sampling] = tt_out_trace
