@@ -1314,6 +1314,7 @@ def _is_overflow_detail(detail):
 
 
 _TT_ONLY_CONTRACT = """
+================ STRICT TT-ONLY CONTRACT — gate WILL auto-fail on violation ================
 
 The TT pipeline MUST be a pure TTNN forward path. The following are FORBIDDEN in the
 pipeline's HOT path (run_*, __call__, forward, _apply_*, decode_step, decode_prefill,
@@ -1393,6 +1394,7 @@ ALLOWED HF USAGE (SETUP / REFERENCE ONLY — NOT the forward path):
   4. HF calls inside <stage>_trace_setup(inputs) — seeding fixed-value
      persistent buffers BEFORE trace capture begins, so trace has stable
      inputs. The trace_step itself must be pure TT.
+============================================================================================
 """
 
 
@@ -1860,6 +1862,7 @@ def _parallelism_prompt_block(pc) -> str:
         return ""
     return f"""
 
+================ CHIP PLACEMENT — {pc.chips}-CHIP MESH (TP={pc.tp} x DP={pc.dp}) ================
 The tool has selected this parallelism split for `{pc.chips}` chips by checking per-TP kernel
 viability (largest kernel-viable TP degree that divides the mesh; the remaining chips become
 data-parallel replicas). Place the pipeline on the mesh accordingly:
@@ -1884,6 +1887,7 @@ data-parallel replicas). Place the pipeline on the mesh accordingly:
 
 
 _TRACE_PROMPT_BLOCK = """
+================ COMMAND 3 — TRACE CONTRACT (host-free full pipeline) ================
 AFTER Gates 1-3 pass (correct + on-device), make the pipeline trace-capturable per
 STAGE. Derive the stages from the HF reference config (Source A) — architectures /
 is_encoder_decoder / sub-configs give the phases (ForCausalLM -> [prefill, decode];
@@ -1919,9 +1923,21 @@ prompt, language, …) for call-signature compatibility; the resident build deri
 config, not a prompt.
 
 `layers` CAPS THE DEPTH BUILT, and None means every layer -- never 0, which a builder reads as a
-zero-layer model. Build exactly `layers` repeats of the model's repeated block (the decoder /
-transformer stack) and leave everything else -- embeddings, norms, heads -- intact, so a capped build
-still exercises every DISTINCT op the full model runs, just fewer times.
+zero-layer model. Build exactly `layers` repeats of EVERY repeated block the model has -- not just
+the text decoder -- and leave everything else (embeddings, norms, projectors, heads) intact, so a
+capped build still exercises every DISTINCT op the full model runs, just fewer times.
+
+EVERY STACK, because multimodal models have more than one and the singular wording here produced a
+model that could not run. Voxtral-Mini-3B has a 32-layer text decoder AND two 32-layer audio encoder
+stacks. Read as "the decoder / transformer stack", `layers=2` capped the text path and left both
+encoders at full depth -- 2 text layers behind 64 encoder layers, a configuration that exists in no
+real deployment. Measured 2026-08-12: n_layers=2, kv_slots=2, and enc_a/enc_b at 32 each, with the
+bulk llama_model resident-layer count at 0. The profile stayed large because the encoders dominate
+it, and the first forward died in the argmax reshape.
+
+A capped build must remain a MODEL, not a fragment: if capping a stack would leave an aggregate
+sub-block holding zero layers, cap to the smallest depth that keeps every stage able to run, and say
+so. "Fewer times" is the contract; "structurally absent" is not.
 
 ONE KNOB PER STACK WHEN THERE IS MORE THAN ONE STACK. `layers` is the DEFAULT depth for every
 repeated block; a model with several independent stacks must ALSO accept a per-stack override named
@@ -2075,6 +2091,7 @@ sibling model under models/demos/<other-model>/:
       - _captured/<name>/{{args,kwargs,output}}.pt   (HF golden tensors)
       - tests/pcc/            (per-component PCC tests)
 
+================ COMMAND 1 — ACT AS PLANNER ================
 Based on Group A and Group B information ONLY, act as a planner and create a
 sketch plan (mental model) that produces a task_heads JSON with: what "pass"
 means, which graduated stubs go where, the validation metric, behavioral
@@ -2083,6 +2100,7 @@ modules from Source B and does not leave any graduated module out. Correctly
 VERIFY that the graduated modules are listed correctly so none are wasted.
 Write the plan to {demo_dir}/e2e_plan.json.
 
+================ COMMAND 2 — ORCHESTRATE THE BUILD ================
 Based on that plan and only information from the plan, fire parallel agents
 working on Call 1, Call 2, … Call N (the task heads) separately if there is no
 dependency between them; if two calls share a graduated module, use only ONE
