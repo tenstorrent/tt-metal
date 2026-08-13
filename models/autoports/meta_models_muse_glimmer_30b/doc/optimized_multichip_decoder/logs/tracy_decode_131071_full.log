@@ -1,70 +1,70 @@
-2026-08-13 02:25:56.770 | INFO     | __main__:main:412 - Using port 8086
-2026-08-13 02:25:56.770 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
-2026-08-13 02:25:56.825 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/ttuser/dev/muse-glimmer/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
-Connecting to 127.0.0.1:8086...2026-08-13 02:25:56.830 | INFO     | __main__:main:430 - Test process started
-2026-08-13 02:25:57.754 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+2026-08-13 04:43:33.432 | INFO     | __main__:main:412 - Using port 8086
+2026-08-13 04:43:33.432 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-13 04:43:33.487 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/ttuser/dev/muse-glimmer/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-13 04:43:33.493 | INFO     | __main__:main:430 - Test process started
+2026-08-13 04:43:34.419 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
 Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
-2026-08-13 02:26:00.967 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
-2026-08-13 02:26:00.967 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
-2026-08-13 02:26:00.968 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
-2026-08-13 02:26:00.968 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
-2026-08-13 02:26:00.979 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
-2026-08-13 02:26:00.980 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
-2026-08-13 02:26:01.057 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
-2026-08-13 02:26:01.057 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
-2026-08-13 02:26:01.057 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
-2026-08-13 02:26:01.057 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
-2026-08-13 02:26:01.059 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
-2026-08-13 02:26:01.217 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
-2026-08-13 02:26:01.336 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
-2026-08-13 02:26:01.336 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
-2026-08-13 02:26:01.336 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
-2026-08-13 02:26:01.336 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
-2026-08-13 02:26:01.336 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
-2026-08-13 02:26:01.383 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:01.384 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:01.384 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:01.385 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:01.385 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:01.386 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:01.386 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:01.387 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:01.394 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
-2026-08-13 02:26:01.400 | info     |           Metal | Profiler started on device 1 (profiler_initializer.cpp:49)
-2026-08-13 02:26:01.406 | info     |           Metal | Profiler started on device 2 (profiler_initializer.cpp:49)
-2026-08-13 02:26:01.412 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
-2026-08-13 02:26:01.412 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
-2026-08-13 02:26:01.439 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
-2026-08-13 02:26:01.440 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
-2026-08-13 02:26:01.443 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
-2026-08-13 02:26:01.444 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
-2026-08-13 02:26:01.444 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
-2026-08-13 02:26:01.444 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
-2026-08-13 02:26:05.302 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
-2026-08-13 02:26:05.380 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
-2026-08-13 02:26:05.386 | INFO     | tracy:signpost:49 - PERF_DECODE
-2026-08-13 02:26:05.390 | INFO     | tracy:signpost:49 - PERF_DECODE_END
-2026-08-13 02:26:05.702 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:05.702 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:05.702 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:05.702 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:05.702 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:05.703 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:05.703 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:05.703 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:05.703 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:05.703 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:05.704 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:05.704 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:05.704 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:05.704 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:05.704 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
-2026-08-13 02:26:05.705 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:37.717 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-13 04:43:37.717 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-13 04:43:37.717 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-13 04:43:37.717 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-13 04:43:37.729 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-13 04:43:37.729 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-13 04:43:37.807 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-13 04:43:37.807 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-13 04:43:37.807 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-13 04:43:37.807 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-13 04:43:37.808 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-13 04:43:38.033 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-13 04:43:38.154 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 04:43:38.154 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 04:43:38.154 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-13 04:43:38.154 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 04:43:38.154 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 04:43:38.201 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:38.201 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:38.202 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:38.202 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:38.203 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:38.204 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:38.204 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:38.205 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:38.212 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-08-13 04:43:38.218 | info     |           Metal | Profiler started on device 1 (profiler_initializer.cpp:49)
+2026-08-13 04:43:38.224 | info     |           Metal | Profiler started on device 2 (profiler_initializer.cpp:49)
+2026-08-13 04:43:38.231 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-08-13 04:43:38.231 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 04:43:38.262 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-13 04:43:38.263 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-13 04:43:38.264 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-13 04:43:38.264 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-13 04:43:38.264 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 04:43:38.264 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 04:43:42.130 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 04:43:42.209 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 04:43:42.215 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-08-13 04:43:42.219 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+2026-08-13 04:43:42.528 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:42.528 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:42.528 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:42.528 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:42.528 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:42.529 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:42.529 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:42.529 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:42.529 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:42.529 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:42.529 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:42.530 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:42.530 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:42.531 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:42.532 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 04:43:42.536 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
 PERF decode kind=full context=131071 iters=8 out=(1, 1, 1, 6656)
 nanobind: leaked 3 instances!
- - leaked instance 0x7583688f9cc8 of type "ttnn._ttnn.tensor.CoreRangeSet"
- - leaked instance 0x7583759d53f8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
- - leaked instance 0x7583759d55d8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7343233b1d88 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7343284bd628 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7343284bd448 of type "ttnn._ttnn.multi_device.MeshCoordinate"
 nanobind: leaked 24 types!
  - leaked type "MathFidelity"
  - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
@@ -78,48 +78,48 @@ nanobind: leaked 24 types!
  - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
  - ... skipped remainder
 nanobind: leaked 282 functions!
- - leaked function "merge"
+ - leaked function "device"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "reshape"
  - leaked function "__init__"
- - leaked function "__ne__"
  - leaked function ""
  - leaked function ""
- - leaked function "get_view"
- - leaked function "item"
  - leaked function ""
- - leaked function "is_per_core_allocated"
  - leaked function ""
  - ... skipped remainder
 nanobind: this is likely caused by a reference counting issue in the binding code.
-See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-13 02:26:08.692 | info     |    BuildKernels | JIT cache stats: 266/266 hits (100.0%) [266 cached, 93 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
-2026-08-13 02:26:08.692 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
-2026-08-13 02:26:08.724 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
-2026-08-13 02:26:08.724 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
-2026-08-13 02:26:09.353 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
-2026-08-13 02:26:09.353 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
-2026-08-13 02:26:09.353 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-13 04:43:45.537 | info     |    BuildKernels | JIT cache stats: 285/285 hits (100.0%) [285 cached, 96 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-13 04:43:45.537 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-13 04:43:45.570 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-13 04:43:45.570 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-13 04:43:46.153 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-13 04:43:46.153 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-13 04:43:46.153 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
 
 Timer resolution: 0 ns
 
 Frames: 2
-Time span: 11.87 s
-Zones: 1,622,716
-Elapsed time: 11.71 s
+Time span: 12.03 s
+Zones: 1,650,328
+Elapsed time: 11.81 s
 Saving trace... done!
-Trace size 15.01 MB (18.98% ratio)
-2026-08-13 02:26:09.679 | INFO     | __main__:main:469 - Copying /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/perf_windows_2026_08_13_02_26_09.tracy
-2026-08-13 02:26:09.682 | INFO     | __main__:main:472 - Copied /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/perf_windows_2026_08_13_02_26_09.tracy
-2026-08-13 02:26:09.682 | INFO     | __main__:main:481 - embed.tracy -> traces/perf_windows_2026_08_13_02_26_09.tracy
-2026-08-13 02:26:09.682 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
-2026-08-13 02:26:09.682 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
-2026-08-13 02:26:09.682 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
-2026-08-13 02:26:10.233 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
-2026-08-13 02:26:10.258 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
-2026-08-13 02:26:10.259 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+Trace size 15.36 MB (19.09% ratio)
+2026-08-13 04:43:46.455 | INFO     | __main__:main:469 - Copying /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/perf_windows_2026_08_13_04_43_46.tracy
+2026-08-13 04:43:46.459 | INFO     | __main__:main:472 - Copied /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/perf_windows_2026_08_13_04_43_46.tracy
+2026-08-13 04:43:46.459 | INFO     | __main__:main:481 - embed.tracy -> traces/perf_windows_2026_08_13_04_43_46.tracy
+2026-08-13 04:43:46.459 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-13 04:43:46.459 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-13 04:43:46.459 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-13 04:43:47.028 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-08-13 04:43:47.054 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-08-13 04:43:47.054 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
 /home/ttuser/dev/muse-glimmer/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
   df = pd.read_csv(tracyOpTimesLog)
-2026-08-13 02:26:11.910 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
-2026-08-13 02:26:11.911 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
-2026-08-13 02:26:13.748 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
-2026-08-13 02:26:13.749 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
-2026-08-13 02:26:13.789 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
-2026-08-13 02:26:14.320 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/reports/2026_08_13_02_26_13/ops_perf_results_2026_08_13_02_26_13.csv
+2026-08-13 04:43:48.853 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-13 04:43:48.853 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-13 04:43:50.816 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-13 04:43:50.816 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-13 04:43:50.859 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-13 04:43:51.399 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/reports/2026_08_13_04_43_50/ops_perf_results_2026_08_13_04_43_50.csv

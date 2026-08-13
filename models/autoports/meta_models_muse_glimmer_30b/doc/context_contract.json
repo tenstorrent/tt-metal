@@ -896,7 +896,7 @@
     "mlp_padding": "The per-device MLP intermediate is zero-padded 4992 -> 5120 (156 -> 160 tiles) so the width-sharded DRAM weight is exactly one shard per DRAM bank and one 16-core L1 grid can serve the whole decode step. Costs 2.6% of the MLP weight bytes; silu(0)*0 = 0 makes it numerically inert.",
     "decode_layout": "Every width-sharded L1 decode tensor is on 16 cores -- the largest count that divides every matmul input width (208 hidden, 32 gated attention, 160 padded intermediate). The 40-tile QKV projection output is the one padded shard (3 tiles per core against 2.5); it is an output, never an in0. The decode residual now also crosses the *layer boundary* in this layout rather than being written back to DRAM interleaved; see optimized_multichip_decoder.inter_layer_decode_residual_contract.",
     "decode_matmul": "All six decode projections are MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig dispatches with per-device-K in0_block_w: wqkv 13, attn_gate 13, o_proj 2, mlp_gate 13, mlp_up 13, mlp_down 10.",
-    "collectives": "Two reductions per layer, one per sublayer, on ttnn.Topology.Ring, with the residual stream replicated. The implementation is split by payload: prefill uses ttnn.experimental.reduce_scatter_minimal_async + all_gather_async with seven layer-owned global semaphores in L1_SMALL, reduce-scatter at 4 workers, all-gather at the op default, and a barrier semaphore on both; decode uses the composite ttnn.reduce_scatter(num_workers_per_link=1, use_l1_small_for_semaphores=True) + ttnn.all_gather. See optimized_multichip_decoder.collective_implementation for why.",
+    "collectives": "Two reductions per layer, one per sublayer, on ttnn.Topology.Ring, with the residual stream replicated. The implementation is split by payload: prefill uses ttnn.experimental.reduce_scatter_minimal_async + all_gather_async with seven layer-owned global semaphores in L1_SMALL, reduce-scatter at 4 workers, all-gather at the op default, and a barrier semaphore on both; decode uses the composite ttnn.reduce_scatter(num_workers_per_link=1, use_l1_small_for_semaphores=True) + ttnn.all_gather. See optimized_multichip_decoder.collective_implementation for why. Above 256 rows the prefill reduction also carries its following RMSNorm inside it, at the fractured width; see optimized_multichip_decoder.prefill_fractured_norm.",
     "decode_sdpa": "paged_scaled_dot_product_attention_decode over the whole 11x10 grid, op-chosen q/k chunking, max_cores_per_head_batch=32. With one local KV head the op's default of 16 leaves most of the grid idle and costs 12% of the long-context decode step.",
     "precision_policy": "Inherited unchanged from the optimized stage: BFLOAT16 activations/residual/norms, BFLOAT8_B attention weights, BFLOAT4_B MLP weights, BFLOAT8_B paged KV cache, LoFi projections.",
     "page_block_size": 64,
@@ -913,18 +913,22 @@
   "performance": {
     "note": "'e2e' is warmed host wall time from bench/layer_ab.py, min of 3 rounds, no profiler attached, with before and after from the same invocation (logs/final_layer_ab.log); 'device' is the Device Time column of tt-perf-report over a warmed signposted Tracy window, decode divided by its 8 trace replays, recaptured against the final default path (tracy/).",
     "traced_decode_ms_per_token_e2e": {
-      "sliding@2048": 0.4545,
+      "sliding@2048": 0.4547,
       "full@2048": 0.4238
     },
     "traced_decode_ms_per_token_e2e_before": {
       "sliding@2048": 0.4574,
-      "full@2048": 0.4257
+      "full@2048": 0.4259
+    },
+    "traced_decode_pct_change": {
+      "sliding@2048": -0.55,
+      "full@2048": -0.5
     },
     "traced_decode_us_device": {
-      "sliding@2048": 438.8,
-      "full@2048": 416.4,
-      "sliding@131071": 438.2,
-      "full@131071": 520.6
+      "sliding@2048": 439.4,
+      "full@2048": 416.8,
+      "sliding@131071": 437.5,
+      "full@131071": 521.3
     },
     "traced_decode_us_device_before": {
       "sliding@2048": 441.5,
@@ -932,11 +936,19 @@
       "sliding@131071": 440.5,
       "full@131071": 522.7
     },
+    "prefill_ms_e2e": {
+      "8192_sliding": 17.93,
+      "8192_full": 17.85
+    },
+    "prefill_ms_e2e_before": {
+      "8192_sliding": 19.22,
+      "8192_full": 19.31
+    },
     "prefill_us_device": {
-      "8192_sliding": 17687.1,
-      "8192_full": 17272.0,
-      "128_sliding": 840.1,
-      "128_full": 812.5
+      "8192_sliding": 16930.7,
+      "8192_full": 16195.1,
+      "128_sliding": 837.9,
+      "128_full": 813.8
     },
     "prefill_us_device_before": {
       "8192_sliding": 18211.6,
@@ -944,39 +956,44 @@
       "128_sliding": 839.8,
       "128_full": 814.6
     },
-    "prefill_ms_e2e": {
-      "8192_sliding": 18.98,
-      "8192_full": 18.28
+    "prefill_pct_change_device": {
+      "8192_sliding": -7.03,
+      "8192_full": -9.65,
+      "128_sliding": -0.22,
+      "128_full": -0.1
     },
-    "prefill_ms_e2e_before": {
-      "8192_sliding": 19.31,
-      "8192_full": 18.89
+    "prefill_norm_us_device": {
+      "8192_sliding": 2422.5
     },
-    "prefill_e2e_note": "Not a claim: the same configuration spans 3.4-4.1 % across three runs in one process, which is larger than the effect. The prefill result is the op-level collective (15.2 %) and the device-time window (-2.88 / -3.64 %).",
+    "prefill_norm_us_device_before": {
+      "8192_sliding": 3460.4
+    },
     "single_chip_baseline_e2e": {
-      "traced_decode_sliding@2048": 1.0909,
-      "traced_decode_full@2048": 1.0604,
-      "prefill_8192_sliding": 44.21,
-      "prefill_8192_full": 44.37
+      "traced_decode_sliding@2048": 1.091,
+      "traced_decode_full@2048": 1.0602,
+      "prefill_8192_sliding": 44.26,
+      "prefill_8192_full": 43.31
     },
-    "traced_decode_speedup_vs_single_chip": {
-      "sliding@2048": 2.4,
-      "full@2048": 2.502
+    "speedup_vs_single_chip": {
+      "traced_decode_sliding@2048": 2.4,
+      "traced_decode_full@2048": 2.502,
+      "prefill_8192_sliding": 2.469,
+      "prefill_8192_full": 2.426
     },
     "device_ops_per_iteration": {
       "decode_sliding": 45,
-      "decode_full": 35
+      "decode_full": 35,
+      "prefill_8192_sliding": 34,
+      "prefill_8192_full": 32
     },
     "device_ops_per_iteration_before": {
       "decode_sliding": 46,
-      "decode_full": 36
+      "decode_full": 36,
+      "prefill_8192_sliding": 30,
+      "prefill_8192_full": 28
     },
-    "device_op_count_note": "One fewer op per decode step: the layer-exit sharded_to_interleaved the boundary contract removes. The decode collectives are unchanged (ReduceScatter 29.36 + AllGather 24.09 us/replay), because decode keeps the composite wrappers.",
-    "traced_decode_pct_change": {
-      "sliding@2048": -0.57,
-      "full@2048": -0.51
-    },
-    "traced_decode_pct_change_note": "mean of the repeat rows on each side of logs/final_layer_ab.log: (0.4574+0.4571)/2 -> (0.4547+0.4545+0.4547)/3 and (0.4257+0.4264)/2 -> (0.4238+0.4239+0.4240)/3. Best-to-best is -0.57 % / -0.45 %."
+    "device_op_count_note": "Decode loses one op: the layer-exit sharded_to_interleaved the boundary contract removes; its collectives are unchanged because decode keeps the composite wrappers. Prefill gains four: each of the two reductions replaces one rms_norm with rms_norm_pre_all_gather + a statistics all_gather + rms_norm_post_all_gather, and gets 30 % of the prefill norm time back for it.",
+    "measurement_note": "Decode deltas are mean-of-repeats to mean-of-repeats from one invocation of bench/layer_ab.py; prefill e2e spans 3.1-4.2 % across repeats, so the prefill claim is the device-time window, which is the sharper instrument."
   },
   "tests": {
     "total": 108,
@@ -1056,18 +1073,22 @@
     "performance": {
       "note": "'e2e' is warmed host wall time from bench/layer_ab.py, min of 3 rounds, no profiler attached, with before and after from the same invocation (logs/final_layer_ab.log); 'device' is the Device Time column of tt-perf-report over a warmed signposted Tracy window, decode divided by its 8 trace replays, recaptured against the final default path (tracy/).",
       "traced_decode_ms_per_token_e2e": {
-        "sliding@2048": 0.4545,
+        "sliding@2048": 0.4547,
         "full@2048": 0.4238
       },
       "traced_decode_ms_per_token_e2e_before": {
         "sliding@2048": 0.4574,
-        "full@2048": 0.4257
+        "full@2048": 0.4259
+      },
+      "traced_decode_pct_change": {
+        "sliding@2048": -0.55,
+        "full@2048": -0.5
       },
       "traced_decode_us_device": {
-        "sliding@2048": 438.8,
-        "full@2048": 416.4,
-        "sliding@131071": 438.2,
-        "full@131071": 520.6
+        "sliding@2048": 439.4,
+        "full@2048": 416.8,
+        "sliding@131071": 437.5,
+        "full@131071": 521.3
       },
       "traced_decode_us_device_before": {
         "sliding@2048": 441.5,
@@ -1075,11 +1096,19 @@
         "sliding@131071": 440.5,
         "full@131071": 522.7
       },
+      "prefill_ms_e2e": {
+        "8192_sliding": 17.93,
+        "8192_full": 17.85
+      },
+      "prefill_ms_e2e_before": {
+        "8192_sliding": 19.22,
+        "8192_full": 19.31
+      },
       "prefill_us_device": {
-        "8192_sliding": 17687.1,
-        "8192_full": 17272.0,
-        "128_sliding": 840.1,
-        "128_full": 812.5
+        "8192_sliding": 16930.7,
+        "8192_full": 16195.1,
+        "128_sliding": 837.9,
+        "128_full": 813.8
       },
       "prefill_us_device_before": {
         "8192_sliding": 18211.6,
@@ -1087,39 +1116,44 @@
         "128_sliding": 839.8,
         "128_full": 814.6
       },
-      "prefill_ms_e2e": {
-        "8192_sliding": 18.98,
-        "8192_full": 18.28
+      "prefill_pct_change_device": {
+        "8192_sliding": -7.03,
+        "8192_full": -9.65,
+        "128_sliding": -0.22,
+        "128_full": -0.1
       },
-      "prefill_ms_e2e_before": {
-        "8192_sliding": 19.31,
-        "8192_full": 18.89
+      "prefill_norm_us_device": {
+        "8192_sliding": 2422.5
       },
-      "prefill_e2e_note": "Not a claim: the same configuration spans 3.4-4.1 % across three runs in one process, which is larger than the effect. The prefill result is the op-level collective (15.2 %) and the device-time window (-2.88 / -3.64 %).",
+      "prefill_norm_us_device_before": {
+        "8192_sliding": 3460.4
+      },
       "single_chip_baseline_e2e": {
-        "traced_decode_sliding@2048": 1.0909,
-        "traced_decode_full@2048": 1.0604,
-        "prefill_8192_sliding": 44.21,
-        "prefill_8192_full": 44.37
+        "traced_decode_sliding@2048": 1.091,
+        "traced_decode_full@2048": 1.0602,
+        "prefill_8192_sliding": 44.26,
+        "prefill_8192_full": 43.31
       },
-      "traced_decode_speedup_vs_single_chip": {
-        "sliding@2048": 2.4,
-        "full@2048": 2.502
+      "speedup_vs_single_chip": {
+        "traced_decode_sliding@2048": 2.4,
+        "traced_decode_full@2048": 2.502,
+        "prefill_8192_sliding": 2.469,
+        "prefill_8192_full": 2.426
       },
       "device_ops_per_iteration": {
         "decode_sliding": 45,
-        "decode_full": 35
+        "decode_full": 35,
+        "prefill_8192_sliding": 34,
+        "prefill_8192_full": 32
       },
       "device_ops_per_iteration_before": {
         "decode_sliding": 46,
-        "decode_full": 36
+        "decode_full": 36,
+        "prefill_8192_sliding": 30,
+        "prefill_8192_full": 28
       },
-      "device_op_count_note": "One fewer op per decode step: the layer-exit sharded_to_interleaved the boundary contract removes. The decode collectives are unchanged (ReduceScatter 29.36 + AllGather 24.09 us/replay), because decode keeps the composite wrappers.",
-      "traced_decode_pct_change": {
-        "sliding@2048": -0.57,
-        "full@2048": -0.51
-      },
-      "traced_decode_pct_change_note": "mean of the repeat rows on each side of logs/final_layer_ab.log: (0.4574+0.4571)/2 -> (0.4547+0.4545+0.4547)/3 and (0.4257+0.4264)/2 -> (0.4238+0.4239+0.4240)/3. Best-to-best is -0.57 % / -0.45 %."
+      "device_op_count_note": "Decode loses one op: the layer-exit sharded_to_interleaved the boundary contract removes; its collectives are unchanged because decode keeps the composite wrappers. Prefill gains four: each of the two reductions replaces one rms_norm with rms_norm_pre_all_gather + a statistics all_gather + rms_norm_post_all_gather, and gets 30 % of the prefill norm time back for it.",
+      "measurement_note": "Decode deltas are mean-of-repeats to mean-of-repeats from one invocation of bench/layer_ab.py; prefill e2e spans 3.1-4.2 % across repeats, so the prefill claim is the device-time window, which is the sharper instrument."
     },
     "tests": {
       "total": 108,
@@ -1154,6 +1188,17 @@
       "found_and_fixed": "The first watcher run stopped the device: 'subordinate_erisc detected invalid NOC command buffer state before starting the next kernel' in fabric_erisc_router.cpp. That build called all_gather_async without its barrier semaphore and also carried the persistent staging buffers this stage rejects. The barrier was added. The trip has NOT reproduced with the barrier removed on its own (logs/watcher_no_ag_barrier.log, every counter 0), so the cause is not established; the shipped path is watcher-clean either way.",
       "known_teardown_fault": "unchanged from the multichip stage: closing the 1x4 FABRIC_1D_RING mesh can time out returning ethernet core 29-25 to base firmware, after every test has reported; recoverable with one bounded tt-smi -r."
     },
-    "non_aligned_sequence_lengths": "unchanged: the layer owns its padding, masking, cache fill and output slicing; nine prefill lengths including 1, 100, 2049, 4097, 8193, 12345 and 130073 still pass."
+    "non_aligned_sequence_lengths": "unchanged: the layer owns its padding, masking, cache fill and output slicing; nine prefill lengths including 1, 100, 2049, 4097, 8193, 12345 and 130073 still pass.",
+    "prefill_fractured_norm": {
+      "shipped": true,
+      "min_rows": 256,
+      "min_rows_source": "PREFILL_FRACTURED_NORM_MIN_ROWS == PREFILL_NORM_SHARD_MAX_ROWS",
+      "what": "The two prefill RMSNorms that follow a reduction (post_attention_layernorm after o_proj, post_feedforward_layernorm after mlp_down) run distributed at the 1664-wide reduce-scatter shard (rms_norm_pre_all_gather -> statistics all_gather -> rms_norm_post_all_gather), and the all_gather the reduction owed anyway carries the normalised tensor back to full width.",
+      "why_it_needs_no_new_contract": "This model's prefill norms sit between the reduction and the residual add, so the norm is fractured while the residual stays 6656-wide and replicated. The layer's public prefill boundary is unchanged: DRAM-interleaved replicated in and out. This is doc/multichip_decoder limitation 1, which was deferred on the assumption that it required a second residual contract; it does not.",
+      "worth": "prefill device time -7.03 % (sliding) / -9.65 % (full) at 8192 rows; prefill norms 3460.4 -> 2422.5 us",
+      "gated_because": "ungated it cost the 128-row window +13.42 % / +13.58 %: the saving scales with rows, the statistics gather is fixed",
+      "arithmetic": "identical to a full-width RMSNorm; the statistics gather combines per-device partial sums over all 6656 channels",
+      "pcc_effect": "prefill vs single-chip 0.999839 -> 0.999836; real-weight prefill 0.997755 -> 0.997736"
+    }
   }
 }

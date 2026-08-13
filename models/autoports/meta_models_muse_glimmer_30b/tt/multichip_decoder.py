@@ -117,6 +117,7 @@ from models.autoports.meta_models_muse_glimmer_30b.tt.functional_decoder import 
 from models.autoports.meta_models_muse_glimmer_30b.tt.fused_decoder import _FusedNorm, norm_compute_kernel_config
 from models.autoports.meta_models_muse_glimmer_30b.tt.optimized_decoder import (
     DEFAULT_PRECISION,
+    PREFILL_NORM_SHARD_MAX_ROWS,
     OptimizedDecoder,
     PrecisionPolicy,
     _OptimizedMLP,
@@ -146,6 +147,7 @@ __all__ = [
     "MULTICHIP_DECODE_SDPA",
     "MULTICHIP_PREFILL_MCAST2D",
     "MULTICHIP_PREFILL_MINIMAL_BLOCKS",
+    "PREFILL_FRACTURED_NORM_MIN_ROWS",
     "MeshPlan",
     "MultichipDecoder",
     "ROW_PARALLEL_ROLES",
@@ -651,6 +653,46 @@ DEFAULT_PREFILL_CCL_AG_WORKERS: int | None = None
 #: first-use contract worth re-testing when the op changes.
 DEFAULT_CCL_PERSISTENT_BUFFERS = False
 
+#: Run the two prefill RMSNorms that follow a reduction at the **fractured** width.
+#:
+#: Both row-parallel prefill projections feed straight into a norm -- ``o_proj``
+#: into ``post_attention_layernorm``, ``mlp_down`` into
+#: ``post_feedforward_layernorm``.  With this on, those reductions stop at the
+#: reduce-scatter, the norm runs distributed over the 1664-wide shard
+#: (``rms_norm_pre_all_gather`` -> stats ``all_gather`` -> ``rms_norm_post_all_gather``),
+#: and the all-gather that the reduction would have done anyway carries the
+#: *normalised* tensor back to full width.
+#:
+#: The arithmetic is unchanged: a distributed RMSNorm combines per-device partial
+#: sums through the stats gather, so it normalises over all 6656 channels exactly
+#: as the full-width norm does.  The collective bytes are unchanged too -- the same
+#: reduce-scatter and the same all-gather, plus a stats gather of 32 columns.  What
+#: changes is that the norm and its reads run at a quarter of the width, and the
+#: layer's public prefill contract does not move at all: DRAM-interleaved
+#: replicated in, DRAM-interleaved replicated out.
+#:
+#: Measured on the two-sublayer chain at the real 8192-row shape
+#: (``doc/optimized_multichip_decoder/bench/fractured_prefill_probe.py``):
+#: **4443.9 us against 5902.1**, i.e. 24.7 % of the chain and ~8 % of the prefill
+#: layer.  This is the lever ``doc/multichip_decoder/README.md`` limitation 1 left
+#: for "the stage that owns the layer stack"; it needs no second residual contract,
+#: so this stage takes it.
+#:
+#: **Only above** :data:`PREFILL_FRACTURED_NORM_MIN_ROWS`.  The saving is
+#: proportional to the rows the norm reads, while the statistics gather it adds is
+#: a fixed, latency-bound collective, so at small row counts the trade inverts:
+#: measured on the 128-row window it costs **13.4 % / 13.6 %** of device time
+#: against 8.98 % / 9.27 % saved on the 8192-row one.  The threshold is the same
+#: boundary the inherited norm already switches on -- below it the full-width norm
+#: is L1-sharded and cheap, above it it is DRAM-interleaved and is the expensive
+#: thing this replaces.
+DEFAULT_PREFILL_FRACTURED_NORM = True
+
+#: Rows below which the reduction is finished before the norm, as it was.  Equal to
+#: :data:`PREFILL_NORM_SHARD_MAX_ROWS` by construction, not by coincidence: that is
+#: exactly where the full-width prefill norm stops being a cheap sharded kernel.
+PREFILL_FRACTURED_NORM_MIN_ROWS = PREFILL_NORM_SHARD_MAX_ROWS
+
 #: Hand the next layer the decode residual width-sharded in L1 instead of DRAM
 #: interleaved.  See ``OptimizedDecoder.decode_forward``; measured by
 #: ``bench/boundary_probe.py`` at 1.9-6.3 us per layer with a bit-identical
@@ -879,6 +921,7 @@ class MultichipDecoder(OptimizedDecoder):
         ccl_buffers_per_channel: int | None = None,
         ccl_num_links: int | None = None,
         ccl_ag_barrier: bool = True,
+        prefill_fractured_norm: bool = DEFAULT_PREFILL_FRACTURED_NORM,
         **kwargs,
     ) -> None:
         kwargs.setdefault("decode_matmul", MULTICHIP_DECODE_MATMUL)
@@ -914,6 +957,15 @@ class MultichipDecoder(OptimizedDecoder):
         #: :data:`DEFAULT_DECODE_CCL_IMPL` and
         #: ``doc/optimized_multichip_decoder/logs/watcher_no_ag_barrier.log``.
         self.ccl_ag_barrier = ccl_ag_barrier
+        #: See :data:`DEFAULT_PREFILL_FRACTURED_NORM`.  Requires the async prefill
+        #: collective, because it needs the reduce-scatter and the all-gather as
+        #: separate ops with the norm between them.
+        self.prefill_fractured_norm = prefill_fractured_norm and self.prefill_ccl_impl == "async"
+        #: Set by ``_prefill_projection`` when it hands back a *scattered* partial
+        #: instead of a reduced one, and consumed by the very next
+        #: ``_prefill_norm``.  The pairing is structural: both row-parallel prefill
+        #: projections return directly into a norm.
+        self._pending_scatter: ttnn.Tensor | None = None
         self._ccl_sems = None
         self._ccl_slot = 0
         decode_sdpa = kwargs.pop("decode_sdpa", None) or MULTICHIP_DECODE_SDPA
@@ -1007,6 +1059,7 @@ class MultichipDecoder(OptimizedDecoder):
         ccl_buffers_per_channel: int | None = None,
         ccl_num_links: int | None = None,
         ccl_ag_barrier: bool = True,
+        prefill_fractured_norm: bool = DEFAULT_PREFILL_FRACTURED_NORM,
         **kwargs,
     ) -> "MultichipDecoder":
         """Same contract as ``OptimizedDecoder.from_state_dict`` on a mesh.
@@ -1101,12 +1154,27 @@ class MultichipDecoder(OptimizedDecoder):
             weight = _get_layer_tensor(state_dict, layer_idx, f"{name}.weight").to(torch.float32)
             folded = (1.0 + weight).to(torch.bfloat16)
             tile = to_mesh(folded.reshape(1, 1, 1, plan.hidden_size), dtype=ttnn.bfloat16)
+            # The per-device quarter of the same weight, for the distributed form
+            # of this norm (DEFAULT_PREFILL_FRACTURED_NORM).  Fractured over the
+            # hidden dimension with the same mapper the column-parallel weights
+            # use, so device d holds exactly the channels its reduce-scatter shard
+            # carries.
+            local = ttnn.from_torch(
+                folded.reshape(1, 1, 1, plan.hidden_size),
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+            )
             row_major = to_mesh(
                 folded.reshape(1, 1, plan.hidden_size // TILE_SIZE, TILE_SIZE),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
-            return _FusedNorm(tile, row_major, eps, norm_ck)
+            fused = _FusedNorm(tile, row_major, eps, norm_ck)
+            fused.local_weight = local
+            return fused
 
         def linear_weight(suffix: str) -> torch.Tensor:
             return _get_layer_tensor(state_dict, layer_idx, suffix).to(torch.float32).transpose(-2, -1).contiguous()
@@ -1211,6 +1279,7 @@ class MultichipDecoder(OptimizedDecoder):
             ccl_buffers_per_channel=ccl_buffers_per_channel,
             ccl_num_links=ccl_num_links,
             ccl_ag_barrier=ccl_ag_barrier,
+            prefill_fractured_norm=prefill_fractured_norm,
             sharded_decode_io=sharded_decode_io,
             **({} if decode_fused_activation is None else {"decode_fused_activation": decode_fused_activation}),
         )
@@ -1575,7 +1644,75 @@ class MultichipDecoder(OptimizedDecoder):
             )
         if role not in ROW_PARALLEL_ROLES:
             return out
+        if self.prefill_fractured_norm and rows > PREFILL_FRACTURED_NORM_MIN_ROWS:
+            # Stop at the scatter and hand the 1664-wide partial to the norm that
+            # is structurally guaranteed to consume it next; ``_prefill_norm``
+            # finishes the reduction with the gather it would have done anyway.
+            self._pending_scatter = self._prefill_reduce_scatter(out)
+            return self._pending_scatter
         return self._all_reduce(out, ttnn.DRAM_MEMORY_CONFIG, prefill=True)
+
+    def _prefill_reduce_scatter(self, tensor: ttnn.Tensor) -> ttnn.Tensor:
+        sems = self._ccl_semaphores()
+        scattered = ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            persistent_output_buffers=None,
+            dim=3,
+            multi_device_global_semaphore=sems["rs"],
+            barrier_semaphore=sems["rs_barrier"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=CCL_TOPOLOGY,
+            num_workers_per_link=self.prefill_ccl_rs_workers,
+        )
+        ttnn.deallocate(tensor)
+        return scattered
+
+    def _prefill_norm(self, norm, x: ttnn.Tensor) -> ttnn.Tensor:
+        """The inherited prefill norm, or the distributed one over a scattered partial.
+
+        See :data:`DEFAULT_PREFILL_FRACTURED_NORM`.  ``_prefill_projection`` sets
+        ``_pending_scatter`` when it hands back a reduce-scattered partial rather
+        than a reduced tensor; this consumes it, normalises at the fractured width
+        with the same arithmetic a full-width RMSNorm would use, and finishes the
+        reduction with the all-gather the reduction owed anyway.
+
+        Identity of the tensor is checked rather than its width, so a norm that is
+        *not* the paired consumer cannot accidentally take the fractured path.
+        """
+        pending = self._pending_scatter
+        if pending is None or x is not pending:
+            return super()._prefill_norm(norm, x)
+        self._pending_scatter = None
+        stats = ttnn.rms_norm_pre_all_gather(x, compute_kernel_config=norm.compute_kernel_config, dtype=ttnn.bfloat16)
+        gathered_stats = self._prefill_all_gather(stats)
+        ttnn.deallocate(stats)
+        normed_local = ttnn.rms_norm_post_all_gather(
+            x,
+            gathered_stats,
+            epsilon=norm.eps,
+            weight=norm.local_weight,
+            compute_kernel_config=norm.compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(gathered_stats)
+        ttnn.deallocate(x)
+        out = self._prefill_all_gather(normed_local)
+        ttnn.deallocate(normed_local)
+        return out
+
+    def _prefill_all_gather(self, tensor: ttnn.Tensor) -> ttnn.Tensor:
+        sems = self._ccl_semaphores()
+        return ttnn.experimental.all_gather_async(
+            tensor,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=sems["ag"],
+            barrier_semaphore=sems["ag_barrier"] if self.ccl_ag_barrier else None,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=CCL_TOPOLOGY,
+            **({} if self.prefill_ccl_ag_workers is None else {"num_workers_per_link": self.prefill_ccl_ag_workers}),
+        )
 
     def _prefill_mcast2d_spec(self, role: str, rows: int, dtype: ttnn.DataType) -> tuple[int, int] | None:
         for max_rows, spec in self.prefill_mcast2d.get((role, dtype), ()):

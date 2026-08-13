@@ -1,0 +1,72 @@
+2026-08-13 03:50:26.713 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-13 03:50:26.906 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-13 03:50:26.906 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-13 03:50:26.906 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-13 03:50:26.906 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-13 03:50:26.918 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-13 03:50:26.918 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-13 03:50:26.996 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-13 03:50:26.996 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-13 03:50:26.996 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-13 03:50:26.996 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-13 03:50:26.997 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-13 03:50:27.224 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-13 03:50:27.344 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 03:50:27.344 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 03:50:27.344 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-13 03:50:27.344 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 03:50:27.344 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 03:50:27.385 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 03:50:27.385 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 03:50:27.386 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 03:50:27.386 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 03:50:27.387 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 03:50:27.387 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 03:50:27.388 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 03:50:27.389 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 03:50:27.389 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 03:50:27.414 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-13 03:50:27.414 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-13 03:50:27.415 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-13 03:50:27.416 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-13 03:50:27.416 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 03:50:27.416 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+FRACPREFILL rows=8192 sublayers=2 replicated (shipped)      5902.1 us
+FRACPREFILL rows=8192 sublayers=2 fractured                 4443.9 us
+nanobind: leaked 3 instances!
+ - leaked instance 0x7552603b9588 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7552603b93a8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x75520c3db648 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 45 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - ... skipped remainder
+nanobind: leaked 372 functions!
+ - leaked function "IsProgramRealtimeProfilerActive"
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "__iter__"
+ - leaked function ""
+ - leaked function "sfpu_nan"
+ - leaked function "__eq__"
+ - leaked function ""
+ - leaked function "to_json"
+ - leaked function "bounding_box"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-13 03:50:33.266 | info     |    BuildKernels | JIT cache stats: 105/150 hits (70.0%) [105 cached, 69 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-13 03:50:33.266 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-13 03:50:33.280 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-13 03:50:33.280 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-13 03:50:33.764 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-13 03:50:33.764 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-13 03:50:33.764 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

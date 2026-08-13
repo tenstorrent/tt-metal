@@ -1,30 +1,30 @@
-2026-08-13 02:23:42.179 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+2026-08-13 04:44:54.116 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
 Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
-2026-08-13 02:23:44.065 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
-2026-08-13 02:23:44.065 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
-2026-08-13 02:23:44.065 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
-2026-08-13 02:23:44.065 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
-2026-08-13 02:23:44.077 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
-2026-08-13 02:23:44.077 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
-2026-08-13 02:23:44.154 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
-2026-08-13 02:23:44.154 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
-2026-08-13 02:23:44.154 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
-2026-08-13 02:23:44.154 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
-2026-08-13 02:23:44.156 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
-2026-08-13 02:23:44.401 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
-2026-08-13 02:23:44.525 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
-2026-08-13 02:23:44.525 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
-2026-08-13 02:23:44.525 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
-2026-08-13 02:23:44.525 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
-2026-08-13 02:23:44.525 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
-2026-08-13 02:23:44.564 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-13 04:44:55.988 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-13 04:44:55.988 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-13 04:44:55.988 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-13 04:44:55.988 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-13 04:44:56.000 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-13 04:44:56.000 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-13 04:44:56.078 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-13 04:44:56.078 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-13 04:44:56.078 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-13 04:44:56.078 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-13 04:44:56.080 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-13 04:44:56.243 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-13 04:44:56.366 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 04:44:56.366 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 04:44:56.366 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-13 04:44:56.366 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 04:44:56.366 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 04:44:56.404 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
 MESH MeshShape([1, 1]) devices=1 grid=11-10
-AB       single           kind=sliding  mesh=1x1 batch=1 prefill8192=   44.21 ms  traced_decode@2048= 1.0909 ms/token  prefill_pcc=0.993759 decode_pcc=0.993506  (1.1333/1.0910/1.0909)
-AB       single           kind=full     mesh=1x1 batch=1 prefill8192=   44.37 ms  traced_decode@2048= 1.0604 ms/token  prefill_pcc=0.992293 decode_pcc=0.992146  (1.1209/1.0606/1.0604)
+AB       single           kind=sliding  mesh=1x1 batch=1 prefill8192=   44.26 ms  traced_decode@2048= 1.0910 ms/token  prefill_pcc=0.993759 decode_pcc=0.993506  (1.1374/1.0910/1.0910)
+AB       single           kind=full     mesh=1x1 batch=1 prefill8192=   43.31 ms  traced_decode@2048= 1.0602 ms/token  prefill_pcc=0.992293 decode_pcc=0.992146  (1.1061/1.0603/1.0602)
 nanobind: leaked 3 instances!
- - leaked instance 0x707844b80b88 of type "ttnn._ttnn.multi_device.MeshCoordinate"
- - leaked instance 0x7077c6e93738 of type "ttnn._ttnn.tensor.CoreRangeSet"
- - leaked instance 0x707844b80d68 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x723e8c07cc78 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x723e8c07ce58 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x723e0e313678 of type "ttnn._ttnn.tensor.CoreRangeSet"
 nanobind: leaked 24 types!
  - leaked type "MathFidelity"
  - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
@@ -38,22 +38,22 @@ nanobind: leaked 24 types!
  - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
  - ... skipped remainder
 nanobind: leaked 282 functions!
- - leaked function ""
- - leaked function "push_current_command_queue_id_for_thread"
- - leaked function ""
- - leaked function "size"
- - leaked function "create_descriptor"
+ - leaked function "pop_current_command_queue_id_for_thread"
  - leaked function ""
  - leaked function ""
- - leaked function "get_layout"
+ - leaked function "pad_to_tile"
+ - leaked function "dram_grid_size"
+ - leaked function "set_program_cache_misses_allowed"
  - leaked function ""
- - leaked function "cpu"
+ - leaked function ""
+ - leaked function "worker_core_from_logical_core"
+ - leaked function ""
  - ... skipped remainder
 nanobind: this is likely caused by a reference counting issue in the binding code.
-See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-13 02:23:57.020 | info     |    BuildKernels | JIT cache stats: 319/319 hits (100.0%) [319 cached, 69 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
-2026-08-13 02:23:57.020 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
-2026-08-13 02:23:57.034 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
-2026-08-13 02:23:57.034 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
-2026-08-13 02:23:57.636 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
-2026-08-13 02:23:57.636 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
-2026-08-13 02:23:57.636 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-13 04:45:08.823 | info     |    BuildKernels | JIT cache stats: 319/319 hits (100.0%) [319 cached, 69 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-13 04:45:08.823 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-13 04:45:08.838 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-13 04:45:08.838 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-13 04:45:09.363 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-13 04:45:09.363 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-13 04:45:09.363 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

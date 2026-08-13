@@ -593,9 +593,20 @@ class _CollectiveSpy:
             setattr(ttnn.experimental, name, original)
         return False
 
+    #: A distributed RMSNorm's statistics gather moves two scalars per row, so its
+    #: payload is one tile wide against the hidden size's 208.  It is a real op and
+    #: it is counted -- as a *statistics* gather, not as half of a reduction --
+    #: because the contract these tests pin is how many times the layer reduces
+    #: the hidden state across the mesh.  See DEFAULT_PREFILL_FRACTURED_NORM.
+    STATS_GATHER_MAX_WIDTH = 2 * 32
+
+    def stats_gathers(self) -> int:
+        return sum(1 for c in self.calls if c["op"] == "all_gather" and c["width"] <= self.STATS_GATHER_MAX_WIDTH)
+
     def reductions(self, mode: str) -> int:
         """Number of full reductions performed, under CCL mode ``mode``."""
         counts = {name: sum(1 for call in self.calls if call["op"] == name) for name in self.OPS}
+        counts["all_gather"] -= self.stats_gathers()
         if mode == "rs_ag":
             assert (
                 counts["reduce_scatter"] == counts["all_gather"]
@@ -1620,13 +1631,12 @@ def test_collective_implementation_is_split_by_payload(multichip_mesh, decoder_c
     decoder = build_multichip(multichip_mesh, decoder_cache, kind)
     assert decoder.prefill_ccl_impl == "async"
     assert decoder.decode_ccl_impl == "wrapper"
-    # This test runs a 256-row prefill *and* a decode against one decoder, and the
-    # 256-row sharded prefill norm is the L1-tightest window in the suite (see
-    # DEFAULT_L1_SMALL_SIZE).  ``_bound_ccl_semaphores`` releases accumulated CCL
-    # semaphores *after* each test, which is one test too late for this one: run
-    # late in a watcher session it failed with "Statically allocated circular
-    # buffers ... clash with L1 buffers" while passing in isolation.
-    # Ask for the region up front rather than depending on session position.
+    # ``_bound_ccl_semaphores`` releases accumulated CCL semaphores *after* each
+    # test, which is one test too late for this one: it runs a prefill and a decode
+    # against one decoder, and run late in a watcher session it failed with
+    # "Statically allocated circular buffers ... clash with L1 buffers" while
+    # passing in isolation.  Ask for the region up front rather than depending on
+    # session position.
     multichip_mesh.clear_program_cache()
     page_table = make_page_table(multichip_mesh, 1, SHORT_MAX_SEQ, seed=515151)
 
@@ -1658,7 +1668,10 @@ def test_collective_implementation_is_split_by_payload(multichip_mesh, decoder_c
     try:
         ttnn.deallocate(
             decoder.prefill_forward(
-                to_device_hidden(multichip_mesh, R.synthetic_hidden_states(1, 256, seed=515152)),
+                # Above PREFILL_FRACTURED_NORM_MIN_ROWS, so the shipped fractured
+                # prefill norm is the path under test; at or below it the layer
+                # deliberately finishes the reduction before the norm instead.
+                to_device_hidden(multichip_mesh, R.synthetic_hidden_states(1, 512, seed=515152)),
                 page_table=page_table,
                 user_id=0,
             )
@@ -1669,7 +1682,11 @@ def test_collective_implementation_is_split_by_payload(multichip_mesh, decoder_c
         s for s in seen if s.startswith("wrapper:")
     ], f"prefill must reduce with the async primitives, saw {seen}"
     assert sum(1 for s in seen if s == "async:reduce_scatter_minimal_async") == 2, seen
-    assert sum(1 for s in seen if s == "async:all_gather_async") == 2, seen
+    # Two reductions, and **four** gathers: each reduction's own gather plus the
+    # statistics gather of the distributed norm that now sits inside it
+    # (DEFAULT_PREFILL_FRACTURED_NORM).  The stats gather is one tile wide against
+    # the hidden size's 208, which is what makes it worth having.
+    assert sum(1 for s in seen if s == "async:all_gather_async") == (4 if decoder.prefill_fractured_norm else 2), seen
 
     # ---- decode must be the wrappers, and must not touch an async primitive
     seen.clear()

@@ -51,6 +51,7 @@ _BEFORE = {
     "ccl_impl": "wrapper",
     "ccl_persistent_buffers": False,
     "sharded_decode_io": False,
+    "prefill_fractured_norm": False,
 }
 
 
@@ -111,6 +112,9 @@ CANDIDATES.update(
         # -- the shipped multichip decode collective, for the before/after row --
         "ccl_wrapper": {"ccl_impl": "wrapper"},
         "no_sharded_io": {"sharded_decode_io": False},
+        # The prefill norms back at full width, i.e. the reduction finished before
+        # the norm instead of around it.
+        "no_frac_norm": {"prefill_fractured_norm": False},
         "before": dict(_BEFORE),
         "beforeb": dict(_BEFORE),
     }

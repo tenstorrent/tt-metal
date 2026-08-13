@@ -392,14 +392,79 @@ tuning surface is worth 15 %; at 40 KB it is pure fixed cost and the async op is
 **Kept** for prefill: async pair, reduce-scatter 4 workers, all-gather op default,
 barrier semaphores on both.
 
-### 8.1 The fractured prefill residual
+### 8.1 The fractured prefill norm — taken
 
-`doc/multichip_decoder/README.md` limitation 1 leaves this as "the single largest
-remaining prefill lever, worth an estimated 11 % of the prefill layer", deferred
-to the stage that owns the layer stack. This stage owns the layer, so it is
-priced rather than deferred — see §11.
+`doc/multichip_decoder/README.md` limitation 1 left this as the largest remaining
+prefill lever, "worth an estimated 11 % of the prefill layer", deferred because a
+fractured residual "introduces a second residual contract for the full-model stage
+to carry". An earlier revision of this work log repeated that reasoning and
+declined it again. **That was wrong, and a review caught it.**
 
----
+The hole in the argument is that this model's prefill norms sit *between* the
+reduction and the residual add, not after it:
+
+```
+attn      = reduce(o_proj_partial)          # full width
+attn_norm = post_attention_layernorm(attn)  # full width  <- the expensive part
+hidden    = residual + attn_norm            # full width
+```
+
+so the **norm** can be fractured without the **residual** being fractured. The
+residual add stays 6656 wide and replicated, the layer's public prefill contract
+stays DRAM-interleaved replicated in and out, and there is no second residual
+contract for anyone to carry.
+
+`bench/fractured_prefill_probe.py` priced both arms as complete stackable chains
+at the real 8192-row shape before anything was implemented
+(`logs/fractured_prefill_probe.log`, two sublayers):
+
+| arm | μs |
+| --- | --- |
+| `replicated` — reduce to 6656, add, `rms_norm` at 6656 | 5902.1 |
+| **`fractured`** — reduce-scatter, add and distributed norm at 1664, gather | **4443.9** |
+
+**24.7 % of the chain.** So it was implemented:
+``_prefill_projection`` stops a row-parallel reduction at the reduce-scatter and
+hands the 1664-wide partial to the norm that is structurally guaranteed to consume
+it next (both row-parallel prefill projections return directly into one);
+``_prefill_norm`` runs ``rms_norm_pre_all_gather`` → stats ``all_gather`` →
+``rms_norm_post_all_gather`` at that width and finishes the reduction with the
+gather it owed anyway. The pairing is checked by tensor *identity*, not by width,
+so a norm that is not the paired consumer cannot take the fractured path.
+
+Whole-layer and device-time result:
+
+| | before | after |
+| --- | --- | --- |
+| six prefill RMSNorms (8192, sliding) | 3460.4 μs | **2422.5** (−30 %) |
+| prefill collectives | 3447.8 μs | 3578.7 (+130.9 — the two stats gathers) |
+| 8192-row device window, sliding / full | 18211.6 / 17925.2 | **16930.7 / 16195.1** (−7.03 / −9.65 %) |
+| 8192-row e2e, sliding / full | 19.17 / 19.84 ms | **17.93 / 17.85 ms** (−6.7 / −7.5 %) |
+
+Arithmetically identical, and the correctness surface says so: prefill PCC moves
+by 3e-6 (`0.999839 → 0.999836` against the single-chip baseline) and the
+real-weight prefill checks by 2e-6, both from the reduction order of the
+distributed norm rather than from anything structural.
+
+**Gated at 256 rows.** The saving scales with the rows the norm reads while the
+statistics gather is fixed and latency-bound, so at small row counts the trade
+inverts. Ungated it cost the 128-row window **+13.42 % / +13.58 %** of device
+time; that regression is the reason the gate exists, and
+`PREFILL_FRACTURED_NORM_MIN_ROWS` is set to `PREFILL_NORM_SHARD_MAX_ROWS` because
+that is exactly where the full-width norm stops being a cheap L1-sharded kernel.
+Gated, the 128-row window reads −0.22 % / −0.10 %, i.e. untouched.
+
+Two op-count contracts moved with it and were updated rather than relaxed: the
+prefill reduction now dispatches two reduce-scatters and **four** all-gathers (two
+payload, two statistics), so `_CollectiveSpy` classifies a gather one tile wide as
+a statistics gather and keeps counting *reductions*, and
+`test_collective_implementation_is_split_by_payload` asserts the new count and
+runs its prefill above the gate.
+
+Decode is untouched: its norms are already width-sharded in L1, and the multichip
+stage's floor-calibrated probe refutes the fractured contract there (+13.57 μs per
+step). The two regimes disagreeing is that stage's own result; this stage acted on
+the half of it that was still open.
 
 ## 9. Real-weight precision run
 

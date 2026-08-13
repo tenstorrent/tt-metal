@@ -2,15 +2,17 @@
 
 An optimization pass over the [multichip decoder](../multichip_decoder/README.md),
 in place, on the same four Blackhole dies. Same public contract, same paged
-semantics, same 131072-token capability, the **same correctness floor to the sixth
-decimal** — and **0.55 % faster traced decode** plus **2.9–3.6 % faster
-prefill device time**, taking the decode speedup against one chip from
-2.39x/2.49x to **2.40x/2.50x**.
+semantics, same 131072-token capability, the same correctness floor — and
+**7.0–9.7 % faster prefill device time** plus **0.5 % faster traced decode**,
+taking the prefill speedup against one chip from 2.30x/2.33x to **2.47x/2.43x**
+and decode from 2.39x/2.49x to **2.40x/2.50x**.
 
-The headline is small, and the reason is worth stating up front: the two largest
-candidates this stage found — persistent CCL staging buffers and the async
-collective on the *decode* payload — were implemented, measured at 1.4 % together,
-and then **rejected on correctness**. What ships is what survived.
+Three things ship, and the largest is the last one this stage found: the two
+prefill RMSNorms that follow a reduction now run *inside* it, at a quarter of the
+width. Two candidates that looked bigger along the way — persistent CCL staging
+buffers, and the async collective on the *decode* payload — were implemented,
+measured, and then rejected, one on correctness and one on measurement. What
+ships is what survived.
 
 | item | value |
 | --- | --- |
@@ -18,7 +20,7 @@ and then **rejected on correctness**. What ships is what survived.
 | tests | `tests/test_multichip_decoder.py` + `tests/test_multichip_vs_single_chip.py`, unchanged as a gate; 4 new contract tests |
 | baseline | the multichip decoder at `937ed0b5c50`, re-measured in the same harness in the same processes |
 | device | 4 x Blackhole, `ClusterType::P300_X2`, `ttnn.MeshShape(1, 4)`, `FABRIC_1D_RING`, `ttnn.Topology.Ring`, 2 links |
-| what changed | the **prefill** reduction calls the async CCL primitives with semaphores this layer owns; the decode residual crosses the **layer boundary width-sharded in L1** |
+| what changed | the two post-reduction **prefill norms run distributed inside the reduction** at 1664 wide; the prefill reduction calls the async CCL primitives with semaphores this layer owns; the decode residual crosses the **layer boundary width-sharded in L1** |
 | what did not | parallelism, precision policy, KV-cache dtype/layout, matmul geometry, SDPA config, collective bytes, packet size, `l1_small_size` |
 | capability | unchanged: 131072 tokens, batch to 32, non-aligned lengths — [`../context_contract.json`](../context_contract.json) |
 
@@ -33,8 +35,8 @@ two or three times in that same process as its own repeat control.
 | --- | --- | --- | --- |
 | traced decode, sliding @2048 | 0.4574 / 0.4571 | **0.4547 / 0.4545 / 0.4547** | **−0.57 %** |
 | traced decode, full @2048 | 0.4257 / 0.4264 | **0.4238 / 0.4239 / 0.4240** | **−0.51 %** |
-| prefill 8192, sliding | 19.31 / 19.09 ms | 19.64 / 18.98 / 19.20 ms | inside the spread |
-| prefill 8192, full | 18.89 / 18.88 ms | 18.28 / 18.43 / 19.06 ms | inside the spread |
+| prefill 8192, sliding | 19.17 / 19.27 ms | **18.00 / 18.17 / 17.62 ms** | **−6.7 %** |
+| prefill 8192, full | 19.84 / 18.77 ms | **17.37 / 18.09 / 18.10 ms** | **−7.5 %** |
 
 The delta quoted is **mean-of-the-repeats to mean-of-the-repeats** — (0.4574 +
 0.4571)/2 against (0.4547 + 0.4545 + 0.4547)/3, and likewise for `full` — and every
@@ -42,12 +44,11 @@ other percentage in this document uses the same rule. Best-to-best gives −0.57
 −0.45 %. Traced decode reproduces to 1e-4 within a run and across runs, so the
 effect is an order of magnitude above the noise either way.
 
-Warmed prefill is much noisier — the same configuration measured three times in
-one process spans 3.4 % (`sliding`) and 4.1 % (`full`), which is larger than the
-effect — so the prefill row is **not** decided by this table and is not claimed
-from it. It is decided at the op level, where the collective itself is **15.2 %
-faster** (§[Collectives](#collectives)), and confirmed by device time, which drops
-**2.88 % (`sliding`) / 3.64 % (`full`)** on the 8192-token window.
+Warmed prefill spans 3.1 % (`sliding`) / 4.2 % (`full`) across the repeats, so
+the prefill rows are quoted mean-to-mean and are only reportable because the
+effect is now larger than that spread. Device time, which is the sharper
+instrument, puts it at **−7.03 % (`sliding`) / −9.65 % (`full`)** on the
+8192-token window.
 
 Against one chip, both measured in the same harness on the same host
 (`logs/final_layer_ab_single.log`). One asymmetry is worth naming rather than
@@ -60,10 +61,10 @@ tensor parallelism got better:
 
 | window | 1 chip | 4 chips | speedup | was |
 | --- | --- | --- | --- | --- |
-| traced decode, sliding @2048 | 1.0909 | **0.4545 ms/token** | **2.40x** | 2.39x |
-| traced decode, full @2048 | 1.0604 | **0.4238 ms/token** | **2.50x** | 2.49x |
-| prefill 8192, sliding | 44.21 | 18.98 ms | 2.33x | 2.30x |
-| prefill 8192, full | 44.37 | 18.28 ms | 2.43x | 2.33x |
+| traced decode, sliding @2048 | 1.0910 | **0.4547 ms/token** | **2.40x** | 2.39x |
+| traced decode, full @2048 | 1.0602 | **0.4238 ms/token** | **2.50x** | 2.49x |
+| prefill 8192, sliding | 44.26 | **17.93 ms** | **2.47x** | 2.30x |
+| prefill 8192, full | 43.31 | **17.85 ms** | **2.43x** | 2.33x |
 
 The two prefill rows are **not a claim**, for the same reason the Result table's
 prefill rows are not: at 3.4–4.1 % same-config spread this harness cannot resolve
@@ -76,10 +77,16 @@ replays, against the multichip stage's tables captured the same way:
 
 | window | before | after | delta | ops/iter |
 | --- | --- | --- | --- | --- |
-| decode sliding / full @2048 | 441.5 / 419.0 | **438.8 / 416.4** | −0.62 / −0.62 % | 46→45 / 36→35 |
-| decode sliding / full @131071 | 440.5 / 522.7 | **438.2 / 520.6** | −0.53 / −0.39 % | 46→45 / 36→35 |
-| prefill 8192 sliding / full | 18211.6 / 17925.2 | **17687.1 / 17272.0** | **−2.88 / −3.64 %** | unchanged |
-| prefill 128 sliding / full | 839.8 / 814.6 | 840.1 / 812.5 | +0.03 / −0.26 % | unchanged |
+| decode sliding / full @2048 | 441.5 / 419.0 | **439.4 / 416.8** | −0.48 / −0.51 % | 46→45 / 36→35 |
+| decode sliding / full @131071 | 440.5 / 522.7 | **437.5 / 521.3** | −0.69 / −0.26 % | 46→45 / 36→35 |
+| prefill 8192 sliding / full | 18211.6 / 17925.2 | **16930.7 / 16195.1** | **−7.03 / −9.65 %** | 30→34 / 28→32 |
+| prefill 128 sliding / full | 839.8 / 814.6 | 837.9 / 813.8 | −0.22 / −0.10 % | unchanged |
+
+The 8192-row prefill window gains four ops and gets 7–10 % faster: the six
+RMSNorms fall from **3460.4 to 2422.5 μs** (−30 %) because the two that follow a
+reduction now run at 1664 wide, against **+130.9 μs** of extra collective for the
+two statistics gathers that buys. The 128-row window is unchanged because the
+fractured norm is gated off there — see below.
 
 The decode op count drops by exactly one — the `sharded_to_interleaved` the
 boundary contract removes — and `ShardedToInterleaved` falls from 5.85 μs over 5
@@ -94,10 +101,15 @@ Each knob measured on its own, in the same invocation, by turning exactly one of
 
 | change | sliding | full | worth |
 | --- | --- | --- | --- |
-| **sharded layer boundary** (`no_sharded_io` turns it off) | 0.4573 → 0.4545 | 0.4260 → 0.4238 | **0.61 % / 0.52 %** |
-| **async prefill collective** | not visible in decode | not visible in decode | **15.2 % of the prefill collective**, −2.9 / −3.6 % of prefill device time |
-| async collective on *decode* too (`ccl_async`) | 0.4555 | 0.4244 | **0.22 % / 0.14 % slower** — rejected, below |
+| **fractured prefill norm** (`no_frac_norm` turns it off) | prefill 19.11 → 17.93 ms | prefill 18.10 → 17.85 ms | **the largest win in the stage**: −30 % of prefill norm time |
+| **sharded layer boundary** (`no_sharded_io` turns it off) | 0.4573 → 0.4547 | 0.4258 → 0.4238 | **0.57 % / 0.47 %** of decode |
+| **async prefill collective** | not visible in decode | not visible in decode | **15.2 % of the prefill collective**, and a prerequisite for the fractured norm |
+| async collective on *decode* too (`ccl_async`) | 0.4555 | 0.4244 | **0.2 % slower** — rejected, below |
 | persistent CCL staging buffers | 0.31 % faster | 0.29 % faster | **rejected on correctness**, below |
+
+Decode and prefill were improved by different changes: decode by the boundary
+contract, prefill by the norm and the collective. Nothing this stage shipped
+helps both.
 
 So the decode win is the boundary contract, essentially all of it, and the prefill
 win is the collective. The two candidates that looked bigger did not survive.
@@ -268,6 +280,63 @@ knob (`ccl_persistent_buffers=True`), the warm-up
 async ops themselves are clean in every arm and carry the win, and because this is
 a TTNN first-use contract worth re-testing when the op changes.
 
+## The fractured prefill norm
+
+`doc/multichip_decoder/README.md` limitation 1 left this as "the single largest
+remaining prefill lever, worth an estimated 11 % of the prefill layer", deferred
+to "the stage that owns the layer stack" because a fractured residual "introduces
+a second residual contract for the full-model stage to carry". That reasoning had
+a hole in it, and finding the hole is what made the change cheap: **this layer's
+prefill norms sit between the reduction and the residual add, not after it**, so
+the norm can be fractured without the *residual* being fractured at all.
+
+Both row-parallel prefill projections feed straight into a norm — `o_proj` into
+`post_attention_layernorm`, `mlp_down` into `post_feedforward_layernorm`. So:
+
+| | before | after |
+| --- | --- | --- |
+| reduce | `reduce_scatter` → `all_gather` → 6656 | `reduce_scatter` → 1664 |
+| normalise | `rms_norm` at **6656** | `rms_norm_pre_all_gather` → stats `all_gather` → `rms_norm_post_all_gather`, at **1664** |
+| return to full width | — | the `all_gather` the reduction owed anyway |
+| residual add | 6656, replicated | 6656, replicated — **unchanged** |
+
+The arithmetic is identical: a distributed RMSNorm combines per-device partial
+sums through the statistics gather, so it normalises over all 6656 channels
+exactly as the full-width norm does. The collective *bytes* are identical too —
+the same reduce-scatter and the same all-gather — plus a statistics gather one tile
+wide. And the layer's public prefill contract does not move: DRAM-interleaved
+replicated in, DRAM-interleaved replicated out. There is no second residual
+contract, because the residual was never fractured.
+
+Measured (`tracy/sliding/prefill_8192_perf_report.csv` against the multichip
+stage's):
+
+| | before | after |
+| --- | --- | --- |
+| six RMSNorms | 3460.4 μs | **2422.5 μs** (−30 %) |
+| collectives | 3447.8 μs | 3578.7 μs (+130.9, the two statistics gathers) |
+| 8192-row window, sliding / full | 18211.6 / 17925.2 | **16930.7 / 16195.1** (−7.03 / −9.65 %) |
+| ops per window | 30 / 28 | 34 / 32 |
+
+`bench/fractured_prefill_probe.py` priced the two arms as complete stackable
+chains before any of this was implemented — 4443.9 μs against 5902.1 for two
+sublayers at 8192 rows, i.e. 24.7 % — and the whole-layer result is consistent
+with it.
+
+**It is gated at 256 rows** (`PREFILL_FRACTURED_NORM_MIN_ROWS`, equal to
+`PREFILL_NORM_SHARD_MAX_ROWS` by construction). The saving scales with the rows
+the norm reads while the statistics gather it adds is fixed and latency-bound, so
+below that the trade inverts: ungated, the 128-row window measured **+13.4 % /
++13.6 %** of device time. Gated, it is −0.22 % / −0.10 %, i.e. untouched. That
+threshold is exactly where the inherited full-width norm stops being a cheap
+L1-sharded kernel and becomes a DRAM-interleaved one — which is the thing this
+replaces.
+
+Decode is unchanged: its norms are already width-sharded in L1 and its residual is
+already sharded, and the multichip stage's floor-calibrated probe refutes the
+fractured contract there (+13.57 μs per step). This is a prefill-only change, and
+the two regimes disagreeing is the same result that stage got, now acted on.
+
 ## The inter-layer residual layout contract
 
 **Full-model bringup should preserve this rather than rediscover it.**
@@ -437,10 +506,15 @@ against the optimized path.
    L1 with recorded errors. See the rejection table and [work log §3](work_log.md);
    the enabling code is kept so the candidate stays expressible. `o_proj` is
    4.8 % of the decode step, so the whole ceiling here is a fraction of a percent.
-6. **The hidden-size RMSNorms still do not shrink with TP**, and the fractured
-   residual that would quarter them is still refuted for decode on the multichip
-   stage's floor-corrected measurement. For prefill it is not refuted; see
-   [work log §8.1](work_log.md) for what this stage did with it.
+6. **The hidden-size RMSNorms still do not shrink with TP in *decode*.** The
+   fractured residual that would quarter them is refuted there on the multichip
+   stage's floor-corrected measurement (+13.57 μs per step), and decode's norms
+   are already width-sharded in L1. In *prefill* it is no longer open: the two
+   norms that follow a reduction now run inside it at 1664 wide, which is 30 % of
+   the prefill norm time — see [The fractured prefill norm](#the-fractured-prefill-norm).
+   The two norms that do **not** follow a reduction (`input_layernorm`,
+   `pre_feedforward_layernorm`) still run replicated at full width in both
+   regimes, because there is no reduction around them to fracture into.
 7. **Prefill is still not traced**, so it keeps a host gap. Inherited; tracing
    prefill belongs to the stage that owns the generator loop.
 8. **Whole-layer prefill A/B cannot resolve changes below ~4 %** on this harness.
@@ -455,7 +529,8 @@ D=models/autoports/meta_models_muse_glimmer_30b/doc/optimized_multichip_decoder
 bash $D/bench/run_suites.sh
 # the before/after A/B, the single-chip baseline, and the real-weight precision run
 python $D/bench/layer_ab.py --mesh 1x4 \
-  --candidates before,tp4,tp4b,beforeb,tp4c,no_sharded_io,ccl_wrapper,ccl_async
+  --candidates before,tp4,tp4b,beforeb,tp4c,no_sharded_io,no_frac_norm
+python $D/bench/fractured_prefill_probe.py --rows 8192 --sublayers 2
 python $D/bench/layer_ab.py --mesh 1x1 --candidates single
 python $D/bench/layer_ab.py --mesh 1x4 --real-weights --pcc-seq-len 2049 \
   --candidates tp4,attn_bfp4,attn_bf16,fid_hifi2,act_bfp8,kv_bfp4,kv_bf16
@@ -478,4 +553,5 @@ python $D/bench/layer_ab.py --list
 | `bench/fused_ccl_probe.py` | fused matmul-CCL, both decompositions, against unfused controls |
 | `bench/packing_probe.py` | packed vs separate same-input projections at the per-device shapes |
 | `bench/regression_bisect.py` | which optimized knob broke the first decode step |
+| `bench/fractured_prefill_probe.py` | what a fractured prefill norm is worth, as a complete stackable chain, before implementing it |
 | `bench/run_tracy.sh` | the eight signposted device-time windows |

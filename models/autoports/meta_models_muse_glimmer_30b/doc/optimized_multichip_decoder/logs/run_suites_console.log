@@ -1,6 +1,6 @@
-104 passed[0m, [33m[1m3 warnings[0m[33m in 526.52s (0:08:46)[0m[33m ==================[0m
-4 passed[0m, [33m[1m3 warnings[0m[33m in 34.93s[0m[33m ========================[0m
-worst[sliding seq_len=2049 batch=1]: 0.999839 on prefill
-worst[full seq_len=2049 batch=1]: 0.999807 on prefill
-worst[sliding seq_len=12345 batch=4]: 0.999721 on prefill
+104 passed[0m, [33m[1m3 warnings[0m[33m in 529.91s (0:08:49)[0m[33m ==================[0m
+4 passed[0m, [33m[1m3 warnings[0m[33m in 35.06s[0m[33m ========================[0m
+worst[sliding seq_len=2049 batch=1]: 0.999836 on prefill
+worst[full seq_len=2049 batch=1]: 0.999804 on prefill
+worst[sliding seq_len=12345 batch=4]: 0.999718 on prefill
 worst[full seq_len=12345 batch=4]: 0.999183 on decode2
