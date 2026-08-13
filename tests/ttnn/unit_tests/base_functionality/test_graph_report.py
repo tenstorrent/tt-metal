@@ -672,7 +672,7 @@ class TestImportGraphUnit:
                 "name": "ttnn.conv2d",
                 "arguments": {"in_channels": "256"},
                 "input_tensor_ids": [7],
-                "error": {"type": "RuntimeError", "message": "clash with L1 buffers"},
+                "error": {"type": "RuntimeError", "message": "Something went wrong"},
             }
         ]
 
@@ -686,7 +686,7 @@ class TestImportGraphUnit:
         assert name == "ttnn.conv2d"
 
         cursor.execute("SELECT operation_id, operation_name, error_type, error_message FROM errors")
-        assert cursor.fetchall() == [(operation_id, "ttnn.conv2d", "RuntimeError", "clash with L1 buffers")]
+        assert cursor.fetchall() == [(operation_id, "ttnn.conv2d", "RuntimeError", "Something went wrong")]
 
         cursor.execute("SELECT value FROM operation_arguments WHERE operation_id = ?", (operation_id,))
         assert cursor.fetchall() == [("256",)]
