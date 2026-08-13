@@ -10,12 +10,44 @@
 #include <string>
 #include <utility>
 
+#include <hostdevcommon/profiler_common.h>
+
 #if defined(TRACY_ENABLE)
 #include <common/TracyTTDeviceData.hpp>
 #include <tracy/Tracy.hpp>
+#include <client/TracyProfiler.hpp>
 #endif
 
 namespace tt::tt_metal {
+
+#if defined(TRACY_ENABLE)
+namespace {
+
+// Bytes per NoC word on this part. The NIU counters count WORDS, and the device reports the authoritative
+// scale in out[129] (NOC_WORD_BYTES straight out of noc_parameters.h) -- which the per-run log block already
+// uses. This constant exists only because noc_parameters.h is a device header and cannot be included here;
+// if the two ever disagree the log block is right and this is wrong.
+constexpr double kNocWordBytes = 64.0;
+
+// Plot names must outlive the capture: the server queries the CLIENT to dereference the pointer, so a
+// std::string that goes out of scope leaves the server resolving freed memory. These are interned once per
+// (core, series) and deliberately never freed -- there are at most 6 drainers x 4 series + 1 aggregate.
+const char* intern_plot_name(uint64_t key, const std::string& text) {
+    static std::mutex mu;
+    static std::unordered_map<uint64_t, const char*> names;
+    std::lock_guard<std::mutex> g(mu);
+    auto it = names.find(key);
+    if (it != names.end()) {
+        return it->second;
+    }
+    char* p = new char[text.size() + 1];
+    std::memcpy(p, text.c_str(), text.size() + 1);
+    names.emplace(key, p);
+    return p;
+}
+
+}  // namespace
+#endif
 
 PerfDebugTracyHandler::PerfDebugTracyHandler() = default;
 
@@ -227,6 +259,69 @@ void PerfDebugTracyHandler::HandleWorkerEvent([[maybe_unused]] const perf_debug:
 #endif
 
     TracyTTPushMarker(ctx, marker);
+
+    // ---- NoC-FOOTPRINT per-sweep sample -> Tracy PLOTS, on the DEVICE timebase ------------------------
+    //
+    // The whole point is the timestamp. A plot stamped at decode time would land milliseconds to the RIGHT of
+    // the drainer zones it explains (the mover's ring tail alone trails the last worker zone by 2.5-2.9 ms),
+    // so PlotDataAt takes the instant explicitly and we convert the device tick into the TSC domain the
+    // server will map. That conversion is the exact inverse of the device-ZONE mapping, which is why a sample
+    // lands on the same pixel column as the DRISC-SWEEP zone it came from:
+    //
+    //   a zone displays at   ConvertGpuTime(tgpu) = round(ts/freq) - anchor_ns + TscTime(host_start)
+    //   a plot displays at   TscTime(tsc) = (tsc - baseTime) * timerMul
+    //   equate them  =>      tsc = (round(ts/freq) - anchor_ns) / timerMul + host_start
+    //
+    // and the server-private baseTime cancels, which is what makes this computable client-side at all.
+    if (event.id == kernel_profiler::SPSC_DATA_ID_NOCFP && event.num_values >= 2) {
+        ChipAnchor a{};
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto ait = chip_anchors_.find(event.chip_id);
+            if (ait == chip_anchors_.end() || ait->second.frequency == 0.0) {
+                return;  // no anchor yet: a sample with no mapping is worse than no sample
+            }
+            a = ait->second;
+        }
+        const double timer_mul = tracy::Profiler::GetTimerMul();
+        if (timer_mul == 0.0) {
+            return;
+        }
+        const double dev_ns = static_cast<double>(event.timestamp) / a.frequency;
+        const double anchor_ns = a.first_timestamp / a.frequency;
+        const int64_t tsc =
+            static_cast<int64_t>((dev_ns - anchor_ns) / timer_mul) + static_cast<int64_t>(a.host_start);
+
+        // Payload order is the shared contract in profiler_common.h (SpscNocFpWord). The consumer packed each
+        // pair hi-word first, so values[0] = rd_words<<32 | rd_txns and values[1] = wr_words<<32 | wr_txns.
+        const uint64_t rd_words = event.values[0] >> 32, rd_txns = event.values[0] & 0xFFFFFFFFu;
+        const uint64_t wr_words = event.values[1] >> 32, wr_txns = event.values[1] & 0xFFFFFFFFu;
+        const double rd_kb = static_cast<double>(rd_words) * kNocWordBytes / 1024.0;
+        const double wr_kb = static_cast<double>(wr_words) * kNocWordBytes / 1024.0;
+
+        const uint64_t ck = ContextKey(event.chip_id, event.core_noc0_x, event.core_noc0_y);
+        const std::string who = fmt::format("DRISC {}-{}", event.core_noc0_x, event.core_noc0_y);
+        tracy::Profiler::PlotDataAt(intern_plot_name(ck * 8 + 0, who + " NoC rd KB/sweep"), rd_kb, tsc);
+        tracy::Profiler::PlotDataAt(intern_plot_name(ck * 8 + 1, who + " NoC wr KB/sweep"), wr_kb, tsc);
+        tracy::Profiler::PlotDataAt(
+            intern_plot_name(ck * 8 + 2, who + " NoC rd txns/sweep"), static_cast<int64_t>(rd_txns), tsc);
+        tracy::Profiler::PlotDataAt(
+            intern_plot_name(ck * 8 + 3, who + " NoC wr txns/sweep"), static_cast<int64_t>(wr_txns), tsc);
+
+        // DERIVED AGGREGATE: the sum over drainers of each one's most recent per-sweep bytes. Stated plainly
+        // because it is not a measurement -- the six drainers sweep independently, so there is no instant at
+        // which all six sampled together. It answers "roughly how much NoC is the profiler moving right now"
+        // and must not be read as a synchronous total.
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            nocfp_last_kb_[ck] = rd_kb + wr_kb;
+            double total = 0.0;
+            for (const auto& [k, v] : nocfp_last_kb_) {
+                total += v;
+            }
+            tracy::Profiler::PlotDataAt(intern_plot_name(1, "DRISC all NoC KB/sweep (sum of latest)"), total, tsc);
+        }
+    }
 #endif
 }
 

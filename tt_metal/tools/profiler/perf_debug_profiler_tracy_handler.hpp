@@ -66,6 +66,8 @@ private:
     std::unordered_map<uint64_t, int32_t> lane_depth_;
     uint64_t orphan_end_count_ = 0;
     std::unordered_set<uint64_t> orphan_lanes_;
+    // Per-drainer latest per-sweep NoC KB, for the derived aggregate plot. Keyed by ContextKey.
+    std::unordered_map<uint64_t, double> nocfp_last_kb_;
 };
 
 }  // namespace tt::tt_metal
