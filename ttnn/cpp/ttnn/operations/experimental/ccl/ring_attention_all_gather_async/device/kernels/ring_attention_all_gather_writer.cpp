@@ -48,9 +48,10 @@ constexpr uint32_t unicast_route_arg1 = get_compile_time_arg_val(15);
 // metadata accessor is emitted.
 constexpr bool has_metadata = get_compile_time_arg_val(16);
 constexpr uint32_t cb_meta_id = get_compile_time_arg_val(17);
+constexpr bool split_forwarding_enabled = get_compile_time_arg_val(18);
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 18;
+    constexpr uint32_t page_size_base_idx = 19;
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     // Metadata accessor follows the output accessors (metadata path only); fall back to a valid (unused)
     // accessor offset when absent so TensorAccessorArgs<> never names a non-accessor compile arg.
@@ -294,8 +295,7 @@ void kernel_main() {
         }
     }
 
-    // On an even ring the terminal relayed slice
-    const bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
+    // The parent fused op passes this gate so the all-gather and its consumer share one protocol decision.
     if (split_forwarding_enabled && direction == 1) {
         writes_expected++;
     }

@@ -897,6 +897,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.is_causal,
         args.is_balanced,
         args.is_cross,
+        args.sliding_window_size,
         cache_key_logical_n,
         args.logical_l,
         tensor_args.joint_is_sharded(),

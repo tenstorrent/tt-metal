@@ -1186,7 +1186,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     sdpa_fused_op_signaler->split_forwarding_enabled =
         (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring) &&
         (args.all_gather_operation_attributes.ring_size % 2 == 0) &&
-        (args.all_gather_operation_attributes.ring_size > 2);
+        // Latent-V uses the single-payload gather layout, which remains on the established unsplit
+        // consumer protocol. Sliding routes through the neighbor-halo exchange rather than this all-gather.
+        (args.all_gather_operation_attributes.ring_size > 2) && !v_shares_k_buffer && !has_sliding_window;
 
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
     log_debug(
@@ -2864,7 +2866,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // (user, layer)-major KV-cache batch factor: the all-gather reader computes the gathered slot as
             // slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx. Defaults (1, 0) keep callers unaffected.
             args.kv_cache_num_layers,
-            args.kv_cache_layer_idx);
+            args.kv_cache_layer_idx,
+            sdpa_fused_op_signaler->split_forwarding_enabled);
     }
 
     return desc;

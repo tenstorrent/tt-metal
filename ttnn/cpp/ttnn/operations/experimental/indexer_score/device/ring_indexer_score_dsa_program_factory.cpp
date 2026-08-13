@@ -481,7 +481,7 @@ ProgramDescriptor build_ring_program_descriptor(
     const uint32_t kv_len_tiles = pcache.kv_len_tiles;
 
     std::vector<uint32_t> fused_rt;
-    sdpa_sig.push_ring_sdpa_fused_op_rt_args(fused_rt);  // {ring_size, ring_index, fwd, bwd, sem0, sem1}
+    sdpa_sig.push_ring_sdpa_fused_op_rt_args(fused_rt);
 
     // ---- Step E: band-visit reorder (local-first, then remote by ring arrival) --------------------------
     // shard_order / band_readiness are computed above (hoisted so the band->column assignment can balance
@@ -626,7 +626,14 @@ ProgramDescriptor build_ring_program_descriptor(
             // (compute_cols_x,1), ...) instead of running off the right grid edge as row-major would.
             ttnn::ccl::CoreAllocationStrategy::COL_MAJOR,
             args.cache_batch_idx,
-            gather_valid_height_tiles(args, k_local));
+            gather_valid_height_tiles(args, k_local),
+            std::nullopt,
+            std::nullopt,
+            0,
+            1,
+            0,
+            // This fused consumer has no split-shard second-half wait.
+            false);
     }
 
     log_debug(

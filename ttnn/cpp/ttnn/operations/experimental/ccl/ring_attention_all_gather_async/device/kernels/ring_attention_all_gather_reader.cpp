@@ -35,6 +35,7 @@ constexpr bool direction = get_compile_time_arg_val(9);  // 1 is forward, 0 is b
 constexpr bool fuse_op = get_compile_time_arg_val(10);
 constexpr bool has_metadata = get_compile_time_arg_val(11);
 constexpr uint32_t cb_meta_id = get_compile_time_arg_val(12);
+constexpr bool split_forwarding_enabled = get_compile_time_arg_val(13);
 
 // Prefetch: batch multiple packets of DRAM reads before a single barrier.
 // This keeps more reads in flight across interleaved DRAM banks, hiding latency.
@@ -42,7 +43,7 @@ constexpr uint32_t cb_meta_id = get_compile_time_arg_val(12);
 constexpr uint32_t PREFETCH_PACKETS = 4;
 
 void kernel_main() {
-    constexpr uint32_t page_size_base_idx = 13;
+    constexpr uint32_t page_size_base_idx = 14;
     constexpr auto inputs_args = make_tensor_accessor_args_tuple<num_inputs, page_size_base_idx + num_inputs>();
     constexpr auto outputs_args = make_tensor_accessor_args_tuple<
         num_inputs,
@@ -185,8 +186,7 @@ void kernel_main() {
         }
     }
 
-    // Mirror the writer's split-forwarding (see ring_attention_all_gather_writer.cpp): on an even ring the diametric
-    const bool split_forwarding_enabled = (topology == Topology::Ring) && (ring_size % 2 == 0) && (ring_size > 2);
+    // The parent fused op passes this gate so the all-gather and its consumer share one protocol decision.
     if (split_forwarding_enabled && direction == 1) {
         slices_expected++;
         writes_expected++;

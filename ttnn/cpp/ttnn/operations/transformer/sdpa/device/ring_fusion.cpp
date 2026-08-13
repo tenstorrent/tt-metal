@@ -73,6 +73,8 @@ void RingSDPAFusedOpSignaler::push_ring_sdpa_fused_op_rt_args(std::vector<uint32
     // Even-ring split-forwarding: the diametric shard S arrives split across both links
     const uint32_t split_shard_id =
         this->ring_size ? ((this->ring_index + this->backward_writes_expected + 1) % this->ring_size) : 0;
+    // The all-gather signals this semaphore only for remote slices. The diametric shard's second
+    // half is direction 1's final remote slice, so its signal count is backward_writes_expected + 1.
     const uint32_t split_second_half_wait = this->backward_writes_expected + 1;
     out_rt_args.push_back(static_cast<uint32_t>(this->split_forwarding_enabled ? 1 : 0));
     out_rt_args.push_back(static_cast<uint32_t>(split_shard_id));
