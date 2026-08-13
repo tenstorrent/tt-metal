@@ -24,7 +24,6 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.experimental.xtts.reference.xtts_gpt_block import (
     HIDDEN_SIZE,
-    MAX_GPT_SEQ_LEN,
     MAX_MEL_POS,
     MAX_TEXT_POS,
     reference_gpt_block,
@@ -36,9 +35,8 @@ from models.experimental.xtts.tt.xtts_gpt_block import TtXttsGptBlock
 @pytest.mark.parametrize(
     "seq_len",
     [
-        MAX_TEXT_POS,  # 404 — max text stream length
-        MAX_MEL_POS,  # 608 — max mel/audio stream length
-        MAX_GPT_SEQ_LEN,  # 1012 — full concatenated [text]+[mel] GPT context
+        MAX_TEXT_POS,  # 404 — max text stream
+        MAX_MEL_POS,  # 608 — max mel stream (1012 is unreachable: text + codes ≤ 980)
     ],
 )
 @pytest.mark.parametrize("pcc", [0.99])

@@ -3,40 +3,9 @@
 
 """ISL sweep for the XTTS-v2 GPT prefill chain, and a max_seq sweep for decode.
 
-**Why the sweep looks like this.** XTTS has no single sweepable context axis. The GPT
-runs two streams with two separate learned position tables, and the checkpoint's own
-tensor shapes are the hard ceiling:
-
-  * ``gpt.text_pos_embedding.emb.weight`` is ``(404, 1024)`` — the text stream cannot
-    exceed 404 positions.
-  * ``gpt.mel_pos_embedding.emb.weight`` is ``(608, 1024)`` — the mel stream cannot
-    exceed 608 (``gpt_max_audio_tokens`` = 605 codes).
-  * ``GPT2Config n_positions`` = 1012 = 404 + 608 bounds the two TOGETHER, so the corner
-    "max text AND max codes" is not reachable: 32 cond + 404 text + 605 codes needs a
-    1056-long cache, over the 1012 budget. The supported region is the triangle
-    ``text + codes <= 980``, not a line to 1012.
-
-So this sweeps the **text/prefill axis** to the architectural ceiling, and separately
-sweeps the **cache-depth axis** that drives decode cost. Text lengths are tile multiples
-(the ``[cond | text]`` prefill is tile-clean, and ``cond`` is 32), which makes 384 the
-largest usable point under the 404-row table.
-
-Note this is the *correctness* ceiling. End-to-end the demo caps lower — 352 text ids and
-205 single-pass codes — because of an L1 circular-buffer allocation collision, not a clean
-size limit. See the README's context-length section; the perf sweep covers that envelope.
-
-Two tests:
-
-  1. ``test_tt_gpt_prefill_isl_sweep`` — the full 30-layer prefill at each ISL, gated on
-     three things: the decode latent that comes off it, the per-layer KV cache (per-position
-     median, so one outlier row cannot sink it), and the cache's conditioning rows on their
-     own — the last being the regression test for the ``ttnn.fill_cache`` odd-tile bug
-     worked around in ``tt/xtts_gpt_model.py``. Accuracy is flat across the ISL range: the
-     latent stays 0.9959-0.9986 and the cache medians >= 0.9988 from 64 to 416 positions.
-  2. ``test_tt_gpt_decode_max_seq_sweep`` — one decode step at a fixed fill level but
-     several cache sizes. Decode attends over the WHOLE fixed cache under an additive
-     mask, so this proves the mask correctly ignores the unfilled tail: the result must be
-     PCC-clean against the reference *and* invariant to ``max_seq``.
+The GPT has two position tables (text 404, mel 608). Max text and max codes together are
+unreachable (``text + codes ≤ 980``). This file sweeps the text/prefill axis to 384 (last tile
+multiple under 404) and decode cache depth separately.
 
 Run:
     source python_env/bin/activate
@@ -80,10 +49,7 @@ ISL_SWEEP = [32, 64, 96, 128, 192, 256, 320, 384]
 DECODE_PROMPT_TEXT_LEN = 96  # -> prompt_len 128 with the 32 conditioning latents
 MAX_SEQ_SWEEP = [160, 384, 608, 992]
 
-# The conditioning rows are reported AND gated separately from the text rows. At correct shapes
-# they sit at ~0.99997; a known bug drops them to 0.70-0.85 at odd-tile prompt lengths >= 288 (see
-# the docstring). Keeping them out of the pooled median is what makes that bug visible instead of
-# averaged away.
+# Conditioning rows gated separately from text rows (fill_cache odd-tile bug; see xtts_gpt_model.py).
 COND_ROW_PCC = 0.99
 
 
@@ -103,12 +69,7 @@ _SWEEP_TEXT = "the quick brown fox jumps over the lazy dog. " * 60
 def _wrapped_text(text_len):
     """Real wrapped English text trimmed to exactly ``text_len`` ids.
 
-    Deliberately NOT ``[STOP]``-padded. Padding a long prompt out with hundreds of ``[STOP]``
-    ids is degenerate input the model never sees, and it makes the port look materially worse
-    than it is: at text_len 384 the decode latent measures **0.977778** STOP-padded, **0.988563**
-    on random ids, and **0.996217** on real text. Only the last is a fair reading of the model,
-    and on real text the accuracy is flat across the whole ISL range rather than decaying. The
-    VibeVoice port avoided the same trap by sweeping on synthetic non-degenerate inputs.
+    Not ``[STOP]``-padded: long STOP filler is degenerate and is not what inference feeds.
     """
     ids = wrap_text_ids(preprocess_text(_SWEEP_TEXT, lang="en"))
     assert ids.shape[1] >= text_len, f"_SWEEP_TEXT yields {ids.shape[1]} ids, need {text_len}"
@@ -178,13 +139,8 @@ def test_tt_gpt_prefill_isl_sweep(device, xtts_state_dict, cond_latents, pcc, re
         for layer, (ref_k, ref_v) in enumerate(ref_kv):
             tt_k = ttnn.to_torch(kv[layer][0]).float()[:, :, :prompt_len, :]
             tt_v = ttnn.to_torch(kv[layer][1]).float()[:, :, :prompt_len, :]
-            # Per-POSITION PCC, then take the median across positions. A flat PCC over the whole
-            # tensor mixes two populations — the 32 bf16-uploaded conditioning rows and the text
-            # rows the GPT computes itself — and the conditioning rows dominate the covariance,
-            # reporting ~0.93 while the text positions sit at ~0.9999. Measured at text_len=384,
-            # layer 0: flat 0.934853, per-position median 0.999929, and EXACTLY the 32 conditioning
-            # rows below 0.99 (worst 0.659). Median is the same choice the VibeVoice port made for
-            # its prefill hidden, for the same reason.
+            # Per-position PCC, then median. A flat PCC mixes the 32 uploaded conditioning rows
+            # with GPT-computed text rows and is dominated by the former.
             kp = torch.tensor([float(comp_pcc(ref_k[:, :, p, :], tt_k[:, :, p, :], pcc)[1]) for p in range(prompt_len)])
             vp = torch.tensor([float(comp_pcc(ref_v[:, :, p, :], tt_v[:, :, p, :], pcc)[1]) for p in range(prompt_len)])
             k_meds.append(float(kp.median()))
@@ -194,10 +150,7 @@ def test_tt_gpt_prefill_isl_sweep(device, xtts_state_dict, cond_latents, pcc, re
 
         k_med, v_med = min(k_meds), min(v_meds)  # worst layer's median
 
-        # Functional gate: one decode step off this prefill — the latent the vocoder consumes.
-        # Gated alongside the cache itself, which on real text holds >= 0.9988 at every layer and
-        # every ISL. (On STOP-padded prompts the same medians read 0.974 and the latent 0.978; that
-        # is the degenerate input, not the model — see ``_wrapped_text``.)
+        # Decode latent off this prefill — what the vocoder consumes.
         with torch.no_grad():
             mel_emb = ref_model.mel_embedding(torch.tensor([[0]])) + ref_model.mel_pos_embedding(torch.arange(1))
             ref_latent = ref_model.final_norm(ref_stack(torch.cat([prompt_emb, mel_emb.float()], dim=1))[:, -1:, :])
@@ -218,13 +171,11 @@ def test_tt_gpt_prefill_isl_sweep(device, xtts_state_dict, cond_latents, pcc, re
             failures.append(f"text_len={text_len} cache K per-position median {k_med:.6f} < {pcc}")
         if v_med < pcc:
             failures.append(f"text_len={text_len} cache V per-position median {v_med:.6f} < {pcc}")
-        # Gated: the conditioning rows carry the voice identity. This is the regression test for the
-        # ttnn.fill_cache odd-tile bug (see tt/xtts_gpt_model.py) — without its workaround these
-        # read 0.71 / 0.63 / 0.56 at prompt_len 288 / 352 / 416 and the decode latent falls to 0.960.
+        # fill_cache odd-tile regression (see tt/xtts_gpt_model.py).
         if min(k_cond) < COND_ROW_PCC:
             failures.append(
                 f"text_len={text_len} prompt_len={prompt_len} ({prompt_len // TILE} tiles) "
-                f"conditioning-row K min {min(k_cond):.6f} < {COND_ROW_PCC} — the odd-tile fill_cache bug"
+                f"conditioning-row K min {min(k_cond):.6f} < {COND_ROW_PCC}"
             )
 
     logger.info(

@@ -215,7 +215,7 @@ class TtTracedDecoder:
 
     def run(self):
         dev, N, floor = self.device, self.N, self.floor
-        # Poll every step: less-frequent polls run extra decode past STOP (measured worse).
+        # Poll every step: less-frequent polls run extra decode past STOP.
         t_replay = time.perf_counter()
         steps_run = 0
         for i in range(N):

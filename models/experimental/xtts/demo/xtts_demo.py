@@ -106,18 +106,10 @@ def _load_audio_22k(ref_audio, max_seconds):
 
 
 def _split_into_chunks(text, lang):
-    """Return the sentence groups to synthesise. ONE group (single pass) whenever the whole text fits.
+    """Return the sentence groups to synthesise. One group whenever the whole text fits.
 
-    XTTS generates one utterance per pass, bounded by the text position embedding
-    (``MAX_TEXT_POS``), the audio-code budget, and the single-shot vocoder's circular buffers. If
-    the whole text fits in a pass it is returned unsplit — that is the fast path and what the
-    default text is sized for.
-
-    Only when it does not fit is it split at sentence boundaries, and then against the SMALLER
-    ``CHUNKING.max_chunk_codes``, because per-chunk headroom shrinks as device cycles accumulate
-    (see :class:`~models.experimental.xtts.config.ChunkingConfig` for the measurements behind both
-    budgets). A sentence is never split, so a single over-long sentence cannot be made to fit — the
-    caller is warned rather than silently crashing.
+    Over-budget text is split at sentence boundaries against ``CHUNKING.max_chunk_codes``.
+    A sentence is never split.
     """
 
     def ids_of(t):
@@ -268,13 +260,10 @@ def _generate_one(tt, wrapped, cond_wav, spk_wav_tt, cfg):
 
 
 def _generate_chunked(tt, chunks, cond_wav, spk_wav_tt, cfg):
-    """Every chunk of one take off a SINGLE warmup + capture.
+    """Every chunk of one take off a single warmup + capture.
 
-    Chunked text used to re-open the device and recompile the whole model per chunk — ~60 s of
-    compile to buy ~1.5 s of replay, paid again for every chunk. The traces are static programs
-    over fixed buffers, so as long as each chunk is padded to the same text length they can be
-    captured once and replayed: per chunk the session only rewrites the text ids, re-seeds the KV
-    cache (SETUP replay), replays the decode step per token, and replays the vocoder.
+    Chunks are padded to one text length so the traces can be captured once and replayed.
+    Per chunk: rewrite text ids, SETUP replay (re-seed KV), decode per token, vocoder replay.
 
     Returns ``(list of (wav_np, codes, replay_s), compile_s)`` with ``compile_s`` paid once.
     """

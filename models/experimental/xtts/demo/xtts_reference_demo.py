@@ -311,10 +311,8 @@ def synthesize(reference, wrapped, cond_latents, g, args):
         rep=args.repetition_penalty,
     )
     generate = generate_recompute if args.no_kv_cache else generate_cached
-    # A decode step is 120 tiny GEMMs (one token, 30 blocks), so it is dominated by per-op thread
-    # launch/barrier cost, not FLOPs — handing it every core makes it dramatically SLOWER. Measured
-    # on this 16-core host: 1013 ms/token at 16 threads, 456 at 8, 150 at 4, 78 at 2. The vocoder and
-    # the conditioning encoder are large-tensor work and keep the global thread count.
+    # Decode is launch-bound (tiny GEMMs); fewer threads is faster. Vocoder/conditioning keep the
+    # global thread count.
     prev_threads = torch.get_num_threads()
     t0 = time.time()
     try:

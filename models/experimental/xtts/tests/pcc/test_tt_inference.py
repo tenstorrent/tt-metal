@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Phase-3 end-to-end test: text + reference audio -> waveform, TTNN vs torch reference.
+"""End-to-end test: text + reference audio -> waveform, TTNN vs torch reference.
 
 Wires the whole XTTS-v2 model on device (conditioning -> GPT KV-cache greedy decode ->
 HiFi-GAN decoder) and validates the waveform against the full torch reference with real
@@ -80,6 +80,8 @@ def _stft_mag(wav):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+# Spectrogram-domain gate: a GAN vocoder turns tiny bf16 latent differences into phase shifts
+# that wreck sample-wise waveform PCC without changing what is heard.
 @pytest.mark.parametrize("pcc", [0.99])
 def test_tt_inference(device, xtts_state_dict, pcc, reset_seeds):
     from scipy.signal import resample_poly

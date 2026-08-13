@@ -10,7 +10,7 @@ before the HiFi-GAN generator:
     z = F.interpolate(z, scale=output_sample_rate/input_sample_rate, "linear")   # if rates differ
     o = waveform_decoder(z, g)
 
-The speaker encoder that produces ``g`` is a later phase; here ``g`` is supplied.
+The speaker encoder that produces ``g`` is supplied separately.
 
 Also provides :func:`build_linear_interp_matrix`, the exact matrix form of a 1D
 ``F.interpolate(mode="linear", align_corners=False)`` — used by the TTNN port to do

@@ -1,11 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Phase-2 test: TTNN GPT greedy generate (KV-cache decode) vs the torch reference.
+"""TTNN GPT greedy generate (KV-cache decode) vs the torch reference.
 
-Validates the on-device autoregressive loop against the Phase-1 reference
-(``reference/xtts_gpt_generate.py``) with real coqui/XTTS-v2 weights and real
-conditioning latents. Two checks:
+Validates the on-device autoregressive loop against ``reference/xtts_gpt_generate.py``
+with real coqui/XTTS-v2 weights and real conditioning latents. Two checks:
 
   1. **Exact code match** — free-running TT greedy must produce the same audio
      codes as the reference greedy (deterministic; the point of choosing greedy).
