@@ -303,12 +303,45 @@ struct NocAsyncCopyTx {
 template <int thread, typename Accessor>
 NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, uint32_t block_idx);
 
+// Custom load, for routines the built-in overload cannot express. The harness
+// keeps the circular-buffer protocol -- cb_reserve_back, the write pointer, and
+// (via the returned handle) the read barrier and cb_push_back -- and `fn` owns
+// the traffic. It is called as
+//
+//     fn(uint32_t l1_addr, uint32_t page_bytes)
+//
+// with the address of the first page and the CB's page size, and must fill
+// exactly storage.num_tiles consecutive pages from there: that is the count the
+// handle pushes, whatever `fn` actually wrote.
+//
+// `fn` must issue ONLY READS, and only on this thread's assigned NOC. The
+// handle releases with noc_async_read_barrier(), which covers reads on a single
+// NOC (noc_index) -- reads issued on the other NOC, or writes, are not covered,
+// and the push would then publish pages that have not landed.
+template <int thread, typename Fn>
+NocAsyncReadTx<thread> noc_load(const Storage& storage, Fn fn);
+
 template <int thread, typename Accessor>
 Block noc_load_mcast(const Storage& storage, Mcast mcast, const Accessor& acc, uint32_t block_idx);
 
 // Drains a Block to a tensor. Takes the Block by value: this call consumes it.
 template <int thread, typename Accessor>
 NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, uint32_t block_idx);
+
+// Custom store: the mirror of the custom noc_load. `fn` is called as
+//
+//     fn(uint32_t l1_addr, uint32_t page_bytes)
+//
+// with the address of the first page of `block`, and covers block.num_tiles
+// consecutive pages -- the count the handle pops.
+//
+// `fn` must issue ONLY WRITES, and only on this thread's assigned NOC. The
+// handle releases the source buffer with noc_async_writes_flushed() and pops,
+// which covers writes departing local L1 on a single NOC (noc_index). Reads
+// issued here, or writes on the other NOC, are not covered, so the pop can hand
+// the pages back while they are still being sourced.
+template <int thread, typename Fn>
+NocAsyncWriteTx<thread> noc_store(Block block, Fn fn);
 
 // ---------------------------------------------------------------------------
 // Core-to-core movement: pull a peer's block into this core's Storage
