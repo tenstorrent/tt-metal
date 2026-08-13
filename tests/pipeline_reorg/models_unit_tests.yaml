@@ -286,6 +286,38 @@
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: models
 
+- name: BERT-Large unit tests
+  cmd: |
+    pytest --timeout 180 \
+      models/demos/metal_BERT_large_11/tests/test_bert_batch_dram.py \
+      models/demos/metal_BERT_large_11/tests/test_demo.py
+  model: bert-large
+  model_family: BERT
+  skus:
+    wh_n150:
+      timeout: 4
+      tier: 3
+  owner_id: U024A4EFV6U # Brian Liu
+  team: ttnn
+
+- name: ResNet-50 unit tests
+  cmd: |
+    pytest --timeout 300 \
+      models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_performant.py \
+      models/demos/vision/classification/resnet50/wormhole/tests/test_ttnn_functional_resnet50_large.py
+    pytest --timeout 300 models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py
+  model: resnet50
+  model_family: ResNet
+  skus:
+    wh_n150:
+      timeout: 20
+      tier: 1
+    wh_llmbox:
+      timeout: 8
+      tier: 1
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+
 - name: Gemma-3-4B unit tests
   cmd: |
     export TT_METAL_WATCHER=30
@@ -1087,6 +1119,22 @@
       tier: 2
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+
+- name: TT-DiT Stable Diffusion 3.5 Large unit tests
+  cmd: |
+    unset TT_METAL_WATCHER  # blocked by #50886
+    unset HF_HUB_OFFLINE
+    pytest --timeout 300 models/tt_dit/tests/models/sd35/test_vae_sd35.py
+    pytest --timeout 300 models/tt_dit/tests/models/sd35/test_attention_sd35.py
+    pytest --timeout 300 models/tt_dit/tests/models/sd35/test_transformer_sd35.py::test_sd35_transformer_block
+  model: sd35
+  model_family: Stable Diffusion
+  skus:
+    wh_llmbox:
+      timeout: 10
+      tier: 3
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
 
 # ============================================================================
 # Multihost (exabox) model-unit tests

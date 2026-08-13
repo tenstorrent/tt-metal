@@ -12,8 +12,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <impl/context/metal_context.hpp>
 #include <impl/debug/noc_debugging.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
-
 namespace tt::tt_metal {
 
 class NOCDebuggingFixture : public MeshDispatchFixture {

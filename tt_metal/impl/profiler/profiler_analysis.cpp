@@ -13,6 +13,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
 #include <tt_metal.hpp>
+#include "tt_metal_profiler.hpp"
 #include <fstream>
 
 #include "context/metal_env_accessor.hpp"
