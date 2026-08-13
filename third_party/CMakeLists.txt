@@ -228,7 +228,7 @@ CPMAddPackage(
 # target already in scope, nanobind skips its own find_package(Python) call and fails when
 # nanobind-config.cmake asserts that Python::Module also exists. Find both components explicitly
 # here so nanobind sees a complete target set.
-find_package(Python 3.9 REQUIRED COMPONENTS Interpreter Development.Module OPTIONAL_COMPONENTS Development.SABIModule)
+find_package(Python REQUIRED COMPONENTS Interpreter Development.Module OPTIONAL_COMPONENTS Development.SABIModule)
 
 CPMAddPackage(
     NAME nanobind
