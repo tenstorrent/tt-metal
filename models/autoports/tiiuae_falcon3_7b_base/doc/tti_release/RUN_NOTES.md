@@ -292,5 +292,6 @@ at TTI SHA `e26e723bf026`. Its lm-eval commands passed
 1` for both IFEval and GPQA. It supersedes the earlier passing report that
 exposed lm-eval's 2,048-token default. The stage artifact commit before this
 rereview cycle was `53521e54ffb856b331a3015ffd6320ed9a1a8412`;
-the final tt-metal SHA is recorded after the replacement artifacts and rereview
-are committed.
+the context-preserving artifact commit is
+`2e76369011bbd804609bbadf9c3ab2539de3ae60`. The final review-record commit is
+logged after rereview. No stage-owned commit was pushed.
