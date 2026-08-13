@@ -176,18 +176,13 @@ def test_untilize_with_unpadding_height_sharded(
 @pytest.mark.parametrize(
     "hw, out_channels",
     [
-        (2048, 2),  # issue #19475: 4 bytes, below 16-byte NOC alignment
-        (2048, 4),  # issue #19475: 8 bytes, below 16-byte NOC alignment
-        (2048, 8),  # issue #19475: 16 bytes, at alignment boundary
+        (2048, 2),  # 4 bytes, below 16-byte NOC alignment
+        (2048, 4),  # 8 bytes, below 16-byte NOC alignment
+        (2048, 8),  # 16 bytes, at alignment boundary
+        (2048, 16),  # W==16 fast path must not fire for interleaved output
     ],
 )
 def test_untilize_with_unpadding_height_sharded_narrow_width_regression(device, hw, out_channels):
-    """Regression test for issue #19475 / PR #38428.
-
-    HEIGHT_SHARDED TILE → ROW_MAJOR where the actual output row width is below
-    the 16-byte L1 NOC alignment boundary.  The CB page size must be
-    aligned_page_size (≥ 16 bytes), not block_row_size, to avoid overflow.
-    """
     torch.manual_seed(0)
     torch_input = torch.rand((hw, out_channels), dtype=torch.bfloat16)
 
@@ -203,7 +198,14 @@ def test_untilize_with_unpadding_height_sharded_narrow_width_regression(device, 
     output_tensor_end = [hw - 1, out_channels - 1]
 
     tt_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
-    tt_out = ttnn.untilize_with_unpadding(tt_tensor, output_tensor_end=output_tensor_end)
+    if out_channels == 16:
+        # Force an interleaved output so the W==16 fast path (sharded-only) must not fire.
+        tt_out = ttnn.untilize_with_unpadding(
+            tt_tensor, output_tensor_end=output_tensor_end, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        assert tt_out.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+    else:
+        tt_out = ttnn.untilize_with_unpadding(tt_tensor, output_tensor_end=output_tensor_end)
     result = ttnn.to_torch(tt_out)
 
     assert_equal(result, torch_input)

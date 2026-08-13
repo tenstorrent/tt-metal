@@ -39,13 +39,15 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
     bool cross_shard_type = out_sharded && output.memory_config().memory_layout() != a.memory_config().memory_layout();
     // Special handling for tensors of W=16 and H%32==0
     // In this case skip untilizing on compute and in writer kernel just copy face0 and face2,
-    // and skip face1 and face3. Not compatible with the cross-shard-type writer
-    // (writer_unary_unpad_cross_sharded.cpp), which expects the compute kernel's normal untilized
-    // row-major output (from untilize.cpp), not this fast path's tiled face-copy output (from
-    // eltwise_copy.cpp) - only writer_unary_unpad_width_16_sharded.cpp knows how to extract faces
-    // 0 and 2 from that format, so disable the fast path whenever the cross-shard writer is used.
-    bool unpad_tensor_w_16 =
-        !cross_shard_type && output.padded_shape()[-1] == 16 && output.padded_shape()[-2] % TILE_HEIGHT == 0;
+    // and skip face1 and face3. Only writer_unary_unpad_width_16_sharded.cpp knows how to extract
+    // faces 0 and 2 from the tiled output emitted by eltwise_copy.cpp; that writer is only reached
+    // inside the `else if (out_sharded)` branch. The interleaved-output writers
+    // (writer_unary_unpad_sharded_to_interleaved.cpp and
+    // writer_unary_stick_layout_interleaved_blocks.cpp) expect the normal untilized row-major rows
+    // produced by untilize.cpp and cannot consume the tiled data, so the fast path must be gated on
+    // out_sharded in addition to !cross_shard_type.
+    bool unpad_tensor_w_16 = out_sharded && !cross_shard_type && output.padded_shape()[-1] == 16 &&
+                             output.padded_shape()[-2] % TILE_HEIGHT == 0;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tile_size(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
