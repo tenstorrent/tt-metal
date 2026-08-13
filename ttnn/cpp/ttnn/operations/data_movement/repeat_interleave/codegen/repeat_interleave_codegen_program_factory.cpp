@@ -30,14 +30,16 @@ constexpr uint32_t kRiWriteBatch = 4;
 // Double-buffers whichever side batches more, so one batch fills while the other drains.
 constexpr uint32_t kRiCbDepth = 2 * std::max(kRiReadBatch, kRiWriteBatch);
 
-// sequencers.h SEQ_REPEAT_INTERLEAVE (ops/repeat_interleave/builder.py's SEQ_REPEAT_INTERLEAVE).
+// SEQ_REPEAT_INTERLEAVE, see common/kernels/codegen/sequencers.h
+// (ops/repeat_interleave/builder.py's SEQ_REPEAT_INTERLEAVE).
 constexpr uint32_t kSeqRepeatInterleave = 9;
 
+// Shared generator output — the tile reader is named by five port manifests, the writer by three —
+// so both live under data_movement/common/ and are not this op's to edit.
 constexpr const char* kTileReaderSrc =
-    "ttnn/cpp/ttnn/operations/data_movement/repeat_interleave/codegen/kernels/"
-    "reader_tile_interleaved_unified.cpp";
+    "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/reader_tile_interleaved_unified.cpp";
 constexpr const char* kTileWriterSrc =
-    "ttnn/cpp/ttnn/operations/data_movement/repeat_interleave/codegen/kernels/writer_interleaved.cpp";
+    "ttnn/cpp/ttnn/operations/data_movement/common/kernels/codegen/writer_interleaved.cpp";
 constexpr const char* kRmReaderSrc =
     "ttnn/cpp/ttnn/operations/data_movement/repeat_interleave/codegen/kernels/"
     "reader_repeat_interleave_rm.cpp";
