@@ -1633,18 +1633,10 @@ class Gemma4Model:
                     mesh_mapper=mesh_mapper,
                 )
 
-        self._prefill_input_ids_torch = tokens_torch
-        self._prefill_batch_size = batch_size
-        self._prefill_seq_len_per_user = per_user_seq_len
         # Host embeds feed PLI only. Unconditional F.embedding over the vocab
         # table was ~32 ms of start→Embeddings host gap at ISL 2048 on 31B
         # (no PLI); skip when PLI is off. Same gate as _compute_per_layer_inputs.
-        if self.hidden_size_per_layer_input and self.per_layer_input_weights and self._embed_weight_cpu is not None:
-            import torch.nn.functional as F
-
-            self._prefill_embeds_torch = F.embedding(tokens_torch, self._embed_weight_cpu).float() * self.embed_scale
-        else:
-            self._prefill_embeds_torch = None
+        self._stash_prefill_host_state(tokens_torch, batch_size, per_user_seq_len)
 
         if trace_enabled:
             return tt_tokens, None, None, tt_page_table, tt_chunk_page_table, tt_chunk_start_idx
@@ -1665,6 +1657,134 @@ class Gemma4Model:
 
     def prepare_prefill_inputs_trace(self, tokens, **kwargs):
         return self.prepare_inputs_prefill(tokens, trace_enabled=True, **kwargs)
+
+    def _torch_to_host_ttnn(self, torch_tensor, dtype):
+        """Host-only ttnn tensor (device=None) for ``copy_host_to_device_tensor``."""
+        return ttnn.from_torch(
+            torch_tensor,
+            device=None,
+            dtype=dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=self._replicate_to_mesh_mapper(),
+        )
+
+    def _stash_prefill_host_state(self, tokens_torch, batch_size, per_user_seq_len):
+        """Side effects ``prepare_inputs_prefill`` sets for PLI / forward consumers."""
+        self._prefill_input_ids_torch = tokens_torch
+        self._prefill_batch_size = batch_size
+        self._prefill_seq_len_per_user = per_user_seq_len
+        if self.hidden_size_per_layer_input and self.per_layer_input_weights and self._embed_weight_cpu is not None:
+            import torch.nn.functional as F
+
+            self._prefill_embeds_torch = F.embedding(tokens_torch, self._embed_weight_cpu).float() * self.embed_scale
+        else:
+            self._prefill_embeds_torch = None
+
+    @staticmethod
+    def should_skip_staged_page_table(cache: dict, buf_key, pt_host: torch.Tensor) -> bool:
+        """True when ``pt_host`` was already CH2D'd into the device buffer keyed by ``buf_key``.
+
+        Same-object (multi-chunk reuses one padded table) or equal contents.
+        In-place mutation of a staged table between calls is unsupported — pass a
+        new tensor if block IDs change.
+        """
+        last = cache.get((buf_key, "page_table"))
+        if last is None:
+            return False
+        last_ref, last_clone = last
+        return last_ref is pt_host or (last_clone is not None and torch.equal(last_clone, pt_host))
+
+    def stage_prefill_trace_inputs(
+        self,
+        tokens,
+        *,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=0,
+        batch_size=1,
+        user_id=0,
+        device_tensors,
+        refresh_page_table: bool = True,
+    ):
+        """CH2D into captured prefill device buffers for trace replay.
+
+        Trace capture owns persistent device tensors for
+        ``(tokens, page_table, chunk_page_table, chunk_start_idx)``. Replay only
+        refreshes their contents — no per-call device ``from_torch``.
+
+        When ``refresh_page_table`` is False, the full page_table device buffer is
+        left untouched (caller already staged it this request). When True, H2D is
+        still skipped if the host table matches the last staged contents.
+
+        Returns ``device_tensors`` unchanged (stable addresses for the graph).
+        """
+        del user_id
+        tokens_torch = tokens.to(torch.long)
+        if batch_size > 1:
+            assert tokens_torch.dim() == 2, "batched prefill tokens must be [batch, seq_len]"
+            per_user_seq_len = tokens_torch.shape[-1]
+            tokens_for_embed = tokens_torch.reshape(1, 1, 1, -1)
+        else:
+            per_user_seq_len = tokens_torch.shape[-1]
+            tokens_for_embed = tokens_torch
+
+        self._stash_prefill_host_state(tokens_torch, batch_size, per_user_seq_len)
+
+        if device_tensors is None or len(device_tensors) < 4:
+            raise ValueError("stage_prefill_trace_inputs requires captured device_tensors of length 4")
+
+        dev_tok = device_tensors[0]
+        dev_pt = device_tensors[1]
+        dev_chunk_pt = device_tensors[2]
+        dev_start = device_tensors[3]
+        buf_key = id(dev_tok) if dev_tok is not None else 0
+        cache = getattr(self, "_prefill_trace_stage_cache", None)
+        if cache is None:
+            cache = {}
+            self._prefill_trace_stage_cache = cache
+
+        # Tokens always change per chunk / request.
+        if dev_tok is not None:
+            # int64 source → uint32 (same as decode): skip int32→uint32 host warn #18536.
+            host_tok = self._torch_to_host_ttnn(tokens_for_embed.to(torch.int64), ttnn.uint32)
+            ttnn.copy_host_to_device_tensor(host_tok, dev_tok)
+
+        if page_table is not None and dev_pt is not None:
+            if refresh_page_table:
+                pt_host = page_table if page_table.dim() > 1 else page_table.unsqueeze(0)
+                pt_host = pt_host.to(dtype=torch.int32)
+                cache_key = (buf_key, "page_table")
+                if not self.should_skip_staged_page_table(cache, buf_key, pt_host):
+                    host_pt = self._torch_to_host_ttnn(pt_host, ttnn.int32)
+                    ttnn.copy_host_to_device_tensor(host_pt, dev_pt)
+                    cache[cache_key] = (pt_host, pt_host.detach().clone())
+        elif page_table is None and dev_pt is not None:
+            raise ValueError("Captured page_table device buffer present but host page_table is None")
+        elif page_table is not None and dev_pt is None:
+            raise ValueError("Host page_table provided but captured page_table device buffer is None")
+
+        if chunk_page_table is not None and dev_chunk_pt is not None:
+            cpt = chunk_page_table if chunk_page_table.dim() > 1 else chunk_page_table.unsqueeze(0)
+            host_cpt = self._torch_to_host_ttnn(cpt.to(dtype=torch.int32), ttnn.int32)
+            ttnn.copy_host_to_device_tensor(host_cpt, dev_chunk_pt)
+        elif chunk_page_table is None and dev_chunk_pt is not None:
+            raise ValueError("Captured chunk_page_table device buffer present but host chunk_page_table is None")
+        elif chunk_page_table is not None and dev_chunk_pt is None:
+            raise ValueError("Host chunk_page_table provided but captured chunk_page_table device buffer is None")
+
+        if dev_start is not None:
+            start_i = int(chunk_start_idx) if not isinstance(chunk_start_idx, ttnn.Tensor) else None
+            if start_i is None:
+                raise TypeError("chunk_start_idx must be an int when staging into a device scalar buffer")
+            host_start = self._torch_to_host_ttnn(
+                torch.tensor([start_i], dtype=torch.int32),
+                ttnn.int32,
+            )
+            ttnn.copy_host_to_device_tensor(host_start, dev_start)
+        elif chunk_start_idx is not None and int(chunk_start_idx) != 0 and chunk_page_table is not None:
+            raise RuntimeError("Traced chunk_start_idx device buffer missing for multi-chunk replay")
+
+        return device_tensors
 
     def _reshape_prefill_embeds(self, tt_embeds, seq_len):
         if len(tt_embeds.shape) == 3:
