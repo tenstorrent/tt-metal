@@ -2050,6 +2050,25 @@ SPECIALS_READY_OPS.update(
     }
 )
 
+# Three of the 34 that the sweep left out were the *golden's* fault, not the kernel's, and each
+# was a comparison or a saturation branch that swallowed a NaN it was never meant to see. They
+# are listed separately from the bulk above because each needed a fix, and because the pattern is
+# worth recognising: a guard written for finite inputs ("did this overflow?", "is this inside the
+# shrink band?") answers *false* for NaN and quietly routes it somewhere wrong.
+SPECIALS_READY_OPS.update(
+    {
+        MathOperation.Square: "square(+/-inf) = +inf, square(NaN) = NaN. The golden tested "
+        "isfinite(x * x) to detect overflow, which is also false for NaN, so it reported inf "
+        "where the kernel correctly returns NaN. Green on Blackhole after the fix.",
+        MathOperation.I0: "I0(+/-inf) = +inf (I0 is even and unbounded), I0(NaN) = NaN. "
+        "torch.special.i0 returns NaN at +/-inf, which is a torch limitation rather than the "
+        "mathematics -- the kernel was the correct party here and the golden was not.",
+        MathOperation.Hardshrink: "hardshrink(NaN) = NaN. The golden's |x| > lambda test is "
+        "false for NaN, which sent it to the shrink-to-zero branch; torch and the kernel both "
+        "propagate. Green on Blackhole after the fix.",
+    }
+)
+
 # Fill is enrolled, but read its entry narrowly: the kernel writes a compile-time constant and
 # its golden ignores the input, so driving specials through it asserts that a non-finite *input*
 # does not corrupt a constant fill -- and nothing at all about how Fill handles a NaN, because it

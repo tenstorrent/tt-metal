@@ -2793,6 +2793,12 @@ class UnarySFPUGolden:
         return math.cosh(x)
 
     def _square(self, x):
+        # A *finite* input that overflows saturates, and handle_infinite_numbers picks inf or
+        # NaN per format. A non-finite input is not an overflow and must propagate: testing
+        # isfinite(x * x) alone sent NaN down the overflow branch, so the golden reported
+        # square(NaN) = inf where the kernel correctly returns NaN.
+        if math.isnan(x):
+            return x
         if not math.isfinite(x * x):
             return self.handle_infinite_numbers(math.inf)
         return x * x
@@ -2854,6 +2860,14 @@ class UnarySFPUGolden:
 
     def _i0(self, x):
         # modified Bessel I0; kernel uses a poly approx valid on |x| <= 3.75.
+        #
+        # torch.special.i0 returns NaN at +/-inf. That is a torch limitation, not the
+        # mathematics: I0 is even and increases without bound, so I0(+/-inf) = +inf -- which is
+        # what the kernel returns. Taking torch's answer made the golden the wrong party.
+        if math.isnan(x):
+            return x
+        if math.isinf(x):
+            return self.handle_infinite_numbers(math.inf)
         return self._torch_unary(x, torch.special.i0)
 
     def _rdiv(self, x, value=2.0):
@@ -3046,6 +3060,15 @@ class UnarySFPUGolden:
 
     def _i1_bessel(self, x):
         # Modified Bessel I1; kernel poly approx is valid on |x| <= ~3.75.
+        #
+        # Same torch limitation as _i0, with the sign kept: I1 is odd, so I1(+/-inf) = +/-inf.
+        # Fixed for correctness rather than to enrol the op -- I1 is still outside
+        # SPECIALS_READY_OPS because the *kernel* saturates a non-finite input to
+        # +/-1.1547668e37, which is the Log saturation question and not a golden matter.
+        if math.isnan(x):
+            return x
+        if math.isinf(x):
+            return math.copysign(self.handle_infinite_numbers(math.inf), x)
         return self._torch_unary(x, torch.special.i1)
 
     def _sign(self, x):
@@ -3168,6 +3191,12 @@ class UnarySFPUGolden:
 
     def _hardshrink(self, x):
         # hardshrink(x) = x when |x| > lambda, else 0.
+        #
+        # NaN is not "inside the shrink band": every comparison against it is false, so
+        # abs(x) > lambda failed and the golden returned 0.0. It propagates, which is both what
+        # torch.nn.functional.hardshrink does and what the kernel does.
+        if math.isnan(x):
+            return x
         return x if abs(x) > self._HARDSHRINK_LAMBDA else 0.0
 
     def _softplus(self, x):
