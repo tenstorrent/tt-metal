@@ -1,0 +1,5 @@
+{
+  "shipped_policy": {"candidate": "default", "policy_updates": {"advisor_plan": "mlp_product_only"}},
+  "shipped_weight_dtypes": {"attention": "BFLOAT16", "mlp_gate_up": "BFLOAT4_B", "mlp_down": "BFLOAT4_B", "kv_cache": "BFLOAT8_B"},
+  "shipped_policy_source": "dataclasses.replace(frozen_policy, advisor_plan='mlp_product_only')"
+}

@@ -1,0 +1,8 @@
+# Raw profiler captures are multi-gigabyte and reproducible from the retained scripts/invocations.
+profiles/**/.logs/
+profiles/**/reports/**/profile_log_device.csv
+profiles/**/reports/**/tracy_profile_log_host.tracy
+profiles/**/reports/**/tracy_ops_times.csv
+profiles/**/reports/**/tracy_ops_data.csv
+profiles/**/reports/**/device_analysis_data/
+profiles/**/reports/**/runtime_artifacts/

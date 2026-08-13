@@ -1,0 +1,8 @@
+{
+  "batch": 32,
+  "bit_exact": true,
+  "candidate": "default",
+  "kind": "linear",
+  "mode": "prefill",
+  "path": "optimized"
+}

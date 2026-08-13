@@ -1,0 +1,55 @@
+{
+  "layer_kind": "linear_attention",
+  "layer_idx": 0,
+  "batch": 32,
+  "traced_weight_dtypes": {
+    "linear_input": "BFLOAT4_B",
+    "linear_output": "BFLOAT4_B",
+    "mlp_gate_up": "BFLOAT4_B",
+    "mlp_down": "BFLOAT4_B",
+    "recurrent_state": "BFLOAT8_B"
+  },
+  "shipped_weight_dtypes": {
+    "linear_input": "BFLOAT4_B",
+    "linear_output": "BFLOAT4_B",
+    "mlp_gate_up": "BFLOAT4_B",
+    "mlp_down": "BFLOAT4_B",
+    "recurrent_state": "BFLOAT8_B"
+  },
+  "policy_source": "models/autoports/qwen_qwen3_6_27b/tt/optimized_decoder.py:448 resolve_policy('default', 'linear_attention'); execution logs under doc/optimized_decoder/artifacts/candidates/linear_final_input_w5_output_w12_b32.json",
+  "advisor_commit": "97724a11700e0aab6358d7dc2421b244df5f219a",
+  "advisor_pin_expected": "97724a1170",
+  "advisor_home": "/home/mvasiljevic/tt-mlir",
+  "optimizer_pin_expected": "618cd4e75d",
+  "optimizer_files_changed_since_pin": [],
+  "host": "b30c965c728b",
+  "tool_path": "/home/mvasiljevic/tt-mlir/build/bin/ttnn-advise",
+  "tool_realpath": "/opt/ttmlir-toolchain/venv/bin/ttnn-advise",
+  "tool_sha256": "1822cd4f7a05354a26e9f891d1cc06661fcf612f9b71f049a735b92c4510f731",
+  "tracer_imported_from": "/opt/ttmlir-toolchain/venv/lib/python3.12/site-packages/ttnn_jit/_src/ttnn_emit_tracer.py",
+  "tracer_sha256": "3e1dc61fb195b6ed3df881d7ca4abc1a0dc86e29e37e3c0e5086efeb1f7237aa",
+  "tracer_checkout_path": "/home/mvasiljevic/tt-mlir/tools/ttnn-jit/_src/ttnn_emit_tracer.py",
+  "tracer_checkout_sha256": "3e1dc61fb195b6ed3df881d7ca4abc1a0dc86e29e37e3c0e5086efeb1f7237aa",
+  "tracer_matches_checkout": true,
+  "captured_at": "2026-08-10T19:20:18+00:00",
+  "capture_scope": {
+    "ops_attempted": [
+      "input_rms_norm",
+      "token_mixer_decode",
+      "residual_add",
+      "post_rms_norm",
+      "mlp",
+      "residual_add"
+    ],
+    "methods_substituted": {
+      "_rms_norm_decode": "same rms_norm call with the dynamic memory_config() guard omitted; decode_forward already converts residual to decode_residual_memory_config",
+      "_decode_linear": "same linear call with the dynamic input memory_config() guard omitted; traced producer layouts are assigned by the advisor"
+    },
+    "env_knobs": {
+      "SHARD_ADVISE_BATCH": 32,
+      "CHALLENGER_LAYER_KIND": "linear_attention",
+      "CHALLENGER_LAYER_IDX": 0
+    },
+    "stopped_at": null
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "label": "advised_plan_verbatim_full_attention_incumbent_equivalent",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "process_ordinal": 7,
+  "device_users_at_start": {
+    "count": 0,
+    "processes": []
+  },
+  "device_users_at_end": {
+    "count": 0,
+    "processes": []
+  },
+  "repeats_ms": [
+    1.4497867226600647,
+    1.4493160136044025,
+    1.451921183615923,
+    1.4532042108476162,
+    1.4513533003628254
+  ],
+  "median_ms": 1.4513533003628254,
+  "noise_floor_ms": 0.0038881972432136536,
+  "harness": "models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/scripts/harness.py",
+  "harness_scope": "maximal expressible subset of advisor whole plan; zero policy-exposed placements, traced batch-32 layer",
+  "measured_at": "2026-08-10T19:16:45+00:00",
+  "shipped_policy": {
+    "candidate": "default"
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT16",
+    "mlp_gate_up": "BFLOAT4_B",
+    "mlp_down": "BFLOAT4_B",
+    "kv_cache": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "dataclasses.replace(resolve_policy('default','full_attention')) on the frozen incumbent; zero final_ir placements have an existing independent policy field, so the maximal expressible subset is the unchanged policy",
+  "verdict": "rejected",
+  "hard_error": "maximal expressible subset changed zero frozen policy fields; remaining advice requires graph-topology rewrites; nlp_concat_heads_decode is advisor-unfixable",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}

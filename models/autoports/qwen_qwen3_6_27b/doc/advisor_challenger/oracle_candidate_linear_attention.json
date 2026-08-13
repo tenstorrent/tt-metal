@@ -1,0 +1,9 @@
+{
+  "batch": 32,
+  "candidate": "advisor_mlp_product_linear_b32",
+  "kind": "linear_attention",
+  "passed": true,
+  "path": "optimized",
+  "pcc": 0.9981887732142846,
+  "reference": "hf"
+}

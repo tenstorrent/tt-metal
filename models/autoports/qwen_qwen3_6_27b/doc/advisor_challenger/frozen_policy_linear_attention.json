@@ -1,0 +1,14 @@
+{
+  "shipped_policy": {
+    "candidate": "default",
+    "policy_updates": {"advisor_plan": "off"}
+  },
+  "shipped_weight_dtypes": {
+    "linear_input": "BFLOAT4_B",
+    "linear_output": "BFLOAT4_B",
+    "mlp_gate_up": "BFLOAT4_B",
+    "mlp_down": "BFLOAT4_B",
+    "recurrent_state": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "models/autoports/qwen_qwen3_6_27b/tt/optimized_decoder.py:448 resolve_policy('default', 'linear_attention'); execution logs under doc/optimized_decoder/artifacts/candidates/linear_final_input_w5_output_w12_b32.json"
+}

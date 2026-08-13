@@ -1,0 +1,8 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_DECODE'.
+Using operations until 'PERF_DECODE_END'.
+No device operations found in the CSV data.
+Writing CSV output to models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/profiles/incumbent_full_attention/perf.csv

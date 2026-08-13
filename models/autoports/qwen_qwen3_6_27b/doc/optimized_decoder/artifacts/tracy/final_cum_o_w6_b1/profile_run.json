@@ -1,0 +1,61 @@
+{
+  "batch": 1,
+  "candidate": "final_cum_o_w6",
+  "kind": "full",
+  "perf_argv": [
+    "/home/mvasiljevic/tt-metal/python_env/bin/tt-perf-report",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/final_cum_o_w6_b1/reports/2026_07_30_11_42_28/ops_perf_results_2026_07_30_11_42_28.csv",
+    "--start-signpost",
+    "PERF_DECODE",
+    "--end-signpost",
+    "PERF_DECODE_END",
+    "--no-color",
+    "--csv",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/final_cum_o_w6_b1/perf.csv",
+    "--summary-file",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/final_cum_o_w6_b1/summary"
+  ],
+  "perf_exit_status": 0,
+  "perf_output": [
+    "Detected CSV format: v2.1 (with device arch and worker core count)",
+    "Using architecture from CSV: blackhole",
+    "Architecture: blackhole, Worker cores: 110",
+    "Sorting CSV by 'HOST START TS' column...",
+    "Using operations after 'PERF_DECODE'.",
+    "Using operations until 'PERF_DECODE_END'.",
+    "Detected data from 1 devices. Merging device data...",
+    "Writing CSV output to /home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/final_cum_o_w6_b1/perf.csv",
+    "Overall DRAM roofline (modeled ops): 55.8% (286 GB/s)",
+    "Warning: Unclassified operation 'NLPCreateQKVHeadsDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.",
+    "Writing CSV stacked report to /home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/final_cum_o_w6_b1/summary.csv",
+    "Plotting PNG stacked report to /home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/final_cum_o_w6_b1/summary.png"
+  ],
+  "profile_argv": [
+    "/home/mvasiljevic/tt-metal/python_env/bin/python",
+    "-m",
+    "tracy",
+    "-r",
+    "-p",
+    "-o",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/final_cum_o_w6_b1",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tests/traced_synthetic_pcc.py",
+    "--kind",
+    "full",
+    "--batch",
+    "1",
+    "--optimized",
+    "--candidate",
+    "final_cum_o_w6",
+    "--steps",
+    "3"
+  ],
+  "profile_exit_status": 0,
+  "profile_output": [
+    "OPTIMIZED_POLICY candidate=final_cum_o_w6 layer_kind=full_attention attention_dtype=DataType.BFLOAT16 cache_dtype=DataType.BFLOAT8_B sdpa_fidelity=MathFidelity.HiFi4 qkv_fidelity=MathFidelity.HiFi2 o_fidelity=MathFidelity.HiFi2 qkv_w=2 o_w=6 gate_w=5 up_w=5 down_w=17 linear_packed=False linear_outer=False linear_recurrent=auto linear_recurrent_fidelity=MathFidelity.HiFi2 linear_recurrent_state_dtype=DataType.FLOAT32 storage_cores=8",
+    "FULL_TRACED_SYNTHETIC_PCC batch=1 step=1 0.9990086830950573",
+    "FULL_TRACED_SYNTHETIC_PCC batch=1 step=2 0.9995811889597688",
+    "FULL_TRACED_SYNTHETIC_LATENCY path=optimized candidate=final_cum_o_w6 batch=1 median_ms=1.297170 min_ms=1.297170",
+    "2026-07-30 11:42:28.822 | INFO     | tracy.process_ops_logs:generate_reports:1765 - OPs csv generated at: /home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/final_cum_o_w6_b1/reports/2026_07_30_11_42_28/ops_perf_results_2026_07_30_11_42_28.csv"
+  ],
+  "raw_report": "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/doc/optimized_decoder/artifacts/tracy/final_cum_o_w6_b1/reports/2026_07_30_11_42_28/ops_perf_results_2026_07_30_11_42_28.csv"
+}

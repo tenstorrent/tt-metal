@@ -1,0 +1,46 @@
+{
+  "label": "confirm_mlp_product_only_linear_attention",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "process_ordinal": 20,
+  "device_users_at_start": {
+    "count": 0,
+    "processes": []
+  },
+  "device_users_at_end": {
+    "count": 0,
+    "processes": []
+  },
+  "repeats_ms": [
+    15.830312464386225,
+    15.820696521550417,
+    15.831229817122221,
+    15.825583841651678,
+    15.82518707960844
+  ],
+  "median_ms": 15.825583841651678,
+  "noise_floor_ms": 0.010533295571804047,
+  "harness": "models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/scripts/harness.py",
+  "harness_scope": "one decoder layer, traced decode replay, batch 32, measured end to end on the host",
+  "measured_at": "2026-08-10T19:31:32+00:00",
+  "shipped_policy": {
+    "candidate": "default",
+    "policy_updates": {
+      "advisor_plan": "mlp_product_only"
+    }
+  },
+  "shipped_weight_dtypes": {
+    "linear_input": "BFLOAT4_B",
+    "linear_output": "BFLOAT4_B",
+    "mlp_gate_up": "BFLOAT4_B",
+    "mlp_down": "BFLOAT4_B",
+    "recurrent_state": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "dataclasses.replace(frozen_policy, advisor_plan='mlp_product_only')",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}

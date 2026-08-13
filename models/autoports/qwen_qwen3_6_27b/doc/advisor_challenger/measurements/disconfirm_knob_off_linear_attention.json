@@ -1,0 +1,43 @@
+{
+  "label": "disconfirm_knob_off_linear_attention",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "process_ordinal": 22,
+  "device_users_at_start": {
+    "count": 0,
+    "processes": []
+  },
+  "device_users_at_end": {
+    "count": 0,
+    "processes": []
+  },
+  "repeats_ms": [
+    15.838000103831291,
+    15.84323350340128,
+    15.846573859453201,
+    15.843800771981478,
+    15.843051970005035
+  ],
+  "median_ms": 15.84323350340128,
+  "noise_floor_ms": 0.008573755621910095,
+  "harness": "models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/scripts/harness.py",
+  "harness_scope": "one decoder layer, traced decode replay, batch 32, measured end to end on the host",
+  "measured_at": "2026-08-10T19:34:11+00:00",
+  "shipped_policy": {
+    "candidate": "default"
+  },
+  "shipped_weight_dtypes": {
+    "linear_input": "BFLOAT4_B",
+    "linear_output": "BFLOAT4_B",
+    "mlp_gate_up": "BFLOAT4_B",
+    "mlp_down": "BFLOAT4_B",
+    "recurrent_state": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "models/autoports/qwen_qwen3_6_27b/tt/optimized_decoder.py:448 resolve_policy('default', 'linear_attention'); execution logs under doc/optimized_decoder/artifacts/candidates/linear_final_input_w5_output_w12_b32.json",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}

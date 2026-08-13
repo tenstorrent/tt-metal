@@ -1,0 +1,1 @@
+ID,Total %,Bound,OP Code,Device,Device Time,Op-to-Op Gap,Cores,DRAM,DRAM %,FLOPs,FLOPs %,Math Fidelity,Output Datatype,Input 0 Datatype,Input 1 Datatype,DRAM Sharded,Input 0 Memory,Inner Dim Block Size,Output Subblock H,Output Subblock W,Global Call Count,Advice

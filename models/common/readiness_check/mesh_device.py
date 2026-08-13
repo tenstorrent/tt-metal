@@ -11,9 +11,11 @@ from typing import Any
 #: Label → (mesh rows, mesh cols). N300 (2 chips) is openable as N150 by
 #: requesting (1, 1) — the device manager picks one of the two chips. T3K
 #: and TG follow the same row-major convention used in the demo fixtures.
+#: P300X2 is a QuietBox 2: two dual-die P300 cards exposed as a 1x4 mesh.
 MESH_SHAPES: dict[str, tuple[int, int]] = {
     "N150": (1, 1),
     "N300": (1, 2),
+    "P300X2": (1, 4),
     "T3K": (1, 8),
     "TG": (8, 4),
 }
