@@ -287,16 +287,6 @@ class Prefetcher(LightweightModule):
         self.ring_size = self.num_receiver_cores * self.num_senders
         self.dram_banks = self.core_config.dram_banks
 
-        ### Full compute grid, used as the single prefill sub device. Referenced as
-        ### ``self.all_core_range_set`` by the Mode.PREFILL branch of the sub-device setup below, which
-        ### previously read an attribute that was never assigned -- latent until a caller actually
-        ### switched the prefetcher into PREFILL mode (AttributeError: 'Prefetcher' object has no
-        ### attribute 'all_core_range_set').
-        _grid = self.mesh_device.compute_with_storage_grid_size()
-        self.all_core_range_set = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_grid.x - 1, _grid.y - 1))]
-        )
-
         ### Worker core ranges for the worker sub device
         if self.receiver_mapping_override:
             grid = self.mesh_device.compute_with_storage_grid_size()
