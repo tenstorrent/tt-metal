@@ -139,30 +139,32 @@ void kernel_main() {
                         // (the SRAM the compute consumer + the NOC engine read): a cacheable fill stays dirty
                         // in the DM D$ -- invisible to the consumer (it reads stale TL1) AND later evicted
                         // over the neighbor llk_post DFB, corrupting it. So the fill MUST use a coherent store.
-                        // DataflowBuffer::get_write_ptr() now returns the NON-CACHEABLE L1 alias on Quasar DM,
-                        // so the stores (and the col-0 reads) bypass the D$/L2 and go straight to TL1: the
-                        // consumer sees the fill, no dirty line can clobber a neighbor, and no cache flush is
-                        // needed. WH/BH DFB is CB-backed shared L1 with no incoherent write-back D$, so the
-                        // plain fill is already visible there (alias offset is 0). Coherent but UNORDERED vs.
-                        // the credit post -- see the TODO(#51291) at the top of this file.
+                        // The scoped_write_lock spans the whole fill window -- the NOC read into the entry
+                        // and the CPU broadcast fill. It handles caching and store ordering.
 #if SRC_BCAST_COL  // a (in0) is the COL operand
                         dfb_in0.reserve_back(onetile);
 #if !SRC_SHARDED
-                        noc.async_read(
-                            src, dfb_in0, src_tile_bytes, {.page_id = tile_offset + th}, {.offset_bytes = 0});
-                        noc.async_read_barrier();
-                        FILL_TILE_WITH_FIRST_COLUMN(dfb_in0.get_write_ptr());
+                        {
+                            const auto lock = dfb_in0.scoped_write_lock(onetile);
+                            noc.async_read(
+                                src, dfb_in0, src_tile_bytes, {.page_id = tile_offset + th}, {.offset_bytes = 0});
+                            noc.async_read_barrier();
+                            FILL_TILE_WITH_FIRST_COLUMN(static_cast<uint32_t>(lock.get_ptr().get_address()));
+                        }
 #endif
-                        dfb_in0.push_back(onetile);  // TODO(#51291): unordered vs. the fill -- see top
+                        dfb_in0.push_back(onetile);
 #else  // b (in1) is the COL operand
                         dfb_in1.reserve_back(onetile);
 #if !SRC_SHARDED_B
-                        noc.async_read(
-                            src_b, dfb_in1, src_tile_bytes_b, {.page_id = tile_offset_b + th}, {.offset_bytes = 0});
-                        noc.async_read_barrier();
-                        FILL_TILE_WITH_FIRST_COLUMN_B(dfb_in1.get_write_ptr());
+                        {
+                            const auto lock = dfb_in1.scoped_write_lock(onetile);
+                            noc.async_read(
+                                src_b, dfb_in1, src_tile_bytes_b, {.page_id = tile_offset_b + th}, {.offset_bytes = 0});
+                            noc.async_read_barrier();
+                            FILL_TILE_WITH_FIRST_COLUMN_B(static_cast<uint32_t>(lock.get_ptr().get_address()));
+                        }
 #endif
-                        dfb_in1.push_back(onetile);  // TODO(#51291): unordered vs. the fill -- see top
+                        dfb_in1.push_back(onetile);
 #endif
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {

@@ -35,32 +35,22 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    // Fill the RHS scalar tile ONCE. DataflowBuffer::get_write_ptr() now returns the NON-CACHEABLE L1
-    // alias on Quasar DM, so the fill below bypasses the D$/L2 and goes straight to TL1 with no manual
-    // offset and no cache flush. WH/BH DFB is CB-backed shared L1 with no incoherent write-back D$, so
-    // the plain fill is already visible there (alias offset is 0).
-    //
-    // TODO(#51291): the alias makes the fill COHERENT but not ORDERED. dev_mem_map.h states "only plain
-    // loads/stores WITH FENCES work uncached", and DataflowBuffer::push_back publishes the credit via an
-    // overlay register write with no fence of its own -- so on silicon the credit may be observed before
-    // the fill lands in TL1, and the consumer unpacks a stale scalar tile. Both stores are volatile, so
-    // this is a hardware store-ordering hazard, not a compiler one. NOT mitigated here: craq-sim applies
-    // every store synchronously and has no store-buffer state, so the hazard is unreproducible on the only
-    // substrate we have, and it is a platform-wide contract gap rather than ours -- Semaphore::up()
-    // (api/dataflow/noc_semaphore.h) publishes through the same uncached alias with no fence. Stopgap if
-    // this ships to HW first: one `fence` before the push_back below -- bare `fence` = iorw,iorw;
-    // __atomic_thread_fence(RELEASE) emits only `fence rw,w`, which does NOT order I/O-region accesses such
-    // as the overlay write. Not free on craq-sim: a bare fence there maps to a full DM L1 D$ flush-all.
+    // Fill the RHS scalar tile ONCE, holding a scoped_write_lock over the entry. The lock handles both
+    // cache coherence and store ordering: the fill is visible to the compute consumer, and is ordered
+    // ahead of the push_back that publishes the entry.
     DataflowBuffer dfb_in1(dfb::in1);
     dfb_in1.reserve_back(onetile);
+    {
+        const auto lock = dfb_in1.scoped_write_lock(onetile);
 #ifdef FILL_WITH_VALUE_FLOAT
-    const auto float_ptr = reinterpret_cast<const float*>(&packed_scalar);
-    FILL_WITH_VALUE_FLOAT(dfb_in1.get_write_ptr(), *float_ptr);
+        const auto float_ptr = reinterpret_cast<const float*>(&packed_scalar);
+        FILL_WITH_VALUE_FLOAT(static_cast<uint32_t>(lock.get_ptr().get_address()), *float_ptr);
 #endif
 #ifdef FILL_WITH_VALUE
-    FILL_WITH_VALUE(dfb_in1.get_write_ptr(), packed_scalar);
+        FILL_WITH_VALUE(static_cast<uint32_t>(lock.get_ptr().get_address()), packed_scalar);
 #endif
-    dfb_in1.push_back(onetile);  // TODO(#51291): unordered vs. the fill stores above -- see note at the fill
+    }  // lock released before the credit post
+    dfb_in1.push_back(onetile);
 
     DataflowBuffer dfb_out(dfb::out);
 

@@ -321,11 +321,17 @@ void kernel_main() {
         DataflowBuffer pad_read_cb(dfb::pad_read);
 
         pad_fill_cb.reserve_back(1);
-        if constexpr (pad_val == 0) {
-            noc.async_write_zeros(pad_fill_cb, aligned_stick_nbytes, {.offset_bytes = 0});
-            noc.write_zeros_l1_barrier();
-        } else {
-            fill_with_val<num_elements_to_fill, pad_val>(pad_fill_cb.get_write_ptr());
+        {
+            // The scoped_write_lock covers whichever way this entry is filled -- the NOC zero-write or the
+            // CPU fill. It handles caching and orders the fill ahead of the push_back that publishes the
+            // entry to the peer reader.
+            const auto lock = pad_fill_cb.scoped_write_lock(1);
+            if constexpr (pad_val == 0) {
+                noc.async_write_zeros(pad_fill_cb, aligned_stick_nbytes, {.offset_bytes = 0});
+                noc.write_zeros_l1_barrier();
+            } else {
+                fill_with_val<num_elements_to_fill, pad_val>(static_cast<uint32_t>(lock.get_ptr().get_address()));
+            }
         }
         pad_fill_cb.push_back(1);
 

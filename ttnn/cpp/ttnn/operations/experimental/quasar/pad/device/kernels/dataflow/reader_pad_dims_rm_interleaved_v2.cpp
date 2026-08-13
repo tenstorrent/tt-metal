@@ -109,33 +109,43 @@ void kernel_main() {
     const uint32_t pad_align_addr = cb_pad_align.get_read_ptr();
 #endif
 
-    fill_pad_dfb_with_val(cb_pad, stick_size_padded, packed_pad_value);
+    {
+        const auto pad_lock = cb_pad.scoped_write_lock(1);
+        fill_pad_dfb_with_val(cb_pad, stick_size_padded, packed_pad_value);
+    }
 
     uint32_t i_page = start_page_id;
     uint32_t curr_c = start_dim_c, curr_h = start_dim_h, curr_n = start_dim_n;
     for (uint32_t iter = 0; iter < num_sticks_per_core;) {
         cb_in0.reserve_back(num_sticks_per_barrier);
-        uint32_t l1_write_addr = cb_in0.get_write_ptr();
+        {
+            // One write lock over the whole reserved run: every NOC write and CPU copy below lands in these
+            // entries. The lock also handles caching and orders everything ahead of the push_back.
+            // The loop walks l1_write_addr itself (stick by stick), so the addressing stays as it was --
+            // get_ptr() only exposes the start of the run.
+            const auto in0_lock = cb_in0.scoped_write_lock(num_sticks_per_barrier);
+            uint32_t l1_write_addr = static_cast<uint32_t>(in0_lock.get_ptr().get_address());
 
-        for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
-            bool read_stick = (curr_h >= front_pad_h and curr_h < H) and (curr_c >= front_pad_c and curr_c < C) and
-                              (curr_n >= front_pad_n and curr_n < N);
-            {
-                CoreLocalMem<uint32_t> dst(l1_write_addr);
-                noc.async_read(
-                    UnicastEndpoint{},
-                    dst,
-                    stick_size_padded,
-                    {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
-                     .noc_y = (uint32_t)my_y[noc.get_noc_id()],
-                     .addr = pad_val_addr},
-                    {.offset_bytes = 0});
-                noc.async_read_barrier();
-            }
-            if (read_stick) {
+            for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
+                bool read_stick = (curr_h >= front_pad_h and curr_h < H) and (curr_c >= front_pad_c and curr_c < C) and
+                                  (curr_n >= front_pad_n and curr_n < N);
+                {
+                    CoreLocalMem<uint32_t> dst(l1_write_addr);
+                    noc.async_read(
+                        UnicastEndpoint{},
+                        dst,
+                        stick_size_padded,
+                        {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                         .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                         .addr = pad_val_addr},
+                        {.offset_bytes = 0});
+                    noc.async_read_barrier();
+                }
+                if (read_stick) {
 #ifdef HAS_PAD_ALIGN
                 if constexpr (front_padding) {  // Read noc into cb_pad_align l1
-                    uint32_t temp_addr = cb_pad_align.get_write_ptr();
+                    const auto lock = cb_pad_align.scoped_write_lock(1);
+                    const uint32_t temp_addr = static_cast<uint32_t>(lock.get_ptr().get_address());
                     read_input_pages_into_l1(
                         noc,
                         s,
@@ -147,19 +157,23 @@ void kernel_main() {
                     noc.async_read_barrier();
                     memmove(
                         (void*)(l1_write_addr + stick_size_padded_front),
-                        (void*)(cb_pad_align.get_read_ptr()),
+                        (void*)(temp_addr),
                         (size_t)(stick_size_bytes));
                 } else if constexpr (unaligned) {
-                    uint32_t temp_addr = cb_pad_align.get_write_ptr();
-                    read_input_pages_into_l1(
-                        noc,
-                        s,
-                        i_page,
-                        temp_addr,
-                        num_input_pages_in_row,
-                        input_page_size,
-                        size_of_valid_data_in_last_input_page_in_row);
-                    noc.async_read_barrier();
+                    uint32_t temp_addr;
+                    {
+                        const auto lock = cb_pad_align.scoped_write_lock(1);
+                        temp_addr = static_cast<uint32_t>(lock.get_ptr().get_address());
+                        read_input_pages_into_l1(
+                            noc,
+                            s,
+                            i_page,
+                            temp_addr,
+                            num_input_pages_in_row,
+                            input_page_size,
+                            size_of_valid_data_in_last_input_page_in_row);
+                        noc.async_read_barrier();
+                    }
                     CoreLocalMem<uint32_t> dst(l1_write_addr);
                     noc.async_read(
                         UnicastEndpoint{},
@@ -189,7 +203,7 @@ void kernel_main() {
                     input_page_size,
                     size_of_valid_data_in_last_input_page_in_row);
 #endif
-            }
+                }
             l1_write_addr += stick_size_padded_aligned;
             curr_h++;
             if (curr_h == H_padded) {
@@ -200,8 +214,9 @@ void kernel_main() {
                     curr_c = 0;
                 }
             }
-        }
+            }
         noc.async_read_barrier();
+        }  // in0_lock released before the credit post
         cb_in0.push_back(num_sticks_per_barrier);
     }
 }

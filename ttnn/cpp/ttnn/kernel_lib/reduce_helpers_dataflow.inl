@@ -161,22 +161,28 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f, uint32_t valid_reduce_di
     DataflowBuffer dfb(dfb_id);
 
     dfb.reserve_back(1);
-    uint32_t write_addr = dfb.get_write_ptr();
 
     Noc noc;
-    noc.async_write_zeros(dfb, get_tile_size(dfb_id));
-    noc.write_zeros_l1_barrier();
-
     uint32_t scaler = float_to_scaler_bits<data_format>(scaler_f);
-    if (scaler != 0) {
-        if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
-            fill_each_face_row0<data_format, num_faces>(addr_to_l1_ptr(write_addr), scaler);
-        } else {
-            if (valid_reduce_dim_elements_in_tile == full_dim) {
+    {
+        // The scoped_write_lock spans the whole fill window -- the NOC zero-write and the CPU fills.
+        // It handles caching and orders the stores ahead of the push_back below.
+        const auto lock = dfb.scoped_write_lock(1);
+        const uint32_t write_addr = static_cast<uint32_t>(lock.get_ptr().get_address());
+
+        noc.async_write_zeros(dfb, get_tile_size(dfb_id));
+        noc.write_zeros_l1_barrier();
+
+        if (scaler != 0) {
+            if constexpr (reduce_dim == ReduceDim::REDUCE_SCALAR) {
                 fill_each_face_row0<data_format, num_faces>(addr_to_l1_ptr(write_addr), scaler);
             } else {
-                fill_each_face_row0_partial<data_format, reduce_dim, face_rows, faces_per_row>(
-                    addr_to_l1_ptr(write_addr), scaler, valid_reduce_dim_elements_in_tile);
+                if (valid_reduce_dim_elements_in_tile == full_dim) {
+                    fill_each_face_row0<data_format, num_faces>(addr_to_l1_ptr(write_addr), scaler);
+                } else {
+                    fill_each_face_row0_partial<data_format, reduce_dim, face_rows, faces_per_row>(
+                        addr_to_l1_ptr(write_addr), scaler, valid_reduce_dim_elements_in_tile);
+                }
             }
         }
     }

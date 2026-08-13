@@ -75,6 +75,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         // junk/padding data
         if constexpr (zero_pages) {
             if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
+                const auto lock = in_cb.scoped_write_lock(1);
                 zero_out_page(noc, in_cb);
             }
         }
@@ -89,8 +90,11 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                     wide_reduction ? (MAX_TILES_PER_REDUCTION * TILE_WIDTH) : (in_ntiles_c * TILE_WIDTH);
                 constexpr uint32_t tail_offset_bytes = total_elems_to_reduce * row_stride_elems * BYTES_PER_ELEM;
                 constexpr uint32_t tail_elems = (num_tilized_rows - total_elems_to_reduce) * row_stride_elems;
+                const auto lock = in_cb.scoped_write_lock(1);
                 fill_with_val(
-                    in_cb.get_write_ptr() + tail_offset_bytes, tail_elems, static_cast<uint16_t>(bf16_init_value));
+                    static_cast<uint32_t>(lock.get_ptr().get_address()) + tail_offset_bytes,
+                    tail_elems,
+                    static_cast<uint16_t>(bf16_init_value));
             }
         }
         for (uint32_t h = 0; h < kernel_h; ++h) {
@@ -106,9 +110,10 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 // NOT this path -- CPU and NOC reads BOTH see the same wrong TL1 data at base, so the input
                 // tensor's L1 data is genuinely stale after 32c, a host-upload/L1-alloc issue, not the gather.)
                 {
+                    const auto lock = in_cb.scoped_write_lock(1);
                     volatile tt_l1_ptr uint32_t* rp_src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(read_offset);
-                    volatile tt_l1_ptr uint32_t* rp_dst =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in_cb.get_write_ptr() + write_offset);
+                    volatile tt_l1_ptr uint32_t* rp_dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        static_cast<uint32_t>(lock.get_ptr().get_address()) + write_offset);
                     const uint32_t rp_nwords = (read_bytes * w_multiple) >> 2;
                     for (uint32_t rp_i = 0; rp_i < rp_nwords; ++rp_i) {
                         rp_dst[rp_i] = rp_src[rp_i];
@@ -147,6 +152,7 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                             // clear the in CB
                             if ((total_elems_to_reduce - processed_sticks) < max_sticks_for_reduction &&
                                 processed_sticks != total_elems_to_reduce) {
+                                const auto lock = in_cb.scoped_write_lock(1);
                                 clear_out_tiles<clear_value_cb_id>(noc, in_cb, clear_cb, in_cb_ntiles);
                             }
                         }
@@ -295,7 +301,11 @@ void kernel_main() {
     // fill the clear cb
     if constexpr (is_avg_pool || need_to_initialize_in_cb || force_max_clear) {
         if constexpr (reader_id == 0) {
-            fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
+            {
+                const auto lock = clear_value_cb.scoped_write_lock(1);
+                fill_with_val(
+                    static_cast<uint32_t>(lock.get_ptr().get_address()), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
+            }
             clear_value_cb.push_back(1);
         }
         if constexpr (reader_id == 1) {
@@ -313,6 +323,7 @@ void kernel_main() {
                 // the window rows (the unwritten tail rows stay 0 and reduce to a no-op in the sum).
                 DataflowBuffer icb_clear(in_cb_id);
                 Noc clear_noc;
+                const auto clear_lock = icb_clear.scoped_write_lock(multi_buffering_factor);
                 clear_noc.async_write_zeros(icb_clear, icb_clear.get_entry_size() * multi_buffering_factor);
                 clear_noc.write_zeros_l1_barrier();
             } else {
@@ -337,6 +348,7 @@ void kernel_main() {
                 // poison was reverted -- a bf16 value can't fault the RISC; the poison fault was this overrun
                 // clobbering a control region with garbage instead of benign zeros.)
 #endif
+                const auto clear_lock = icb_clear.scoped_write_lock(multi_buffering_factor);
                 clear_noc.async_write_zeros(icb_clear, icb_clear.get_entry_size() * multi_buffering_factor);
                 clear_noc.write_zeros_l1_barrier();
             }
@@ -348,7 +360,10 @@ void kernel_main() {
         // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
         // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
         // between the first and second face.
-        fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
+        {
+            const auto lock = in_scalar_cb.scoped_write_lock(1);
+            fill_with_val(static_cast<uint32_t>(lock.get_ptr().get_address()), FACE_WIDTH, bf16_scalar >> 16);
+        }
         in_scalar_cb.push_back(1);
     }
     const uint32_t core_nhw_index = get_arg(args::core_nhw_index);
@@ -496,7 +511,6 @@ void kernel_main() {
             {
                 const uint32_t global_stick =
                     use_split_reader ? (2u * out_stick_counter + reader_id) : out_stick_counter;
-                const uint32_t scratch_row0_addr = scratch_cb.get_read_ptr();  // untilized row 0 = the result
                 // Scratch and the borrowed output shard are BOTH local L1 on this core, so the reduced row 0
                 // -> output-stick copy is a local L1->L1 move. Do it with a direct pointer copy rather than a
                 // NoC self-loopback async_read: on HW both are correct, but the sim's per-stick self-loopback
@@ -504,17 +518,19 @@ void kernel_main() {
                 // artifacts). A straight L1 copy is race-free and HW-faithful.
                 //
                 // COHERENCY: the compute packer wrote this stick's reduced row directly to Tensix L1 (TL1),
-                // bypassing this DM core's private L1 D$ / shared L2. The scratch CB is single-buffered, so
-                // its L1 line address is constant across sticks: after the first read caches it, every later
-                // read hits the STALE cached copy (all sticks would read stick 0's result). On HW the reader
-                // must invalidate any address another agent wrote before reading it. On Quasar DM that is now
-                // handled for free: get_read_ptr() returns the uncached L1 alias, so these loads bypass the
-                // D$/L2 and re-fetch from TL1 every time -- no invalidate needed, and no stale-line hazard
-                // from the single-buffered scratch CB.
+                // bypassing this DM core's private L1 D$ / shared L2. The two locks handle caching for both
+                // sides of the copy -- the scratch reads see the freshly packed data (the scratch CB is
+                // single-buffered, so its address repeats every stick) and the output stores are visible to
+                // the host read-back.
 #ifndef ARCH_QUASAR
                 invalidate_l1_cache();
 #endif
-                const uint32_t out_dst_addr = out_shard_cb.get_write_ptr() + global_stick * out_row_bytes;
+                const auto scratch_lock = scratch_cb.scoped_read_lock(scratch_npages);
+                const auto out_lock = out_shard_cb.scoped_write_lock(1);
+                const uint32_t scratch_row0_addr =
+                    static_cast<uint32_t>(scratch_lock.get_ptr().get_address());  // untilized row 0 = the result
+                const uint32_t out_dst_addr =
+                    static_cast<uint32_t>(out_lock.get_ptr().get_address()) + global_stick * out_row_bytes;
                 volatile tt_l1_ptr uint32_t* src_w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_row0_addr);
                 volatile tt_l1_ptr uint32_t* dst_w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_dst_addr);
                 for (uint32_t w = 0; w < out_row_bytes >> 2; ++w) {
