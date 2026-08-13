@@ -106,6 +106,48 @@ def test_all_gather_rmsnorm_honors_memory_config_when_tensor_is_already_full_wid
     assert calls == [(x, requested_memory_config)]
 
 
+def test_decode_reshards_final_norm_output_to_lm_head_input_memory_config(monkeypatch):
+    """Guard the BH final-norm -> LMHead sharding boundary without opening hardware."""
+
+    decode_norm_memcfg = object()
+    lm_head_memcfg = SimpleNamespace(is_sharded=lambda: True)
+    gathered = object()
+    normalized = SimpleNamespace(memory_config=lambda: decode_norm_memcfg)
+    resharded = object()
+    logits = object()
+    calls = []
+
+    norm = SimpleNamespace(
+        config=SimpleNamespace(decode_memory_config=decode_norm_memcfg),
+        decode_forward=lambda x: calls.append(("norm", x)) or normalized,
+    )
+    lm_head = SimpleNamespace(
+        config=SimpleNamespace(input_memcfg=lm_head_memcfg),
+        forward=lambda x: calls.append(("lm_head", x)) or logits,
+    )
+    model = SimpleNamespace(layers=[], norm=norm, lm_head=lm_head)
+
+    def fake_all_gather(final_norm, x, *, memory_config):
+        calls.append(("all_gather", final_norm, x, memory_config))
+        return gathered
+
+    def fake_reshard(x, memory_config):
+        calls.append(("reshard", x, memory_config))
+        return resharded
+
+    monkeypatch.setattr(qwen_model, "_all_gather_rmsnorm_tensor", fake_all_gather)
+    monkeypatch.setattr(qwen_model.ttnn, "reshard", fake_reshard)
+
+    x_embed = object()
+    assert qwen_model.Qwen3_32B.decode_forward(model, x_embed, object(), (object(), object())) is logits
+    assert calls == [
+        ("all_gather", norm, x_embed, decode_norm_memcfg),
+        ("norm", gathered),
+        ("reshard", normalized, lm_head_memcfg),
+        ("lm_head", resharded),
+    ]
+
+
 def test_decoder_layer_prefill_calls_chunk_capable_attention_entrypoint(monkeypatch):
     captured = {}
     attention_output = object()

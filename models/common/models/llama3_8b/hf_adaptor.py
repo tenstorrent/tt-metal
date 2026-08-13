@@ -400,7 +400,7 @@ def _max_prefill_chunk_size(mesh_device) -> int:
     override = os.getenv("MAX_PREFILL_CHUNK_SIZE")
     if override is not None:
         return int(override) * 1024
-    return {"N150": 4, "N300": 64, "N150x4": 4, "T3K": 128}[get_device_name(mesh_device)] * 1024
+    return {"N150": 4, "N300": 64, "N150x4": 4, "T3K": 128, "P150": 4}[get_device_name(mesh_device)] * 1024
 
 
 def _trace_prefill_supported_seq_lens(
@@ -408,6 +408,7 @@ def _trace_prefill_supported_seq_lens(
 ) -> tuple[int, ...]:
     supported_seq_lens_by_device = {
         "N150": (128, 1024),
+        "P150": (128, 1024),
         "N300": (128, 1024, 2048, 4096, 8192),
         "N150x4": (128, 1024, 2048, 4096, 8192),
         "T3K": (128, 1024, 2048, 4096, 8192),

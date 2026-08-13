@@ -8,10 +8,13 @@ from types import SimpleNamespace
 import pytest
 
 from models.common.models.qwen3_32b import executor as qwen3_executor
+from models.demos.utils.model_targets import resolve_metric_tolerance
+from models.demos.utils.trace_region_sizes import resolve_trace_region_size
 
 _DEMO_PATH = "models/common/tests/demos/qwen3_32b/demo.py"
 _DEMO_SOURCE = Path(_DEMO_PATH).read_text(encoding="utf-8")
 _DEMO_TREE = ast.parse(_DEMO_SOURCE, filename=_DEMO_PATH)
+_COMMON_CONFTEST_SOURCE = Path("models/common/tests/conftest.py").read_text(encoding="utf-8")
 
 
 def _function(name):
@@ -40,6 +43,7 @@ def test_demo_case_manifest_is_preserved():
         "batch-32",
         "batch-32-ci",
         "eval-32",
+        "eval-32-perf-report",
         "ci-b1-DP-2",
         "ci-b1-DP-4",
         "ci-b1-DP-8",
@@ -49,9 +53,25 @@ def test_demo_case_manifest_is_preserved():
     assert ast.literal_eval(optimizations.args[1]) == ["performance", "accuracy"]
 
 
-def test_demo_keeps_qwen3_trace_region_and_fabric():
-    assert '"trace_region_size": 50_000_000' in _DEMO_SOURCE
-    assert "ttnn.FabricConfig.FABRIC_1D" in _DEMO_SOURCE
+def test_demo_resolves_qwen3_trace_region_and_matches_ring_fabric():
+    assert 'resolve_trace_region_size("qwen3-32b", env)' in _DEMO_SOURCE
+    assert '"trace_region_size": 50_000_000' not in _DEMO_SOURCE
+    assert "ttnn.FabricConfig.FABRIC_1D_RING" in _DEMO_SOURCE
+    assert resolve_trace_region_size("qwen3-32b", "T3K") == 90_000_000
+    assert resolve_trace_region_size("qwen3-32b", "P150x4") == 90_000_000
+
+
+def test_demo_exposes_p150x4_and_uses_canonical_device_naming():
+    assert '"P150x4": (1, 4)' in _DEMO_SOURCE
+    assert "bh_hardware" not in _DEMO_SOURCE
+    assert not any(isinstance(node, ast.FunctionDef) and node.name == "get_device_name" for node in _DEMO_TREE.body)
+    imports = [ast.unparse(node) for node in _DEMO_TREE.body if isinstance(node, (ast.Import, ast.ImportFrom))]
+    assert any("models.common.device_utils import get_device_name" in statement for statement in imports)
+
+
+def test_required_bh_gate_failures_are_not_converted_to_fixture_skips():
+    assert 'mesh_device_name in {"P150", "P150X4"}' in _COMMON_CONFTEST_SOURCE
+    assert "if blackhole_selected:\n                raise" in _COMMON_CONFTEST_SOURCE
 
 
 def test_demo_uses_model_owned_runtime_compatibility_wrappers():
@@ -64,7 +84,7 @@ def test_demo_uses_model_owned_runtime_compatibility_wrappers():
 
 @pytest.mark.parametrize("data_parallel", [2, 4, 8, 16, 32])
 def test_every_dp_case_skips_before_submesh_or_model_construction(data_parallel, expect_error):
-    namespace = {"pytest": pytest, "ttnn": SimpleNamespace(MeshDevice=object), "_MIN_TP_DEVICES": 8}
+    namespace = {"pytest": pytest, "ttnn": SimpleNamespace(MeshDevice=object), "_MIN_TP_DEVICES": 4}
     function = _function("_dp_or_skip")
     exec(compile(ast.Module(body=[function], type_ignores=[]), _DEMO_PATH, "exec"), namespace)
     mesh = SimpleNamespace(get_num_devices=lambda: 8)
@@ -119,6 +139,46 @@ def test_eval_repeat_warms_executor_before_shared_perf_runner_replay():
     helper_source = ast.unparse(_function("_warmup_demo_executor"))
     assert "executor.warmup_model_decode" in helper_source
     assert "executor.warmup_model_prefill" in helper_source
+
+
+def test_eval_perf_report_reuses_three_repeat_geometry_and_first_repeat_profiler():
+    source = ast.unparse(_function("_run_eval_repeat_batch32"))
+    assert "repeat_batches=_EVAL_REPEAT_BATCHES" in source
+    assert "first_repeat_profiler=profiler" in source
+    assert "_assert_eval32_perf_target(first_result, expected" in source
+    assert "'on_device_topk' if perf_report else 'host'" in source
+    assert "eval-32-perf-report" in ast.unparse(_function("test_qwen3_32b"))
+
+
+def test_eval_perf_targets_fail_closed_when_missing_or_failed(expect_error):
+    resolve_namespace = {
+        "resolve_perf_targets": lambda *args, **kwargs: None,
+        "_EVAL32_TARGET_SEQ_LEN": 686,
+    }
+    resolve_function = _function("_resolve_eval32_perf_targets")
+    exec(compile(ast.Module(body=[resolve_function], type_ignores=[]), _DEMO_PATH, "exec"), resolve_namespace)
+    with expect_error(ValueError, "qualification gates fail closed"):
+        resolve_namespace["_resolve_eval32_perf_targets"]("Qwen/Qwen3-32B", "P150x4")
+
+    assert_namespace = {
+        "resolve_metric_tolerance": resolve_metric_tolerance,
+        "PERF_TOLERANCE": 0.05,
+    }
+    assert_function = _function("_assert_eval32_perf_target")
+    exec(compile(ast.Module(body=[assert_function], type_ignores=[]), _DEMO_PATH, "exec"), assert_namespace)
+    result = SimpleNamespace(tok_s_u=1.0, ttft_ms=1_000.0)
+    expected = {"decode_t/s/u": 21.6, "prefill_time_to_first_token": 87}
+    with expect_error(AssertionError, "tok/s/u.*ttft_ms"):
+        assert_namespace["_assert_eval32_perf_target"](result, expected, case_name="BH/eval")
+
+
+def test_other_declared_p150x4_perf_nodes_fail_closed_on_missing_targets(expect_error):
+    namespace = {}
+    function = _function("_require_p150x4_local_perf_target")
+    exec(compile(ast.Module(body=[function], type_ignores=[]), _DEMO_PATH, "exec"), namespace)
+    namespace["_require_p150x4_local_perf_target"]("T3K", {}, case_name="WH")
+    with expect_error(ValueError, "missing frozen P150x4 perf target"):
+        namespace["_require_p150x4_local_perf_target"]("P150x4", {}, case_name="BH/batch-32-ci")
 
 
 def test_traced_compatibility_wrapper_is_accepted_by_transition_perf_helper(monkeypatch):
