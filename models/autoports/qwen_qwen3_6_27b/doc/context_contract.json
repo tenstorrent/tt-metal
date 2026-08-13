@@ -125,6 +125,57 @@
     },
     "status": "optimized_decoder_ready_for_stage_review"
   },
+  "multichip_decoder": {
+    "status": "multichip_decoder_validation_complete",
+    "target_hardware": "4x Blackhole p300c",
+    "target_mesh": [
+      1,
+      4
+    ],
+    "tensor_parallel_size": 4,
+    "fabric": "FABRIC_1D_RING",
+    "topology": "Ring",
+    "supported_context_target": 262144,
+    "capability_reduction": {
+      "scope": "batch-32 full-stack KV residency on the target 4x p300c mesh",
+      "batch_1_advertised_context_preserved": true,
+      "largest_feasible_batch_32_context": 82432,
+      "smallest_failed_batch_32_context": 82496,
+      "reason": "hard per-device DRAM allocation limit after auditable current-loader weights/RoPE/state plus measured peak warmed-trace workspace",
+      "artifact": "doc/multichip_decoder/artifacts/capacity/capacity_b32.json"
+    },
+    "activation_dtype": "bfloat16",
+    "ccl_dtype_initial_policy": "bfloat16",
+    "full_attention_local_q_heads": 6,
+    "full_attention_local_kv_heads": 1,
+    "linear_attention_local_key_heads": 4,
+    "linear_attention_local_value_heads": 12,
+    "local_mlp_intermediate": 4352,
+    "full_model_selected_weight_bytes_estimate": {
+      "unique_semantic_global": 14691860480,
+      "unique_semantic_per_device": 3672965120,
+      "current_loader_resident_per_device": 10599141888,
+      "note": "Official-weight PCC rejected BFP4 full attention, so selected full projections are BF16. Resident bytes are decomposed by actual loader object families in the capacity artifact and include phase copies, norms/misc, physical tile overhead, and per-layer C=262144 RoPE."
+    },
+    "full_model_kv_cache_bytes": {
+      "batch_1_context_262144_global": 9126805504,
+      "batch_1_context_262144_per_device": 2281701376,
+      "batch_32_context_262144_global": 292057776128,
+      "batch_32_context_262144_per_device": 73014444032,
+      "note": "Includes physical BFP8 tile overhead for K and V across all 16 full-attention layers. B1 C=262144 passed. With measured workspace, B32 is physically limited to C=82432; C=82496 is the immediate measured failure."
+    },
+    "full_model_linear_recurrent_state_bytes": {
+      "batch_32_global": 2290089984,
+      "batch_32_per_device": 572522496,
+      "note": "Physical BFP8 tile storage plus convolution state for all 48 linear-attention layers; independent of context length."
+    },
+    "reserved_trace_activation_workspace_bytes_per_device": 1969152,
+    "workspace_reserve_is_measured": true,
+    "workspace_note": "Maximum load-to-warmed/captured/replayed DRAM allocator delta across final B32 full and linear trace artifacts.",
+    "largest_feasible_batch_32_context": 82432,
+    "smallest_failed_batch_32_context": 82496,
+    "plan_artifact": "doc/multichip_decoder/mesh_plan.md"
+  },
   "layer_kinds": {
     "linear_attention": {
       "representative_layer": 0,

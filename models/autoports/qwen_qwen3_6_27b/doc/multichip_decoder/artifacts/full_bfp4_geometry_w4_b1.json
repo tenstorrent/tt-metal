@@ -1,0 +1,24 @@
+{
+  "baseline_candidate": "default",
+  "batch": 1,
+  "candidate": "geometry_w4",
+  "capture_position_pcc": "0.9999886974539355",
+  "efficiency": 0.440733707737338,
+  "fallback_audit": true,
+  "kind": "full",
+  "multichip_trace_median_ms": 0.7203742861747742,
+  "pcc": [
+    "0.9999918947458506",
+    "0.9999933887829309",
+    "0.9999944882050535",
+    "0.9999925311929837",
+    "0.9999940823720086",
+    "0.9999929746530747",
+    "0.9999916167544552"
+  ],
+  "single_chip_median_ms": 1.2699729204177856,
+  "single_chip_trace_replay": true,
+  "speedup": 1.762934830949352,
+  "steps": 8,
+  "trace_replay": true
+}

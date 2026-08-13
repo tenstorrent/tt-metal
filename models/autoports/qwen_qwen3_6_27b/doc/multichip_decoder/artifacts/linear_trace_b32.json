@@ -1,0 +1,22 @@
+{
+  "batch": 32,
+  "capture_position_pcc": "1.0",
+  "efficiency": 0.8594575897665324,
+  "fallback_audit": true,
+  "kind": "linear",
+  "multichip_trace_median_ms": 4.6044158935546875,
+  "pcc": [
+    "1.0",
+    "1.0",
+    "1.0",
+    "1.0",
+    "1.0",
+    "1.0",
+    "1.0"
+  ],
+  "single_chip_median_ms": 15.829200744628906,
+  "single_chip_trace_replay": true,
+  "speedup": 3.4378303590661297,
+  "steps": 8,
+  "trace_replay": true
+}

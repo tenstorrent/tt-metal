@@ -1,0 +1,27 @@
+{
+  "baseline_candidate": "default",
+  "batch": 32,
+  "candidate": "default",
+  "capture_position_pcc": "1.0",
+  "deterministic_pcc": [
+    "1.0",
+    "1.0",
+    "1.0",
+    "1.0"
+  ],
+  "deterministic_replay": true,
+  "efficiency": 0.8865694742942632,
+  "fallback_audit": true,
+  "kind": "linear",
+  "multichip_trace_median_ms": 4.471762180328369,
+  "pcc": [
+    "1.0",
+    "1.0",
+    "1.0"
+  ],
+  "single_chip_median_ms": 15.858111381530762,
+  "single_chip_trace_replay": true,
+  "speedup": 3.546277897177053,
+  "steps": 4,
+  "trace_replay": true
+}
