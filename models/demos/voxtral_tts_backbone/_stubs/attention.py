@@ -104,6 +104,10 @@ class TtAttention:
         self.o_plan = build_plan(device, int(self.wo.shape[-2]), int(self.wo.shape[-1]))
         self.q_plan = build_plan(device, int(self.wq.shape[-2]), int(self.wq.shape[-1]))
         self.qkv_plan = build_plan(device, int(self.wqkv.shape[-2]), int(self.wqkv.shape[-1]), max_cores=32)
+        #: Cleared the first time the fused rotation refuses this model's
+        #: operands, so the explicit chain takes over for the rest of the run
+        #: instead of raising inside a captured trace.
+        self._fused_rope = True
         self._q_end = int(self.wq.shape[-1])
         self._k_end = self._q_end + int(self.wk.shape[-1])
         self._v_end = self._k_end + int(self.wv.shape[-1])
@@ -192,6 +196,28 @@ class TtAttention:
         return ttnn.linear(hidden_states, weight, **mm)
 
     def _apply_rope(self, x, cos, sin):
+        """`x*cos + rotate_half(x)*sin` — HF's rotation, as ONE dispatch.
+
+        Written out (the fallback below) this is SEVEN ops for a single
+        elementwise rotation: two slices, a neg and a concat to build
+        rotate_half, then two multiplies and an add. It runs twice per layer (Q
+        and K), so at 26 layers it is ~360 launches per decoded token against
+        tensors of a few KB — which is exactly why the roofline tags this
+        model's BinaryNg/Reshape/Concat/Slice ops `bound_by=dispatch`. Their
+        cost is launch overhead, and the only lever that touches launch overhead
+        is issuing fewer launches.
+
+        `rotary_embedding_hf` is that same HF-style rotation as one kernel, and
+        our operands are ALREADY the layout it documents for prefill mode:
+        `_split_heads` gives [1, heads, s, hd] and `_as_broadcastable` gives
+        [1, 1, s, hd]; a decode row is that shape with s=1. head_dim 128 is a
+        multiple of 2*TILE, which is the op's alignment requirement.
+        """
+        if self._fused_rope:
+            try:
+                return ttnn.experimental.rotary_embedding_hf(x, cos, sin, is_decode_mode=False)
+            except Exception:  # noqa: BLE001 - unsupported shape/dtype: explicit chain
+                self._fused_rope = False
         return ttnn.add(ttnn.multiply(x, cos), ttnn.multiply(self._rotate_half(x), sin))
 
     def _as_broadcastable(self, t):
