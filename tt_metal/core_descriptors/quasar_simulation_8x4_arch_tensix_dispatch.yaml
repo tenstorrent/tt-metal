@@ -25,9 +25,6 @@ unharvested:
         end: [8, 5]
 
 
-      # Consumed in order as [cq0 prefetch, cq0 dispatch, cq1 prefetch, cq1 dispatch],
-      # matching the per-cq node grouping in quasar_single_chip_2cq (topology.cpp).
-      # dispatch_s shares its cq's dispatcher tile and does not consume an entry.
       dispatch_cores:
         [[-1, -1], [-1, -1], [-1, -2], [-1, -2]]
 
