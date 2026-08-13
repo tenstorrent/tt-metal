@@ -581,11 +581,19 @@ NocAsyncReadTx<thread> noc_load(
 // Same, with the handshake semaphores supplied by the harness's reservation.
 // Prefer these: the pair is protocol plumbing, and having callers allocate it
 // invites the initial-value and reset mistakes the explicit form makes possible.
-// Reach for the explicit overloads only to give a broadcast its own pair.
-template <int thread, typename Accessor>
+// Reach for the explicit overloads only to give a broadcast a pair of its own
+// beyond the reserved ones.
+//
+// `pair` selects which reserved pair to use, defaulting to the driving thread's.
+// Two broadcasts must never share a pair -- their ready counters would interleave
+// and noc_semaphore_wait, which waits for EQUALITY, would miss its target. The
+// default is right when they run on different threads (the usual case: one per
+// NOC, overlapping). Name the pair explicitly to put two broadcasts on ONE thread
+// and still keep them apart.
+template <int thread, int pair = thread, typename Accessor>
 NocAsyncReadTx<thread> noc_load(const Storage& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx);
 
-template <int thread, typename Accessor>
+template <int thread, int pair = thread, typename Accessor>
 NocAsyncReadTx<thread> noc_load(const Storage& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx);
 
 // Drains a Block to a tensor. Takes the Block by value: this call consumes it.
