@@ -1141,7 +1141,7 @@
   cmd: |
     unset HF_HUB_OFFLINE
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
-    pytest --timeout 1500 models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "(decoder and load_dit) or conv3d_1x1x1 or (l768 and bf16)"
+    pytest --timeout 1500 models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "decoder or conv3d_1x1x1 or (l768 and bf16)"
     pytest --timeout 900 models/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq"
     pytest --timeout 900 models/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "short_seq"
   model: mochi
