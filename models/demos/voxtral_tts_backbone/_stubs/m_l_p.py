@@ -23,6 +23,7 @@ from __future__ import annotations
 import ttnn
 
 from models.demos.voxtral_tts_backbone._stubs.attention import _stage
+from models.demos.voxtral_tts_backbone._stubs.decode_matmul import build_plan
 
 
 class TtMLP:
@@ -32,6 +33,10 @@ class TtMLP:
         self.device = device
         self.w_gate, self.w_up, self.w_down = weights
         self.compute_kernel_config = compute_kernel_config
+        # down_proj is the widest read in the block (9216 -> 3072) and the one
+        # `ttnn.linear` routes worst on its own, so its decode call gets an
+        # explicit full-grid plan. The weight layout is untouched.
+        self.down_plan = build_plan(device, int(self.w_down.shape[-2]), int(self.w_down.shape[-1]))
 
     @classmethod
     def build(cls, device, torch_module, compute_kernel_config=None):
@@ -56,7 +61,10 @@ class TtMLP:
         mm = {"compute_kernel_config": self.compute_kernel_config} if self.compute_kernel_config else {}
         gate = ttnn.silu(ttnn.linear(x, self.w_gate, **mm))
         up = ttnn.linear(x, self.w_up, **mm)
-        return ttnn.linear(ttnn.multiply(gate, up), self.w_down, **mm)
+        hidden = ttnn.multiply(gate, up)
+        if self.down_plan is not None and self.down_plan.matches(hidden):
+            return self.down_plan(hidden, self.w_down, self.compute_kernel_config)
+        return ttnn.linear(hidden, self.w_down, **mm)
 
 
 def _default_compute_kernel_config(device):
