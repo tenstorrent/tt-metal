@@ -24,6 +24,16 @@ inline void calculate_sfpu_mul_u16_to_u32_body() {
 
 template <int ITERATIONS = 8>
 inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // Repro for https://github.com/tenstorrent/tt-metal/issues/52997
+    // RISC nops in the always-inlined LCM body; hang is codegen-sensitive vs dest SFPLOAD after SFPU.
+    asm volatile("nop");
+    asm volatile("nop");
+    asm volatile("nop");
+    asm volatile("nop");
+    asm volatile("nop");
+    asm volatile("nop");
+    asm volatile("nop");
+    asm volatile("nop");
     for (int d = 0; d < ITERATIONS; d++) {
         // size of each tile in Dest is 64 rows
         constexpr uint dst_tile_size = 64;
@@ -56,6 +66,9 @@ inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in
         TTI_SFPEXEXP(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
         TTI_SFPIADD(0, p_sfpu::LREG4, p_sfpu::LREG3, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);
         TTI_SFPSETEXP(0, p_sfpu::LREG0, p_sfpu::LREG3, 0);
+
+        // Working fix for hang in issue #52997.
+        // TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::WAIT_SFPU);
 
 	// Load a and multiply by 1/gcd(a, b)
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, 3, dst_index_in0 * dst_tile_size);
