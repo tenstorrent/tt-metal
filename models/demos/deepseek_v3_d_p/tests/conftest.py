@@ -125,6 +125,7 @@ def pytest_configure(config):
 
 def _test_defined_uncollection(items, is_ci_env, is_ci_v2_env):
     kept = []
+    is_bh = is_blackhole()
     for item in items:
         marker = item.get_closest_marker("uncollect_if")
         if marker is None:
@@ -134,7 +135,8 @@ def _test_defined_uncollection(items, is_ci_env, is_ci_v2_env):
         # Values the predicate wants that come from fixtures, not parametrization.
         params.setdefault("is_ci_env", is_ci_env)
         params.setdefault("is_ci_v2_env", is_ci_v2_env)
-        if marker.kwargs["pred"](**params):
+        params.setdefault("is_bh", is_bh)
+        if not marker.kwargs["pred"](**params):
             kept.append(item)
 
     return kept
@@ -155,7 +157,7 @@ def pytest_collection_modifyitems(config, items):
     """
     is_ci_env = os.getenv("CI") == "true"
     is_ci_v2_env = "TT_GH_CI_INFRA" in os.environ
-    items = _test_defined_uncollection(items, is_ci_env, is_ci_v2_env)
+    items[:] = _test_defined_uncollection(items, is_ci_env, is_ci_v2_env)
 
     on_ci = is_ci_env or is_ci_v2_env
     torus_xy_certified = os.getenv("PREFILL_TORUS_XY_CERTIFIED") == "1"
@@ -283,20 +285,21 @@ def pytest_collection_modifyitems(config, items):
         if mesh_shape is None or topology is None:
             continue
 
-        # Unsupported fabric rings on QB/LB meshes
-        allowed_fabric_cfgs = DEFAULT_ALLOWED_FABRICS
-        if cluster_type in CI_ALLOWED_FABRICS.keys():
-            allowed_fabric_dct = CI_ALLOWED_FABRICS[cluster_type]
-            if mesh_shape in allowed_fabric_dct.keys():
-                allowed_fabric_cfgs = allowed_fabric_dct[mesh_shape]
+        if on_ci:
+            # Unsupported fabric rings on QB/LB meshes
+            allowed_fabric_cfgs = DEFAULT_ALLOWED_FABRICS
+            if cluster_type in CI_ALLOWED_FABRICS.keys():
+                allowed_fabric_dct = CI_ALLOWED_FABRICS[cluster_type]
+                if mesh_shape in allowed_fabric_dct.keys():
+                    allowed_fabric_cfgs = allowed_fabric_dct[mesh_shape]
 
-        if requested_fabric_cfg not in allowed_fabric_cfgs:
-            item.add_marker(
-                pytest.mark.skip(
-                    reason="requested combination of fabric config and mesh, unfeasible on the given hardware"
+            if requested_fabric_cfg not in allowed_fabric_cfgs:
+                item.add_marker(
+                    pytest.mark.skip(
+                        reason="requested combination of fabric config and mesh, unfeasible on the given hardware"
+                    )
                 )
-            )
-            continue
+                continue
 
         devices_needed = mesh_shape[0] * mesh_shape[1]
         is_ring = topology == "ring"
