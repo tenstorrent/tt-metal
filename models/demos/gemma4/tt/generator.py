@@ -26,7 +26,6 @@ from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
     SUPPORTED_PREFILL_BATCH_SIZES,
     Generator,
-    _pad_or_create_page_table,
     batched_prefill_padded_batch,
 )
 from models.tt_transformers.tt.model_config import determine_device_name
@@ -39,6 +38,39 @@ GEMMA4_MAX_BATCHED_PREFILL_SEQ_LEN = MAX_BATCHED_PREFILL_SEQ_LEN
 # vLLM token-chunked continuations can land on unaligned start_pos (e.g. 48);
 # align down and re-prefill the prefix (Galaxy SDPA_CHUNK_ALIGN pattern).
 SDPA_CHUNK_ALIGN = 128
+
+# Page-table column widths are 8-aligned to match ``_pad_or_create_page_table``
+# (tt_transformers) so CH2D into captured prefill buffers never reshapes.
+_PAGE_TABLE_WIDTH_ALIGN = 8
+
+
+def _align_page_table_blocks(n: int) -> int:
+    """Round page-table column count up to the shared 8-block alignment."""
+    n = max(0, int(n))
+    return ((n + _PAGE_TABLE_WIDTH_ALIGN - 1) // _PAGE_TABLE_WIDTH_ALIGN) * _PAGE_TABLE_WIDTH_ALIGN
+
+
+def ensure_page_table_width(table: torch.Tensor | None, target_blocks: int, *, fill: int = -1) -> torch.Tensor:
+    """Host page table with width ``>= target_blocks`` (8-aligned), padded with ``fill``.
+
+    Prefer this over ``torch.cat([table, pad])`` in multi-chunk paths: when the
+    table is already wide enough it is a no-op (slice only if over-wide). Growth
+    allocates one contiguous buffer and copies — still O(width) once per request,
+    never a per-chunk ``cat`` of two tensors.
+    """
+    aligned = _align_page_table_blocks(target_blocks)
+    if table is None:
+        return torch.full((1, aligned), fill, dtype=torch.int32)
+    if table.dim() == 1:
+        table = table.unsqueeze(0)
+    width = int(table.shape[1])
+    if width == aligned:
+        return table
+    if width > aligned:
+        return table[:, :aligned]
+    out = torch.full((int(table.shape[0]), aligned), fill, dtype=torch.int32)
+    out[:, :width] = table.to(dtype=torch.int32)
+    return out
 
 
 def align_num_cached_tokens_to_sdpa(num_cached_per_user: list[int]) -> list[int]:
@@ -236,6 +268,40 @@ class ChunkedPrefillPageTableGuardMixin:
         # Base Generator hook: chunked-prefill page-table padding/slicing uses this so
         # it matches the HMA effective block_size instead of the declared shape.
         return self._effective_paged_block_size(kv_cache)
+
+    def _chunk_page_table_scratch(self, *, rows: int, cols: int) -> torch.Tensor:
+        """Reusable host buffer for per-chunk page-table slices (no torch.cat).
+
+        Filled with -1 then overwritten with the live block-ID slice before each
+        ``copy_host_to_device`` into the captured chunk_page_table buffer.
+        """
+        cols = _align_page_table_blocks(cols)
+        rows = int(rows)
+        scratch = getattr(self, "_chunk_pt_scratch", None)
+        if scratch is None or scratch.shape[0] < rows or scratch.shape[1] < cols:
+            scratch = torch.full((rows, cols), -1, dtype=torch.int32)
+            self._chunk_pt_scratch = scratch
+        # View may be wider than needed; callers use [:, :cols].
+        return scratch[:rows, :cols]
+
+    def _fill_chunk_page_table(
+        self,
+        source_page_table: torch.Tensor,
+        *,
+        chunk_start_block: int,
+        chunk_end_block: int,
+        chunk_blocks: int,
+    ) -> torch.Tensor:
+        """Slice ``source`` into a reusable -1-padded host buffer of width ``chunk_blocks``."""
+        aligned = _align_page_table_blocks(chunk_blocks)
+        rows = int(source_page_table.shape[0])
+        scratch = self._chunk_page_table_scratch(rows=rows, cols=aligned)
+        scratch.fill_(-1)
+        sl = source_page_table[:, chunk_start_block:chunk_end_block]
+        width = min(int(sl.shape[1]), aligned)
+        if width > 0:
+            scratch[:, :width] = sl[:, :width].to(dtype=torch.int32)
+        return scratch
 
     def _uses_bounded_sliding_kv(self, model_id=-1):
         model = self.model[model_id]
@@ -523,14 +589,20 @@ class ChunkedPrefillPageTableGuardMixin:
         # model's max_seq_len so capture (8k warmup) and replay share one width.
         max_seq_blocks = num_blocks_in_seq(int(self.model_args[model_id].max_seq_len), block_size)
         target_blocks = max(max_blocks_prefill, max_seq_blocks, int(source_page_table.shape[1]))
-        page_table = _pad_or_create_page_table(source_page_table, target_blocks)
+        # Pad once into a contiguous buffer (no per-chunk torch.cat). Outer
+        # multi-chunk loops should already size to this width when possible.
+        page_table = ensure_page_table_width(source_page_table, target_blocks)
         chunk_page_table = None
         if batch_size == 1:
             chunk_start_block = num_cached_tokens // block_size
             chunk_end_block = num_blocks_in_seq(num_cached_tokens + prefill_seq_len, block_size)
-            chunk_page_table = source_page_table[:, chunk_start_block:chunk_end_block]
             chunk_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
-            chunk_page_table = _pad_or_create_page_table(chunk_page_table, chunk_blocks)
+            chunk_page_table = self._fill_chunk_page_table(
+                page_table,
+                chunk_start_block=chunk_start_block,
+                chunk_end_block=chunk_end_block,
+                chunk_blocks=chunk_blocks,
+            )
 
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
@@ -648,19 +720,15 @@ class ChunkedPrefillPageTableGuardMixin:
         needed_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size)
         if page_table_user.shape[1] > needed_blocks:
             page_table_user = page_table_user[:, :needed_blocks]
-        num_padding_blocks = needed_blocks - page_table_user.shape[1]
-        # Pad with -1 (skip), never 0 (physical block 0). Same invariant as the
-        # eager multi-chunk path — zeros let pad KV clobber the prompt prefix.
-        if num_padding_blocks > 0:
-            page_table_user_padded = torch.cat(
-                [
-                    page_table_user,
-                    torch.full((1, num_padding_blocks), -1, dtype=torch.int32),
-                ],
-                dim=-1,
-            )
-        else:
-            page_table_user_padded = page_table_user
+        # Size once to the same width ``_easy_trace_prefill_with_chunk_page_table``
+        # will demand (max KV / max_seq / needed) so the per-chunk path never
+        # torch.cat-grows the full table. Pad with -1 (skip), never 0.
+        from models.tt_transformers.tt.generator import _get_max_blocks_prefill
+
+        max_blocks_prefill = _get_max_blocks_prefill(kv_cache)
+        max_seq_blocks = num_blocks_in_seq(int(self.model_args[model_id].max_seq_len), block_size)
+        target_blocks = max(max_blocks_prefill, max_seq_blocks, needed_blocks, int(page_table_user.shape[1]))
+        page_table_user_padded = ensure_page_table_width(page_table_user, target_blocks)
         CHUNK_USER_ID = 0
 
         logger.info(
@@ -766,17 +834,9 @@ class ChunkedPrefillPageTableGuardMixin:
             chunk_grid_blocks = num_blocks_in_seq(seq_len + num_cached_tokens, block_size)
             if page_table_user.shape[1] > needed_blocks:
                 page_table_user = page_table_user[:, :needed_blocks]
-            num_padding_blocks = max(0, chunk_grid_blocks - page_table_user.shape[1])
-            if num_padding_blocks > 0:
-                page_table_user_padded = torch.cat(
-                    [
-                        page_table_user,
-                        torch.full((1, num_padding_blocks), -1, dtype=torch.int32),
-                    ],
-                    dim=-1,
-                )
-            else:
-                page_table_user_padded = page_table_user
+            # Pad once to the padded chunk grid (8-aligned). Per-chunk work is a
+            # column slice only — no torch.cat in the loop.
+            page_table_user_padded = ensure_page_table_width(page_table_user, chunk_grid_blocks)
             CHUNK_USER_ID = 0
 
             # Inject an expanded last start when adjust moves it off the chunk grid.
