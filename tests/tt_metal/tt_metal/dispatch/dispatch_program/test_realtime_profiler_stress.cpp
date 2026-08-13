@@ -26,7 +26,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -207,7 +206,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     // memory pressure; the dispatch commands captured in the trace are
     // independent per-enqueue, so dispatch_s still fires 4096 separate
     // kernel_start pulses on replay.
-    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    distributed::MeshTraceId trace_id = mesh_device.get()->begin_mesh_trace(cq.id());
     for (uint32_t i = 0; i < kNumProgramsInTrace; ++i) {
         distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     }
@@ -305,7 +304,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     auto& cq = mesh_device->mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
-    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    distributed::MeshTraceId trace_id = mesh_device.get()->begin_mesh_trace(cq.id());
     for (uint32_t i = 0; i < kNumProgramsInTrace; ++i) {
         distributed::EnqueueMeshWorkload(cq, workload, false);
     }

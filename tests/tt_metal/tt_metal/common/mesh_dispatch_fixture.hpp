@@ -5,6 +5,7 @@
 #pragma once
 
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <type_traits>
 #include "gtest/gtest.h"
 #include <functional>
 #include <map>
@@ -17,7 +18,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include "llrt.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
@@ -53,15 +53,24 @@ public:
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         const std::shared_ptr<distributed::MeshBuffer>& in_buffer,
         std::vector<uint32_t>& src_vec) {
-        distributed::WriteShard(
-            mesh_device->mesh_command_queue(), in_buffer, src_vec, distributed::MeshCoordinate(0, 0));
+        mesh_device->mesh_command_queue().enqueue_write_shards(
+            in_buffer,
+            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(src_vec.data())},
+            false);
     }
     void ReadBuffer(
         const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         const std::shared_ptr<distributed::MeshBuffer>& out_buffer,
         std::vector<uint32_t>& dst_vec) {
-        distributed::ReadShard(
-            mesh_device->mesh_command_queue(), dst_vec, out_buffer, distributed::MeshCoordinate(0, 0));
+        {
+            auto* shard = out_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+            dst_vec.resize(
+                shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+            mesh_device->mesh_command_queue().enqueue_read_shards(
+                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dst_vec.data())},
+                out_buffer,
+                true);
+        };
     }
     int NumDevices() { return this->devices_.size(); }
     bool IsSlowDispatch() const { return this->slow_dispatch_; }

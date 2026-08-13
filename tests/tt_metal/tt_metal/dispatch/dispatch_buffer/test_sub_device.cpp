@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/allocator.hpp>
+#include <type_traits>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/sub_device.hpp>
@@ -27,7 +28,6 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
 namespace tt::tt_metal {
@@ -109,7 +109,13 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     EXPECT_TRUE(buffer_1->address() <= max_addr - buffer_1->get_backing_buffer()->aligned_page_size());
     distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), buffer_1, input_1, false);
     std::vector<uint32_t> output_1;
-    distributed::ReadShard(mesh_device->mesh_command_queue(), output_1, buffer_1, zero_coord_, true);
+    {
+        auto* shard = buffer_1->get_device_buffer(zero_coord_);
+        output_1.resize(
+            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(output_1)>::value_type));
+        mesh_device->mesh_command_queue().enqueue_read_shards(
+            {distributed::ShardDataTransfer{zero_coord_}.host_data(output_1.data())}, buffer_1, true);
+    };
     EXPECT_EQ(input_1, output_1);
     auto input_1_it = input_1.begin();
     for (const auto& physical_core : physical_cores_1) {
@@ -134,7 +140,13 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     EXPECT_TRUE(buffer_3->address() <= max_addr - buffer_3->get_backing_buffer()->aligned_page_size());
     distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), buffer_3, input_2, false);
     std::vector<uint32_t> output_2;
-    distributed::ReadShard(mesh_device->mesh_command_queue(), output_2, buffer_3, zero_coord_, true);
+    {
+        auto* shard = buffer_3->get_device_buffer(zero_coord_);
+        output_2.resize(
+            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(output_2)>::value_type));
+        mesh_device->mesh_command_queue().enqueue_read_shards(
+            {distributed::ShardDataTransfer{zero_coord_}.host_data(output_2.data())}, buffer_3, true);
+    };
     EXPECT_EQ(input_2, output_2);
     auto input_2_it = input_2.begin();
     for (const auto& physical_core : physical_cores_2) {

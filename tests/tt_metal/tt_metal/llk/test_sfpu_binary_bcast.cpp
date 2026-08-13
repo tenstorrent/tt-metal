@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <type_traits>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -21,7 +22,6 @@
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -266,8 +266,10 @@ bool run_sfpu_binary_bcast(const std::shared_ptr<distributed::MeshDevice>& mesh_
     auto src_b_tiled = ::unit_tests::compute::gold_standard_tilize(to_tile_input(src_b_rm), gc);
     auto golden_tiled = ::unit_tests::compute::gold_standard_tilize(to_tile_input(golden_rm), gc);
 
-    distributed::WriteShard(cq, src_data_buffer, src_a_tiled, zero_coord);
-    distributed::WriteShard(cq, src_bcast_buffer, src_b_tiled, zero_coord);
+    cq.enqueue_write_shards(
+        src_data_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(src_a_tiled.data())}, false);
+    cq.enqueue_write_shards(
+        src_bcast_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(src_b_tiled.data())}, false);
 
     tt_metal::SetRuntimeArgs(
         program_,
@@ -294,7 +296,14 @@ bool run_sfpu_binary_bcast(const std::shared_ptr<distributed::MeshDevice>& mesh_
     distributed::Finish(cq);
 
     std::vector<uint32_t> device_tiled;
-    distributed::ReadShard(cq, device_tiled, dst_buffer, zero_coord);
+    {
+        auto* shard = dst_buffer->get_device_buffer(zero_coord);
+        device_tiled.resize(
+            shard->page_size() * shard->num_pages() /
+            sizeof(typename std::decay_t<decltype(device_tiled)>::value_type));
+        cq.enqueue_read_shards(
+            {distributed::ShardDataTransfer{zero_coord}.host_data(device_tiled.data())}, dst_buffer, true);
+    };
 
     if (device_tiled.size() != golden_tiled.size()) {
         log_error(tt::LogTest, "Size mismatch: device={} golden={}", device_tiled.size(), golden_tiled.size());

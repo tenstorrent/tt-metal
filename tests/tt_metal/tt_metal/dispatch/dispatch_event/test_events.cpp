@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <fmt/base.h>
 #include <cstddef>
 #include <cstdint>
@@ -74,9 +75,21 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
             buffers.push_back(distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get()));
 
             if (data_movement_mode == DataMovementMode::WRITE) {
-                distributed::WriteShard(cq, buffers.back(), page, distributed::MeshCoordinate(0, 0), true);
+                cq.enqueue_write_shards(
+                    buffers.back(),
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(page.data())},
+                    true);
             } else if (data_movement_mode == DataMovementMode::READ) {
-                distributed::ReadShard(cq, page, buffers.back(), distributed::MeshCoordinate(0, 0), true);
+                {
+                    auto* shard = buffers.back()->get_device_buffer(distributed::MeshCoordinate(0, 0));
+                    page.resize(
+                        shard->page_size() * shard->num_pages() /
+                        sizeof(typename std::decay_t<decltype(page)>::value_type));
+                    cq.enqueue_read_shards(
+                        {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(page.data())},
+                        buffers.back(),
+                        true);
+                };
             }
         }
         distributed::Finish(cq);
@@ -267,7 +280,8 @@ TEST_F(UnitMeshCQEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize) 
         distributed::ReplicatedBufferConfig buffer_config{.size = page_size};
         std::shared_ptr<distributed::MeshBuffer> buf =
             distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
-        distributed::WriteShard(cq, buf, page, distributed::MeshCoordinate(0, 0), true);
+        cq.enqueue_write_shards(
+            buf, {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(page.data())}, true);
         cq.enqueue_wait_for_event(*event);
 
         if (i % 10 == 0) {

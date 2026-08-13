@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <type_traits>
 
 #include <chrono>
 #include <cstdint>
@@ -18,7 +19,6 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
@@ -260,7 +260,13 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
 
         for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {
             std::vector<uint32_t> dst;
-            ReadShard(mesh_device->mesh_command_queue(), dst, fd_buf, coord);
+            {
+                auto* shard = fd_buf->get_device_buffer(coord);
+                dst.resize(
+                    shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
+                mesh_device->mesh_command_queue().enqueue_read_shards(
+                    {ShardDataTransfer{coord}.host_data(dst.data())}, fd_buf, true);
+            };
             EXPECT_EQ(dst, fd_src_vec) << "Cycle " << cycle << ": sharded L1 readback failed in FD mode at " << coord;
         }
         assert_counter_incrementing(read_counter, "FD steady-state (cycle " + std::to_string(cycle) + ")");

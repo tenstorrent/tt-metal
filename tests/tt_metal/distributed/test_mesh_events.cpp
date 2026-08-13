@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <boost/move/utility_core.hpp>
+#include <type_traits>
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
@@ -62,7 +63,14 @@ TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
         // Reads on CQ 1
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
             readback_vecs.push_back({});
-            ReadShard(mesh_device_->mesh_command_queue(1), readback_vecs.back(), buf, coord);
+            {
+                auto* shard = buf->get_device_buffer(coord);
+                readback_vecs.back().resize(
+                    shard->page_size() * shard->num_pages() /
+                    sizeof(typename std::decay_t<decltype(readback_vecs.back())>::value_type));
+                mesh_device_->mesh_command_queue(1).enqueue_read_shards(
+                    {ShardDataTransfer{coord}.host_data(readback_vecs.back().data())}, buf, true);
+            };
         }
 
         for (auto& vec : readback_vecs) {
@@ -187,11 +195,17 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
             for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
                 for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
                     std::vector<bfloat16> dst_vec = {};
-                    ReadShard(
-                        mesh_device_->mesh_command_queue(1),
-                        dst_vec,
-                        output_bufs[(col_idx * worker_grid_size.y) + row_idx],
-                        device_coord);
+                    {
+                        auto* shard =
+                            output_bufs[(col_idx * worker_grid_size.y) + row_idx]->get_device_buffer(device_coord);
+                        dst_vec.resize(
+                            shard->page_size() * shard->num_pages() /
+                            sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+                        mesh_device_->mesh_command_queue(1).enqueue_read_shards(
+                            {ShardDataTransfer{device_coord}.host_data(dst_vec.data())},
+                            output_bufs[(col_idx * worker_grid_size.y) + row_idx],
+                            true);
+                    };
                     if (device_coord[0] <= (num_rows_in_workload - 1)) {
                         for (auto val : dst_vec) {
                             EXPECT_EQ(static_cast<float>(val), (2 * iter + 5));
@@ -238,7 +252,14 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
 
         for (const auto& coord : devices_0) {
             readback_vecs.push_back({});
-            ReadShard(mesh_device_->mesh_command_queue(0), readback_vecs.back(), buf, coord);
+            {
+                auto* shard = buf->get_device_buffer(coord);
+                readback_vecs.back().resize(
+                    shard->page_size() * shard->num_pages() /
+                    sizeof(typename std::decay_t<decltype(readback_vecs.back())>::value_type));
+                mesh_device_->mesh_command_queue(0).enqueue_read_shards(
+                    {ShardDataTransfer{coord}.host_data(readback_vecs.back().data())}, buf, true);
+            };
         }
 
         mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_1, false);
@@ -247,7 +268,14 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
 
         for (const auto& coord : devices_1) {
             readback_vecs.push_back({});
-            ReadShard(mesh_device_->mesh_command_queue(0), readback_vecs.back(), buf, coord);
+            {
+                auto* shard = buf->get_device_buffer(coord);
+                readback_vecs.back().resize(
+                    shard->page_size() * shard->num_pages() /
+                    sizeof(typename std::decay_t<decltype(readback_vecs.back())>::value_type));
+                mesh_device_->mesh_command_queue(0).enqueue_read_shards(
+                    {ShardDataTransfer{coord}.host_data(readback_vecs.back().data())}, buf, true);
+            };
         }
         for (auto& vec : readback_vecs) {
             EXPECT_EQ(vec, src_vec);

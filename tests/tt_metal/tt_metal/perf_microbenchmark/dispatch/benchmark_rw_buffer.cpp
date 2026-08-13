@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <fmt/base.h>
 #include <fmt/format.h>
 #include <cstdint>
@@ -18,7 +19,6 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/memory_pin.hpp>
@@ -356,7 +356,14 @@ static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& 
 
     for ([[maybe_unused]] auto _ : state) {
         // EnqueueReadMeshBuffer cannot read from a replicated buffer yet, have to use ReadShard
-        ReadShard(mesh_device->mesh_command_queue(), host_buffer, device_buffer, MeshCoordinate(0, 0), true);
+        {
+            auto* shard = device_buffer->get_device_buffer(MeshCoordinate(0, 0));
+            host_buffer.resize(
+                shard->page_size() * shard->num_pages() /
+                sizeof(typename std::decay_t<decltype(host_buffer)>::value_type));
+            mesh_device->mesh_command_queue().enqueue_read_shards(
+                {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(host_buffer.data())}, device_buffer, true);
+        };
     }
 
     state.SetBytesProcessed(transfer_size * state.iterations());

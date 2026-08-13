@@ -17,7 +17,6 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -108,7 +107,8 @@ void RunTest(
         expected_output_read += fmt::format("Read tile {}:{}\n", i, golden_output);
     }
 
-    distributed::WriteShard(cq, src_dram_buffer, u32_vec, zero_coord, true);
+    cq.enqueue_write_shards(
+        src_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(u32_vec.data())}, true);
     fixture->RunProgram(mesh_device, workload);
 
     auto filename = tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir() +

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
+#include <type_traits>
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
@@ -25,7 +26,6 @@
 #include "llk_device_fixture.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
@@ -467,14 +467,23 @@ void run_single_core_broadcast(
     auto tilized_input0 = ::unit_tests::compute::gold_standard_tilize(packed_input0, config);
     auto tilized_input1 = ::unit_tests::compute::gold_standard_tilize(packed_input1, config);
 
-    distributed::WriteShard(cq, src_a_dram_buffer, tilized_input0, zero_coord);
-    distributed::WriteShard(cq, src_b_dram_buffer, tilized_input1, zero_coord);
+    cq.enqueue_write_shards(
+        src_a_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(tilized_input0.data())}, false);
+    cq.enqueue_write_shards(
+        src_b_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(tilized_input1.data())}, false);
 
     distributed::EnqueueMeshWorkload(cq, workload, is_quasar);
     distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
-    distributed::ReadShard(cq, dest_buffer_data, dst_dram_buffer, zero_coord);
+    {
+        auto* shard = dst_dram_buffer->get_device_buffer(zero_coord);
+        dest_buffer_data.resize(
+            shard->page_size() * shard->num_pages() /
+            sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
+        cq.enqueue_read_shards(
+            {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, dst_dram_buffer, true);
+    };
     auto dest_buffer_data_untilized = ::unit_tests::compute::gold_standard_untilize(dest_buffer_data, config);
 
     bool result = is_close_packed_vectors<bfloat16, uint32_t>(

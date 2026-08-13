@@ -5,7 +5,6 @@
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
-#include "tt_metal/distributed/mesh_io.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
@@ -435,7 +434,8 @@ void write_socket_configs(
                     config_data[receiver_enc_offset + 3] = recv_virtual_core.x;  // downstream_noc_x
                 }
             }
-            distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
+            mesh_device->mesh_command_queue(0).enqueue_write_shards(
+                config_buffer, {distributed::ShardDataTransfer{device_coord}.host_data(config_data.data())}, true);
         }
     } else {
         std::vector<receiver_socket_md> config_data(
@@ -480,7 +480,8 @@ void write_socket_configs(
                 md.d2d.upstream_bytes_acked_addr = peer_config_buf_addr + sender_size.md_size_bytes +
                                                    sender_size.ack_size_bytes * receiver_ids_per_sender.at(connection);
             }
-            distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
+            mesh_device->mesh_command_queue(0).enqueue_write_shards(
+                config_buffer, {distributed::ShardDataTransfer{device_coord}.host_data(config_data.data())}, true);
         }
     }
 }

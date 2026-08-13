@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <type_traits>
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <sys/types.h>
@@ -21,7 +22,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
@@ -225,7 +225,8 @@ void run_single_core_copy_block_matmul_partials(
     auto& program_run = workload.get_programs().at(device_range);
 
     std::vector<uint32_t> src_vec = generate_copy_block_stimulus(dram_buffer_size, test_config);
-    distributed::WriteShard(cq, src_dram_buffer, src_vec, zero_coord);
+    cq.enqueue_write_shards(
+        src_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(src_vec.data())}, false);
 
     experimental::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -257,7 +258,13 @@ void run_single_core_copy_block_matmul_partials(
     distributed::Finish(cq);
 
     std::vector<uint32_t> result_vec;
-    distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord);
+    {
+        auto* shard = dst_dram_buffer->get_device_buffer(zero_coord);
+        result_vec.resize(
+            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+        cq.enqueue_read_shards(
+            {distributed::ShardDataTransfer{zero_coord}.host_data(result_vec.data())}, dst_dram_buffer, true);
+    };
 
     EXPECT_EQ(src_vec.size(), result_vec.size());
     EXPECT_EQ(src_vec, result_vec);

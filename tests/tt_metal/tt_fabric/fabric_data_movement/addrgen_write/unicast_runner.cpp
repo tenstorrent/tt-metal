@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <type_traits>
 #include <fmt/format.h>
 #include <algorithm>
 #include <filesystem>
@@ -21,7 +22,6 @@
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <distributed/mesh_device_view_impl.hpp>
@@ -163,8 +163,14 @@ void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p)
     // Mesh CQ (needed for shard I/O and later trace)
     auto& mcq = mesh->mesh_command_queue();
     // Initialize shards on specific src/dst devices (pass CQ, use vectors)
-    Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
-    Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
+    mcq.enqueue_write_shards(
+        src_buf,
+        {Dist::ShardDataTransfer{src_coord}.host_data(tx.data())},
+        /*blocking=*/true);
+    mcq.enqueue_write_shards(
+        dst_buf,
+        {Dist::ShardDataTransfer{dst_coord}.host_data(zeros.data())},
+        /*blocking=*/true);
 
     // ---------------------------- PROGRAM FACTORY ----------------------------
     /*
@@ -352,7 +358,11 @@ Notes:
 
     // Read back (single shard) and verify
     std::vector<uint32_t> rx(n_words, 0u);
-    Dist::ReadShard(mcq, rx, dst_buf, dst_coord, /*blocking=*/true);
+    {
+        auto* shard = dst_buf->get_device_buffer(dst_coord);
+        rx.resize(shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(rx)>::value_type));
+        mcq.enqueue_read_shards({Dist::ShardDataTransfer{dst_coord}.host_data(rx.data())}, dst_buf, /*blocking=*/true);
+    };
     verify_payload_words(rx, tx);
 }
 

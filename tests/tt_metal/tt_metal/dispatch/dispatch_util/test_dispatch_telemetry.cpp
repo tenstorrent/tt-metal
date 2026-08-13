@@ -36,8 +36,6 @@
 #include "impl/dispatch/dispatch_query_manager.hpp"
 #include "distributed/mesh_trace.hpp"
 #include "llrt/core_descriptor.hpp"
-#include <distributed/mesh_io.hpp>
-
 namespace tt::tt_metal {
 namespace {
 
@@ -779,7 +777,7 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchCoreProgramCountForTraceReplay) {
     num_programs++;
 
     constexpr uint32_t num_traced_programs = 16;
-    auto trace_id = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+    auto trace_id = mesh_device.get()->begin_mesh_trace(cq.id());
     for (uint32_t i = 0; i < num_traced_programs; ++i) {
         distributed::EnqueueMeshWorkload(cq, workload, false);
         num_programs++;

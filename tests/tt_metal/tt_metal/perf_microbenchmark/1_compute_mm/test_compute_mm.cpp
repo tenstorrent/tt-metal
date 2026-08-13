@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
+#include <type_traits>
 #include <chrono>
 #include <cerrno>
 #include <fmt/base.h>
@@ -20,7 +21,6 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <algorithm>
 #include <array>
@@ -1487,7 +1487,13 @@ bool validation_single_core(
     bool pass = true;
 
     std::vector<uint32_t> result;
-    tt_metal::distributed::ReadShard(device->mesh_command_queue(), result, out_buffer, {0, 0}, true);
+    {
+        auto* shard = out_buffer->get_device_buffer({0, 0});
+        result.resize(
+            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result)>::value_type));
+        device->mesh_command_queue().enqueue_read_shards(
+            {tt_metal::distributed::ShardDataTransfer{{0, 0}}.host_data(result.data())}, out_buffer, true);
+    };
 
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
     auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
@@ -1536,7 +1542,13 @@ bool validation_single_core_fp8(
     bool pass = true;
 
     std::vector<uint32_t> result;
-    tt_metal::distributed::ReadShard(device->mesh_command_queue(), result, out_buffer, {0, 0}, true);
+    {
+        auto* shard = out_buffer->get_device_buffer({0, 0});
+        result.resize(
+            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result)>::value_type));
+        device->mesh_command_queue().enqueue_read_shards(
+            {tt_metal::distributed::ShardDataTransfer{{0, 0}}.host_data(result.data())}, out_buffer, true);
+    };
 
     auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
     auto result_untilized = untilize_swizzled(result_bfp8, Mt * 32, Nt * 32);

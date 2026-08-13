@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstddef>
@@ -37,8 +38,6 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
-
 namespace tt::tt_metal {
 
 using std::map;
@@ -247,12 +246,20 @@ bool run_sfpu_all_same_buffer(distributed::MeshCommandQueue& cq, const SfpuConfi
 
     mesh_workload.add_program(device_range, std::move(program));
 
-    distributed::WriteShard(cq, input_dram_buffer, packed_input, local_coord);
+    cq.enqueue_write_shards(
+        input_dram_buffer, {distributed::ShardDataTransfer{local_coord}.host_data(packed_input.data())}, false);
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     distributed::Finish(cq);
 
     std::vector<uint32_t> dest_buffer_data;
-    distributed::ReadShard(cq, dest_buffer_data, output_dram_buffer, local_coord);
+    {
+        auto* shard = output_dram_buffer->get_device_buffer(local_coord);
+        dest_buffer_data.resize(
+            shard->page_size() * shard->num_pages() /
+            sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
+        cq.enqueue_read_shards(
+            {distributed::ShardDataTransfer{local_coord}.host_data(dest_buffer_data.data())}, output_dram_buffer, true);
+    };
 
     return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
 }

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <fmt/base.h>
 //////////////////////////////////////////////////////////////////////////////////////////
 // Tests data movement between N cores with proper use of semaphores for sync
@@ -38,8 +39,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
-
 namespace tt::tt_metal {
 
 using std::map;
@@ -254,7 +253,15 @@ void create_and_run_row_pipeline(
 
     log_info(LogTest, "Reading results from device...");
     std::vector<uint32_t> result_vec;
-    distributed::ReadShard(cq, result_vec, dst_buffer, distributed::MeshCoordinate(0, 0));
+    {
+        auto* shard = dst_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+        result_vec.resize(
+            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+        cq.enqueue_read_shards(
+            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
+            dst_buffer,
+            true);
+    };
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown

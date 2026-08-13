@@ -6,6 +6,7 @@
 // These tests require a real device (slow dispatch).
 
 #include <cstdlib>
+#include <type_traits>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -13,7 +14,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
@@ -246,11 +246,16 @@ TEST_F(PerCoreAllocationTest, PerCoreSocketConfigMetadataUsesPerCoreAddress) {
 
     // The receiver's on-device config must point read_ptr/fifo_addr at the receiver core's per-core address.
     std::vector<receiver_socket_md> recv_config_readback;
-    distributed::ReadShard(
-        md->mesh_command_queue(),
-        recv_config_readback,
-        recv_socket.get_config_buffer(),
-        distributed::MeshCoordinate(0, 0));
+    {
+        auto* shard = recv_socket.get_config_buffer()->get_device_buffer(distributed::MeshCoordinate(0, 0));
+        recv_config_readback.resize(
+            shard->page_size() * shard->num_pages() /
+            sizeof(typename std::decay_t<decltype(recv_config_readback)>::value_type));
+        md->mesh_command_queue().enqueue_read_shards(
+            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(recv_config_readback.data())},
+            recv_socket.get_config_buffer(),
+            true);
+    };
     ASSERT_EQ(recv_config_readback.size(), 1u);
     EXPECT_EQ(recv_config_readback[0].fifo_addr, pc_addr);
     EXPECT_EQ(recv_config_readback[0].read_ptr, pc_addr);
@@ -258,11 +263,16 @@ TEST_F(PerCoreAllocationTest, PerCoreSocketConfigMetadataUsesPerCoreAddress) {
 
     // The sender's downstream_fifo_addr must match the same per-core address.
     std::vector<uint8_t> sender_config_bytes;
-    distributed::ReadShard(
-        md->mesh_command_queue(),
-        sender_config_bytes,
-        send_socket.get_config_buffer(),
-        distributed::MeshCoordinate(0, 0));
+    {
+        auto* shard = send_socket.get_config_buffer()->get_device_buffer(distributed::MeshCoordinate(0, 0));
+        sender_config_bytes.resize(
+            shard->page_size() * shard->num_pages() /
+            sizeof(typename std::decay_t<decltype(sender_config_bytes)>::value_type));
+        md->mesh_command_queue().enqueue_read_shards(
+            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(sender_config_bytes.data())},
+            send_socket.get_config_buffer(),
+            true);
+    };
     ASSERT_GE(sender_config_bytes.size(), sizeof(sender_socket_md));
     sender_socket_md sender_md{};
     std::memcpy(&sender_md, sender_config_bytes.data(), sizeof(sender_socket_md));

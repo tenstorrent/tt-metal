@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <array>
 #include <cstddef>
 #include <iomanip>
@@ -443,14 +442,22 @@ TEST_P(DeviceLocalMeshBufferShardingTest, ShardingTest) {
 
     for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
         for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
-            WriteShard(mesh_device_->mesh_command_queue(), buf, src_vec, MeshCoordinate(logical_y, logical_x));
+            mesh_device_->mesh_command_queue().enqueue_write_shards(
+                buf, {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(src_vec.data())}, false);
         }
     }
 
     for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
         for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
             std::vector<uint32_t> dst_vec = {};
-            ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, MeshCoordinate(logical_y, logical_x));
+            {
+                auto* shard = buf->get_device_buffer(MeshCoordinate(logical_y, logical_x));
+                dst_vec.resize(
+                    shard->page_size() * shard->num_pages() /
+                    sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+                mesh_device_->mesh_command_queue().enqueue_read_shards(
+                    {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(dst_vec.data())}, buf, true);
+            };
             EXPECT_EQ(dst_vec, src_vec);
         }
     }
@@ -563,7 +570,10 @@ TEST_F(MeshBufferTestSuite, InterleavedShardsReadWrite) {
             std::iota(src_vec.begin(), src_vec.end(), i);
             for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
                 for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
-                    WriteShard(mesh_device_->mesh_command_queue(), buf, src_vec, MeshCoordinate(logical_y, logical_x));
+                    mesh_device_->mesh_command_queue().enqueue_write_shards(
+                        buf,
+                        {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(src_vec.data())},
+                        false);
                 }
             }
 
@@ -573,7 +583,16 @@ TEST_F(MeshBufferTestSuite, InterleavedShardsReadWrite) {
                         continue;
                     }
                     std::vector<uint32_t> dst_vec = {};
-                    ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, MeshCoordinate(logical_y, logical_x));
+                    {
+                        auto* shard = buf->get_device_buffer(MeshCoordinate(logical_y, logical_x));
+                        dst_vec.resize(
+                            shard->page_size() * shard->num_pages() /
+                            sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+                        mesh_device_->mesh_command_queue().enqueue_read_shards(
+                            {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(dst_vec.data())},
+                            buf,
+                            true);
+                    };
                     EXPECT_EQ(dst_vec, src_vec);
                 }
             }
@@ -1482,7 +1501,13 @@ TEST_F(MeshBufferTestSuite, EnqueueProgramAfterPinnedMemoryWriteRerunsCorrectly)
 
     auto read_and_check_output = [&](uint16_t expected_value) {
         std::vector<uint16_t> output;
-        ReadShard(mesh_device_->mesh_command_queue(), output, output_buffer, test_coord);
+        {
+            auto* shard = output_buffer->get_device_buffer(test_coord);
+            output.resize(
+                shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(output)>::value_type));
+            mesh_device_->mesh_command_queue().enqueue_read_shards(
+                {ShardDataTransfer{test_coord}.host_data(output.data())}, output_buffer, true);
+        };
         ASSERT_EQ(output.size(), input.size());
         for (uint16_t value : output) {
             EXPECT_EQ(value, expected_value);
@@ -1593,7 +1618,13 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
 
         // Read back and verify
         std::vector<uint32_t> dst_vec = {};
-        ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, coord);
+        {
+            auto* shard = buf->get_device_buffer(coord);
+            dst_vec.resize(
+                shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+            mesh_device_->mesh_command_queue().enqueue_read_shards(
+                {ShardDataTransfer{coord}.host_data(dst_vec.data())}, buf, true);
+        };
         ASSERT_EQ(dst_vec.size(), src_vector.size());
         EXPECT_EQ(dst_vec, src_vector);
     }
@@ -1671,7 +1702,12 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalWidthShardedBufferWithPinnedM
     EXPECT_TRUE(pinned_shared->lock_may_block());
 
     std::vector<uint32_t> dst;
-    ReadShard(mesh_device_->mesh_command_queue(), dst, buf, coord);
+    {
+        auto* shard = buf->get_device_buffer(coord);
+        dst.resize(shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
+        mesh_device_->mesh_command_queue().enqueue_read_shards(
+            {ShardDataTransfer{coord}.host_data(dst.data())}, buf, true);
+    };
     ASSERT_EQ(dst.size(), expected.size());
     EXPECT_EQ(dst, expected);
 }
@@ -1700,7 +1736,10 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithCoreFilter) 
     constexpr uint32_t k_new = 0x44444444u;
     const uint32_t num_u32 = buf_size / sizeof(uint32_t);
     std::vector<uint32_t> sentinel_vec(num_u32, k_sentinel);
-    WriteShard(mesh_device_->mesh_command_queue(), buf, sentinel_vec, coord, /*blocking=*/true);
+    mesh_device_->mesh_command_queue().enqueue_write_shards(
+        buf,
+        {ShardDataTransfer{coord}.host_data(sentinel_vec.data())},
+        /*blocking=*/true);
 
     std::vector<uint32_t> newest(num_u32, k_new);
     CoreRangeSet filter(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
@@ -1710,7 +1749,13 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithCoreFilter) 
         mesh_device_->mesh_command_queue(), *buf, distributed_host_buffer, /*blocking=*/true, filter);
 
     std::vector<uint32_t> dst_vec;
-    ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, coord);
+    {
+        auto* shard = buf->get_device_buffer(coord);
+        dst_vec.resize(
+            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+        mesh_device_->mesh_command_queue().enqueue_read_shards(
+            {ShardDataTransfer{coord}.host_data(dst_vec.data())}, buf, true);
+    };
     Buffer& shard = *buf->get_device_buffer(coord);
     auto expected =
         expected_shard_host_layout_after_filtered_write(shard, test_config.page_size(), k_sentinel, k_new, filter);
@@ -1753,8 +1798,20 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteWithNullFilterIsEquivalent) {
 
     std::vector<uint32_t> out_a;
     std::vector<uint32_t> out_b;
-    ReadShard(mesh_device_->mesh_command_queue(), out_a, buf_explicit, coord);
-    ReadShard(mesh_device_->mesh_command_queue(), out_b, buf_default, coord);
+    {
+        auto* shard = buf_explicit->get_device_buffer(coord);
+        out_a.resize(
+            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(out_a)>::value_type));
+        mesh_device_->mesh_command_queue().enqueue_read_shards(
+            {ShardDataTransfer{coord}.host_data(out_a.data())}, buf_explicit, true);
+    };
+    {
+        auto* shard = buf_default->get_device_buffer(coord);
+        out_b.resize(
+            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(out_b)>::value_type));
+        mesh_device_->mesh_command_queue().enqueue_read_shards(
+            {ShardDataTransfer{coord}.host_data(out_b.data())}, buf_default, true);
+    };
     EXPECT_EQ(out_a, out_b);
     EXPECT_EQ(out_a, src_vec);
 }

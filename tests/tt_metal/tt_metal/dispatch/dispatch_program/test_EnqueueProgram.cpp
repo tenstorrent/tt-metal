@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <type_traits>
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
@@ -34,7 +35,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <distributed/mesh_io.hpp>
 #include <distributed/mesh_workload_impl.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
@@ -938,11 +938,29 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
             std::vector<uint32_t> dst_data;
             if (i & 1) {
                 distributed::EnqueueWriteMeshBuffer(cq, buffer, src_data_1, false);
-                distributed::ReadShard(cq, dst_data, buffer, distributed::MeshCoordinate{0, 0}, true);
+                {
+                    auto* shard = buffer->get_device_buffer(distributed::MeshCoordinate{0, 0});
+                    dst_data.resize(
+                        shard->page_size() * shard->num_pages() /
+                        sizeof(typename std::decay_t<decltype(dst_data)>::value_type));
+                    cq.enqueue_read_shards(
+                        {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(dst_data.data())},
+                        buffer,
+                        true);
+                };
                 EXPECT_EQ(src_data_1, dst_data);
             } else {
                 distributed::EnqueueWriteMeshBuffer(cq, dram_buffer, src_data_2, false);
-                distributed::ReadShard(cq, dst_data, dram_buffer, distributed::MeshCoordinate{0, 0}, true);
+                {
+                    auto* shard = dram_buffer->get_device_buffer(distributed::MeshCoordinate{0, 0});
+                    dst_data.resize(
+                        shard->page_size() * shard->num_pages() /
+                        sizeof(typename std::decay_t<decltype(dst_data)>::value_type));
+                    cq.enqueue_read_shards(
+                        {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(dst_data.data())},
+                        dram_buffer,
+                        true);
+                };
                 EXPECT_EQ(src_data_2, dst_data);
             }
         }
@@ -958,7 +976,16 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
     std::vector<uint32_t> dst_data;
     for (int iteration = 0; iteration < k_Iterations; ++iteration) {
         for (int i = 0; i < k_LoopPerDev; ++i) {
-            distributed::ReadShard(cq, dst_data, buffer, distributed::MeshCoordinate{0, 0}, true);
+            {
+                auto* shard = buffer->get_device_buffer(distributed::MeshCoordinate{0, 0});
+                dst_data.resize(
+                    shard->page_size() * shard->num_pages() /
+                    sizeof(typename std::decay_t<decltype(dst_data)>::value_type));
+                cq.enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(dst_data.data())},
+                    buffer,
+                    true);
+            };
         }
     }
 

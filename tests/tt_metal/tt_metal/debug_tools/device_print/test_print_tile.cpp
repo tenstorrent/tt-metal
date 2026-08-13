@@ -17,7 +17,6 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -119,7 +118,8 @@ void RunTest(
     std::vector<uint32_t> u32_vec = GenerateInputTile(data_format);
 
     // Send input tile to dram
-    distributed::WriteShard(cq, src_dram_buffer, u32_vec, zero_coord);
+    cq.enqueue_write_shards(
+        src_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(u32_vec.data())}, false);
 
     // Run the program
     fixture->RunProgram(mesh_device, workload);

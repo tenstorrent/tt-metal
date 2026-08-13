@@ -45,8 +45,6 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
-
 using std::vector;
 using namespace tt;
 
@@ -1051,11 +1049,10 @@ int main(int argc, char** argv) {
         auto activations_tile_layout =
             convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(activations_tilized));
         auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-        tt_metal::distributed::WriteShard(
-            device->mesh_command_queue(0),
+        device->mesh_command_queue(0).enqueue_write_shards(
             in0_buffer,
-            activations,
-            tt::tt_metal::distributed::MeshCoordinate(0, 0),
+            {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
+                activations.data())},
             true);
 
         auto identity = create_identity_matrix(Kt * 32, Nt * 32, std::min(Kt, Nt) * 32);
@@ -1063,8 +1060,11 @@ int main(int argc, char** argv) {
         auto weights_tile_layout =
             convert_layout_tile_swizzled_to_tile_nfaces(ttsl::make_const_span(identity_tilized));
         auto weights = pack_bfloat16_vec_into_uint32_vec(weights_tile_layout);
-        tt_metal::distributed::WriteShard(
-            device->mesh_command_queue(0), in1_buffer, weights, tt::tt_metal::distributed::MeshCoordinate(0, 0), true);
+        device->mesh_command_queue(0).enqueue_write_shards(
+            in1_buffer,
+            {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
+                weights.data())},
+            true);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Matmul Parameters Setup
@@ -1135,12 +1135,17 @@ int main(int argc, char** argv) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> result_vec;
-        tt_metal::distributed::ReadShard(
-            device->mesh_command_queue(0),
-            result_vec,
-            out_buffer,
-            tt::tt_metal::distributed::MeshCoordinate(0, 0),
-            true);
+        {
+            auto* shard = out_buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0));
+            result_vec.resize(
+                shard->page_size() * shard->num_pages() /
+                sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+            device->mesh_command_queue(0).enqueue_read_shards(
+                {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
+                    result_vec.data())},
+                out_buffer,
+                true);
+        };
         auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
         auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(ttsl::make_const_span(result_bfp16));
         auto result_untilized = untilize_swizzled(result_flat_layout, Mt * 32, Nt * 32);

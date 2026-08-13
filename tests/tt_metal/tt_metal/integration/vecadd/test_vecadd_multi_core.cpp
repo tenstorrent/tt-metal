@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <type_traits>
 #include <gtest/gtest.h>
 #include <cstddef>
 #include <tt-metalium/bfloat16.hpp>
@@ -24,7 +25,6 @@
 #include <tt-metalium/device.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
@@ -140,8 +140,8 @@ bool vecadd_multi_core(
         SetRuntimeArgs(program, compute, core, {tiles_per_core, i});
     }
 
-    distributed::WriteShard(cq, a, a_data, zero_coord);
-    distributed::WriteShard(cq, b, b_data, zero_coord);
+    cq.enqueue_write_shards(a, {distributed::ShardDataTransfer{zero_coord}.host_data(a_data.data())}, false);
+    cq.enqueue_write_shards(b, {distributed::ShardDataTransfer{zero_coord}.host_data(b_data.data())}, false);
     // Enqueue the program
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -150,7 +150,12 @@ bool vecadd_multi_core(
 
     // Read the output buffer.
     std::vector<bfloat16> c_data;
-    distributed::ReadShard(cq, c_data, c, zero_coord);
+    {
+        auto* shard = c->get_device_buffer(zero_coord);
+        c_data.resize(
+            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(c_data)>::value_type));
+        cq.enqueue_read_shards({distributed::ShardDataTransfer{zero_coord}.host_data(c_data.data())}, c, true);
+    };
 
     size_t data_per_core = tile_size * tiles_per_core;
 

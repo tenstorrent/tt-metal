@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/command_queue_fixture.hpp"
+#include <type_traits>
 
 #include <chrono>
 #include <cstdint>
@@ -15,7 +16,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_gold_impls.hpp"
@@ -150,7 +150,15 @@ void run_eltwise_binary_test(
 
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     std::vector<uint32_t> result_vec;
-    distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0));
+    {
+        auto* shard = dst_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+        result_vec.resize(
+            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+        cq.enqueue_read_shards(
+            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
+            dst_dram_buffer,
+            true);
+    };
 
     // Validation
     EXPECT_EQ(src0_vec, result_vec);

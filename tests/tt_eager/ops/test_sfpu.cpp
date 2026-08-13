@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <cctype>
 #include <cerrno>
 #include <fmt/base.h>
@@ -32,7 +33,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
@@ -195,8 +195,11 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
         std::vector<uint32_t> src_vec = sfpu_op_to_init_func.at(sfpu_name)(
             dram_buffer_size, std::chrono::system_clock::now().time_since_epoch().count());
 
-        tt_metal::distributed::WriteShard(
-            device->mesh_command_queue(0), src_dram_buffer, src_vec, tt::tt_metal::distributed::MeshCoordinate(0, 0));
+        device->mesh_command_queue(0).enqueue_write_shards(
+            src_dram_buffer,
+            {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
+                src_vec.data())},
+            false);
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -220,11 +223,17 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
         tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload, true);
 
         std::vector<uint32_t> result_vec;
-        tt_metal::distributed::ReadShard(
-            device->mesh_command_queue(0),
-            result_vec,
-            dst_dram_buffer,
-            tt::tt_metal::distributed::MeshCoordinate(0, 0));
+        {
+            auto* shard = dst_dram_buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0));
+            result_vec.resize(
+                shard->page_size() * shard->num_pages() /
+                sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+            device->mesh_command_queue(0).enqueue_read_shards(
+                {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
+                    result_vec.data())},
+                dst_dram_buffer,
+                true);
+        };
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////

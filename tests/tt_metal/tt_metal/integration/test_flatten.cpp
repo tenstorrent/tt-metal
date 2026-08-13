@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstdint>
@@ -24,7 +25,6 @@
 #include <tt-metalium/device.hpp>
 #include "mesh_dispatch_fixture.hpp"
 #include <distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
@@ -297,7 +297,14 @@ bool flatten_stress(
         distributed::EnqueueMeshWorkload(cq, workload, false);
         // Blocking read
         std::vector<uint32_t> result_vec;
-        distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord, true);
+        {
+            auto* shard = dst_dram_buffer->get_device_buffer(zero_coord);
+            result_vec.resize(
+                shard->page_size() * shard->num_pages() /
+                sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+            cq.enqueue_read_shards(
+                {distributed::ShardDataTransfer{zero_coord}.host_data(result_vec.data())}, dst_dram_buffer, true);
+        };
 
         // Validation of data
         TT_FATAL(

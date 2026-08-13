@@ -12,8 +12,6 @@
 #include <fstream>
 #include <numeric>
 #include <sstream>
-#include <distributed/mesh_io.hpp>
-
 namespace tt::tt_metal::distributed {
 
 namespace {
@@ -248,7 +246,8 @@ std::pair<double, double> run_d2h_throughput(
     std::vector<uint32_t> src_vec(page_size / sizeof(uint32_t));
     std::vector<uint32_t> dst_vec(page_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
-    WriteShard(mesh_device->mesh_command_queue(), sender_data_buffer, src_vec, sender_core.device_coord, true);
+    mesh_device->mesh_command_queue().enqueue_write_shards(
+        sender_data_buffer, {ShardDataTransfer{sender_core.device_coord}.host_data(src_vec.data())}, true);
     execute_program_on_device(*mesh_device, sender_core.device_coord, std::move(send_program));
 
     for (uint32_t i = 0; i < num_iterations; i++) {

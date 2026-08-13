@@ -7,7 +7,6 @@
 #include "gtest/gtest.h"
 #include "host_api.hpp"
 #include "tt_metal.hpp"
-#include <distributed/mesh_io.hpp>
 namespace tt::tt_metal {
 
 /**
@@ -59,8 +58,10 @@ std::shared_ptr<distributed::MeshBuffer> create_result_buffer(
     };
     auto result_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
     std::vector<DataT> init_data(RESULT_BUFFER_SIZE / sizeof(DataT), 0);
-    distributed::WriteShard(
-        mesh_device->mesh_command_queue(), result_buffer, init_data, distributed::MeshCoordinate(0, 0));
+    mesh_device->mesh_command_queue().enqueue_write_shards(
+        result_buffer,
+        {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(init_data.data())},
+        false);
     return result_buffer;
 }
 

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/reflection.hpp>
+#include <type_traits>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstddef>
@@ -38,8 +39,6 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
-
 namespace tt::tt_metal {
 class IDevice;
 }  // namespace tt::tt_metal
@@ -206,9 +205,12 @@ static BinaryBuffers create_and_populate_binary_buffers(
     buffers.input2 = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     buffers.output = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 
-    distributed::WriteShard(cq, buffers.input0, stimulus.packed_input0, zero_coord, false);
-    distributed::WriteShard(cq, buffers.input1, stimulus.packed_input1, zero_coord, false);
-    distributed::WriteShard(cq, buffers.input2, stimulus.packed_input2, zero_coord, false);
+    cq.enqueue_write_shards(
+        buffers.input0, {distributed::ShardDataTransfer{zero_coord}.host_data(stimulus.packed_input0.data())}, false);
+    cq.enqueue_write_shards(
+        buffers.input1, {distributed::ShardDataTransfer{zero_coord}.host_data(stimulus.packed_input1.data())}, false);
+    cq.enqueue_write_shards(
+        buffers.input2, {distributed::ShardDataTransfer{zero_coord}.host_data(stimulus.packed_input2.data())}, false);
 
     return buffers;
 }
@@ -219,7 +221,14 @@ static bool read_and_validate_binary_result(
     const distributed::MeshCoordinate& zero_coord,
     const BinaryStimulus& stimulus) {
     std::vector<uint32_t> dest_buffer_data;
-    distributed::ReadShard(cq, dest_buffer_data, output_dram_buffer, zero_coord, false);
+    {
+        auto* shard = output_dram_buffer->get_device_buffer(zero_coord);
+        dest_buffer_data.resize(
+            shard->page_size() * shard->num_pages() /
+            sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
+        cq.enqueue_read_shards(
+            {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, output_dram_buffer, false);
+    };
 
     return is_close_packed_vectors<bfloat16, uint32_t>(
         dest_buffer_data, stimulus.packed_golden, [&](const bfloat16& a, const bfloat16& b) {

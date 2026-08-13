@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <type_traits>
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <distributed/mesh_workload_impl.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -592,11 +592,17 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
         for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
             for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
                 std::vector<bfloat16> dst_vec = {};
-                ReadShard(
-                    mesh_device_->mesh_command_queue(),
-                    dst_vec,
-                    output_bufs[(col_idx * worker_grid_size.y) + row_idx],
-                    device_coord);
+                {
+                    auto* shard =
+                        output_bufs[(col_idx * worker_grid_size.y) + row_idx]->get_device_buffer(device_coord);
+                    dst_vec.resize(
+                        shard->page_size() * shard->num_pages() /
+                        sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+                    mesh_device_->mesh_command_queue().enqueue_read_shards(
+                        {ShardDataTransfer{device_coord}.host_data(dst_vec.data())},
+                        output_bufs[(col_idx * worker_grid_size.y) + row_idx],
+                        true);
+                };
                 if (device_coord[0] <= num_rows_in_mesh_workload - 1) {
                     for (auto val : dst_vec) {
                         EXPECT_EQ(static_cast<float>(val), 5);
@@ -704,11 +710,17 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
             for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
                 for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
                     std::vector<bfloat16> dst_vec = {};
-                    ReadShard(
-                        mesh_device_->mesh_command_queue(),
-                        dst_vec,
-                        output_buffers[(col_idx * worker_grid_size.y) + row_idx],
-                        device_coord);
+                    {
+                        auto* shard =
+                            output_buffers[(col_idx * worker_grid_size.y) + row_idx]->get_device_buffer(device_coord);
+                        dst_vec.resize(
+                            shard->page_size() * shard->num_pages() /
+                            sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+                        mesh_device_->mesh_command_queue().enqueue_read_shards(
+                            {ShardDataTransfer{device_coord}.host_data(dst_vec.data())},
+                            output_buffers[(col_idx * worker_grid_size.y) + row_idx],
+                            true);
+                    };
                     for (int i = 0; i < dst_vec.size(); i++) {
                         float ref_val = std::pow(2, (iter % 2) + 1);
                         if (i >= 512) {

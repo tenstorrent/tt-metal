@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include <type_traits>
 #include <cstring>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -18,7 +19,6 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -482,14 +482,21 @@ static bool reader_datacopy_writer(
     auto input_data = generate_inputs(config);
 
     // Write input data to input DRAM buffer
-    distributed::WriteShard(cq, input_dram_buffer, input_data, zero_coord);
+    cq.enqueue_write_shards(
+        input_dram_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(input_data.data())}, false);
 
     // Run the program
     fixture->RunProgram(mesh_device, workload);
 
     // Read output data from output DRAM buffer
     std::vector<uint32_t> output_data;
-    distributed::ReadShard(cq, output_data, output_dram_buffer, zero_coord);
+    {
+        auto* shard = output_dram_buffer->get_device_buffer(zero_coord);
+        output_data.resize(
+            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(output_data)>::value_type));
+        cq.enqueue_read_shards(
+            {distributed::ShardDataTransfer{zero_coord}.host_data(output_data.data())}, output_dram_buffer, true);
+    };
 
     auto golden_output = generate_golden_output(input_data, config.data_format);
     // Check the print log against golden output.

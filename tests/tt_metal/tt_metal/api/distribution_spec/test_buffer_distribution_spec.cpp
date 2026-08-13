@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
+#include <type_traits>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "dispatch/system_memory_manager.hpp"
 #include "allocator/allocator.hpp"
@@ -10,7 +11,6 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
@@ -390,12 +390,16 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
 
     if (cq_read) {
         log_info(tt::LogTest, "Reading with: FDMeshCommandQueue ReadShard");
-        ReadShard(
-            mesh_device_->mesh_command_queue(),
-            dst,
-            mesh_buffer,
-            tt::tt_metal::distributed::MeshCoordinate{0, 0},
-            /*blocking=*/false);
+        {
+            auto* shard = mesh_buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate{0, 0});
+            dst.resize(
+                shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
+            mesh_device_->mesh_command_queue().enqueue_read_shards(
+                {tt::tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate{0, 0}}
+                     .host_data(dst.data())},
+                mesh_buffer,
+                /*blocking=*/false);
+        };
         Finish(mesh_device_->mesh_command_queue());
     } else {
         log_info(tt::LogTest, "Reading with: ReadFromBuffer (equivalent to SDMeshCommandQueue enqueue_read_shards)");

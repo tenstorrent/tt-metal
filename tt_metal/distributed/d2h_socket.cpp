@@ -5,7 +5,6 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
-#include "tt_metal/distributed/mesh_io.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
@@ -222,8 +221,10 @@ void D2HSocket::write_socket_metadata(
     // External-config ctor skips MeshBuffer allocation; use direct L1 write. Standard
     // ctor owns config_buffer_; use fast-dispatch WriteShard like pre-RT-profiler path.
     if (config_buffer_) {
-        distributed::WriteShard(
-            mesh_device->mesh_command_queue(0), config_buffer_, config_data, sender_core_.device_coord, true);
+        mesh_device->mesh_command_queue(0).enqueue_write_shards(
+            config_buffer_,
+            {distributed::ShardDataTransfer{sender_core_.device_coord}.host_data(config_data.data())},
+            true);
     } else {
         IDevice* device = mesh_device->get_device(sender_core_.device_coord);
         tt::tt_metal::detail::WriteToDeviceL1(

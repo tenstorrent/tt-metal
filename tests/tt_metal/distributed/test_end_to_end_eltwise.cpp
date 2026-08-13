@@ -3,9 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <functional>
 
-
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <distributed/mesh_workload_impl.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
@@ -299,7 +297,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
 
     EnqueueMeshWorkload(cq, mesh_workload, true /* blocking */);
 
-    auto trace_id = BeginTraceCapture(mesh_device_.get(), cq.id());
+    auto trace_id = mesh_device_.get()->begin_mesh_trace(cq.id());
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
     mesh_device_->end_mesh_trace(cq.id(), trace_id);
 
@@ -363,7 +361,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
 
     EnqueueMeshWorkload(cq, mesh_workload, true /* blocking */);
 
-    auto trace_id = BeginTraceCapture(mesh_device_.get(), cq.id());
+    auto trace_id = mesh_device_.get()->begin_mesh_trace(cq.id());
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
     mesh_device_->end_mesh_trace(cq.id(), trace_id);
 
@@ -480,7 +478,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), multiply_and_subtract_mesh_workload, true);
 
-    auto trace_id = BeginTraceCapture(mesh_device_.get(), kWorkloadCqId);
+    auto trace_id = mesh_device_.get()->begin_mesh_trace(kWorkloadCqId);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), multiply_and_subtract_mesh_workload, false);
     mesh_device_->end_mesh_trace(kWorkloadCqId, trace_id);

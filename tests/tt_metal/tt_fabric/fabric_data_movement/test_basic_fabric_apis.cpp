@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <type_traits>
 #include <gtest/gtest.h>
 #include <cstdint>
 #include "hostdevcommon/fabric_common.h"
@@ -30,7 +31,6 @@
 #include "utils.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <distributed/mesh_io.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
@@ -74,8 +74,11 @@ std::shared_ptr<tt_metal::distributed::MeshBuffer> PrepareBuffer(
         .size = size,
     };
     auto buffer = tt_metal::distributed::MeshBuffer::create(global_buffer_config, device_local_config, device.get());
-    tt_metal::distributed::WriteShard(
-        device->mesh_command_queue(), buffer, fill_data, tt::tt_metal::distributed::MeshCoordinate({0, 0}), true);
+    device->mesh_command_queue().enqueue_write_shards(
+        buffer,
+        {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate({0, 0})}.host_data(
+            fill_data.data())},
+        true);
     return buffer;
 }
 
@@ -142,11 +145,17 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
             control_plane.get_fabric_node_id_from_physical_chip_id(src_device->get_devices()[0]->id());
 
         std::vector<uint32_t> result_data;
-        tt::tt_metal::distributed::ReadShard(
-            src_device->mesh_command_queue(),
-            result_data,
-            result_buffers[src_idx],
-            tt::tt_metal::distributed::MeshCoordinate({0, 0}));
+        {
+            auto* shard = result_buffers[src_idx]->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate({0, 0}));
+            result_data.resize(
+                shard->page_size() * shard->num_pages() /
+                sizeof(typename std::decay_t<decltype(result_data)>::value_type));
+            src_device->mesh_command_queue().enqueue_read_shards(
+                {tt::tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate({0, 0})}
+                     .host_data(result_data.data())},
+                result_buffers[src_idx],
+                true);
+        };
         for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
             auto dst_fabric_node_id =
                 control_plane.get_fabric_node_id_from_physical_chip_id(devices[dst_idx]->get_devices()[0]->id());

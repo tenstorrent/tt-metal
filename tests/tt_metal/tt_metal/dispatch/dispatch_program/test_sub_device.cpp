@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstddef>
+#include <type_traits>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
@@ -43,8 +44,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
-
 // Access to internal API: ProgramImpl::validate_circular_buffer_region
 #include "tt_metal/impl/program/program_impl.hpp"
 
@@ -164,7 +163,13 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
 
     // Test blocking read buffer doesn't stall
     std::vector<uint32_t> output_1;
-    distributed::ReadShard(device->mesh_command_queue(), output_1, buffer_1, zero_coord, true);
+    {
+        auto* shard = buffer_1->get_device_buffer(zero_coord);
+        output_1.resize(
+            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(output_1)>::value_type));
+        device->mesh_command_queue().enqueue_read_shards(
+            {distributed::ShardDataTransfer{zero_coord}.host_data(output_1.data())}, buffer_1, true);
+    };
     EXPECT_EQ(input_1, output_1);
     auto input_1_it = input_1.begin();
     for (const auto& physical_core : physical_cores_1) {

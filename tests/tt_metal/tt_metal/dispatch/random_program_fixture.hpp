@@ -8,7 +8,6 @@
 #include "env_lib.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <gtest/gtest.h>
 #include <tt-metalium/circular_buffer_constants.h>
@@ -411,8 +410,7 @@ private:
             distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
-        const distributed::MeshTraceId trace_id =
-            distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
+        const distributed::MeshTraceId trace_id = this->device_.get()->begin_mesh_trace(mesh_command_queue.id());
         for (auto& workload : this->workloads) {
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
         }

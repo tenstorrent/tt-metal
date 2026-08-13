@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "multi_device_fixture.hpp"
+#include <type_traits>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -194,18 +194,29 @@ TEST_F(GenericMeshDeviceFixture, PCIeHostReadBandwidthSweep) {
 
         // Seed device buffer
         vector<uint32_t> src(buf_size / sizeof(uint32_t), 0xDEADBEEF);
-        distributed::WriteShard(cq, buffer, src, device_coord, false);
+        cq.enqueue_write_shards(buffer, {distributed::ShardDataTransfer{device_coord}.host_data(src.data())}, false);
         distributed::Finish(cq);
 
         vector<uint32_t> dst;
 
         // Warmup
-        distributed::ReadShard(cq, dst, buffer, device_coord, true);
+        {
+            auto* shard = buffer->get_device_buffer(device_coord);
+            dst.resize(
+                shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
+            cq.enqueue_read_shards({distributed::ShardDataTransfer{device_coord}.host_data(dst.data())}, buffer, true);
+        };
 
         // Timed
         auto start = chrono::high_resolution_clock::now();
         for (uint32_t i = 0; i < num_iterations; i++) {
-            distributed::ReadShard(cq, dst, buffer, device_coord, true);
+            {
+                auto* shard = buffer->get_device_buffer(device_coord);
+                dst.resize(
+                    shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
+                cq.enqueue_read_shards(
+                    {distributed::ShardDataTransfer{device_coord}.host_data(dst.data())}, buffer, true);
+            };
         }
         auto end = chrono::high_resolution_clock::now();
 

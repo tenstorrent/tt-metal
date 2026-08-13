@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <cerrno>
 #include <fmt/base.h>
 #include <cstdint>
@@ -21,7 +22,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
@@ -95,7 +95,10 @@ int main(int argc, char** argv) {
 
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
-                distributed::WriteShard(cq, buffer, src_vec, distributed::MeshCoordinate(0, 0));
+                cq.enqueue_write_shards(
+                    buffer,
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(src_vec.data())},
+                    false);
                 distributed::Finish(cq);
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;
@@ -119,7 +122,17 @@ int main(int argc, char** argv) {
 
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
-                distributed::ReadShard(cq, result_vec, buffer, distributed::MeshCoordinate(0, 0));
+                {
+                    auto* shard = buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+                    result_vec.resize(
+                        shard->page_size() * shard->num_pages() /
+                        sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+                    cq.enqueue_read_shards(
+                        {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(
+                            result_vec.data())},
+                        buffer,
+                        true);
+                };
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;
             }

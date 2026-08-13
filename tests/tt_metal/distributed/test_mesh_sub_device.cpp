@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <type_traits>
 #include <cstdint>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <array>
@@ -154,8 +154,16 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
         for (std::size_t logical_x = 0; logical_x < output_buf->device()->num_cols(); logical_x++) {
             for (std::size_t logical_y = 0; logical_y < output_buf->device()->num_rows(); logical_y++) {
                 std::vector<uint32_t> dst_vec;
-                ReadShard(
-                    mesh_device_->mesh_command_queue(), dst_vec, output_buf, MeshCoordinate(logical_y, logical_x));
+                {
+                    auto* shard = output_buf->get_device_buffer(MeshCoordinate(logical_y, logical_x));
+                    dst_vec.resize(
+                        shard->page_size() * shard->num_pages() /
+                        sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+                    mesh_device_->mesh_command_queue().enqueue_read_shards(
+                        {ShardDataTransfer{MeshCoordinate(logical_y, logical_x)}.host_data(dst_vec.data())},
+                        output_buf,
+                        true);
+                };
                 EXPECT_EQ(dst_vec, src_vec);
             }
         }

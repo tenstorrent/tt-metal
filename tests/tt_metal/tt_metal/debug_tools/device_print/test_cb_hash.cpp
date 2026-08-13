@@ -16,6 +16,7 @@
 //   3. Distinct inputs produce distinct fingerprints (discrimination).
 
 #include <cstdint>
+#include <type_traits>
 #include <fstream>
 #include <regex>
 #include <sstream>
@@ -27,7 +28,6 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -152,7 +152,10 @@ uint32_t run_once(
         s.core,
         {static_cast<uint32_t>(s.output_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
 
-    distributed::WriteShard(cq, s.input_dram, const_cast<std::vector<uint32_t>&>(input), s.zero);
+    cq.enqueue_write_shards(
+        s.input_dram,
+        {distributed::ShardDataTransfer{s.zero}.host_data(const_cast<std::vector<uint32_t>&>(input).data())},
+        false);
     fixture->RunProgram(mesh_device, s.workload);
 
     return extract_hash(fixture->dprint_file_name, LABEL, INPUT_CB, NUM_TILES);
@@ -192,11 +195,19 @@ uint32_t run_once_sfpu(
     SetRuntimeArgs(
         *s.program, writer, s.core, {static_cast<uint32_t>(s.output_dram->address()), 0u, static_cast<uint32_t>(NUM_TILES)});
 
-    distributed::WriteShard(cq, s.input_dram, const_cast<std::vector<uint32_t>&>(input), s.zero);
+    cq.enqueue_write_shards(
+        s.input_dram,
+        {distributed::ShardDataTransfer{s.zero}.host_data(const_cast<std::vector<uint32_t>&>(input).data())},
+        false);
     fixture->RunProgram(mesh_device, s.workload);
 
     std::vector<uint32_t> result(NUM_TILES * 1024, 0u);
-    distributed::ReadShard(cq, result, s.output_dram, s.zero);
+    {
+        auto* shard = s.output_dram->get_device_buffer(s.zero);
+        result.resize(
+            shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result)>::value_type));
+        cq.enqueue_read_shards({distributed::ShardDataTransfer{s.zero}.host_data(result.data())}, s.output_dram, true);
+    };
 
     uint32_t h = 0u;
     for (uint32_t w : result) {

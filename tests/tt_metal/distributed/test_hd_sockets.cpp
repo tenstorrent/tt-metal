@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -150,7 +149,8 @@ void test_d2h_socket(
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::vector<uint32_t> dst_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
-    WriteShard(mesh_device->mesh_command_queue(), sender_data_buffer, src_vec, sender_core.device_coord);
+    mesh_device->mesh_command_queue().enqueue_write_shards(
+        sender_data_buffer, {ShardDataTransfer{sender_core.device_coord}.host_data(src_vec.data())}, false);
 
     auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices = MeshCoordinateRange(sender_core.device_coord);

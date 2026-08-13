@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/command_queue_fixture.hpp"
+#include <type_traits>
 
 #include <chrono>
 #include <cerrno>
@@ -11,7 +12,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <cmath>
 #include <cstring>
 #include <exception>
@@ -72,7 +72,15 @@ bool test_write_interleaved_sticks_and_then_read_interleaved_sticks(
         distributed::EnqueueWriteMeshBuffer(cq, sticks_buffer, src_vec, false);
 
         vector<uint32_t> dst_vec;
-        distributed::ReadShard(cq, dst_vec, sticks_buffer, distributed::MeshCoordinate(0, 0));
+        {
+            auto* shard = sticks_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+            dst_vec.resize(
+                shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+            cq.enqueue_read_shards(
+                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dst_vec.data())},
+                sticks_buffer,
+                true);
+        };
 
         pass &= (src_vec == dst_vec);
     } catch (const std::exception& e) {
@@ -207,7 +215,16 @@ bool interleaved_stick_reader_single_bank_tilized_writer_datacopy_test(
         distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
 
         std::vector<uint32_t> result_vec;
-        distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0));
+        {
+            auto* shard = dst_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+            result_vec.resize(
+                shard->page_size() * shard->num_pages() /
+                sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+            cq.enqueue_read_shards(
+                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
+                dst_dram_buffer,
+                true);
+        };
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
@@ -351,7 +368,16 @@ bool interleaved_tilized_reader_interleaved_stick_writer_datacopy_test(
         distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
 
         std::vector<uint32_t> result_vec;
-        distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0));
+        {
+            auto* shard = dst_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+            result_vec.resize(
+                shard->page_size() * shard->num_pages() /
+                sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+            cq.enqueue_read_shards(
+                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
+                dst_dram_buffer,
+                true);
+        };
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
@@ -488,7 +514,16 @@ bool test_interleaved_l1_datacopy(
     mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
 
-    distributed::ReadShard(cq, readback_buffer, dst, distributed::MeshCoordinate(0, 0));
+    {
+        auto* shard = dst->get_device_buffer(distributed::MeshCoordinate(0, 0));
+        readback_buffer.resize(
+            shard->page_size() * shard->num_pages() /
+            sizeof(typename std::decay_t<decltype(readback_buffer)>::value_type));
+        cq.enqueue_read_shards(
+            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(readback_buffer.data())},
+            dst,
+            true);
+    };
 
     pass = (host_buffer == readback_buffer);
 

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <array>
+#include <type_traits>
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
@@ -23,7 +24,6 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include "tt_align.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -537,13 +537,15 @@ public:
         std::vector<uint32_t> data(total_size / sizeof(uint32_t));
 
         // Start non-blocking read
-        tt::tt_metal::distributed::ReadShard(
-            mesh_device_->mesh_command_queue(),
-            data,
-            mesh_buffer,
-            device_coord,
-            false  // blocking=false
-        );
+        {
+            auto* shard = mesh_buffer->get_device_buffer(device_coord);
+            data.resize(
+                shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(data)>::value_type));
+            mesh_device_->mesh_command_queue().enqueue_read_shards(
+                {tt::tt_metal::distributed::ShardDataTransfer{device_coord}.host_data(data.data())},
+                mesh_buffer,
+                /*blocking=*/false);
+        }
 
         return {mesh_buffer, buffer_page_mapping, std::move(data), size_bytes};
     }
@@ -646,8 +648,10 @@ public:
 
         const auto total_size = size_bytes * cores.size();
         std::vector<uint32_t> zero_buffer(total_size / sizeof(uint32_t), 0);
-        tt::tt_metal::distributed::WriteShard(
-            mesh_device_->mesh_command_queue(), mesh_buffer, zero_buffer, device_coord, true);
+        mesh_device_->mesh_command_queue().enqueue_write_shards(
+            mesh_buffer,
+            {tt::tt_metal::distributed::ShardDataTransfer{device_coord}.host_data(zero_buffer.data())},
+            true);
     }
 
     // Local runtime args function - writes args to local args buffer instead of using SetRuntimeArgs
@@ -663,8 +667,10 @@ public:
         all_args_buffer.reserve(total_size / sizeof(uint32_t));
         all_args_buffer.insert(all_args_buffer.end(), args.begin(), args.end());
 
-        tt::tt_metal::distributed::WriteShard(
-            mesh_device_->mesh_command_queue(), mesh_buffer, all_args_buffer, device_coord, true);
+        mesh_device_->mesh_command_queue().enqueue_write_shards(
+            mesh_buffer,
+            {tt::tt_metal::distributed::ShardDataTransfer{device_coord}.host_data(all_args_buffer.data())},
+            true);
     }
 
     // ======================================================================================

@@ -11,7 +11,6 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "llrt.hpp"
 
@@ -155,7 +154,8 @@ inline bool move_tiles_to_dram(
         }
     }
 
-    distributed::WriteShard(cq, buffer, tiles, distributed::MeshCoordinate(0, 0));
+    cq.enqueue_write_shards(
+        buffer, {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(tiles.data())}, false);
     return pass;
 }
 

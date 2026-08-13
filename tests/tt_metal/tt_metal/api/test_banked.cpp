@@ -3,12 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <fmt/base.h>
 #include <cstdint>
 #include <sys/types.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <map>
@@ -183,16 +183,31 @@ bool reader_cb_writer(
     ////////////////////////////////////////////////////////////////////////////
     auto input_packed =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, cfg.size_bytes / sizeof(uint32_t));
-    distributed::WriteShard(cq, input_buffer, input_packed, zero_coord, false);
+    cq.enqueue_write_shards(
+        input_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(input_packed.data())}, false);
     SetRuntimeArgs(program_, reader_kernel, cfg.logical_core, reader_runtime_args);
     SetRuntimeArgs(program_, writer_kernel, cfg.logical_core, writer_runtime_args);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     std::vector<uint32_t> reread_input_packed;
-    distributed::ReadShard(cq, reread_input_packed, input_buffer, zero_coord, false);
+    {
+        auto* shard = input_buffer->get_device_buffer(zero_coord);
+        reread_input_packed.resize(
+            shard->page_size() * shard->num_pages() /
+            sizeof(typename std::decay_t<decltype(reread_input_packed)>::value_type));
+        cq.enqueue_read_shards(
+            {distributed::ShardDataTransfer{zero_coord}.host_data(reread_input_packed.data())}, input_buffer, false);
+    };
 
     std::vector<uint32_t> output_packed;
-    distributed::ReadShard(cq, output_packed, output_buffer, zero_coord, false);
+    {
+        auto* shard = output_buffer->get_device_buffer(zero_coord);
+        output_packed.resize(
+            shard->page_size() * shard->num_pages() /
+            sizeof(typename std::decay_t<decltype(output_packed)>::value_type));
+        cq.enqueue_read_shards(
+            {distributed::ShardDataTransfer{zero_coord}.host_data(output_packed.data())}, output_buffer, false);
+    };
 
     pass &= (output_packed == input_packed);
 
@@ -288,7 +303,8 @@ bool reader_datacopy_writer(const std::shared_ptr<distributed::MeshDevice>& mesh
     //                      Compile and Execute Appli   cation
     ////////////////////////////////////////////////////////////////////////////
 
-    distributed::WriteShard(cq, input_buffer, input_packed, zero_coord, false);
+    cq.enqueue_write_shards(
+        input_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(input_packed.data())}, false);
 
     SetRuntimeArgs(
         program_,
@@ -308,7 +324,14 @@ bool reader_datacopy_writer(const std::shared_ptr<distributed::MeshDevice>& mesh
         });
     distributed::EnqueueMeshWorkload(cq, workload, false);
     std::vector<uint32_t> dest_buffer_data;
-    distributed::ReadShard(cq, dest_buffer_data, output_buffer, zero_coord, false);
+    {
+        auto* shard = output_buffer->get_device_buffer(zero_coord);
+        dest_buffer_data.resize(
+            shard->page_size() * shard->num_pages() /
+            sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
+        cq.enqueue_read_shards(
+            {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, output_buffer, false);
+    };
     pass &= input_packed == dest_buffer_data;
 
     return pass;

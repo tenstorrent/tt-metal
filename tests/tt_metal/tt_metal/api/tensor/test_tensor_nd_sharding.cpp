@@ -14,6 +14,7 @@
 // MeshTensor/HostTensor API on a single-device mesh via MeshDevice1x1Fixture.
 
 #include <gtest/gtest.h>
+#include <type_traits>
 #include <gmock/gmock.h>
 
 #include <functional>
@@ -47,8 +48,6 @@
 #include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
-
 #include "impl/tensor/mesh_tensor_impl.hpp"
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
@@ -1277,12 +1276,16 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
     }
     EXPECT_EQ(tensor_data, partial_readback_data);
 
-    distributed::ReadShard(
-        mesh_device_->mesh_command_queue(),
-        full_readback_data,
-        shared_mesh_buffer,
-        distributed::MeshCoordinate(0, 0),
-        true);
+    {
+        auto* shard = shared_mesh_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+        full_readback_data.resize(
+            shard->page_size() * shard->num_pages() /
+            sizeof(typename std::decay_t<decltype(full_readback_data)>::value_type));
+        mesh_device_->mesh_command_queue().enqueue_read_shards(
+            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(full_readback_data.data())},
+            shared_mesh_buffer,
+            true);
+    };
     EXPECT_EQ(tensor_data, full_readback_data);
 }
 

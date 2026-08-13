@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <type_traits>
 #include <cstdint>
 // #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -40,7 +41,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -405,8 +405,10 @@ bool RunWriteBWTest(
     auto remote_input_buffer =
         distributed::MeshBuffer::create(buffer_config, local_input_config, receiver_mesh_device.get());
 
-    distributed::WriteShard(sender_cq, local_input_buffer, inputs, zero_coord);
-    distributed::WriteShard(receiver_cq, remote_input_buffer, inputs, zero_coord);
+    sender_cq.enqueue_write_shards(
+        local_input_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(inputs.data())}, false);
+    receiver_cq.enqueue_write_shards(
+        remote_input_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(inputs.data())}, false);
 
     std::vector<uint32_t> local_input_buffer_addresses(num_local_sender_channels, local_input_buffer->address());
     std::vector<uint32_t> remote_input_buffer_addresses(num_remote_sender_channels, remote_input_buffer->address());
@@ -438,10 +440,12 @@ bool RunWriteBWTest(
     }
 
     for (const auto& buffer_id : local_output_buffers) {
-        distributed::WriteShard(sender_cq, buffer_id, all_zeros, zero_coord);
+        sender_cq.enqueue_write_shards(
+            buffer_id, {distributed::ShardDataTransfer{zero_coord}.host_data(all_zeros.data())}, false);
     }
     for (const auto& buffer_id : remote_output_buffers) {
-        distributed::WriteShard(receiver_cq, buffer_id, all_zeros, zero_coord);
+        receiver_cq.enqueue_write_shards(
+            buffer_id, {distributed::ShardDataTransfer{zero_coord}.host_data(all_zeros.data())}, false);
     }
 
     uint32_t erisc_handshake_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
@@ -643,11 +647,16 @@ bool RunWriteBWTest(
         std::vector<uint32_t> readback_data_vec(all_zeros.size());  // init to 0 data for easier debug
         std::fill(readback_data_vec.begin(), readback_data_vec.end(), 0);
 
-        distributed::ReadShard(
-            output_buffer->device()->mesh_command_queue(),
-            readback_data_vec,
-            output_buffer,
-            distributed::MeshCoordinate(0, 0));
+        {
+            auto* shard = output_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
+            readback_data_vec.resize(
+                shard->page_size() * shard->num_pages() /
+                sizeof(typename std::decay_t<decltype(readback_data_vec)>::value_type));
+            output_buffer->device()->mesh_command_queue().enqueue_read_shards(
+                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(readback_data_vec.data())},
+                output_buffer,
+                true);
+        };
         log_info(tt::LogTest, "Checking outputs");
         if (readback_data_vec.size() != inputs.size()) {
             log_error(tt::LogTest, "Output size mismatch: expected {} got {}", inputs.size(), readback_data_vec.size());

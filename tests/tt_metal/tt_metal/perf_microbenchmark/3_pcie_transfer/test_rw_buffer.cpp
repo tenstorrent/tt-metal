@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <cerrno>
 #include <fmt/base.h>
 #include <cstdint>
@@ -28,7 +29,6 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
 using namespace tt;
@@ -163,12 +163,17 @@ int main(int argc, char** argv) {
 
             if (!skip_read) {
                 auto t_begin = std::chrono::steady_clock::now();
-                tt_metal::distributed::ReadShard(
-                    device->mesh_command_queue(),
-                    result_vec,
-                    buffer,
-                    tt_metal::distributed::MeshCoordinate(0, 0),
-                    true);
+                {
+                    auto* shard = buffer->get_device_buffer(tt_metal::distributed::MeshCoordinate(0, 0));
+                    result_vec.resize(
+                        shard->page_size() * shard->num_pages() /
+                        sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+                    device->mesh_command_queue().enqueue_read_shards(
+                        {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}
+                             .host_data(result_vec.data())},
+                        buffer,
+                        true);
+                };
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
                 float read_bw = transfer_size / (elapsed_us * 1000.0);

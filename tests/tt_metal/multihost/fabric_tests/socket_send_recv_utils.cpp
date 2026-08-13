@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <cstdint>
 #include <cmath>
 #include <cstddef>
@@ -10,7 +11,6 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include <algorithm>
@@ -158,11 +158,10 @@ bool test_socket_send_recv(
                 }
                 mesh_core_coords.insert(connection.sender_core);
                 auto sender_core = connection.sender_core.core_coord;
-                WriteShard(
-                    mesh_device_->mesh_command_queue(),
+                mesh_device_->mesh_command_queue().enqueue_write_shards(
                     sender_data_buffer,
-                    src_vec,
-                    connection.sender_core.device_coord);
+                    {ShardDataTransfer{connection.sender_core.device_coord}.host_data(src_vec.data())},
+                    false);
 
                 auto sender_fabric_node_id = mesh_device_->get_fabric_node_id(connection.sender_core.device_coord);
                 auto recv_fabric_node_id =
@@ -256,11 +255,17 @@ bool test_socket_send_recv(
                 std::vector<uint32_t> recv_data_readback;
                 if (mesh_device_->is_local(connection.receiver_core.device_coord)) {
                     // Only read back data on devices owned by this host
-                    ReadShard(
-                        mesh_device_->mesh_command_queue(),
-                        recv_data_readback,
-                        recv_data_buffer,
-                        connection.receiver_core.device_coord);
+                    {
+                        auto* shard = recv_data_buffer->get_device_buffer(connection.receiver_core.device_coord);
+                        recv_data_readback.resize(
+                            shard->page_size() * shard->num_pages() /
+                            sizeof(typename std::decay_t<decltype(recv_data_readback)>::value_type));
+                        mesh_device_->mesh_command_queue().enqueue_read_shards(
+                            {ShardDataTransfer{connection.receiver_core.device_coord}.host_data(
+                                recv_data_readback.data())},
+                            recv_data_buffer,
+                            true);
+                    };
                     uint32_t idx = core_to_core_id.at(connection.receiver_core.core_coord);
                     std::vector<uint32_t> recv_data_readback_per_core(
                         recv_data_readback.begin() + idx * data_size / sizeof(uint32_t),

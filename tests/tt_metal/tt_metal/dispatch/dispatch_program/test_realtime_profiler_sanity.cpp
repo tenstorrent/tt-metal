@@ -34,7 +34,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -393,7 +392,7 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
         prog.set_runtime_id(static_cast<uint64_t>(kTraceRuntimeId));
     }
 
-    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_device.get(), mesh_cq.id());
+    distributed::MeshTraceId trace_id = mesh_device.get()->begin_mesh_trace(mesh_cq.id());
     distributed::EnqueueMeshWorkload(mesh_cq, workload, false);
     mesh_device->end_mesh_trace(mesh_cq.id(), trace_id);
     mesh_device->replay_mesh_trace(mesh_cq.id(), trace_id, true);

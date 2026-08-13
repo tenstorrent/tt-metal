@@ -3,13 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <cerrno>
 #include <fmt/base.h>
 #include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <algorithm>
 #include <cstring>
@@ -90,11 +90,10 @@ int main(int argc, char** argv) {
 
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
-                tt_metal::distributed::WriteShard(
-                    device->mesh_command_queue(0),
+                device->mesh_command_queue(0).enqueue_write_shards(
                     buffer,
-                    src_vec,
-                    tt::tt_metal::distributed::MeshCoordinate(0, 0),
+                    {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}
+                         .host_data(src_vec.data())},
                     true);
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;
@@ -118,12 +117,17 @@ int main(int argc, char** argv) {
 
             for (int i = 0; i < iter; i++) {
                 begin = std::chrono::steady_clock::now();
-                tt_metal::distributed::ReadShard(
-                    device->mesh_command_queue(0),
-                    result_vec,
-                    buffer,
-                    tt::tt_metal::distributed::MeshCoordinate(0, 0),
-                    true);
+                {
+                    auto* shard = buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0));
+                    result_vec.resize(
+                        shard->page_size() * shard->num_pages() /
+                        sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+                    device->mesh_command_queue(0).enqueue_read_shards(
+                        {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}
+                             .host_data(result_vec.data())},
+                        buffer,
+                        true);
+                };
                 end = std::chrono::steady_clock::now();
                 elapsed_sum += end - begin;
             }

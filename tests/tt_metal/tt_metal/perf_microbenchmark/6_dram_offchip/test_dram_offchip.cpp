@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <chrono>
+#include <type_traits>
 #include <cerrno>
 #include <fmt/base.h>
 #include <cstdlib>
@@ -44,7 +45,6 @@
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
 using namespace tt;
@@ -504,8 +504,17 @@ bool validation(
     } else {
         std::vector<uint32_t> result_vec;
         log_info(LogTest, "ReadShard API may take a long time if the input size is large");
-        tt_metal::distributed::ReadShard(
-            device->mesh_command_queue(), result_vec, input_buffer, tt_metal::distributed::MeshCoordinate(0, 0), true);
+        {
+            auto* shard = input_buffer->get_device_buffer(tt_metal::distributed::MeshCoordinate(0, 0));
+            result_vec.resize(
+                shard->page_size() * shard->num_pages() /
+                sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+            device->mesh_command_queue().enqueue_read_shards(
+                {tt_metal::distributed::ShardDataTransfer{tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
+                    result_vec.data())},
+                input_buffer,
+                true);
+        };
         log_info(LogTest, "ReadShard API done");
 
         for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {

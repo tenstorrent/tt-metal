@@ -23,7 +23,6 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -320,7 +319,8 @@ void RunTestOnCore(
     // Write to the input buffer
     std::vector<uint32_t> input_vec =
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    distributed::WriteShard(cq, input_buffer, input_vec, zero_coord);
+    cq.enqueue_write_shards(
+        input_buffer, {distributed::ShardDataTransfer{zero_coord}.host_data(input_vec.data())}, false);
 
     // Write runtime args - update to a core that doesn't exist or an improperly aligned address,
     // depending on the flags passed in.

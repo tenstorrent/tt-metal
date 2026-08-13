@@ -29,7 +29,6 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
@@ -490,7 +489,7 @@ MeshTraceId setup_trace_if_enabled(
     MeshTraceId tid;
     if (info.use_trace) {
         const std::size_t cq_id = 0;
-        tid = BeginTraceCapture(mesh_device.get(), cq_id);
+        tid = mesh_device.get()->begin_mesh_trace(cq_id);
         executor.execute_programs();
         mesh_device->end_mesh_trace(cq_id, tid);
         Finish(mesh_device->mesh_command_queue(cq_id));
