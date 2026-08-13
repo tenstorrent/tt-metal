@@ -6,8 +6,6 @@
 
 #include <nanobind/nanobind.h>
 
-#include "ttnn/operations/data_movement/common/codegen_types.hpp"
-
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded_nanobind.hpp"
 #include "ttnn/operations/data_movement/sharded/reshard/reshard_nanobind.hpp"
 #include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved_nanobind.hpp"
@@ -55,11 +53,6 @@
 namespace ttnn::operations::data_movement {
 
 void py_module(nb::module_& mod) {
-    nb::enum_<ImplementationSelector>(mod, "ImplementationSelector")
-        .value("Auto", ImplementationSelector::Auto)
-        .value("Native", ImplementationSelector::Native)
-        .value("Codegen", ImplementationSelector::Codegen);
-
     bind_fill_pad(mod);
     bind_fill_rm(mod);
     bind_fold_operation(mod);

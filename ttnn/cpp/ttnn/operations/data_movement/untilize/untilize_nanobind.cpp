@@ -9,13 +9,11 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn/operations/data_movement/common/codegen_types.hpp"
 #include "untilize.hpp"
+#include "untilize_force.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::data_movement::detail {
-
-using ImplementationSelector = ttnn::operations::data_movement::ImplementationSelector;
 
 void bind_untilize(nb::module_& mod) {
     const auto* doc =
@@ -34,7 +32,6 @@ void bind_untilize(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
                 sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
-                implementation (ImplementationSelector, optional): Auto (default), Native, or Codegen.
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
@@ -48,7 +45,36 @@ void bind_untilize(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("use_multicore") = true,
+        nb::arg("sub_core_grids") = nb::none());
+
+    // Bound with a plain def rather than ttnn::bind_function: the latter tags the callable for
+    // auto_register_ttnn_cpp_operations, which would republish these as ttnn.* operations. They are
+    // meant to stay reachable only via this private module. See untilize_force.hpp.
+    mod.def(
+        "untilize_force_native",
+        &ttnn::operations::data_movement::untilize_force_native,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("use_multicore") = true,
         nb::arg("sub_core_grids") = nb::none(),
-        nb::arg("implementation") = ImplementationSelector::Auto);
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Verification only: runs the native untilize prim unconditionally. Not part of the ttnn API;
+            use ttnn.untilize, which selects a prim on its own.
+        )doc");
+
+    mod.def(
+        "untilize_force_codegen",
+        &ttnn::operations::data_movement::untilize_force_codegen,
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Verification only: runs the codegen untilize prim unconditionally, raising for a case outside
+            its support scope rather than falling back to native. Not part of the ttnn API; use
+            ttnn.untilize, which selects a prim on its own.
+        )doc");
 }
 }  // namespace ttnn::operations::data_movement::detail

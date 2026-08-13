@@ -2932,12 +2932,13 @@ def test_untilize_nd_shard_to_same_shard_spec_uneven_input_shard_spec(
     assert_equal(input_torch_tensor, ttnn.to_torch(ttnn_output_tensor))
 
 
-# --- Codegen-path coverage (implementation=ImplementationSelector.Codegen) ---
+# --- Codegen-path coverage ---
 #
-# ttnn.untilize defaults to Auto, which sends gate-supported cases to codegen and the rest to
-# native. The nightly routing suite only asserts the *rejected* cases fall back to native, so
-# nothing there fails if a codegen kernel itself breaks -- these force codegen and compare it
-# against native on the same input. That comparison is exact for every dtype below because
+# ttnn.untilize routes gate-supported cases to codegen and the rest to native, and offers no way to
+# ask for one: the verification-only entries below live in the private module for that reason (see
+# untilize_force.hpp). The nightly routing suite only asserts the *rejected* cases fall back to
+# native, so nothing there fails if a codegen kernel itself breaks -- these pin codegen and compare
+# it against native on the same input. That comparison is exact for every dtype below because
 # untilize only relayouts values, so any mismatch is a real kernel bug rather than tolerance.
 #
 # One case per writer the program factory can pick (untilize_codegen_supported.cpp decides which
@@ -2965,6 +2966,10 @@ codegen_case_ids = [
 ]
 
 
+_force_native = ttnn._ttnn.operations.data_movement.untilize_force_native
+_force_codegen = ttnn._ttnn.operations.data_movement.untilize_force_codegen
+
+
 def _codegen_input_tensor(device, tensor_shape, dtype):
     return ttnn.from_torch(
         torch.randn(tensor_shape, dtype=torch.bfloat16), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
@@ -2977,12 +2982,8 @@ def test_untilize_codegen(device, tensor_shape, dtype, output_buffer_type):
     input_ttnn_tensor = _codegen_input_tensor(device, tensor_shape, dtype)
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, output_buffer_type)
 
-    golden = ttnn.untilize(
-        input_ttnn_tensor, memory_config=output_memory_config, implementation=ttnn.ImplementationSelector.Native
-    )
-    output = ttnn.untilize(
-        input_ttnn_tensor, memory_config=output_memory_config, implementation=ttnn.ImplementationSelector.Codegen
-    )
+    golden = _force_native(input_ttnn_tensor, memory_config=output_memory_config)
+    output = _force_codegen(input_ttnn_tensor, memory_config=output_memory_config)
 
     assert output.shape == golden.shape, f"Output shape {output.shape} does not match native shape {golden.shape}"
     assert_equal(ttnn.to_torch(golden), ttnn.to_torch(output))
@@ -2997,14 +2998,11 @@ def test_pc_untilize_codegen(device, tensor_shape):
     torch.manual_seed(42)
     num_iters = 3
     input_tensors = [_codegen_input_tensor(device, tensor_shape, ttnn.bfloat16) for _ in range(num_iters)]
-    goldens = [
-        ttnn.to_torch(ttnn.untilize(tensor, implementation=ttnn.ImplementationSelector.Native))
-        for tensor in input_tensors
-    ]
+    goldens = [ttnn.to_torch(_force_native(tensor)) for tensor in input_tensors]
 
     for i in range(num_iters):
         with device.cache_entries_counter.measure():
-            output = ttnn.untilize(input_tensors[i], implementation=ttnn.ImplementationSelector.Codegen)
+            output = _force_codegen(input_tensors[i])
 
         assert_equal(goldens[i], ttnn.to_torch(output))
         if i == 0:

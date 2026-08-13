@@ -13,8 +13,10 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal
 
-_NATIVE = ttnn.ImplementationSelector.Native  # forced-native golden leg
-_ROUTED = ttnn.ImplementationSelector.Auto
+# `ttnn.untilize` takes no implementation argument -- it routes on its own. The forced-native golden
+# leg therefore comes from the verification-only entry in the private module; see untilize_force.hpp.
+_force_native = ttnn._ttnn.operations.data_movement.untilize_force_native
+_force_codegen = ttnn._ttnn.operations.data_movement.untilize_force_codegen
 
 
 def _make_input(shape, dtype):
@@ -325,11 +327,11 @@ _ROUTING_IDS = [
 def test_untilize_codegen_routing(device, shape, kwargs, dtype, layout):
     x = _make_input(shape, dtype)
     xt = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device)
-    golden = ttnn.to_torch(ttnn.untilize(xt, **kwargs, implementation=_NATIVE))
+    golden = ttnn.to_torch(_force_native(xt, **kwargs))
     # The golden call warms the native program, so a correct fallback leaves the cache
     # unchanged; only a mis-route to codegen compiles a new program and grows it.
     entries_before = device.num_program_cache_entries()
-    out = ttnn.untilize(xt, **kwargs, implementation=_ROUTED)
+    out = ttnn.untilize(xt, **kwargs)
     assert_equal(golden, ttnn.to_torch(out))
     msg = "auto routed an out-of-scope case to codegen (program cache grew); expected native fallback"
     assert device.num_program_cache_entries() == entries_before, msg
@@ -340,11 +342,6 @@ def test_untilize_codegen_routing(device, shape, kwargs, dtype, layout):
 # sub-grid must reach native under `auto` -- silently widening the placement would break the
 # resource partitioning the caller asked for.
 _SUB_CORE_GRIDS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6))])
-
-_EXECUTION_CONTROLS = [
-    ({"use_multicore": False}, "use_multicore_false"),
-    ({"sub_core_grids": _SUB_CORE_GRIDS}, "sub_core_grids"),
-]
 
 # Each control carries its own shape because this leg has to run native to have a golden: native's
 # sub-core-grid factory only accepts tensors one tile row tall (UntilizeDeviceOperation validate).
@@ -362,19 +359,19 @@ def test_untilize_execution_controls_route_to_native(device, controls, shape, co
     x = torch.rand(shape, dtype=torch.bfloat16)
     xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     kwargs = {"memory_config": ttnn.DRAM_MEMORY_CONFIG, **controls}
-    golden = ttnn.to_torch(ttnn.untilize(xt, **kwargs, implementation=_NATIVE))
+    golden = ttnn.to_torch(_force_native(xt, **kwargs))
     entries_before = device.num_program_cache_entries()
-    out = ttnn.untilize(xt, **kwargs, implementation=_ROUTED)
+    out = ttnn.untilize(xt, **kwargs)
     assert_equal(golden, ttnn.to_torch(out))
     msg = f"auto routed {control_id} to codegen (program cache grew); codegen cannot honour it"
     assert device.num_program_cache_entries() == entries_before, msg
 
 
-@pytest.mark.parametrize("controls,control_id", _EXECUTION_CONTROLS, ids=[c[1] for c in _EXECUTION_CONTROLS])
-def test_untilize_forced_codegen_rejects_execution_controls(device, controls, control_id, expect_error):
-    x = torch.rand([64, 128], dtype=torch.bfloat16)
-    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    with expect_error(RuntimeError, "cannot honour"):
-        ttnn.untilize(
-            xt, memory_config=ttnn.DRAM_MEMORY_CONFIG, **controls, implementation=ttnn.ImplementationSelector.Codegen
-        )
+def test_forced_codegen_refuses_out_of_scope_case(device, expect_error):
+    # The forced leg exists to be compared against native, so it has to fail loudly outside its
+    # support scope: if it fell back, every bit-exactness result gathered through it would really be
+    # native-vs-native. bfloat8_b needs a tile-aligned logical shape, and [64, 100] is not.
+    x = torch.rand([1, 10, 64, 100], dtype=torch.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "does not support"):
+        _force_codegen(xt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
