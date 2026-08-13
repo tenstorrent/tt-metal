@@ -1042,7 +1042,21 @@ class TPGatedDeltaNet:
         # realistic T catches the clash.
         # Wormhole only: Blackhole's placement was tuned separately and is left byte-identical.
         kd = self.key_dim_tp
-        _qkv_mc = None if tpc.is_blackhole() else (ttnn.L1_MEMORY_CONFIG if T <= 2048 else ttnn.DRAM_MEMORY_CONFIG)
+        # MODEL-GATED. The Wormhole L1 placement below was tuned for the 9B (dim 4096); it is NOT
+        # safe for the 27B (dim 5120), whose chunked prefill dies inside chunk_gated_delta_rule with
+        #   "circular buffers in program N clash with L1 buffers on core range [0-0 - 0-0]"
+        # Note the trigger is NOT the resident slice size: at T=2048 the 27B's per-device q+k+v is
+        # 5.2MB vs the 9B's 16.8MB, and it has fewer heads per device (nv 6 vs 16). So it is the op's
+        # own CB layout at these head dims, and shrinking the slices would not help. The 27B path
+        # never placed these in L1 (see gdn/tp.py on the 27B branch), so give it that behaviour
+        # verbatim rather than retuning the 9B's win. Gate on dim, not model_name: HF_MODEL is often
+        # a hashed snapshot directory, which makes name-based checks unreliable.
+        _qkv_l1_tuned_for_this_model = self.args.dim <= 4096
+        _qkv_mc = (
+            None
+            if (tpc.is_blackhole() or not _qkv_l1_tuned_for_this_model)
+            else (ttnn.L1_MEMORY_CONFIG if T <= 2048 else ttnn.DRAM_MEMORY_CONFIG)
+        )
         if self._gdn_flat_qkv:
             # Flat q/k/v: adapter splits heads inside untilize
             q = ttnn.slice(conv, (0, 0, 0), (1, T, kd), memory_config=_qkv_mc)
