@@ -610,7 +610,11 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactorySingleRowSingleCore::
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/"
                   "sort_single_row_single_core.cpp",
-        .compiler_options = {.defines = sort_kernel_defines(is_row_major, is_uint16_input)},
+        // Compute kernels build at O3; the compiler-options default is O2, so the level is stated
+        // explicitly rather than inherited.
+        .compiler_options =
+            {.defines = sort_kernel_defines(is_row_major, is_uint16_input),
+             .opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args =
             {
@@ -1370,7 +1374,10 @@ ttnn::device_operation::ProgramArtifacts SortProgramFactoryCrossCoreDataExchange
         .unique_id = COMPUTE,
         .source = "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/compute/"
                   "sort_cross_core_data_exchange.cpp",
-        .compiler_options = {.defines = layout_defines(is_row_major)},
+        // Compute kernels build at O3; the compiler-options default is O2, so the level is stated
+        // explicitly rather than inherited.
+        .compiler_options =
+            {.defines = layout_defines(is_row_major), .opt_level = KernelSpec::CompilerOptions::OptLevel::O3},
         .dfb_bindings = std::move(compute_dfb_bindings),
         .compile_time_args =
             {
