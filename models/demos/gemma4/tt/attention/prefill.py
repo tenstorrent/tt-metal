@@ -585,12 +585,11 @@ def _prefill_forward_single(
             num_layers=ring_num_layers,
             ccl_manager=ccl_manager,
         )
-    # Chunks after the first read history through the ring; the local shard alone holds
-    # a strided subset of the prefix.
-    # GEMMA4_RING_CHUNK0 probe: force chunk 0 through the ring path too, to find what
-    # actually rejects it. If it can be made to work, both chunk kinds share one graph
-    # and a single captured trace serves the whole prefill.
-    use_ring_attention = use_ring and (chunk_offset > 0 or os.environ.get("GEMMA4_RING_CHUNK0") == "1")
+    # Every chunk reads through the ring: chunks after the first need it, since the local shard
+    # alone holds a strided subset of the prefix, and chunk 0 takes the same path despite having
+    # no history so that both chunk kinds share one graph and a single captured trace serves the
+    # whole prefill.
+    use_ring_attention = use_ring
     if use_ring_attention:
         cp_ring_ckc = ttnn.init_device_compute_kernel_config(
             tt_q.device().arch(),
