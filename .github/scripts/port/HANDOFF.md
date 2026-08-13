@@ -378,12 +378,31 @@ returned a handle in 28 seconds, two `wait` calls reported the run still going w
 accounted correctly across calls, the third collected `build OK` at 8.7 minutes, and both the
 scratch ref and the job record were gone afterwards.
 
-## The one thing CIv2 cannot do
+## The one thing CIv2 could not do, and now can
 
-Routed around rather than fixed, by the split described at the top. The diagnosis is kept because it
-is what rules out running the agent in-cluster at all, and because the infra ask at the end of it is
-still the shorter fix if it ever becomes available -- it would collapse the two workflows back into
-one job with a local incremental build, which is both simpler and far faster per cycle.
+**Fixed on 2026-08-13.** [tt-flux#748](https://github.com/tenstorrent/tt-flux/pull/748) added one line
+to `apps/restricted-proxy/configmap/squid.conf`, and a throwaway probe on
+`tt-ubuntu-2204-N150-viommu-stable` confirmed the door is open: `CONNECT api.githubcopilot.com:443`
+now tunnels and the far side answers, where before squid answered 403 without the request ever
+leaving the cluster. The API's own reply to an unauthenticated probe is a 404, which is the point --
+a 404 is the service talking, and a 403 was the proxy refusing to let us talk to it.
+
+So the reason for the two-workflow split is gone, and the collapse it was blocking is now the plan:
+one in-cluster job with a local incremental build, which is both simpler and far faster per cycle.
+The hosted runner was never a good host for this -- four cores, and the probe watched its build rate
+collapse from 145 targets a minute to 10-15 as it crossed into the ttnn unity builds -- so the split
+was paying for egress with compute. In-cluster stops paying either way.
+
+Two things do not follow from this and must not be assumed. AWF's own allowlist still governs what
+the agent may reach; the cluster proxy was only ever the second gate in series. And the agent still
+runs inside AWF's container, whose mount set is `RUNNER_TEMP/gh-aw`, the workspace, the tool cache
+and `/tmp/gh-aw` -- nothing there passes `--device /dev/tenstorrent`, so being in-cluster does not by
+itself put a card in the agent's hands. Whether an `mcp-scripts` handler executes on the runner host,
+where the card and docker are, or inside that container, where neither is, decides what the collapsed
+job can actually do. Probe it before rebuilding the topology around an assumption.
+
+The diagnosis below is kept as the record of what was wrong, because it took three misleading layers
+to reach and the reasoning is worth not repeating.
 
 The job ran on CIv2 end to end up to the agent itself: the runner hosts gh-aw's servers, the
 build succeeds, the baseline passes, and the agent process starts. Then every model request fails,
@@ -404,15 +423,11 @@ the earlier failures were so confusing -- three separate layers (missing `netsta
 loopback, unpriced model) each had to be cleared before the real one became visible, and each
 presented as a silent connection that did not happen.
 
-**The ask for infra is one line:** allow `api.githubcopilot.com:443` through `restricted-proxy` for
-the `tt-ubuntu-2204-N150-viommu-stable` pool. Worth requesting alongside it, since gh-aw's own
-allowlist names them and a later feature may reach for one:
-`api.business.githubcopilot.com`, `api.enterprise.githubcopilot.com`,
-`api.individual.githubcopilot.com`, and `telemetry.enterprise.githubcopilot.com`.
-
-Note that AWF is *not* being bypassed by this request. Its own allowlist still governs what the
-agent may reach; the cluster proxy is a second gate in series, and this only stops the two gates
-from disagreeing about the one host the agent cannot work without.
+**The ask for infra was one line**, and what landed was `acl toallow dstdomain .githubcopilot.com` --
+a domain entry rather than the single host that was asked for, so the four hosts gh-aw's own allowlist
+names are covered too: `api.business.githubcopilot.com`, `api.enterprise.githubcopilot.com`,
+`api.individual.githubcopilot.com`, and `telemetry.enterprise.githubcopilot.com`. Nothing here has to
+change if a later gh-aw feature reaches for one of them.
 
 ## A secret in an mcp-scripts tool is not hidden from the agent
 
