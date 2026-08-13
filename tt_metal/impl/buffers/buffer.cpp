@@ -593,6 +593,7 @@ Buffer::~Buffer() {
 
 IDevice* Buffer::device() const { return impl_->device_; }
 DeviceAddr Buffer::size() const { return impl_->size_; }
+bool Buffer::is_allocated() const { return impl_->is_allocated(); }
 BufferType Buffer::buffer_type() const { return impl_->buffer_type_; }
 TensorMemoryLayout Buffer::buffer_layout() const { return impl_->buffer_layout_; }
 bool Buffer::has_shard_spec() const { return impl_->shard_spec_.has_value(); }

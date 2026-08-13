@@ -190,6 +190,7 @@ public:
     IDevice* device() const;
     Allocator* allocator() const;
     DeviceAddr size() const;
+    bool is_allocated() const;
 
     // Returns address of buffer in the first bank
     uint32_t address() const;
