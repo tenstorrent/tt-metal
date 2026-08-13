@@ -357,6 +357,11 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, uin
 // handle releases with noc_async_read_barrier(), which covers reads on a single
 // NOC (noc_index) -- reads issued on the other NOC, or writes, are not covered,
 // and the push would then publish pages that have not landed.
+//
+// `fn` is only CALLED on the owning data-movement thread, but its body is
+// COMPILED on all five projections, so the intrinsics it names have to resolve
+// everywhere; the binding declares them as unreachable no-ops on the compute
+// projection for exactly this reason (see tt/unified_adaptor_v1.hpp).
 template <int thread, typename Fn>
 NocAsyncReadTx<thread> noc_load(const Storage& storage, Fn fn);
 

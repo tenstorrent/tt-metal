@@ -61,9 +61,25 @@ void kernel_main() {
     const auto out = TensorAccessor(out_args, out_addr);
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
+#if defined(EA_CUSTOM_LOAD)
+        // Same fill, spelled as a custom routine. The lambda's body is compiled
+        // on all five projections, so it doubles as the check that the compute
+        // projection can see the data-movement intrinsics.
+        u::ComputeBlock a = u::noc_load<1>(in0_storage, [&](uint32_t l1, uint32_t bytes) {
+                                for (uint32_t p = 0; p < tiles_per_block; ++p) {
+                                    noc_async_read(in0.get_noc_addr(b * tiles_per_block + p), l1 + p * bytes, bytes);
+                                }
+                            }).wait();
+        u::ComputeBlock c = u::noc_load<1>(in1_storage, [&](uint32_t l1, uint32_t bytes) {
+                                for (uint32_t p = 0; p < tiles_per_block; ++p) {
+                                    noc_async_read(in1.get_noc_addr(b * tiles_per_block + p), l1 + p * bytes, bytes);
+                                }
+                            }).wait();
+#else
         // Reader (DM thread 1) fills these; compute waits on them.
         u::ComputeBlock a = u::noc_load<1>(in0_storage, in0, b).wait();
         u::ComputeBlock c = u::noc_load<1>(in1_storage, in1, b).wait();
+#endif
 
         // Compute evaluates the expression; the allocator picks DST slots.
         //   copy a -> dst0, copy c -> dst1, add(dst0,dst1) -> dst0, exp(dst0)
