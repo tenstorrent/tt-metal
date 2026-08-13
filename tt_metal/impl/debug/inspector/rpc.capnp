@@ -51,26 +51,31 @@ struct MeshCoordinate {
     coordinates @0 :List(Int32);
 }
 
-struct MeshSocketConnection {
-    localChipId @0 :UInt32;       # metal device id owning this endpoint's config buffer (for noc reads)
-    localCoreX @1 :UInt32;
-    localCoreY @2 :UInt32;
-    localMeshId @3 :UInt32;       # fabric node id of this endpoint (cross-rank stitch key)
-    localFabricChipId @4 :UInt32;
-    peerMeshId @5 :UInt32;        # fabric node id of the peer endpoint (matches the peer's local id)
-    peerFabricChipId @6 :UInt32;
-    peerCoreX @7 :UInt32;
-    peerCoreY @8 :UInt32;
+struct MeshSocketPeer {
+    fabricChipId @0 :UInt32;      # with the record's peerMeshId, the peer endpoint's fabric node id
+    coreX @1 :UInt32;
+    coreY @2 :UInt32;
+}
+
+struct MeshSocketEndpoint {
+    chipId @0 :UInt32;            # metal device id owning this endpoint's config buffer
+    coreX @1 :UInt32;
+    coreY @2 :UInt32;
+    fabricChipId @3 :UInt32;      # with the record's localMeshId, this endpoint's fabric node id
+    peers @4 :List(MeshSocketPeer);  # more than one when a sender core feeds several downstreams
 }
 
 struct MeshSocketRecord {
     isSender @0 :Bool;
     configBufferAddress @1 :UInt64;
     dataBufferAddress @2 :UInt64;
-    connections @3 :List(MeshSocketConnection);
+    endpoints @3 :List(MeshSocketEndpoint);  # only the ones this rank owns, one per local core
     fifoSize @4 :UInt64;
     senderMdSizeBytes @5 :UInt32;
     bytesAckedStrideBytes @6 :UInt32;
+    # Mesh ids come from the socket config, so they are one per socket rather than per endpoint.
+    localMeshId @7 :UInt32;       # cross-rank stitch key for this side
+    peerMeshId @8 :UInt32;        # matches the peer rank's localMeshId
 }
 
 struct MeshWorkloadProgramData {

@@ -160,43 +160,36 @@ def discover(inspector_data, id_mapping, run_checks) -> list[Endpoint]:
     # Fabric node id -> device id, so a peer owned by this host can be labelled like the Dev column.
     fabric_to_device_id: dict[tuple[int, int], int] = {}
     for s in sockets:
-        for c in s.connections:
-            device = to_device(int(c.localChipId))
+        for e in s.endpoints:
+            device = to_device(int(e.chipId))
             if device is not None:
-                fabric_to_device_id[(int(c.localMeshId), int(c.localFabricChipId))] = device.id
+                fabric_to_device_id[(int(s.localMeshId), int(e.fabricChipId))] = device.id
 
     endpoints: list[Endpoint] = []
     for s in sockets:
         role = "sender" if s.isSender else "receiver"
-        if not s.connections:
-            continue
-
-        # Each core holds its own md at that same address: group by core, one read each.
-        by_core: dict[tuple[int, int, int], list] = {}
-        for c in s.connections:
-            by_core.setdefault((int(c.localChipId), int(c.localCoreX), int(c.localCoreY)), []).append(c)
-
-        for (chip_id, core_x, core_y), conns in by_core.items():
-            device = to_device(chip_id)
+        peer_mesh_id = int(s.peerMeshId)
+        for e in s.endpoints:
+            device = to_device(int(e.chipId))
             if device is None:
                 continue
             endpoints.append(
                 Endpoint(
                     role=role,
-                    location=OnChipCoordinate(core_x, core_y, "logical", device, "tensix"),
-                    node=node_label(int(conns[0].localMeshId), int(conns[0].localFabricChipId)),
+                    location=OnChipCoordinate(int(e.coreX), int(e.coreY), "logical", device, "tensix"),
+                    node=node_label(int(s.localMeshId), int(e.fabricChipId)),
                     config_addr=int(s.configBufferAddress),
                     md_size=int(s.senderMdSizeBytes),
                     acked_stride=int(s.bytesAckedStrideBytes),
                     peers=[
                         Peer(
-                            mesh_id=int(c.peerMeshId),
-                            fabric_chip_id=int(c.peerFabricChipId),
-                            core_x=int(c.peerCoreX),
-                            core_y=int(c.peerCoreY),
-                            device_id=fabric_to_device_id.get((int(c.peerMeshId), int(c.peerFabricChipId))),
+                            mesh_id=peer_mesh_id,
+                            fabric_chip_id=int(p.fabricChipId),
+                            core_x=int(p.coreX),
+                            core_y=int(p.coreY),
+                            device_id=fabric_to_device_id.get((peer_mesh_id, int(p.fabricChipId))),
                         )
-                        for c in conns
+                        for p in e.peers
                     ],
                 )
             )

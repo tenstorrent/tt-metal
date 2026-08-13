@@ -178,19 +178,24 @@ void Data::rpc_get_sockets(rpc::Inspector::GetSocketsResults::Builder& results) 
         socket.setFifoSize(socket_data.fifo_size);
         socket.setSenderMdSizeBytes(socket_data.sender_md_size_bytes);
         socket.setBytesAckedStrideBytes(socket_data.bytes_acked_stride_bytes);
-        auto conns = socket.initConnections(socket_data.connections.size());
+        socket.setLocalMeshId(socket_data.local_mesh_id);
+        socket.setPeerMeshId(socket_data.peer_mesh_id);
+        auto endpoints = socket.initEndpoints(socket_data.endpoints.size());
         uint32_t j = 0;
-        for (const auto& c : socket_data.connections) {
-            auto conn = conns[j++];
-            conn.setLocalChipId(c.local_chip_id);
-            conn.setLocalCoreX(c.local_core_x);
-            conn.setLocalCoreY(c.local_core_y);
-            conn.setLocalMeshId(c.local_mesh_id);
-            conn.setLocalFabricChipId(c.local_fabric_chip_id);
-            conn.setPeerMeshId(c.peer_mesh_id);
-            conn.setPeerFabricChipId(c.peer_fabric_chip_id);
-            conn.setPeerCoreX(c.peer_core_x);
-            conn.setPeerCoreY(c.peer_core_y);
+        for (const auto& e : socket_data.endpoints) {
+            auto endpoint = endpoints[j++];
+            endpoint.setChipId(e.chip_id);
+            endpoint.setCoreX(e.core_x);
+            endpoint.setCoreY(e.core_y);
+            endpoint.setFabricChipId(e.fabric_chip_id);
+            auto peers = endpoint.initPeers(e.peers.size());
+            uint32_t k = 0;
+            for (const auto& p : e.peers) {
+                auto peer = peers[k++];
+                peer.setFabricChipId(p.fabric_chip_id);
+                peer.setCoreX(p.core_x);
+                peer.setCoreY(p.core_y);
+            }
         }
     }
 }

@@ -60,16 +60,18 @@ struct MeshDeviceData {
     bool initialized = false;
 };
 
-struct MeshSocketConnectionData {
-    uint32_t local_chip_id{};
-    uint32_t local_core_x{};
-    uint32_t local_core_y{};
-    uint32_t local_mesh_id{};
-    uint32_t local_fabric_chip_id{};
-    uint32_t peer_mesh_id{};
-    uint32_t peer_fabric_chip_id{};
-    uint32_t peer_core_x{};
-    uint32_t peer_core_y{};
+struct MeshSocketPeerData {
+    uint32_t fabric_chip_id{};
+    uint32_t core_x{};
+    uint32_t core_y{};
+};
+
+struct MeshSocketEndpointData {
+    uint32_t chip_id{};
+    uint32_t core_x{};
+    uint32_t core_y{};
+    uint32_t fabric_chip_id{};
+    std::vector<MeshSocketPeerData> peers;
 };
 
 struct MeshSocketData {
@@ -80,7 +82,9 @@ struct MeshSocketData {
     uint64_t fifo_size{};
     uint32_t sender_md_size_bytes{};
     uint32_t bytes_acked_stride_bytes{};
-    std::vector<MeshSocketConnectionData> connections;
+    uint32_t local_mesh_id{};
+    uint32_t peer_mesh_id{};
+    std::vector<MeshSocketEndpointData> endpoints;
 };
 
 struct MeshWorkloadRuntimeEntry {
