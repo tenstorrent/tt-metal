@@ -374,7 +374,9 @@ def _resolve_qwen3_32b_sku_overlay(*, arch, cluster_type, num_dev: int, mesh_dev
         overlay = _Qwen3_32BSKUOverlay(
             architecture="wormhole",
             topology=ttnn.Topology.Ring,
-            dram_shard_grid_width=mesh_device.dram_grid_size().x,
+            # Preserve the established WH recipe, which shards over 8 DRAM
+            # banks even though Wormhole physically exposes 12 DRAM cores.
+            dram_shard_grid_width=8,
             mlp_prefill_len_cutoff=1024,
             mlp_prefill_grid=(8, 8),
             prefill_minimal_matmul=minimal,
