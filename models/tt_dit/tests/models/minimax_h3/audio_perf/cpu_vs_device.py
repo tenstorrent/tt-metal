@@ -47,10 +47,49 @@ MESH = tuple(int(v) for v in os.environ.get("CVD_MESH", "1x1").split("x"))
 T_FACTOR = int(os.environ.get("CVD_T_FACTOR", "1"))
 MESH_AXIS = int(os.environ.get("CVD_MESH_AXIS", "1"))
 TRACED = os.environ.get("CVD_TRACED", "0") == "1"
-IS_DEFAULT = MESH == (1, 1) and T_FACTOR == 1 and not TRACED
+
+
+# The precision levers, which dominate both latency and PSNR. The decoder's own defaults are accurate
+# mode -- split_mode="full", tap_matmul=True, prefer_mac=True -- so leaving these unset measures what
+# ships. Setting all three to the fast values measures the configuration the earlier 281.6 ms / 49.45 dB
+# result was taken in, which is a *different operator set*, not just a different speed:
+#
+#   CVD_SPLIT_MODE=off CVD_TAP_MATMUL=0 CVD_PREFER_MAC=0     # fast
+#
+# `None` means "leave the constructor default alone" so a run that sets nothing cannot silently pin a
+# lever to a value that later changes upstream.
+def _flag(name):
+    raw = os.environ.get(name)
+    return None if raw is None else raw not in ("0", "false", "False", "")
+
+
+SPLIT_MODE = os.environ.get("CVD_SPLIT_MODE")
+TAP_MATMUL = _flag("CVD_TAP_MATMUL")
+PREFER_MAC = _flag("CVD_PREFER_MAC")
+# conv3d's C_in_block cap for the H3 audio blocking table. Not a boolean and easy to overlook, but it
+# moves accuracy on its own: conv_pre's error falls monotonically as the block grows (2.40e-03 at 32,
+# 1.86e-03 at 128), because a larger block means fewer partial sums to round.
+MAX_C_IN_BLOCK = os.environ.get("CVD_MAX_C_IN_BLOCK")
+LEVERS = {
+    k: v
+    for k, v in (
+        ("split_mode", SPLIT_MODE),
+        ("tap_matmul", TAP_MATMUL),
+        ("prefer_mac", PREFER_MAC),
+        ("max_c_in_block", int(MAX_C_IN_BLOCK) if MAX_C_IN_BLOCK else None),
+    )
+    if v is not None
+}
+
+IS_DEFAULT = MESH == (1, 1) and T_FACTOR == 1 and not TRACED and not LEVERS
 # Non-default runs get their config in the filename. Overwriting `{label}_2_device.wav` with a
 # differently-configured decode is how the stale `*_3_device_prefix.wav` confusion started.
-TAG = "" if IS_DEFAULT else f"_{MESH[0]}x{MESH[1]}_f{T_FACTOR}ax{MESH_AXIS}{'_traced' if TRACED else ''}"
+_lever_tag = "".join(
+    f"_{k}-{v}"
+    for k, v in (("sm", SPLIT_MODE), ("tap", TAP_MATMUL), ("mac", PREFER_MAC), ("cin", MAX_C_IN_BLOCK))
+    if v is not None
+)
+TAG = "" if IS_DEFAULT else f"_{MESH[0]}x{MESH[1]}_f{T_FACTOR}ax{MESH_AXIS}{'_traced' if TRACED else ''}{_lever_tag}"
 
 # (label, librosa example key, seconds to skip -- past leading silence / into a busy passage)
 CLIPS = [
@@ -141,6 +180,8 @@ def main():
             parallel_config = ParallelFactor(factor=T_FACTOR, mesh_axis=MESH_AXIS)
             ccl_manager = CCLManager(device, num_links=1, topology=ttnn.Topology.Linear)
 
+        if LEVERS:
+            print(f"levers: {LEVERS} (unset ones keep the constructor default)", flush=True)
         decoder = MiniMaxH3AudioDecoder(
             latent_channels=config["latent_channels"],
             latent_dim=config["latent_dim"],
@@ -152,6 +193,7 @@ def main():
             mesh_device=device,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
+            **LEVERS,
         )
         decoder.load_torch_state_dict(convert_minimax_h3_audio_state_dict(dict(reference.state_dict())), strict=False)
 

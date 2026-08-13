@@ -532,9 +532,9 @@ def _localize_divergence(baseline, parallel, *, factor: int, logger) -> None:
 
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH, indirect=["mesh_device", "device_params"])
 def test_audio_decode_t_parallel(mesh_device):
-    weights_dir = _weights_dir()
+    weights_dir = weights_subdir("audio_vae")
     if weights_dir is None:
-        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_DIFFUSERS_DIR")
+        pytest.skip("MiniMax-H3 audio_vae not found; set MINIMAX_H3_MODEL_PATH")
     pytest.importorskip("diffusers", reason="pinned diffusers reference not installed")
     from diffusers import AutoencoderKLMiniMaxH3Audio
     from loguru import logger
@@ -542,7 +542,7 @@ def test_audio_decode_t_parallel(mesh_device):
 
     from ....models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 
-    config = _config(weights_dir)
+    config = load_config(weights_dir)
     reference = AutoencoderKLMiniMaxH3Audio(**config).eval()
     reference.load_state_dict(load_file(os.path.join(weights_dir, "diffusion_pytorch_model.safetensors")))
     converted = convert_minimax_h3_audio_state_dict(dict(reference.state_dict()))
