@@ -19,17 +19,67 @@ import ttnn
 BLOCK_SIZE = 12
 
 
-@dataclass(frozen=True)
+@dataclass
 class TtAttnResState:
     """Owned live and sealed tensors transferred between pipeline segments."""
 
-    prefix_sum: ttnn.Tensor
+    prefix_sum: ttnn.Tensor | None
     block_residual: ttnn.Tensor | None
 
     def deallocate(self):
-        ttnn.deallocate(self.prefix_sum)
+        if self.prefix_sum is not None:
+            ttnn.deallocate(self.prefix_sum)
         if self.block_residual is not None:
             ttnn.deallocate(self.block_residual)
+        self.prefix_sum = None
+        self.block_residual = None
+
+    def take_packed(self) -> ttnn.Tensor:
+        """Consume this state into one D2D tensor: sealed snapshots, then live prefix."""
+        if self.prefix_sum is None:
+            raise ValueError("AttnRes state has no live prefix to pack")
+        if self.block_residual is None:
+            packed = self.prefix_sum
+        else:
+            packed = ttnn.concat([self.block_residual, self.prefix_sum], dim=1)
+            ttnn.deallocate(self.block_residual)
+            ttnn.deallocate(self.prefix_sum)
+        self.prefix_sum = None
+        self.block_residual = None
+        return packed
+
+    @classmethod
+    def from_packed(cls, packed: ttnn.Tensor, *, num_sealed: int) -> "TtAttnResState":
+        """Validate and consume one D2D tensor into sealed snapshots and live prefix."""
+        if num_sealed < 0:
+            raise ValueError(f"num_sealed must be non-negative, got {num_sealed}")
+        if len(packed.shape) != 4 or packed.shape[0] != 1 or packed.shape[1] != num_sealed + 1:
+            raise ValueError(f"packed AttnRes state must be [1, {num_sealed + 1}, N, H], got {tuple(packed.shape)}")
+        if num_sealed == 0:
+            return cls(prefix_sum=packed, block_residual=None)
+
+        stop = tuple(packed.shape)
+        block_residual = None
+        try:
+            block_residual = ttnn.slice(
+                packed,
+                (0, 0, 0, 0),
+                (stop[0], num_sealed, stop[2], stop[3]),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            prefix_sum = ttnn.slice(
+                packed,
+                (0, num_sealed, 0, 0),
+                stop,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        except Exception:
+            if block_residual is not None:
+                ttnn.deallocate(block_residual)
+            ttnn.deallocate(packed)
+            raise
+        ttnn.deallocate(packed)
+        return cls(prefix_sum=prefix_sum, block_residual=block_residual)
 
 
 class TtAttnResStream(object):
@@ -172,6 +222,8 @@ def attn_res_segment(
         raise ValueError(f"AttnRes segment layers must be contiguous, got {layer_indices}")
     if not isinstance(state, TtAttnResState):
         raise TypeError(f"state must be TtAttnResState, got {type(state).__name__}")
+    if state.prefix_sum is None:
+        raise ValueError("AttnRes segment state has no live prefix")
     if layer_indices[0] == 0 and state.block_residual is not None:
         raise ValueError("AttnRes segment starting at layer 0 must not have sealed input state")
     if layer_indices[0] != 0 and state.block_residual is None:
@@ -223,6 +275,10 @@ def attn_res_segment(
         block_size=block_size,
         block_residual=state.block_residual,
     )
+    # Ownership moved into ``stream`` after validation. Empty the caller's handle so
+    # defensive cleanup after either success or failure cannot double-free its tensors.
+    state.prefix_sum = None
+    state.block_residual = None
 
     def free_batch():
         nonlocal partials, shifts, masses
@@ -313,6 +369,8 @@ def attn_res_segment(
 
 def finalize_attn_res(op, state, q_out):
     """Apply the model-level AttnRes read and consume ``state``."""
+    if state.prefix_sum is None:
+        raise ValueError("output AttnRes state has no live prefix")
     if state.block_residual is None:
         raise ValueError("output AttnRes requires at least one sealed snapshot")
     partials = shifts = masses = None

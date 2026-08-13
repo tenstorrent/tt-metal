@@ -8,14 +8,10 @@ linear-attention layers. The TT KDA, MLA, AttnRes, and LatentMoE components exis
 runtime composes their hybrid layer schedule and state ownership yet. K3 therefore cannot be served
 end to end; a serving adapter must subclass ``PrefillModelAdapter`` directly and build that runtime.
 
-This adapter therefore exists to give the MLA and MoE layers a first-class ``variant`` fixture: the
-test suite's ``TEST_VARIANTS`` registers it locally (the same test-only pattern GLM-5.2 uses) and it
-is deliberately **absent** from ``models/demos/common/prefill/adapter.py:ADAPTER_PATHS``, so nothing
-can select it with ``PREFILL_MODEL=kimi_k3`` and get a half-built model.
-
-It subclasses ``MLAPrefillAdapter`` for the config/cache/reference plumbing only. ``build_runtime``
-and ``allocate_kv_cache`` are inherited but would size the KV cache to ``params.num_layers``, which
-is wrong for 24-of-93; they are overridden to fail loudly rather than mislead.
+This adapter gives the existing component tests a first-class ``variant``. It remains deliberately
+absent from ``models/demos/common/prefill/adapter.py:ADAPTER_PATHS`` until ``build_runtime`` supplies
+the complete hybrid model, compact MLA cache, AttnRes rank transport, and migration/ack contract;
+production therefore cannot select ``PREFILL_MODEL=kimi_k3`` and receive a partial runtime.
 
 MoE scope (issue #51336): the latent-MoE structure -- routed experts at the reduced 3584 hidden,
 896 experts / top-16, a latent RMSNorm, and one shared expert at 6144. Two deliberate limits:
@@ -127,6 +123,16 @@ class KimiK3Adapter(MLAPrefillAdapter):
             "inherited MLA allocator would size the cache to the full 93-layer count. Use "
             "KimiK3Config.mla_kv_slot() when wiring this up."
         )
+
+    def layer_split_boundaries(self, num_layers):
+        """Admit only the AttnRes segment starts certified by the 31/31/31 handoff gate."""
+        if num_layers != KimiK3Config.NUM_LAYERS:
+            raise ValueError(f"Kimi-K3 requires {KimiK3Config.NUM_LAYERS} layers, got {num_layers}")
+        return set(KimiK3Config.PIPELINE_RANK_STARTS)
+
+    def pipeline_activation_candidate_count(self, next_first_layer_idx: int) -> int:
+        """Pack sealed AttnRes snapshots plus the live prefix into the one D2D tensor."""
+        return KimiK3Config.attn_res_candidate_count_at_boundary(next_first_layer_idx)
 
     def build_runtime(self, **kwargs):
         raise NotImplementedError(

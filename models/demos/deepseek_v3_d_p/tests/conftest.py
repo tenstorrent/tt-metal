@@ -42,8 +42,8 @@ from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2 import GLM52Adapte
 
 TEST_VARIANTS["glm_5_2"] = GLM52Adapter()
 
-# kimi_k3 is TEST-ONLY for the same reason, more strongly: 69 of its 93 layers are KDA
-# linear-attention layers with no TT implementation, so only its MLA layer is testable.
+# kimi_k3 remains TEST-ONLY while its implemented KDA/MLA/AttnRes/LatentMoE components are being
+# composed into the production runtime; the inherited all-MLA runtime would still build the wrong model.
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
 
 TEST_VARIANTS["kimi_k3"] = KimiK3Adapter()

@@ -126,6 +126,16 @@ class PrefillModelAdapter(ABC):
     # Must match the layout the model's decoder layer consumes/produces.
     pipeline_activation_emb_tp_sharded: bool = True
 
+    def pipeline_activation_candidate_count(self, next_first_layer_idx: int) -> int:
+        """Candidate-axis depth carried across the boundary before ``next_first_layer_idx``.
+
+        Ordinary residual models carry one hidden tensor. Models whose residual state has
+        additional snapshots may pack them into the same D2D tensor and override this value;
+        the common runner still owns a single socket and a single metadata record.
+        """
+        del next_first_layer_idx
+        return 1
+
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
     # where this model's config / weights live and how to build its runtime. All

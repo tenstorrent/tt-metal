@@ -316,9 +316,16 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
     until its peer's matching ctor. Doing inbound first chains the bring-up: rank 0's sender unblocks
     rank 1's receiver, which frees rank 1 to build its sender for rank 2's receiver, and so on — no
     deadlock. Both sides pass the identical worker-core grid and global spec."""
-    global_spec = activation_global_spec(chunk_size, hidden_size)
+    layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS))
 
-    def _common():
+    def _global_spec(next_first_layer_idx):
+        return activation_global_spec(
+            chunk_size,
+            hidden_size,
+            ADAPTER.pipeline_activation_candidate_count(next_first_layer_idx),
+        )
+
+    def _common(global_spec):
         # Fresh mapper per call: create_sender/create_receiver take the mapper by std::unique_ptr and
         # MOVE it, so a middle rank (builds BOTH a receiver and a sender) must not reuse one — the
         # second create would get a consumed/null mapper and fail overload resolution.
@@ -338,13 +345,19 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
     if rank > 0:
         logger.info(f"[pp rank {rank}] [d2d] creating inbound receiver from rank {rank - 1}")
         inbound = ttnn.D2DStreamService.create_receiver(
-            receiver_mesh=mesh_device, sender_rank=rank - 1, receiver_rank=rank, **_common()
+            receiver_mesh=mesh_device,
+            sender_rank=rank - 1,
+            receiver_rank=rank,
+            **_common(_global_spec(layer_split[rank][0])),
         )
     outbound = None
     if rank < num_ranks - 1:
         logger.info(f"[pp rank {rank}] [d2d] creating outbound sender to rank {rank + 1}")
         outbound = ttnn.D2DStreamService.create_sender(
-            sender_mesh=mesh_device, sender_rank=rank, receiver_rank=rank + 1, **_common()
+            sender_mesh=mesh_device,
+            sender_rank=rank,
+            receiver_rank=rank + 1,
+            **_common(_global_spec(layer_split[rank + 1][0])),
         )
     logger.info(
         f"[pp rank {rank}] [d2d] endpoints up (inbound={'yes' if inbound else 'no'} "
@@ -406,17 +419,20 @@ def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict, *, deall
     )
 
 
-def _forward_shutdown(d2d_out, rank: int, hidden_size: int) -> None:
+def _forward_shutdown(d2d_out, rank: int, num_ranks: int, hidden_size: int) -> None:
     """Forward the shutdown sentinel to the downstream rank so it unblocks in its own recv, then release
     the outbound link so the transfer ships (mirroring _compute_and_send's tail). The activation content
     is irrelevant — the downstream discards it once it sees the sentinel — but outbound_socket_service_sync
     requires the input's per-shard spec to equal the sender backing's, so build the dummy exactly like a
-    real activation: the [1, 1, CHUNK_SIZE, hidden_size] bf16 TILE spec sharded by D2D_MAPPER_CONFIG."""
+    real activation, including any model-specific packed residual candidates."""
     import torch
 
     dev = d2d_out.get_backing_tensor().device()
+    layer_split = compute_layer_split(NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS))
+    next_first_layer_idx = layer_split[rank + 1][0]
+    candidate_count = ADAPTER.pipeline_activation_candidate_count(next_first_layer_idx)
     dummy = ttnn.from_torch(
-        torch.zeros(1, 1, CHUNK_SIZE, hidden_size),
+        torch.zeros(1, candidate_count, CHUNK_SIZE, hidden_size),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=dev,
@@ -563,7 +579,7 @@ def run_request_loop(
             ttnn.deallocate(inp)
             ttnn.deallocate(metadata_device)
             if d2d_out is not None:
-                _forward_shutdown(d2d_out, rank, hidden_size)
+                _forward_shutdown(d2d_out, rank, num_ranks, hidden_size)
             break
         slot = meta["slot_id"]
         slot_id = slot  # for the PREFILL_REQUEST_LOOP_PCC check after the loop
@@ -594,7 +610,7 @@ def run_request_loop(
                 "(PREFILL_STANDALONE_CHUNKED_NCHUNKS reached); exiting request loop for migration validation"
             )
             if d2d_out is not None:
-                _forward_shutdown(d2d_out, rank, hidden_size)
+                _forward_shutdown(d2d_out, rank, num_ranks, hidden_size)
             break
     if num_ranks > 1 and n_selftest:
         ttnn.distributed_context_barrier()
@@ -969,7 +985,9 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         # This rank's pipeline stage owns layers [first_layer_idx, first_layer_idx + num_my_layers).
         # The layer-aware merge gathers each rank's range so the table spans all stages; pass this
         # rank's range (same split the runtime/cache was built with).
-        first_layer_idx, num_my_layers = compute_layer_split(NUM_LAYERS, num_ranks)[rank]
+        first_layer_idx, num_my_layers = compute_layer_split(
+            NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS)
+        )[rank]
         table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
         wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
 

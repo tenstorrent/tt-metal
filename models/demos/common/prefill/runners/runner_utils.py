@@ -360,12 +360,15 @@ def build_h2d_service(
     return service
 
 
-def activation_global_spec(chunk_size: int, hidden_size: int) -> ttnn.TensorSpec:
+def activation_global_spec(chunk_size: int, hidden_size: int, candidate_count: int = 1) -> ttnn.TensorSpec:
     """Global spec of the inter-rank hidden state carried over the D2D pipeline socket:
-    [1, 1, chunk_size, hidden_size] bf16 TILE DRAM. The caller's mesh mapper shards it (seq across SP
-    rows, emb across TP cols) to match the embedding output layout the downstream model consumes."""
+    [1, candidate_count, chunk_size, hidden_size] bf16 TILE DRAM. Ordinary residual models use one
+    candidate. A model with additional residual snapshots packs them on dim 1. The caller's mesh mapper
+    shards seq across SP rows and emb across TP cols; the candidate axis is carried whole on each shard."""
+    if candidate_count <= 0:
+        raise ValueError(f"candidate_count must be positive, got {candidate_count}")
     return ttnn.TensorSpec(
-        shape=ttnn.Shape([1, 1, chunk_size, hidden_size]),
+        shape=ttnn.Shape([1, candidate_count, chunk_size, hidden_size]),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         buffer_type=ttnn.BufferType.DRAM,

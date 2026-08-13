@@ -141,6 +141,10 @@ class KimiK3Config:
 
     # AttnRes (attention-side, out of scope here; recorded so the delta is not lost)
     ATTN_RES_BLOCK_SIZE = 12
+    # The segmented-handoff prerequisite certifies the natural three-rank 31/31/31
+    # cuts. A single-rank run also starts at 0. Arbitrary cuts stay rejected
+    # until the successor-fragment issue tracked by #53029 is understood.
+    PIPELINE_RANK_STARTS = frozenset({0, 31, 62})
 
     # LatentMoE norm + SiTU-GLU activation.
     LATENT_MOE_USE_NORM = True
@@ -173,6 +177,17 @@ class KimiK3Config:
         if layer_idx not in ids:
             raise ValueError(f"model layer {layer_idx} is a KDA layer, not an MLA layer; MLA layers are {ids}")
         return ids.index(layer_idx)
+
+    @classmethod
+    def attn_res_candidate_count_at_boundary(cls, next_first_layer_idx: int) -> int:
+        """Packed D2D depth: sealed snapshots followed by the live prefix."""
+        if next_first_layer_idx not in cls.PIPELINE_RANK_STARTS - {0}:
+            raise ValueError(
+                f"Kimi-K3 D2D boundary {next_first_layer_idx} is not a certified rank start; "
+                f"expected one of {sorted(cls.PIPELINE_RANK_STARTS - {0})}"
+            )
+        num_sealed = len(range(0, next_first_layer_idx, cls.ATTN_RES_BLOCK_SIZE))
+        return num_sealed + 1
 
 
 def kimi_k3_hf_config(max_seq: int = 8192):

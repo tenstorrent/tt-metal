@@ -36,9 +36,11 @@ import torch
 from loguru import logger
 
 from models.common.utility_functions import comp_pcc
+from models.demos.common.prefill.runners.runner_utils import activation_global_spec
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.modeling_kimi_k3_mla import KimiMLAAttention
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KimiK3Adapter
 
 # Absorbed vs unabsorbed differ only by bf16 rounding through two extra matmuls.
 REFERENCE_PCC = 0.999
@@ -204,6 +206,19 @@ def test_k3_layer_schedule(expect_error):
     # A KDA layer index must raise rather than return a plausible-but-wrong slot.
     with expect_error(ValueError, "KDA layer"):
         KimiK3Config.mla_kv_slot(0)  # layer 0 is KDA
+
+    # The packed D2D contract is derived from the already-certified 31/31/31
+    # AttnRes cuts. Ordinary models retain the one-candidate global shape.
+    adapter = KimiK3Adapter()
+    assert adapter.layer_split_boundaries(KimiK3Config.NUM_LAYERS) == {0, 31, 62}
+    assert adapter.pipeline_activation_candidate_count(31) == 4
+    assert adapter.pipeline_activation_candidate_count(62) == 7
+    assert tuple(activation_global_spec(512, KimiK3Config.EMB_SIZE).shape) == (1, 1, 512, 7168)
+    assert tuple(activation_global_spec(512, KimiK3Config.EMB_SIZE, 4).shape) == (1, 4, 512, 7168)
+    with expect_error(ValueError, "not a certified rank start"):
+        adapter.pipeline_activation_candidate_count(30)
+    with expect_error(ValueError, "candidate_count must be positive"):
+        activation_global_spec(512, KimiK3Config.EMB_SIZE, 0)
 
 
 def test_k3_softmax_scale_has_no_mscale():

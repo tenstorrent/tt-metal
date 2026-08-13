@@ -34,6 +34,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import EPS, attn_res, attn_res_stack
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import (
     BLOCK_SIZE,
@@ -296,9 +297,10 @@ def test_walk_matches_reference(mesh_device, device_params, tmp_path):
 
     # The production runner cannot keep all 93 K3 MoE layers resident on one rank.
     # Re-run the same unchanged row through three contiguous pipeline segments and
-    # transfer both the live stream and sealed snapshots between them. This promotes
-    # the prior stack-only check to cover the production handoff without adding a
-    # test/configuration or weakening the direct full-stack comparison above.
+    # pack both the live stream and sealed snapshots into the single D2D tensor exchanged
+    # between them. This promotes the prior stack-only check to cover the production
+    # handoff without adding a test/configuration or weakening the direct full-stack
+    # comparison above.
     state = TtAttnResState(prefix_sum=ttnn.clone(embeddings), block_residual=None)
     # Three ranks get the runner's default even split for 93 layers. The starts
     # at 31 and 62 deliberately fall inside AttnRes blocks, exercising the short
@@ -314,6 +316,11 @@ def test_walk_matches_reference(mesh_device, device_params, tmp_path):
             [_module_stub] * (stop - start),
             block_size=BLOCK_SIZE,
         )
+        if stop < LAYERS:
+            num_sealed = KimiK3Config.attn_res_candidate_count_at_boundary(stop) - 1
+            packed = state.take_packed()
+            assert packed.shape[1] == num_sealed + 1
+            state = TtAttnResState.from_packed(packed, num_sealed=num_sealed)
     segmented_walk = finalize_attn_res(
         op,
         state,
