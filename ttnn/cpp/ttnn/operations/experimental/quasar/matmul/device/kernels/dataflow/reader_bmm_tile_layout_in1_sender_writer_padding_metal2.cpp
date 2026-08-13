@@ -29,10 +29,8 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
-#include "api/debug/dprint.h"  // DEBUG: matmul mcast hang diagnosis (remove after)
 
 void kernel_main() {
-    DPRINT("WSM enter\n");  // DEBUG: matmul pre-kernel_main confirmation (remove after)
     // READER
     uint32_t rt_args_idx = 0;
     // in1 tensor args (in1_tensor_addr is now the tensor::in1 binding)
@@ -168,16 +166,6 @@ void kernel_main() {
     // DEBUG: matmul mcast hang — the sender reports its NoC coords, expected ack count, and the
     // multicast rectangle it sets receiver_sem=VALID over. If the rectangle doesn't cover every
     // receiver (ragged/L-shaped grid), uncovered receivers hang at their in1 wait.
-    DPRINT(
-        "SEND core x={} y={} num_dests={} num_cores={} mcast=[{},{}]..[{},{}]\n",
-        (uint32_t)my_x[noc.get_noc_id()],
-        (uint32_t)my_y[noc.get_noc_id()],
-        in1_mcast_num_dests,
-        in1_mcast_num_cores,
-        in1_mcast_dest_noc_start_x,
-        in1_mcast_dest_noc_start_y,
-        in1_mcast_dest_noc_end_x,
-        in1_mcast_dest_noc_end_y);
     DataflowBuffer cb_in1(dfb::cb_in1);
     DataflowBuffer cb_out(dfb::cb_out);
     Semaphore sender_sem(sem::in1_sender);
@@ -195,7 +183,9 @@ void kernel_main() {
 #endif  // IN1_SHARDED
 
     //  WRITER
-    const auto s = TensorAccessor(tensor::out);
+    // Used only when the output-write path below is compiled in (some mcast configs write via DFB
+    // instead), so mark maybe_unused to avoid -Wunused-but-set-variable, matching s_sparsity below.
+    [[maybe_unused]] const auto s = TensorAccessor(tensor::out);
 
     // sparsity accessor. cb_sparsity is an inert DMA-landing scratch used only when sparsity is
     // enabled (batchB > 0). As a single-kernel self-loop DFB (PRODUCER+CONSUMER) it is rejected by
@@ -295,9 +285,6 @@ void kernel_main() {
                         sender_sem.wait(in1_mcast_num_dests);
                         sender_sem.set(0);
                         // DEBUG: matmul mcast hang — reached iff all in1 acks received (first block).
-                        if (b == 0 && bh == 0 && bw == 0 && block == 0) {
-                            DPRINT("SEND in1 acked (got {} dests)\n", in1_mcast_num_dests);
-                        }
 
                         // Now we have the block in the CB address, we can mcast to dests!
                         MulticastEndpoint mcast_dst;
@@ -315,9 +302,14 @@ void kernel_main() {
                              .addr = static_cast<uint32_t>(in1_start_address)},
                             true);
 
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
+                        // Flush the DATA multicast before the VALID-semaphore multicast. On Quasar, without this
+                        // barrier the back-to-back in1-then-bias mcasts let the bias VALID semaphore write
+                        // race/drop on the NoC -> the receiver's bias wait(VALID) hangs (flaky: 1x1 256->128
+                        // flaked, bottleneck conv2 hung deterministically). Sender sends+acks bias but the
+                        // receiver never sees bias VALID. Matches the BH ordering requirement.
                         noc.async_writes_flushed();
-#endif  // ARCH_BLACKHOLE
+#endif  // ARCH_BLACKHOLE || ARCH_QUASAR
 
                         // We should also multicast the flag to destinations
                         receiver_sem.set_multicast(
@@ -369,9 +361,6 @@ void kernel_main() {
                         // DEBUG: matmul mcast hang — reached iff all BIAS acks received (first block).
                         // If "SEND in1 acked" prints but this does not, the bias mcast handshake is the
                         // stuck point (receivers never reached the bias up() because in1 VALID didn't reach them).
-                        if (b == 0 && bh == 0 && bw == 0) {
-                            DPRINT("SEND bias acked (got {} dests)\n", in1_mcast_num_dests);
-                        }
 
                         MulticastEndpoint mcast_dst;
                         noc.async_write_multicast(
@@ -386,9 +375,14 @@ void kernel_main() {
                              .noc_y_end = in1_mcast_dest_noc_end_y,
                              .addr = static_cast<uint32_t>(in3_start_address)},
                             true);
-#ifdef ARCH_BLACKHOLE
+#if defined(ARCH_BLACKHOLE) || defined(ARCH_QUASAR)
+                        // Flush the DATA multicast before the VALID-semaphore multicast. On Quasar, without this
+                        // barrier the back-to-back in1-then-bias mcasts let the bias VALID semaphore write
+                        // race/drop on the NoC -> the receiver's bias wait(VALID) hangs (flaky: 1x1 256->128
+                        // flaked, bottleneck conv2 hung deterministically). Sender sends+acks bias but the
+                        // receiver never sees bias VALID. Matches the BH ordering requirement.
                         noc.async_writes_flushed();
-#endif  // ARCH_BLACKHOLE
+#endif  // ARCH_BLACKHOLE || ARCH_QUASAR
 
                         receiver_sem.set_multicast(
                             noc,
@@ -507,15 +501,7 @@ void kernel_main() {
     // in the nonposted-writes-sent wait (NIU_MST_NONPOSTED_WR_REQ_SENT == noc_nonposted_writes_num_issued).
     // If npw_issued exceeds the actual HW sends (npw_sent==0), a metal2 primitive (likely the in1
     // multicast wrapper counting issued += num_dests while the NIU counts one request) over-incremented.
-    DPRINT(
-        "[in1-dev] PREBARRIER noc={} reads_issued={} npw_issued={} reads_flushed={} npw_sent={}\n",
-        (uint32_t)noc_index,
-        (uint32_t)noc_reads_num_issued[noc_index],
-        (uint32_t)noc_nonposted_writes_num_issued[noc_index],
-        (uint32_t)ncrisc_noc_reads_flushed(noc_index),
-        (uint32_t)ncrisc_noc_nonposted_writes_sent(noc_index));
 
     // Drain outstanding NOC writes AND atomics before returning (Metal 2.0 FW epilogue does not).
     noc.async_full_barrier();
-    DPRINT("WSM end\n");  // DEBUG: matmul layer3 hang
 }

@@ -28,11 +28,15 @@
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
+
+#include <tt_stl/small_vector.hpp>
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/types.hpp"
 
@@ -67,13 +71,13 @@ protected:
 // ============================================================================
 
 TEST_F(QueryOpConstraintsMockDevice, DeviceTensorCreationInGraphCapture) {
-    const auto input_spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 64, 128}),
+    const auto input_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
 
-    // create_device_tensor inside graph capture should work on mock device
+    // ttnn::create_device_tensor inside graph capture should work on mock device
     auto capture = ttnn::graph::ScopedGraphCapture(ttnn::graph::GraphProcessor::RunMode::NO_DISPATCH);
-    auto tensor = create_device_tensor(input_spec, mock_device_.get());
+    auto tensor = ttnn::create_device_tensor(input_spec, mock_device_.get());
     EXPECT_TRUE(tensor.is_allocated());
 }
 
@@ -82,8 +86,8 @@ TEST_F(QueryOpConstraintsMockDevice, DeviceTensorCreationInGraphCapture) {
 // ============================================================================
 
 TEST_F(QueryOpConstraintsMockDevice, NormalModeGraphCaptureAllocatesRealMemory) {
-    const auto input_spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 64, 128}),
+    const auto input_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
 
     // Record allocator state before
@@ -91,7 +95,7 @@ TEST_F(QueryOpConstraintsMockDevice, NormalModeGraphCaptureAllocatesRealMemory) 
 
     {
         auto capture = ttnn::graph::ScopedGraphCapture(ttnn::graph::GraphProcessor::RunMode::NORMAL);
-        auto tensor = create_device_tensor(input_spec, mock_device_.get());
+        auto tensor = ttnn::create_device_tensor(input_spec, mock_device_.get());
 
         // Tensor should have a real address (not 0 like in NO_DISPATCH)
         EXPECT_GT(tensor.buffer()->address(), 0u);
@@ -107,15 +111,15 @@ TEST_F(QueryOpConstraintsMockDevice, NormalModeGraphCaptureAllocatesRealMemory) 
 }
 
 TEST_F(QueryOpConstraintsMockDevice, NormalModeVsNoDispatchAllocatorBehavior) {
-    const auto input_spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 64, 128}),
+    const auto input_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
 
     // NO_DISPATCH: allocation is dry (address=0, allocator untouched)
     size_t allocated_no_dispatch = 0;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(ttnn::graph::GraphProcessor::RunMode::NO_DISPATCH);
-        auto tensor = create_device_tensor(input_spec, mock_device_.get());
+        auto tensor = ttnn::create_device_tensor(input_spec, mock_device_.get());
         EXPECT_EQ(tensor.buffer()->address(), 0u);
         allocated_no_dispatch = mock_device_->allocator()->get_statistics(BufferType::L1).total_allocated_bytes;
     }
@@ -124,7 +128,7 @@ TEST_F(QueryOpConstraintsMockDevice, NormalModeVsNoDispatchAllocatorBehavior) {
     size_t allocated_normal = 0;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(ttnn::graph::GraphProcessor::RunMode::NORMAL);
-        auto tensor = create_device_tensor(input_spec, mock_device_.get());
+        auto tensor = ttnn::create_device_tensor(input_spec, mock_device_.get());
         EXPECT_GT(tensor.buffer()->address(), 0u);
         allocated_normal = mock_device_->allocator()->get_statistics(BufferType::L1).total_allocated_bytes;
     }
@@ -133,8 +137,8 @@ TEST_F(QueryOpConstraintsMockDevice, NormalModeVsNoDispatchAllocatorBehavior) {
 }
 
 TEST_F(QueryOpConstraintsMockDevice, NormalModeMultipleTensorsAccumulateState) {
-    const auto spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 32, 64}),
+    const auto spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 32, 64}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
 
     auto stats_before = mock_device_->allocator()->get_statistics(BufferType::L1);
@@ -142,10 +146,10 @@ TEST_F(QueryOpConstraintsMockDevice, NormalModeMultipleTensorsAccumulateState) {
     {
         auto capture = ttnn::graph::ScopedGraphCapture(ttnn::graph::GraphProcessor::RunMode::NORMAL);
 
-        auto tensor1 = create_device_tensor(spec, mock_device_.get());
+        auto tensor1 = ttnn::create_device_tensor(spec, mock_device_.get());
         auto stats_after_1 = mock_device_->allocator()->get_statistics(BufferType::L1);
 
-        auto tensor2 = create_device_tensor(spec, mock_device_.get());
+        auto tensor2 = ttnn::create_device_tensor(spec, mock_device_.get());
         auto stats_after_2 = mock_device_->allocator()->get_statistics(BufferType::L1);
 
         // Each tensor adds to the allocator state
@@ -176,8 +180,8 @@ TEST_F(QueryOpConstraintsMockDevice, ExtractStateReturnsValidState) {
 }
 
 TEST_F(QueryOpConstraintsMockDevice, OverrideStateRestoresCheckpoint) {
-    const auto spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 32, 64}),
+    const auto spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 32, 64}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
 
     // Take empty checkpoint
@@ -187,7 +191,7 @@ TEST_F(QueryOpConstraintsMockDevice, OverrideStateRestoresCheckpoint) {
     experimental::MockAllocatorState state_with_tensor;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(ttnn::graph::GraphProcessor::RunMode::NORMAL);
-        auto tensor = create_device_tensor(spec, mock_device_.get());
+        auto tensor = ttnn::create_device_tensor(spec, mock_device_.get());
         state_with_tensor = experimental::extract_mock_allocator_state(*mock_device_);
         EXPECT_GT(state_with_tensor.total_allocated_size(), 0u);
     }
@@ -208,15 +212,15 @@ TEST_F(QueryOpConstraintsMockDevice, OverrideStateRestoresCheckpoint) {
 }
 
 TEST_F(QueryOpConstraintsMockDevice, CheckpointRestoreWorkflow) {
-    const auto spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 32, 64}),
+    const auto spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 32, 64}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
 
     // Simulate op1: allocate output, take checkpoint
     experimental::MockAllocatorState checkpoint_after_op1;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(ttnn::graph::GraphProcessor::RunMode::NORMAL);
-        auto op1_output = create_device_tensor(spec, mock_device_.get());
+        auto op1_output = ttnn::create_device_tensor(spec, mock_device_.get());
         checkpoint_after_op1 = experimental::extract_mock_allocator_state(*mock_device_);
     }
 
@@ -225,7 +229,7 @@ TEST_F(QueryOpConstraintsMockDevice, CheckpointRestoreWorkflow) {
     {
         experimental::override_mock_allocator_state(*mock_device_, checkpoint_after_op1);
         auto capture = ttnn::graph::ScopedGraphCapture(ttnn::graph::GraphProcessor::RunMode::NORMAL);
-        auto op2_output = create_device_tensor(spec, mock_device_.get());
+        auto op2_output = ttnn::create_device_tensor(spec, mock_device_.get());
         state_after_op2a = experimental::extract_mock_allocator_state(*mock_device_);
     }
 
@@ -235,12 +239,12 @@ TEST_F(QueryOpConstraintsMockDevice, CheckpointRestoreWorkflow) {
         experimental::override_mock_allocator_state(*mock_device_, checkpoint_after_op1);
 
         // Use DRAM config this time
-        const auto dram_spec = ttnn::TensorSpec(
-            ttnn::Shape(Array4D{1, 1, 32, 64}),
+        const auto dram_spec = tt::tt_metal::TensorSpec(
+            ttnn::Shape(ttnn::Array4D{1, 1, 32, 64}),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::DRAM_MEMORY_CONFIG));
 
         auto capture = ttnn::graph::ScopedGraphCapture(ttnn::graph::GraphProcessor::RunMode::NORMAL);
-        auto op2_output = create_device_tensor(dram_spec, mock_device_.get());
+        auto op2_output = ttnn::create_device_tensor(dram_spec, mock_device_.get());
         state_after_op2b = experimental::extract_mock_allocator_state(*mock_device_);
     }
 
@@ -254,8 +258,8 @@ TEST_F(QueryOpConstraintsMockDevice, CheckpointRestoreWorkflow) {
 // ============================================================================
 
 TEST_F(QueryOpConstraintsMockDevice, UnaryRelu) {
-    const auto input_spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 64, 128}),
+    const auto input_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
 
     auto query = ttnn::graph::query_op_constraints(
@@ -272,8 +276,8 @@ TEST_F(QueryOpConstraintsMockDevice, UnaryRelu) {
 }
 
 TEST_F(QueryOpConstraintsMockDevice, UnaryReluHeightSharded) {
-    const auto input_spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{3, 1, 32 * 32, 32 * 32}),
+    const auto input_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{3, 1, 32 * 32, 32 * 32}),
         TensorLayout(
             DataType::BFLOAT16,
             PageConfig(Layout::TILE),
@@ -299,8 +303,8 @@ TEST_F(QueryOpConstraintsMockDevice, UnaryReluHeightSharded) {
 }
 
 TEST_F(QueryOpConstraintsMockDevice, BinaryAdd) {
-    const auto spec_a = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{4, 2, 5 * 32, 7 * 32}),
+    const auto spec_a = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{4, 2, 5 * 32, 7 * 32}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
     const auto& spec_b = spec_a;
 
@@ -325,12 +329,12 @@ TEST_F(QueryOpConstraintsMockDevice, BinaryAdd) {
 }
 
 TEST_F(QueryOpConstraintsMockDevice, Matmul) {
-    const auto spec_a = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 64, 128}),
+    const auto spec_a = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
 
-    const auto spec_b = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 128, 64}),
+    const auto spec_b = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 128, 64}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
 
     auto query = ttnn::graph::query_op_constraints(
@@ -364,11 +368,11 @@ TEST_F(QueryOpConstraintsMockDevice, Matmul) {
 // ============================================================================
 
 TEST_F(QueryOpConstraintsMockDevice, MatmulProgramConfigCaptured) {
-    const auto spec_a = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 64, 128}),
+    const auto spec_a = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-    const auto spec_b = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 128, 64}),
+    const auto spec_b = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 128, 64}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
 
     auto initial_state = experimental::extract_mock_allocator_state(*mock_device_);
@@ -436,11 +440,11 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulProgramConfigCaptured) {
 // round-trips it to the same footprint.
 TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedProgramConfigCaptured) {
     // M=512 (16 tiles), K=256 (8 tiles), N=1024 (32 tiles).
-    const auto spec_a = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 512, 256}),
+    const auto spec_a = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 512, 256}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
-    const auto spec_b = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 256, 1024}),
+    const auto spec_b = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 256, 1024}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
 
     // Width-shard the [512, 1024] output across an 8-core row: each core holds the full height
@@ -511,12 +515,115 @@ TEST_F(QueryOpConstraintsMockDevice, MatmulWidthShardedProgramConfigCaptured) {
 }
 
 // ============================================================================
+// Metal 2.0 dataflow buffers in the estimation-path capture (#51674)
+//
+// A ported op allocates L1 scratch as dataflow buffers, so circular_buffers() is empty and the
+// CB side of the resource usage summed to zero. `repeat` is the first such op (#51068).
+// ============================================================================
+
+namespace {
+// Row major so `repeat` lands on the interleaved-RM factory, which builds two dataflow buffers.
+tt::tt_metal::TensorSpec metal2_repeat_input_spec() {
+    return tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), ttnn::L1_MEMORY_CONFIG));
+}
+
+// Two DFBs of (2 * READ_ALIGNMENT) + page_size = 128 + 256 bytes, neither borrowed nor aliased.
+constexpr uint32_t kRepeatDfbPeakPerCore = 768;
+
+ttnn::graph::ConstraintQueryResponse query_repeat(tt::tt_metal::distributed::MeshDevice* device) {
+    const auto input_spec = metal2_repeat_input_spec();
+    return ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::repeat(std::forward<decltype(args)>(args)...); },
+        device,
+        input_spec,
+        ttsl::SmallVector<uint32_t>{1, 1, 2, 1},
+        input_spec.tensor_layout().get_memory_config(),
+        // Without this, `repeat` picks the codegen path, which uses circular buffers and would
+        // report a non-zero peak with or without dataflow buffers being recorded.
+        std::string("native"));
+}
+
+// Two repeats in one capture. Params are by const& because forwarding the same pack twice is
+// unsound; `first` is held to end of scope so both programs' buffers coexist.
+ttnn::graph::ConstraintQueryResponse query_two_repeats(tt::tt_metal::distributed::MeshDevice* device) {
+    const auto input_spec = metal2_repeat_input_spec();
+    return ttnn::graph::query_op_constraints(
+        [](const auto& input, const auto& repetition_vector, const auto& memory_config, const auto& implementation) {
+            [[maybe_unused]] const auto first = ttnn::repeat(input, repetition_vector, memory_config, implementation);
+            return ttnn::repeat(input, repetition_vector, memory_config, implementation);
+        },
+        device,
+        input_spec,
+        ttsl::SmallVector<uint32_t>{1, 1, 2, 1},
+        input_spec.tensor_layout().get_memory_config(),
+        std::string("native"));
+}
+}  // namespace
+
+// The regression itself: this reported exactly 0 before DFBs were recorded.
+TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatReportsDataflowBufferPeak) {
+    auto query = query_repeat(mock_device_.get());
+
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
+    EXPECT_EQ(query.resource_usage.dataflow_buffer_peak_size_per_core, kRepeatDfbPeakPerCore);
+    // The op has no circular buffers, so that metric stays 0 rather than absorbing the DFBs.
+    EXPECT_EQ(query.resource_usage.cb_peak_size_per_core, 0u);
+}
+
+// Recording the buffers is only half the fix; the running total is a separate accumulator.
+TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatDataflowBufferPeakContributesToPeakMemory) {
+    auto query = query_repeat(mock_device_.get());
+
+    ASSERT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
+    ASSERT_EQ(query.resource_usage.dataflow_buffer_peak_size_per_core, kRepeatDfbPeakPerCore);
+    EXPECT_EQ(
+        query.resource_usage.peak_memory_usage_per_core,
+        query.resource_usage.dataflow_buffer_peak_size_per_core + query.resource_usage.l1_buffers_peak_per_core);
+}
+
+// Must be two programs in ONE capture: separate queries each re-zero the counters, so their
+// equality would hold whether or not the per-program reset covers DFB nodes.
+TEST_F(QueryOpConstraintsMockDevice, MetalV2RepeatDataflowBufferPeakDoesNotAccumulateWithinOneCapture) {
+    auto single = query_repeat(mock_device_.get());
+    auto doubled = query_two_repeats(mock_device_.get());
+
+    ASSERT_EQ(single.status, ttnn::graph::ExecutionStatus::Success)
+        << "Error: " << single.error_message.value_or("none");
+    ASSERT_EQ(doubled.status, ttnn::graph::ExecutionStatus::Success)
+        << "Error: " << doubled.error_message.value_or("none");
+    ASSERT_EQ(single.resource_usage.dataflow_buffer_peak_size_per_core, kRepeatDfbPeakPerCore);
+    EXPECT_EQ(
+        doubled.resource_usage.dataflow_buffer_peak_size_per_core,
+        single.resource_usage.dataflow_buffer_peak_size_per_core);
+}
+
+// Guards the other direction: the added dataflow-buffer pass must leave ops that use real
+// circular buffers accounted for exactly as before.
+TEST_F(QueryOpConstraintsMockDevice, LegacyCircularBufferOpStillReportsCbPeak) {
+    const auto input_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+
+    auto query = ttnn::graph::query_op_constraints(
+        [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); },
+        mock_device_.get(),
+        input_spec,
+        input_spec.tensor_layout().get_memory_config());
+
+    ASSERT_EQ(query.status, ttnn::graph::ExecutionStatus::Success) << "Error: " << query.error_message.value_or("none");
+    EXPECT_GT(query.resource_usage.cb_peak_size_per_core, 0u);
+    EXPECT_GE(query.resource_usage.peak_memory_usage_per_core, query.resource_usage.cb_peak_size_per_core);
+}
+
+// ============================================================================
 // query_op_constraints_with_initial_state — pure state-in / state-out variant
 // ============================================================================
 
 TEST_F(QueryOpConstraintsMockDevice, WithInitialStateReturnsResponseAndNewState) {
-    const auto input_spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 64, 128}),
+    const auto input_spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
 
     // Start from an empty allocator state.
@@ -546,8 +653,8 @@ TEST_F(QueryOpConstraintsMockDevice, WithInitialStateReturnsResponseAndNewState)
 }
 
 TEST_F(QueryOpConstraintsMockDevice, WithInitialStateThreadsStateAcrossOps) {
-    const auto spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 64, 128}),
+    const auto spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
     auto relu = [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); };
     const auto mem_cfg = spec.tensor_layout().get_memory_config();
@@ -571,8 +678,8 @@ TEST_F(QueryOpConstraintsMockDevice, WithInitialStateThreadsStateAcrossOps) {
 }
 
 TEST_F(QueryOpConstraintsMockDevice, WithInitialStateIsPureAcrossCalls) {
-    const auto spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 64, 128}),
+    const auto spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
     auto relu = [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); };
     const auto mem_cfg = spec.tensor_layout().get_memory_config();
@@ -591,8 +698,8 @@ TEST_F(QueryOpConstraintsMockDevice, WithInitialStateIsPureAcrossCalls) {
 }
 
 TEST_F(QueryOpConstraintsMockDevice, OptionalStateNulloptRunsStatelessQuery) {
-    const auto spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 64, 128}),
+    const auto spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
     auto relu = [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); };
     const auto mem_cfg = spec.tensor_layout().get_memory_config();
@@ -618,8 +725,8 @@ TEST_F(QueryOpConstraintsMockDevice, OptionalStateNulloptRunsStatelessQuery) {
 }
 
 TEST_F(QueryOpConstraintsMockDevice, OptionalStateWithValueMatchesStatefulCore) {
-    const auto spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 64, 128}),
+    const auto spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
     auto relu = [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); };
     const auto mem_cfg = spec.tensor_layout().get_memory_config();
@@ -641,8 +748,8 @@ TEST_F(QueryOpConstraintsMockDevice, OptionalStateWithValueMatchesStatefulCore) 
 }
 
 TEST_F(QueryOpConstraintsMockDevice, WithAllocationsReproducesQueryPlacement) {
-    const auto spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 64, 128}),
+    const auto spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
     auto relu = [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); };
     const auto mem_cfg = spec.tensor_layout().get_memory_config();
@@ -663,8 +770,8 @@ TEST_F(QueryOpConstraintsMockDevice, WithAllocationsReproducesQueryPlacement) {
 }
 
 TEST_F(QueryOpConstraintsMockDevice, WithAllocationsDropRecordFreesSpace) {
-    const auto spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 64, 128}),
+    const auto spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
     auto relu = [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); };
     const auto mem_cfg = spec.tensor_layout().get_memory_config();
@@ -693,8 +800,8 @@ TEST_F(QueryOpConstraintsMockDevice, WithAllocationsDropRecordFreesSpace) {
 TEST_F(QueryOpConstraintsMockDevice, WithAllocationsFreedSlotIsReused) {
     // Proves build-from-records ≡ regular dealloc placement: after dropping a record, a fresh
     // allocation reuses the freed slot exactly as it would on a real device.
-    const auto spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 64, 128}),
+    const auto spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
     auto relu = [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); };
     const auto mem_cfg = spec.tensor_layout().get_memory_config();
@@ -723,8 +830,8 @@ TEST_F(QueryOpConstraintsMockDevice, WithAllocationsFreedSlotIsReused) {
 
 TEST_F(QueryOpConstraintsMockDevice, WithInitialStateReportsOomAsError) {
     // An L1 output far larger than total L1 cannot be allocated in Phase 2 -> Error.
-    const auto huge = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 16384, 16384}),
+    const auto huge = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 16384, 16384}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
     auto relu = [](auto&&... args) { return ttnn::relu(std::forward<decltype(args)>(args)...); };
 
@@ -772,8 +879,8 @@ protected:
 };
 
 TEST_F(MockAllocatorCoexistence, CheckpointRestoreWhileRealDeviceOpen) {
-    const auto spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 32, 64}),
+    const auto spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 32, 64}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
 
     // Empty checkpoint while real device is open
@@ -783,7 +890,7 @@ TEST_F(MockAllocatorCoexistence, CheckpointRestoreWhileRealDeviceOpen) {
     experimental::MockAllocatorState state_with_tensor;
     {
         auto capture = ttnn::graph::ScopedGraphCapture(ttnn::graph::GraphProcessor::RunMode::NORMAL);
-        auto tensor = create_device_tensor(spec, mock_device_.get());
+        auto tensor = ttnn::create_device_tensor(spec, mock_device_.get());
         state_with_tensor = experimental::extract_mock_allocator_state(*mock_device_);
         EXPECT_GT(state_with_tensor.total_allocated_size(), 0u);
     }
@@ -807,15 +914,15 @@ TEST_F(MockAllocatorCoexistence, CheckpointRestoreWhileRealDeviceOpen) {
 }
 
 TEST_F(MockAllocatorCoexistence, GraphCaptureOnMockDoesNotAffectRealDevice) {
-    const auto spec = ttnn::TensorSpec(
-        ttnn::Shape(Array4D{1, 1, 64, 128}),
+    const auto spec = tt::tt_metal::TensorSpec(
+        ttnn::Shape(ttnn::Array4D{1, 1, 64, 128}),
         TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), ttnn::L1_MEMORY_CONFIG));
 
     auto real_stats_before = real_device_->allocator()->get_statistics(BufferType::L1);
 
     {
         auto capture = ttnn::graph::ScopedGraphCapture(ttnn::graph::GraphProcessor::RunMode::NORMAL);
-        auto tensor = create_device_tensor(spec, mock_device_.get());
+        auto tensor = ttnn::create_device_tensor(spec, mock_device_.get());
         EXPECT_TRUE(tensor.is_allocated());
         // Mock allocator advanced
         auto mock_state = experimental::extract_mock_allocator_state(*mock_device_);

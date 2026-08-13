@@ -18,7 +18,7 @@ void SelectTargetLogitDeviceOperation::validate_on_program_cache_miss(
                            tt::tt_metal::Layout required_layout,
                            tt::tt_metal::DataType required_dtype) {
         TT_FATAL(
-            tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            tensor.storage_type() == ttnn::StorageType::DEVICE,
             "SelectTargetLogit: '{}' must be on DEVICE, got '{}'",
             name,
             enchantum::to_string(tensor.storage_type()));
@@ -36,7 +36,7 @@ void SelectTargetLogitDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(required_dtype),
             enchantum::to_string(tensor.dtype()));
         TT_FATAL(
-            tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "SelectTargetLogit: '{}' must use INTERLEAVED memory layout, got '{}'",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
@@ -66,7 +66,7 @@ void SelectTargetLogitDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.preallocated_output.has_value()) {
         const auto& out = tensor_args.preallocated_output.value();
         TT_FATAL(
-            out.storage_type() == tt::tt_metal::StorageType::DEVICE,
+            out.storage_type() == ttnn::StorageType::DEVICE,
             "SelectTargetLogit: 'preallocated_output' must be on DEVICE, got '{}'",
             enchantum::to_string(out.storage_type()));
         TT_FATAL(out.buffer() != nullptr, "SelectTargetLogit: 'preallocated_output' buffer is null.");
@@ -79,7 +79,7 @@ void SelectTargetLogitDeviceOperation::validate_on_program_cache_miss(
             "SelectTargetLogit: 'preallocated_output' must be BFLOAT16, got '{}'",
             enchantum::to_string(out.dtype()));
         TT_FATAL(
-            out.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
+            out.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
             "SelectTargetLogit: 'preallocated_output' must use INTERLEAVED memory layout, got '{}'",
             enchantum::to_string(out.memory_config().memory_layout()));
     }
@@ -92,7 +92,7 @@ SelectTargetLogitDeviceOperation::spec_return_value_t SelectTargetLogitDeviceOpe
     }
     ttnn::Shape shape = tensor_args.logit.logical_shape();
     shape[-1] = 1U;
-    return ttnn::TensorSpec(
+    return tt::tt_metal::TensorSpec(
         shape,
         tt::tt_metal::TensorLayout(
             tensor_args.logit.dtype(), tt::tt_metal::Layout::TILE, tensor_args.logit.memory_config()));
@@ -103,7 +103,7 @@ SelectTargetLogitDeviceOperation::tensor_return_value_t SelectTargetLogitDeviceO
     if (tensor_args.preallocated_output.has_value()) {
         return tensor_args.preallocated_output.value();
     }
-    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.logit.device());
+    return ttnn::create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.logit.device());
 }
 
 ttsl::hash::hash_t SelectTargetLogitDeviceOperation::compute_program_hash(

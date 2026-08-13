@@ -39,6 +39,10 @@ void RunningStatistics::validate_tensors(
     check_tensor_stat(batch_mean, "batch_mean_shape", C);
     check_tensor_stat(batch_var, "batch_var_shape", C);
 
+    TT_FATAL(
+        running_mean.has_value() || running_var.has_value(),
+        "running_statistics requires at least one of running_mean / running_var");
+
     // running_mean (1, C, 1, 1)
     if (running_mean.has_value()) {
         check_tensor_stat(running_mean.value(), "running_mean_shape", C);
@@ -89,7 +93,7 @@ RunningStatistics::spec_return_value_t RunningStatistics::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
     const auto output_shape = tensor_args.batch_mean.logical_shape();
-    return TensorSpec(
+    return tt::tt_metal::TensorSpec(
         output_shape,
         TensorLayout(operation_attributes.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 }

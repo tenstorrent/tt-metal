@@ -261,7 +261,7 @@ UntilizeDeviceOperation::spec_return_value_t UntilizeDeviceOperation::compute_ou
     const auto& input_tensor = tensor_args.input;
     DataType output_dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
 
-    return {TensorSpec(
+    return {tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
         TensorLayout::fromPaddedShape(
             output_dtype,
@@ -402,7 +402,6 @@ Tensor untilize(
     bool use_multicore,
     bool fp32_dest_acc_en,
     std::optional<CoreRangeSet> sub_core_grids,
-    bool enough_space_width,
     bool enough_space_height,
     uint32_t pf_type) {
     return ttnn::device_operation::launch<UntilizeDeviceOperation>(
@@ -411,7 +410,6 @@ Tensor untilize(
             .use_multicore = use_multicore,
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .sub_core_grids = std::move(sub_core_grids),
-            .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .pf_type = pf_type},
         UntilizeTensorArgs{.input = input});

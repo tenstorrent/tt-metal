@@ -9,9 +9,11 @@
 
 #include <array>
 #include <cstdint>
+#include <type_traits>
 #include <utility>
 
-// Store-and-forward AllGather is Fabric_1D only: every fabric send is a single 1-hop unicast to the neighbor.
+// Store-and-forward AllGather: every fabric send is a single 1-hop unicast to the neighbor.
+// Runs on any effectively-1D topology (both Fabric 1D and 2D).
 namespace fabric_api = tt::tt_fabric::linear::experimental;
 
 ////////////////////////////////////////////////////////////////
@@ -93,20 +95,22 @@ private:
 };
 
 // Unicasts pages one hop to the single neighbor. Handles packetization (pack several pages into one
-// scatter-write packet when they fit, else split a big page across packets).
+// scatter-write packet when they fit, else split a big page across packets), and the semaphore increments
+// that announce them.
 //
 // Templated on the sender type (SenderT*) so the same writer drives either a direct WorkerToFabricEdmSender
 // (one worker per direction) or a WorkerToFabricMuxSender (workers sharing a fabric mux). The send calls are
-// base sender-pointer overloads that accept either; for 1D-linear all routing is to_chip_unicast(1) set via
-// set_state, so no route-manager is needed. FabricWriter owns its two packet headers directly.
+// base sender-pointer overloads that accept either, so no route-manager is needed -- which is also why this
+// class routes its own headers.
 template <uint32_t page_size, uint32_t packet_size, typename SenderT>
 class FabricWriter {
 public:
-    FabricWriter(const Noc& noc, SenderT* sender) :
+    FabricWriter(const Noc& noc, SenderT* sender, uint16_t neighbor_chip_id, uint16_t neighbor_mesh_id) :
         noc{noc},
         sender{sender},
         scatter_packet_header{PacketHeaderPool::allocate_header(1)},
         unicast_packet_header{PacketHeaderPool::allocate_header(1)},
+        sem_packet_header{PacketHeaderPool::allocate_header(1)},
         scatter_header({}, {}),
         chunk_count{0} {
         std::array<uint64_t, max_pages_per_packet> dummy_addrs{};  // init to 0s
@@ -121,10 +125,35 @@ public:
 
         fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
             unicast_packet_header, num_hops);
+
+        // One atomic-inc header for the "alive" barrier inc + data_valid signals; Flush orders it after the
+        // payload it announces.
+        fabric_api::fabric_unicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            sem_packet_header, num_hops, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{0u, 1u});
+
+        // For Fabric_2D, set_state() sets routes only in its RoutingPlaneConnectionManager overloads, so set
+        // them here. Keyed on the header type since the FABRIC_2D define is absent on the mux path.
+        if constexpr (std::is_base_of_v<tt::tt_fabric::HybridMeshPacketHeader, PACKET_HEADER_TYPE>) {
+            using MeshHeader = volatile tt::tt_fabric::HybridMeshPacketHeader*;
+            fabric_set_unicast_route(
+                reinterpret_cast<MeshHeader>(scatter_packet_header), neighbor_chip_id, neighbor_mesh_id);
+            fabric_set_unicast_route(
+                reinterpret_cast<MeshHeader>(unicast_packet_header), neighbor_chip_id, neighbor_mesh_id);
+            fabric_set_unicast_route(
+                reinterpret_cast<MeshHeader>(sem_packet_header), neighbor_chip_id, neighbor_mesh_id);
+        }
     }
 
     ~FabricWriter() {
         ASSERT(chunk_count == 0);  // outstanding chunks! flush() not called correctly
+    }
+
+    // Increment a semaphore on the neighbor.
+    void atomic_inc(uint64_t addr, uint32_t val) {
+        fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
+            UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val>(
+            sender, sem_packet_header, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{addr, val});
     }
 
     void async_write(uint32_t l1_addr, uint64_t remote_noc_addr) {
@@ -211,6 +240,7 @@ private:
     SenderT* sender;  // direct or mux sender
     volatile tt_l1_ptr PACKET_HEADER_TYPE* scatter_packet_header;
     volatile tt_l1_ptr PACKET_HEADER_TYPE* unicast_packet_header;
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* sem_packet_header;
     NocUnicastScatterCommandHeader scatter_header;
     uint8_t chunk_count;     // accumulated chunks not yet sent in a packet
     uint32_t start_l1_addr;  // start address of the accumulated contiguous chunks

@@ -602,14 +602,18 @@ def fast_device_to_host(
 
             n_hosts = int(ttnn.distributed_context_get_size())
             if n_hosts > 1:
-                # mesh_partition's internal slice asserts per-chip W is
-                # tile-aligned in TILE layout. Predict the per-chip shape
-                # after the upcoming repeat (× n_hosts on inter_dim) and
-                # mesh_partition (÷ inter_axis_size on inter_dim), then drop
-                # to ROW_MAJOR if W won't be tile-aligned.
+                # A TILE-layout all_gather/repeat/mesh_partition is only safe when
+                # BOTH of the last two dims are tile-aligned. If the second-to-last
+                # dim (H) is not a multiple of TILE_SIZE, its tile padding makes the
+                # TILE repeat/mesh_partition interleave H rows across the shards ->
+                # horizontal-band noise corruption on multi-host (single-host skips
+                # this block, hence 4x8 was clean but 4x32 corrupted). Predict the
+                # per-chip shape after repeat (× n_hosts) and mesh_partition
+                # (÷ inter_axis_size) on inter_dim, and drop to ROW_MAJOR unless
+                # BOTH last dims are tile-aligned (matches the known-good behavior).
                 post_shape = list(gathered_tensor.shape)
                 post_shape[inter_dim] = post_shape[inter_dim] * n_hosts // mesh_shape[inter_host_axis]
-                if post_shape[-1] % ttnn.TILE_SIZE != 0:
+                if post_shape[-1] % ttnn.TILE_SIZE != 0 or post_shape[-2] % ttnn.TILE_SIZE != 0:
                     gathered_tensor = ttnn.to_layout(gathered_tensor, ttnn.ROW_MAJOR_LAYOUT)
 
                 repeat_dims = [1] * len(gathered_tensor.shape)
@@ -866,3 +870,30 @@ def print_tensor_mem_info(tt: ttnn.Tensor):
         logger.info("  layout:", s.layout)
         logger.info("  dtype:", s.dtype)
         logger.info("  memory_config:", s.memory_config())
+
+
+def prepare_weight_for_concatenated_input(
+    weight: torch.Tensor,
+    sizes: Sequence[int],
+    *,
+    device_count: int,
+    tile_pad_segments: bool = True,
+) -> torch.Tensor:
+    """Shard weight by device_count per segment and stack.
+
+    tile_pad_segments=True (fused concat): zero-pad each per-device segment K to a tile boundary
+    so minimal_matmul([prefix, suffix], weight) works for any channel count.
+    tile_pad_segments=False (materialized concat): contiguous stack, for use with ttnn.concat.
+    """
+    segments = weight.split(sizes, dim=1)
+    padded_segments = []
+    for seg in segments:
+        unf = seg.unflatten(1, [device_count, -1])  # [out, device_count, K_seg/dev]
+        if tile_pad_segments:
+            k_per_dev = unf.shape[2]
+            k_padded = ((k_per_dev + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+            if k_padded != k_per_dev:
+                pad = torch.zeros(*unf.shape[:2], k_padded - k_per_dev, dtype=unf.dtype)
+                unf = torch.cat([unf, pad], dim=2)
+        padded_segments.append(unf)
+    return torch.cat(padded_segments, dim=2).flatten(1, 2)

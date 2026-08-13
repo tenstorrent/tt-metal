@@ -34,6 +34,7 @@
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "hostdevcommon/dispatch_telemetry_types.hpp"
+#include "impl/dispatch/dispatch_engine_cores.hpp"
 
 using namespace tt::tt_metal;
 
@@ -94,7 +95,7 @@ PrefetchKernel::PrefetchKernel(
 void PrefetchKernel::GenerateStaticConfigs() {
     uint16_t channel = descriptor_.cluster().get_assigned_channel_for_device(device_->id());
     uint8_t cq_id_ = this->cq_id_;
-    const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
+    const auto& my_dispatch_constants = get_dispatch_mem_map();
     // May be zero if not using dispatch on fabric
     static_config_.fabric_header_rb_base =
         my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_HEADER_RB, cq_id_);
@@ -143,14 +144,13 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.my_upstream_cb_sem_id = 0;
         dependent_config_.upstream_cb_sem_id = 0;
         static_config_.cmddat_q_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        static_config_.cmddat_q_blocks = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 
         uint32_t dispatch_s_buffer_base = 0xff;
         if (get_dispatch_query_manager_ref().dispatch_s_enabled()) {
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
-            if (GetCoreType() == CoreType::WORKER) {
-                // dispatch_s (and on Quasar, prefetch itself) shares a Tensix core with dispatch_d.
-                // Place dispatch_s CB immediately after dispatch_d's CB within the shared L1.
+            if (GetCoreType() == CoreType::WORKER || GetCoreType() == CoreType::DISPATCH) {
+                // dispatch_s (and on Quasar, prefetch itself) shares a core with dispatch_d
+                // (Tensix WORKER or Quasar DE). Place dispatch_s CB immediately after dispatch_d's CB.
                 dispatch_s_buffer_base =
                     dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                my_dispatch_constants.dispatch_buffer_pages();
@@ -203,7 +203,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
             *program_, logical_core_, my_dispatch_constants.prefetch_d_buffer_pages(), GetCoreType());
         static_config_.cmddat_q_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        static_config_.cmddat_q_blocks = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 
         // PREFETCH_H has no DISPATCH_S
         static_config_.dispatch_s_buffer_base = 0;
@@ -239,14 +238,13 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.my_upstream_cb_sem_id =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
         static_config_.cmddat_q_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
-        static_config_.cmddat_q_blocks = DispatchSettings::PREFETCH_D_BUFFER_BLOCKS;
 
         uint32_t dispatch_s_buffer_base = 0xff;
         {  // Just to make it match previous implementation
             uint32_t dispatch_buffer_base = my_dispatch_constants.dispatch_buffer_base(cq_id_);
-            if (GetCoreType() == CoreType::WORKER) {
-                // dispatch_s (and on Quasar, prefetch itself) shares a Tensix core with dispatch_d.
-                // Place dispatch_s CB immediately after dispatch_d's CB within the shared L1.
+            if (GetCoreType() == CoreType::WORKER || GetCoreType() == CoreType::DISPATCH) {
+                // dispatch_s (and on Quasar, prefetch itself) shares a core with dispatch_d
+                // (Tensix WORKER or Quasar DE). Place dispatch_s CB immediately after dispatch_d's CB.
                 dispatch_s_buffer_base =
                     dispatch_buffer_base + (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE) *
                                                my_dispatch_constants.dispatch_buffer_pages();
@@ -494,7 +492,6 @@ void PrefetchKernel::CreateKernel() {
         {"MY_UPSTREAM_CB_SEM_ID", std::to_string(static_config_.my_upstream_cb_sem_id.value())},
         {"UPSTREAM_CB_SEM_ID", std::to_string(dependent_config_.upstream_cb_sem_id.value())},
         {"CMDDAT_Q_LOG_PAGE_SIZE", std::to_string(static_config_.cmddat_q_log_page_size.value())},
-        {"CMDDAT_Q_BLOCKS", std::to_string(static_config_.cmddat_q_blocks.value())},
         {"DISPATCH_S_BUFFER_BASE", std::to_string(static_config_.dispatch_s_buffer_base.value())},
         {"MY_DISPATCH_S_CB_SEM_ID", std::to_string(static_config_.my_dispatch_s_cb_sem_id.value())},
         {"DOWNSTREAM_DISPATCH_S_CB_SEM_ID", std::to_string(dependent_config_.downstream_dispatch_s_cb_sem_id.value())},
@@ -543,7 +540,7 @@ void PrefetchKernel::CreateKernel() {
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };
 
-    const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
+    const auto& my_dispatch_constants = get_dispatch_mem_map();
     defines["PREFETCH_Q_ENTRY_BITS"] = std::to_string(my_dispatch_constants.prefetch_q_entry_size_bytes() * 8);
 
     if (!is_hd()) {
@@ -586,7 +583,7 @@ void PrefetchKernel::ConfigureCore() {
     if (static_config_.is_h_variant.value()) {
         // Initialize the FetchQ
         uint16_t channel = descriptor_.cluster().get_assigned_channel_for_device(device_->id());
-        const auto& my_dispatch_constants = *dispatch_mem_map_[enchantum::to_underlying(GetCoreType())].get();
+        const auto& my_dispatch_constants = get_dispatch_mem_map();
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
         const uint32_t prefetch_q_bytes = my_dispatch_constants.prefetch_q_size();

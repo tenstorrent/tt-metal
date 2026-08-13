@@ -50,16 +50,16 @@ public:
 
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& get_mesh_device() const { return mesh_device_; }
     tt::tt_metal::IDevice* get_device() const { return device_; }
-    const std::vector<CoreCoord>& get_worker_cores() const { return worker_cores_; }
+    const std::vector<tt::tt_metal::CoreCoord>& get_worker_cores() const { return worker_cores_; }
 
-    CoreCoord get_mux_logical_core() const;
-    CoreCoord get_drainer_logical_core() const;
-    std::vector<CoreCoord> get_sender_logical_cores(const MuxV2ThroughputCase& benchmark_case) const;
+    tt::tt_metal::CoreCoord get_mux_logical_core() const;
+    tt::tt_metal::CoreCoord get_drainer_logical_core() const;
+    std::vector<tt::tt_metal::CoreCoord> get_sender_logical_cores(const MuxV2ThroughputCase& benchmark_case) const;
 
 private:
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
     tt::tt_metal::IDevice* device_ = nullptr;
-    std::vector<CoreCoord> worker_cores_;
+    std::vector<tt::tt_metal::CoreCoord> worker_cores_;
 };
 
 struct StandaloneMuxV2BenchmarkRunResult {

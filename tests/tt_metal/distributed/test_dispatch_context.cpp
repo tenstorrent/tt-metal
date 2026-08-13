@@ -41,6 +41,10 @@ TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {
     if (rt_options.get_fast_dispatch()) {
         GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
     }
+    if (MetalContext::instance().get_cluster().is_mock_or_emulated()) {
+        GTEST_SKIP() << "Mock/emulated devices cannot validate real data movement; see "
+                        "MockDeviceFdSdToggleIsNoOp for the mock-specific no-op behavior.";
+    }
     const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
     auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
 
@@ -98,6 +102,27 @@ TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {
     }
 }
 
+// Regression test for https://github.com/tenstorrent/tt-metal/issues/50634:
+// A SD->FD->SD toggle must be a safe no-op on mock/emulated devices. These targets never create
+// hardware command queues, so the FD teardown previously dereferenced an empty command-queue vector
+// and segfaulted. Verify the round-trip completes and the device remains usable.
+TEST_F(DispatchContextFixture, MockDeviceFdSdToggleIsNoOp) {
+    const auto& rt_options = MetalContext::instance().rtoptions();
+    if (rt_options.get_fast_dispatch()) {
+        GTEST_SKIP() << "This test can only be run with Slow Dispatch mode.";
+    }
+    if (!MetalContext::instance().get_cluster().is_mock_or_emulated()) {
+        GTEST_SKIP() << "This test only applies to mock/emulated devices.";
+    }
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
+
+    // SD -> FD -> SD toggle should not crash and should leave the device usable.
+    experimental::DispatchContext::get().initialize_fast_dispatch(mesh_device_.get());
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh_device_.get());
+    Finish(mesh_device_->mesh_command_queue());
+}
+
 TEST(DispatchContext, DoubleInitWithoutTerminateShouldThrow) {
     const auto& rt_options = MetalContext::instance().rtoptions();
     if (rt_options.get_fast_dispatch()) {
@@ -107,6 +132,10 @@ TEST(DispatchContext, DoubleInitWithoutTerminateShouldThrow) {
     auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
 
     const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.is_mock_or_emulated()) {
+        GTEST_SKIP() << "FD/SD toggle is a no-op on mock/emulated devices; the throw invariants do not apply. See "
+                        "MockDeviceFdSdToggleIsNoOp.";
+    }
     if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP()
             << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";
@@ -132,6 +161,10 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
     auto mesh_device_ = MeshDevice::create(MeshDeviceConfig(system_shape));
 
     const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.is_mock_or_emulated()) {
+        GTEST_SKIP() << "Mock/emulated devices cannot validate real data movement; see "
+                        "MockDeviceFdSdToggleIsNoOp for the mock-specific no-op behavior.";
+    }
     if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
         GTEST_SKIP()
             << "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.";

@@ -8,8 +8,6 @@
 #include <string>
 #include <variant>
 
-#include <tt-metalium/program_descriptors.hpp>
-
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "gelu_backward_program_factory.hpp"
@@ -20,7 +18,7 @@ namespace ttnn::experimental::prim {
 struct GeluBackwardDeviceOperation {
     using operation_attributes_t = GeluBackwardParams;
     using tensor_args_t = GeluBackwardInputs;
-    using spec_return_value_t = TensorSpec;
+    using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<GeluBackwardProgramFactory>;
 

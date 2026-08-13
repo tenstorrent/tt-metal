@@ -110,6 +110,17 @@ std::vector<float> quantize_to_bf16_float(const std::vector<float>& in) {
     return out;
 }
 
+constexpr uint32_t TF32_MASK = 0xffffe000u;
+// Wormhole's supported FP32-to-SrcA path converts FP32 inputs to TF32 by
+// dropping the low 13 mantissa bits.
+std::vector<float> quantize_to_tf32_float(const std::vector<float>& in) {
+    std::vector<float> out(in.size());
+    for (size_t i = 0; i < in.size(); ++i) {
+        const auto bits = std::bit_cast<uint32_t>(in[i]);
+        out[i] = std::bit_cast<float>(bits & TF32_MASK);
+    }
+    return out;
+}
 // Row-major 32x32 vector of floats (already quantized to bfloat16) -> packed uint32
 // vector with two bfloat16 lanes per uint32 (low 16 = even idx, high 16 = odd idx).
 // This is the layout gold_standard_tilize expects when datum_bytes == 2.
@@ -206,11 +217,12 @@ bool run_sfpu_binary_bcast(const std::shared_ptr<distributed::MeshDevice>& mesh_
         {"BINOP_VAL", std::to_string(static_cast<int>(cfg.binop))},
     };
 
-    // For FP32 we ask the unpacker to land the tile directly in DEST (bypassing srcA/srcB);
-    // for Float16_b we leave the default, which routes the tile through srcA/srcB before
-    // the SFPU consumes it. That exercises the other unpack path.
+    // Blackhole can unpack FP32 directly to DEST. Wormhole must use its supported
+    // FP32-to-TF32 SrcA path: its unpack-to-DEST cleanup issues a final
+    // unpack-to-SrcA, for which FP32-to-FP32 is undefined by the unpacker contract.
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    if (is_fp32) {
+    const bool use_fp32_unpack_to_dest = is_fp32 && mesh_device->arch() == tt::ARCH::BLACKHOLE;
+    if (use_fp32_unpack_to_dest) {
         unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
         unpack_to_dest_mode[tt::CBIndex::c_1] = UnpackToDestMode::UnpackToDestFp32;
     }
@@ -237,8 +249,11 @@ bool run_sfpu_binary_bcast(const std::shared_ptr<distributed::MeshDevice>& mesh_
         src_b_rm = quantize_to_bf16_float(src_b_rm);
     }
 
-    // Golden (row-major), then tilize to match device-side tile layout.
-    auto golden_rm = compute_golden(src_a_rm, src_b_rm, cfg);
+    // Golden (row-major), including the input precision of the selected unpack
+    // path, then tilize to match device-side tile layout.
+    const auto golden_a_rm = is_fp32 && !use_fp32_unpack_to_dest ? quantize_to_tf32_float(src_a_rm) : src_a_rm;
+    const auto golden_b_rm = is_fp32 && !use_fp32_unpack_to_dest ? quantize_to_tf32_float(src_b_rm) : src_b_rm;
+    auto golden_rm = compute_golden(golden_a_rm, golden_b_rm, cfg);
 
     ::unit_tests::compute::GoldenConfig gc{
         .num_tiles_r_dim = 1, .num_tiles_c_dim = 1, .datum_bytes = elem_bytes(df)};
@@ -364,8 +379,8 @@ TEST_P(SfpuBinaryBcastFixture, TensixSfpuBinaryBcast) {
         binop_name.at(cfg.binop),
         unit_tests::compute::sfpu_binary_bcast::df_name.at(cfg.df));
 
-    for (unsigned int id = 0; id < this->num_devices_; ++id) {
-        ASSERT_TRUE(unit_tests::compute::sfpu_binary_bcast::run_sfpu_binary_bcast(this->devices_.at(id), cfg));
+    for (auto& device : this->devices_) {
+        ASSERT_TRUE(unit_tests::compute::sfpu_binary_bcast::run_sfpu_binary_bcast(device, cfg));
     }
 }
 
@@ -375,7 +390,7 @@ INSTANTIATE_TEST_SUITE_P(
     SfpuBinaryBcastAllVariants,
     SfpuBinaryBcastFixture,
     ::testing::Values(
-        // Float32: unpacker writes directly to DEST (bypasses srcA/srcB).
+        // Float32: Blackhole unpacks directly to DEST; Wormhole routes through TF32 SrcA.
         SfpuBcastConfig{BcastDim::COL, BinOp::ADD, tt::DataFormat::Float32},
         SfpuBcastConfig{BcastDim::COL, BinOp::SUB, tt::DataFormat::Float32},
         SfpuBcastConfig{BcastDim::COL, BinOp::MUL, tt::DataFormat::Float32},

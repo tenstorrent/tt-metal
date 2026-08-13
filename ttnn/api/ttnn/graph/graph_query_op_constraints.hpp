@@ -20,16 +20,17 @@
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/experimental/mock_device/mock_allocator.hpp>
 #include <ttnn/distributed/tensor_topology.hpp>
 
 namespace ttnn::graph {
 
-// Pairs a TensorSpec with a TensorTopology, allowing callers to specify
+// Pairs a tt::tt_metal::TensorSpec with a tt::tt_metal::TensorTopology, allowing callers to specify
 // distribution (shard/replicate) when creating tensors in query_op_constraints.
 struct DistributedTensorSpec {
-    TensorSpec tensor_spec;
+    tt::tt_metal::TensorSpec tensor_spec;
     tt::tt_metal::TensorTopology tensor_topology;
 };
 
@@ -91,30 +92,30 @@ inline std::vector<Tensor> extract_output_tensors(const std::variant<Ts...>& res
     return tensors;
 }
 
-// Transform a query argument into the value passed to the op: TensorSpec/DistributedTensorSpec
+// Transform a query argument into the value passed to the op: tt::tt_metal::TensorSpec/DistributedTensorSpec
 // (and their optional/vector forms) become device tensors via create_device_tensor; a MeshDevice
 // is wrapped in a reference_wrapper; everything else is forwarded unchanged.
 template <typename Arg>
 auto materialize_arg(tt::tt_metal::distributed::MeshDevice* device, Arg&& arg) {
     if constexpr (std::is_same_v<std::decay_t<Arg>, DistributedTensorSpec>) {
-        return create_device_tensor(arg.tensor_spec, device, arg.tensor_topology);
+        return ttnn::create_device_tensor(arg.tensor_spec, device, arg.tensor_topology);
     } else if constexpr (std::is_same_v<std::decay_t<Arg>, std::optional<DistributedTensorSpec>>) {
-        return arg ? std::optional<Tensor>(create_device_tensor(arg->tensor_spec, device, arg->tensor_topology))
+        return arg ? std::optional<Tensor>(ttnn::create_device_tensor(arg->tensor_spec, device, arg->tensor_topology))
                    : std::nullopt;
     } else if constexpr (std::is_same_v<std::decay_t<Arg>, std::vector<DistributedTensorSpec>>) {
         std::vector<Tensor> result(arg.size());
         std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& item) {
-            return create_device_tensor(item.tensor_spec, device, item.tensor_topology);
+            return ttnn::create_device_tensor(item.tensor_spec, device, item.tensor_topology);
         });
         return result;
-    } else if constexpr (std::is_same_v<std::decay_t<Arg>, TensorSpec>) {
-        return create_device_tensor(arg, device);
-    } else if constexpr (std::is_same_v<std::decay_t<Arg>, std::optional<TensorSpec>>) {
-        return arg ? std::optional<Tensor>(create_device_tensor(*arg, device)) : std::nullopt;
-    } else if constexpr (std::is_same_v<std::decay_t<Arg>, std::vector<TensorSpec>>) {
+    } else if constexpr (std::is_same_v<std::decay_t<Arg>, tt::tt_metal::TensorSpec>) {
+        return ttnn::create_device_tensor(arg, device);
+    } else if constexpr (std::is_same_v<std::decay_t<Arg>, std::optional<tt::tt_metal::TensorSpec>>) {
+        return arg ? std::optional<Tensor>(ttnn::create_device_tensor(*arg, device)) : std::nullopt;
+    } else if constexpr (std::is_same_v<std::decay_t<Arg>, std::vector<tt::tt_metal::TensorSpec>>) {
         std::vector<Tensor> result(arg.size());
         std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& item) {
-            return create_device_tensor(item, device);
+            return ttnn::create_device_tensor(item, device);
         });
         return result;
     } else if constexpr (std::is_same_v<std::decay_t<Arg>, tt::tt_metal::distributed::MeshDevice>) {
@@ -129,8 +130,13 @@ auto materialize_arg(tt::tt_metal::distributed::MeshDevice* device, Arg&& arg) {
 }  // namespace detail
 
 struct ResourceUsage {
+    // Circular buffers only. A Metal 2.0 program has none, so this is legitimately 0 for a ported
+    // op and its L1 shows up under the dataflow-buffer and scratchpad fields instead.
     size_t cb_peak_size_per_core = 0;
     size_t l1_buffers_peak_per_core = 0;
+    size_t dataflow_buffer_peak_size_per_core = 0;
+    size_t scratchpad_peak_size_per_core = 0;
+    // Every kind above: the number to check an op against the L1 budget.
     size_t peak_memory_usage_per_core = 0;
     size_t l1_output_buffer_per_core = 0;
 };
@@ -138,7 +144,7 @@ struct ResourceUsage {
 struct ConstraintQueryResponse {
     ExecutionStatus status = ExecutionStatus::Error;
     ResourceUsage resource_usage;
-    std::optional<std::vector<TensorSpec>> output_tensor_specs;
+    std::optional<std::vector<tt::tt_metal::TensorSpec>> output_tensor_specs;
     std::optional<std::string> error_message;
 };
 
@@ -162,8 +168,7 @@ namespace detail {
 // Build a success response from the captured op trace and its output tensors.
 inline ConstraintQueryResponse build_success_response(
     const nlohmann::json& op_trace, const std::vector<Tensor>& outputs) {
-    const auto& [cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core] =
-        extract_resource_usage_per_core(op_trace);
+    const auto usage = extract_resource_usage_per_core(op_trace);
 
     size_t l1_output_buffer_per_core = 0;
     for (const auto& output : outputs) {
@@ -172,7 +177,7 @@ inline ConstraintQueryResponse build_success_response(
         }
     }
 
-    std::vector<TensorSpec> output_specs;
+    std::vector<tt::tt_metal::TensorSpec> output_specs;
     output_specs.reserve(outputs.size());
     std::transform(outputs.begin(), outputs.end(), std::back_inserter(output_specs), [](const Tensor& t) {
         return t.tensor_spec();
@@ -180,7 +185,12 @@ inline ConstraintQueryResponse build_success_response(
 
     return ConstraintQueryResponse{
         ExecutionStatus::Success,
-        {cb_peak_size_per_core, l1_buffers_peak_per_core, peak_memory_usage_per_core, l1_output_buffer_per_core},
+        {.cb_peak_size_per_core = usage.peak_cb,
+         .l1_buffers_peak_per_core = usage.peak_l1,
+         .dataflow_buffer_peak_size_per_core = usage.peak_dataflow_buffer,
+         .scratchpad_peak_size_per_core = usage.peak_scratchpad,
+         .peak_memory_usage_per_core = usage.peak_total,
+         .l1_output_buffer_per_core = l1_output_buffer_per_core},
         std::make_optional(std::move(output_specs))};
 }
 
@@ -189,6 +199,8 @@ inline ConstraintQueryResponse error_response(const std::string& message) {
         ExecutionStatus::Error,
         {.cb_peak_size_per_core = 0,
          .l1_buffers_peak_per_core = 0,
+         .dataflow_buffer_peak_size_per_core = 0,
+         .scratchpad_peak_size_per_core = 0,
          .peak_memory_usage_per_core = 0,
          .l1_output_buffer_per_core = 0},
         /* output_tensor_specs= */ std::nullopt,

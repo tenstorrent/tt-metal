@@ -125,11 +125,7 @@ EffectiveKvGeometry resolve_effective_kv_geometry(
     if (use_mla || !geo.active()) {
         return {k_num_heads, v_num_heads, k_block_size};
     }
-    return {
-        geo.num_kv_heads.value_or(k_num_heads),
-        geo.num_kv_heads.value_or(v_num_heads),
-        geo.block_size.value_or(k_block_size),
-    };
+    return {geo.num_kv_heads, geo.num_kv_heads, geo.block_size};
 }
 
 // Chunked prefill parameters collected from page table layout.
@@ -172,6 +168,17 @@ ChunkedParams compute_chunked_params(
             "page table page size in bytes must be a multiple of 32 due to address alignment");
     }
     return p;
+}
+
+tt::DataFormat fp32_dest_intermediate_dataformat(bool fp32_dest_acc_en) {
+    return fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+}
+
+uint32_t attention_sink_tile_count(bool use_attention_sink, bool use_streaming_compute, uint32_t q_chunk_tiles) {
+    if (!use_attention_sink) {
+        return 0;
+    }
+    return use_streaming_compute ? 1 : q_chunk_tiles;
 }
 
 }  // namespace
@@ -438,8 +445,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;  // finalized below once out_out_subblock_h is known
     uint32_t scale_tiles = 1;
-    uint32_t statistics_tiles = Sq_chunk_t;                               // Single column of values in each iteration
-    uint32_t attention_sink_tiles = use_attention_sink ? Sq_chunk_t : 0;  // One column vector per Q chunk
+    uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
+    // Streaming compute broadcasts the per-head scalar directly; legacy compute consumes one
+    // expanded first-column tile per Q row.
+    uint32_t attention_sink_tiles = attention_sink_tile_count(use_attention_sink, use_streaming_compute, Sq_chunk_t);
 
     // log all values
     log_debug(tt::LogOp, "q_tiles: {}", q_tiles);
@@ -694,12 +703,16 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
-                                                       // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat im_df =
+        tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
     tt::DataFormat stats_df = im_df;
+    tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
+    tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
     // both must share the same data format for the unpack config to be correct.
-    TT_ASSERT(im_df == stats_df, "SDPA fused SALAD correction requires out and sum CBs to share data format");
+    TT_ASSERT(
+        !use_streaming_compute || sum_df == im_df,
+        "SDPA fused SALAD correction requires out and sum CBs to share data format");
 
     uint32_t q_tile_size = tt::tile_size(q_df);
     uint32_t k_tile_size = tt::tile_size(k_df);
@@ -708,6 +721,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
     uint32_t stats_tile_size = tt::tile_size(stats_df);
+    uint32_t qk_im_tile_size = tt::tile_size(qk_im_df);
+    uint32_t sum_tile_size = tt::tile_size(sum_df);
 
     log_debug(tt::LogOp, "q_data_format: {}", q_df);
     log_debug(tt::LogOp, "k_data_format: {}", k_df);
@@ -717,6 +732,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
     log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
     log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
+    log_debug(tt::LogOp, "qk_im_data_format: {}", qk_im_df);
+    log_debug(tt::LogOp, "sum_data_format: {}", sum_df);
 
     sdpa_cb::CBIds cb_ids;
     uint32_t next_cb_index = 0;
@@ -794,13 +811,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         cb_ids.recip_scratch = allocate_tile_cb(1, im_tile_size, im_df);
     }
 
-    cb_ids.qk_im = allocate_tile_cb(qk_tiles, im_tile_size, im_df);
+    cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
     cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     cb_ids.max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    cb_ids.sum_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    cb_ids.sum_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    cb_ids.sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
+    cb_ids.sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
 
@@ -928,6 +945,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         uint32_t chains_skipped = 0;
         // Track injector physical X columns for DRAM channel spreading
         std::vector<uint32_t> injector_phys_x;
+        injector_phys_x.reserve(head_segments.size());
 
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
             auto& segments = head_segments[head_id];
@@ -973,6 +991,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             // Build chain in wrap order: start, start+1, ..., N-1, 0, 1, ..., start-1.
             // Break on conflict (core already in a different chain).
             std::vector<std::size_t> chain_order;
+            chain_order.reserve(segments.size());
             for (std::size_t step = 0; step < segments.size(); ++step) {
                 std::size_t idx = (start + step) % segments.size();
                 const auto& seg = segments[idx];
@@ -1127,6 +1146,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
             uint32_t ref_q_chunks;
         };
         std::vector<McastCandidate> candidates;
+        candidates.reserve(head_segments.size());
         bool all_eligible = true;
         uint32_t total_multi_core_chains = 0;
 
@@ -1138,6 +1158,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
             // Collect chain core indices that actually participate in this head's chain
             std::vector<uint32_t> chain_core_indices;
+            chain_core_indices.reserve(segments.size());
             for (const auto& seg : segments) {
                 if (seg.core_idx < core_chain_info.size() && core_chain_info[seg.core_idx].participates &&
                     core_chain_info[seg.core_idx].batch == (head_id / NQH) &&

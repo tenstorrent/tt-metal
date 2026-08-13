@@ -178,11 +178,31 @@ void AllGatherMinimalMatmulAsyncOp::validate_on_program_cache_miss(
     TT_FATAL(chunks >= 1, "minimal_matmul requires chunks >= 1, got chunks={}", chunks);
     TT_FATAL(dim == -1, "minimal_matmul currently only supports dim=-1, got dim={}", dim);
 
-    if (chunks > 1) {
-        // Validate N is divisible by chunks
+    const auto& explicit_chunk_sizes = attributes.chunk_sizes;
+    if (!explicit_chunk_sizes.empty()) {
+        // Variable-width chunks: `chunks` widths (elements) that may differ, summing to N.
+        TT_FATAL(
+            static_cast<int32_t>(explicit_chunk_sizes.size()) == chunks,
+            "chunk_sizes must have exactly chunks={} entries, got {}",
+            chunks,
+            explicit_chunk_sizes.size());
+        uint32_t chunk_sizes_sum = 0;
+        for (size_t i = 0; i < explicit_chunk_sizes.size(); ++i) {
+            const uint32_t width = explicit_chunk_sizes[i];
+            TT_FATAL(width > 0, "chunk_sizes[{}] must be > 0", i);
+            TT_FATAL(
+                width % tt::constants::TILE_WIDTH == 0,
+                "chunk_sizes[{}]={} must be a multiple of TILE_WIDTH={}",
+                i,
+                width,
+                tt::constants::TILE_WIDTH);
+            chunk_sizes_sum += width;
+        }
+        TT_FATAL(chunk_sizes_sum == N, "chunk_sizes must sum to the output width N={}, got {}", N, chunk_sizes_sum);
+    } else if (chunks > 1) {
+        // Uniform split (the default): N must divide evenly and each chunk must be tile-aligned.
         TT_FATAL(N % chunks == 0, "Output width N={} must be divisible by chunks={}", N, chunks);
 
-        // Validate each chunk is tile-aligned
         const uint32_t N_per_chunk = N / chunks;
         TT_FATAL(
             N_per_chunk % tt::constants::TILE_WIDTH == 0,
@@ -348,27 +368,29 @@ AllGatherMinimalMatmulAsyncOp::spec_return_value_t AllGatherMinimalMatmulAsyncOp
 
     // Create specs for output tensors
     // Layout: [activation_gather_intermediate, (optional: weight_gather_intermediate), chunks...]
-    std::vector<TensorSpec> output_specs;
+    std::vector<tt::tt_metal::TensorSpec> output_specs;
     output_specs.reserve(chunks + 1 + (fsdp_fused ? 1 : 0));
 
     output_specs.push_back(
-        TensorSpec(intermediate_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
+        tt::tt_metal::TensorSpec(intermediate_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
 
     if (fsdp_fused) {
         // Gathered weight intermediate: [K_full, N_local] = [K_local * fsdp_ring_size, N_local].
         // Derive from in1_input_tensor_shape so we don't depend on persistent_weight_buffer being provided.
         ttnn::Shape weight_intermediate_shape(in1_input_tensor_shape);
         weight_intermediate_shape[-2] = weight_intermediate_shape[-2] * attributes.fsdp_ring_size;
-        output_specs.push_back(TensorSpec(
+        output_specs.push_back(tt::tt_metal::TensorSpec(
             weight_intermediate_shape,
             TensorLayout(in1_input_tensor.dtype(), PageConfig(Layout::TILE), in1_input_tensor.memory_config())));
     }
 
-    const uint32_t N_per_chunk = N / chunks;
-    for (int32_t i = 0; i < chunks; ++i) {
+    // Per-chunk widths: explicit when given, else the uniform N/chunks split.
+    const auto chunk_sizes = resolve_chunk_sizes(attributes, N);
+    for (const uint32_t chunk_width : chunk_sizes) {
         ttnn::Shape output_shape(in0_input_tensor_shape);
-        output_shape[-1] = N_per_chunk;
-        output_specs.push_back(TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
+        output_shape[-1] = chunk_width;
+        output_specs.push_back(
+            tt::tt_metal::TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config)));
     }
 
     return output_specs;
@@ -439,7 +461,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
     const std::vector<GlobalSemaphore>& fsdp_multi_device_global_semaphore,
     const std::optional<ttnn::Tensor>& persistent_weight_buffer,
     std::optional<ttnn::ccl::Topology> fsdp_topology,
-    bool fuse_swiglu) {
+    bool fuse_swiglu,
+    const std::vector<uint32_t>& chunk_sizes) {
     using OperationType = ttnn::experimental::prim::AllGatherMinimalMatmulAsyncOp;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -486,7 +509,8 @@ std::vector<ttnn::Tensor> all_gather_minimal_matmul_async(
         fsdp_multi_device_global_semaphore,
         using_persistent_weight_buffer,
         fsdp_topology_,
-        fuse_swiglu};
+        fuse_swiglu,
+        chunk_sizes};
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor,
         weight_tensor,

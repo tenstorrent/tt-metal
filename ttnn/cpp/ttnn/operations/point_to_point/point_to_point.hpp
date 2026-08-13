@@ -22,7 +22,7 @@ ttnn::Tensor point_to_point(
 
 namespace operations::point_to_point {
 
-ttnn::TensorSpec p2p_compute_intermediate_tensor_spec(
+tt::tt_metal::TensorSpec p2p_compute_intermediate_tensor_spec(
     const ttnn::Tensor& input_tensor,
     const MeshCoordinate& receiver_coord,
     const MeshCoordinate& sender_coord,

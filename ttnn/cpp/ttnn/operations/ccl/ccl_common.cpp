@@ -25,6 +25,17 @@ bool is_fabric_2d() {
     return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D;
 }
 
+std::optional<ttnn::DeviceComputeKernelConfig> resolve_fp32_acc_compute_kernel_config(
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config, tt::tt_metal::DataType input_dtype) {
+    if (!compute_kernel_config.has_value() && input_dtype == tt::tt_metal::DataType::FLOAT32) {
+        return ttnn::DeviceComputeKernelConfig{
+            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+            .fp32_dest_acc_en = true,
+        };
+    }
+    return compute_kernel_config;
+}
+
 void validate_packet_size(tt::ARCH arch, size_t packet_size, uint32_t page_size) {
     // NOTE: ideally query the below which are currently not publicly accessible.
     // FabricEriscDatamoverBuilder::max_packet_payload_size_bytes_{wormhole,blackhole} in
@@ -170,6 +181,9 @@ uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uin
         log_debug(tt::LogOp, "Topological dimension {}", ring_size);
         return ring_size;
     }
+    // Without a cluster_axis the CCL spans the tensor's own device list, and
+    // get_linearized_index_from_physical_coord indexes into that same list. Keep the two in sync:
+    // switching this to the global mesh size alone would let a ring index exceed the ring size.
     const auto device_coords = tensor.device_storage().get_coords();
     TT_FATAL(!device_coords.empty(), "device_coords is empty");
     log_debug(tt::LogOp, "Topological dimension {}", device_coords.size());
@@ -389,7 +403,7 @@ std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& ten
     return devices;
 }
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+WorkerCoreSelection try_choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
     IDevice* device,
@@ -397,12 +411,12 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     const CoreCoord core_grid_offset,
     const std::optional<CoreRangeSet>& sub_core_grid,
     CoreAllocationStrategy strategy) {
-    std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
-    auto available_cores = device->worker_cores(
+    const auto worker_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    auto available_cores = worker_cores;
     if (sub_core_grid.has_value()) {
         available_cores = available_cores.intersection(sub_core_grid.value());
     }
@@ -457,7 +471,38 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
             break;
         }
     }
-    return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
+
+    // The loops above shift each candidate by core_grid_offset without re-checking it, so an offset near the grid
+    // edge can push cores off the worker grid entirely (onto dispatch cores).
+    WorkerCoreSelection selection{
+        sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true), {}};
+    for (const auto& core : selection.cores) {
+        if (!worker_cores.contains(core)) {
+            selection.unplaceable_cores.push_back(core);
+        }
+    }
+    return selection;
+}
+
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const CoreCoord core_grid_offset,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    CoreAllocationStrategy strategy) {
+    auto selection = try_choose_worker_cores(
+        num_links, num_workers_per_link, device, sub_device_id, core_grid_offset, sub_core_grid, strategy);
+    TT_FATAL(
+        selection.all_placeable(),
+        "Core grid offset {} pushed {} of the {} selected worker cores (first: {}) off the worker grid; kernels "
+        "cannot be placed there. Request fewer cores or use a smaller offset.",
+        core_grid_offset.str(),
+        selection.unplaceable_cores.size(),
+        selection.cores.size(),
+        selection.unplaceable_cores.front().str());
+    return {std::move(selection.core_range_set), std::move(selection.cores)};
 }
 
 std::vector<ttnn::Tensor> unpad_output_tensor(
@@ -466,6 +511,7 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
     const ttsl::SmallVector<uint32_t>& unpad_elements,
     const int dim) {
     std::vector<ttnn::Tensor> combined_tensors;
+    combined_tensors.reserve(num_devices);
 
     ttsl::SmallVector<uint32_t> begins = {0, 0, 0, 0};
     ttsl::SmallVector<uint32_t> ends = {1, 1, 1, 1};
@@ -478,7 +524,7 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
 
         ttnn::Tensor sliced_tensor = ttnn::slice(output_tensor.at(0), begins, ends, step);
 
-        combined_tensors.push_back(sliced_tensor);
+        combined_tensors.push_back(std::move(sliced_tensor));
     }
     ttnn::Tensor concat_tensor = ttnn::concat(combined_tensors, dim);
     return {concat_tensor};

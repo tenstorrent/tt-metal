@@ -23,6 +23,7 @@ from loguru import logger
 import ttnn
 
 from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
+from ...experimental.lora.ltx_adapter_loader import LTXAdapterHandle, iter_lora_modules, load_ltx_adapter_into
 from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
 from ...models.transformers.ltx.transformer_ltx import (
@@ -39,11 +40,19 @@ from ...utils.fuse_loras import LoraSpec
 from ...utils.ltx import SPATIAL_COMPRESSION, TEMPORAL_COMPRESSION, ceil_to, latent_grid
 from ...utils.mochi import get_rot_transformation_mat
 from ...utils.patchifiers import AudioLatentShape, VideoPixelShape
+from ...utils.progress import Watchdog
 from ...utils.tensor import bf16_tensor
 from ...utils.tracing import StateTensor
 from ...utils.video import Audio
 
 LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+
+# Default DiT-linear quant preset. Empty selects the bf16 baseline (the default); set
+# LTX_QUANT=all_bf8_lofi to opt into the shipped bf8 1080p tier (its perf/VBench floors are calibrated
+# against it), or LTX_QUANT=all_bf4_lofi for the bf4 probe tier (measurement only — bf4 activations
+# destroy quality). _resolve_quant_config resolves this once and threads the tag into the transformer
+# cache name, so a quantized cache stays separate from the baseline.
+LTX_QUANT_DEFAULT = ""
 
 DEFAULT_NEGATIVE_PROMPT = (
     "blurry, out of focus, overexposed, underexposed, low contrast, washed out colors, excessive noise, "
@@ -195,6 +204,10 @@ class LTXPipeline:
     """
 
     HAS_UPSAMPLER: bool = False
+    # Set by subclasses that capture traces of their own after construction: the encode trace has to
+    # be the last one taken, or a later capture reclaims its activation region. See
+    # ``GemmaTokenizerEncoderPair.defer_trace_capture``.
+    DEFERS_ENCODE_TRACE: bool = False
 
     def __init__(
         self,
@@ -222,6 +235,8 @@ class LTXPipeline:
         run_warmup: bool = False,
         traced: bool = False,
         extra_transformer_variants: list[tuple[str, list[LoraSpec]]] | None = None,
+        lora_enabled: bool = False,
+        lora_cache_capacity: int = 2,
         image_conditioning: bool | None = None,
     ):
         self.mesh_device = mesh_device
@@ -248,6 +263,16 @@ class LTXPipeline:
             )
         self.vae_parallel_config = vae_parallel_config
         self.mode = mode
+        # On-device fuse-mode LoRA: swap via bind_active on the transformer's LoRA
+        # Linears (weight.data += A@B), not the host-fuse+reload path used by
+        # extra_transformer_variants.
+        self.lora_enabled = lora_enabled
+        # How many registered adapters keep their A/B factors resident on device
+        # (per-Linear LRU). Larger = fewer host re-uploads on swap and after each
+        # dynamic_load page-in, at the cost of holding that many rank-sized factor
+        # sets in DRAM. 0 disables the cache.
+        self.lora_cache_capacity = int(lora_cache_capacity)
+        self._active_lora: LTXAdapterHandle | None = None
 
         self.num_attention_heads = num_attention_heads
         self.attention_head_dim = attention_head_dim
@@ -277,6 +302,8 @@ class LTXPipeline:
             mode=self.mode,
             dynamic_load=self.dynamic_load,
         )
+        if self._traced and not self.dynamic_load and self.DEFERS_ENCODE_TRACE:
+            self.gemma_encoder_pair.defer_trace_capture()
         self.gemma_path: str | None = self.gemma_encoder_pair.gemma_path
 
         self.transformer: LTXTransformerModel | None = None
@@ -294,6 +321,10 @@ class LTXPipeline:
         self._image_conditioning: bool = bool(image_conditioning)
 
         if self.checkpoint_name is not None:
+            # Resolved before construction so the LtxQuantProfile is baked into the transformer modules
+            # (Parameter.load typecasts DiT-linear weights to the preset dtype as they load), rather
+            # than typecast afterward by a post-load hook.
+            self._resolve_quant_config()
             self._instantiate_modules(extra_transformer_variants or [])
             self._register_coresident_exclusions()
             self._prime_caches()
@@ -317,6 +348,8 @@ class LTXPipeline:
             self.tt_vocoder_with_bwe.release_trace()
         if self.tt_mel_decoder is not None:
             self.tt_mel_decoder.release_trace()
+        if self.vae_decoder is not None:
+            self.vae_decoder.release_trace()
         self._trace_state.clear()
         self._prompt_v = StateTensor()
         self._prompt_a = StateTensor()
@@ -494,6 +527,8 @@ class LTXPipeline:
             # auto-detected from the conditioning-image path or forced by the caller). Pure T2V keeps
             # the fast scalar-AdaLN path — no separate on/off flag.
             image_conditioning=bool(self.vae is not None and self.vae.encoder_blocks and self._image_conditioning),
+            quant_config=getattr(self, "_quant_config", None),
+            lora_enabled=self.lora_enabled,
         )
 
     def _instantiate_modules(self, extra_variants: list[tuple[str, list[LoraSpec]]]) -> None:
@@ -599,16 +634,119 @@ class LTXPipeline:
         self._prepare_audio_decoder()
         self._prepare_transformer(0)
 
+    def _resolve_quant_config(self) -> None:
+        """Resolve the DiT-linear quant preset (LTX_QUANT_DEFAULT unless LTX_QUANT names another).
+
+        LTX_QUANT="" selects the bf16 baseline. Runs before ``_instantiate_modules`` so the resolved
+        ``LtxQuantProfile`` is baked into transformer construction (weights load direct-to-quant)."""
+        self._quant_cache_tag = None
+        self._quant_config = None
+        preset = os.environ.get("LTX_QUANT", LTX_QUANT_DEFAULT).strip()
+        if not preset:
+            return
+        from ...models.transformers.ltx.quant_config import LtxQuantProfile
+
+        # Explicit registry, not getattr(LtxQuantProfile, preset): the profile's instance methods
+        # (linear_kwargs, ...) are class attributes too, so getattr would resolve LTX_QUANT=linear_kwargs
+        # to a callable and crash instead of falling back to bf16.
+        presets = {"all_bf8_lofi": LtxQuantProfile.all_bf8_lofi, "all_bf4_lofi": LtxQuantProfile.all_bf4_lofi}
+        factory = presets.get(preset)
+        if factory is None:
+            logger.warning(f"LTX_QUANT='{preset}' is not a quant preset; running baseline (bf16/HiFi2)")
+            return
+        logger.info(f"LTX_QUANT='{preset}': building the transformer with the DiT-linear quant config")
+        # _quant_cache_tag routes cache writes/reads to a preset-tagged dir; it must equal the resolved
+        # preset or a run poisons the wrong-precision cache (cached tensorbins carry their dtype).
+        self._quant_cache_tag = preset
+        self._quant_config = factory()
+
     def _prepare_transformer(self, idx: int = 0) -> None:
         state = self.transformer_states[idx]
+        # The transformer is built with the quant config, so a cache miss loads weights direct-to-quant
+        # and the write holds the quantized tensorbins. quant_tag keeps that cache separate from the
+        # bf16 baseline.
         state.checkpoint.load(
             state.model,
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
             is_fsdp=self.is_fsdp,
             lora_specs=state.lora_specs,
+            quant_tag=getattr(self, "_quant_cache_tag", None),
         )
         self.transformer = state.model
+        # dynamic_load restores the cached (LoRA-free) base weights on every
+        # page-in, so re-merge the active adapter's delta onto the fresh weights.
+        if self.lora_enabled:
+            for _, mod in iter_lora_modules(state.model):
+                mod.reapply_after_load()
+
+    def register_lora_adapter(self, path: str, *, scale: float = 1.0, name: str = "") -> LTXAdapterHandle:
+        """Host-register a LoRA safetensors into the transformer's LoRA bank.
+        No device weights change until ``set_active_lora(handle)``."""
+        if not self.lora_enabled:
+            raise RuntimeError("pipeline was built with lora_enabled=False; on-device LoRA swap is unavailable")
+        if self.transformer is None:
+            raise RuntimeError("transformer not instantiated; call the pipeline's build/prime path first")
+        handle = load_ltx_adapter_into(self.transformer, path, scale=scale, name=name)
+        self._apply_lora_cache_capacity()
+        return handle
+
+    def _apply_lora_cache_capacity(self) -> None:
+        """Push the pipeline's cache capacity onto every LoRA Linear (attn/ffn
+        built with ``lora_enabled`` plus the promoted globals)."""
+        if self.transformer is None:
+            return
+        for _, mod in iter_lora_modules(self.transformer):
+            mod.set_lora_cache_capacity(self.lora_cache_capacity)
+
+    def set_lora_cache_capacity(self, n: int) -> None:
+        """Set how many registered adapters keep their A/B factors resident on
+        device (per-Linear LRU). Applies immediately to the current transformer."""
+        self.lora_cache_capacity = int(n)
+        self._apply_lora_cache_capacity()
+
+    def set_active_lora(self, handle: LTXAdapterHandle | None) -> None:
+        """Bind ``handle`` (or unbind, if None) on device: ``weight.data += scale*A@B``
+        per LoRA Linear. No host fuse, no weight reload."""
+        if not self.lora_enabled:
+            raise RuntimeError("pipeline was built with lora_enabled=False; on-device LoRA swap is unavailable")
+        if self.transformer is None:
+            # Nothing resident to unbind on teardown; a real bind needs the transformer built.
+            if handle is None:
+                self._active_lora = None
+                return
+            raise RuntimeError("transformer not instantiated; call the pipeline's build/prime path first")
+        mods = dict(iter_lora_modules(self.transformer))
+        if handle is None:
+            for mod in mods.values():
+                mod.unbind_active()
+            self._active_lora = None
+            return
+        # Bind every module the handle targets; unbind the rest so a delta merged
+        # by a previously-active adapter (whose coverage the new handle doesn't
+        # share) is removed rather than left stale on the base weight.
+        for module_path, mod in mods.items():
+            idx = handle.target_indices.get(module_path)
+            if idx is None:
+                mod.unbind_active()
+            else:
+                mod.bind_active(idx)
+        missing = [p for p in handle.target_indices if p not in mods]
+        if missing:
+            logger.warning(
+                f"set_active_lora: {len(missing)} handle target(s) not found on transformer — skipping: {missing[:5]}"
+            )
+        self._active_lora = handle
+
+    def load_lora_weights(self, path: str, *, strength: float = 1.0, name: str = "") -> LTXAdapterHandle:
+        """Register + activate a LoRA in one call. Returns the handle for later swaps."""
+        handle = self.register_lora_adapter(path, scale=strength, name=name)
+        self.set_active_lora(handle)
+        return handle
+
+    def unload_lora_weights(self) -> None:
+        """Unbind the active LoRA, restoring the base weights on device."""
+        self.set_active_lora(None)
 
     def _device_embed_cache_path(self, prompts: list[str]) -> str:
         """Disk-cache path for on-device prompt embeddings. Separate namespace from the
@@ -630,7 +768,8 @@ class LTXPipeline:
             logger.info(f"Loading cached device embeddings from {cache_path}")
             return torch.load(cache_path, weights_only=False)
 
-        results = self.gemma_encoder_pair.encode(prompts)
+        with Watchdog("gemma text-encode"):
+            results = self.gemma_encoder_pair.encode(prompts)
 
         if use_cache:
             torch.save(results, cache_path)
@@ -681,7 +820,10 @@ class LTXPipeline:
         latent_spatial = latent.reshape(B, latent_frames, latent_h, latent_w, self.in_channels)
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
-        video = self.vae_decoder(latent_spatial, output_type=output_type)
+        with Watchdog("vae decode"):
+            video = self.vae_decoder(latent_spatial, output_type=output_type)
+        if output_type == "yuv":
+            return video  # already a numpy (T, H*3//2, W) uint8 yuv420p planar array
         if output_type != "float":
             return video.numpy()
         return video
@@ -1188,23 +1330,27 @@ class LTXPipeline:
         audio_spatial = audio_latent.reshape(1, audio_N, z, audio_latent.shape[2] // z).permute(0, 2, 1, 3).float()
 
         _time_stages = os.environ.get("LTX_TIME_STAGES") in ("1", "true", "True")
-        if _time_stages:
-            import time as _t
+        # Watchdog wraps both branches so the stall heartbeat fires during mel-VAE/vocoder regardless of
+        # the stage-timing toggle — LTX_TIME_STAGES=1 must not reintroduce the silent gap.
+        with Watchdog("audio decode (mel-VAE + vocoder)"):
+            if _time_stages:
+                import time as _t
 
-            ttnn.synchronize_device(self.mesh_device)
-            _t0 = _t.perf_counter()
-            mel = self._decode_mel(audio_spatial)
-            ttnn.synchronize_device(self.mesh_device)
-            _t_vae = _t.perf_counter()
-            waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
-            ttnn.synchronize_device(self.mesh_device)
-            _t_voc = _t.perf_counter()
-            logger.info(
-                f"STAGE_SPLIT mel_vae={(_t_vae - _t0) * 1000:.1f}ms " f"vocoder+bwe={(_t_voc - _t_vae) * 1000:.1f}ms"
-            )
-        else:
-            mel = self._decode_mel(audio_spatial)
-            waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
+                ttnn.synchronize_device(self.mesh_device)
+                _t0 = _t.perf_counter()
+                mel = self._decode_mel(audio_spatial)
+                ttnn.synchronize_device(self.mesh_device)
+                _t_vae = _t.perf_counter()
+                waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
+                ttnn.synchronize_device(self.mesh_device)
+                _t_voc = _t.perf_counter()
+                logger.info(
+                    f"STAGE_SPLIT mel_vae={(_t_vae - _t0) * 1000:.1f}ms "
+                    f"vocoder+bwe={(_t_voc - _t_vae) * 1000:.1f}ms"
+                )
+            else:
+                mel = self._decode_mel(audio_spatial)
+                waveform = self.tt_vocoder_with_bwe(mel).squeeze(0).float()
         sampling_rate = self.tt_vocoder_with_bwe.output_sampling_rate
 
         # Trim to video duration.

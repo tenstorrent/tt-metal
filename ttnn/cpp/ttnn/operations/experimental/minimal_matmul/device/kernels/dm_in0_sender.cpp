@@ -29,12 +29,9 @@ void kernel_main() {
     constexpr uint32_t in0_tile_size = get_compile_time_arg_val(11);
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
     constexpr uint32_t in2_tile_size = get_compile_time_arg_val(13);
-    uint32_t in0_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-    uint32_t in0_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(15));
-    uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));
-    Semaphore<> in0_sender_sem(get_compile_time_arg_val(14));
-    Semaphore<> in0_receiver_sem(get_compile_time_arg_val(15));
-    Semaphore<> in0_valid_sem(get_compile_time_arg_val(16));
+    Semaphore<> in0_sender_semaphore(get_compile_time_arg_val(14));
+    Semaphore<> in0_receiver_semaphore(get_compile_time_arg_val(15));
+    Semaphore<> in0_valid_semaphore(get_compile_time_arg_val(16));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
     constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
@@ -83,18 +80,19 @@ void kernel_main() {
 #endif
 
 #ifdef FUSE_TERNARY
-// Calculate offset for ternary_a_args - must account for FUSE_BIAS and potentially FUSE_AG
-#if defined(FUSE_AG) && defined(READ_FROM_LOCAL_INPUT)
-// If we have FUSE_AG with READ_FROM_LOCAL_INPUT, in3 is defined
+// Calculate offset for ternary_a_args - must account for FUSE_BIAS and an optional in3 accessor.
+// in3 is present whenever in0 has a second source (AG local slice OR fused concat), so the
+// ternary args sit one accessor-block later in the CTA list in both cases.
+#ifdef IN0_HAS_SECOND_SOURCE
+// in3 is defined (AG local slice or fused-concat second half)
 #ifdef FUSE_BIAS
     // After in2, then in3, then ternary
     constexpr uint32_t ternary_a_args_cta_offset =
-        in2_args_cta_offset + tensor_accessor::detail::NUM_TENSOR_ACCESSOR_ARGS() * 2;
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<2, in2_args_cta_offset>();
 #else
     // After outputs, then in3, then ternary
     constexpr uint32_t ternary_a_args_cta_offset =
-        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>() +
-        tensor_accessor::detail::NUM_TENSOR_ACCESSOR_ARGS();
+        tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks + 1, out_tensor_args_cta_offset>();
 #endif
 #else
 // No FUSE_AG, same as dm_in1_sender_out
@@ -122,7 +120,14 @@ void kernel_main() {
 #endif  // FUSE_TERNARY
 
     const TensorShape2D in0_shape(M_tiles, K_tiles, padded_M_tiles, padded_K_tiles);
+#ifdef MM_WINDOW_BLOCKS
+    // The output tensor holds only the window, so its height is the host-computed
+    // grid.y * MM_WINDOW_BLOCKS * M_block_tiles rather than the full M. Both the row bound and the
+    // row stride come from it. Width is untouched — windowing is purely along M.
+    const TensorShape2D out_shape(MM_WINDOW_TOTAL_M_TILES, N_tiles, MM_WINDOW_TOTAL_M_TILES, padded_N_tiles);
+#else
     const TensorShape2D out_shape(M_tiles, N_tiles, padded_M_tiles, padded_N_tiles);
+#endif
     const TensorShape2D out0_shape(M_tiles, N_tiles_per_chunk, padded_M_tiles, N_tiles_per_chunk);
 
     constexpr uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
@@ -173,18 +178,21 @@ void kernel_main() {
             device_k_block_start_ids,
             forward_k_block_schedule);
     }
+#endif  // FUSE_AG
 
-#ifdef READ_FROM_LOCAL_INPUT
+// in3 is the second in0 source buffer. AG path: this device's local pre-gather slice. Virtual
+// concat: the second concat half (e.g. mlp output) supplied via optional_input_tensor. Set up
+// whenever in0 has a second source, independent of FUSE_AG.
+#ifdef IN0_HAS_SECOND_SOURCE
 #ifdef FUSE_BIAS
-    constexpr auto in3_args =
-        TensorAccessorArgs<in2_args_cta_offset + tensor_accessor::detail::NUM_TENSOR_ACCESSOR_ARGS>();
+    // in3 (local input) sits right after in2 (bias); advance by in2's real arg count, not a fixed constant.
+    constexpr auto in3_args = TensorAccessorArgs<in2_args.next_compile_time_args_offset()>();
 #else
     constexpr uint32_t in3_args_cta_offset =
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<N_chunks, out_tensor_args_cta_offset>();
     constexpr auto in3_args = TensorAccessorArgs<in3_args_cta_offset>();
 #endif
     const auto in3_reader = TensorAccessor(in3_args, in3_addr);
-#endif
 #endif
 
 #ifdef SRS_FUSE_OP_SIGNALER
@@ -194,18 +202,32 @@ void kernel_main() {
     srs_fuse_signaler_rt_args_idx += 12;  // Skip MinimalMatmulFusedOpSignaler::push_matmul_fused_op_rt_args (12 args)
 #endif
     OpSignaler srs_fuse_signaler;
+    uint32_t mm_progress_counters_base = 0;
+#ifdef MM_WINDOW_BLOCKS
+    uint32_t M_window_start_tile = 0;
+    uint32_t rs_credit_counters_base = 0;
+    uint32_t num_rs_readers = 0;
+#endif
     if constexpr (is_output_writer) {
         srs_fuse_signaler = OpSignaler(srs_fuse_signaler_rt_args_idx);
+        // Per-core signaling: base L1 address of the RS cores' per-core progress counter array
+        mm_progress_counters_base = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
+#ifdef MM_WINDOW_BLOCKS
+        M_window_start_tile = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
+        rs_credit_counters_base = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
+        num_rs_readers = get_arg_val<uint32_t>(srs_fuse_signaler_rt_args_idx++);
+        // Clear stale credits from whatever used this L1 before us. Safe against the readers: their
+        // first credit only lands after they have consumed M block 0, which cannot happen until we
+        // have written it, long after this point.
+        volatile tt_l1_ptr uint32_t* credits = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rs_credit_counters_base);
+        for (uint32_t r = 0; r < num_rs_readers; r++) {
+            credits[r] = 0;
+        }
+#endif
     }
 #endif
 
-    in0_valid_sem.set(VALID);
-
-    const uint64_t in0_sender_semaphore_noc_addr =
-        get_noc_addr(in0_sender_noc_x, in0_sender_noc_y, in0_sender_semaphore_addr);
-
-    const uint64_t in0_receiver_semaphore_noc_addr =
-        get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_receiver_semaphore_addr);
+    in0_valid_semaphore.set(VALID);
 
     /**
      * This is a Row-Major output block ordering.
@@ -224,6 +246,31 @@ void kernel_main() {
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
+        // Rows this block writes to. Only the OUTPUT is windowed — this kernel also reads the
+        // activations with m_tile/m_tile_end (see the in0 read below), and those must stay the true
+        // rows, so the two cannot share a variable.
+        uint32_t out_m_tile = m_tile;
+        uint32_t out_m_tile_end = m_tile_end;
+#ifdef MM_WINDOW_BLOCKS
+        if constexpr (is_output_writer) {
+            // Recycling this slot overwrites the block MM_WINDOW_BLOCKS earlier, so first wait until
+            // EVERY RS reader has finished reading it. The minimum is what matters, not a total: the
+            // readers stripe disjoint tiles and drift apart, so a fast one must not speak for a slow
+            // one.
+            if (m_block_iter >= MM_WINDOW_BLOCKS) {
+                const uint32_t blocks_released_needed = m_block_iter - MM_WINDOW_BLOCKS + 1;
+                volatile tt_l1_ptr uint32_t* credits =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rs_credit_counters_base);
+                for (uint32_t r = 0; r < num_rs_readers; r++) {
+                    if (credits[r] < blocks_released_needed) {
+                        noc_semaphore_wait_min(&credits[r], blocks_released_needed);
+                    }
+                }
+            }
+            out_m_tile = M_window_start_tile + (m_block_iter % MM_WINDOW_BLOCKS) * M_block_tiles;
+            out_m_tile_end = out_m_tile + (m_tile_end - m_tile);
+        }
+#endif
         uint32_t current_M_block_tiles = m_tile_end - m_tile;
         uint32_t current_block_bytes = current_M_block_tiles * K_block_tiles * in0_tile_size;
 #ifdef FUSE_AG
@@ -271,7 +318,7 @@ void kernel_main() {
                         cb_out.pop_front(out_block_num_tiles_swiglu);
 #else
                         cb_out.wait_front(out_block_num_tiles);
-                        uint32_t out_read_ptr = get_read_ptr(cb_out_id);
+                        uint32_t out_read_ptr = cb_out.get_read_ptr();
 
                         // write_block_sync_split is more generic (support multiple output tensors)
                         // But for N_chunks == 1 (non-split minimal_matmul), write_block_sync should be faster
@@ -309,7 +356,7 @@ void kernel_main() {
                 uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
                 cb_in0.reserve_back(in0_block_num_tiles);
 
-                uint32_t in0_start_address = get_write_ptr(cb_in0_id);
+                uint32_t in0_start_address = cb_in0.get_write_ptr();
                 if constexpr (is_injector_core) {
 #ifdef FUSE_AG
                     if (is_injector_core) {
@@ -322,11 +369,23 @@ void kernel_main() {
                         in0_shape,
                         cb_in0_id,
                         in0_tile_size,
-#ifdef READ_FROM_LOCAL_INPUT
+#ifdef IN0_HAS_SECOND_SOURCE
+#ifdef IN0_VIRTUAL_CONCAT
+                        // Fused concatenation (concat-free): in0 (main) holds K-tiles [0, k_split);
+                        // in3 holds K-tiles [k_split, K). main_Wt = k_split is the main buffer width.
+                        in3_reader,
+                        /*local_k_start=*/IN0_K_SPLIT_TILES,
+                        /*local_k_end=*/K_tiles - 1,
+                        /*input_tensor_Wt=*/K_tiles - IN0_K_SPLIT_TILES,
+                        /*main_Wt=*/IN0_K_SPLIT_TILES,
+#else
+                        // AG: in0 is the full gathered K; in3 is this device's local pre-gather slice.
                         in3_reader,
                         fused_op_receiver.local_k_start,
                         fused_op_receiver.local_k_end,
                         fused_op_receiver.input_tensor_Wt,
+                        /*main_Wt=*/K_tiles,
+#endif
 #endif
                         m_tile,
                         m_tile_end,
@@ -334,9 +393,9 @@ void kernel_main() {
                         (k_block + 1) * K_block_tiles);
                 } else {
                     // Get from previous device
-                    in0_receiver_sem.set(INVALID);
-                    noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
-                    in0_receiver_sem.wait(VALID);
+                    in0_receiver_semaphore.set(INVALID);
+                    in0_sender_semaphore.up(noc, in0_sender_noc_x, in0_sender_noc_y, 1);
+                    in0_receiver_semaphore.wait(VALID);
                 }
 
                 // Critical to performance for sender to push data to compute before mcasting
@@ -344,8 +403,8 @@ void kernel_main() {
                 cb_in0.push_back(in0_block_num_tiles);
 
                 if (!is_sink_core) {
-                    in0_sender_sem.wait(1);
-                    in0_sender_sem.set(0);
+                    in0_sender_semaphore.wait(1);
+                    in0_sender_semaphore.set(0);
 
                     /**
                      * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
@@ -362,13 +421,14 @@ void kernel_main() {
                     noc.async_writes_flushed();
 #endif
 
-                    noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
+                    in0_valid_semaphore.relay_unicast(noc, in0_receiver_semaphore, in0_dest_noc_x, in0_dest_noc_y);
                 }
 #ifdef SRS_FUSE_OP_SIGNALER
                 if constexpr (is_output_writer) {
-                    if (not_first_block && k_block_iter == max_defer_write_k_block) {
+                    // Deferred-write path only (guarded by defer_write, which is false on the fused RS path).
+                    if (defer_write && not_first_block && k_block_iter == max_defer_write_k_block) {
                         noc.async_write_barrier();
-                        srs_fuse_signaler.synchronize_workers_and_signal_op(0);
+                        srs_fuse_signaler.signal_op_per_core(mm_progress_counters_base);
                     }
                 }
 #endif
@@ -377,7 +437,7 @@ void kernel_main() {
             if constexpr (!is_output_writer) {
                 cb_in2.reserve_back(N_block_tiles);
 
-                uint32_t l1_write_addr_in2 = get_write_ptr(cb_in2_id);
+                uint32_t l1_write_addr_in2 = cb_in2.get_write_ptr();
                 for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
                     noc.async_read(
                         in2_reader,
@@ -415,16 +475,21 @@ void kernel_main() {
             // We get reuse on in0 when striding N block
             reuse_block = true;
 
-            defer_write_m_tile = m_tile;
-            defer_write_m_tile_end = m_tile_end;
+            defer_write_m_tile = out_m_tile;
+            defer_write_m_tile_end = out_m_tile_end;
             defer_write_n_tile = n_tile;
             defer_write_n_tile_end = n_tile_end;
             /**
              * If this isn't the last output block, defer writing until the defer_k_write_block iteration
              * of the next output block.
              */
+#ifdef SRS_FUSE_OP_SIGNALER
+            // Fused RS path: write each block promptly
+            defer_write = false;
+#else
             defer_write = !is_last_block;
             defer_write = defer_write && !is_injector_core;
+#endif
 
             if (!defer_write) {
                 if constexpr (is_output_writer) {
@@ -435,8 +500,8 @@ void kernel_main() {
                             out_shape_swiglu,
                             cb_out_id,
                             out_tile_size,
-                            m_tile,
-                            m_tile_end,
+                            out_m_tile,
+                            out_m_tile_end,
                             n_tile / 2,
                             n_tile_end / 2);
                     } else {
@@ -449,8 +514,8 @@ void kernel_main() {
                             out0_shape_swiglu,
                             cb_out_id,
                             out_tile_size,
-                            m_tile,
-                            m_tile_end,
+                            out_m_tile,
+                            out_m_tile_end,
                             n_tile / 2,
                             n_tile_end / 2);
                     }
@@ -463,8 +528,8 @@ void kernel_main() {
                             out_shape,
                             cb_out_id,
                             out_tile_size,
-                            m_tile,
-                            m_tile_end,
+                            out_m_tile,
+                            out_m_tile_end,
                             n_tile,
                             n_tile_end);
                     } else {
@@ -473,17 +538,16 @@ void kernel_main() {
                             out0_shape,
                             cb_out_id,
                             out_tile_size,
-                            m_tile,
-                            m_tile_end,
+                            out_m_tile,
+                            out_m_tile_end,
                             n_tile,
                             n_tile_end);
                     }
 #endif  // FUSE_SWIGLU
 #ifdef SRS_FUSE_OP_SIGNALER
-                    if (is_last_block) {
-                        noc.async_write_barrier();
-                        srs_fuse_signaler.synchronize_workers_and_signal_op(0);
-                    }
+                    // Signal this core's per-core progress counter right after its prompt block write
+                    noc.async_write_barrier();
+                    srs_fuse_signaler.signal_op_per_core(mm_progress_counters_base);
 #endif
                 }
             }

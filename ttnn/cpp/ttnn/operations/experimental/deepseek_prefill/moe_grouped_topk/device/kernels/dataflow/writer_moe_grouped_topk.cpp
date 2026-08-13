@@ -293,20 +293,27 @@ void kernel_main() {
     constexpr uint32_t remainder_tokens_per_tile = get_named_compile_time_arg_val("remainder_tokens_per_tile");
     constexpr uint32_t cb_gathered_sigmoid = get_named_compile_time_arg_val("cb_gathered_sigmoid");
     constexpr uint32_t cb_padding_config = get_named_compile_time_arg_val("cb_padding_config");
+    // Test-only debug output.
+    constexpr uint32_t cb_biased_dump = get_named_compile_time_arg_val("cb_biased_dump");
+    constexpr uint32_t dump_biased_scores = get_named_compile_time_arg_val("dump_biased_scores");
+    constexpr uint32_t biased_page_size = get_named_compile_time_arg_val("biased_page_size");
 
     const uint32_t weights_addr = get_arg_val<uint32_t>(0);
     const uint32_t indices_addr = get_arg_val<uint32_t>(1);
     const uint32_t start_height_tile = get_arg_val<uint32_t>(2);
     const uint32_t end_height_tile = get_arg_val<uint32_t>(3);
     const uint32_t padding_config_addr = get_arg_val<uint32_t>(4);
+    const uint32_t biased_addr = get_arg_val<uint32_t>(5);
 
     constexpr auto weights_args = TensorAccessorArgs<0>();
     constexpr auto indices_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
     constexpr auto padding_config_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
+    constexpr auto biased_args = TensorAccessorArgs<padding_config_args.next_compile_time_args_offset()>();
 
     const auto weights_accessor = TensorAccessor(weights_args, weights_addr, weights_page_size);
     const auto indices_accessor = TensorAccessor(indices_args, indices_addr, indices_page_size);
     const auto padding_config_accessor = TensorAccessor(padding_config_args, padding_config_addr);
+    const auto biased_accessor = TensorAccessor(biased_args, biased_addr, biased_page_size);
 
     // Optional padding awareness: when a per-device [num_real_tokens, pad_side] row is supplied
     // (addr != 0), padded token rows have their output expert indices overwritten with the
@@ -328,6 +335,7 @@ void kernel_main() {
     Noc noc;
     CircularBuffer out_indices_cb(cb_out_indices);
     CircularBuffer out_weights_cb(cb_out_weights);
+    CircularBuffer biased_dump_cb(cb_biased_dump);
 
     // while reader and compute kernels are applying the sigmoid, we can create the topk indices
     // I see no performance difference generating these internally inside the writer kernel
@@ -401,6 +409,21 @@ void kernel_main() {
         noc.async_writes_flushed();
         out_indices_cb.pop_front(1);
         out_weights_cb.pop_front(1);
+
+        // Test-only debug output.
+        if constexpr (dump_biased_scores) {
+            biased_dump_cb.wait_front(width_tiles);
+            for (uint32_t width_tile = 0; width_tile < width_tiles; width_tile++) {
+                noc.async_write(
+                    biased_dump_cb,
+                    biased_accessor,
+                    biased_page_size,
+                    {.offset_bytes = width_tile * biased_page_size},
+                    {.page_id = height_tile * width_tiles + width_tile});
+            }
+            noc.async_writes_flushed();
+            biased_dump_cb.pop_front(width_tiles);
+        }
     }
     noc.async_write_barrier();
 }

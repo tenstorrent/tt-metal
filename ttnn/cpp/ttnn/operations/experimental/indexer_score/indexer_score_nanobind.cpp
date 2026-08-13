@@ -4,6 +4,7 @@
 
 #include "indexer_score_nanobind.hpp"
 
+#include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
@@ -183,6 +184,73 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
         nb::arg("block_cyclic_chunk_local") = std::nullopt);
+
+    ttnn::bind_function<"ring_indexer_score_dsa", "ttnn.experimental.">(
+        mod,
+        R"doc(
+        Ring-fused DeepSeek-V3.2 DSA / GLM-5 lightning-indexer scorer.
+
+        Identical score semantics to ``indexer_score_dsa`` but SUBSUMES the SP all-gather: rather than the
+        caller pre-gathering K, it takes this chip's LOCAL K shard ``k_local`` [B,1,sll,D] (the all-gather
+        input) plus a pre-allocated ``k`` persistent buffer (the gather output). In indexed-cache mode,
+        ``k_local`` may be a multi-slot ND-sharded cache and ``k`` is batch-1 scratch; only the selected slot
+        and the complete block-cyclic slabs touched by ``kv_len`` are gathered. One program
+        co-schedules the ring_attention all-gather with the indexer compute so fabric transport overlaps
+        scoring; the reader gates each K band on ONLY the SP shards that band touches, so it scores already-
+        arrived shards while farther slabs are still in flight. DSA only -- there is no fused MSA variant.
+
+        Args:
+            q: [B, Hi, Sq, D] bf16/bfp8_b tiled (post non-interleaved RoPE); see indexer_score_dsa
+            k: [B, 1, T, D] bf16/bfp8_b tiled PERSISTENT all-gather OUTPUT buffer, T = sp*sll. B must be 1
+                when cache_batch_idx is set; the gather fills remote SP shards in place
+            weights: [B, Hi, Sq, 1] bf16 tiled learned per-head gates (scale pre-folded)
+            k_local: [B, 1, sll, D] bf16/bfp8_b tiled, interleaved or ND-sharded DRAM -- this chip's SP
+                shard and the all-gather INPUT; sll = T/sp; must match k's dtype
+            ag_multi_device_global_semaphore: list of the all-gather's out-ready global semaphores; requires
+                >= 2 (the forward and backward ring directions)
+            cluster_axis: mesh axis that is the SP ring -- both the gather axis and the causality axis.
+                REQUIRED here (optional in indexer_score_dsa)
+            topology: ttnn.Topology -- ttnn.Topology.Linear (non-torus grid) or ttnn.Topology.Ring
+            num_links: int, fabric links for the gather (default 1)
+            ag_sub_device_id: optional ttnn.SubDeviceId scoping the AG worker cores (kept disjoint from the
+                compute grid so transport and compute cores do not collide)
+            chunk_start_idx: optional int, rank 0's global query start; see indexer_score_dsa
+            program_config: IndexerScoreProgramConfig work-unit knobs; see indexer_score_dsa.
+                head_group_size must be 0 (all Hi resident) or Hi -- head streaming is not supported here
+            compute_kernel_config: optional DeviceComputeKernelConfig (only math_fidelity honored)
+            cache_batch_idx: optional int selecting one k_local cache slot; only that slot is gathered into
+                k slot 0. See indexer_score_dsa.
+            kv_len: optional int, valid tile-aligned key prefix in (0, T]. With block-cyclic K, transport is
+                bounded to the complete per-rank slabs touched by this prefix.
+            seq_subshard_axis: optional int, 2D SP×TP -- the (TP) mesh axis the query rows are ALSO block-cyclic
+                sub-sharded over, on top of the SP shard. The K cache stays SP-sharded + TP-replicated (the ring
+                AG still gathers along cluster_axis), so only the causal query geometry gains the tp_rank*Sq
+                sub-offset. nullopt = query sharded on the SP axis only. See indexer_score_dsa.
+            block_cyclic_sp_axis: optional int, mesh axis the cache was striped over; MUST equal cluster_axis;
+                see indexer_score_dsa
+            block_cyclic_chunk_local: optional int, per-shard chunk length; required with block_cyclic_sp_axis
+
+        Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
+        )doc",
+        &ttnn::experimental::ring_indexer_score_dsa,
+        nb::arg("q"),
+        nb::arg("k"),
+        nb::arg("weights"),
+        nb::arg("k_local"),
+        nb::arg("ag_multi_device_global_semaphore"),
+        nb::kw_only(),
+        nb::arg("cluster_axis"),
+        nb::arg("topology"),
+        nb::arg("num_links") = 1,
+        nb::arg("ag_sub_device_id") = nb::none(),
+        nb::arg("chunk_start_idx") = nb::none(),
+        nb::arg("program_config") = IndexerScoreProgramConfig{},
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("cache_batch_idx") = nb::none(),
+        nb::arg("kv_len") = nb::none(),
+        nb::arg("seq_subshard_axis") = nb::none(),
+        nb::arg("block_cyclic_sp_axis") = nb::none(),
+        nb::arg("block_cyclic_chunk_local") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

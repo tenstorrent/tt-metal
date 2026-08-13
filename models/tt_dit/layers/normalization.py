@@ -202,13 +202,42 @@ class DistributedRMSNorm(Module):
         rope_sin=None,
         trans_mat=None,
         dtype=None,
+        dynamic_weight=None,
+        dynamic_bias=None,
+        per_head_norm=False,
     ) -> ttnn.Tensor:
+        # per_head_norm selects the normalization semantics when the activation is
+        # head-split (num_heads_per_device > 1):
+        #   True  -> RMSNorm INDEPENDENTLY over each head's head_dim (per-head QK-norm, e.g.
+        #            Ideogram4). No cross-device all-gather (each head is device-local).
+        #   False -> one RMSNorm over the FULL per-device row, then reshape to heads
+        #            (WAN2.2 / LTX "norm before splitting heads").
+        # The two are NOT equivalent. Default is whole-row (False); per-head models must opt
+        # in with per_head_norm=True at the call site (e.g. the Ideogram4 QK-norm).
         expected_dim = self.embedding_dim // self.mesh_width
         if x.shape[-1] != expected_dim:
             msg = (
                 f"last dimension of input tensor with shape {tuple(x.shape)} should match "
                 f"embedding_dim / mesh_width = {expected_dim}"
             )
+            raise ValueError(msg)
+
+        # Effective affine weight: the static per-channel weight, optionally modulated by a
+        # per-sample dynamic weight (e.g. an adaLN (1 + scale) factor). Folding it in here
+        # applies the modulation inside the fused op (fp32 internals) and removes the separate
+        # elementwise scale op the caller would otherwise need. RMSNorm has no bias term.
+        weight = self.weight.data if self.weight is not None else None
+        if dynamic_weight is not None:
+            weight = dynamic_weight if weight is None else ttnn.multiply(weight, dynamic_weight)
+        weight_key = tuple(weight.shape) if weight is not None else None
+
+        # dynamic_bias is the additive half of an adaLN modulation (the `shift`), folded into the same
+        # fused op as the scale so the caller needs no separate elementwise add. The device op accepts
+        # a per-token bias of shape [.., N, H] alongside a per-token weight; it requires a weight
+        # whenever a bias is given. Unlike the weight it does not reach create_stats_buffer, because
+        # only the weight can change the stats scratch geometry -- hence it is absent from the cache key.
+        if dynamic_bias is not None and weight is None:
+            msg = "dynamic_bias requires a weight: pass dynamic_weight or build the norm with affine=True"
             raise ValueError(msg)
 
         # Fused distributed RMSNorm device op (PRE sum-of-squares + fabric ring AG + POST
@@ -225,14 +254,18 @@ class DistributedRMSNorm(Module):
                 # forwarded to create_stats_buffer and affects its sizing). Guards against
                 # a shared-cache collision between two same-shape modules differing only
                 # in affine geometry.
-                ("rms", tuple(x.shape), num_heads_per_device, rope_cos is not None, self.weight is not None),
+                # per_head_norm changes the stats geometry (per-head reduces locally -> no
+                # all-gather scratch), so it MUST be part of the key and forwarded to
+                # create_stats_buffer (which returns None for the per-head/local path).
+                ("rms", tuple(x.shape), num_heads_per_device, per_head_norm, rope_cos is not None, weight_key),
                 lambda: ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
                     x,
                     self.mesh_axis,
                     self.mesh_device,
                     num_heads_per_device=num_heads_per_device,
+                    per_head_norm=per_head_norm,
                     num_links=self.ccl_manager.num_links,
-                    weight=self.weight.data if self.weight is not None else None,
+                    weight=weight,
                     transformation_mat=trans_mat,
                     rope_cos=rope_cos,
                     rope_sin=rope_sin,
@@ -240,7 +273,9 @@ class DistributedRMSNorm(Module):
             ),
             epsilon=self.norm_eps,
             num_heads_per_device=num_heads_per_device,
-            weight=self.weight.data if self.weight is not None else None,
+            per_head_norm=per_head_norm,
+            weight=weight,
+            bias=dynamic_bias,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
             num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
             transformation_mat=trans_mat,
@@ -327,8 +362,7 @@ class DistributedLayerNorm(Module):
         """Lazy-allocate the row-major fp32 reciprocal LUT the fused op consumes.
 
         The fused op's reader NoC-reads a ROW_MAJOR [1,1,1,width_per_device] DRAM tensor
-        holding [1/1..1/width] (replicated per device) — unlike the composite Welford op,
-        which used a HEIGHT_SHARDED L1 layout. Cached per (device, width).
+        holding [1/1..1/width] (replicated per device). Cached per (device, width).
         """
         width = self.embedding_dim // self.mesh_width
         key = (self.mesh_device.id(), width)
@@ -399,7 +433,7 @@ Set mesh_axis to None to disable data parallelism.
 class GroupNorm(Module):
     default_num_out_blocks = {
         # (Batch, Height, Width, Channels): num_out_blocks
-    }  # used to override the num_out_blocks computed based on the input shape.
+    }  # overrides the num_out_blocks computed from the input shape.
 
     def __init__(
         self,

@@ -194,7 +194,8 @@ std::vector<Tensor> topk(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<Tensor>& indices_tensor,
-    std::optional<std::tuple<Tensor&, Tensor&>> preallocated_output_tensors) {
+    std::optional<std::tuple<Tensor&, Tensor&>> preallocated_output_tensors,
+    const bool stable) {
     // Store original shape for final output validation
     const ttnn::Shape& original_lshape = input_tensor.logical_shape();
 
@@ -274,7 +275,7 @@ std::vector<Tensor> topk(
 
         // Creating indices tensor on host and copying to device (there is no direct way to write
         // to a device tensor with a scalar value).
-        const TensorSpec& indices_spec = indices.tensor_spec();
+        const tt::tt_metal::TensorSpec& indices_spec = indices.tensor_spec();
         TT_FATAL(indices_spec.data_type() == DataType::UINT16, "Indices tensor must be UINT16 for rank 0 input tensor");
         // Although we only need to store one value, have to account for extra padding
         // in the tile layout. So host buffer size needs to match device buffer size.
@@ -371,6 +372,7 @@ std::vector<Tensor> topk(
         -1,
         largest,
         sorted,
+        stable,
         input_memory_config,
         used_sub_core_grids,
         indices_tensor,

@@ -25,8 +25,7 @@ args_list_t emit_runtime_args(WorkerEdmInterfaceArgs const& edm_interface_args) 
 
 args_list_t emit_compile_time(const WorkerEdmInterfaceArgs& /*edm_interface_args*/) { return {}; }
 
-args_list_t legacy_emit_address_generator_runtime_args(
-    const tt::tt_metal::IDevice* const d, const tt::tt_metal::Tensor& t) {
+args_list_t legacy_emit_address_generator_runtime_args(const tt::tt_metal::IDevice* const d, const ttnn::Tensor& t) {
     args_list_t args;
     switch (t.buffer()->buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
@@ -53,8 +52,7 @@ args_list_t legacy_emit_address_generator_runtime_args(
     };
 }
 
-args_list_t emit_address_generator_runtime_args(
-    const tt::tt_metal::IDevice* const /*d*/, const tt::tt_metal::Tensor& t) {
+args_list_t emit_address_generator_runtime_args(const tt::tt_metal::IDevice* const /*d*/, const ttnn::Tensor& t) {
     args_list_t args;
     switch (t.buffer()->buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
@@ -79,7 +77,7 @@ args_list_t emit_address_generator_runtime_args(
     };
 }
 
-args_list_t legacy_emit_address_generator_compile_time_args(const tt::tt_metal::Tensor& t) {
+args_list_t legacy_emit_address_generator_compile_time_args(const ttnn::Tensor& t) {
     switch (t.buffer()->buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:
@@ -98,7 +96,7 @@ args_list_t legacy_emit_address_generator_compile_time_args(const tt::tt_metal::
     TT_ASSERT(false);
 }
 
-args_list_t emit_address_generator_compile_time_args(const tt::tt_metal::Tensor& t) {
+args_list_t emit_address_generator_compile_time_args(const ttnn::Tensor& t) {
     switch (t.buffer()->buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:
@@ -140,7 +138,9 @@ static std::pair<std::vector<uint32_t>, std::vector<uint32_t>> shard_noc_cores_f
     TT_ASSERT(d != nullptr);
     auto const& core_range = shard_spec.grid.bounding_box();
     std::vector<uint32_t> logical_to_noc_row_map;
+    logical_to_noc_row_map.reserve(core_range.end_coord.y - core_range.start_coord.y + 1);
     std::vector<uint32_t> logical_to_noc_col_map;
+    logical_to_noc_col_map.reserve(core_range.end_coord.x - core_range.start_coord.x + 1);
     for (uint32_t y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
         CoreCoord noc_core = d->virtual_core_from_logical_core(CoreCoord(0, y), tt::CoreType::WORKER);
         logical_to_noc_row_map.push_back(noc_core.y);
@@ -150,12 +150,13 @@ static std::pair<std::vector<uint32_t>, std::vector<uint32_t>> shard_noc_cores_f
         logical_to_noc_col_map.push_back(noc_core.x);
     }
 
-    return {logical_to_noc_row_map, logical_to_noc_col_map};
+    return {std::move(logical_to_noc_row_map), std::move(logical_to_noc_col_map)};
 }
 
 std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(IDevice const* d, Tensor const& t) {
     std::vector<uint32_t> args;
     auto const& [row_map, col_map] = shard_noc_cores_from_shard_spec(d, t.shard_spec().value());
+    args.reserve(row_map.size() + col_map.size() + 2);
     args.push_back(row_map.size());
     for (unsigned int row : row_map) {
         args.push_back(row);
@@ -170,6 +171,7 @@ std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_rt_args(IDevice const* d, T
 
 std::vector<uint32_t> ShardedAddrGenArgBuilder::emit_ct_args(Tensor const& t) {
     std::vector<uint32_t> args;
+    args.reserve(7);
     TT_ASSERT(t.is_sharded());
     auto const& [pages_per_shard_y, pages_per_shard_x] = t.buffer()->shard_spec().shape_in_pages();
     auto const& [shard_grid_start, shard_grid_end] = shard_grid_from_shard_spec(t.shard_spec().value());

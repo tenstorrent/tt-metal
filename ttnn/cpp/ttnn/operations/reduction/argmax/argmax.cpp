@@ -6,7 +6,6 @@
 #include "device/argmax_utils.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
 #include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/core/to_layout/to_layout_op.hpp"
@@ -154,11 +153,9 @@ static Tensor zero_volume_argmax(
 
     // Creating result tensor on host and copying to device (there is no direct way to write
     // to a device tensor with a scalar value).
-    const TensorSpec& tensor_spec = preallocated_tensor.tensor_spec();
-    // Note that allocate_host_buffer() doesn't allow specifying initial value, but that doesn't matter
-    // here because the tensor is 0-volume (i.e., it has no elements).
-    auto host_buffer = tt::tt_metal::tensor_impl::allocate_host_buffer(tensor_spec);
-    Tensor host_tensor(std::move(host_buffer), output_shape, tensor_spec.data_type(), tensor_spec.layout());
+    // Unspecified contents are fine here because the tensor is 0-volume (i.e., it has no elements).
+    const tt::tt_metal::TensorSpec& tensor_spec = preallocated_tensor.tensor_spec();
+    Tensor host_tensor(tt::tt_metal::HostTensor::allocate_for_overwrite(tensor_spec));
     copy_to_device(host_tensor, preallocated_tensor);
 
     return preallocated_tensor;
@@ -221,7 +218,7 @@ Tensor argmax(
             input_shape);
         // Creating result tensor on host and copying to device (there is no direct way to write
         // to a device tensor with a scalar value).
-        const TensorSpec& preallocated_spec = preallocated_tensor.tensor_spec();
+        const tt::tt_metal::TensorSpec& preallocated_spec = preallocated_tensor.tensor_spec();
         TT_FATAL(
             preallocated_spec.data_type() == DataType::UINT32,
             "Preallocated output tensor must be UINT32 for rank 0 input tensor");
