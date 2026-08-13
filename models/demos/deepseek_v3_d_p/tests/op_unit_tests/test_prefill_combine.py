@@ -10,9 +10,8 @@ PyTorch reference implementation when combining expert outputs back to token pos
 Uses torch-generated dispatch inputs to isolate the combine operation.
 """
 
-from dataclasses import dataclass
-import itertools
 import os
+from dataclasses import dataclass
 
 import pytest
 import torch
@@ -466,43 +465,47 @@ def _cross_product_conflated_cmb_test_dimensions():
     params = []
     for model_name, model_config_class, is_extended_model, test_meshes in COMBINE_MODELS:
         for target_mesh, fabric_cfg in test_meshes.target_meshes.items():
-            device_params = fabric_to_device_params(fabric_cfg)
-            fabric_topo = _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg)
-            topo_marker = _topo_marker(target_mesh, fabric_cfg)
-            mesh_requirements_marker = pytest.mark.requires_mesh_topology(mesh_shape=target_mesh, topology=topo_marker)
-            marks = (
-                (pytest.mark.extended_model, mesh_requirements_marker)
-                if is_extended_model
-                else (mesh_requirements_marker)
-            )
-            test_scenarios = [
-                ("pcc", 128, 4, True),
-                ("perf_no_pcc", 640, 8, False),
-            ]
-            for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in test_scenarios:
-                model_config = _model_scaledown_for_combine(
-                    model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc
+            for cmb_version in [1, 2]:
+                device_params = fabric_to_device_params(fabric_cfg, cmb_version)
+                fabric_topo = _fabric_cfg_to_fabric_topo_for_cmb_op(fabric_cfg)
+                topo_marker = _topo_marker(target_mesh, fabric_cfg)
+                mesh_requirements_marker = pytest.mark.requires_mesh_topology(
+                    mesh_shape=target_mesh, topology=topo_marker
                 )
-
-                num_experts = model_config.NUM_ROUTED_EXPERTS
-                topk = model_config.NUM_EXPERTS_PER_TOKEN
-                shape = target_mesh
-
-                params.append(
-                    pytest.param(
-                        shape,
-                        device_params,
-                        fabric_topo,
-                        seq_len_per_chip,
-                        model_config.EMB_SIZE,
-                        num_experts,
-                        topk,
-                        dispatch_buffer_capacity_factor,
-                        run_pcc,
-                        marks=marks,
-                        id=f"{model_name}-{_mesh_id(target_mesh, fabric_cfg)}-{test_scenario_id}",
+                marks = (
+                    (pytest.mark.extended_model, mesh_requirements_marker)
+                    if is_extended_model
+                    else (mesh_requirements_marker)
+                )
+                test_scenarios = [
+                    ("pcc", 640, 8, True),
+                    ("perf_no_pcc", 640, 8, False),
+                ]
+                for test_scenario_id, seq_len_per_chip, dispatch_buffer_capacity_factor, run_pcc in test_scenarios:
+                    model_config = _model_scaledown_for_combine(
+                        model_config_class(), test_meshes.full_model_mesh, target_mesh, run_pcc
                     )
-                )
+
+                    num_experts = model_config.NUM_ROUTED_EXPERTS
+                    topk = model_config.NUM_EXPERTS_PER_TOKEN
+                    shape = target_mesh
+
+                    params.append(
+                        pytest.param(
+                            shape,
+                            device_params,
+                            fabric_topo,
+                            seq_len_per_chip,
+                            model_config.EMB_SIZE,
+                            num_experts,
+                            topk,
+                            dispatch_buffer_capacity_factor,
+                            run_pcc,
+                            cmb_version,
+                            marks=marks,
+                            id=f"{model_name}-{_mesh_id(target_mesh, fabric_cfg)}-{test_scenario_id}-cmb_v{cmb_version}",
+                        )
+                    )
 
     return params
 
@@ -532,7 +535,7 @@ def _cross_product_conflated_cmb_test_dimensions():
 #    test-code cross product calculation, or are skipped in the body of the test, depending on where it was less cumbersome to implement it.
 #
 @pytest.mark.parametrize(
-    "mesh_device, device_params, topology, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
+    "mesh_device, device_params, topology, seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check, cmb_version",
     _cross_product_conflated_cmb_test_dimensions(),
     indirect=["mesh_device", "device_params"],
 )
@@ -544,7 +547,6 @@ def _cross_product_conflated_cmb_test_dimensions():
     ids=["tile", "row_major"],
 )
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
-@pytest.mark.parametrize("cmb_version", [1, 2], ids=["cmb_v1", "cmb_v2"])
 def test_ttnn_combine(
     mesh_device,
     seq_len_per_chip,
