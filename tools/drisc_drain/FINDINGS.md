@@ -4303,3 +4303,132 @@ not comparable to anything.
 - **The default 4 Mi host record ring silently drops at this volume**: 1,801,941 records dropped until
   `TT_METAL_PERF_DEBUG_RING_RECS=16777216`. Producer stalls stayed 0 throughout, so the stall counters do NOT
   tell you the trace is incomplete — check the BroadcastRing line.
+
+## §N+44 — The profiler on a REAL model: ResNet-50 trace+2cq (bh-26, 2026-08-13)
+
+First real-model run of the DRISC perf-debug profiler with the NoC-footprint instrument on. Everything below
+is from `models/demos/vision/classification/resnet50/blackhole/tests/test_perf_e2e_resnet50.py::test_perf_trace_2cqs[16-0.0018-30-device_params0]`
+-- batch 16, 30 iterations, trace capture + replay, 2 command queues, 110 cores, ~844 ms of device time.
+Env: `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PERF_DEBUG_PROFILER=1 TT_METAL_PERF_DEBUG_ROLE_SPLIT=1
+TT_METAL_PERF_DEBUG_DRISC_ZONES=1 TT_METAL_PERF_DEBUG_NOC_FOOTPRINT=1`, `RING_RECS=67108864`.
+
+### It passes, and the instrument is nearly free
+
+| config | reps | inference time (avg) | producer stalls | records / dropped |
+|---|---|---|---|---|
+| no profiler | 3 | 0.0015957 / 0.0015872 / 0.0015820 s | -- | -- |
+| profiler only | 3 | 0.0016193 / 0.0016144 / 0.0016171 s | **0** of 110 | 1,581,952 / **0** |
+| + self-zones + NoC footprint | 3 | 0.0016195 / 0.0016268 / 0.0016199 s | **0** of 110 | ~1,736,000 / **0** |
+
+**e2e overhead ~+2%** (mean 0.0015883 -> 0.0016170 s), against **+4.6%** for the X280 generation. The self-zone
+and NoC-footprint instruments add **+0.3%** on top of the profiler, which is inside the baseline's own
+run-to-run spread (0.0015820-0.0015957 = 0.9%), i.e. not resolvable.
+
+**The perf gate still passes with profiling on**: the test's target is 0.0018 s and every config lands at
+0.0016x. So a real model can be profiled without breaching its own threshold -- the practically important
+result. 0 stalls and 0 dropped records in every profiled rep: ResNet's marker density (~1.6-2.5 M records over
+844 ms) is far below the host sink's ~16.78 M ceiling, so the §N+39 worry that a real model would saturate the
+ring did not materialise. **Nothing here was capped or dropped.**
+
+### The NoC footprint is a different animal from the synthetic workload
+
+Per drainer, in-window, at stock defaults:
+
+| | synthetic 120-core / 2 ms | ResNet-50 / 844 ms |
+|---|---|---|
+| filler bytes | ~52 MB | **2,231-2,556 MB** |
+| filler txns | ~6,400 | 227,341-259,191 |
+| mover bytes | ~70 MB | 378-382 MB |
+| mover txns | ~6,900 | **1,509,408-1,672,852** |
+| filler read rate p50 | 17.90 GB/s | **1.87 GB/s** (max 31.22) |
+
+Two things follow, and they are the argument for the two-phase read:
+
+1. **A filler's read p50 collapses to 1.87 GB/s of a 31.22 max.** Real ops leave the L1 marker rings nearly
+   empty nearly all the time, so a typical sweep hauls a mostly-empty 10,496 B span. That is §N+36's
+   under-full-span problem in its natural habitat, and it is waste, not throughput.
+2. **The two roles have opposite traffic shapes**: fillers ~2.4 GB in ~240k transactions (~10 kB each, whole
+   spans); movers ~380 MB in ~1.6 M transactions (~240 B each). Same instrument, and no single number
+   describes both -- which is why the plots are per-role and why the aggregate row had to be split.
+
+### THE SAMPLER IS A SAMPLER, and on a real model that is stark
+
+At stock defaults (500 us hold, idle sampling off):
+
+| | traced sweeps | of ALL sweeps | did work | work windows | frames | % of egress |
+|---|---|---|---|---|---|---|
+| filler | 710-751 | **0.4-0.5%** | 259-269 | **94-95** | 100-102 of 256 | 1.5-1.8% |
+| mover | 87,358-95,959 | 4.5% | 2,618-2,619 | 165-173 | 1,795-1,935 of 4,096 | **13.2-15.2%** |
+
+**The dark gaps in a filler lane are the emission window being CLOSED, not the drainer idling.** A filler is
+always sweeping or pacing; emission is armed by discovered work and held open for
+`TT_METAL_PERF_DEBUG_DRISC_ZONE_HOLD_US` (default 500 us) after the last work-bearing sweep. 844 ms of ResNet
+produces 94-95 disconnected windows. So **a filler row is a sample of the run, not a record of it** -- a dark
+region means "nothing interesting for at least 500 us", never "nothing happened".
+
+Raising the hold to 50 ms collapses 96 windows to **1** and gives continuous filler lanes (coverage 0.4% ->
+4.0-4.6%, frames 100 -> 200-220 of 256), but **movers then hit their cap** (4,097 of a 4,096 budget, 29.5-31.7%
+of egress) and truncate instead. Both roles cannot currently be continuous over 844 ms at these sample rates.
+Kept at 500 us by choice: nothing is capped there and both roles cover the whole run.
+
+Note the mover's **13-15% of egress at defaults against a filler's 1.5%**. That is sample RATE, not budget: a
+mover samples every ~1.27 us because that is how often it sweeps. It is the largest instrument cost in the
+system, and decimating the mover's interval -- 1.27 us resolution over 844 ms is far finer than any question
+needs -- is the obvious lever if it ever matters.
+
+### Two defects the model exposed, and three fixes that did not survive
+
+**Role-aware self-frame budget (FIXED).** The shared 256-frame cap stopped BOTH movers ~20% into the run and
+they never came back: the cap is permanent, not periodic, so nothing re-arms them. Diagnosed by the user
+observing that a *sampler* would resume and these did not. Movers now get 16x. Measured need for full coverage:
+filler ~100 frames, mover 1,814-1,970. `DRISC_ZONE_FRAMES=0` does NOT mean unlimited -- the code maps 0 -> 256.
+
+**Pacing hysteresis too sticky (FIXED, by constants).** The controller is asymmetric: up x1.25, down x0.875,
+and a `kPaceCritical` collapse throws the gap to 0 outright. On a sparse model with 94-96 work windows,
+collapses fire constantly and the gap needed ~35-40 sweeps to climb back, so it effectively never arrived --
+the PACE distribution from the trace came out **bimodal, 24-32% of samples under 1 us and ~50% at the 148 us
+ceiling**, while `out[42]` reported only the FINAL gap and hid it completely (the fifth instance in this file of
+a statistic quoted over the wrong population). Now x1.5 with a floor of 512: ~13 sweeps, and a filler's total
+sweeps fall **475k-564k -> 166k-178k** with the knee unchanged (delay 15 = 0/0/0). Tuned by IMMEDIATES on
+purpose: `gap >> 1` is the same instruction as `gap >> 2`, so it costs **zero DRISC code** -- which is what made
+it viable when a branch was not.
+
+**REJECTED 1: seeding the gap at kGapMaxCycles.** Premise "start where it settles" was false -- the controller
+settles at 8k-34k cycles on the synthetic workload and only pins at the ceiling on a sparse model. Delaying the
+first sweep by up to 148 us moved the knee: delay 15 went 0/0/0/0 -> **35/100/107/75**, delay 10 roughly
+doubled, `ring-room waits` still 0, i.e. the **L1 marker** rings filled while the drainer waited.
+
+**REJECTED 2: seeding it for MOVERS too** (a regression introduced while fixing the above, caught by the user).
+The seed keyed on `kFillPct` alone while the controller that lowers it is gated
+`kFillPct != 0 && kRole != kRoleMover`, so movers pinned at 148 us with no feedback path: ~114x slower to drain,
+and a 20 ms trace replay took ~100 ms to finish. **The symptom looked like efficiency** -- mover sweeps fell
+150x and were reported as a win. Rule: **a role with no feedback path must never be seeded away from 0**, and a
+seed must be gated on the same condition as the controller that maintains it.
+
+**REJECTED 3: a two-regime fast ramp** (x5 below a quarter of target), in three variants -- unbounded, bounded
+to the low eighth of the range, and gated on having staged a frame. All three cost **3-8 stalls at delay 15-20**
+where the gentle ramp gives 0, because before producers start, fill reads 0 and looks identical to sparseness.
+The final variant **overflowed the DRISC code region**, the drainer FAILED TO LOAD, and the run still passed
+while reporting a plausible time with no device zones at all.
+
+### METHOD ERROR that invalidated several intermediate readings
+
+**The DRISC kernel is JIT-compiled AT RUNTIME, so a code-region overflow appears in the RUN log, never in the
+`ninja` output.** Several "built, no overflow" checks during this work greped the build and proved nothing; the
+instrumented configuration was silently not loading while an uninstrumented one was being tuned and measured.
+Only the loud-failure path (`FAILED TO LOAD ... THIS CAPTURE WILL BE EMPTY`) surfaced it. **Check the run log.**
+
+### A configuration that stalls, not yet bisected
+
+`TT_METAL_DEVICE_PROFILER=1` + `TT_METAL_DRISC_PROFILER=1` **without** `TT_METAL_PERF_DEBUG_PROFILER=1` sat at
+99.7% CPU in userspace for 10+ minutes on this test, where comparable reps finish in ~3.7 s, with every worker
+thread parked in `futex_wait` -- the signature of a host poll for a consumer that never came up. One
+observation, and `DRISC_PROFILER=1` is the documented way to suppress the legacy RT manager and DRAM profiler
+(§647), so someone will reach for it. Worth a two-arm env bisect.
+
+### Captures
+
+`tracy_captures/resnet50_default500us.tracy` is canonical (stock defaults, nothing capped).
+`resnet50_hold50ms.tracy` has continuous filler lanes with truncated movers. `resnet50_trace2cq_nocfp.tracy`
+(movers cut at 20%) and `resnet50_roleaware.tracy` (contains the mover cold-start regression) are superseded
+and misleading -- delete them.
