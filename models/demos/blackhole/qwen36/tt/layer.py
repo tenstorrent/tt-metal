@@ -183,7 +183,16 @@ class Qwen36DecoderLayer:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
             # PREFILL: distributed rmsnorm outputs in L1 so the fused in-proj AGMM gathers from L1, not DRAM.
-            if _norm_mode == Mode.PREFILL:
+            #
+            # MODEL-GATED on dim. This full-width [S, dim] output stays L1-resident across the whole
+            # layer, including the GDN chunk kernel. At S=2048 that is 262 KB/core for the 9B
+            # (dim 4096) and 328 KB/core for the 27B (dim 5120) over a Wormhole's 64 cores; the 27B
+            # figure leaves the chunk kernel ~20 KB short of placing its own CBs and it dies with
+            # "circular buffers ... clash with L1 buffers". Blackhole has both the larger L1 and ~110
+            # cores, so it keeps the tuned path. Gate on dim rather than model_name: HF_MODEL is often
+            # a hashed snapshot directory.
+            _norm_l1_fits = self.args.dim <= 4096 or is_blackhole()
+            if _norm_mode == Mode.PREFILL and _norm_l1_fits:
                 _attn_norm_config = {**_attn_norm_config, "distributed_output_mem_config": ttnn.L1_MEMORY_CONFIG}
             # DECODE ff_norm uses the attn_norm layout (act_shard_hidden, 32-core) so Qwen36MLP's input reshard is a no-op and the norm runs on 32 cores not 8; PREFILL keeps the framework ff config.
             if _norm_mode == Mode.DECODE:

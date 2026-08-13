@@ -702,10 +702,21 @@ class ModelArgs:
                 self.n_heads % self.cluster_shape[1] == 0
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
 
-            assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
+            # KV heads must line up with the mesh width in ONE of two ways: either they shard
+            # (n_kv_heads % TP == 0, the usual case), or TP is a whole multiple of them and each
+            # device REPLICATES a KV head (TP > n_kv_heads, e.g. Qwen3.6-27B's 4 KV heads on a T3K's
+            # 8 devices). The replication direction requires the model's own attention to expand the
+            # k/v projections — the generic tt_transformers attention below does not, so a model
+            # relying on it must still satisfy the sharding direction.
+            assert (
+                self.n_kv_heads % self.cluster_shape[1] == 0 or self.cluster_shape[1] % self.n_kv_heads == 0
+            ), f"n_kv_heads and num_devices must divide one way or the other: {self.n_kv_heads} vs {self.cluster_shape[1]}"
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
-            self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+            # max(1, ...) for the replication case, where the floor division is 0.
+            self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / max(
+                1, self.n_kv_heads // self.cluster_shape[1]
+            )
 
             # All Gather Matmul for Dense Out (DO) - computed flag stored as instance attribute
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
