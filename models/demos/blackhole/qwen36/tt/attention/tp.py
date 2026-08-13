@@ -60,6 +60,16 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         return str(cache_dir / n) if cache_dir is not None else None
 
     tw = {}
+    # GQA KV replication (TP > n_kv_heads, e.g. TP=8 on T3K with 4 KV heads): expand k/v from
+    # [n_kv_heads*head_dim, in] to [TP*head_dim, in] so every device owns ONE WHOLE KV head instead
+    # of a fraction of one. Devices sharing a KV head recompute identical K/V into their own local
+    # cache (caches are per-device and never gathered), so this is correct, not just convenient.
+    # No-op when TP <= n_kv_heads, so the validated TP<=n_kv_heads layouts are byte-for-byte
+    # unchanged. Device d lands on KV head (d*n_kv_heads)//TP, which matches HF's q-head grouping
+    # (q head h -> kv head h//(n_heads/n_kv_heads)) because q heads shard contiguously.
+    k_proj = tpc.replicate_kv_weight(state_dict["k_proj.weight"], args.n_kv_heads, args.num_devices, args.head_dim)
+    v_proj = tpc.replicate_kv_weight(state_dict["v_proj.weight"], args.n_kv_heads, args.num_devices, args.head_dim)
+
     # Column-parallel q/k/v: fused [q+gate|k|v] per device, or separate DRAM-sharded weights.
     # Distinct cache names — as_tensor reload ignores requested memcfg.
     fused_qkv = getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None
