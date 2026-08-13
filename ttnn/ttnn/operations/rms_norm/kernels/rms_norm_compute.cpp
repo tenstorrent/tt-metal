@@ -6,8 +6,8 @@
 //   tilize_block            -> compute_kernel_lib::tilize            (ROW_MAJOR only)
 //   mask_tail_block         -> eltwise_chain (BinaryFpu Mul, bcast Row, strided, in place)
 //   square_accumulate_block -> compute_kernel_lib::sum_of_squares
-//   collapse_partial_block  -> compute_kernel_lib::reduce<SUM, REDUCE_ROW, ..., Collapse>
-//   combine_block (root)    -> compute_kernel_lib::reduce<SUM, REDUCE_ROW, ..., Skip>
+//   collapse_partial_block  -> compute_kernel_lib::reduce<SUM, REDUCE_ROW> (s == 1)
+//   combine_block (root)    -> compute_kernel_lib::reduce<SUM, REDUCE_ROW> over (B, s)
 //   scale_block             -> compute_kernel_lib::mul (bcast Col)
 //   apply_gamma_block       -> compute_kernel_lib::mul (bcast Row)
 //   untilize_block          -> compute_kernel_lib::untilize          (ROW_MAJOR only)
@@ -47,7 +47,6 @@ namespace ckl = compute_kernel_lib;
 constexpr uint32_t cb_input_tiles = 0;
 constexpr uint32_t cb_gamma_tiles = 1;
 constexpr uint32_t cb_sq_partials = 2;
-constexpr uint32_t cb_slice_stat = 3;
 constexpr uint32_t cb_gathered_partials = 4;
 constexpr uint32_t cb_rms_bcast = 5;
 constexpr uint32_t cb_rms_recip = 6;
@@ -112,7 +111,16 @@ void kernel_main() {
         ckl::PopPolicy::None,
         ckl::OperandKind::Row,
         ckl::TileOffset::Unset);
-    constexpr auto in_place = ckl::output(cb_input_tiles, ckl::ReservePolicy::None, ckl::PushPolicy::None);
+    // In-place pack window.  TileOffset::Set (base 0) is REQUIRED, not cosmetic:
+    // with TileOffset::Unset the chain emits `pack_tile<out_of_order_output=false>`,
+    // whose LLK path derives the write address from an internal running counter and
+    // ignores the tile index.  That counter is only rewound by a pack reconfig — and
+    // the chain's reconfig fold ELIDES the reconfig when two consecutive chains pack
+    // to the same CB.  So a second in-place chain (scale, then apply_gamma on the
+    // ROW_MAJOR path) would keep counting past the block and silently drop its
+    // result.  `Set` selects `pack_tile<true>`, which honours base + i_flat.
+    constexpr auto in_place =
+        ckl::output(cb_input_tiles, ckl::ReservePolicy::None, ckl::PushPolicy::None, ckl::TileOffset::Set);
     // Per-tile reserve/push: the chain reserves (PerOuter, PerOuter) exclusively
     // for DEST-accumulating packs, so the streaming output CB uses the per-tile
     // lifecycle.  The writer still drains a whole tile-row (S pages) at a time,
@@ -166,20 +174,29 @@ void kernel_main() {
         ckl::sum_of_squares<x_held, ckl::row_output(cb_sq_partials)>(block_shape);
 
         if constexpr (NUM_HIDDEN_SLICES > 1) {
-            // ---- collapse_partial_block: within-tile collapse -> column-0-valid
-            //      per-slice partial. NO finalize here: 1/W and epsilon must be
-            //      applied once, after the combine.
-            ckl::reduce<
-                ckernel::PoolType::SUM,
-                ckernel::ReduceDim::REDUCE_ROW,
-                cb_sq_partials,
-                cb_scaler,
-                cb_slice_stat,
-                ckl::ReduceInputPolicy::BulkWaitBulkPop>(ckl::ReduceInputBlockShape::of(BLOCK_ROWS, 1));
-
-            // ---- combine_block (root): sum the s gathered column-0-valid
-            //      partials. ReduceWithinTile::Skip is the documented case —
-            //      the inputs are already collapsed on the reduce axis.
+            // ---- combine_block: `collapse_partial_block` is FUSED INTO the root's
+            //      combine rather than run per contributor.
+            //
+            //      Design deviation, recorded: op_design.md routes each slice
+            //      through its own within-tile collapse (-> cb_slice_stat,
+            //      column-0-valid) and asks the root to sum those with
+            //      ReduceWithinTile::Skip.  That template value is currently
+            //      UNREACHABLE through compute_kernel_lib::reduce(): the
+            //      "Skip is AccumulateViaAdd-only" static_assert
+            //      (reduce_helpers_compute.inl:886-891) sits AFTER the
+            //      `if constexpr (AccumulateViaAdd) { ... return; }` block, so it
+            //      is not in a discarded statement and fires for the
+            //      AccumulateViaAdd instantiation too.
+            //
+            //      The equivalent that stays on a supported path: ship the RAW
+            //      per-column partial tile (cb_sq_partials, all 32 columns carry a
+            //      partial sum) and let the root do ONE reduce over the (B, s)
+            //      gathered block.  Sum-over-contributors then collapse-within-tile
+            //      == collapse then sum, so the arithmetic is identical, the NoC
+            //      payload is the same B tiles per contributor, and one whole
+            //      compute phase disappears from every non-root core.
+            //      cb_slice_stat is therefore not created at all; cb_sq_partials'
+            //      single consumer is the writer.
             if (is_root) {
                 ckl::reduce<
                     ckernel::PoolType::SUM,
@@ -190,10 +207,9 @@ void kernel_main() {
                     ckl::ReduceInputPolicy::BulkWaitBulkPop,
                     ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                     ReduceFp32Mode::Fast,
-                    ckl::ReduceAlgorithm::AccumulateViaAdd,
+                    ckl::ReduceAlgorithm::Auto,
                     ckl::NoAccumulation,
-                    decltype(finalize),
-                    ckl::ReduceWithinTile::Skip>(
+                    decltype(finalize)>(
                     ckl::ReduceInputBlockShape::of(BLOCK_ROWS, NUM_HIDDEN_SLICES),
                     ckl::ReduceInputMemoryLayout::contiguous(),
                     ckl::NoAccumulation{},

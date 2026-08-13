@@ -24,7 +24,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 
-constexpr uint32_t cb_slice_stat = 3;
+constexpr uint32_t cb_sq_partials = 2;
 constexpr uint32_t cb_gathered_partials = 4;
 constexpr uint32_t cb_output_tiles = 9;
 constexpr uint32_t cb_rm_stage_out = 11;
@@ -74,8 +74,8 @@ void kernel_main() {
 
         // ---- combine_block: contribute this slice's partials to the root ----
         if constexpr (NUM_HIDDEN_SLICES > 1) {
-            cb_wait_front(cb_slice_stat, BLOCK_ROWS);
-            const uint32_t src = get_read_ptr(cb_slice_stat);
+            cb_wait_front(cb_sq_partials, BLOCK_ROWS);
+            const uint32_t src = get_read_ptr(cb_sq_partials);
             for (uint32_t r = 0; r < BLOCK_ROWS; ++r) {
                 const uint32_t page = r * NUM_HIDDEN_SLICES + slice_index;
                 noc_async_write(
@@ -85,7 +85,7 @@ void kernel_main() {
             }
             noc_async_write_barrier();
             gather_progress.up(noc, root_noc_x, root_noc_y, 1);
-            cb_pop_front(cb_slice_stat, BLOCK_ROWS);
+            cb_pop_front(cb_sq_partials, BLOCK_ROWS);
         }
 
         // ---- store_block ----

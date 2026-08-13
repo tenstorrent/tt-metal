@@ -6,3 +6,13 @@
 {"source":"tt-probe","pid":2932582,"started_at_ms":1786658214677,"wait_ms":122,"run_ms":47957,"test_path":"rms_norm","exit_code":1}
 {"source":"tt-probe","pid":2932974,"started_at_ms":1786658270552,"wait_ms":143,"run_ms":49981,"test_path":"rms_norm","exit_code":1}
 {"source":"tt-probe","pid":2933592,"started_at_ms":1786658342828,"wait_ms":179,"run_ms":48387,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":2935847,"started_at_ms":1786658430940,"wait_ms":123,"run_ms":49961,"test_path":"rms_norm","exit_code":1}
+{"source":"tt-probe","pid":2936837,"started_at_ms":1786658591399,"wait_ms":143,"run_ms":50705,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":2937499,"started_at_ms":1786658659218,"wait_ms":143,"run_ms":48129,"test_path":"rms_norm","exit_code":1}
+{"source":"tt-probe","pid":2937933,"started_at_ms":1786658719574,"wait_ms":179,"run_ms":48049,"test_path":"rms_norm","exit_code":1}
+{"source":"tt-probe","pid":2938981,"started_at_ms":1786658884100,"wait_ms":152,"run_ms":48404,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":2939440,"started_at_ms":1786658947304,"wait_ms":175,"run_ms":50292,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":2940107,"started_at_ms":1786659019482,"wait_ms":305,"run_ms":48603,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":2940654,"started_at_ms":1786659105441,"wait_ms":144,"run_ms":49433,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":2941301,"started_at_ms":1786659195892,"wait_ms":175,"run_ms":47560,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":2942206,"started_at_ms":1786659378511,"wait_ms":176,"run_ms":61578,"test_path":"rms_norm","exit_code":0}

@@ -127,23 +127,42 @@ void kernel_main() {
             }
         } else {
             // ROW_MAJOR gamma is ONE stick of W elements. Only row 0 of each tile
-            // is ever read (BroadcastDim::Row), and row 0 lives in two faces:
+            // is ever read (BroadcastDim::Row), and row 0 straddles two faces:
             // face0 row0 at byte 0 and face1 row0 at byte 16*16*elem.
+            //
+            // Step 1 lands the whole 32-element chunk at the tile's byte 0. That
+            // is the ONLY DRAM offset available: a DRAM read must start on a
+            // 64-byte boundary (get_dram_alignment() == 64 on Blackhole) and
+            // element offset t*32 is the only multiple of 64/128 in the stick, so
+            // a direct "second face" read at +16 elements is illegal. The trailing
+            // 16 elements therefore spill into face0 ROW 1, which the Row
+            // broadcast never reads.
             for (uint32_t t = 0; t < valid_tiles; ++t) {
                 const uint32_t elems_left = valid_w - t * TILE_DIM;
-                const uint32_t n0 = elems_left < FACE_DIM ? elems_left : FACE_DIM;
+                const uint32_t n = elems_left < TILE_DIM ? elems_left : TILE_DIM;
                 const uint32_t src_elem = (slice_base + t) * TILE_DIM;
+                noc_async_read(
+                    gamma_accessor.get_noc_addr(0, src_elem * GAMMA_ELEM_BYTES),
+                    gamma_l1 + t * GAMMA_TILE_BYTES,
+                    n * GAMMA_ELEM_BYTES);
+            }
+            noc_async_read_barrier();
+
+            // Step 2: move the spilled 16 elements into face1 row0 with a local
+            // L1->L1 NoC copy (L1 alignment is 16, so both offsets are legal).
+            const uint64_t self = get_noc_addr(my_x[noc_index], my_y[noc_index], 0);
+            for (uint32_t t = 0; t < valid_tiles; ++t) {
+                const uint32_t elems_left = valid_w - t * TILE_DIM;
+                if (elems_left <= FACE_DIM) {
+                    continue;
+                }
+                const uint32_t rest = elems_left - FACE_DIM;
+                const uint32_t n1 = rest < FACE_DIM ? rest : FACE_DIM;
                 const uint32_t tile_l1 = gamma_l1 + t * GAMMA_TILE_BYTES;
                 noc_async_read(
-                    gamma_accessor.get_noc_addr(0, src_elem * GAMMA_ELEM_BYTES), tile_l1, n0 * GAMMA_ELEM_BYTES);
-                if (elems_left > FACE_DIM) {
-                    const uint32_t rest = elems_left - FACE_DIM;
-                    const uint32_t n1 = rest < FACE_DIM ? rest : FACE_DIM;
-                    noc_async_read(
-                        gamma_accessor.get_noc_addr(0, (src_elem + FACE_DIM) * GAMMA_ELEM_BYTES),
-                        tile_l1 + FACE_DIM * FACE_DIM * GAMMA_ELEM_BYTES,
-                        n1 * GAMMA_ELEM_BYTES);
-                }
+                    self + (tile_l1 + FACE_DIM * GAMMA_ELEM_BYTES),
+                    tile_l1 + FACE_DIM * FACE_DIM * GAMMA_ELEM_BYTES,
+                    n1 * GAMMA_ELEM_BYTES);
             }
         }
         noc_async_read_barrier();

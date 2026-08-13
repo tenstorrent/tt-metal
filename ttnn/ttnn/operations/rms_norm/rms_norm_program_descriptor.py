@@ -50,7 +50,8 @@ L1_RESERVE = 96 * 1024  # firmware / kernel text / semaphores headroom
 CB_INPUT_TILES = 0
 CB_GAMMA_TILES = 1
 CB_SQ_PARTIALS = 2
-CB_SLICE_STAT = 3
+# (index 3 intentionally unused: cb_slice_stat is elided — the collapse is fused
+#  into the root's combine, so contributors ship raw cb_sq_partials tiles.)
 CB_GATHERED_PARTIALS = 4
 CB_RMS_BCAST = 5
 CB_RMS_RECIP = 6
@@ -125,7 +126,6 @@ def _footprint_bytes(block_rows, slice_tiles, num_slices, *, is_row_major, has_g
         total += s_ * bytes_["gamma_tile"]  # cb_gamma_tiles
     total += b * bytes_["stat_tile"]  # cb_sq_partials
     if s > 1:
-        total += b * bytes_["stat_tile"]  # cb_slice_stat
         total += s * b * bytes_["stat_tile"]  # cb_gathered_partials
         total += b * bytes_["stat_tile"]  # cb_rms_bcast
     total += b * bytes_["stat_tile"]  # cb_rms_recip
@@ -353,7 +353,6 @@ def create_program_descriptor(
     if has_gamma:
         cbs.append(_cb(CB_GAMMA_TILES, S, gamma_tile, gamma.dtype))
     if S_COUNT > 1:
-        cbs.append(_cb(CB_SLICE_STAT, B, stat_tile, ttnn.float32))
         cbs.append(_cb(CB_GATHERED_PARTIALS, S_COUNT * B, stat_tile, ttnn.float32))
         cbs.append(_cb(CB_RMS_BCAST, B, stat_tile, ttnn.float32))
     if is_row_major:
