@@ -4,10 +4,9 @@
 
 """Device-perf for the HCA block over a chunked prefill at the runner's chunk width (5120) on 8x4.
 
-Chunked and not single-shot: single-shot passes state=None, so forward allocates the state itself and
-every table and mask built there lands between the signposts. The chunked test allocates before
-HCA_START, so what is measured is the per-chunk work -- which is what the block actually does in the
-runner, and the only thing a gate on this block can defend."""
+Chunked and not one shot, because the per-chunk work is what the runner actually does and the only
+thing a gate on this block can defend. Both tests allocate their state before HCA_START, so neither
+measures the allocation."""
 
 import pytest
 
@@ -33,10 +32,9 @@ def test_hca_block_perf_galaxy():
         # Two chunks, so ~4.54 ms of device a chunk. Highest of three 8x4 runs
         # (9,054,311 / 9,060,226 / 9,079,936), which the 5% margin covers.
         #
-        # Not comparable to the old 4,292,000: that measured ONE single-shot chunk, and its region included
-        # the state allocation because single-shot allocates inside forward. This measures two chunks with
-        # the allocation outside. On this same leg the mask move cost 8,620,131 -> 9,054,311 ns, +217 us a
-        # chunk, in exchange for 102 ms a chunk of host time (wall 122.0 -> 20.0 ms).
+        # Not comparable to the old 4,292,000, which measured one chunk with the state allocated inside
+        # the region. On this same leg, moving the mask onto the device cost 8,620,131 -> 9,054,311 ns,
+        # +217 us a chunk, in exchange for 102 ms a chunk of host time (wall 122.0 -> 20.0 ms).
         expected_device_perf_ns_per_iteration=9_080_000,
         subdir="deepseek_v4_hca_block",
         model_name="deepseek_v4_hca_glx_8x4",
