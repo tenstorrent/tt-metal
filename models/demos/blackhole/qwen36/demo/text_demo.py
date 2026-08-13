@@ -302,6 +302,7 @@ def test_demo_text(
             assert len(rows[u]) == max_generated_tokens, f"row {u}: {len(rows[u])} != {max_generated_tokens}"
             assert rows[u] == rows[0], f"row {u} diverged from row 0 (identical prompts must decode identically)"
         assert len(set(rows[0])) > 1, f"degenerate generation: {rows[0]}"
+        _assert_output_quality(text0, len(rows[0]), seqlen)
         return
 
     if model.num_devices > 1:
@@ -317,13 +318,16 @@ def test_demo_text(
                     f"Non-deterministic output between run 0 and run {i}.\n"
                     f"Run 0: {results[0]}\nRun {i}: {results[i]}"
                 )
+            _assert_output_quality(tokenizer.decode(results[0], skip_special_tokens=True), len(results[0]), seqlen)
             return
         generated, perf = _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks)
         text = tokenizer.decode(generated, skip_special_tokens=True)
         logger.info(f"[TP {model.num_devices}-dev] ttft={perf['ttft_s']:.2f}s decode={perf['decode_tok_s']:.2f} tok/s")
         logger.info(f"[TP] GENERATED: {text!r}")
         assert len(generated) == max_generated_tokens, f"{len(generated)} != {max_generated_tokens}"
-        # assert len(set(generated)) > 1, f"degenerate generation: {generated}"
+        # The degeneracy assert below was commented out; _assert_output_quality supersedes it with
+        # checks that also catch fluent-looking loops, which len(set(...)) > 1 never did.
+        _assert_output_quality(text, len(generated), seqlen)
         # Perf JSON for CI target check (validate_perf_targets.py)
         _save_tp_benchmark(perf, model, seqlen=seqlen, prompt_len=actual_len, num_generated=len(generated))
         return
@@ -374,6 +378,7 @@ def test_demo_text(
     text = tokenizer.decode(generated, skip_special_tokens=True)
     _log_results(perf, actual_len, len(generated), text)
     _assert_results(perf, actual_len, len(generated))
+    _assert_output_quality(text, len(generated), seqlen)
 
 
 def _should_use_chunked_trace(model):
@@ -1120,6 +1125,50 @@ def _log_results(perf, prompt_len, num_generated, text):
     logger.info(f"  Generated {num_generated} tokens in {perf['decode_steps']} steps")
     logger.info(f"  Text: {text[:6000]}")
     logger.info("=" * 70)
+
+
+def _assert_output_quality(text, num_generated, seqlen=None):
+    """Reject output that is present but degenerate.
+
+    ``len(set(tokens)) > 1`` only catches a single token repeated forever; a broken numerics path
+    more often emits fluent-looking loops or one word at high frequency, which passes that check.
+    These are content checks with no semantic expectation, so they are safe across prompts:
+
+      * non-empty after stripping,
+      * no single token taking more than 60% of the output,
+      * no 8-gram repeated more than 10 times (a catastrophic loop repeats a phrase dozens of
+        times; the bound is loose so structured output with recurring phrasing still passes).
+
+    For the Frankenstein long-context configs the prompt asks for a summary of a specific text, so
+    when enough tokens were generated to have gotten past any <think> preamble, require at least one
+    term from that text. Gated on length so a short budget spent thinking cannot fail the run.
+    """
+    stripped = text.strip()
+    assert stripped, f"generated {num_generated} tokens but the decoded text is empty/whitespace"
+
+    words = stripped.split()
+    if len(words) >= 20:
+        top = max(set(words), key=words.count)
+        frac = words.count(top) / len(words)
+        assert frac <= 0.6, f"degenerate output: {top!r} is {frac:.0%} of {len(words)} words. TEXT: {stripped[:300]!r}"
+
+    if len(words) >= 40:
+        grams = {}
+        for i in range(len(words) - 7):
+            g = " ".join(words[i : i + 8])
+            grams[g] = grams.get(g, 0) + 1
+        worst, count = max(grams.items(), key=lambda kv: kv[1])
+        assert count <= 10, f"looping output: 8-gram {worst!r} repeats {count}x. TEXT: {stripped[:300]!r}"
+
+    if seqlen in _FRANKENSTEIN_CONFIGS and num_generated >= 100:
+        terms = ("frankenstein", "victor", "creature", "monster", "elizabeth", "geneva", "shelley")
+        low = stripped.lower()
+        hits = [t for t in terms if t in low]
+        assert hits, (
+            f"long-context output does not reference the Frankenstein context at all "
+            f"(expected any of {list(terms)}) — suspect the long-prefill path. TEXT: {stripped[:300]!r}"
+        )
+        logger.info(f"  output content check OK (matched {hits})")
 
 
 def _assert_results(perf, prompt_len, num_generated):
