@@ -195,14 +195,17 @@ def _host_sample(logits, temperature, top_p):
 
 
 def _default_ccl_packet_bytes():
-    """Ideal Fabric packet for dense Gemma4 width-sharded CCL pages (4×page).
+    """Ideal Fabric packet for dense Gemma4 width-sharded CCL pages.
 
-    Matches ``validate_packet_size`` guidance: 31B pages are 1344 B → 5376;
-    12B pages are 960 B → 3840. Other models leave Fabric's default.
+    Matches ``validate_packet_size`` / runtime guidance (≈3× page):
+      WH 31B: 2048 B pages → 6144 (Fabric warns on the 4352 default)
+      BH 31B: 1344 B pages → 5376
+      12B:    960 B pages  → 3840
+    Other models leave Fabric's default.
     """
     model = os.environ.get("HF_MODEL", "").lower()
     if "31b" in model:
-        return 5376
+        return 5376 if is_blackhole() else 6144
     if "12b" in model:
         return 3840
     return None
@@ -220,7 +223,7 @@ def _device_params():
       ``GEMMA4_FABRIC=ring`` → ``FABRIC_1D_RING`` (default ``1d``; ring
         regressed TTFT ~28.8s→~30.9s on 31B/P150x8 — leave off).
       ``GEMMA4_CCL_PACKET_BYTES`` → FabricRouterConfig max payload.
-        BH defaults: 5376 (31B) / 3840 (12B) to match CCL page packing.
+        Defaults (both arches): WH 31B=6144 / BH 31B=5376 / 12B=3840.
         Set ``0`` / ``none`` / ``default`` to keep Fabric's default.
     ``l1_small_size`` is set so all_gather semaphores land in L1_SMALL (avoids
     fragmenting the main L1 pool).
@@ -251,7 +254,7 @@ def _device_params():
 
     pkt_env = os.environ.get("GEMMA4_CCL_PACKET_BYTES")
     if pkt_env is None:
-        pkt_bytes = _default_ccl_packet_bytes() if is_blackhole() else None
+        pkt_bytes = _default_ccl_packet_bytes()
     elif pkt_env.strip().lower() in ("0", "none", "default", ""):
         pkt_bytes = None
     else:
