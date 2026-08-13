@@ -286,9 +286,11 @@ MULTICHIP_DECODE_MATMUL: dict[tuple[str, ttnn.DataType], tuple[int, int]] = {
     # 62 % of peak DRAM.  A narrower working shard is the only way to widen it,
     # its in0 is the gated attention output rather than the residual, and
     # ``decode_forward`` reshards for it -- so the candidate is real and cheap.
-    # Measured against the shipped default (``logs/ab_oproj_workshard_final.log``):
-    # 8 cores / ``in0_block_w=4`` gives 0.4542 / 0.4236 against 0.4546 / 0.4238,
-    # with the three rounds of each non-overlapping.  It is 0.11 % / 0.05 %, and
+    # Measured against the shipped default in one invocation
+    # (``logs/final_layer_ab.log``): 8 cores / ``in0_block_w=4`` gives 0.4541 /
+    # 0.4236 against ``tp4``/``tp4b``/``tp4c``'s 0.4547 / 0.4546 / 0.4544 and
+    # 0.4237 / 0.4238 / 0.4238 -- a 0.11 % win on ``sliding`` and inside the noise
+    # on ``full``.  It is 0.11 % / 0.05 %, and
     # it costs an extra reshard op, the single-grid invariant three structural
     # tests assert, and 13 % of the multichip-vs-single-chip PCC headroom
     # (0.999183 -> 0.999159 against a 0.999 bar).  For a layer whose job is to be
@@ -599,8 +601,8 @@ DEFAULT_L1_SMALL_SIZE = 6144
 #: **15.2 %** faster than ``ttnn.all_reduce`` -- 1348.0 against 1588.7 us, at the
 #: shipped BFP8 payload and packet size
 #: (``doc/optimized_multichip_decoder/logs/prefill_ccl_probe.log``).  At the 40 KB
-#: decode payload it is **0.2 % slower** than the composite wrappers -- 0.4555 /
-#: 0.4244 against 0.4545 / 0.4238 ms/token, three non-overlapping rounds each
+#: decode payload it is **0.2 % slower** than the composite wrappers -- 0.4554 /
+#: 0.4246 against 0.4545 / 0.4236 ms/token, three non-overlapping rounds each
 #: (``doc/optimized_multichip_decoder/logs/final_layer_ab.log``) -- because there
 #: the collective is pure fixed cost and the async op's extra synchronization
 #: outweighs its tuning surface.  So prefill takes it and decode does not.

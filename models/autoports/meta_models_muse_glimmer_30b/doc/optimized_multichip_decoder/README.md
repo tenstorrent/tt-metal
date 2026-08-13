@@ -316,7 +316,7 @@ stage's):
 | | before | after |
 | --- | --- | --- |
 | six RMSNorms | 3460.4 μs | **2454.8 μs** (−29 %) |
-| collectives | 3447.8 μs | **3214.5 μs** — *down* 233.3, because §Collectives' async pair is in the same capture; the two statistics gathers inside that total are 67.7 + 53.4 = **121.1 μs** |
+| collectives | 3447.8 μs | **2842.5 μs** — *down* 605.3, because §Collectives' async pair is in the same capture. The two statistics gathers inside that total are 67.7 + 53.4 = **121.1 μs**, against payload gathers of 640.1 + 635.5 |
 | 8192-row window, sliding / full | 18211.6 / 17925.2 | **16620.3 / 16123.3** (−8.74 / −10.05 %) |
 | ops per window | 30 / 28 | 34 / 32 |
 

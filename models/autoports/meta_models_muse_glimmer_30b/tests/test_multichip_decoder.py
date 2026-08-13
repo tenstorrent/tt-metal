@@ -1631,8 +1631,8 @@ def test_collective_implementation_is_split_by_payload(multichip_mesh, decoder_c
     The split is a measurement.  With the barrier semaphore both primitives ship
     with, the async pair is **15.2 %** faster than ``ttnn.all_reduce`` at the
     107 MB prefill payload (1348.0 against 1588.7 us) and **0.2 % slower** than
-    the wrappers at the 40 KB decode payload (0.4555 / 0.4244 against 0.4545 /
-    0.4238 ms/token), where the collective is pure fixed cost and one more
+    the wrappers at the 40 KB decode payload (0.4554 / 0.4246 against 0.4545 /
+    0.4236 ms/token), where the collective is pure fixed cost and one more
     synchronization round outweighs the async op's tuning surface.
 
     Both halves of that are asserted here, at dispatch level, because either one

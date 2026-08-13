@@ -152,8 +152,8 @@ what it should be: same algebra, same bytes, same dtype.
 **Every number in that table is superseded**, by a correctness finding rather than
 a re-measurement: the all-gather call had no `barrier_semaphore`, and §10.1 shows
 the watcher stopping the device because of it. With the barrier present the async
-decode step measures **0.4555 / 0.4244** against the wrappers' **0.4545 /
-0.4238**, so the async implementation is rejected for decode and kept for prefill
+decode step measures **0.4554 / 0.4246** against the wrappers' **0.4545 /
+0.4236**, so the async implementation is rejected for decode and kept for prefill
 (§8). The table is retained because it is the evidence for the *shape* of the
 worker-count curve, and that shape is what the prefill choice rests on; it is not
 evidence for a configuration this layer ships.
@@ -437,7 +437,7 @@ Whole-layer and device-time result:
 | | before | after |
 | --- | --- | --- |
 | six prefill RMSNorms (8192, sliding) | 3460.4 μs | **2454.8** (−29 %) |
-| prefill collectives | 3447.8 μs | **3214.5** — *down* 233.3, because the async pair (§8) is in the same capture; the two statistics gathers inside that total are 67.7 + 53.4 = **121.1 μs** |
+| prefill collectives | 3447.8 μs | **2842.5** — *down* 605.3, because the async pair (§8) is in the same capture. The two statistics gathers inside that total are 67.7 + 53.4 = **121.1 μs**, against payload gathers of 640.1 + 635.5 |
 | 8192-row device window, sliding / full | 18211.6 / 17925.2 | **16620.3 / 16123.3** (−8.74 / −10.05 %) |
 | 8192-row e2e, sliding / full | 18.96 / 18.99 ms | **17.61 / 17.02 ms** (−6.8 / −8.5 %) |
 
@@ -585,7 +585,8 @@ So the barrier is kept because it is what the op contract and every other model 
 the tree do, and because it costs 0.13 % where it ships — not because this stage
 can show it was the cause. **The decode/prefill split does not depend on it**: the
 async decode step is 0.2 % slower than the wrappers *with* the barrier
-(0.4555 / 0.4244 against 0.4545 / 0.4238, three non-overlapping rounds each), and
+(0.4554 / 0.4246 against 0.4545 / 0.4236, in one invocation on the shipped
+default), and
 that measurement alone decides it. A pre-stage control run
 (`logs/watcher_run_wrapper_control.log`) is also clean, so nothing here indicts the
 inherited path either — though that control predates the `tests reported:` guard
@@ -616,9 +617,10 @@ produces an all-zero counter table that looks exactly like a clean one.
 
 The multichip stage's two modules, plus this stage's own contract tests:
 **108 passed** and **4 passed**.  The vs-single-chip comparison -- the only population that can see a
-parallelisation or scheduling fault, at a 0.999 bar -- reproduces the multichip
-stage's worst values to six decimals (0.999839 / 0.999807 / 0.999721 /
-**0.999183**).
+parallelisation or scheduling fault, at a 0.999 bar -- reads **0.999836 /
+0.999804 / 0.999718 / 0.999183**.  The decode value is the baseline's to six
+decimals; the three prefill values are 3e-6 below it, which is the fractured
+norm's re-association (section 8.1).
 
 Seven tests changed: three new (the payload split, the boundary fixed point, and
 the fractured-vs-full-width norm equivalence), three updated where the contract
@@ -637,12 +639,10 @@ Recaptured against the final default, after §8.1 landed:
 
 | window | before | after | delta | ops/iter |
 | --- | --- | --- | --- | --- |
-| decode sliding @2048 | 441.5 | **439.0** | −0.58 % | 46 → 45 |
-| decode sliding @131071 | 440.5 | **437.6** | −0.67 % | 46 → 45 |
-| decode full @2048 | 419.0 | **416.6** | −0.57 % | 36 → 35 |
-| decode full @131071 | 522.7 | **521.5** | −0.23 % | 36 → 35 |
-| prefill 128 sliding / full | 839.8 / 814.6 | 839.9 / 816.0 | +0.01 / +0.18 % | 38 / 36 |
-| prefill 8192 sliding / full | 18211.6 / 17925.2 | **16620.3 / 16123.3** | **−8.74 / −10.05 %** | 30 → 34 / 28 → 32 |
+| decode sliding / full @2048 | 441.5 / 419.0 | **439.0 / 416.6** | −0.58 / −0.57 % | 46→45 / 36→35 |
+| decode sliding / full @131071 | 440.5 / 522.7 | **437.6 / 521.5** | −0.67 / −0.23 % | 46→45 / 36→35 |
+| prefill 128 sliding / full | 839.8 / 814.6 | 839.9 / 816.0 | +0.01 / +0.18 % | unchanged |
+| prefill 8192 sliding / full | 18211.6 / 17925.2 | **16620.3 / 16123.3** | **−8.74 / −10.05 %** | 30→34 / 28→32 |
 
 The 8192-row window is where this stage's work lands, and it lands through §8.1:
 the six prefill RMSNorms fall from **3460.4 to 2454.8 μs**.  The decode windows
@@ -652,7 +652,7 @@ Per-op, `sliding` decode @2048, μs per replay:
 
 | op | before | after |
 | --- | --- | --- |
-| both reductions | 53.24 | 53.45 — **unchanged**, decode keeps the wrappers |
+| both reductions | 53.24 | 53.38 — **unchanged**, decode keeps the wrappers |
 | `ShardedToInterleaved` | 5.85 (x5) | **3.97** (x4) — the layer-exit one is gone |
 | six matmuls, norms, SDPA, elementwise | unchanged to <1 % | unchanged |
 
