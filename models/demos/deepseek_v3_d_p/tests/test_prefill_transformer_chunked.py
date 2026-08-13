@@ -136,27 +136,23 @@ LAYER_PCC_THRESHOLD = 0.88
 KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
 
-# Per-chunk baseline medians (seconds) for the no-PCC perf gate, pulled from a known-good CI run. Keyed
-# by (num_layers, n_chunks, num_iters, use_trace) so only the exact config we have a CI number for is
-# gated; every other combo in the no-PCC sweep stays record-only. Each list has one entry per chunk
-# (index c == chunk c). A single margin (the perf_margin pytest arg) is applied to every chunk.
-# Recalibrate by re-reading the "chunk timing stats" table from a fresh green CI run.
+# Per-chunk baseline medians (seconds) for the perf gate, pulled from a known-good CI run. Keyed by
+# (num_layers, n_chunks, num_iters) so only the exact config we have a CI number for is gated; every
+# other combo in the sweep stays record-only. Each list has one entry per chunk (index c == chunk c). A
+# single margin (the perf_margin pytest arg) is applied to every chunk. Recalibrate by re-reading the
+# "chunk timing stats" table from a fresh green CI run.
 #
-# use_trace is part of the key because traced replay and eager dispatch are different regimes, not a
-# small delta: the same L61/11-chunk/10-iter config measures 0.6-0.95 s/chunk traced but a flat ~1.10
-# s/chunk untraced (host-dispatch bound, so the depth ramp disappears). One shared baseline would fail
-# whichever half of the pair it was not calibrated on.
+# TRACED ONLY. These are trace-replay numbers, and the gate is hard-wired to use_trace=True at the call
+# site -- the untraced variant is never gated, whatever this table holds. The two are different regimes,
+# not a small delta: this config measures 0.6-0.95 s/chunk traced (a ramp, since chunk c attends to
+# KV[0:c*CHUNK]) but a flat ~1.10 s/chunk untraced, host-dispatch bound so the depth ramp disappears
+# entirely. Untraced per-chunk stddev also reaches 0.22 s within a single run (~20%; run 31670499441
+# job 94387075128), which no meaningful band would survive.
 KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
     # (55k / code_debug), from run 31675454129 job 94407856609 -- green, and stable within the run
-    # (per-chunk stddev <= 0.002 s over the 9 post-warmup iterations). The times rise with chunk index
-    # because chunk c attends to KV[0:c*CHUNK], so the MLA gather grows with depth.
-    (61, 11, 10, True): [0.605, 0.606, 0.653, 0.681, 0.711, 0.743, 0.760, 0.793, 0.842, 0.869, 0.905],
-    # The untraced twin (CI job "Blaze - Chunked Kimi perf (code_debug 55k, no trace)") stays
-    # record-only: its medians are a flat ~1.10 s but with per-chunk stddev up to 0.22 s within a single
-    # run (run 31670499441 job 94387075128) -- ~20% spread, which no meaningful band survives. Gate it
-    # once the eager-dispatch path is stable enough to have a real baseline.
-    # (61, 11, 10, False): [...],
+    # (per-chunk stddev <= 0.002 s over the 9 post-warmup iterations).
+    (61, 11, 10): [0.605, 0.606, 0.653, 0.681, 0.711, 0.743, 0.760, 0.793, 0.842, 0.869, 0.905],
 }
 # Default +/- tolerance band around each baseline chunk median (fraction). Overridable per test via the
 # perf_margin pytest argument (see test_prefill_block_perf.py's `margin` column for the design).
@@ -1758,11 +1754,15 @@ def test_kimi_prefill_transformer_chunked_perf(
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
     # Gate against the CI baseline only for the exact config we have a recorded number for; every other
-    # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert). The
-    # baseline is only meaningful at preload_isl=0 (the recorded runs started from an empty cache).
+    # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert). Two
+    # hard conditions on top of the table lookup:
+    #   use_trace   -- the baselines are trace-replay numbers, and the untraced path is a different
+    #                  regime (flat ~1.10 s/chunk, ~20% within-run spread), so it is NEVER gated. This
+    #                  is the guard, not the table's contents: adding an untraced entry cannot arm it.
+    #   preload_isl -- the baseline only means anything at 0 (the recorded runs started from an empty cache).
     baseline_chunk_times_s = (
-        KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters, use_trace))
-        if preload_isl == 0
+        KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters))
+        if (use_trace and preload_isl == 0)
         else None
     )
     run_chunked_transformer_updated(
@@ -1852,11 +1852,15 @@ def test_kimi_prefill_transformer_chunked(
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
     # Gate against the CI baseline only for the exact config we have a recorded number for; every other
-    # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert). The
-    # baseline is only meaningful at preload_isl=0 (the recorded runs started from an empty cache).
+    # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert). Two
+    # hard conditions on top of the table lookup:
+    #   use_trace   -- the baselines are trace-replay numbers, and the untraced path is a different
+    #                  regime (flat ~1.10 s/chunk, ~20% within-run spread), so it is NEVER gated. This
+    #                  is the guard, not the table's contents: adding an untraced entry cannot arm it.
+    #   preload_isl -- the baseline only means anything at 0 (the recorded runs started from an empty cache).
     baseline_chunk_times_s = (
-        KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters, use_trace))
-        if preload_isl == 0
+        KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters))
+        if (use_trace and preload_isl == 0)
         else None
     )
     run_chunked_transformer_updated(
