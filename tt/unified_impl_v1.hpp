@@ -550,6 +550,16 @@ NocAsyncReadTx<thread> noc_load(
                 at += bytes;
             }
 
+            // A one-core rectangle -- a 1xN or Nx1 core grid gives one for the
+            // degenerate axis -- has nobody to broadcast to. Read and publish,
+            // skipping a handshake with no counterpart and a multicast to zero
+            // destinations. ttsim tolerates the 0-destination command; that is
+            // not a reason to issue one.
+            if (num_dests == 0) {
+                noc_async_read_barrier();
+                return NocAsyncReadTx<thread>(storage);
+            }
+
             // Do not multicast into a receiver's buffer until it has told us the
             // buffer is free. Then clear the count so the next block starts from
             // zero -- leaving it set would let the next call skip the handshake.
@@ -609,21 +619,21 @@ NocAsyncReadTx<thread> noc_load(
 // not available: kernels build with -ftt-no-dyninit and sem_l1_base is a runtime
 // extern, so a static Semaphore is rejected outright ("dynamic initialization of
 // static-storage is disallowed in this environment").
-template <int thread, typename Accessor>
+template <int thread, int pair, typename Accessor>
 NocAsyncReadTx<thread> noc_load(const Storage& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx) {
     static_assert(
         kMcastSemsReserved,
         "multicast needs its handshake semaphores reserved by the host: build the program through "
         "unified_program(), which reserves them and defines TT_UNIFIED_MCAST_SEM_BASE -- or pass your own pair "
         "to the six-argument noc_load()");
-    Semaphore<thread> receivers_ready(kMcastReadySem<thread>);
-    Semaphore<thread> data_sent(kMcastSentSem<thread>);
+    Semaphore<thread> receivers_ready(kMcastReadySem<pair>);
+    Semaphore<thread> data_sent(kMcastSentSem<pair>);
     return noc_load<thread>(storage, mcast, receivers_ready, data_sent, acc, block_idx);
 }
 
-template <int thread, typename Accessor>
+template <int thread, int pair, typename Accessor>
 NocAsyncReadTx<thread> noc_load(const Storage& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx) {
-    return noc_load<thread>(storage, mcast.to_physical(), acc, block_idx);
+    return noc_load<thread, pair>(storage, mcast.to_physical(), acc, block_idx);
 }
 
 // ---------------------------------------------------------------------------
