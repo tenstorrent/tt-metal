@@ -75,7 +75,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         // junk/padding data
         if constexpr (zero_pages) {
             if (c_i == in_nblocks_c - 1 && last_tile_is_partial) {
-                const auto lock = in_cb.scoped_write_lock(1);
                 zero_out_page(noc, in_cb);
             }
         }
@@ -90,11 +89,15 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                     wide_reduction ? (MAX_TILES_PER_REDUCTION * TILE_WIDTH) : (in_ntiles_c * TILE_WIDTH);
                 constexpr uint32_t tail_offset_bytes = total_elems_to_reduce * row_stride_elems * BYTES_PER_ELEM;
                 constexpr uint32_t tail_elems = (num_tilized_rows - total_elems_to_reduce) * row_stride_elems;
-                const auto lock = in_cb.scoped_write_lock(1);
                 fill_with_val(
-                    static_cast<uint32_t>(lock.get_ptr().get_address()) + tail_offset_bytes,
-                    tail_elems,
-                    static_cast<uint16_t>(bf16_init_value));
+                    in_cb.get_write_ptr() + tail_offset_bytes, tail_elems, static_cast<uint16_t>(bf16_init_value));
+#ifdef ARCH_QUASAR
+                // Quasar sim coherency: write back the CPU-store tail fill so compute's TL1 read of in_cb's
+                // pad rows sees the init value (not stale L1). Same reason as the window-copy write-back.
+                flush_l2_cache_range(
+                    static_cast<uintptr_t>(in_cb.get_write_ptr() + tail_offset_bytes),
+                    static_cast<size_t>(tail_elems) * 2);
+#endif
             }
         }
         for (uint32_t h = 0; h < kernel_h; ++h) {
@@ -110,14 +113,17 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 // NOT this path -- CPU and NOC reads BOTH see the same wrong TL1 data at base, so the input
                 // tensor's L1 data is genuinely stale after 32c, a host-upload/L1-alloc issue, not the gather.)
                 {
-                    const auto lock = in_cb.scoped_write_lock(1);
                     volatile tt_l1_ptr uint32_t* rp_src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(read_offset);
-                    volatile tt_l1_ptr uint32_t* rp_dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        static_cast<uint32_t>(lock.get_ptr().get_address()) + write_offset);
+                    volatile tt_l1_ptr uint32_t* rp_dst =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in_cb.get_write_ptr() + write_offset);
                     const uint32_t rp_nwords = (read_bytes * w_multiple) >> 2;
                     for (uint32_t rp_i = 0; rp_i < rp_nwords; ++rp_i) {
                         rp_dst[rp_i] = rp_src[rp_i];
                     }
+                    // Write back the CPU-store copy to TL1 so the compute unpack (which reads in_cb from TL1)
+                    // sees it. Without this, compute reduces stale/zero in_cb.
+                    flush_l2_cache_range(
+                        reinterpret_cast<uintptr_t>(rp_dst), static_cast<size_t>(read_bytes * w_multiple));
                 }
 #else
                 noc.async_read(
@@ -152,7 +158,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                             // clear the in CB
                             if ((total_elems_to_reduce - processed_sticks) < max_sticks_for_reduction &&
                                 processed_sticks != total_elems_to_reduce) {
-                                const auto lock = in_cb.scoped_write_lock(1);
                                 clear_out_tiles<clear_value_cb_id>(noc, in_cb, clear_cb, in_cb_ntiles);
                             }
                         }
@@ -301,11 +306,7 @@ void kernel_main() {
     // fill the clear cb
     if constexpr (is_avg_pool || need_to_initialize_in_cb || force_max_clear) {
         if constexpr (reader_id == 0) {
-            {
-                const auto lock = clear_value_cb.scoped_write_lock(1);
-                fill_with_val(
-                    static_cast<uint32_t>(lock.get_ptr().get_address()), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
-            }
+            fill_with_val(clear_value_cb.get_write_ptr(), TILE_HEIGHT * TILE_WIDTH, bf16_init_value);
             clear_value_cb.push_back(1);
         }
         if constexpr (reader_id == 1) {
@@ -323,7 +324,6 @@ void kernel_main() {
                 // the window rows (the unwritten tail rows stay 0 and reduce to a no-op in the sum).
                 DataflowBuffer icb_clear(in_cb_id);
                 Noc clear_noc;
-                const auto clear_lock = icb_clear.scoped_write_lock(multi_buffering_factor);
                 clear_noc.async_write_zeros(icb_clear, icb_clear.get_entry_size() * multi_buffering_factor);
                 clear_noc.write_zeros_l1_barrier();
             } else {
@@ -348,7 +348,6 @@ void kernel_main() {
                 // poison was reverted -- a bf16 value can't fault the RISC; the poison fault was this overrun
                 // clobbering a control region with garbage instead of benign zeros.)
 #endif
-                const auto clear_lock = icb_clear.scoped_write_lock(multi_buffering_factor);
                 clear_noc.async_write_zeros(icb_clear, icb_clear.get_entry_size() * multi_buffering_factor);
                 clear_noc.write_zeros_l1_barrier();
             }
@@ -360,10 +359,14 @@ void kernel_main() {
         // Fill only the first FACE_WIDTH, since we set reload_srcB = true in unpack_tilizeA_B_block, meaning the values
         // for the remaining faces will be reused from the first one. This is safe here because there’s no difference
         // between the first and second face.
-        {
-            const auto lock = in_scalar_cb.scoped_write_lock(1);
-            fill_with_val(static_cast<uint32_t>(lock.get_ptr().get_address()), FACE_WIDTH, bf16_scalar >> 16);
-        }
+        fill_with_val(in_scalar_cb.get_write_ptr(), FACE_WIDTH, bf16_scalar >> 16);
+#ifdef ARCH_QUASAR
+        // Quasar sim coherency: the reduce scalar is a CPU-store fill through the DM L1/L2 cache, but the
+        // compute reduce reads it directly from TL1. Without write-back compute multiplies by a STALE scalar
+        // -> wrong reduce magnitude (the /TILE_HEIGHT scale on the const-channel test) and, if the stale value
+        // varies per reduce, decorrelated output (low PCC). Mirrors the in_cb / scratch->out write-backs.
+        flush_l2_cache_range(static_cast<uintptr_t>(in_scalar_cb.get_write_ptr()), static_cast<size_t>(FACE_WIDTH) * 2);
+#endif
         in_scalar_cb.push_back(1);
     }
     const uint32_t core_nhw_index = get_arg(args::core_nhw_index);
@@ -511,38 +514,41 @@ void kernel_main() {
             {
                 const uint32_t global_stick =
                     use_split_reader ? (2u * out_stick_counter + reader_id) : out_stick_counter;
+                const uint32_t scratch_row0_addr = scratch_cb.get_read_ptr();  // untilized row 0 = the result
                 // Scratch and the borrowed output shard are BOTH local L1 on this core, so the reduced row 0
                 // -> output-stick copy is a local L1->L1 move. Do it with a direct pointer copy rather than a
                 // NoC self-loopback async_read: on HW both are correct, but the sim's per-stick self-loopback
                 // read under multi-core load silently drops/duplicates sticks (the zero-write + adjacent-dup
                 // artifacts). A straight L1 copy is race-free and HW-faithful.
                 //
-                // COHERENCY, read side: the compute packer wrote this stick's reduced row directly to
-                // Tensix L1 (TL1), bypassing this DM core's private L1 D$ / shared L2. scratch_lock covers
-                // exactly the entries it reads (scratch_row0_addr IS the lock's address), so its
-                // invalidate-on-acquire drops the stale line -- needed because the scratch CB is
-                // single-buffered and its address repeats every stick.
-                //
-                // COHERENCY, write side: out_lock must cover the stick we are about to store, so it locks
-                // EVERY entry, not one. A scoped lock always starts at wr_ptr, and this borrowed view is
-                // never reserved/pushed, so wr_ptr stays pinned at the shard base -- a 1-entry lock would
-                // invalidate/flush stick 0 while we write stick `global_stick`. Locking the whole ring is
-                // the only form that covers the target for every stick, and its flush-on-release
-                // publishes the stick to TL1.
-#ifndef ARCH_QUASAR
+                // COHERENCY: the compute packer wrote this stick's reduced row directly to Tensix L1 (TL1),
+                // bypassing this DM core's private L1 D$ / shared L2. The scratch CB is single-buffered, so
+                // its L1 line address is constant across sticks: after the first read caches it, every later
+                // read hits the STALE cached copy (all sticks would read stick 0's result). On HW the reader
+                // must invalidate any address another agent wrote before reading it (invalidate_l1_cache() is
+                // a no-op on Quasar DM). Invalidate the scratch row's L2+L1D lines so the load re-fetches the
+                // freshly packed data from TL1. The prior NoC-read path avoided this because the NoC engine
+                // reads TL1 directly (non-snooping), never through the DM cache. Arch-split: Quasar (tt-2xx)
+                // has invalidate_l2_cache_range; WH/BH have no L2, so invalidate_l1_cache() (equivalent effect).
+#ifdef ARCH_QUASAR
+                invalidate_l2_cache_range(scratch_row0_addr, out_row_bytes);
+#else
                 invalidate_l1_cache();
 #endif
-                const auto scratch_lock = scratch_cb.scoped_read_lock(scratch_npages);
-                const auto out_lock = out_shard_cb.scoped_write_lock(out_shard_cb.get_total_num_entries());
-                const uint32_t scratch_row0_addr =
-                    static_cast<uint32_t>(scratch_lock.get_ptr().get_address());  // untilized row 0 = the result
-                const uint32_t out_dst_addr =
-                    static_cast<uint32_t>(out_lock.get_ptr().get_address()) + global_stick * out_row_bytes;
+                const uint32_t out_dst_addr = out_shard_cb.get_write_ptr() + global_stick * out_row_bytes;
                 volatile tt_l1_ptr uint32_t* src_w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_row0_addr);
                 volatile tt_l1_ptr uint32_t* dst_w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_dst_addr);
                 for (uint32_t w = 0; w < out_row_bytes >> 2; ++w) {
                     dst_w[w] = src_w[w];
                 }
+                // Write-back the copied output row to TL1 so the host device->host read-back (and any NoC
+                // consumer) sees it, not this DM core's cached copy. Without this the output stick keeps its
+                // pre-kernel stale L1 -> the got.max=2.0 leak. Write-side analog of the scratch invalidate
+                // above and the in_cb write-back in read_kernel_with_top_left_index. (Quasar tt-2xx L2; WH/BH
+                // have no L2 so the write is already visible to the NoC engine.)
+#ifdef ARCH_QUASAR
+                flush_l2_cache_range(reinterpret_cast<uintptr_t>(dst_w), static_cast<size_t>(out_row_bytes));
+#endif
                 // limited to the first few global sticks to avoid flooding/crashing the dprint server.
                 // Distinct sensible values per stick => compute/reduce/pack is fine and the bug is in the
                 // out-copy/assembly; constant/garbage (e.g. 2.0) => compute-side or a fixed/stale read.
