@@ -450,8 +450,12 @@ def _unsupported_param_combos(**params):
     dispatched_buffer_layout = params["dispatched_buffer_layout"]
     is_ci_env = params["is_ci_env"]
     is_ci_v2_env = params["is_ci_v2_env"]
+    is_bh = params["is_bh"]
 
-    num_devices = mesh_device.get_num_devices()
+    # This function is called before test cases are fully formed, so 'mesh_device' here, unlike in the test_ttnn_combine
+    # function is not fully formed device object. Rather it is the first parametrization axis argument that parametrization
+    # logic itterates over (which is also named 'mesh_device') and which is a simple shape tuple.
+    num_devices = mesh_device[0] * mesh_device[1]
     if num_devices >= 8 and not run_pcc_check and use_predictable_data:
         return True
 
@@ -474,7 +478,7 @@ def _unsupported_param_combos(**params):
     # FP8_E4M3 hardware support (Fp8_e4m3 DataFormat in CBs, packer FP8 path) only exists on
     # Blackhole. TtCombineModule already raises ValueError if fp8_output is requested on
     # non-BH; skip cleanly here so this surfaces as "skipped" instead of an error.
-    if use_fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
+    if use_fp8_output and not is_bh:
         return True
 
     # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
