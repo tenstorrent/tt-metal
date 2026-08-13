@@ -27,17 +27,7 @@ ALWI void REL() {
 
 void kernel_main() {
     constexpr uint32_t onetile = 1;
-    // Magic CB indices are gone: each buffer is a named DFB binding. The local
-    // aliases keep the LLK/FIFO call sites readable; each is the dfb:: handle.
-    constexpr auto in_dfb = dfb::input;
-    constexpr auto cos_dfb = dfb::cos;
-    constexpr auto sin_dfb = dfb::sin;
-    constexpr auto trans_mat_dfb = dfb::trans_mat;
 
-    constexpr auto rotated_in_interm_dfb = dfb::rotated_interm;
-    constexpr auto cos_interm_dfb = dfb::cos_interm;
-    constexpr auto sin_interm_dfb = dfb::sin_interm;
-    constexpr auto out_dfb = dfb::out;
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto Ht = get_arg(args::Ht);  // How many rows (tiles) in n_heads dimension
     constexpr auto bulk_block_input = [](auto dfb_id) {
@@ -60,18 +50,18 @@ void kernel_main() {
         return ckl::output(dfb_id, ckl::ReservePolicy::None, ckl::PushPolicy::AtEnd, ckl::DataFormatReconfig::Disabled);
     };
 
-    DataflowBuffer in_dfb_obj(in_dfb);
-    DataflowBuffer cos_dfb_obj(cos_dfb);
-    DataflowBuffer sin_dfb_obj(sin_dfb);
-    DataflowBuffer trans_mat_dfb_obj(trans_mat_dfb);
-    DataflowBuffer rotated_in_interm_dfb_obj(rotated_in_interm_dfb);
-    DataflowBuffer cos_interm_dfb_obj(cos_interm_dfb);
-    DataflowBuffer sin_interm_dfb_obj(sin_interm_dfb);
-    DataflowBuffer out_dfb_obj(out_dfb);
+    DataflowBuffer in_dfb_obj(dfb::input);
+    DataflowBuffer cos_dfb_obj(dfb::cos);
+    DataflowBuffer sin_dfb_obj(dfb::sin);
+    DataflowBuffer trans_mat_dfb_obj(dfb::trans_mat);
+    DataflowBuffer rotated_in_interm_dfb_obj(dfb::rotated_interm);
+    DataflowBuffer cos_interm_dfb_obj(dfb::cos_interm);
+    DataflowBuffer sin_interm_dfb_obj(dfb::sin_interm);
+    DataflowBuffer out_dfb_obj(dfb::out);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(in_dfb, trans_mat_dfb, out_dfb);
-    matmul_init(in_dfb, trans_mat_dfb);
-    compute_kernel_hw_startup(rotated_in_interm_dfb, sin_dfb, sin_interm_dfb);  // General Init for all binary ops
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::input, dfb::trans_mat, dfb::out);
+    matmul_init(dfb::input, dfb::trans_mat);
+    compute_kernel_hw_startup(dfb::rotated_interm, dfb::sin, dfb::sin_interm);  // General Init for all binary ops
 
     // Get the trans_mat
     trans_mat_dfb_obj.reserve_back(onetile);
@@ -100,37 +90,37 @@ void kernel_main() {
         // Do the computation
 
         // rotated = x @ trans_mat
-        matmul_init(in_dfb, trans_mat_dfb);
+        matmul_init(dfb::input, dfb::trans_mat);
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
-            matmul_tiles(in_dfb, trans_mat_dfb, j, 0, j);
-            pack_tile(j, rotated_in_interm_dfb, j);
+            matmul_tiles(dfb::input, dfb::trans_mat, j, 0, j);
+            pack_tile(j, dfb::rotated_interm, j);
         }
         REL();
         rotated_in_interm_dfb_obj.push_back(Wt);
-        mul_bcast_rows_init(rotated_in_interm_dfb, sin_dfb);
+        mul_bcast_rows_init(dfb::rotated_interm, dfb::sin);
         ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
             ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Mul,
-                bulk_block_input(rotated_in_interm_dfb),
-                ckl::input(held_block_input(sin_dfb), ckl::BroadcastDim::Row)>{},
-            ckl::PackTile<bulk_output(sin_interm_dfb)>{});
+                bulk_block_input(dfb::rotated_interm),
+                ckl::input(held_block_input(dfb::sin), ckl::BroadcastDim::Row)>{},
+            ckl::PackTile<bulk_output(dfb::sin_interm)>{});
 
         ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
             ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
             ckl::BinaryFpu<
                 ckl::BinaryFpuOp::Mul,
                 ckl::input(
-                    in_dfb,
+                    dfb::input,
                     ckl::WaitPolicy::None,
                     ckl::PopPolicy::AtEnd,
                     ckl::OperandKind::Block,
                     ckl::DataFormatReconfig::Disabled),
-                ckl::input(held_block_input(cos_dfb), ckl::BroadcastDim::Row)>{},
-            ckl::PackTile<bulk_output(cos_interm_dfb)>{});
+                ckl::input(held_block_input(dfb::cos), ckl::BroadcastDim::Row)>{},
+            ckl::PackTile<bulk_output(dfb::cos_interm)>{});
 
-        ckl::add<bulk_block_input(cos_interm_dfb), bulk_block_input(sin_interm_dfb), bulk_output(out_dfb)>(
+        ckl::add<bulk_block_input(dfb::cos_interm), bulk_block_input(dfb::sin_interm), bulk_output(dfb::out)>(
             ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt));
     }
 

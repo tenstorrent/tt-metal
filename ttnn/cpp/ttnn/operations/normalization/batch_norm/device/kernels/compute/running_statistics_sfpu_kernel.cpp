@@ -15,14 +15,7 @@
 namespace ckl = compute_kernel_lib;
 using D = ckl::Dst;
 
-template <
-    uint32_t dfb_batch_id,
-    uint32_t dfb_old_id,
-    uint32_t dfb_updated_id,
-    bool AlsoOut0,
-    uint32_t dfb_one_id,
-    uint32_t dfb_momentum_id,
-    uint32_t dfb_out0_id>
+template <uint32_t dfb_batch_id, uint32_t dfb_old_id, uint32_t dfb_updated_id, bool AlsoOut0>
 ALWI void update_running_stat() {
     using ckl::AddBinary;
     using ckl::MulBinary;
@@ -31,19 +24,19 @@ ALWI void update_running_stat() {
 
     ckl::eltwise_chain(
         ckl::IterationShape::one_tile(),
-        ckl::CopyTile<ckl::input(dfb_one_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D0>{},
-        ckl::CopyTile<ckl::input(dfb_momentum_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D1>{},
+        ckl::CopyTile<ckl::input(dfb::one, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D0>{},
+        ckl::CopyTile<ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D1>{},
         SubBinary<D::D0, D::D1, D::D0>{},  // D0 = 1 - momentum
         ckl::CopyTile<ckl::input(dfb_old_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, SCALAR), D::D1>{},
         MulBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old_stat
-        ckl::CopyTile<ckl::input(dfb_momentum_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D1>{},
+        ckl::CopyTile<ckl::input(dfb::momentum, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D1>{},
         ckl::CopyTile<ckl::input(dfb_batch_id, ckl::WaitPolicy::None, ckl::PopPolicy::None, SCALAR), D::D2>{},
         MulBinary<D::D1, D::D2, D::D1>{},  // D1 = momentum * batch_stat
         AddBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old + momentum * batch
         ckl::PackTile<ckl::output(dfb_updated_id, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>{},
         ckl::Optional<
             AlsoOut0,
-            ckl::PackTile<ckl::output(dfb_out0_id, ckl::ReservePolicy::None, ckl::PushPolicy::None)>>{});
+            ckl::PackTile<ckl::output(dfb::out, ckl::ReservePolicy::None, ckl::PushPolicy::None)>>{});
 }
 
 template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt, uint32_t SrcDfb, uint32_t DstDfb>
@@ -84,28 +77,17 @@ void kernel_main() {
         old_running_mean_has_value || old_running_var_has_value,
         "running_statistics requires at least one of running_mean / running_var");
 
-    constexpr auto dfb_batch_mean_id = dfb::batch_mean;
-    constexpr auto dfb_batch_var_id = dfb::batch_var;
-    constexpr auto dfb_out0_id = dfb::out;
-    constexpr auto dfb_old_running_mean_id = dfb::old_running_mean;
-    constexpr auto dfb_old_running_var_id = dfb::old_running_var;
-    constexpr auto dfb_updated_running_mean_id = dfb::updated_mean;
-    constexpr auto dfb_updated_running_var_id = dfb::updated_var;
-    constexpr auto dfb_momentum_id = dfb::momentum;
-    constexpr auto dfb_one_id = dfb::one;
-    constexpr auto dfb_writer_updated_mean_id = dfb_writer_updated_mean_binding;
-    constexpr auto dfb_writer_updated_var_id = dfb_writer_updated_var_binding;
     constexpr uint32_t tc_in_fmt = get_arg(args::tc_in_fmt);
     constexpr uint32_t tc_out_fmt = get_arg(args::tc_out_fmt);
 
-    DataflowBuffer dfb_batch_mean_obj(dfb_batch_mean_id);
-    DataflowBuffer dfb_batch_var_obj(dfb_batch_var_id);
+    DataflowBuffer dfb_batch_mean_obj(dfb::batch_mean);
+    DataflowBuffer dfb_batch_var_obj(dfb::batch_var);
 
-    compute_kernel_hw_startup(dfb_batch_mean_id, dfb_out0_id);
+    compute_kernel_hw_startup(dfb::batch_mean, dfb::out);
     constexpr uint32_t onetile = 1;
 
-    DataflowBuffer(dfb_momentum_id).wait_front(1);
-    DataflowBuffer(dfb_one_id).wait_front(1);
+    DataflowBuffer(dfb::momentum).wait_front(1);
+    DataflowBuffer(dfb::one).wait_front(1);
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
         // The reader produces both batch-stat streams for every tile, even when only one
@@ -113,47 +95,41 @@ void kernel_main() {
         // filling either two-entry buffer and stalling its producer.
         dfb_batch_mean_obj.wait_front(onetile);
         dfb_batch_var_obj.wait_front(onetile);
-        DataflowBuffer(dfb_out0_id).reserve_back(onetile);
+        DataflowBuffer(dfb::out).reserve_back(onetile);
 
         if constexpr (old_running_mean_has_value) {
             update_running_stat<
-                dfb_batch_mean_id,
-                dfb_old_running_mean_id,
-                dfb_updated_running_mean_id,
-                /*AlsoOut0=*/!old_running_var_has_value,
-                dfb_one_id,
-                dfb_momentum_id,
-                dfb_out0_id>();
+                dfb::batch_mean,
+                dfb::old_running_mean,
+                dfb::updated_mean,
+                /*AlsoOut0=*/!old_running_var_has_value>();
             maybe_typecast_stat<
                 needs_mean_typecast,
                 tc_in_fmt,
                 tc_out_fmt,
-                dfb_updated_running_mean_id,
-                dfb_writer_updated_mean_id>();
+                dfb::updated_mean,
+                dfb_writer_updated_mean_binding>();
         }
 
         if constexpr (old_running_var_has_value) {
             update_running_stat<
-                dfb_batch_var_id,
-                dfb_old_running_var_id,
-                dfb_updated_running_var_id,
-                /*AlsoOut0=*/true,
-                dfb_one_id,
-                dfb_momentum_id,
-                dfb_out0_id>();
+                dfb::batch_var,
+                dfb::old_running_var,
+                dfb::updated_var,
+                /*AlsoOut0=*/true>();
             maybe_typecast_stat<
                 needs_var_typecast,
                 tc_in_fmt,
                 tc_out_fmt,
-                dfb_updated_running_var_id,
-                dfb_writer_updated_var_id>();
+                dfb::updated_var,
+                dfb_writer_updated_var_binding>();
         }
 
-        DataflowBuffer(dfb_out0_id).push_back(onetile);
+        DataflowBuffer(dfb::out).push_back(onetile);
         dfb_batch_mean_obj.pop_front(onetile);
         dfb_batch_var_obj.pop_front(onetile);
     }
 
-    DataflowBuffer(dfb_momentum_id).pop_front(1);
-    DataflowBuffer(dfb_one_id).pop_front(1);
+    DataflowBuffer(dfb::momentum).pop_front(1);
+    DataflowBuffer(dfb::one).pop_front(1);
 }
