@@ -80,7 +80,8 @@ def test_mochi_transformer_block(
     context_pre_only: bool,
     is_fsdp: bool,
 ) -> None:
-    skip_if_unsupported_num_links(mesh_device, num_links)
+    if tuple(mesh_device.shape) != (1, 1):
+        skip_if_unsupported_num_links(mesh_device, num_links)
 
     torch_dtype = torch.float32
     parent_mesh_device = mesh_device

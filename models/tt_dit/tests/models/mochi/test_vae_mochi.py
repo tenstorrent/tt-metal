@@ -237,7 +237,8 @@ def create_random_resblock_models(
 )
 def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, num_links, dtype):
     """Test complete forward pass of TtResBlock."""
-    skip_if_unsupported_num_links(mesh_device, num_links)
+    if tuple(mesh_device.shape) != (1, 1):
+        skip_if_unsupported_num_links(mesh_device, num_links)
 
     block_args = resblock_args.copy()
     block_args["channels"] = C
