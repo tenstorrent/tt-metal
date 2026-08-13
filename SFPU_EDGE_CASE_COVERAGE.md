@@ -980,6 +980,12 @@ Two caveats keep the other two ops out, and one of them is architectural:
   `Sign` and `Heaviside` also behave identically on Wormhole, so the `SFPSETCC` caveat above is one
   contract question rather than two measurements.
 
+  **The code carried this caveat too, and no longer does.** `sfpu_total_order_key()`'s docstring and
+  the `SPECIALS_READY_OPS` comment above the seven enrolments both stated the Blackhole-only version;
+  both were corrected on the code branch once this measurement landed. Worth knowing because the two
+  branches move independently — a reader who checked only the code would otherwise have found it still
+  claiming a limitation this section had already withdrawn.
+
 See §5.6 for what remains.
 
 ### 5.9 The `Log` saturation is a whole-family behaviour, not one op
