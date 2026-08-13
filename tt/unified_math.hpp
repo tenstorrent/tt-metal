@@ -53,8 +53,24 @@
 namespace tt {
 namespace unified {
 
-// Max DST tiles. Halves under fp32 accumulate; see reg_api.h.
-inline constexpr uint32_t kMaxDstTiles = 16;
+// Usable DST tiles per acquire.
+//
+// DST holds 16 tiles, but under the default DstSync::SyncHalf the register file
+// is banked in two and only ONE half is addressable between a tile_regs_acquire
+// and its release -- so the budget is 8, not 16. ttnn's own matmul never picks a
+// larger subblock: SUBBLOCK_HW_CHOICES tops out at 8 ({4,2},{2,4},{8,1},{1,8})
+// in ttnn/.../matmul/device/config/matmul_program_config.cpp.
+//
+// Exceeding it is not a clean failure. A 16-tile subblock still round-trips in
+// Dst mode, because math writes and pack read the same wrong mapping and it
+// cancels; L1 mode exposes it, because the packer's read-modify-write of L1
+// depends on the absolute DST->L1 mapping and only the upper half is right --
+// measured as tiles 0..7 overwritten instead of accumulated.
+//
+// Halves again to 4 under fp32 accumulate (see reg_api.h), which this model does
+// not enable; raising it to 16 would require dst_full_sync_en on the compute
+// config.
+inline constexpr uint32_t kMaxDstTiles = 8;
 
 // ---------------------------------------------------------------------------
 // Leaves and ops
@@ -207,6 +223,11 @@ auto exp_(const N& n) {
 template <typename Geometry, typename Chain>
 auto relu(const MatmulNode<Geometry, Chain>& m) {
     return MatmulNode<Geometry, expr::chain_append_t<Chain, ReluOp>>{m.in0_cb, m.in1_cb};
+}
+
+template <typename Geometry, typename Chain>
+auto exp_(const MatmulNode<Geometry, Chain>& m) {
+    return MatmulNode<Geometry, expr::chain_append_t<Chain, ExpOp>>{m.in0_cb, m.in1_cb};
 }
 
 template <typename Geometry>
@@ -363,7 +384,11 @@ struct Strategy<FPUFusion> {
         using G = typename Node::geometry;
         constexpr uint32_t kAccTiles = G::out_subblock_num_tiles;
 
-        static_assert(kAccTiles <= kMaxDstTiles, "matmul rt_dim * ct_dim exceeds the DST register file");
+        static_assert(
+            kAccTiles <= kMaxDstTiles,
+            "matmul rt_dim * ct_dim exceeds the per-acquire DST budget (8 tiles under half-sync). "
+            "Split the output block into subblocks of at most 8 tiles -- 4x4 is not a legal subblock, "
+            "4x2 / 2x4 / 8x1 / 1x8 are the largest that are.");
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
         using Chain = typename Node::chain;
         constexpr uint32_t kTranspose = 0;
