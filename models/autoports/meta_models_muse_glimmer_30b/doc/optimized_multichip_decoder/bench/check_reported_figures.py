@@ -117,6 +117,141 @@ def numbers(cell: str) -> list[float]:
     return [float(v) for v in re.findall(r"-?\d+\.\d+|(?<![\d.])-?\d+(?![\d.])", cell.replace("−", "-"))]
 
 
+
+#: Figures that are structural rather than measured -- shapes, counts, sizes,
+#: identifiers, bars and thresholds.  Each is a property of the model, the mesh or
+#: a deliberate policy, not a number read off a run, so no artifact can carry it.
+STRUCTURAL = {
+    # shapes and counts
+    6656, 4608, 4096, 1664, 1280, 1024, 5120, 19968, 4992, 2304, 10240, 131072, 130073,
+    32, 64, 128, 208, 256, 512, 2048, 2049, 4097, 8192, 8193, 12345, 16, 8, 4, 2, 1, 0,
+    40, 52, 26, 13, 10, 5, 3, 6, 7, 12, 14, 20, 22, 24, 30, 33, 34, 35, 36, 38, 45, 46, 48,
+    100, 104, 108, 110, 112, 160, 200, 300, 400, 1e-6,
+    # bars, thresholds and tolerances
+    0.999, 0.995, 0.99, 0.96, 0.9998, 0.9999, 0.9,
+    # byte sizes and addresses quoted from runtime messages
+    1792, 2560, 1536, 6144, 3072, 4352, 7168, 7296, 8192, 32768, 425984, 1461376, 1572864,
+    1592192, 1137536, 1139584, 1039872, 1052160, 896256, 1109248, 1136640, 1434048,
+    1460992, 1454080, 316544, 213, 27, 24132, 24136, 24140, 25295, 27625, 30265, 21, 22,
+    # source line numbers, issue ids, versions
+    16667, 45943, 45958, 45052, 45969, 1305, 2222, 197, 240, 269, 41, 45, 56, 72, 95, 123,
+}
+
+#: Values a document may state that are *derived*, with the operation named.  The
+#: sweep tries these against every pair of artifact aggregates.
+#: Each derivation is restricted to the range of values that operation actually
+#: produces in these documents.  Without that, the ratio rule alone will "derive"
+#: any number near 1 -- which is every PCC in the stage -- and a figure with no
+#: evidence would pass.  Two of the five review rounds turned on exactly such a
+#: number (0.999159, 0.9721), so the ranges are the point, not a detail.
+DERIVATIONS = (
+    ("percentage change", lambda a, b: 100.0 * (b - a) / a, 0.02, lambda x: 0.005 <= abs(x) <= 200.0),
+    ("difference", lambda a, b: b - a, 0.15, lambda x: abs(x) >= 1.0),
+    ("sum", lambda a, b: a + b, 0.15, lambda x: abs(x) >= 1.0),
+    ("ratio", lambda a, b: a / b if b else None, 0.006, lambda x: 1.05 <= x <= 60.0),
+)
+
+
+def artifact_corpus():
+    """Every number that appears in a committed log or perf CSV, plus aggregates.
+
+    ``corpus`` is the set of literal strings, so a figure quoted verbatim from a
+    run is found directly.  ``aggregates`` is the much smaller set of *derived*
+    per-window totals a document is likely to compare -- device times, op-code
+    group totals, A/B rows -- which is what the derivation search runs over.
+    """
+    corpus: set[str] = set()
+    # Every stage's logs, because inherited docstrings legitimately quote the
+    # measurements of the stage they were inherited from.
+    for root in sorted(DOC.parent.glob("*_decoder")):
+        for path in list((root / "logs").glob("*.log")) + list((root / "tracy").glob("*/*_perf_report.csv")):
+            try:
+                body = path.read_text(errors="ignore")
+            except OSError:
+                continue
+            for raw in re.findall(r"\d+\.\d+|\d+", body):
+                corpus.add(raw)
+                # A document rounds what a log prints, so every artifact value is
+                # also admissible at 1-4 decimal places.
+                try:
+                    number = float(raw)
+                except ValueError:
+                    continue
+                for width in range(0, 5):
+                    corpus.add(f"{number:.{width}f}")
+    # Discovered by glob across every stage rather than by a fixed tag list: the
+    # earlier stages name their windows differently, and a document that inherits
+    # one of their figures still has to be able to cite it.
+    aggregates: set[float] = set()
+    for root in sorted(DOC.parent.glob("*_decoder")):
+        for path in (root / "tracy").glob("*/*_perf_report.csv"):
+            if "stacked" in path.name:
+                continue
+            replays = DECODE_REPLAYS if "decode" in path.name else 1
+            try:
+                rows = list(csv.DictReader(path.open()))
+                key = next(k for k in rows[0] if k.strip().lower().startswith("device time"))
+                code = next(k for k in rows[0] if "OP CODE" in k.upper() or k.strip() == "Op Code")
+            except (OSError, StopIteration, IndexError):
+                continue
+            per_op: dict[str, float] = collections.defaultdict(float)
+            for row in rows:
+                if row[key].strip():
+                    per_op[row[code]] += float(row[key])
+                    aggregates.add(round(float(row[key]) / replays, 4))
+            per_op = {k: v / replays for k, v in per_op.items()}
+            aggregates.update({round(sum(per_op.values()), 4), float(len(rows) // replays)})
+            aggregates.update(round(v, 4) for v in per_op.values())
+            aggregates.add(round(group(per_op, NORM_OPS), 4))
+            aggregates.add(round(group(per_op, COLLECTIVE_OPS), 4))
+    for path in (DOC / "logs").glob("*.log"):
+        for row in ab_rows(path).values():
+            aggregates.update({round(row["decode_ms"], 6), round(row["prefill_ms"], 6)})
+    for value in list(aggregates):
+        corpus.add(f"{value:.1f}")
+        corpus.add(f"{value:.4f}")
+    return corpus, sorted(v for v in aggregates if v == v)
+
+
+def quoted_figures(text: str):
+    """``(literal, line_number)`` for every decimal figure in ``text``.
+
+    Integers are skipped unless they look like a measurement: bare integers in
+    these documents are overwhelmingly shapes, counts and line numbers, and the
+    structural set below would have to enumerate them all.  Decimals are where
+    every defect this sweep exists to catch has been.
+    """
+    for line_no, line in enumerate(text.splitlines(), 1):
+        if line.lstrip().startswith(("#:", "http")) and "%" not in line:
+            pass
+        for literal in re.findall(r"(?<![\w.])\d+\.\d+(?![\w])", line):
+            yield literal, line_no
+
+
+def has_provenance(literal: str, corpus: set[str], aggregates: list[float]) -> bool:
+    if literal in corpus:
+        return True
+    value = float(literal)
+    if value in STRUCTURAL:
+        return True
+    # A trailing-zero or extra-precision rendering of an artifact value.
+    for width in (1, 2, 3, 4, 5, 6, 7):
+        if f"{value:.{width}f}" in corpus:
+            return True
+    for _, op, tol, in_range in DERIVATIONS:
+        if not in_range(value):
+            continue
+        for a in aggregates:
+            for b in aggregates:
+                try:
+                    got = op(a, b)
+                except ZeroDivisionError:
+                    continue
+                if got is not None and abs(got - value) <= tol:
+                    return True
+    return False
+
+
 def main() -> int:
     readme = (DOC / "README.md").read_text()
     work_log = (DOC / "work_log.md").read_text()
@@ -304,6 +439,25 @@ def main() -> int:
         )
         for quoted in re.findall(r"(?<![\w.])0\.4[0-9]{3}(?![\w])", text):
             expect(quoted in logs, f"{source.name} quotes {quoted}", "no committed log contains it")
+
+    # ------------------------------------------------------------- provenance
+    # The anchored checks above cover about ten table families.  Five rounds of
+    # review showed that is not where the defects live: they live in prose and in
+    # tables nobody thought to anchor, and each round found a *new* number with no
+    # artifact behind it.  So this sweep is the general form of the question --
+    # **every** figure in the documents and in the stage's own source comments
+    # must either appear verbatim in a committed artifact, or be derivable from
+    # two artifact values by one of the four operations this stage's documents
+    # actually use (percentage change, difference, sum, ratio), or be declared
+    # structural.  A number that is none of those has no evidence behind it.
+    corpus, aggregates = artifact_corpus()
+    for name, text in (("README.md", readme), ("work_log.md", work_log),
+                       ("context_contract.json", (DOC.parent / "context_contract.json").read_text()),
+                       ("tt/multichip_decoder.py", (DOC.parent.parent / "tt" / "multichip_decoder.py").read_text()),
+                       ("tests/test_multichip_decoder.py", (DOC.parent.parent / "tests" / "test_multichip_decoder.py").read_text())):
+        for value, line_no in quoted_figures(text):
+            expect(has_provenance(value, corpus, aggregates), f"{name}:{line_no} figure {value}",
+                   "appears in no committed artifact and is not derivable from two that do")
 
     print(f"checked {checks} claims against committed artifacts")
     for failure in failures:

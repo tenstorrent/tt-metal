@@ -44,7 +44,8 @@ other percentage in this document uses the same rule. Best-to-best gives −0.55
 −0.44 %. Traced decode reproduces to 1e-4 within a run and across runs, so the
 effect is an order of magnitude above the noise either way.
 
-Warmed prefill spans 3.1 % (`sliding`) / 4.2 % (`full`) across the repeats, so
+Warmed prefill spans 1.3 % (`sliding`) / 1.4 % (`full`) across this run's three
+repeats -- and up to 4.9 % across invocations -- so
 the prefill rows are quoted mean-to-mean and are only reportable because the
 effect is now larger than that spread. Device time, which is the sharper
 instrument, puts it at **−8.74 % (`sliding`) / −10.05 % (`full`)** on the
@@ -67,7 +68,7 @@ tensor parallelism got better:
 | prefill 8192, full | 43.12 | **17.15 ms** | **2.51x** | 2.33x |
 
 The two prefill rows are **not a claim**, for the same reason the Result table's
-prefill rows are not: at 3.4–4.1 % same-config spread this harness cannot resolve
+prefill rows are not: at a 1.3–4.9 % same-config spread this harness cannot resolve
 a 3 % change, and the ratio inherits that spread from both sides. The prefill
 result this stage does claim is the op-level collective and the device-time
 window, below.
@@ -105,7 +106,7 @@ Each knob measured on its own, in the same invocation, by turning exactly one of
 | **sharded layer boundary** (`no_sharded_io` turns it off) | 0.4571 → 0.4547 | 0.4258 → 0.4237 | **0.53 % / 0.49 %** of decode |
 | **async prefill collective** | not visible in decode | not visible in decode | **15.2 % of the prefill collective**, and a prerequisite for the fractured norm |
 | async collective on *decode* too (`ccl_async`) | 0.4554 | 0.4246 | **0.2 % slower** — rejected, below |
-| persistent CCL staging buffers | 0.31 % faster | 0.29 % faster | **rejected on correctness**, below |
+| persistent CCL staging buffers | 0.51 % faster (`sliding` only; no `full` arm was measured) | — | **rejected on correctness**, below |
 
 Decode and prefill were improved by different changes: decode by the boundary
 contract, prefill by the norm and the collective. Nothing this stage shipped
@@ -169,14 +170,14 @@ on its own:
 
 | payload | async, with AG barrier | wrapper |
 | --- | --- | --- |
-| prefill, 8192 rows, BFP8 (op level) | **1348.0 μs** | 1588.7 (`all_reduce`) |
-| decode, 40 KB (traced whole layer, sliding / full) | 0.4554 / 0.4246 | **0.4545 / 0.4236** |
+| prefill, 8192 rows, BFP8 -- 57.9 MB (op level) | **1348.0 μs** | 1588.7 (`all_reduce`) |
+| decode, 416 KB (traced whole layer, sliding / full) | 0.4554 / 0.4246 | **0.4545 / 0.4236** |
 
 The decode rows do not overlap across their three rounds
 (`logs/final_layer_ab.log`), so 0.2 % is a real ordering, not noise. **Prefill
 takes the async pair** — 15.2 % off the collective, twice per layer, which the
 profiler sees as −2.9 % / −3.6 % of the 8192-token prefill window — and **decode
-keeps the wrappers**, because at 40 KB the collective is pure fixed cost and one
+keeps the wrappers**, because at 416 KB the collective is pure fixed cost and one
 more synchronization round costs more than the async op's tuning surface buys.
 Removing the barrier would buy 0.13 % of the prefill collective (1346.3 against
 1348.0) and is not worth reopening the question.
@@ -190,7 +191,7 @@ answer.
 All rows below are from the committed post-barrier probe
 (`logs/prefill_ccl_probe.log`), at the shipped prefill payload:
 
-| all-gather `num_workers_per_link` | prefill (107 MB, op level) |
+| all-gather `num_workers_per_link` | prefill (57.9 MB, op level) |
 | --- | --- |
 | **op default (shipped)** | **1348.0 μs** |
 | 1 | 2606.3 (+93 %) |
@@ -207,7 +208,7 @@ and the reduce-scatter's, holding the all-gather at 4:
 
 This is the same latency-versus-bandwidth split the multichip stage found for the
 decode reduce-scatter, with the sign reversed by the payload: one worker wins the
-40 KB decode collective and loses the 107 MB prefill one by 93 %. The decode-side
+416 KB decode collective and loses the 57.9 MB prefill one by 93 %. The decode-side
 worker sweep was measured on the pre-barrier build and is not repeated here,
 because decode does not ship the async op; it is in `logs/ab_ccl_async.log` and is
 marked superseded in [work log §2](work_log.md).
@@ -229,8 +230,10 @@ than by convention.
 They must be in `L1_SMALL`. Twelve of them in the main L1 pool (the first
 implementation) sit at the top of it for the life of the mesh, and the decode step
 has only 7,296 B of headroom there — it made the *next* sharded-norm program fail
-with *"Statically allocated circular buffers in program 8764 clash with L1
-buffers"* in 7 of the acceptance tests.
+with *"Statically allocated circular buffers ... clash with L1 buffers"* in
+several acceptance tests. (The count and the program id of that run were not
+committed; the message itself is on record from the `o_proj` ladder,
+`logs/ab_oproj_workshard.log`.)
 
 **The cost, stated plainly for the full-model stage**: those 1,792 B are 7 fewer
 distinct wrapper CCL programs the mesh can hold before they spill into the main L1
@@ -248,8 +251,7 @@ for decode and one per prefill chunk size.
 OPT-009 asks for persistent or preallocated intermediate/output buffers on
 repeated decode collectives. They were implemented
 (`reduce_scatter_minimal_async_create_intermediate_buffer` for the chunk-paged
-staging pair, plus this layer's own scattered output), they are **worth 0.31 % /
-0.29 % of traced decode**, and they are **off**.
+staging pair, plus this layer's own scattered output), they measured **0.51 % of traced decode** on the one arm that was measured (`sliding`, `logs/ab_ccl_async.log`: 0.4549 -> 0.4526; 0.354 % at one all-gather worker), and they are **off**.
 
 `reduce_scatter_minimal_async_create_intermediate_buffer` returns *uninitialised*
 staging, and the ring algorithm reads the penult intermediate before writing it on
@@ -265,12 +267,15 @@ A first-use fault, not a numerical one — and the reason it reached a committed
 suite at all is instructive: the whole-layer A/B and the HF-reference tests all
 warm the layer before they measure or assert, so every one of them passed. Only
 `test_multichip_matches_single_chip[12345-4-full]`, which compares the *first*
-decode step against a single-chip TTNN baseline at 0.999, caught it — at 0.7268.
+decode step against a single-chip TTNN baseline at 0.999, caught it. (That first
+failing run's PCC was not committed; the reproduction in
+`logs/regression_bisect.log` is what the numbers above come from.)
 
 Two fixes were implemented and measured: a warm-up collective through the fresh
 buffers, and then that plus a `synchronize_device` and eager allocation at build
 time. **Each moved the fault rather than removing it** — the first left the
-default configuration at 0.9721 on the first `sliding` decode step, the second
+default configuration wrong on the first `sliding` decode step — a value that was
+not committed — and the second
 left the wrapper-prefill/async-decode combination at 0.9605 on the first `full`
 one, and the failing arm changed between runs of the same code. That is a race.
 
@@ -325,7 +330,7 @@ implemented — 4443.9 μs against 5902.1 for two sublayers at 8192 rows, i.e.
 24.7 %. **It prices more than what ships**: its fractured arm also does the
 *residual add* at 1664, which the shipped path does not (the add stays 6656-wide
 and replicated, which is the whole reason no second residual contract is needed).
-The two full-width residual adds are 654.0 + 555.7 = 1209.7 μs in the committed
+The two full-width residual adds are 616.5 + 555.7 = 1172.2 μs in the committed
 after-capture, so roughly 0.9 ms of the probe's 1.46 ms gap is a saving the
 shipped norm does **not** take. What ships is the norm half; the residual half is
 [limitation 7](#limitations-and-known-issues).
@@ -414,17 +419,17 @@ Every row is a candidate this stage ran on this mesh, not a quotation.
 | --- | --- | --- |
 | async collective on the **decode** payload | rejected: **0.4554 / 0.4246** against the wrappers' **0.4545 / 0.4236**, in one invocation on the shipped default | `logs/final_layer_ab.log` |
 | omitting the all-gather barrier semaphore | not taken: worth 0.13 % of the prefill collective (1346.3 vs 1348.0); a watcher trip was observed once on a build that also carried the rejected persistent buffers and has **not** reproduced since | `logs/prefill_ccl_probe.log`, `logs/watcher_no_ag_barrier.log` |
-| persistent CCL staging buffers | rejected: 0.31 % faster, intermittently wrong on the **first** decode step (PCC 0.7395 / 0.7749); two fixes moved the fault instead of removing it | `logs/regression_bisect.log`, `logs/regression_bisect_fixed.log` |
+| persistent CCL staging buffers | rejected: 0.51 % faster on the one arm measured, intermittently wrong on the **first** decode step (PCC 0.7395 / 0.7749); two fixes moved the fault instead of removing it | `logs/regression_bisect.log`, `logs/regression_bisect_fixed.log` |
 | fused `matmul_reduce_scatter_async`, DRAM-sharded config | blocked, exact contract: *"Unsupported MatmulProgramConfig type for MatmulReduceScatterAsync. Needs to be 2D Multicast."* | `logs/fused_ccl_probe.log` |
 | fused `matmul_reduce_scatter_async`, 2D-multicast config | rejected **on measurement**: the fusion is worth +2.2 % / −2.6 % against its own unfused control, but the 2D-multicast matmul the op requires costs **38 %** (`o_proj`) / **103 %** (`mlp_down`) against the shipped DRAM-sharded form | `logs/fused_ccl_probe.log` |
 | `all_gather_matmul_async` (gathered-input `o_proj`, OPT-008) | rejected: 64.74 μs fused / 65.84 unfused against **44.91** for the shipped decomposition — 44 % slower *with* the fusion | `logs/fused_ccl_gathered_input.log` |
 | packed `wqkv`+`attn_gate` (OPT-001) | rejected: 41.05 vs **40.50** μs. `in0_block_w=13` is legal here, unlike on one chip, so this rejection is about the split cost, not the block size | `logs/packing_probe.log` |
 | packed MLP gate/up (OPT-010) | rejected: 145.66 vs **142.96** μs at `in0_block_w=13`; 4 and 2 are illegal (`(shard_shape[1]/tile_width) % in0_block_w == 0`), 1 costs 87 % | `logs/packing_probe.log` |
-| `o_proj` working shard at 8 cores, `in0_block_w=4` (OPT-011) | rejected **on the shipped path**: it *wins* by 0.11 % on `sliding` (0.4541 against 0.4547 / 0.4546 / 0.4544) and is inside the noise on `full` (0.4236 against 0.4237 / 0.4238 / 0.4238), in one invocation on the shipped default -- and costs an extra reshard op, the single-grid invariant three structural tests assert, and PCC headroom: shipping it moved the worst vs-single-chip check to **0.999159** against a 0.999 bar, from 0.999183. Not a good trade for a stacking baseline | `logs/final_layer_ab.log` — `oproj_c8_bw4` against `tp4`/`tp4b`/`tp4c` in one invocation on the current default — and `logs/ab_oproj_workshard.log` for the L1 wall |
+| `o_proj` working shard at 8 cores, `in0_block_w=4` (OPT-011) | rejected **on the shipped path**: it *wins* by 0.10 % on `sliding` (0.4541 against 0.4547 / 0.4546 / 0.4544) and is inside the noise on `full` (0.4236 against 0.4237 / 0.4238 / 0.4238), in one invocation on the shipped default -- and costs an extra reshard op, the single-grid invariant three structural tests assert, and PCC headroom: shipping it moved the worst vs-single-chip check below the shipped path's **0.999183** against a 0.999 bar, which leaves 1.83e-4 of margin to spend. That run was not committed, so the headroom cost is the weakest of the three reasons; the extra op and the single-grid invariant are not. Not a good trade for a stacking baseline | `logs/final_layer_ab.log` — `oproj_c8_bw4` against `tp4`/`tp4b`/`tp4c` in one invocation on the current default — and `logs/ab_oproj_workshard.log` for the L1 wall |
 | `o_proj` at 4 / 2 / 1 cores | rejected: 4 cores slower; 2 and 1 fail L1 with the exact circular-buffer messages | `logs/ab_oproj_workshard.log` |
 | BFP4 attention weights (OPT-007) | rejected on the **released checkpoint, on this topology**: 0.49 % faster decode, prefill PCC 0.9695 / 0.9732 and decode PCC 0.9818 / 0.9748 against a 0.995 bar | `logs/real_weight_precision.log` |
 | BF16 attention weights | rejected: 57 % / 61 % slower decode, no PCC gain | `logs/real_weight_precision.log` |
-| HiFi2 decode fidelity | rejected: 42 % / 45 % slower for ≤1e-4 of PCC — LoFi re-confirmed on this topology | `logs/real_weight_precision.log` |
+| HiFi2 decode fidelity | rejected: 42 % / 45 % slower for ≤1.6e-4 of PCC — LoFi re-confirmed on this topology | `logs/real_weight_precision.log` |
 | BFP8 activations | blocked, exact contract: `nlp_create_qkv_heads_decode` takes FLOAT32 or BFLOAT16 only | `logs/real_weight_precision.log` |
 | BFP4 KV cache | rejected: no speed change, decode PCC 0.9781 / 0.9733 against 0.995 | `logs/real_weight_precision.log` |
 | BF16 KV cache | rejected: no speed change, 2x the cache bytes, +8e-5 of PCC — BFP8 re-confirmed | `logs/real_weight_precision.log` |
@@ -460,7 +465,7 @@ decode changes what is computed, only which ops dispatch and where tensors live.
 sums four per-device partial `sum(x²)` where the full-width one does a single
 6656-wide reduction, so the two differ by BF16 re-association.
 `test_fractured_prefill_norm_matches_the_full_width_one` measures that difference
-directly, with no reference in between — 0.999939 (`sliding`) / 0.999888 (`full`)
+directly, with no reference in between — 0.999908 (`sliding`) / 0.999888 (`full`)
 — and it does not reach the layer's accuracy surface, which the BFP4/BFP8
 precision policy dominates an order of magnitude above it.
 
@@ -495,14 +500,13 @@ against the optimized path.
 
 ## Limitations and known issues
 
-1. **Persistent CCL staging buffers are unusable on this build.** Worth 0.3 % of
-   decode; rejected for an intermittent first-use fault that two fixes moved
+1. **Persistent CCL staging buffers are unusable on this build.** Worth 0.51 % of decode on the one arm measured; rejected for an intermittent first-use fault that two fixes moved
    rather than removed. A TTNN bug worth filing:
    `reduce_scatter_minimal_async_create_intermediate_buffer` returns
    uninitialised staging that the ring path reads before writing.
 2. **The async collective loses on the decode payload once it is used safely.**
    The all-gather's barrier semaphore is mandatory (the watcher stops the device
-   without it) and costs more at 40 KB than the async op's tuning surface buys.
+   without it) and costs more at 416 KB than the async op's tuning surface buys.
    Decode therefore keeps the composite wrappers, and half of its reduction --
    the all-gather -- still has no tuning surface. That is a TTNN gap, not a
    choice: `ttnn.all_gather` should expose `num_workers_per_link`.
@@ -516,7 +520,7 @@ against the optimized path.
    worker count to the DRAM bank count).
 5. **`o_proj` still runs at 62 % of peak DRAM.** The narrower working shard that
    OPT-011 points at was implemented and measured against the shipped default,
-   where it **wins** 0.11 % / 0.05 % — and it is still not taken, because it costs
+   where it **wins** 0.10 % / 0.04 % — and it is still not taken, because it costs
    an extra reshard, the single-grid invariant three structural tests assert, and
    13 % of the multichip-vs-single-chip PCC headroom. The wider block sizes fail
    L1 with recorded errors. See the rejection table and [work log §3](work_log.md);
@@ -539,8 +543,8 @@ against the optimized path.
    end-to-end is the fractured norm.
 9. **The fractured prefill *residual* is still not taken** — only the norm is.
    `bench/fractured_prefill_probe.py`'s fractured arm also does the residual add
-   at 1664 wide, and the two full-width residual adds are 654.0 + 555.7 =
-   **1209.7 μs** of the 16,620.3 μs prefill window, so roughly 0.9 ms of that
+   at 1664 wide, and the two full-width residual adds are 616.5 + 555.7 =
+   **1172.2 μs** of the 16,620.3 μs prefill window, so roughly 0.9 ms of that
    probe's 1.46 ms gap is still on the table. Taking it *would* need what the
    multichip stage warned about and the norm did not: a fractured residual carried
    across the sublayer, i.e. a second residual contract for the full-model stage,

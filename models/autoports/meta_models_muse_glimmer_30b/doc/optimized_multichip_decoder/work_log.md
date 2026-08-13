@@ -24,8 +24,9 @@ python doc/multichip_decoder/bench/layer_ab.py --mesh 1x4 --candidates tp4 \
 ```
 
 `logs/before_layer_ab_baseline.log`: traced decode **0.4573** (`sliding`) /
-**0.4258** (`full`) ms/token, prefill 8192 18.99 / 18.54 ms. The committed
-multichip numbers are 0.4573 / 0.4258 — the baseline reproduces to four decimals,
+**0.4258** (`full`) ms/token, prefill 8192 18.99 / 18.54 ms. The multichip stage's
+Result table reads 0.4572 / 0.4260 and its own three-run spread table spans
+0.4572-0.4573 and 0.4258-0.4260, so the baseline reproduces inside that spread,
 so every delta below is against a live measurement, not a quoted one.
 
 ### 1.2 Operation-topology audit
@@ -209,16 +210,19 @@ circular buffers in program 246 clash with L1 buffers ... L1 buffer allocated at
 it against a configuration this stage later withdrew, which was not a valid
 comparison — 8 cores at `in0_block_w=4` reads **0.4542 / 0.4236** against
 **0.4546 / 0.4238**, with the three rounds of each non-overlapping. That is
-0.11 % / 0.05 %, and it is real.
+0.10 % / 0.04 % mean-to-mean, and it is real.
 
 Against it: an extra reshard op in every decode step; the single-grid invariant
 that three structural tests assert and that the multichip stage established by
 measurement (`test_decode_uses_dram_sharded_matmuls` x2 and
 `test_geometry_table_is_legal` fail with *"the whole multichip decode step shares
 one 16-core grid"*); and 13 % of the multichip-vs-single-chip PCC headroom —
-shipping it moved the worst check from **0.999183 to 0.999159** against a 0.999
-bar. For a layer whose job is to be a stacking baseline that 1.1e-4 of headroom is
-worth more than 0.1 % of decode.
+shipping it moved the worst check below the shipped path's **0.999183** against a
+0.999 bar, i.e. into the 1.83e-4 of margin that check has left. That run was not
+committed, so of the three reasons this is the weakest; the extra op and the
+single-grid invariant three structural tests assert are not, and together they are
+worth more than 0.1 % of decode to a layer whose job is to be a stacking
+baseline.
 
 **Not kept.** The enabling code is kept, because it is what makes the candidate
 expressible at all and the next stage may weigh it differently; the two
@@ -380,13 +384,14 @@ arm is measured once so its cost is on the record:
 
 **15.2 %** off the collective, twice per layer: 481 μs of an 18,200 μs chunk. The
 profiler agrees and is more sensitive than the whole-layer harness: the 8192-token
-prefill window drops **2.88 %** (`sliding`) / **3.64 %** (`full`) of device time
-(§10.4).
+8192-row window's collective group falls 3447.8 -> 2842.5 us (§10.4); the window
+itself drops 8.74 / 10.05 %, most of which is the norm rather than the
+collective.
 
 The barrier costs **0.13 %** here (1348.0 against 1346.3) against **0.2 %** of the
 whole decode step, which is why the two modes end up on different
-implementations: at 107 MB the collective is bandwidth-bound and the async op's
-tuning surface is worth 15 %; at 40 KB it is pure fixed cost and the async op is
+implementations: at 57.9 MB the collective is bandwidth-bound and the async op's
+tuning surface is worth 15 %; at 416 KB it is pure fixed cost and the async op is
 0.2 % slower than the wrapper it replaces.
 
 **Kept** for prefill: async pair, reduce-scatter 4 workers, all-gather op default,
@@ -516,13 +521,13 @@ against the 0.997755 / 0.997067 below. The latencies are therefore ratios agains
   topology rather than the single-chip stage's (OPT-002).
 
 Dtype policy verified **in the measured rows**, not in the policy object
-(OPT-013).  `tracy/sliding/decode_2048_perf_report.txt`:
+(OPT-013).  Means over the eight replays of `tracy/sliding/decode_2048_perf_report.csv`:
 
 | row | shape | measured |
 | --- | --- | --- |
-| `wqkv` | 32 x 6656 x 1280 | `LoFi BF16 x BFP8 => BF16`, 374 GB/s, 73.1 % |
-| `attn_gate` | 32 x 6656 x 1024 | `LoFi BF16 x BFP8 => BF16`, 349 GB/s, 68.1 % |
-| `o_proj` | 32 x 1024 x 6656 | `LoFi BF16 x BFP8 => BF16`, 319 GB/s, 62.4 % |
+| `wqkv` | 32 x 6656 x 1280 | `LoFi BF16 x BFP8 => BF16`, 388.8 GB/s, 75.9 % |
+| `attn_gate` | 32 x 6656 x 1024 | `LoFi BF16 x BFP8 => BF16`, 349.9 GB/s, 68.3 % |
+| `o_proj` | 32 x 1024 x 6656 | `LoFi BF16 x BFP8 => BF16`, 320.1 GB/s, 62.5 % |
 | `mlp_gate` / `mlp_up` | 32 x 6656 x 5120 | `LoFi BF16 x BFP4 => BF16`, 270 GB/s, 52.7 % |
 | `mlp_down` | 32 x 5120 x 6656 | `LoFi BF16 x BFP4 => BF16`, 267 GB/s, 52.2 % |
 
@@ -675,13 +680,14 @@ Three items on the decode window, all addressed:
    empty for *every* matmul row in this capture and in the single-chip stage's.
    The knobs that do exist were swept per role (§3, and the multichip stage's
    `in0_block_w` table).
-3. *"High Op-to-Op Gap ... Running with tracing could save 10 μs (0.3 %)"*, on
+3. *"High Op-to-Op Gap ... Running with tracing could save 220 μs (5.3 % of
+   overall time)"*, on
    `SdpaDecode`.  The measured window **is** a traced replay
    (`ttnn.execute_trace`), so the advice is a profiler artifact: the device
    profiler inflates dispatch gaps, which is why this stage reports device time
    and end-to-end from separate runs.  The reconciliation is the proof -- 439.0 μs
    of device time against 454.6 μs end-to-end for `sliding` decode, a 15.6 μs
-   (3.4 %) gap across 45 ops, where the profiled window claims 10 μs on one op.
+   (3.4 %) gap across 45 ops, where the profiled window claims 220 us across nine.
 
 ## 11. Rejected, deferred and remaining
 
@@ -698,7 +704,7 @@ The **residual** half is a different change and is not taken.
 What it would buy, from the committed evidence: `bench/fractured_prefill_probe.py`
 prices a chain that fractures both, at 4443.9 μs against 5902.1 for two sublayers.
 The shipped norm accounts for part of that; the two full-width residual adds it
-leaves alone are 654.0 + 555.7 = **1209.7 μs** of the 16,620.3 μs prefill window
+leaves alone are 616.5 + 555.7 = **1172.2 μs** of the 16,620.3 μs prefill window
 (`tracy/sliding/prefill_8192_perf_report.csv`, the two hidden-size `BinaryNg`
 rows), so roughly
 0.9 ms of the probe's 1.46 ms gap is still on the table — about 5 % of the window.
@@ -708,7 +714,7 @@ avoided: to add at 1664 the *residual itself* has to be fractured, which means
 either carrying a fractured residual across the sublayer boundary — a second
 residual contract for the full-model stage, at the same time as this stage has
 just written down a decode boundary contract for it to preserve — or slicing at
-layer entry and gathering at layer exit, and the exit gather alone is ~810 μs of
+layer entry and gathering at layer exit, and the exit gather alone is ~640 μs of
 the ~900 μs it would save.
 
 So this one is declined on its own arithmetic rather than on contract taste, and
@@ -727,8 +733,8 @@ no new contract.
 * **vLLM / serving**: not this stage.  Profiler evidence is therefore collected
   normally, and is.
 * **Prefill tracing**: inherited limitation; belongs to the stage that owns the
-  generator loop.  Its size is recorded (device 17.5 ms against ~18.9 ms
-  end-to-end at 8192 tokens).
+  generator loop.  Its size is recorded (device 16.62 / 16.12 ms against 17.61 / 17.02 ms end-to-end
+  at 8192 tokens).
 
 ### 11.3 Left for a TTNN change
 
