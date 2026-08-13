@@ -88,10 +88,7 @@ class LayerNorm1D(LightweightModule):
             epsilon=cfg.eps,
             weight=self.weight,
             bias=self.bias,
-            # EXPERIMENT (#46445): bypass the fp32 reduction path implicated in #45814.
-            # float32_reduction = fp32_dest_acc_en && !legacy_reduction, and this op is the
-            # only one in bge_m3 with fp32_dest_acc_en=True. Matches bge_large_en/falcon7b/SD.
-            program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+            program_config=None,  # None to pc
             memory_config=None,
             compute_kernel_config=cfg.compute_kernel_config,
         )
