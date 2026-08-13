@@ -218,6 +218,24 @@ class VoxtralTtsBackbonePipeline:
         except Exception:  # noqa: BLE001 - accuracy tuning is best-effort
             self.compute_kernel_config = None
 
+        # The LM head gets its OWN compute config, matched to its bfloat4_b weight.
+        # HiFi4 runs four math passes to preserve mantissa bits a bf4_b operand does not
+        # carry, so on this one matmul it buys nothing and costs cycles; the guideline
+        # policy for a bf8b/bf4b matmul is LoFi with fp32_dest_acc_en=False (which also
+        # unlocks the larger subblocks) and packer_l1_acc=True. Scoped to the head alone:
+        # the per-layer weights are still bf16 and keep the HiFi4 config above, and the
+        # norms must never be walked down this far.
+        try:
+            self.lm_head_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+                device.arch(),
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=True,
+            )
+        except Exception:  # noqa: BLE001 - accuracy tuning is best-effort
+            self.lm_head_compute_kernel_config = self.compute_kernel_config
+
         # --- the repeated stack: a plain list of same-typed blocks ------------
         self.layers = [TtDecoderLayer.build(device, hf_model.model.layers[i]) for i in range(self.depth)]
         self.final_norm = TtRMSNorm.build(device, hf_model.model.norm)
@@ -443,8 +461,8 @@ class VoxtralTtsBackbonePipeline:
         return self._lm_head(hidden)
 
     def _lm_head(self, hidden):
-        if self.compute_kernel_config is not None:
-            return ttnn.linear(hidden, self.w_lm_head, compute_kernel_config=self.compute_kernel_config)
+        if self.lm_head_compute_kernel_config is not None:
+            return ttnn.linear(hidden, self.w_lm_head, compute_kernel_config=self.lm_head_compute_kernel_config)
         return ttnn.linear(hidden, self.w_lm_head)
 
     def _greedy_token(self, logits):
