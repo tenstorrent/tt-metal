@@ -4,6 +4,7 @@
 
 #include <benchmark/benchmark.h>
 #include <tt_stl/reflection.hpp>
+#include <tt-metalium/distributed.hpp>
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/device.hpp"
 
