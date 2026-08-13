@@ -25,6 +25,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSe
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
@@ -370,11 +371,21 @@ COMBINE_MODELS = [
     ("dsv3", DeepSeekV3Config, False, SINGLE_GLX_AND_PROXY_MESHES),
     ("glm_51", GLM51Config, True, SINGLE_GLX_AND_PROXY_MESHES),
     ("kimi_k26", KimiK26Config, True, SINGLE_GLX_AND_PROXY_MESHES),
+    ("kimi_k3", KimiK3Config, True, SINGLE_GLX_AND_PROXY_MESHES),
     ("minimax_m27", MiniMaxM27Config, True, SINGLE_GLX_AND_PROXY_MESHES),
     ("dsv4_pro", DeepSeekV4ProConfig, True, SINGLE_GLX_AND_PROXY_MESHES),
     ("dsv4_flash", DeepSeekV4FlashConfig, True, SINGLE_GLX_AND_PROXY_MESHES),
     ("gptoss_120b", GptOss120BConfig, True, SINGLE_GLX_AND_PROXY_MESHES),
 ]
+
+
+# The embedding axis combine moves is the *routed expert* hidden dim, not the model's residual
+# EMB_SIZE: combine ships routed-expert outputs back to their origin token slots. Those coincide for
+# every model here except Kimi K3, whose LatentMoE runs the routed experts at a reduced hidden dim
+# (ROUTED_EXPERT_HIDDEN_SIZE = 3584 = EMB_SIZE / 2) — tokens are projected down before dispatch and
+# back up after combine, so 3584 is the width the op actually sees.
+def _combine_hidden_dim(model):
+    return getattr(model, "ROUTED_EXPERT_HIDDEN_SIZE", model.EMB_SIZE)
 
 
 # Scales down model hyper-params for a given hardware to obtain good/meaningful proxy test
@@ -394,7 +405,15 @@ def _model_scaledown_for_combine(model, ref_mesh, target_mesh, pcc_only):
 
     # further reduce these two hyperparams in case of pcc check test to get faster, although not perf-representative test
     if pcc_only:
-        model.NUM_ROUTED_EXPERTS = max(target_num_chips, model.NUM_ROUTED_EXPERTS // 16)
+        # Round down to a whole number of experts per chip, the same invariant the mesh-size
+        # scaledown above keeps: create_dispatch_table derives chip_id = local_expert //
+        # (num_routed_experts // num_dispatch_groups // dispatch_group_size), so a count that is not
+        # divisible by the chip count silently maps the tail experts onto out-of-range chip IDs.
+        # Only bites models with more than 16 * num_chips experts (Kimi K3's 896); everything else
+        # clamps to target_num_chips either way.
+        model.NUM_ROUTED_EXPERTS = max(
+            target_num_chips, (model.NUM_ROUTED_EXPERTS // 16 // target_num_chips) * target_num_chips
+        )
         model.NUM_EXPERTS_PER_TOKEN = max(2, model.NUM_EXPERTS_PER_TOKEN // 4)
 
     return model
@@ -462,7 +481,7 @@ def _cross_product_conflated_cmb_test_dimensions():
                         device_params,
                         fabric_topo,
                         seq_len_per_chip,
-                        model_config.EMB_SIZE,
+                        _combine_hidden_dim(model_config),
                         num_experts,
                         topk,
                         dispatch_buffer_capacity_factor,
