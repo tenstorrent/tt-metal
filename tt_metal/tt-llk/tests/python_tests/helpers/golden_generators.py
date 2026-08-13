@@ -244,6 +244,75 @@ def convert_nan_to_inf(operand):
     return [math.copysign(math.inf, x) if math.isnan(x) else x for x in operand]
 
 
+def sfpu_total_order_key(value: float) -> int:
+    """Rank *value* under the total order the SFPU compares FP32 with.
+
+    `SFPGT`, `SFPLE` and `SFPSWAP` all route through the ISA's `SignMagIsSmaller()`, which
+    "treats C and D as sign-magnitude integers" and gives the documented total order
+
+        -NaN < -Inf < ... < -0 < +0 < ... < +Inf < +NaN
+
+    (tt-isa-documentation, BlackholeA0/TensixTile/TensixCoprocessor/{SFPGT,SFPLE,SFPSWAP}.md).
+    So the comparison is a bit-pattern compare remapped from sign-magnitude to two's
+    complement, **not** an IEEE compare: a +NaN outranks every finite value by construction,
+    and IEEE's rule that every ordered comparison with a NaN is false does not apply.
+
+    Modelling this is what lets the comparison ops be enrolled for cat B as ordinary passes.
+    A golden that keeps Python's IEEE semantics disagrees with the hardware at NaN, and
+    recording that as a kernel xfail would blame the kernel for behaving as documented.
+
+    Both zeros rank equal here, because the magnitude of -0.0 is 0. The ISA writes the chain
+    as "-0 < +0", but SignMagIsSmaller() answers "is C less than D" and returns false either
+    way for the pair -- and this suite's comparator cannot see a zero's sign regardless.
+
+    Caveat worth keeping in view: this is documented for **Blackhole**. Wormhole has no SFPGT
+    and no SFPLE at all -- SFPSETCC is its only comparison -- so the guarantee does not carry
+    over, and nothing here has been measured there.
+    """
+    bits = struct.unpack("<i", struct.pack("<f", value))[0]
+    # Sign bit set -> negative side of the order, ranked by magnitude descending.
+    return -(bits & 0x7FFFFFFF) if bits < 0 else bits
+
+
+# Short alias: the comparison goldens read much better as `_order(x) > _order(c)` than with
+# the full name repeated twice per line.
+_order = sfpu_total_order_key
+
+
+def sfpu_min(a: float, b: float) -> float:
+    """min(a, b) under the SFPU's total order -- see sfpu_total_order_key."""
+    return a if sfpu_total_order_key(a) <= sfpu_total_order_key(b) else b
+
+
+def sfpu_max(a: float, b: float) -> float:
+    """max(a, b) under the SFPU's total order -- see sfpu_total_order_key."""
+    return a if sfpu_total_order_key(a) >= sfpu_total_order_key(b) else b
+
+
+def sfpu_relu_max(value: float, threshold: float) -> float:
+    """The golden twin of `_relu_max_body_`, which several kernels share verbatim.
+
+        v_if (result > threshold) result = threshold;
+        v_if (result < 0.0f)      result = 0.0f;
+
+    The first compare is against a vector and so uses the total order, which puts a NaN above
+    the threshold and replaces it; the relu clamp then sees a finite value. The order is not
+    interchangeable -- relu first would leave the NaN in place.
+    """
+    clamped = sfpu_min(value, threshold)
+    return 0.0 if sfpu_total_order_key(clamped) < 0 else clamped
+
+
+def sfpu_clamp(value: float, low: float, high: float) -> float:
+    """clamp under the SFPU's total order, in the kernel's order of operations.
+
+    The kernels apply the two bounds as separate predicated writes -- `v_if (val < min)` then
+    `v_if (val > max)` -- so a +NaN falls through the first and is caught by the second,
+    landing on *high*. Composing torch.clamp instead would keep IEEE semantics and return NaN.
+    """
+    return sfpu_min(sfpu_max(value, low), high)
+
+
 def cast_to_dest_dtype(values: torch.Tensor, dtype) -> torch.Tensor:
     """Cast fp32 *values* to a Dest *dtype*, keeping the sign of any NaN.
 
@@ -2878,12 +2947,16 @@ class UnarySFPUGolden:
         return self._torch_unary(x, lambda t: value / t)
 
     def _clamp(self, x, min_val=CLAMP_MIN, max_val=CLAMP_MAX):
-        # tt-llk clamp with min/max fixed to the dispatch constants and offset 0.
-        return self._torch_unary(x, lambda t: torch.clamp(t, min_val, max_val))
+        # tt-llk clamp with min/max fixed to the dispatch constants and offset 0. Clamped
+        # under the SFPU's total order, not torch's IEEE one: _calculate_clamp_ applies the
+        # bounds as `v_if (val < min)` then `v_if (val > max)`, so a NaN falls through the
+        # first and lands on max. See sfpu_clamp.
+        return sfpu_clamp(x, min_val, max_val)
 
     def _hardtanh(self, x, min_val=CLAMP_MIN, max_val=CLAMP_MAX):
-        # hardtanh(x) = clamp(x, min, max); min/max fixed to the dispatch constants.
-        return self._torch_unary(x, lambda t: torch.clamp(t, min_val, max_val))
+        # hardtanh(x) = clamp(x, min, max); min/max fixed to the dispatch constants, and the
+        # same total-order clamp as _clamp.
+        return sfpu_clamp(x, min_val, max_val)
 
     def _elu(self, x):
         input_tensor = (
@@ -3011,13 +3084,18 @@ class UnarySFPUGolden:
         )
         return input_tensor.fill_(const_value).item()
 
+    # Slope and offset exactly as hardsigmoid_init programs them into vConstFloatPrgm0/1.
+    # 0.1666666716337204 is the fp32 value of 1/6, not a rounding of the literal.
+    _HARDSIGMOID_SLOPE = 0.1666666716337204
+    _HARDSIGMOID_OFFSET = 0.5
+
     def _hardsigmoid(self, x):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
+        # The kernel is `_relu_max_body_(x * slope + offset, 1.0)` -- the same helper relu_max
+        # uses, which is why both diverged from their goldens at NaN in the same way. Not
+        # torch.nn.functional.hardsigmoid: that clamps under IEEE and returns NaN.
+        return sfpu_relu_max(
+            float(x) * self._HARDSIGMOID_SLOPE + self._HARDSIGMOID_OFFSET, 1.0
         )
-        return torch.nn.functional.hardsigmoid(input_tensor).item()
 
     def _sigmoid(self, x):
         input_tensor = (
@@ -3036,12 +3114,11 @@ class UnarySFPUGolden:
         return torch.nn.functional.threshold(input_tensor, t, v).item()
 
     def _relu_max(self, x, threshold=RELU_MAX_THRESHOLD):
-        input_tensor = (
-            x
-            if isinstance(x, torch.Tensor)
-            else torch.tensor(x, dtype=format_dict[self.dst_format])
-        )
-        return torch.relu(torch.min(input_tensor, torch.tensor(threshold))).item()
+        # _relu_max_body_ is `v_if (val > threshold) val = threshold` then
+        # `v_if (val < 0) val = 0`. The first is a two-vector compare and so uses the total
+        # order -- a NaN is greater than the threshold and is replaced by it, after which the
+        # relu clamp sees a finite value. Order matters: relu-then-min would keep the NaN.
+        return sfpu_relu_max(float(x), float(threshold))
 
     def _relu_min(self, x, threshold=RELU_MIN_THRESHOLD):
         input_tensor = (
@@ -3173,17 +3250,21 @@ class UnarySFPUGolden:
             x, lambda t: torch.remainder(t, torch.tensor(self._REMAINDER_DIVISOR))
         )
 
+    # The four ordered comparisons rank by the SFPU's total order rather than by IEEE, so a
+    # NaN operand compares as larger than every finite value instead of making the result
+    # false. See sfpu_total_order_key. Python's own operators are IEEE, so they cannot be
+    # used here even though they agree on every finite input.
     def _unary_gt(self, x):
-        return 1.0 if x > self._UNARY_COMP_THRESHOLD else 0.0
+        return 1.0 if _order(x) > _order(self._UNARY_COMP_THRESHOLD) else 0.0
 
     def _unary_lt(self, x):
-        return 1.0 if x < self._UNARY_COMP_THRESHOLD else 0.0
+        return 1.0 if _order(x) < _order(self._UNARY_COMP_THRESHOLD) else 0.0
 
     def _unary_ge(self, x):
-        return 1.0 if x >= self._UNARY_COMP_THRESHOLD else 0.0
+        return 1.0 if _order(x) >= _order(self._UNARY_COMP_THRESHOLD) else 0.0
 
     def _unary_le(self, x):
-        return 1.0 if x <= self._UNARY_COMP_THRESHOLD else 0.0
+        return 1.0 if _order(x) <= _order(self._UNARY_COMP_THRESHOLD) else 0.0
 
     def _unary_ne(self, x):
         return 1.0 if x != self._UNARY_COMP_THRESHOLD else 0.0
@@ -3192,10 +3273,12 @@ class UnarySFPUGolden:
         return 1.0 if x == self._UNARY_COMP_THRESHOLD else 0.0
 
     def _unary_max(self, x):
-        return max(x, self._UNARY_MAX_MIN_VALUE)
+        return sfpu_max(x, self._UNARY_MAX_MIN_VALUE)
 
     def _unary_min(self, x):
-        return min(x, self._UNARY_MAX_MIN_VALUE)
+        # Under the total order a +NaN is the maximum, so min() returns the *other* operand
+        # -- which is why this diverged from a Python min() and _unary_max did not.
+        return sfpu_min(x, self._UNARY_MAX_MIN_VALUE)
 
     def _polygamma(self, x):
         return self._torch_unary(x, lambda t: torch.polygamma(self._POLYGAMMA_ORDER, t))

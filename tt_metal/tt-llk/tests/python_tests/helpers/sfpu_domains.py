@@ -2101,6 +2101,45 @@ SPECIALS_READY_OPS.update(
     }
 )
 
+# The comparison family, enrolled once the goldens learned the SFPU's total order.
+#
+# These seven were held out as a suspected kernel divergence -- every one of them returns its own
+# upper-bound dispatch constant where IEEE says NaN. The ISA says otherwise: SFPGT, SFPLE and
+# SFPSWAP each document the total order
+#
+#     -NaN < -Inf < ... < -0 < +0 < ... < +Inf < +NaN
+#
+# and all three route through SignMagIsSmaller(), which "treats C and D as sign-magnitude
+# integers" (tt-isa-documentation, BlackholeA0/.../{SFPGT,SFPLE,SFPSWAP}.md). A +NaN outranks
+# every finite value by construction, so clamping one lands on the upper bound. The *goldens*
+# were the wrong party: they modelled IEEE's unordered comparisons, which the SFPU does not
+# implement. sfpu_total_order_key and friends model it, and these enrol as ordinary passes --
+# an xfail here would have recorded a permanent lie about documented hardware.
+#
+# UnaryLt, UnaryLe and UnaryMax are not in this list because they were already enrolled: under
+# the total order their answers happen to coincide with IEEE's at a +NaN, which is exactly why
+# the pass/fail split across the six comparison ops identified the cause.
+#
+# Caveat, deliberately not hidden: the total order is documented for **Blackhole**. Wormhole has
+# no SFPGT and no SFPLE -- SFPSETCC is its only comparison -- so this model is unverified there.
+SPECIALS_READY_OPS.update(
+    {
+        MathOperation.UnaryGt: "x > 0.5 under the SFPU's total order, in which +NaN is the "
+        "largest FP32 value, so NaN > 0.5 is true. Not IEEE, which makes it false.",
+        MathOperation.UnaryGe: "As UnaryGt.",
+        MathOperation.UnaryMin: "min(x, 0.0) under the total order. +NaN is the maximum, so "
+        "the minimum is the other operand -- which is why this diverged where UnaryMax did not.",
+        MathOperation.Clamp: "clamp(x, -1, 1) applied as the kernel applies it: `v_if (val < "
+        "min)` then `v_if (val > max)`, both total-order compares, so a NaN falls through the "
+        "first and lands on max.",
+        MathOperation.Hardtanh: "Same clamp as Clamp, same dispatch constants.",
+        MathOperation.ReluMax: "_relu_max_body_: a total-order `> threshold` replaces a NaN "
+        "with the threshold, and the relu clamp then sees a finite value.",
+        MathOperation.Hardsigmoid: "x * (1/6) + 0.5 through the same _relu_max_body_ the "
+        "kernel shares with ReluMax, so a NaN clamps to 1.0.",
+    }
+)
+
 # The five scalar binops. They are not in sfpu_unary_ops() -- they have their own suite and
 # their own golden (ScalarBinopGolden) -- so none of the unary tranches reached them, and cat B
 # is their *entire* edge story: each is `x (+|-|*|/) c` for a compile-time c, so it is smooth in
