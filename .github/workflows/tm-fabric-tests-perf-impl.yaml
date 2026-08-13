@@ -26,7 +26,7 @@ on:
         required: false
         type: boolean
         default: true
-        description: "Run T3K and BH Quietbox Fabric Mux V2 Throughput performance tests"
+        description: "Run T3K ubench - Fabric Mux V2 Throughput performance test"
 
 jobs:
   generate-matrix:
@@ -57,7 +57,6 @@ jobs:
 
           if [[ "${{ inputs.run-perf-fabric-mux-v2-throughput }}" == "true" ]]; then
             matrix_items+=('{"arch":"wormhole_b0","runs-on":["arch-wormhole_b0","pipeline-perf","config-t3000","in-service"],"name":"T3K ubench - Fabric Mux V2 Throughput","cmd":"TT_METAL_DEVICE_PROFILER=0 pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_v2_throughput.py"}')
-            matrix_items+=('{"arch":"blackhole","runs-on":["BH-LLMBox","pipeline-perf","in-service"],"name":"BH Quietbox ubench - Fabric Mux V2 Throughput","cmd":"TT_METAL_DEVICE_PROFILER=0 pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_mux_v2_throughput.py"}')
           fi
 
           # If no items selected, fail the job with an error
@@ -135,13 +134,6 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - name: Upload mux-v2 throughput outputs
-        uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        timeout-minutes: 10
-        if: ${{ !cancelled() && contains(matrix.test-group.name, 'Mux V2 Throughput') }}
-        with:
-          prefix: mux-v2-throughput-
-          path: /work/generated/fabric_mux_v2_throughput
       - name: Check for benchmark data
         id: check-benchmark-data
         if: ${{ !cancelled() && github.ref_name == 'main' }}
