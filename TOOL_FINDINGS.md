@@ -964,6 +964,58 @@ grid sweeps the hand-port never ran, which cost nothing in accuracy, and (b) one
 hand-port evaluated and deliberately declined. Take (a); (b) is already settled and settled
 correctly.
 
+### F11 — the documented `--max-rounds` default is 20; the real one is 3, and it is the ONLY exit
+
+**Status: found 2026-08-13, run 1 ended on it** · severity: silently caps every run at ~1/7 of the
+advertised effort · reported: not yet
+
+Run 1 ended after 7h20m with this line, and nothing else:
+
+```
+pipeline main: 3 round(s), can_stop=False
+```
+
+`can_stop=False` is the tool's own gate saying **it should not have stopped**. It stopped because
+`DEFAULT_MAX_ROUNDS = 3` (`cc_optimize/run.py:39`, and `cli.py`'s `--max-rounds` default). The
+documentation says otherwise:
+
+```
+GETTING_STARTED.md:272
+  `--max-rounds N` — cc engine: max `claude -p` optimization rounds per pipeline (default `20`).
+```
+
+**20 documented, 3 in code.** A user who reads the guide and does not pass the flag gets 3 rounds.
+
+**This compounds with O7 and that is the real severity.** O7 records that the throughput band can
+never fire `can_stop` when the parameter count is estimated — which is every locally-supplied
+model. So for a local model the band exit is unreachable, the floor exit is unreachable, and
+`--max-rounds` is the *only* thing that ends a run. The documented behaviour ("the deterministic
+gate can still stop earlier once each op is at its floor") is therefore not what happens: **every
+such run ends at exactly 3 rounds, mid-climb, and reports it in one line at the bottom of a long
+report.** Ours had just produced its two largest wins in round 3 when the cap hit.
+
+**Fix:** align the default with the documentation (or the documentation with the default), and make
+the terminal line say *why* it stopped — `stopped: round cap (3) reached with can_stop=False` reads
+very differently from `3 round(s), can_stop=False`.
+
+**Verified:** relaunched with `--max-rounds 20`, pid 1067756, from the same tree.
+
+### O4e — the tool independently corroborates §6.72, the hand-port's most contested experiment
+
+In its last round it tried `nlp_create_qkv_heads` with `transpose_k_heads=False` to replace the
+head-split's 9 ops (3 slices + 3 reshapes + 3 permutes) with one fused call. PCC was bit-identical,
+so this was a pure data-movement question — and it **regressed**: device 273.62 → 281.07 (+2.7%),
+per-token 15.21 → 16.19 (+6.45%). Its conclusion:
+
+> *Dispatches fell 3413 → 2867 yet it got slower — decisive: these were view ops doing no work.*
+
+That is §6.72 reached from the other direction. The hand-port went fused → hand-rolled and measured
+−0.775 ms/frame bit-exact; the tool went hand-rolled → fused and measured +0.98 ms/token. Both land
+on the same conclusion, and the tool's phrasing supplies the mechanism §6.68 got wrong when it
+"counted one op short": **dispatch count is not the cost when the ops being removed are views.**
+
+Two independent confirmations of a reversal that was the hardest call in the hand-port's log.
+
 ### O5 — the ladder's escalation is real, and it gives up in the right place
 
 On the LM head matmul it climbed `grid → dtype → shard → fidelity → structural → cpp` across 11
@@ -1077,6 +1129,11 @@ Three mistakes cost real time and one of them destroyed evidence:
   `python -u` and a direct redirect.
 - **Reported progress from a log line instead of a verified state**, and called a run "past the
   wall" moments before it died at the same place.
+- **Committed findings to the branch the tool was optimizing on.** The tool stamps the current HEAD
+  into its own measurement records, so `full_pipeline_baseline` for the 15.976 result carries the
+  sha of a *documentation* commit. Harmless here, and the agent noticed unprompted (*"the extra HEAD
+  commit is the harness's own findings entry sitting on top of my perf commit"*), but the findings
+  should have lived on a separate branch. `git log --grep '^perf('` isolates the tool's commits.
 
 All PCC numbers in this file come from a direct `pytest` run I executed, not from the tool's
 status files.
