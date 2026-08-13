@@ -385,15 +385,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePi
     ASSERT_EQ(actual_data, expected_data);
 }
 
-// ---------------------------------------------------------------------------
-// L3: semaphore + DRAM-staged SNAKE CHAIN across an arbitrary ordered node list.
-// Data flows node[0] -> node[1] -> ... -> node[N-1]. Each hop: node[i]'s writer
-// stages its (transformed) buffer to DRAM stage[i+1] and increments node[i+1]'s
-// cross-node semaphore; node[i+1]'s reader waits on it, reads stage[i+1], transforms
-// (+1), and relays onward. Final DRAM stage = seed + N. Proves every node in the
-// list can receive-from-prev and send-to-next. Generalizes QuasarMultipleClusters...
-// (the proven 2-node cross-node pipeline) to N nodes.
-// ---------------------------------------------------------------------------
+// Semaphore + DRAM-staged snake chain across an ordered list of nodes.
+// Data flows node[0] -> node[1] -> ... -> node[N-1]. At each hop node[i]'s writer
+// stages its transformed buffer to DRAM and bumps the next node's cross-node semaphore;
+// node[i+1]'s reader waits on it, reads the stage, adds 1, and passes it along.
+// Final DRAM stage = seed + N. Shows every node can both receive from the previous node
+// and send to the next, the 2-node cross-node pipeline generalized to N nodes.
 static void run_snake_chain(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     const std::vector<experimental::NodeCoord>& nodes,
@@ -411,14 +408,13 @@ static void run_snake_chain(
     const uint32_t buf_a = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     const uint32_t buf_b = buf_a + num_elements * sizeof(uint32_t);
-    const uint32_t buf_wrap = buf_b + num_elements * sizeof(uint32_t);  // ring: node[0] receives the wrapped token here
-    const SemaphoreSpecName WRAP{"wrap_sem"};                           // ring: node[N-1] -> node[0] closing edge
-    const SemaphoreSpecName WRAP_L0{"wrap_l0"};                         // ring: local sem for node[0]'s wrap reader
+    const uint32_t buf_wrap = buf_b + num_elements * sizeof(uint32_t);
+    const SemaphoreSpecName WRAP{"wrap_sem"};
+    const SemaphoreSpecName WRAP_L0{"wrap_l0"};
     const uint32_t dram_base = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
     constexpr uint32_t stage_stride = 4096;  // per-hop DRAM staging spacing
     auto stage_addr = [&](uint32_t i) { return dram_base + i * stage_stride; };
-    // Each hop stages num_elements words at stage_addr(i); guard against a payload that would
-    // overflow one stage into the next (stages are stage_stride bytes apart).
+
     ASSERT_LE(num_elements * sizeof(uint32_t), stage_stride);
 
     // Seed stage 0 with [0..num_elements).
@@ -427,13 +423,11 @@ static void run_snake_chain(
         seed[i] = i;
     }
     tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, stage_addr(0), seed);
-    // Sentinel the OUTPUT stage so a stale-data pass is impossible: callers reuse identical
-    // stage addresses across runs, so the final EXPECT_EQ must be forced to observe fresh data
-    // written by THIS run's chain (not leftover values from a prior same-N run).
+    // Pre-fill the output stage with a sentinel value.
     std::vector<uint32_t> out_sentinel(num_elements, 0xdeadbeefu);
     tt_metal::detail::WriteToDeviceDRAMChannel(dev, 0, stage_addr(N), out_sentinel);
-    // Ring mode additionally verifies the wrapped token in node[0]'s buf_wrap; sentinel it too so
-    // the ring-edge assertion cannot pass on stale/uninitialized data.
+    // Ring mode also checks the token that wraps back to node[0]'s buf_wrap; pre-fill it with a
+    // sentinel too so that check can't pass on stale or uninitialized data.
     if (ring) {
         tt_metal::detail::WriteToDeviceL1(dev, nodes[0], buf_wrap, out_sentinel);
     }
@@ -453,12 +447,10 @@ static void run_snake_chain(
         const SemaphoreSpecName CROSS_IN{"cross_" + std::to_string(i == 0 ? 0 : i - 1)};  // hop (i-1)->i
         const SemaphoreSpecName CROSS_OUT{"cross_" + si};                                 // hop i->(i+1)
 
-        // Local intra-node sems (reader->xform, xform->writer).
+        // Local intra-node sems.
         spec.semaphores.push_back(SemaphoreSpec{.unique_id = L0, .target_nodes = nodes[i]});
         spec.semaphores.push_back(SemaphoreSpec{.unique_id = L1, .target_nodes = nodes[i]});
-        // Cross-node sem for the hop i->i+1, allocated on both endpoints (same L1 addr).
-        // NodeRange is a bounding box (end >= start), so order the two adjacent coords by
-        // componentwise min/max — the snake's right->left rows have nodes[i].x > nodes[i+1].x.
+
         if (!is_sink) {
             const auto a = nodes[i];
             const auto b = nodes[i + 1];
@@ -467,7 +459,6 @@ static void run_snake_chain(
             spec.semaphores.push_back(
                 SemaphoreSpec{.unique_id = CROSS_OUT, .target_nodes = experimental::NodeRange{lo, hi}});
         } else if (ring) {
-            // Wrap edge node[N-1] -> node[0] (may be a non-adjacent long hop; bbox may span a column).
             const auto a = nodes[i];
             const auto b = nodes[0];
             const experimental::NodeCoord lo{std::min(a.x, b.x), std::min(a.y, b.y)};
@@ -529,8 +520,8 @@ static void run_snake_chain(
 
         std::vector<KernelSpecName> wu_kernels = {READER, XFORM, WRITER};
         if (ring && is_src) {
-            // Ring: node[0] also hosts the wrap-reader. It MUST live in node[0]'s own work unit —
-            // two work units may not target the same node (program_spec.cpp:1830).
+            // Ring: node[0] also runs the wrap-reader. It must go in node[0]'s existing work unit
+            // because two work units are not allowed to target the same node.
             const KernelSpecName WRAP_READER{"wrap_reader"};
             spec.semaphores.push_back(SemaphoreSpec{.unique_id = WRAP_L0, .target_nodes = nodes[0]});
             spec.kernels.push_back(KernelSpec{
@@ -641,7 +632,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, RingChainFull) {
     run_snake_chain(md, nodes, /*ring=*/true);  // 32-node snake + wrap edge back to node[0]
 }
 
-// L6 stress: longest single cross-node hop, opposite corners {0,0} <-> {7,3}.
+// Longest single cross-node hop: opposite corners {0,0} <-> {7,3}.
 TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeCornerToCorner) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
@@ -654,7 +645,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeCornerToCorner) {
     run_snake_chain(md, {experimental::NodeCoord{0, 0}, experimental::NodeCoord{7, 3}});
 }
 
-// L6 stress: payload-size sweep across the full 32-node snake.
+// Sweep a few payload sizes across the full 32-node snake.
 TEST_F(QuasarMeshDeviceSingleCardFixture, SnakePayloadSweep) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
@@ -682,7 +673,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakePayloadSweep) {
     }
 }
 
-// L5 FAN-OUT: one DRAM root value read concurrently by ALL 32 nodes (broadcast via shared DRAM).
+// Fan-out: all 32 nodes read the same DRAM value at once (broadcast through shared DRAM).
 TEST_F(QuasarMeshDeviceSingleCardFixture, FanOutBroadcast) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
@@ -752,8 +743,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanOutBroadcast) {
     EXPECT_EQ(fail, 0u);
 }
 
-// L5 FAN-IN / GATHER: all 32 nodes concurrently write a coord-unique value into a shared DRAM
-// gather region (each node -> its own slot). Reader reads a per-node DRAM seed, writer stages it out.
+// Fan-in / gather: all 32 nodes write at once into a shared DRAM gather region, each into its
+// own slot with a value unique to its coordinates. Reader loads a per-node DRAM seed, writer
+// stages it back out.
 TEST_F(QuasarMeshDeviceSingleCardFixture, FanInGather) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
@@ -772,8 +764,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanInGather) {
     const uint32_t dram_gather = dram_src + 64u * stride;  // gather region well past the per-node src slots
     auto sig_of = [&](uint32_t x, uint32_t y) { return 0xb000u + x + y * g.x; };
 
-    // Seed each node's own DRAM src slot with its coord-unique value, and sentinel its gather
-    // destination so the post-run gather check cannot pass on stale data from a prior run.
+    // Seed each node's own DRAM source slot with a value unique to its coordinates, and pre-fill
+    // its gather destination with a sentinel so the gather check can't pass on stale data from a
+    // prior run.
     for (uint32_t y = 0; y < g.y; ++y) {
         for (uint32_t x = 0; x < g.x; ++x) {
             const uint32_t idx = x + y * g.x;
@@ -849,7 +842,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FanInGather) {
     EXPECT_EQ(fail, 0u);
 }
 
-// L6 per-row chains: exercise each of the 4 rows as its own independent chain.
+// Run each of the 4 rows as its own independent chain.
 TEST_F(QuasarMeshDeviceSingleCardFixture, PerRowChains) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
@@ -870,11 +863,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, PerRowChains) {
     }
 }
 
-// Vertical analog of PerRowChains: each of the 8 columns is a top->bottom 4-node chain.
-// run_snake_chain blocks per call (EnqueueMeshWorkload is blocking), so the 8 column chains
-// run SEQUENTIALLY -- one completes (enqueue + readback + assert) before the next starts.
-// This adds vertical-NoC-path coverage vs PerRowChains' horizontal hops; it is NOT
-// concurrent-chain contention (which the single-NoC functional sim would not model anyway).
+// Column version of PerRowChains: each of the 8 columns is a top->bottom 4-node chain.
+// Each run_snake_chain call blocks, so the 8 columns run one after another, each finishes its
+// enqueue, readback, and check before the next starts.
 TEST_F(QuasarMeshDeviceSingleCardFixture, PerColumnChains) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
@@ -895,9 +886,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, PerColumnChains) {
     }
 }
 
-// Grid all-to-one barrier: every node except the target (logical {0,0}) remote-increments the
-// target's barrier semaphore once; the target waits for all N-1 increments (one down() each) and
-// records completion in L1. Exercises maximum semaphore fan-in onto a single counter. Non-DFB.
+// Grid all-to-one barrier: every node except the target (logical {0,0}) increments the target's
+// barrier semaphore once over the NoC. The target waits for all N-1 increments, then records
+// completion in L1. Exercises maximum semaphore fan-in onto a single counter.
 TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
     if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
         GTEST_SKIP() << "simulator/emulator only";
@@ -923,8 +914,8 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
     const experimental::NodeRange all_nodes{experimental::NodeCoord{0, 0}, experimental::NodeCoord{g.x - 1, g.y - 1}};
 
     experimental::ProgramSpec spec{.name = "grid_barrier"};
-    // One barrier semaphore, allocated at the same L1 address on all 32 nodes (so the remote-inc
-    // address computation and the target's local read agree).
+    // One barrier semaphore at the same L1 address on all 32 nodes, so the remote increments and
+    // the target's local read all land on the same location.
     spec.semaphores.push_back(experimental::SemaphoreSpec{.unique_id = BARRIER, .target_nodes = all_nodes});
     experimental::KernelSpec bk{
         .unique_id = BK,
@@ -965,11 +956,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridBarrierAllToOne) {
 
     std::vector<uint32_t> r(1, 0u);
     tt_metal::detail::ReadFromDeviceL1(dev, target, result_addr, sizeof(uint32_t), r);
-    // The target writes the RELEASED sentinel only after down(num_signalers) AND wait(0) both
-    // pass -- i.e. exactly num_signalers increments arrived and the counter drained to 0. An
-    // under-count blocks in down() (hang/timeout); an over-count blocks in wait(0). So this
-    // asserts an OBSERVED device property, not the input constant it was seeded/sent. (A single
-    // counting semaphore cannot verify signaler identity/distinctness -- inherent to a counter.)
     constexpr uint32_t kReleased = 0xC0DEBA11u;
     std::cout << "[BARRIER] target result=0x" << std::hex << r[0] << " expected released=0x" << kReleased << std::dec
               << (r[0] == kReleased ? "  PASS" : "  FAIL") << std::endl;
@@ -984,7 +970,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeChain3) {
     if (devices_[0]->compute_with_storage_grid_size().x < 3) {
         GTEST_SKIP() << "need a >=3-wide grid";
     }
-    // First rung: source -> relay -> sink (3 adjacent nodes in row 0).
+    // Source -> relay -> sink across 3 adjacent nodes in row 0.
     run_snake_chain(devices_[0], {{0, 0}, {1, 0}, {2, 0}});
 }
 
@@ -1013,7 +999,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SnakeChainFull) {
     if (g.x < 8 || g.y < 4) {
         GTEST_SKIP() << "need the full 8x4 grid";
     }
-    // Boustrophedon: row0 L->R, row1 R->L, ... so every hop is nearest-neighbor.
+    // Snake order: row0 left->right, row1 right->left, ... so every hop is to a neighbor.
     std::vector<experimental::NodeCoord> nodes;
     for (uint32_t y = 0; y < g.y; ++y) {
         if (y % 2 == 0) {

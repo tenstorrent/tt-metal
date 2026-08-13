@@ -96,10 +96,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, SingleDmL1Write) {
     ASSERT_EQ(outputs[0], value) << "Got the value " << std::hex << outputs[0] << " instead of " << value;
 }
 
-// STEP 0 empirical gate for the full-grid test campaign:
-//  (a) report compute_with_storage_grid_size() -> expect 8x4 (=32 nodes)
-//  (b) host-side write+read L1 on EVERY node from origin {0,0} -> confirms extent, origin, and
-//      per-node L1 addressability across the whole grid, with per-node diagnostics on failure.
+// First check for the full-grid tests: confirm the grid is 8x4 (32 nodes), then host-write and
+// read back L1 on every node from origin {0,0}. Proves the grid size and that every node's L1 is
+// reachable, printing which node failed if any.
 TEST_F(QuasarMeshDeviceSingleCardFixture, GridProbeStep0) {
     if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator.";
@@ -111,8 +110,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridProbeStep0) {
     std::cout << "[STEP0] compute_with_storage_grid_size = " << grid.x << " x " << grid.y
               << "  (nodes=" << (grid.x * grid.y) << ")" << std::endl;
 
-    // This suite targets the full 8x4 Quasar sim grid. Skip (don't fail) on the smaller
-    // 1x3/2x3 CI configs so it no-ops cleanly there instead of asserting.
+    // Skip on the smaller 1x3/2x3 configs; this suite targets the 8x4 Quasar grid.
     if (grid.x != 8u || grid.y != 4u) {
         GTEST_SKIP() << "grid-test suite targets the 8x4 Quasar sim config (got " << grid.x << "x" << grid.y << ")";
     }
@@ -124,7 +122,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridProbeStep0) {
     for (uint32_t y = 0; y < grid.y; ++y) {
         for (uint32_t x = 0; x < grid.x; ++x) {
             const experimental::NodeCoord node{x, y};
-            const uint32_t sig = x + y * grid.x;  // coord-unique signature (tile_id)
+            const uint32_t sig = x + y * grid.x;  // value unique to each node
             std::vector<uint32_t> w{sig};
             std::vector<uint32_t> r(1, 0xdeadbeefu);
             try {
@@ -150,10 +148,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridProbeStep0) {
     EXPECT_EQ(grid.y, 4u) << "expected 4-tall grid";
 }
 
-// L1a (STEP 1): full-grid replicated DM->L1 smoke. Fan ONE kernel to all 32 nodes via
-// target_nodes = NodeRange{{0,0},{7,3}} with a per-node coord-unique signature RTA, then read
-// back per node and print a PASS/FAIL grid map. Exercises the (declared-but-unexercised-at-32)
-// kernel + per-node-RTA fan-out path.
+// Full-grid DM->L1 smoke test. Run one kernel on all 32 nodes at once (target_nodes spans
+// {0,0}..{7,3}), giving each node a runtime arg that writes a value unique to that node. Read
+// every node back and print a PASS/FAIL grid map. Checks that the kernel and per-node runtime
+// args fan out correctly across the whole grid.
 TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
     if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator.";
@@ -161,7 +159,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
     IDevice* dev = devices_[0]->get_devices()[0];
     auto mesh_device = devices_[0];
     const auto grid = mesh_device->compute_with_storage_grid_size();
-    // Skip (don't fail) on the smaller 1x3/2x3 CI configs; this test targets the 8x4 grid.
+    // Skip on the smaller 1x3/2x3 configs; this suite targets the 8x4 Quasar grid.
     if (grid.x != 8u || grid.y != 4u) {
         GTEST_SKIP() << "full-grid test targets the 8x4 Quasar sim config (got " << grid.x << "x" << grid.y << ")";
     }
@@ -198,7 +196,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
     experimental::ProgramSpec spec{.name = "full_grid_l1a", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    // Per-node distinct signature via the per-node RTA table.
+    // Give each node its own value through its per-node runtime args.
     experimental::ProgramRunArgs params;
     experimental::ProgramRunArgs::KernelRunArgs kra{.kernel = DM_KERNEL};
     for (uint32_t y = 0; y < grid.y; ++y) {
@@ -240,9 +238,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridDmL1Write_L1a) {
     EXPECT_EQ(fail, 0u);
 }
 
-// L1c (STEP 3): full-grid COMPUTE smoke. Fan the known-good risc_math compute kernel to all 32
-// nodes; every node must produce the same fixed 16-value output vector. Exercises the compute
-// datapath (UNPACK/MATH/PACK) on the whole grid.
+// Full-grid compute smoke test. Run the known-good risc_math compute kernel on all 32 nodes;
+// every node must produce the same fixed 16-value output. Exercises the compute pipeline
+// (unpack/math/pack) across the whole grid.
 TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridCompute_L1c) {
     if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator.";
@@ -250,7 +248,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridCompute_L1c) {
     IDevice* dev = devices_[0]->get_devices()[0];
     auto mesh_device = devices_[0];
     const auto grid = mesh_device->compute_with_storage_grid_size();
-    // Skip (don't fail) on the smaller 1x3/2x3 CI configs; this test targets the 8x4 grid.
+    // Skip on the smaller 1x3/2x3 configs; this suite targets the 8x4 Quasar grid.
     if (grid.x != 8u || grid.y != 4u) {
         GTEST_SKIP() << "full-grid test targets the 8x4 Quasar sim config (got " << grid.x << "x" << grid.y << ")";
     }
@@ -259,11 +257,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridCompute_L1c) {
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
     const std::vector<uint32_t> expected = {4, 6, 5, 9, 8, 10, 9, 13, 12, 14, 13, 17, 16, 18, 17, 21};
 
-    // Seed every node's 16-word output slot with a sentinel that never appears in `expected`, so a
-    // node whose compute never ran (or whose output was misrouted to a different node) reads back
-    // the sentinel and FAILS rather than silently passing. Note: risc_math's output is node-
-    // independent, so this test cannot by itself distinguish WHICH node produced a value; per-node
-    // output identity is covered separately by FullGridDmL1Write_L1a's coord-unique signatures.
+    // Pre-fill every node's 16-word output slot with a sentinel that never appears in `expected`,
+    // so a node whose compute never ran (or whose output landed on the wrong node) reads back the
+    // sentinel and fails instead of silently passing.
     for (uint32_t y = 0; y < grid.y; ++y) {
         for (uint32_t x = 0; x < grid.x; ++x) {
             std::vector<uint32_t> z(16, 0xC0FFEEu);
@@ -330,11 +326,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, FullGridCompute_L1c) {
     EXPECT_EQ(fail, 0u);
 }
 
-// Grid NoC multicast fan-out: one source node (logical {0,0}) multicasts a value to the same L1
-// address on every node in the full-grid rectangle, driving the actual NoC multicast path
-// (get_noc_multicast_addr -> for_each_multicast_coordinate). Host pre-seeds a sentinel on every
-// node and reads all 32 back, printing a PASS/FAIL grid map — a dropped row/column shows up as an
-// un-updated node (guards the historical multicast column-drop bug). Non-DFB.
+// Grid NoC multicast fan-out. One source node (logical {0,0}) multicasts a value to the same L1
+// address on every node in the full-grid rectangle, exercising the NoC multicast path. Host
+// pre-seeds a sentinel on every node and reads all 32 back, printing a PASS/FAIL grid map: a
+// dropped row or column shows up as a node that never updated.
 TEST_F(QuasarMeshDeviceSingleCardFixture, GridMulticastFanOut) {
     if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
         GTEST_SKIP() << "This test can only be run using a simulator.";
