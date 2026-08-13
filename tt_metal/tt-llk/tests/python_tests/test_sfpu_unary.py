@@ -29,6 +29,7 @@ from helpers.param_config import (
 )
 from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
+    SHIFT_EDGE_AMOUNTS,
     SPECIALS_READY_OPS,
     edge_spec,
     exclude_undefined,
@@ -48,6 +49,7 @@ from helpers.test_variant_parameters import (
     MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
+    SFPU_SHIFT_AMOUNT,
     TILE_COUNT,
     DestSync,
     generate_input_dim,
@@ -875,6 +877,88 @@ def test_eltwise_unary_sfpu_int(
     )
 
 
+# Cat E: the shift amount itself, which is the last gap in that category.
+#
+# The unary shift ops take their amount as a compile-time immediate, not as an operand, so
+# until SFPU_SHIFT_AMOUNT existed the only amount ever tested was the fixed 3 that
+# sfpu_operations.h hard-coded -- one point out of the 32 legal ones, and none of the
+# out-of-range ones. (The *binary* shift ops take theirs as a second operand and have been
+# swept over this same list for a while; that asymmetry is why this needed a C++ change.)
+#
+# The amounts are borrowed from test_sfpu_binary._SHIFT_EDGE_AMOUNTS rather than copied, so
+# the two suites cannot drift on what counts as an interesting shift: the in-range ends
+# (0, 31), the first out-of-range value (32), larger ones, and negatives. Everything outside
+# [0, 31] must produce 0 -- that is the kernel's rule and the golden's `_shift` enforces it.
+_UNARY_SHIFT_OPS = [MathOperation.LeftShift, MathOperation.RightShift]
+
+# A shift is exact, so the stimulus only has to reach the interesting magnitudes rather than
+# straddle a boundary: powers of two around a byte and a half-word, a few odd values to catch
+# a lost low bit, both signs, and zero.
+_SHIFT_STIMULUS_MAGNITUDES = [0, 1, 2, 3, 7, 255, 256, 1023, 65535, 65536]
+
+_INT32_MAX = 2**31 - 1
+
+
+def _shift_stimulus_values(mathop, shift_amount):
+    """Values that stay representable after *mathop* shifts them by *shift_amount*.
+
+    A left shift is the only one that can leave int32, and the amount is a compile-time
+    immediate here, so the value set has to be chosen per variant rather than once. Two
+    bounds, not one: the result must fit in int32 *and* must not be INT32_MIN, which Dst
+    stores as sign-magnitude and cannot represent -- the same pair the binary shift sweep
+    filters its (value, shift) product on.
+
+    Out-of-range amounts need no filter because the kernel defines them as producing 0
+    whatever the input was, which is the contract that half the sweep exists to assert.
+
+    Positive-only, for the reason _int_unary_stimuli_spec gives: Dst stores integers as
+    sign-magnitude, so a negative operand does not survive the round trip the way two's
+    complement would, while Python's >> is arithmetic. Driving negatives here made every
+    RightShift variant except a shift of 0 disagree -- a stimulus limitation reported as a
+    kernel divergence, which is the mistake this suite keeps having to avoid.
+    """
+    magnitudes = _SHIFT_STIMULUS_MAGNITUDES
+    if mathop == MathOperation.LeftShift and 0 <= shift_amount < 32:
+        limit = _INT32_MAX >> shift_amount
+        magnitudes = [m for m in magnitudes if m <= limit]
+    return [float(m) for m in magnitudes]
+
+
+@pytest.mark.nightly
+@parametrize(
+    mathop=_UNARY_SHIFT_OPS,
+    shift_amount=list(SHIFT_EDGE_AMOUNTS),
+    dest_acc=[DestAccumulation.Yes],
+    input_dimensions=[[64, 64]],
+)
+def test_eltwise_unary_sfpu_int_shift(
+    mathop: MathOperation,
+    shift_amount: int,
+    dest_acc: DestAccumulation,
+    input_dimensions: list[int],
+):
+    """Sweep the unary shift ops over the full shift-amount axis, in range and out."""
+    values = _shift_stimulus_values(mathop, shift_amount)
+    if not any(v for v in values):
+        # Only 0 survives the representable-result filter, so the variant would assert
+        # 0 << n == 0 and nothing else. Skipped rather than left as a green vacuous pass.
+        pytest.skip(
+            reason=f"every non-zero value overflows int32 at a left shift of {shift_amount}"
+        )
+    formats = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        input_dimensions,
+        spec_A=StimuliSpec.custom(values=values, seed=0),
+        shift_amount=shift_amount,
+    )
+
+
 @parametrize(
     formats=input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
     approx_mode=[ApproximationMode.No],
@@ -1048,6 +1132,7 @@ def eltwise_unary_sfpu(
     spec_A=None,
     custom_atol=None,
     custom_rtol=None,
+    shift_amount=None,
 ):
     torch.manual_seed(0)
     torch.set_printoptions(precision=10)
@@ -1088,6 +1173,7 @@ def eltwise_unary_sfpu(
         dest_acc,
         formats.input_format,
         input_dimensions,
+        **({} if shift_amount is None else {"shift_amount": shift_amount}),
     )
 
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
@@ -1108,6 +1194,9 @@ def eltwise_unary_sfpu(
             FAST_MODE(fast_mode),
             CLAMP_NEGATIVE(True),
             MATH_OP(mathop=mathop),
+            # Only emitted when swept: sfpu_operations.h keys off #ifdef, and every other
+            # unary test has to keep compiling without the macro.
+            *([] if shift_amount is None else [SFPU_SHIFT_AMOUNT(shift_amount)]),
         ],
         runtimes=[
             TILE_COUNT(tile_cnt_A),

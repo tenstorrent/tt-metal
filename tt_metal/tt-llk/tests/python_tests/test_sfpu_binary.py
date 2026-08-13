@@ -31,6 +31,7 @@ from helpers.param_config import (
 from helpers.sfpu_domains import (
     _OP_DOMAIN_REGISTRY,
     _SFPU_BINARY_OPS,
+    SHIFT_EDGE_AMOUNTS,
     edge_pair_values,
     exclude_undefined_pair,
     for_op,
@@ -1055,29 +1056,10 @@ _SHIFT_EDGE_VALUES = [
     -0x80000000,  # INT32_MIN (filtered out per-op; see _build_shift_edge_case_src)
 ]
 
-# Shift amounts spanning in-range values (0..31), the first out-of-range value (32),
-# larger out-of-range values, and negative amounts. Everything outside [0, 31] must
-# yield 0 to match the kernel.
-_SHIFT_EDGE_AMOUNTS = [
-    0,
-    1,
-    2,
-    7,
-    15,
-    16,
-    30,
-    31,  # in-range
-    32,
-    33,
-    40,
-    63,
-    100,
-    1000,  # >= 32 -> 0
-    -1,
-    -5,
-    -32,
-    -1000,  # < 0 -> 0
-]
+# Shift amounts now live in sfpu_domains.SHIFT_EDGE_AMOUNTS, because the unary shift sweep
+# drives the same list through a compile-time immediate and a second copy would let
+# "interesting shift" mean two different things.
+_SHIFT_EDGE_AMOUNTS = list(SHIFT_EDGE_AMOUNTS)
 
 
 def _shift_reference(mathop, value, shift):

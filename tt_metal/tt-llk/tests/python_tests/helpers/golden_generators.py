@@ -2370,10 +2370,13 @@ class UnarySFPUGolden:
         fill_const_value: float = 5,
         reduce_pool: Optional[ReducePool] = None,
         skip_tilize: bool = False,
+        shift_amount: int = 3,
     ):
         self.data_format = data_format
         self.dst_format = data_format
         self.dest_acc = dest_acc
+        # Mirrors the SFPU_SHIFT_AMOUNT template parameter; only the unary shift ops read it.
+        self._int_shift_amount = shift_amount
 
         if operation not in self.ops:
             raise ValueError(f"Unsupported operation: {operation}")
@@ -2936,13 +2939,28 @@ class UnarySFPUGolden:
         return result
 
     def _left_shift(self, x):
-        # Matches calculate_left_shift with a fixed shift of 3; stimuli are bounded so
-        # the result never leaves the positive int32 range (no overflow/wrap).
-        return int(x) << self._int_shift_amount
+        # Matches calculate_left_shift at self._int_shift_amount, which the shift sweep
+        # varies through the SFPU_SHIFT_AMOUNT template parameter. Amounts outside [0, 31]
+        # are defined by the kernel as producing 0 -- the same rule the binary shift ops
+        # follow, and the reason Python's unbounded << cannot be used unguarded here.
+        return self._shift(int(x), lambda v, n: v << n)
 
     def _right_shift(self, x):
-        # Arithmetic right shift by 3; Python >> on ints is arithmetic (sign-propagating).
-        return int(x) >> self._int_shift_amount
+        # Arithmetic right shift (Python >> on ints is sign-propagating), same out-of-range
+        # rule as _left_shift.
+        return self._shift(int(x), lambda v, n: v >> n)
+
+    def _shift(self, value: int, op) -> int:
+        """Apply *op* at self._int_shift_amount, with the kernel's out-of-range rule.
+
+        A shift amount below 0 or at/above 32 yields 0. Without that guard a swept amount of
+        1000 would make Python compute a 1000-bit integer and the golden would disagree with
+        the kernel on every element rather than on none.
+        """
+        n = int(self._int_shift_amount)
+        if n < 0 or n >= 32:
+            return 0
+        return op(value, n)
 
     def _unary_max_int32(self, x):
         return max(int(x), self._int_maxmin_scalar)

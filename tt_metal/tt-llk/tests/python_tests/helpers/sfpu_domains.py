@@ -1668,6 +1668,38 @@ UINT32_MAX = 2**32 - 1
 # op where they disagree most visibly (1/+0 = +inf against 1/-0 = -inf, and the SFPU
 # returns +inf for both — that sign disagreement is what forced Bfp4_b's tighter
 # reciprocal domain).
+# Shift amounts worth driving on purpose, shared by the unary and binary shift sweeps.
+#
+# Spans the in-range ends (0, 31), the first out-of-range value (32), larger out-of-range
+# ones, and negatives. The kernel defines everything outside [0, 31] as producing 0, so the
+# out-of-range half is the part that actually asserts a contract rather than arithmetic.
+#
+# Lives here rather than in either test because both suites drive it: the binary shift ops
+# take the amount as an operand and the unary ones as a compile-time immediate
+# (SFPU_SHIFT_AMOUNT), so a copy per suite would let "interesting shift" mean two different
+# things -- the drift this module exists to prevent.
+SHIFT_EDGE_AMOUNTS: Tuple[int, ...] = (
+    0,
+    1,
+    2,
+    7,
+    15,
+    16,
+    30,
+    31,  # in range
+    32,
+    33,
+    40,
+    63,
+    100,
+    1000,  # >= 32 -> 0
+    -1,
+    -5,
+    -32,
+    -1000,  # < 0 -> 0
+)
+
+
 def _is_negative_zero(value: float) -> bool:
     """True only for -0.0. `value == -0.0` is also true for +0.0, so read the sign bit."""
     return value == 0.0 and math.copysign(1.0, value) < 0.0
