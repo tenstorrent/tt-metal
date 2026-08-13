@@ -45,8 +45,14 @@ def _core_split(device, k_tiles: int, n_tiles: int, max_cores: int = 0):
 
     Both must divide evenly: `in0_block_w` slices K per core and `per_core_N`
     slices N, and a remainder on either is a mis-sized shard, not just an
-    imbalance. More cores is not automatically better -- see the module note --
-    so `max_cores` caps the search for shapes that measured better narrower.
+    imbalance.
+
+    MORE CORES IS NOT BETTER, and for a K-heavy shape it is much worse: widening
+    the shard shortens `in0_block_w` and `per_core_N` together, until each core
+    is walking a long chain of tiny k-blocks to produce a single output tile with
+    nothing to overlap the reduction against. down_proj (9216->3072) measured
+    0.1589 ms at 96 cores and 0.0934 ms at 24. So `max_cores` is not a
+    workaround -- callers are expected to SWEEP it per shape and pin what won.
     """
     grid = device.compute_with_storage_grid_size()
     ceiling = min(max_cores, grid.x * grid.y) if max_cores else grid.x * grid.y

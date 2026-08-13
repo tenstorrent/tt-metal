@@ -35,8 +35,19 @@ class TtMLP:
         self.compute_kernel_config = compute_kernel_config
         # down_proj is the widest read in the block (9216 -> 3072) and the one
         # `ttnn.linear` routes worst on its own, so its decode call gets an
-        # explicit full-grid plan. The weight layout is untouched.
-        self.down_plan = build_plan(device, int(self.w_down.shape[-2]), int(self.w_down.shape[-1]))
+        # explicit plan. The weight layout is untouched.
+        #
+        # 24 cores, NOT the whole grid. This op is not bandwidth-bound -- it
+        # takes the same 0.159 ms whether its weight is bf16 or bf8_b -- so what
+        # limits it is the shape of the k-reduction, and spreading it wider makes
+        # that worse: at 96 cores each core walks 96 sequential k-blocks
+        # (in0_block_w=3) to produce ONE output tile, with nothing to overlap the
+        # reduction against. Fewer, fatter shards win by a lot. Measured per call
+        # at bf8_b: 96c 0.1589 / 48c 0.0960 / 32c 0.1137 / 24c 0.0934 / 16c
+        # 0.1084 / 12c 0.1342 / 8c 0.1964 ms.
+        self.down_plan = build_plan(
+            device, int(self.w_down.shape[-2]), int(self.w_down.shape[-1]), max_cores=24
+        )
         # gate/up (3072 -> 9216) deliberately keeps the DEFAULT routing: its N is
         # 288 tiles, so `ttnn.linear` already spreads it well (369 GB/s, the best
         # of any projection here). Seven core counts were swept for it and every
