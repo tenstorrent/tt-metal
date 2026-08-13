@@ -232,9 +232,17 @@ class VoxtralTtsBackbonePipeline:
             device=device,
         )
         # tie_word_embeddings=True, so this is the embedding matrix transposed.
+        #
+        # bfloat8_b, not bfloat16: decode's LM head is DRAM-BANDWIDTH bound, streaming this
+        # whole [3072, 131072] weight (~805 MB at bf16) to produce ONE token, so its cost is
+        # bytes/bandwidth and halving the stored format halves the op. Grid and shard levers
+        # cannot touch that -- they redistribute the read, they do not shrink it. The head is
+        # a single projection with no depth to compound error through, and the token it feeds
+        # comes from an argmax, which cares only about the ARGMAX of the logits, not their
+        # exact values.
         self.w_lm_head = ttnn.from_torch(
             hf_model.lm_head.weight.detach().to(torch.bfloat16).transpose(0, 1).contiguous(),
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
         )
