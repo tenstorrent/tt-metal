@@ -29,6 +29,24 @@ ALWI void square(IterationShape shape) {
         shape, BinaryFpu<BinaryFpuOp::Mul, Input, Input, Dst::D0, Output.dest_accumulation>{}, PackTile<Output>{});
 }
 
+constexpr RowOutputSpec row_output(uint32_t cb_id, DataFormatReconfig reconfig, PackRelu relu) noexcept {
+    return {cb_id, reconfig, relu};
+}
+
+template <InputSpec Input, RowOutputSpec RowOutput>
+ALWI void sum_of_squares(IterationShape shape) {
+    constexpr auto output_spec = output(
+        RowOutput.cb_id,
+        ReservePolicy::PerOuter,
+        PushPolicy::PerOuter,
+        RowOutput.reconfig,
+        TileAddressing::Direct,
+        DestAccumulation::PerRow,
+        L1Accumulation::Disabled,
+        RowOutput.relu);
+    square<Input, output_spec>(shape);
+}
+
 template <class SfpuOp, InputSpec Input, OutputSpec Output>
 ALWI void unary(IterationShape shape) {
     static_assert(
