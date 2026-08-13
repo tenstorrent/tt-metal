@@ -733,12 +733,20 @@ section is the credit half of the ledger and is the material for the comparison 
 | after the grid/structural rungs (20:04) | 348.026 | 23.168 | 0.9795 |
 | after the dtype rung on MLP + attention | — | 18.282 | 0.9715 |
 | after the down_proj shard-width sweep (O4b) | 281.8 | 16.763 | 0.9708 |
-| after the same sweep generalised to K/V (O4b) | 276.7 | **16.135** | **0.9897** |
+| after the same sweep generalised to K/V (O4b) | 276.7 | 16.135 | 0.9897 |
+| after fusing Q/K/V into one decode projection (O4c) | 273.6 | **15.976** | 0.9708 |
 | tool's own roofline target | 338.541 | — | gate 0.95 |
 | **hand-port, for reference** | — | **15.907** | — |
 
-**16.135 against 15.907 — the tool is now within 1.4% of 74 human experiments**, and it got the
-last two steps *without* spending accuracy: both were shape results, and the second raised PCC.
+**15.976 against 15.907 — the tool has reached parity with 74 human experiments**, autonomously,
+in about 4 hours of loop time. The gap is 0.44%, which is inside the run-to-run noise of either
+measurement.
+
+State this with the accuracy bar attached, every time it is quoted: the tool is at e2e PCC 0.9708
+against its 0.95 gate; the hand-port's p150 decode holds 0.981 (`STATUS.md`, and 0.99991 on the
+N150 branch). Those two numbers are not measured over the same thing, so they are not a clean
+comparison — but the tool is certainly not *tighter*, and part of the last 3 ms came from
+`bfloat8_b` on `down_proj`, which is §6.16's `w2` decision the hand-port took and then handed back.
 
 **On the dtype walk, and a correction.** Three commits took `gate/up`, `down_proj` and `q/k/v/o` to
 `bfloat8_b`, and PCC did walk 0.9795 → 0.9715 alongside 23.168 → 18.282. But the ladder then
@@ -894,6 +902,25 @@ without unfusing it, and unfusing costs a dispatch the hand-port deliberately pa
 - **Q/K/V — does not transfer as-is.** It is evidence that the *optimum differs per projection*
   (Q wants 32, K/V want 16), which is an argument about whether the fusion is still worth it, not a
   drop-in change.
+
+**SUPERSEDED within the hour, by the tool itself.** The very next attempt was the structural rung on
+QKV, and it independently arrived at the hand-port's design: stage the three weights **concatenated**
+into one 3072×6144 tensor and run **one wide matmul per token** instead of three, opening one shard
+instead of two, then slicing. `16.135 → 15.976 ms/token`. Its own explanation of why the win is small
+is the interesting part:
+
+> *Modest rather than dramatic because the three separate projections were already individually tuned
+> (their own core counts and a shared input shard), so what is left to win is the per-op dispatch and
+> one reshard, not bytes — the fused read moves exactly the same weight bytes.*
+
+So the caveat above was right about the mechanism and wrong about the conclusion: the per-projection
+optima are real, and fusing still wins anyway, because what fusion buys is dispatch, not bandwidth.
+The hand-port's fused `wqkv` is vindicated by a tool that tried it both ways.
+
+It also recorded what it deliberately did **not** take: `nlp_create_qkv_heads_decode`, which would
+collapse the 3 reshapes + 3 permutes as well, because it emits `[1,B,H,D]` while this SDPA path
+consumes `[1,H,S,D]` — a contract change across the cache write and SDPA, so it belongs in its own
+attempt rather than riding along. That is the same boundary §6.68/§6.72 negotiated by hand.
 
 ### O5 — the ladder's escalation is real, and it gives up in the right place
 
