@@ -88,7 +88,46 @@
 struct TensorAccessor {
     template <typename Args>
     constexpr TensorAccessor(Args, uint32_t) {}
+
+    // Present so a custom load/store routine compiles here; see below.
+    std::uint64_t get_noc_addr(uint32_t, uint32_t = 0, uint8_t = 0) const {
+        ASSERT(false);
+        return 0;
+    }
 };
+
+// The data-movement intrinsics, as no-ops.
+//
+// Needed because a custom routine's body is compiled on EVERY projection. The
+// harness only *calls* it from inside a `#if IS_DM_THREAD` region, but the
+// closure lives in the shared kernel source, and C++ compiles a non-generic
+// lambda's body where it is written -- so
+//
+//     noc_load<1>(storage, [&](uint32_t l1, uint32_t bytes) {
+//         noc_async_read(acc.get_noc_addr(p), l1, bytes);   // <-- compiled on TRISC too
+//     });
+//
+// fails to build on a compute projection unless these names resolve. (A generic
+// `[](auto l1, ...)` lambda happens to survive, because a dependent argument
+// defers lookup to an instantiation that never happens on this projection -- but
+// that is too fragile to ask users to rely on.)
+//
+// They are unreachable rather than merely empty: nothing on a compute thread has
+// any business touching the NOC, so each one asserts if it is ever really
+// called, and the dead bodies strip out of the TRISC binary.
+inline void noc_async_read(std::uint64_t, uint32_t, uint32_t, uint8_t = 0) { ASSERT(false); }
+inline void noc_async_write(uint32_t, std::uint64_t, uint32_t, uint8_t = 0) { ASSERT(false); }
+inline std::uint64_t get_noc_addr(uint32_t, uint32_t, uint32_t, uint8_t = 0) {
+    ASSERT(false);
+    return 0;
+}
+inline std::uint64_t get_noc_addr(uint32_t) {
+    ASSERT(false);
+    return 0;
+}
+inline void noc_async_read_barrier(uint8_t = 0) { ASSERT(false); }
+inline void noc_async_write_barrier(uint8_t = 0) { ASSERT(false); }
+inline void noc_async_writes_flushed(uint8_t = 0) { ASSERT(false); }
 #endif
 
 namespace tt {

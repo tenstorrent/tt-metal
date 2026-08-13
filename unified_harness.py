@@ -90,17 +90,23 @@ def unified_program(
     )
 
     kernels = [
-        # reader
+        # reader. `noc` must be set explicitly: DataMovementConfig defaults it to
+        # RISCV_0_default (= NOC 0) regardless of processor, so leaving it out puts
+        # BOTH data-movement kernels on NOC 0. That costs the second NOC's
+        # bandwidth, and it makes the end-of-kernel NOC-idle asserts in brisck.cc
+        # cross-talk: NOC_INDEX is emitted from this field (kernel.cpp:252), so
+        # BRISC would check NOC 0's read counters against its own issued count and
+        # trip on reads NCRISC issued.
         ttnn.KernelDescriptor(
             **shared,
             runtime_args=make_runtime_args(cores, runtime_args),
-            config=ttnn.DataMovementConfigDescriptor(processor=reader_processor),
+            config=ttnn.DataMovementConfigDescriptor(processor=reader_processor, noc=ttnn.NOC.RISCV_1_default),
         ),
         # writer
         ttnn.KernelDescriptor(
             **shared,
             runtime_args=make_runtime_args(cores, runtime_args),
-            config=ttnn.DataMovementConfigDescriptor(processor=writer_processor),
+            config=ttnn.DataMovementConfigDescriptor(processor=writer_processor, noc=ttnn.NOC.RISCV_0_default),
         ),
         # compute (fans out to TRISC 0/1/2)
         ttnn.KernelDescriptor(
