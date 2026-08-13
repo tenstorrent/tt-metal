@@ -469,3 +469,48 @@ clears it and neither does. A later op reading DEST with linear addressing gets 
 Notes: 3 of 6 gaps are in `experimental/` fast-(un)tilize paths; 3 are WH/BH divergences the
 per-arch swarm split surfaced (untilize WH-ok/BH-gap; tilizeA_B WH-gap/BH-ok;
 reduce_block_max_row WH-benign/BH-gap).
+
+---
+
+## 12. Reconfig-escape gaps (sticky cfg mode-bits)
+
+A third class, from the audit's largest persistent bucket (1479 `cfg_register` effects
+"retained until reconfigured"). A gap here is a behavioral cfg bit — accumulate, relu,
+format-override, DEST-remap — that an op sets to a non-default and that nothing resets except a
+full `hw_configure`, so a later op inherits the wrong mode. Distinct from §11: it applies to
+ops with no `uninit`, and to Quasar (which has no uninit pattern).
+
+Method: from the 1479, drop the self-refreshing address/stride/counter regs (recomputed by
+every op that uses them) and the bits the baseline `hw_configure` re-establishes; keep
+behavioral bits with no in-body clear-to-default. That leaves 13 one-way candidates (WH 5,
+BH 2, QSR 6). A per-arch sage swarm (incl. `sage-quasar`) then checked each: fixed vs
+parameterized setter, and whether any reset/disable path exists.
+
+```
+13 candidates →  3 confirmed gaps  |  8 benign  |  2 swarm false-positives (overturned)
+```
+
+Confirmed:
+
+- BH `DEST_ACCESS_CFG_remap_addrs` + `swizzle_32b` — the **same two bits as §11's fast-(un)tilize
+  gaps**, re-derived here from the no-uninit lens (`_llk_math_reconfig_remap_(true)` set, no
+  `(false)` caller anywhere). Method-validation, not a new gap.
+- **QSR `THCON_PACKER0_REG3_PACK_STRIDE_NO_WRITE` (new)** — set to fixed `1` in the small-tile
+  branch of `_llk_pack_untilize_strided_init_` (`llk_pack_untilize.h:271`); no write of `0`
+  exists anywhere in `tt_llk_quasar`, and `_llk_pack_hw_configure_` touches only REG0. A
+  following PACKER0 op inherits row-write suppression.
+
+Benign (8): WH `Pack_L1_Acc` ×4 and `ALU SrcA_val` (reset via `hw_configure` / dedicated clear);
+QSR PACKER0 `L1_ACC` / `RELU_MODE` / `EDGE_MASK_MODE` (re-established each `_llk_pack_init_`,
+which hardcodes the PACK0 branch, `llk_pack.h:73`).
+
+**Methodology note (swarm reliability).** The swarm flagged QSR PACKER1 `L1_ACC` and `RELU_MODE`
+as gaps while calling their PACKER0 twins benign — but the code is structurally identical
+(`PACK_SEL`-branched, lines 212/216 and 255/260). Source validation overturned both:
+`_llk_pack_init_` only ever instantiates the PACK0 branch, so PACKER1's RELU is never written in
+the standard path, and L1_ACC is caller-managed symmetrically for both packers. On Quasar
+(Sonnet, no DeepWiki) the swarm needs a same-code consistency cross-check; contradictory
+verdicts on twin resources are the tell.
+
+**Running total across classes: §11 F3 (6) + §12 reconfig-escape (1 new) = 7 distinct confirmed
+gaps** (the 2 BH DEST bits are shared between the classes, counted once).
