@@ -18,6 +18,7 @@ from .llk_params import (
     BroadcastType,
     DataCopyType,
     DestSync,
+    DstRoundingMode,
     EltwiseBinaryReuseDestType,
     FastMode,
     ImpliedMathFormat,
@@ -27,6 +28,8 @@ from .llk_params import (
     NarrowTile,
     PerfRunType,
     ReducePool,
+    SdpaFwOp,
+    SdpaOp,
     StableSort,
     StochasticRounding,
     Tilize,
@@ -502,6 +505,45 @@ class REDUCE_POOL_TYPE(TemplateParameter):
 
 
 @dataclass
+class SDPA_OP(TemplateParameter):
+    sdpa_op: SdpaOp = SdpaOp.RecipLegacy
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int SDPA_OP = {self.sdpa_op.value};"
+
+
+@dataclass
+class SDPA_EXP_SCALE(TemplateParameter):
+    scale_bf16: int = 0x3F80  # bf16(1.0)
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint16_t EXP_SCALE_BF16 = {self.scale_bf16}u;"
+
+
+@dataclass
+class SDPA_SOFTPLUS_PARAMS(TemplateParameter):
+    softplus_beta_bits: int = 0x3F800000  # 1.0f
+    softplus_beta_reciprocal_bits: int = 0x3F800000  # 1.0f
+    softplus_threshold_bits: int = 0x41A00000  # 20.0f
+
+    def convert_to_cpp(self) -> str:
+        lines = [
+            f"constexpr std::uint32_t SOFTPLUS_BETA_BITS = {self.softplus_beta_bits}u;",
+            f"constexpr std::uint32_t SOFTPLUS_BETA_RECIPROCAL_BITS = {self.softplus_beta_reciprocal_bits}u;",
+            f"constexpr std::uint32_t SOFTPLUS_THRESHOLD_BITS = {self.softplus_threshold_bits}u;",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class SDPA_FW_OP(TemplateParameter):
+    sdpa_fw_op: SdpaFwOp = SdpaFwOp.Recip
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr int SDPA_FW_OP = {self.sdpa_fw_op.value};"
+
+
+@dataclass
 class TOPK(TemplateParameter):
     topk_k: int = 0
     topk_matrix_width: int = 0
@@ -601,6 +643,44 @@ class GENERALIZED_MOE_GATE(TemplateParameter):
             f"constexpr std::uint32_t GMG_B2D_BASE = {self.b2d_base};",
             f"constexpr std::uint32_t GMG_SECTIONS = {self.sections};",
             f"constexpr bool GMG_SIGMOID = {str(self.sigmoid).lower()};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class DEEPSEEK_MOE_GATE(TemplateParameter):
+    """Compile-time configuration for the deepseek_moe_gate test."""
+
+    dmg_mode: int = 0
+    dmg_sub_op: int = 0
+    dmg_sigmoid: bool = False
+    dmg_reload: bool = False
+    dmg_eps: int = 0
+    dmg_scale: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr int DMG_MODE = {self.dmg_mode};",
+            f"constexpr int DMG_SUB_OP = {self.dmg_sub_op};",
+            f"constexpr bool DMG_SIGMOID = {str(self.dmg_sigmoid).lower()};",
+            f"constexpr bool DMG_RELOAD = {str(self.dmg_reload).lower()};",
+            f"constexpr std::uint32_t DMG_EPS = {self.dmg_eps};",
+            f"constexpr std::uint32_t DMG_SCALE = {self.dmg_scale};",
+        ]
+        return "\n".join(lines)
+
+
+@dataclass
+class HADAMARD(TemplateParameter):
+    """Compile-time configuration for the H128 Hadamard test."""
+
+    hadamard_normalize: bool = True
+    h16_tile_index: int = 0
+
+    def convert_to_cpp(self) -> str:
+        lines: list[str] = [
+            f"constexpr bool HADAMARD_NORMALIZE = {str(self.hadamard_normalize).lower()};",
+            f"constexpr std::uint32_t HADAMARD_H16_TILE_INDEX = {self.h16_tile_index};",
         ]
         return "\n".join(lines)
 
@@ -923,6 +1003,16 @@ class SIGN_MAGNITUDE_FORMAT(TemplateParameter):
         return (
             f"constexpr bool SFPU_SIGN_MAGNITUDE = {str(self.sign_magnitude).lower()};"
         )
+
+
+@dataclass
+class SFPU_DST_ROUNDING_MODE(TemplateParameter):
+    """Selects the bf16 narrowing mode for binary SFPU ADD/SUB results."""
+
+    dst_rounding: DstRoundingMode = DstRoundingMode.Default
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr ckernel::DstRoundingMode SFPU_DST_ROUNDING_MODE = {self.dst_rounding.cpp_enum_value};"
 
 
 @dataclass

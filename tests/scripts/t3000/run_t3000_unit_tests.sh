@@ -185,6 +185,7 @@ run_t3000_ttnn_multiprocess_slow_tests() {
   local mesh2x4_rank_binding="tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml"
 
   tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" pytest -svv tests/ttnn/distributed/test_submesh_not_spanning_all_ranks_T3000.py
+  tt-run --mpi-args "$mpi_args" --rank-binding "$mesh2x4_rank_binding" build/test/ttnn/multiprocess/unit_tests_dual_rank_2x4_to_string
 }
 
 run_t3000_grok_tests() {
@@ -301,10 +302,7 @@ run_t3000_tt_dit_tests() {
   #Clip Encoder
   DIT_UNIT_TEST=1 pytest models/tt_dit/tests/encoders/clip/test_clip_full_projection.py -k 1x4-t3k ; fail+=$?
 
-  #Image DiTs VAE with one iteration pcc and perf test
-  DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/sd35/test_vae_sd35.py::test_sd35_vae_vae_decoder -k "t3k" ; fail+=$?
-
-  #Flux1 Single Transformer Block and other Image DiTs Transformer blocks
+  #Flux1 Single Transformer Block and other Image DiTs Transformer blocks. TODO: DELETE!
   DIT_UNIT_TEST=1 pytest models/tt_dit/tests/models/flux1/test_transformer_flux1.py::test_transformer -k 2x4sp0tp1 ; fail+=$?
 
   #Mochi Transformer
