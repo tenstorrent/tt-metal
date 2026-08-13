@@ -110,6 +110,13 @@ class TtStreamingSynthesizer:
     def __init__(self, device, flow, hift, config: StreamConfig | None = None, dtype=ttnn.bfloat16):
         self.device, self.flow, self.hift, self.dtype = device, flow, hift, dtype
         self.cfg = config or StreamConfig()
+        # Deliberately does NOT turn on the vocoder's trace cache, even though every
+        # middle chunk decodes the same geometry. Capturing a fresh geometry costs about
+        # a second against the ~34 ms per chunk a replay saves, so the crossover is near
+        # 30 chunks -- a minute of audio. Below that, enabling it makes a stream slower;
+        # a 12-chunk stream measured 2.2x worse. Long-form callers can opt in with
+        # `hift.enable_trace(True)` or `COSYVOICE_HIFT_TRACE=1`. See
+        # TtHiFTGenerator.enable_trace for the numbers.
         n = self.cfg.mel_overlap_len
         # Split windows uploaded once: fade_in_out multiplies the head of the new
         # signal by the window's first half and the tail of the old by its second.
