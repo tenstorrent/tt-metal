@@ -1,0 +1,8 @@
+{"event": "phase", "phase": "planner", "state": "start", "at_ms": 1786654401239}
+{"event": "phase", "phase": "planner", "state": "end", "at_ms": 1786656684206}
+{"event": "phase", "phase": "implementer", "state": "start", "at_ms": 1786656684738}
+{"source":"tt-probe","pid":2931415,"started_at_ms":1786658085085,"wait_ms":179,"run_ms":45531,"test_path":"rms_norm","exit_code":1}
+{"source":"tt-probe","pid":2931729,"started_at_ms":1786658138325,"wait_ms":155,"run_ms":50357,"test_path":"rms_norm","exit_code":1}
+{"source":"tt-probe","pid":2932582,"started_at_ms":1786658214677,"wait_ms":122,"run_ms":47957,"test_path":"rms_norm","exit_code":1}
+{"source":"tt-probe","pid":2932974,"started_at_ms":1786658270552,"wait_ms":143,"run_ms":49981,"test_path":"rms_norm","exit_code":1}
+{"source":"tt-probe","pid":2933592,"started_at_ms":1786658342828,"wait_ms":179,"run_ms":48387,"test_path":"rms_norm","exit_code":0}

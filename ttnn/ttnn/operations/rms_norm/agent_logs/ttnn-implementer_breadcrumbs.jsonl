@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"probe: (32,32) TILE bf16 no_gamma","detail":"max diff 0.0083; s=1 RowParallel path green","ts":"2026-08-13T21:59:58+00:00"}
