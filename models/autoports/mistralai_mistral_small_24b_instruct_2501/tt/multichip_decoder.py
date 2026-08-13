@@ -209,6 +209,7 @@ class MultichipDecoder(OptimizedDecoder):
         mlp_math_fidelity=ttnn.MathFidelity.LoFi,
         attention_weight_dtype=ttnn.bfloat4_b,
         attention_math_fidelity=ttnn.MathFidelity.LoFi,
+        sdpa_math_fidelity=ttnn.MathFidelity.HiFi4,
         topology=ttnn.Topology.Linear,
         num_links: int = 2,
         use_prefill_program_configs: bool = True,
@@ -224,6 +225,9 @@ class MultichipDecoder(OptimizedDecoder):
         prefill_activation_family: str = "dram",
         prefill_collective_family: str = "default",
         prefill_collective_dtype: str = "bf16",
+        residual_dtype=ttnn.bfloat16,
+        collective_workspace_dtype=ttnn.bfloat16,
+        norm_weight_dtype=ttnn.bfloat16,
         shared_rope: tuple | None = None,
         shared_collective: tuple | None = None,
         shared_prefill_collective: tuple | None = None,
@@ -370,6 +374,12 @@ class MultichipDecoder(OptimizedDecoder):
             raise ValueError("prefill_collective_dtype must be 'bf16' or 'bfp8', " f"got {prefill_collective_dtype!r}")
         if prefill_collective_dtype != "bf16" and prefill_collective_family != "persistent":
             raise ValueError("reduced prefill collective dtype requires the persistent prefill family")
+        if residual_dtype != ttnn.bfloat16:
+            raise ValueError("the stack-preserved residual contract currently requires BF16")
+        if collective_workspace_dtype != ttnn.bfloat16:
+            raise ValueError("persistent collective workspaces currently require BF16")
+        if norm_weight_dtype != ttnn.bfloat16:
+            raise ValueError("RMSNorm weights currently require BF16")
 
         if shared_rope is None:
             rotary = MistralRotaryEmbedding(hf_config)
@@ -437,8 +447,8 @@ class MultichipDecoder(OptimizedDecoder):
             head_dim=head_dim,
             intermediate_size=local_intermediate_size,
             rms_norm_eps=rms_norm_eps,
-            input_norm=_replicate_to_mesh(input_norm, mesh_device),
-            post_attention_norm=_replicate_to_mesh(post_attention_norm, mesh_device),
+            input_norm=_replicate_to_mesh(input_norm, mesh_device, dtype=norm_weight_dtype),
+            post_attention_norm=_replicate_to_mesh(post_attention_norm, mesh_device, dtype=norm_weight_dtype),
             qkv_weight=_shard_to_mesh(
                 qkv,
                 mesh_device,
@@ -520,6 +530,8 @@ class MultichipDecoder(OptimizedDecoder):
         decoder.prefill_activation_family = prefill_activation_family
         decoder.prefill_collective_family = prefill_collective_family
         decoder.prefill_collective_dtype = ttnn.bfloat16 if prefill_collective_dtype == "bf16" else ttnn.bfloat8_b
+        decoder.residual_dtype = residual_dtype
+        decoder.collective_workspace_dtype = collective_workspace_dtype
         decoder.mlp_geometry = tuple(int(value) for value in mlp_geometry)
         decoder.attention_geometry = tuple(int(value) for value in attention_geometry)
         decoder.mlp_weight_dtype = mlp_weight_dtype
@@ -537,7 +549,7 @@ class MultichipDecoder(OptimizedDecoder):
             packer_l1_acc=True,
         )
         decoder.sdpa_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=sdpa_math_fidelity,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
@@ -616,6 +628,7 @@ class MultichipDecoder(OptimizedDecoder):
                 decoder.collective_workspace = _replicate_to_mesh(
                     torch.zeros((1, 1, batch, hidden_size * TP_DEGREE), dtype=torch.bfloat16),
                     mesh_device,
+                    dtype=collective_workspace_dtype,
                     memory_config=collective_workspace_mem_config,
                 )
                 grid_size = mesh_device.compute_with_storage_grid_size()
@@ -660,7 +673,7 @@ class MultichipDecoder(OptimizedDecoder):
                 )
                 decoder.prefill_collective_workspace = ttnn.allocate_tensor_on_device(
                     ttnn.Shape([1, 1, max_prefill_tokens, hidden_size * TP_DEGREE]),
-                    ttnn.bfloat16,
+                    collective_workspace_dtype,
                     ttnn.TILE_LAYOUT,
                     mesh_device,
                     decoder.prefill_collective_workspace_mem_config,
@@ -1208,7 +1221,7 @@ class MultichipDecoder(OptimizedDecoder):
             ),
         )
         attention = self._all_reduce_hidden(attention, mode="prefill")
-        hidden_states = ttnn.add(residual, attention, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        hidden_states = ttnn.add(residual, attention, dtype=self.residual_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         residual = hidden_states
         hidden_states = self._prefill_rms_norm(
@@ -1219,7 +1232,9 @@ class MultichipDecoder(OptimizedDecoder):
         )
         hidden_states = self._mlp_forward(hidden_states)
         hidden_states = self._all_reduce_hidden(hidden_states, mode="prefill")
-        hidden_states = ttnn.add(residual, hidden_states, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        hidden_states = ttnn.add(
+            residual, hidden_states, dtype=self.residual_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
         if stacked_layout:
             return hidden_states
         return self.finish_prefill_residual(hidden_states, logical_seq_len=seq_len)
@@ -1457,7 +1472,9 @@ class MultichipDecoder(OptimizedDecoder):
                 [1, 1, 1, 1],
                 memory_config=self.decode_norm_mem_config,
             )
-        hidden_states = ttnn.add(residual, attention, dtype=ttnn.bfloat16, memory_config=self.decode_norm_mem_config)
+        hidden_states = ttnn.add(
+            residual, attention, dtype=self.residual_dtype, memory_config=self.decode_norm_mem_config
+        )
 
         residual = hidden_states
         hidden_states = ttnn.rms_norm(
@@ -1479,7 +1496,7 @@ class MultichipDecoder(OptimizedDecoder):
                 memory_config=self.decode_norm_mem_config,
             )
         hidden_states = ttnn.add(
-            residual, hidden_states, dtype=ttnn.bfloat16, memory_config=self.decode_norm_mem_config
+            residual, hidden_states, dtype=self.residual_dtype, memory_config=self.decode_norm_mem_config
         )
         if int(hidden_states.shape[-2]) != self.batch:
             hidden_states = ttnn.slice(

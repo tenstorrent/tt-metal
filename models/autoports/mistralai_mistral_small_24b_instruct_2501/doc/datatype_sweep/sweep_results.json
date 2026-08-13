@@ -1,0 +1,829 @@
+{
+  "schema_version": 1,
+  "model_id": "mistralai/Mistral-Small-24B-Instruct-2501",
+  "thresholds": {
+    "top1": 0.9,
+    "top5": 0.98,
+    "top100": 1.0
+  },
+  "ranking_metric": "trace_verified_teacher_forcing_decode_t_s_u",
+  "selected_config_id": "bfp4_lofi_bfp8kv_bf16ccl",
+  "baseline_prefill": {
+    "top1": 0.99,
+    "top5": 1.0,
+    "top100": 1.0,
+    "log": "logs/baseline_prefill.log"
+  },
+  "post_selection_token_out": {
+    "precision_config_path": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/selected_precision_config.json",
+    "command": "MISTRAL_SMALL_24B_PRECISION_CONFIG=models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/selected_precision_config.json MISTRAL_SMALL_24B_OPTIMIZED_FULL_MODEL_BENCHMARK=/home/mvasiljevic/hf-cache/hub/models--mistralai--Mistral-Small-24B-Instruct-2501/snapshots/9527884be6e5616bdd54de542f9ae13384489724 MISTRAL_SMALL_24B_OPT_FULL_LAYERS=40 MISTRAL_SMALL_24B_OPT_FULL_STEPS=128 pytest -q -s models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_full_model.py::test_optimized_full_model_token_out_benchmark",
+    "prompt_tokens": 128,
+    "steps": 128,
+    "ttft_ms_samples": [
+      57.294177,
+      56.826756
+    ],
+    "no_readback_t_s_u": 55.930356,
+    "no_readback_ms_per_token": 17.879379,
+    "trace_verified": true,
+    "host_boundaries_inside_window": 0,
+    "evidence_log": "logs/bf16_ccl_token_out.log"
+  },
+  "results": [
+    {
+      "config_id": "baseline_bfp4_lofi_bfp8kv_bfp8ccl",
+      "precision_config_path": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/candidates/baseline_bfp4_lofi_bfp8kv_bfp8ccl.json",
+      "dtype_policy": {
+        "weight_groups": {
+          "embedding": {
+            "dtype": "BF16",
+            "layers": "global",
+            "layer_exceptions": []
+          },
+          "norms": {
+            "dtype": "BF16",
+            "layers": "0-39 plus final",
+            "layer_exceptions": []
+          },
+          "attention_qkv_wo": {
+            "dtype": "BFP4_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "mlp_gate_up": {
+            "dtype": "BFP4_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "mlp_down": {
+            "dtype": "BFP4_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "lm_head": {
+            "dtype": "BF16",
+            "layers": "global",
+            "layer_exceptions": []
+          }
+        },
+        "activation_residual": {
+          "attention_input": "BF16",
+          "mlp_input": "BF16",
+          "residual": "BF16"
+        },
+        "ccl": {
+          "decode_payload": "BFP8_B",
+          "prefill_payload": "BF16",
+          "workspace": "BF16"
+        },
+        "kv_cache": {
+          "dtype": "BFP8_B",
+          "layout": "paged local KV-head shards",
+          "page_block_size": 32
+        },
+        "logits_sampling": {
+          "logits": "BF16",
+          "sampling_logits": "BF16",
+          "sampling_params": "BF16",
+          "token_indices": "UINT32",
+          "mode": "split Sampling1D"
+        },
+        "layer_exceptions": {}
+      },
+      "compute_fidelity_policy": {
+        "attention_qkv_wo": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "sdpa": "HiFi4",
+        "lm_head": "HiFi2"
+      },
+      "runtime_geometry": {
+        "max_context_len": 32768,
+        "attention_geometry": [
+          10,
+          12,
+          16,
+          8,
+          10,
+          4
+        ],
+        "mlp_geometry": [
+          10,
+          32,
+          40,
+          16,
+          16
+        ]
+      },
+      "top1": 0.97,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 229.367625,
+      "trace_verified_teacher_forcing_decode_t_s_u": 52.829349,
+      "trace_verified_samples_t_s_u": [
+        52.74561,
+        52.913089
+      ],
+      "trace_verified": true,
+      "measurement_regime": "full-model AIME24 chat-template, 100 forced tokens, split traced decode; rank by internal traced interval",
+      "reference_path": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/artifacts/aime24_chat_100.refpt",
+      "reference_sha256": "e88a9c2fe1d59448231e5edc4260f306328e4e4fdeef878d05166d2e4d9bbbc9",
+      "command": "MISTRAL_SMALL_24B_PRECISION_CONFIG=models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/candidates/baseline_bfp4_lofi_bfp8kv_bfp8ccl.json HF_HUB_OFFLINE=1 TT_LOGGER_LEVEL=info python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/mistralai_mistral_small_24b_instruct_2501 --reference models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/artifacts/aime24_chat_100.refpt --mesh-device P300_QUAD --fabric-config FABRIC_1D --trace-region-size 200000000",
+      "hardware": "4x Blackhole p300c, firmware 19.9.0",
+      "mesh": "1x4 TP4, FABRIC_1D",
+      "git_branch": "mvasiljevic/fast-models/mistralai-mistral-small-24b-instruct-2501",
+      "measurement_base_commit": "d182c2fe795610b7622205b4a06e98457b2a6e93",
+      "measurement_worktree_state": "base commit plus live datatype-policy plumbing and candidate JSON in this stage",
+      "evidence_logs": [
+        "logs/baseline_policy_teacher_forcing.log",
+        "logs/baseline_policy_teacher_forcing_repeat.log"
+      ],
+      "accuracy_pass": true,
+      "capability_pass": true,
+      "pass": true,
+      "selected": false,
+      "decision": "rejected: slower than BF16 decode CCL in repeated teacher-forcing and matched token-out"
+    },
+    {
+      "config_id": "bfp4_hifi2_bfp8kv_bfp8ccl",
+      "precision_config_path": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/candidates/bfp4_hifi2_bfp8kv_bfp8ccl.json",
+      "dtype_policy": {
+        "weight_groups": {
+          "embedding": {
+            "dtype": "BF16",
+            "layers": "global",
+            "layer_exceptions": []
+          },
+          "norms": {
+            "dtype": "BF16",
+            "layers": "0-39 plus final",
+            "layer_exceptions": []
+          },
+          "attention_qkv_wo": {
+            "dtype": "BFP4_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "mlp_gate_up": {
+            "dtype": "BFP4_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "mlp_down": {
+            "dtype": "BFP4_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "lm_head": {
+            "dtype": "BF16",
+            "layers": "global",
+            "layer_exceptions": []
+          }
+        },
+        "activation_residual": {
+          "attention_input": "BF16",
+          "mlp_input": "BF16",
+          "residual": "BF16"
+        },
+        "ccl": {
+          "decode_payload": "BFP8_B",
+          "prefill_payload": "BF16",
+          "workspace": "BF16"
+        },
+        "kv_cache": {
+          "dtype": "BFP8_B",
+          "layout": "paged local KV-head shards",
+          "page_block_size": 32
+        },
+        "logits_sampling": {
+          "logits": "BF16",
+          "sampling_logits": "BF16",
+          "sampling_params": "BF16",
+          "token_indices": "UINT32",
+          "mode": "split Sampling1D"
+        },
+        "layer_exceptions": {}
+      },
+      "compute_fidelity_policy": {
+        "attention_qkv_wo": "HiFi2",
+        "mlp_gate_up": "HiFi2",
+        "mlp_down": "HiFi2",
+        "sdpa": "HiFi4",
+        "lm_head": "HiFi2"
+      },
+      "runtime_geometry": {
+        "max_context_len": 32768,
+        "attention_geometry": [
+          10,
+          12,
+          16,
+          8,
+          10,
+          4
+        ],
+        "mlp_geometry": [
+          10,
+          32,
+          40,
+          16,
+          16
+        ]
+      },
+      "top1": 0.97,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 1469.744461,
+      "trace_verified_teacher_forcing_decode_t_s_u": 36.609832,
+      "trace_verified_samples_t_s_u": [
+        36.609832
+      ],
+      "trace_verified": true,
+      "measurement_regime": "full-model AIME24 chat-template, 100 forced tokens, split traced decode; rank by internal traced interval",
+      "reference_path": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/artifacts/aime24_chat_100.refpt",
+      "reference_sha256": "e88a9c2fe1d59448231e5edc4260f306328e4e4fdeef878d05166d2e4d9bbbc9",
+      "command": "MISTRAL_SMALL_24B_PRECISION_CONFIG=models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/candidates/bfp4_hifi2_bfp8kv_bfp8ccl.json HF_HUB_OFFLINE=1 TT_LOGGER_LEVEL=info python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/mistralai_mistral_small_24b_instruct_2501 --reference models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/artifacts/aime24_chat_100.refpt --mesh-device P300_QUAD --fabric-config FABRIC_1D --trace-region-size 200000000",
+      "hardware": "4x Blackhole p300c, firmware 19.9.0",
+      "mesh": "1x4 TP4, FABRIC_1D",
+      "git_branch": "mvasiljevic/fast-models/mistralai-mistral-small-24b-instruct-2501",
+      "measurement_base_commit": "d182c2fe795610b7622205b4a06e98457b2a6e93",
+      "measurement_worktree_state": "base commit plus live datatype-policy plumbing and candidate JSON in this stage",
+      "evidence_logs": [
+        "logs/bfp4_hifi2_teacher_forcing.log"
+      ],
+      "accuracy_pass": true,
+      "capability_pass": true,
+      "pass": true,
+      "selected": false,
+      "decision": "rejected: fidelity-only HiFi2 is much slower than LoFi"
+    },
+    {
+      "config_id": "bfp8_lofi_bfp8kv_bfp8ccl",
+      "precision_config_path": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/candidates/bfp8_lofi_bfp8kv_bfp8ccl.json",
+      "dtype_policy": {
+        "weight_groups": {
+          "embedding": {
+            "dtype": "BF16",
+            "layers": "global",
+            "layer_exceptions": []
+          },
+          "norms": {
+            "dtype": "BF16",
+            "layers": "0-39 plus final",
+            "layer_exceptions": []
+          },
+          "attention_qkv_wo": {
+            "dtype": "BFP8_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "mlp_gate_up": {
+            "dtype": "BFP8_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "mlp_down": {
+            "dtype": "BFP8_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "lm_head": {
+            "dtype": "BF16",
+            "layers": "global",
+            "layer_exceptions": []
+          }
+        },
+        "activation_residual": {
+          "attention_input": "BF16",
+          "mlp_input": "BF16",
+          "residual": "BF16"
+        },
+        "ccl": {
+          "decode_payload": "BFP8_B",
+          "prefill_payload": "BF16",
+          "workspace": "BF16"
+        },
+        "kv_cache": {
+          "dtype": "BFP8_B",
+          "layout": "paged local KV-head shards",
+          "page_block_size": 32
+        },
+        "logits_sampling": {
+          "logits": "BF16",
+          "sampling_logits": "BF16",
+          "sampling_params": "BF16",
+          "token_indices": "UINT32",
+          "mode": "split Sampling1D"
+        },
+        "layer_exceptions": {}
+      },
+      "compute_fidelity_policy": {
+        "attention_qkv_wo": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "sdpa": "HiFi4",
+        "lm_head": "HiFi2"
+      },
+      "runtime_geometry": {
+        "max_context_len": 32768,
+        "attention_geometry": [
+          10,
+          12,
+          16,
+          8,
+          10,
+          4
+        ],
+        "mlp_geometry": [
+          10,
+          32,
+          40,
+          8,
+          8
+        ]
+      },
+      "top1": 0.98,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 1910.366622,
+      "trace_verified_teacher_forcing_decode_t_s_u": 38.33946,
+      "trace_verified_samples_t_s_u": [
+        38.33946
+      ],
+      "trace_verified": true,
+      "measurement_regime": "full-model AIME24 chat-template, 100 forced tokens, split traced decode; rank by internal traced interval",
+      "reference_path": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/artifacts/aime24_chat_100.refpt",
+      "reference_sha256": "e88a9c2fe1d59448231e5edc4260f306328e4e4fdeef878d05166d2e4d9bbbc9",
+      "command": "MISTRAL_SMALL_24B_PRECISION_CONFIG=models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/candidates/bfp8_lofi_bfp8kv_bfp8ccl.json HF_HUB_OFFLINE=1 TT_LOGGER_LEVEL=info python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/mistralai_mistral_small_24b_instruct_2501 --reference models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/artifacts/aime24_chat_100.refpt --mesh-device P300_QUAD --fabric-config FABRIC_1D --trace-region-size 200000000",
+      "hardware": "4x Blackhole p300c, firmware 19.9.0",
+      "mesh": "1x4 TP4, FABRIC_1D",
+      "git_branch": "mvasiljevic/fast-models/mistralai-mistral-small-24b-instruct-2501",
+      "measurement_base_commit": "d182c2fe795610b7622205b4a06e98457b2a6e93",
+      "measurement_worktree_state": "base commit plus live datatype-policy plumbing and candidate JSON in this stage",
+      "evidence_logs": [
+        "logs/bfp8_lofi_teacher_forcing.log"
+      ],
+      "accuracy_pass": true,
+      "capability_pass": true,
+      "pass": true,
+      "selected": false,
+      "decision": "rejected: adapted legal block-8 BFP8 path is slower than BFP4 LoFi"
+    },
+    {
+      "config_id": "bfp8_hifi2_bfp8kv_bfp8ccl",
+      "precision_config_path": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/candidates/bfp8_hifi2_bfp8kv_bfp8ccl.json",
+      "dtype_policy": {
+        "weight_groups": {
+          "embedding": {
+            "dtype": "BF16",
+            "layers": "global",
+            "layer_exceptions": []
+          },
+          "norms": {
+            "dtype": "BF16",
+            "layers": "0-39 plus final",
+            "layer_exceptions": []
+          },
+          "attention_qkv_wo": {
+            "dtype": "BFP8_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "mlp_gate_up": {
+            "dtype": "BFP8_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "mlp_down": {
+            "dtype": "BFP8_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "lm_head": {
+            "dtype": "BF16",
+            "layers": "global",
+            "layer_exceptions": []
+          }
+        },
+        "activation_residual": {
+          "attention_input": "BF16",
+          "mlp_input": "BF16",
+          "residual": "BF16"
+        },
+        "ccl": {
+          "decode_payload": "BFP8_B",
+          "prefill_payload": "BF16",
+          "workspace": "BF16"
+        },
+        "kv_cache": {
+          "dtype": "BFP8_B",
+          "layout": "paged local KV-head shards",
+          "page_block_size": 32
+        },
+        "logits_sampling": {
+          "logits": "BF16",
+          "sampling_logits": "BF16",
+          "sampling_params": "BF16",
+          "token_indices": "UINT32",
+          "mode": "split Sampling1D"
+        },
+        "layer_exceptions": {}
+      },
+      "compute_fidelity_policy": {
+        "attention_qkv_wo": "HiFi2",
+        "mlp_gate_up": "HiFi2",
+        "mlp_down": "HiFi2",
+        "sdpa": "HiFi4",
+        "lm_head": "HiFi2"
+      },
+      "runtime_geometry": {
+        "max_context_len": 32768,
+        "attention_geometry": [
+          10,
+          12,
+          16,
+          8,
+          10,
+          4
+        ],
+        "mlp_geometry": [
+          10,
+          32,
+          40,
+          8,
+          8
+        ]
+      },
+      "top1": 0.99,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 1476.891191,
+      "trace_verified_teacher_forcing_decode_t_s_u": 35.950609,
+      "trace_verified_samples_t_s_u": [
+        35.950609
+      ],
+      "trace_verified": true,
+      "measurement_regime": "full-model AIME24 chat-template, 100 forced tokens, split traced decode; rank by internal traced interval",
+      "reference_path": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/artifacts/aime24_chat_100.refpt",
+      "reference_sha256": "e88a9c2fe1d59448231e5edc4260f306328e4e4fdeef878d05166d2e4d9bbbc9",
+      "command": "MISTRAL_SMALL_24B_PRECISION_CONFIG=models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/candidates/bfp8_hifi2_bfp8kv_bfp8ccl.json HF_HUB_OFFLINE=1 TT_LOGGER_LEVEL=info python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/mistralai_mistral_small_24b_instruct_2501 --reference models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/artifacts/aime24_chat_100.refpt --mesh-device P300_QUAD --fabric-config FABRIC_1D --trace-region-size 200000000",
+      "hardware": "4x Blackhole p300c, firmware 19.9.0",
+      "mesh": "1x4 TP4, FABRIC_1D",
+      "git_branch": "mvasiljevic/fast-models/mistralai-mistral-small-24b-instruct-2501",
+      "measurement_base_commit": "d182c2fe795610b7622205b4a06e98457b2a6e93",
+      "measurement_worktree_state": "base commit plus live datatype-policy plumbing and candidate JSON in this stage",
+      "evidence_logs": [
+        "logs/bfp8_hifi2_teacher_forcing.log"
+      ],
+      "accuracy_pass": true,
+      "capability_pass": true,
+      "pass": true,
+      "selected": false,
+      "decision": "rejected: slower than BFP8 LoFi and BFP4 LoFi"
+    },
+    {
+      "config_id": "bfp4_lofi_bfp8kv_bf16ccl",
+      "precision_config_path": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/candidates/bfp4_lofi_bfp8kv_bf16ccl.json",
+      "dtype_policy": {
+        "weight_groups": {
+          "embedding": {
+            "dtype": "BF16",
+            "layers": "global",
+            "layer_exceptions": []
+          },
+          "norms": {
+            "dtype": "BF16",
+            "layers": "0-39 plus final",
+            "layer_exceptions": []
+          },
+          "attention_qkv_wo": {
+            "dtype": "BFP4_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "mlp_gate_up": {
+            "dtype": "BFP4_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "mlp_down": {
+            "dtype": "BFP4_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "lm_head": {
+            "dtype": "BF16",
+            "layers": "global",
+            "layer_exceptions": []
+          }
+        },
+        "activation_residual": {
+          "attention_input": "BF16",
+          "mlp_input": "BF16",
+          "residual": "BF16"
+        },
+        "ccl": {
+          "decode_payload": "BF16",
+          "prefill_payload": "BF16",
+          "workspace": "BF16"
+        },
+        "kv_cache": {
+          "dtype": "BFP8_B",
+          "layout": "paged local KV-head shards",
+          "page_block_size": 32
+        },
+        "logits_sampling": {
+          "logits": "BF16",
+          "sampling_logits": "BF16",
+          "sampling_params": "BF16",
+          "token_indices": "UINT32",
+          "mode": "split Sampling1D"
+        },
+        "layer_exceptions": {}
+      },
+      "compute_fidelity_policy": {
+        "attention_qkv_wo": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "sdpa": "HiFi4",
+        "lm_head": "HiFi2"
+      },
+      "runtime_geometry": {
+        "max_context_len": 32768,
+        "attention_geometry": [
+          10,
+          12,
+          16,
+          8,
+          10,
+          4
+        ],
+        "mlp_geometry": [
+          10,
+          32,
+          40,
+          16,
+          16
+        ]
+      },
+      "top1": 0.97,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 226.993467,
+      "trace_verified_teacher_forcing_decode_t_s_u": 54.212248,
+      "trace_verified_samples_t_s_u": [
+        54.155957,
+        54.268538
+      ],
+      "trace_verified": true,
+      "measurement_regime": "full-model AIME24 chat-template, 100 forced tokens, split traced decode; rank by internal traced interval",
+      "reference_path": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/artifacts/aime24_chat_100.refpt",
+      "reference_sha256": "e88a9c2fe1d59448231e5edc4260f306328e4e4fdeef878d05166d2e4d9bbbc9",
+      "command": "MISTRAL_SMALL_24B_PRECISION_CONFIG=models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/candidates/bfp4_lofi_bfp8kv_bf16ccl.json HF_HUB_OFFLINE=1 TT_LOGGER_LEVEL=info python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/mistralai_mistral_small_24b_instruct_2501 --reference models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/artifacts/aime24_chat_100.refpt --mesh-device P300_QUAD --fabric-config FABRIC_1D --trace-region-size 200000000",
+      "hardware": "4x Blackhole p300c, firmware 19.9.0",
+      "mesh": "1x4 TP4, FABRIC_1D",
+      "git_branch": "mvasiljevic/fast-models/mistralai-mistral-small-24b-instruct-2501",
+      "measurement_base_commit": "d182c2fe795610b7622205b4a06e98457b2a6e93",
+      "measurement_worktree_state": "base commit plus live datatype-policy plumbing and candidate JSON in this stage",
+      "evidence_logs": [
+        "logs/bf16_ccl_teacher_forcing.log",
+        "logs/bf16_ccl_teacher_forcing_repeat.log"
+      ],
+      "accuracy_pass": true,
+      "capability_pass": true,
+      "pass": true,
+      "selected": true,
+      "decision": "selected: fastest repeated passing trace-verified teacher-forcing policy"
+    },
+    {
+      "config_id": "bfp4_lofi_bfp8act_bfp8kv_bfp8ccl",
+      "precision_config_path": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/candidates/bfp4_lofi_bfp8act_bfp8kv_bfp8ccl.json",
+      "dtype_policy": {
+        "weight_groups": {
+          "embedding": {
+            "dtype": "BF16",
+            "layers": "global",
+            "layer_exceptions": []
+          },
+          "norms": {
+            "dtype": "BF16",
+            "layers": "0-39 plus final",
+            "layer_exceptions": []
+          },
+          "attention_qkv_wo": {
+            "dtype": "BFP4_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "mlp_gate_up": {
+            "dtype": "BFP4_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "mlp_down": {
+            "dtype": "BFP4_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "lm_head": {
+            "dtype": "BF16",
+            "layers": "global",
+            "layer_exceptions": []
+          }
+        },
+        "activation_residual": {
+          "attention_input": "BFP8_B",
+          "mlp_input": "BFP8_B",
+          "residual": "BF16"
+        },
+        "ccl": {
+          "decode_payload": "BFP8_B",
+          "prefill_payload": "BF16",
+          "workspace": "BF16"
+        },
+        "kv_cache": {
+          "dtype": "BFP8_B",
+          "layout": "paged local KV-head shards",
+          "page_block_size": 32
+        },
+        "logits_sampling": {
+          "logits": "BF16",
+          "sampling_logits": "BF16",
+          "sampling_params": "BF16",
+          "token_indices": "UINT32",
+          "mode": "split Sampling1D"
+        },
+        "layer_exceptions": {}
+      },
+      "compute_fidelity_policy": {
+        "attention_qkv_wo": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "sdpa": "HiFi4",
+        "lm_head": "HiFi2"
+      },
+      "runtime_geometry": {
+        "max_context_len": 32768,
+        "attention_geometry": [
+          10,
+          12,
+          16,
+          8,
+          10,
+          4
+        ],
+        "mlp_geometry": [
+          10,
+          32,
+          40,
+          16,
+          16
+        ]
+      },
+      "top1": 0.98,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 220.932642,
+      "trace_verified_teacher_forcing_decode_t_s_u": 51.600778,
+      "trace_verified_samples_t_s_u": [
+        51.600778
+      ],
+      "trace_verified": true,
+      "measurement_regime": "full-model AIME24 chat-template, 100 forced tokens, split traced decode; rank by internal traced interval",
+      "reference_path": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/artifacts/aime24_chat_100.refpt",
+      "reference_sha256": "e88a9c2fe1d59448231e5edc4260f306328e4e4fdeef878d05166d2e4d9bbbc9",
+      "command": "MISTRAL_SMALL_24B_PRECISION_CONFIG=models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/candidates/bfp4_lofi_bfp8act_bfp8kv_bfp8ccl.json HF_HUB_OFFLINE=1 TT_LOGGER_LEVEL=info python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/mistralai_mistral_small_24b_instruct_2501 --reference models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/artifacts/aime24_chat_100.refpt --mesh-device P300_QUAD --fabric-config FABRIC_1D --trace-region-size 200000000",
+      "hardware": "4x Blackhole p300c, firmware 19.9.0",
+      "mesh": "1x4 TP4, FABRIC_1D",
+      "git_branch": "mvasiljevic/fast-models/mistralai-mistral-small-24b-instruct-2501",
+      "measurement_base_commit": "d182c2fe795610b7622205b4a06e98457b2a6e93",
+      "measurement_worktree_state": "base commit plus live datatype-policy plumbing and candidate JSON in this stage",
+      "evidence_logs": [
+        "logs/bfp8_activations_teacher_forcing.log"
+      ],
+      "accuracy_pass": true,
+      "capability_pass": true,
+      "pass": true,
+      "selected": false,
+      "decision": "rejected: reduced matmul inputs are slower"
+    },
+    {
+      "config_id": "bfp4_lofi_bf16kv_bfp8ccl",
+      "precision_config_path": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/candidates/bfp4_lofi_bf16kv_bfp8ccl.json",
+      "dtype_policy": {
+        "weight_groups": {
+          "embedding": {
+            "dtype": "BF16",
+            "layers": "global",
+            "layer_exceptions": []
+          },
+          "norms": {
+            "dtype": "BF16",
+            "layers": "0-39 plus final",
+            "layer_exceptions": []
+          },
+          "attention_qkv_wo": {
+            "dtype": "BFP4_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "mlp_gate_up": {
+            "dtype": "BFP4_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "mlp_down": {
+            "dtype": "BFP4_B",
+            "layers": "0-39",
+            "layer_exceptions": []
+          },
+          "lm_head": {
+            "dtype": "BF16",
+            "layers": "global",
+            "layer_exceptions": []
+          }
+        },
+        "activation_residual": {
+          "attention_input": "BF16",
+          "mlp_input": "BF16",
+          "residual": "BF16"
+        },
+        "ccl": {
+          "decode_payload": "BFP8_B",
+          "prefill_payload": "BF16",
+          "workspace": "BF16"
+        },
+        "kv_cache": {
+          "dtype": "BF16",
+          "layout": "paged local KV-head shards",
+          "page_block_size": 32
+        },
+        "logits_sampling": {
+          "logits": "BF16",
+          "sampling_logits": "BF16",
+          "sampling_params": "BF16",
+          "token_indices": "UINT32",
+          "mode": "split Sampling1D"
+        },
+        "layer_exceptions": {}
+      },
+      "compute_fidelity_policy": {
+        "attention_qkv_wo": "LoFi",
+        "mlp_gate_up": "LoFi",
+        "mlp_down": "LoFi",
+        "sdpa": "HiFi4",
+        "lm_head": "HiFi2"
+      },
+      "runtime_geometry": {
+        "max_context_len": 32768,
+        "attention_geometry": [
+          10,
+          12,
+          16,
+          8,
+          10,
+          4
+        ],
+        "mlp_geometry": [
+          10,
+          32,
+          40,
+          16,
+          16
+        ]
+      },
+      "top1": 0.97,
+      "top5": 1.0,
+      "top100": 1.0,
+      "token_count": 100,
+      "ttft_ms": 627.998432,
+      "trace_verified_teacher_forcing_decode_t_s_u": 53.326028,
+      "trace_verified_samples_t_s_u": [
+        53.326028
+      ],
+      "trace_verified": true,
+      "measurement_regime": "full-model AIME24 chat-template, 100 forced tokens, split traced decode; rank by internal traced interval",
+      "reference_path": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/artifacts/aime24_chat_100.refpt",
+      "reference_sha256": "e88a9c2fe1d59448231e5edc4260f306328e4e4fdeef878d05166d2e4d9bbbc9",
+      "command": "MISTRAL_SMALL_24B_PRECISION_CONFIG=models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/candidates/bfp4_lofi_bf16kv_bfp8ccl.json HF_HUB_OFFLINE=1 TT_LOGGER_LEVEL=info python -m models.common.readiness_check.run_teacher_forcing --model-dir models/autoports/mistralai_mistral_small_24b_instruct_2501 --reference models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/full_model/artifacts/aime24_chat_100.refpt --mesh-device P300_QUAD --fabric-config FABRIC_1D --trace-region-size 200000000",
+      "hardware": "4x Blackhole p300c, firmware 19.9.0",
+      "mesh": "1x4 TP4, FABRIC_1D",
+      "git_branch": "mvasiljevic/fast-models/mistralai-mistral-small-24b-instruct-2501",
+      "measurement_base_commit": "d182c2fe795610b7622205b4a06e98457b2a6e93",
+      "measurement_worktree_state": "base commit plus live datatype-policy plumbing and candidate JSON in this stage",
+      "evidence_logs": [
+        "logs/bf16_kv_teacher_forcing.log"
+      ],
+      "accuracy_pass": true,
+      "capability_pass": false,
+      "pass": false,
+      "selected": false,
+      "decision": "rejected: 18,304-token physical ceiling cannot preserve advertised 32,768 context"
+    }
+  ]
+}

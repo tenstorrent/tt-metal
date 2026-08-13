@@ -1,0 +1,8 @@
+Sure! Here's a simple breakdown:
+
+1. **Supervised Learning**:
+   - **Training**: Think of it like a teacher guiding a student. The model is given labeled data, which means it includes both the input (like a picture of a cat) and the correct output (like the label "cat").
+   - **Goal**: The model learns to make predictions based on the labeled examples. For example, it learns to recognize cats in new pictures.
+   - **Example**: Training a model to recognize handwritten digits by showing it images of digits along with their correct labels (0-9).
+
+2. **Unsupervised Learning

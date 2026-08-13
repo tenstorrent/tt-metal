@@ -1,0 +1,33 @@
+{
+  "model_id": "mistralai/Mistral-Small-24B-Instruct-2501",
+  "hf_advertised_context": 32768,
+  "total_device_dram_bytes": 34178731008,
+  "fixed_bytes_including_weights_trace_and_runtime_reserve": 10138391424,
+  "page_block_size": 32,
+  "runtime_reserve_bytes": 1610612736,
+  "trace_region_bytes_per_device": 1600000000,
+  "candidates": [
+    {
+      "kv_cache_dtype": "BFP8_B",
+      "per_device_kv_bytes_per_logical_token": 696320,
+      "per_device_other_variable_bytes_per_logical_token": 1032,
+      "per_device_variable_bytes_per_logical_token": 697352,
+      "calculated_context_ceiling_with_reserve": 34464,
+      "advertised_context_supported": true,
+      "selected": true,
+      "physical_gate": "inherited current-source 40-layer batch-32 cache-resident prefill+decode pass at 32768; dtype/layout unchanged"
+    },
+    {
+      "kv_cache_dtype": "BF16",
+      "per_device_kv_bytes_per_logical_token": 1310720,
+      "per_device_other_variable_bytes_per_logical_token": 1032,
+      "per_device_variable_bytes_per_logical_token": 1311752,
+      "calculated_context_ceiling_with_reserve": 18304,
+      "advertised_context_supported": false,
+      "selected": false,
+      "rejection": "cannot retain the HF 32768-token capability with the established 40-layer weights, trace reservation, and 1.5 GiB runtime reserve"
+    }
+  ],
+  "formula": "floor_to_page((total_device_dram_bytes - fixed_bytes) / per_device_variable_bytes_per_logical_token)",
+  "selected_result": "BFP8_B preserves the existing 32768-token contract; changing decode CCL payload BFP8_B to BF16 does not add a persistent DRAM lifetime and does not change this ceiling"
+}

@@ -1,0 +1,14 @@
+{
+  "hf_model": "mistralai/Mistral-Small-24B-Instruct-2501",
+  "hf_snapshot": "9527884be6e5616bdd54de542f9ae13384489724",
+  "tokenizer_class": "TokenizersBackend",
+  "chat_template_present": true,
+  "prompt_mode": "chat",
+  "rendering_method": "tokenizer.apply_chat_template(single user turn, add_generation_prompt=True)",
+  "fix_mistral_regex": true,
+  "prompt_source": "/home/mvasiljevic/tt-metal/models/common/readiness_check/vllm_prompts.txt",
+  "num_prompts": 6,
+  "max_new_tokens": 128,
+  "hf_control": "same snapshot/tokenizer/rendered token IDs, greedy",
+  "tt_runtime_fallback_policy": "throw_exception_on_fallback=true"
+}

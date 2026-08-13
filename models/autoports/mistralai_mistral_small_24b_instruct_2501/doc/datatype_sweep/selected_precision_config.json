@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "config_id": "bfp4_lofi_bfp8kv_bf16ccl",
+  "model_id": "mistralai/Mistral-Small-24B-Instruct-2501",
+  "selection_metric": "median trace-verified full-model teacher-forcing decode t/s/u",
+  "acceptance_thresholds": {"top1": 0.90, "top5": 0.98, "top100": 1.0},
+  "weight_groups": {
+    "embedding": {"dtype": "BF16", "layers": "global", "layer_exceptions": []},
+    "norms": {"dtype": "BF16", "layers": "0-39 plus final", "layer_exceptions": []},
+    "attention_qkv_wo": {"dtype": "BFP4_B", "layers": "0-39", "layer_exceptions": []},
+    "mlp_gate_up": {"dtype": "BFP4_B", "layers": "0-39", "layer_exceptions": []},
+    "mlp_down": {"dtype": "BFP4_B", "layers": "0-39", "layer_exceptions": []},
+    "lm_head": {"dtype": "BF16", "layers": "global", "layer_exceptions": []}
+  },
+  "compute_fidelities": {
+    "attention_qkv_wo": "LoFi",
+    "mlp_gate_up": "LoFi",
+    "mlp_down": "LoFi",
+    "sdpa": "HiFi4",
+    "lm_head": "HiFi2"
+  },
+  "activation_residual": {"attention_input": "BF16", "mlp_input": "BF16", "residual": "BF16"},
+  "ccl": {"decode_payload": "BF16", "prefill_payload": "BF16", "workspace": "BF16"},
+  "kv_cache": {"dtype": "BFP8_B", "layout": "paged local KV-head shards", "page_block_size": 32},
+  "logits_sampling": {
+    "logits": "BF16",
+    "sampling_logits": "BF16",
+    "sampling_params": "BF16",
+    "token_indices": "UINT32",
+    "mode": "split Sampling1D"
+  },
+  "layer_exceptions": {},
+  "runtime": {
+    "max_context_len": 32768,
+    "attention_geometry": [10, 12, 16, 8, 10, 4],
+    "mlp_geometry": [10, 32, 40, 16, 16]
+  },
+  "default_consumers": [
+    "tt.generator.build_generator",
+    "MistralSmall24BFullModel.from_state_dict",
+    "MistralSmall24BGenerator",
+    "future vLLM adapter via build_generator; no vLLM work performed in this stage"
+  ]
+}

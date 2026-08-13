@@ -102,7 +102,7 @@
     "trace_region_bytes_per_dram_bank": 200000000,
     "per_device_reserved_trace_region_bytes": 1600000000,
     "per_device_shared_persistent_collective_workspace_l1_bytes": 1310720,
-    "decode_collective_output_dtype": "BFP8_B",
+    "decode_collective_output_dtype": "BF16",
     "decode_collective_workspace_dtype": "BF16",
     "prefill_collective_output_dtype": "BF16",
     "per_device_variable_bytes_per_logical_token": 697352,
@@ -112,7 +112,7 @@
     "runtime_reserve_bytes": 1610612736,
     "per_device_margin_after_runtime_reserve_at_advertised_context": 1189509248,
     "calculated_context_ceiling_with_reserve": 34464,
-    "calculation_policy": "Tile-aware physical DRAM storage: BFP4_B=576 bytes per 32x32 tile, BFP8_B=1088 bytes per tile, BF16=2048 bytes per tile. The fixed DRAM lifetime includes both optimized decode and interleaved large-M prefill matrix representations for all 40 layers, tiled replicated layer/final norms, TP4 BF16 embedding and untied LM head, persistent split-trace token/logit state, Sampling1D index/seed buffers, and the Metal trace region used by the full 40-layer split model/sampler capture. The configured 200,000,000-byte trace region is reserved independently in each of eight DRAM banks, so its physical per-device cost is 1,600,000,000 bytes. RoPE prefill+decode tables, shared position indices, page table, and all 40 local K/V pairs scale with logical context. The optimized decoder keeps one 1,310,720-byte BF16 L1 collective workspace shared by all sequential layers and emits decode collective results in BFP8_B; neither is a DRAM lifetime and neither reduces the DRAM-derived context ceiling. The capacity gate additionally allocates a physical 1.5 GiB per-rank runtime reserve, executes a batch-32 prefill chunk with all full-context caches resident, then decodes position 32,767. The post-reserve physical ceiling is 34,464 after rounding down to the 32-token page block.",
+    "calculation_policy": "Tile-aware physical DRAM storage: BFP4_B=576 bytes per 32x32 tile, BFP8_B=1088 bytes per tile, BF16=2048 bytes per tile. The fixed DRAM lifetime includes both optimized decode and interleaved large-M prefill matrix representations for all 40 layers, tiled replicated layer/final norms, TP4 BF16 embedding and untied LM head, persistent split-trace token/logit state, Sampling1D index/seed buffers, and the Metal trace region used by the full 40-layer split model/sampler capture. The configured 200,000,000-byte trace region is reserved independently in each of eight DRAM banks, so its physical per-device cost is 1,600,000,000 bytes. RoPE prefill+decode tables, shared position indices, page table, and all 40 local K/V pairs scale with logical context. The selected decoder keeps one 1,310,720-byte BF16 L1 collective workspace shared by all sequential layers and emits decode collective results in BF16; neither is a persistent DRAM lifetime and neither reduces the DRAM-derived context ceiling. The capacity gate additionally allocates a physical 1.5 GiB per-rank runtime reserve, executes a batch-32 prefill chunk with all full-context caches resident, then decodes position 32,767. The post-reserve physical ceiling is 34,464 after rounding down to the 32-token page block.",
     "prefill_policy": "The 32K cache and weights fit, but a replicated batch-32 full-width 32K BF16 residual is 10,737,418,240 bytes per rank. Full-context prefill must therefore stream/chunk internal work while preserving arbitrary logical lengths.",
     "capacity_probe_command": "MISTRAL_SMALL_24B_MULTICHIP_CAPACITY=1 TT_LOGGER_LEVEL=fatal pytest -q -s models/autoports/mistralai_mistral_small_24b_instruct_2501/tests/test_multichip_decoder.py::test_multichip_full_context_paged_cache_capacity",
     "capacity_probe_artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_multichip_decoder/evidence/final_current_source_gate_bfp8.xml",
@@ -229,7 +229,7 @@
     "advertised_context": 32768,
     "calculated_physical_ceiling_with_reserve": 34464,
     "capability_reduction": false,
-    "full_path_policy": "TP4 embeddings and BF16 endpoints; 40-layer BFP4 LoFi decoder with BF16 activations, BFP8 KV cache, BFP8 persistent decode collectives, BF16 prefill collectives, and 11-core L1 block-sharded inter-layer residuals; BF16 HiFi2 LM head; device split-trace Sampling1D",
+    "full_path_policy": "TP4 embeddings and BF16 endpoints; 40-layer BFP4 LoFi decoder with BF16 activations, BFP8 KV cache, BF16 persistent decode collectives, BF16 prefill collectives, and 11-core L1 block-sharded inter-layer residuals; BF16 HiFi2 LM head; device split-trace Sampling1D",
     "terminal_geometry": {
       "rank_local_vocab_columns_per_split": 8192,
       "input_cores": 10,
@@ -276,6 +276,18 @@
       "residual_gap_percent_of_measured": 2.394
     },
     "evidence_root": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/optimized_full_model"
+  },
+  "datatype_sweep": {
+    "status": "selected_and_trace_verified",
+    "selected_config_id": "bfp4_lofi_bfp8kv_bf16ccl",
+    "selected_config": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/selected_precision_config.json",
+    "kv_cache_dtype": "BFP8_B",
+    "decode_collective_output_dtype": "BF16",
+    "advertised_context": 32768,
+    "calculated_physical_ceiling_with_reserve": 34464,
+    "capability_reduction": false,
+    "capacity_recomputation": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/context_capacity_by_kv_dtype.json",
+    "non_aligned_prompt_evidence": "models/autoports/mistralai_mistral_small_24b_instruct_2501/doc/datatype_sweep/logs/selected_default_non_aligned.log"
   },
   "paths": {
     "prefill": {

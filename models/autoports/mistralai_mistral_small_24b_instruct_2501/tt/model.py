@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -25,6 +25,7 @@ from models.autoports.mistralai_mistral_small_24b_instruct_2501.tt.optimized_dec
     _dram_sharded_weight_memory_config,
     _l1_width_sharded_memory_config,
 )
+from models.autoports.mistralai_mistral_small_24b_instruct_2501.tt.precision_policy import dtype_name, fidelity_name
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig
 from models.common.modules.tt_ccl import TT_CCL, get_tt_ccl
 
@@ -83,6 +84,25 @@ class FullModelConfig:
     max_context_len: int = HF_CONTEXT_LENGTH
     num_blocks: int = HF_CONTEXT_LENGTH // PAGED_BLOCK_SIZE
     prefill_chunk_size: int = DEFAULT_PREFILL_CHUNK_SIZE
+    precision_config_id: str = "inherited_optimized_default"
+    precision_config_path: str | None = None
+    embedding_weight_dtype: object = ttnn.bfloat16
+    norm_weight_dtype: object = ttnn.bfloat16
+    attention_weight_dtype: object = ttnn.bfloat4_b
+    mlp_gate_up_weight_dtype: object = ttnn.bfloat4_b
+    mlp_down_weight_dtype: object = ttnn.bfloat4_b
+    attention_math_fidelity: object = ttnn.MathFidelity.LoFi
+    mlp_math_fidelity: object = ttnn.MathFidelity.LoFi
+    mlp_down_math_fidelity: object = ttnn.MathFidelity.LoFi
+    sdpa_math_fidelity: object = ttnn.MathFidelity.HiFi4
+    attention_activation_dtype: object = ttnn.bfloat16
+    mlp_activation_dtype: object = ttnn.bfloat16
+    residual_dtype: object = ttnn.bfloat16
+    decode_collective_dtype: object = ttnn.bfloat8_b
+    prefill_collective_dtype: object = ttnn.bfloat16
+    collective_workspace_dtype: object = ttnn.bfloat16
+    attention_geometry: tuple[int, int, int, int, int, int] = (10, 12, 16, 8, 10, 4)
+    mlp_geometry: tuple[int, int, int, int, int] = (10, 32, 40, 16, 16)
     kv_cache_dtype: object = ttnn.bfloat8_b
     lm_head_weight_dtype: object = ttnn.bfloat16
     lm_head_math_fidelity: object = ttnn.MathFidelity.HiFi2
@@ -90,6 +110,11 @@ class FullModelConfig:
     lm_head_input_cores: int = LM_HEAD_INPUT_CORES
     lm_head_output_cores: int = LM_HEAD_OUTPUT_CORES
     lm_head_max_in0_block_w: int = 4
+    logits_dtype: object = ttnn.bfloat16
+    sampling_logits_dtype: object = ttnn.bfloat16
+    sampling_params_dtype: object = ttnn.bfloat16
+    sampling_index_dtype: object = ttnn.uint32
+    layer_exceptions: Mapping[int, Mapping[str, object]] = field(default_factory=dict)
     override_num_layers: int | None = None
 
     def validate(self, hf_config) -> None:
@@ -110,11 +135,53 @@ class FullModelConfig:
             raise ValueError("the paged-cache split permits only BFP8 or BF16")
         if self.lm_head_weight_dtype not in (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b):
             raise ValueError("LM-head weights must be BF16, BFP8, or BFP4")
+        weight_dtypes = (ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b)
+        for name in ("attention_weight_dtype", "mlp_gate_up_weight_dtype", "mlp_down_weight_dtype"):
+            if getattr(self, name) not in weight_dtypes:
+                raise ValueError(f"{name} must be BF16, BFP8, or BFP4")
+        if self.embedding_weight_dtype != ttnn.bfloat16 or self.norm_weight_dtype != ttnn.bfloat16:
+            raise ValueError("the accepted embedding and norm kernels require BF16 weights")
+        if self.residual_dtype != ttnn.bfloat16:
+            raise ValueError("the stack-preserved residual contract currently requires BF16")
+        if self.collective_workspace_dtype != ttnn.bfloat16:
+            raise ValueError("persistent collective workspaces currently require BF16")
+        if self.logits_dtype != self.sampling_logits_dtype:
+            raise ValueError("Sampling1D input dtype must match the LM-head logits dtype")
+        if self.logits_dtype != ttnn.bfloat16 or self.sampling_params_dtype != ttnn.bfloat16:
+            raise ValueError("the accepted Sampling1D path requires BF16 logits and parameters")
+        if self.sampling_index_dtype != ttnn.uint32:
+            raise ValueError("the accepted Sampling1D token/index contract requires UINT32")
+        if self.mlp_down_math_fidelity != self.mlp_math_fidelity:
+            raise ValueError("the current fused MLP compute config requires gate/up/down to share math fidelity")
+        for layer_idx in self.layer_exceptions:
+            if int(layer_idx) < 0 or int(layer_idx) >= int(_config_value(hf_config, "num_hidden_layers")):
+                raise ValueError(f"layer exception index {layer_idx} is out of range")
         local_vocab_size = int(_config_value(hf_config, "vocab_size")) // TP_DEGREE
         if self.lm_head_columns_per_device < ttnn.TILE_SIZE or (local_vocab_size % self.lm_head_columns_per_device):
             raise ValueError("lm_head_columns_per_device must divide the rank-local vocabulary")
         if self.lm_head_max_in0_block_w < 1:
             raise ValueError("lm_head_max_in0_block_w must be positive")
+
+    def decoder_kwargs(self, layer_idx: int) -> dict[str, object]:
+        kwargs = {
+            "attention_weight_dtype": self.attention_weight_dtype,
+            "mlp_weight_dtype": self.mlp_gate_up_weight_dtype,
+            "down_weight_dtype": self.mlp_down_weight_dtype,
+            "attention_math_fidelity": self.attention_math_fidelity,
+            "mlp_math_fidelity": self.mlp_math_fidelity,
+            "sdpa_math_fidelity": self.sdpa_math_fidelity,
+            "attention_activation_dtype": dtype_name(self.attention_activation_dtype).lower().replace("_b", ""),
+            "mlp_activation_dtype": dtype_name(self.mlp_activation_dtype).lower().replace("_b", ""),
+            "residual_dtype": self.residual_dtype,
+            "collective_dtype": dtype_name(self.decode_collective_dtype).lower().replace("_b", ""),
+            "prefill_collective_dtype": dtype_name(self.prefill_collective_dtype).lower().replace("_b", ""),
+            "collective_workspace_dtype": self.collective_workspace_dtype,
+            "norm_weight_dtype": self.norm_weight_dtype,
+            "attention_geometry": self.attention_geometry,
+            "mlp_geometry": self.mlp_geometry,
+        }
+        kwargs.update(self.layer_exceptions.get(layer_idx, {}))
+        return kwargs
 
 
 class MistralSmall24BFullModel:
@@ -222,12 +289,12 @@ class MistralSmall24BFullModel:
             mesh_device,
             mesh_mapper=shard_hidden,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
+            dtype=config.embedding_weight_dtype,
         )
         del embedding
 
         final_norm = _terminal_state_tensor(state_dict, "norm.weight").to(torch.bfloat16)
-        final_norm_weight = _mesh_tensor(final_norm, mesh_device, mesh_mapper=replicate)
+        final_norm_weight = _mesh_tensor(final_norm, mesh_device, mesh_mapper=replicate, dtype=config.norm_weight_dtype)
         del final_norm
 
         lm_head = _terminal_state_tensor(state_dict, "lm_head.weight").to(torch.bfloat16).transpose(0, 1)
@@ -293,6 +360,7 @@ class MistralSmall24BFullModel:
                 shared_rope=shared_rope,
                 shared_collective=shared_collective,
                 shared_prefill_collective=shared_prefill_collective,
+                **config.decoder_kwargs(layer_idx),
             )
             shared_rope = layer.shared_rope
             shared_collective = layer.shared_collective
@@ -349,6 +417,46 @@ class MistralSmall24BFullModel:
             ]
             for _ in range(self.num_layers)
         ]
+
+    def precision_policy_summary(self) -> dict[str, object]:
+        first = self.layers[0]
+        last = self.layers[-1]
+
+        def layer_summary(layer):
+            return {
+                "layer_idx": layer.layer_idx,
+                "attention_weight_dtype": dtype_name(layer.qkv_weight.dtype),
+                "mlp_gate_up_weight_dtype": dtype_name(layer.gate_weight.dtype),
+                "mlp_down_weight_dtype": dtype_name(layer.down_weight.dtype),
+                "attention_math_fidelity": fidelity_name(layer.attention_compute_kernel_config.math_fidelity),
+                "mlp_math_fidelity": fidelity_name(layer.mlp_compute_kernel_config.math_fidelity),
+                "sdpa_math_fidelity": fidelity_name(layer.sdpa_compute_kernel_config.math_fidelity),
+                "attention_activation_dtype": dtype_name(layer.attention_activation_dtype),
+                "mlp_activation_dtype": dtype_name(layer.mlp_activation_dtype),
+                "residual_dtype": dtype_name(layer.residual_dtype),
+                "decode_collective_dtype": dtype_name(layer.collective_dtype),
+                "prefill_collective_dtype": dtype_name(layer.prefill_collective_dtype),
+                "collective_workspace_dtype": dtype_name(layer.collective_workspace.dtype),
+                "attention_geometry": list(layer.attention_geometry),
+                "mlp_geometry": list(layer.mlp_geometry),
+            }
+
+        return {
+            "config_id": self.config.precision_config_id,
+            "config_path": self.config.precision_config_path,
+            "embedding_weight_dtype": dtype_name(self.embedding_weight.dtype),
+            "norm_weight_dtype": dtype_name(self.final_norm_weight.dtype),
+            "kv_cache_dtype": dtype_name(self.config.kv_cache_dtype),
+            "lm_head_weight_dtype": dtype_name(self.lm_head_weights[0].dtype),
+            "lm_head_math_fidelity": fidelity_name(self.lm_head_compute_kernel.math_fidelity),
+            "logits_dtype": dtype_name(self.config.logits_dtype),
+            "sampling_logits_dtype": dtype_name(self.config.sampling_logits_dtype),
+            "sampling_params_dtype": dtype_name(self.config.sampling_params_dtype),
+            "sampling_index_dtype": dtype_name(self.config.sampling_index_dtype),
+            "first_layer": layer_summary(first),
+            "last_layer": layer_summary(last),
+            "layer_exceptions": sorted(int(index) for index in self.config.layer_exceptions),
+        }
 
     @staticmethod
     def reset_kv_cache(kv_cache) -> None:
@@ -433,7 +541,7 @@ class MistralSmall24BFullModel:
             split = ttnn.linear(
                 hidden,
                 weight,
-                dtype=ttnn.bfloat16,
+                dtype=self.config.logits_dtype,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=program_config,
                 compute_kernel_config=self.lm_head_compute_kernel,

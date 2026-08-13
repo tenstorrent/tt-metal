@@ -27,6 +27,7 @@ from models.autoports.mistralai_mistral_small_24b_instruct_2501.tt.model import 
     MistralSmall24BFullModel,
 )
 from models.autoports.mistralai_mistral_small_24b_instruct_2501.tt.multichip_decoder import MultichipDecoder
+from models.autoports.mistralai_mistral_small_24b_instruct_2501.tt.precision_policy import load_precision_policy
 from models.common.readiness_check.contract import Generator
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
 
@@ -64,6 +65,35 @@ def test_full_model_policy_preserves_accepted_decoder_defaults():
     assert signature.parameters["collective_family"].default == "persistent"
     assert signature.parameters["collective_dtype"].default == "bfp8"
     assert signature.parameters["prefill_collective_dtype"].default == "bf16"
+
+
+def test_datatype_sweep_policy_is_complete_and_constructible():
+    policy_path = MODEL_DIR / "doc/datatype_sweep/candidates/baseline_bfp4_lofi_bfp8kv_bfp8ccl.json"
+    raw, kwargs = load_precision_policy(policy_path)
+    config = FullModelConfig(**kwargs)
+    config.validate(_hf_config())
+
+    assert raw["config_id"] == config.precision_config_id
+    assert config.precision_config_path == str(policy_path.resolve())
+    assert config.kv_cache_dtype == ttnn.bfloat8_b
+    assert config.logits_dtype == config.sampling_logits_dtype == ttnn.bfloat16
+    assert config.sampling_params_dtype == ttnn.bfloat16
+    assert config.sampling_index_dtype == ttnn.uint32
+    layer = config.decoder_kwargs(0)
+    assert layer["attention_weight_dtype"] == ttnn.bfloat4_b
+    assert layer["mlp_weight_dtype"] == layer["down_weight_dtype"] == ttnn.bfloat4_b
+    assert layer["attention_math_fidelity"] == layer["mlp_math_fidelity"] == ttnn.MathFidelity.LoFi
+    assert layer["collective_dtype"] == "bfp8"
+    assert layer["prefill_collective_dtype"] == "bf16"
+    assert layer["residual_dtype"] == ttnn.bfloat16
+    assert layer["mlp_geometry"] == (10, 32, 40, 16, 16)
+
+    selected_path = MODEL_DIR / "doc/datatype_sweep/selected_precision_config.json"
+    selected_raw, selected_kwargs = load_precision_policy(selected_path)
+    selected = FullModelConfig(**selected_kwargs)
+    selected.validate(_hf_config())
+    assert selected_raw["config_id"] == "bfp4_lofi_bfp8kv_bf16ccl"
+    assert selected.decoder_kwargs(0)["collective_dtype"] == "bf16"
 
 
 def test_full_context_capacity_accounting_includes_split_trace_region():
@@ -574,16 +604,26 @@ def test_optimized_full_model_token_out_benchmark(mesh_device):
     config = AutoConfig.from_pretrained(snapshot, local_files_only=True)
     num_layers = int(os.environ.get("MISTRAL_SMALL_24B_OPT_FULL_LAYERS", "40"))
     steps = int(os.environ.get("MISTRAL_SMALL_24B_OPT_FULL_STEPS", "128"))
+    precision_path = os.environ.get("MISTRAL_SMALL_24B_PRECISION_CONFIG")
+    if precision_path is None:
+        selected_path = MODEL_DIR / "doc/datatype_sweep/selected_precision_config.json"
+        precision_path = os.fspath(selected_path) if selected_path.exists() else None
+    precision_kwargs = load_precision_policy(precision_path)[1] if precision_path else {}
+    precision_kwargs.update(
+        {
+            "max_batch_size": 1,
+            "max_context_len": 512,
+            "num_blocks": 16,
+            "prefill_chunk_size": 128,
+            "override_num_layers": num_layers,
+        }
+    )
     full_config = FullModelConfig(
-        max_batch_size=1,
-        max_context_len=512,
-        num_blocks=16,
-        prefill_chunk_size=128,
-        override_num_layers=num_layers,
         lm_head_columns_per_device=int(os.environ.get("MISTRAL_SMALL_24B_LM_HEAD_COLUMNS", "8192")),
         lm_head_input_cores=int(os.environ.get("MISTRAL_SMALL_24B_LM_HEAD_INPUT_CORES", "10")),
         lm_head_output_cores=int(os.environ.get("MISTRAL_SMALL_24B_LM_HEAD_OUTPUT_CORES", "64")),
         lm_head_max_in0_block_w=int(os.environ.get("MISTRAL_SMALL_24B_LM_HEAD_BLOCK_W", "4")),
+        **precision_kwargs,
     )
     model = MistralSmall24BFullModel.from_state_dict(
         SafetensorStateDict(snapshot),
@@ -655,6 +695,7 @@ def test_optimized_full_model_token_out_benchmark(mesh_device):
     )
     print(
         "OPTIMIZED_FULL_MODEL_TOKEN_OUT "
+        f"precision_config_id={full_config.precision_config_id} "
         f"layers={num_layers} prompt_len=128 steps={steps} "
         f"lm_head_columns={full_config.lm_head_columns_per_device} "
         f"lm_head_input_cores={full_config.lm_head_input_cores} "

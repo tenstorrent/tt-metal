@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import time
 from collections.abc import Iterator, Mapping
 from pathlib import Path
@@ -26,6 +27,7 @@ from models.autoports.mistralai_mistral_small_24b_instruct_2501.tt.model import 
     FullModelConfig,
     MistralSmall24BFullModel,
 )
+from models.autoports.mistralai_mistral_small_24b_instruct_2501.tt.precision_policy import load_precision_policy
 from models.common.readiness_check.contract import Generator, NextInputFn
 from models.tt_transformers.tt.common import copy_host_to_device
 
@@ -143,9 +145,15 @@ class MistralSmall24BGenerator(Generator):
             self._default_page_table(),
             dtype=ttnn.int32,
         )
-        self._sampling_k = self._device_tt(torch.ones(32, dtype=torch.int32), dtype=ttnn.uint32)
-        self._sampling_p = self._device_tt(torch.zeros(32, dtype=torch.bfloat16), dtype=ttnn.bfloat16)
-        self._sampling_temp = self._device_tt(torch.ones(32, dtype=torch.bfloat16), dtype=ttnn.bfloat16)
+        self._sampling_k = self._device_tt(
+            torch.ones(32, dtype=torch.int32), dtype=self.model.config.sampling_index_dtype
+        )
+        self._sampling_p = self._device_tt(
+            torch.zeros(32, dtype=torch.bfloat16), dtype=self.model.config.sampling_params_dtype
+        )
+        self._sampling_temp = self._device_tt(
+            torch.ones(32, dtype=torch.bfloat16), dtype=self.model.config.sampling_params_dtype
+        )
         self._sampling_snapshot = (tuple([1] * 32), tuple([0.0] * 32), tuple([1.0] * 32))
 
     def _default_page_table(self) -> torch.Tensor:
@@ -274,8 +282,11 @@ class MistralSmall24BGenerator(Generator):
             return
         host = (
             self._host_tt(torch.tensor(k_values, dtype=torch.int32), dtype=ttnn.uint32),
-            self._host_tt(torch.tensor(p_values, dtype=torch.bfloat16), dtype=ttnn.bfloat16),
-            self._host_tt(torch.tensor(inverse_temperatures, dtype=torch.bfloat16), dtype=ttnn.bfloat16),
+            self._host_tt(torch.tensor(p_values, dtype=torch.bfloat16), dtype=self.model.config.sampling_params_dtype),
+            self._host_tt(
+                torch.tensor(inverse_temperatures, dtype=torch.bfloat16),
+                dtype=self.model.config.sampling_params_dtype,
+            ),
         )
         copy_host_to_device(host, (self._sampling_k, self._sampling_p, self._sampling_temp))
         self._sampling_snapshot = snapshot
@@ -936,11 +947,26 @@ def _resolve_snapshot(snapshot_path: str | Path | None) -> Path:
 def build_generator(model_dir: str | Path, mesh_device, **kwargs: Any) -> Generator:
     """Build the standard readiness generator; no serving integration side effects."""
 
+    model_dir = Path(model_dir).resolve()
     snapshot = _resolve_snapshot(kwargs.pop("snapshot_path", None))
     hf_config = AutoConfig.from_pretrained(snapshot, local_files_only=True)
     tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True, fix_mistral_regex=True)
+    explicit_policy_path = kwargs.pop("precision_config_path", None)
+    policy_path_text = explicit_policy_path or os.environ.get("MISTRAL_SMALL_24B_PRECISION_CONFIG")
+    if policy_path_text is None:
+        selected_path = model_dir / "doc/datatype_sweep/selected_precision_config.json"
+        policy_path_text = selected_path if selected_path.exists() else None
+    policy_kwargs: dict[str, Any] = {}
+    if policy_path_text is not None:
+        _, policy_kwargs = load_precision_policy(policy_path_text)
+
+    def configured(name: str, default):
+        return kwargs.pop(name, policy_kwargs.pop(name, default))
+
     max_batch_size = int(kwargs.pop("max_batch_size", 1))
-    max_context_len = int(kwargs.pop("max_seq_len", hf_config.max_position_embeddings))
+    max_context_len = int(
+        kwargs.pop("max_seq_len", policy_kwargs.pop("max_context_len", hf_config.max_position_embeddings))
+    )
     num_blocks = int(
         kwargs.pop(
             "num_blocks",
@@ -952,15 +978,41 @@ def build_generator(model_dir: str | Path, mesh_device, **kwargs: Any) -> Genera
         max_context_len=max_context_len,
         num_blocks=num_blocks,
         prefill_chunk_size=int(kwargs.pop("prefill_chunk_size", 576)),
-        kv_cache_dtype=kwargs.pop("kv_cache_dtype", ttnn.bfloat8_b),
-        lm_head_weight_dtype=kwargs.pop("lm_head_weight_dtype", ttnn.bfloat16),
-        lm_head_math_fidelity=kwargs.pop("lm_head_math_fidelity", ttnn.MathFidelity.HiFi2),
+        precision_config_id=configured("precision_config_id", "inherited_optimized_default"),
+        precision_config_path=configured("precision_config_path", None),
+        embedding_weight_dtype=configured("embedding_weight_dtype", ttnn.bfloat16),
+        norm_weight_dtype=configured("norm_weight_dtype", ttnn.bfloat16),
+        attention_weight_dtype=configured("attention_weight_dtype", ttnn.bfloat4_b),
+        mlp_gate_up_weight_dtype=configured("mlp_gate_up_weight_dtype", ttnn.bfloat4_b),
+        mlp_down_weight_dtype=configured("mlp_down_weight_dtype", ttnn.bfloat4_b),
+        attention_math_fidelity=configured("attention_math_fidelity", ttnn.MathFidelity.LoFi),
+        mlp_math_fidelity=configured("mlp_math_fidelity", ttnn.MathFidelity.LoFi),
+        mlp_down_math_fidelity=configured("mlp_down_math_fidelity", ttnn.MathFidelity.LoFi),
+        sdpa_math_fidelity=configured("sdpa_math_fidelity", ttnn.MathFidelity.HiFi4),
+        attention_activation_dtype=configured("attention_activation_dtype", ttnn.bfloat16),
+        mlp_activation_dtype=configured("mlp_activation_dtype", ttnn.bfloat16),
+        residual_dtype=configured("residual_dtype", ttnn.bfloat16),
+        decode_collective_dtype=configured("decode_collective_dtype", ttnn.bfloat8_b),
+        prefill_collective_dtype=configured("prefill_collective_dtype", ttnn.bfloat16),
+        collective_workspace_dtype=configured("collective_workspace_dtype", ttnn.bfloat16),
+        attention_geometry=configured("attention_geometry", (10, 12, 16, 8, 10, 4)),
+        mlp_geometry=configured("mlp_geometry", (10, 32, 40, 16, 16)),
+        kv_cache_dtype=configured("kv_cache_dtype", ttnn.bfloat8_b),
+        lm_head_weight_dtype=configured("lm_head_weight_dtype", ttnn.bfloat16),
+        lm_head_math_fidelity=configured("lm_head_math_fidelity", ttnn.MathFidelity.HiFi2),
         lm_head_columns_per_device=int(kwargs.pop("lm_head_columns_per_device", LM_HEAD_COLUMNS_PER_DEVICE)),
         lm_head_input_cores=int(kwargs.pop("lm_head_input_cores", LM_HEAD_INPUT_CORES)),
         lm_head_output_cores=int(kwargs.pop("lm_head_output_cores", LM_HEAD_OUTPUT_CORES)),
         lm_head_max_in0_block_w=int(kwargs.pop("lm_head_max_in0_block_w", 4)),
+        logits_dtype=configured("logits_dtype", ttnn.bfloat16),
+        sampling_logits_dtype=configured("sampling_logits_dtype", ttnn.bfloat16),
+        sampling_params_dtype=configured("sampling_params_dtype", ttnn.bfloat16),
+        sampling_index_dtype=configured("sampling_index_dtype", ttnn.uint32),
+        layer_exceptions=configured("layer_exceptions", {}),
         override_num_layers=kwargs.pop("override_num_layers", None),
     )
+    if policy_kwargs:
+        raise TypeError(f"unused precision-policy options: {sorted(policy_kwargs)}")
     if kwargs:
         raise TypeError(f"unknown build_generator options: {sorted(kwargs)}")
     model = MistralSmall24BFullModel.from_state_dict(
@@ -969,6 +1021,7 @@ def build_generator(model_dir: str | Path, mesh_device, **kwargs: Any) -> Genera
         mesh_device=mesh_device,
         full_model_config=full_config,
     )
+    print("PRECISION_POLICY_RUNTIME_SUMMARY=" + json.dumps(model.precision_policy_summary(), sort_keys=True))
     return MistralSmall24BGenerator(model, tokenizer)
 
 
