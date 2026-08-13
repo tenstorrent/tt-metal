@@ -1,0 +1,102 @@
+{
+  "findings": [],
+  "measured": [
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[0] greedy_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 10,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.3
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[0] sampled_completion ('Write a haiku about machine learning.')",
+      "source": "words",
+      "num_tokens": 9,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.3333
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 188,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0319
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[1] sampled_completion ('Explain the difference between supervised and unsupervised l')",
+      "source": "words",
+      "num_tokens": 188,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0319
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[2] greedy_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "source": "words",
+      "num_tokens": 205,
+      "adjacent_duplication": 0.0049,
+      "trigram_loop_fraction": 0.0146
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[2] sampled_completion ('Complete this story: Once upon a time, in a faraway kingdom,')",
+      "source": "words",
+      "num_tokens": 202,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0149
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[3] greedy_completion ('What are the three laws of thermodynamics?')",
+      "source": "words",
+      "num_tokens": 152,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0592
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[3] sampled_completion ('What are the three laws of thermodynamics?')",
+      "source": "words",
+      "num_tokens": 189,
+      "adjacent_duplication": 0.0053,
+      "trigram_loop_fraction": 0.0635
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[4] greedy_completion ('Translate the following to French: \"Hello, how are you today')",
+      "source": "words",
+      "num_tokens": 35,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1714
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[4] sampled_completion ('Translate the following to French: \"Hello, how are you today')",
+      "source": "words",
+      "num_tokens": 26,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.2308
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 152,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0987
+    },
+    {
+      "artifact": "models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm/vllm_qualitative_outputs.json",
+      "label": "prompt[5] sampled_completion ('Write a Python function to calculate the Fibonacci sequence.')",
+      "source": "words",
+      "num_tokens": 147,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0816
+    }
+  ],
+  "exit_code": 0
+}

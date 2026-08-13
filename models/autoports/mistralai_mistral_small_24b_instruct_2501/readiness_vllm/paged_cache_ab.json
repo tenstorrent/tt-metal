@@ -1,0 +1,86 @@
+{
+  "default_zero_based_full": {
+    "token_ids": [
+      69957,
+      1033,
+      9380,
+      1681,
+      1261,
+      6165,
+      17984,
+      2100,
+      1049,
+      1046,
+      1603,
+      22361,
+      41672,
+      35807,
+      55015,
+      1256
+    ],
+    "text": "Sure!\u0120Here's\u0120a\u0120simple\u0120explanation:\u010a\u010a1.\u0120**Supervised\u0120Learning**:\u010a\u0120\u0120"
+  },
+  "vllm_one_based_full": {
+    "token_ids": [
+      69957,
+      1033,
+      9380,
+      1681,
+      1261,
+      6165,
+      17984,
+      2100,
+      1049,
+      1046,
+      1603,
+      22361,
+      41672,
+      35807,
+      55015,
+      1256
+    ],
+    "text": "Sure!\u0120Here's\u0120a\u0120simple\u0120explanation:\u010a\u010a1.\u0120**Supervised\u0120Learning**:\u010a\u0120\u0120"
+  },
+  "vllm_one_based_logical": {
+    "token_ids": [
+      69957,
+      1033,
+      9380,
+      1681,
+      1261,
+      6165,
+      17984,
+      2100,
+      1049,
+      1046,
+      1603,
+      22361,
+      41672,
+      35807,
+      55015,
+      1256
+    ],
+    "text": "Sure!\u0120Here's\u0120a\u0120simple\u0120explanation:\u010a\u010a1.\u0120**Supervised\u0120Learning**:\u010a\u0120\u0120"
+  },
+  "vllm_one_based_logical_safe_tail": {
+    "token_ids": [
+      69957,
+      1033,
+      9380,
+      1681,
+      1261,
+      6165,
+      17984,
+      2100,
+      1049,
+      1046,
+      1603,
+      22361,
+      41672,
+      35807,
+      55015,
+      1256
+    ],
+    "text": "Sure!\u0120Here's\u0120a\u0120simple\u0120explanation:\u010a\u010a1.\u0120**Supervised\u0120Learning**:\u010a\u0120\u0120"
+  }
+}

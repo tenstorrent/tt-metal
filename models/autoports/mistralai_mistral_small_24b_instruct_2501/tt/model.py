@@ -83,6 +83,7 @@ class FullModelConfig:
     max_batch_size: int = 1
     max_context_len: int = HF_CONTEXT_LENGTH
     num_blocks: int = HF_CONTEXT_LENGTH // PAGED_BLOCK_SIZE
+    pooled_kv_cache: bool = False
     prefill_chunk_size: int = DEFAULT_PREFILL_CHUNK_SIZE
     precision_config_id: str = "inherited_optimized_default"
     precision_config_path: str | None = None
@@ -125,7 +126,8 @@ class FullModelConfig:
             raise ValueError(f"max_context_len must be in [1, {hf_context}]")
         if self.prefill_chunk_size < 32 or self.prefill_chunk_size % 32:
             raise ValueError("prefill_chunk_size must be a positive multiple of 32")
-        required_blocks = self.max_batch_size * math.ceil(self.max_context_len / PAGED_BLOCK_SIZE)
+        per_request_blocks = math.ceil(self.max_context_len / PAGED_BLOCK_SIZE)
+        required_blocks = per_request_blocks if self.pooled_kv_cache else self.max_batch_size * per_request_blocks
         if self.num_blocks < required_blocks:
             raise ValueError(
                 f"num_blocks={self.num_blocks} cannot cover batch={self.max_batch_size}, "
@@ -394,7 +396,7 @@ class MistralSmall24BFullModel:
             sampler=sampler,
         )
 
-    def allocate_kv_cache(self, *, num_blocks: int | None = None, dtype=None):
+    def allocate_kv_cache(self, *, num_blocks: int | None = None, dtype=None, shared_across_layers: bool = False):
         """Allocate local KV-head shards directly on every mesh rank."""
 
         num_blocks = self.config.num_blocks if num_blocks is None else int(num_blocks)
@@ -404,8 +406,9 @@ class MistralSmall24BFullModel:
         if dtype not in (ttnn.bfloat8_b, ttnn.bfloat16):
             raise ValueError("KV cache dtype must be BFP8 or BF16")
         local_shape = ttnn.Shape([num_blocks, self.num_kv_heads // TP_DEGREE, PAGED_BLOCK_SIZE, self.head_dim])
-        return [
-            [
+
+        def allocate_pair():
+            return [
                 ttnn.allocate_tensor_on_device(
                     local_shape,
                     dtype,
@@ -415,8 +418,11 @@ class MistralSmall24BFullModel:
                 )
                 for _ in range(2)
             ]
-            for _ in range(self.num_layers)
-        ]
+
+        if shared_across_layers:
+            pair = allocate_pair()
+            return [pair] * self.num_layers
+        return [allocate_pair() for _ in range(self.num_layers)]
 
     def precision_policy_summary(self) -> dict[str, object]:
         first = self.layers[0]
@@ -444,6 +450,7 @@ class MistralSmall24BFullModel:
         return {
             "config_id": self.config.precision_config_id,
             "config_path": self.config.precision_config_path,
+            "pooled_kv_cache": self.config.pooled_kv_cache,
             "embedding_weight_dtype": dtype_name(self.embedding_weight.dtype),
             "norm_weight_dtype": dtype_name(self.final_norm_weight.dtype),
             "kv_cache_dtype": dtype_name(self.config.kv_cache_dtype),
@@ -597,10 +604,15 @@ class MistralSmall24BFullModel:
         logits = self._lm_head_many_rows(flat)
         return ttnn.reshape(logits, [1, batch, seq_len, self.local_vocab_size])
 
-    def prefill_forward(self, tokens, *, page_table, kv_cache, return_hidden: bool = False):
+    def prefill_forward(
+        self, tokens, *, page_table, kv_cache, return_hidden: bool = False, active_batch: int | None = None
+    ):
         batch, seq_len = int(tokens.shape[-2]), int(tokens.shape[-1])
         if batch != self.batch:
             raise ValueError(f"tokens batch={batch} does not match configured batch={self.batch}")
+        active_batch = batch if active_batch is None else int(active_batch)
+        if not 1 <= active_batch <= batch:
+            raise ValueError(f"active_batch must be in [1, {batch}], got {active_batch}")
         hidden = self.embed_prefill(tokens)
         hidden, logical_seq_len = self.layers[0].prepare_prefill_residual(hidden)
         for layer, (key_cache, value_cache) in zip(self.layers, kv_cache):
@@ -610,6 +622,7 @@ class MistralSmall24BFullModel:
                 value_cache,
                 logical_seq_len=logical_seq_len,
                 page_table=page_table,
+                active_batch=active_batch,
             )
         hidden = self.layers[-1].finish_prefill_residual(hidden, logical_seq_len=logical_seq_len)
         if return_hidden:

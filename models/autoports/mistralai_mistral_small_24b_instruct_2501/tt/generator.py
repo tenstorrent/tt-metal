@@ -83,6 +83,7 @@ class MistralSmall24BGenerator(Generator):
         self._trace_kv_cache = None
         self._trace_page_table_snapshot: torch.Tensor | None = None
         self._trace_active_batch: int | None = None
+        self._slots_prefilled_since_decode: set[int] = set()
         self._prefill_weights_released = False
         self.last_generate_stats: dict[str, Any] = {}
         self.trace_stats = {
@@ -130,6 +131,12 @@ class MistralSmall24BGenerator(Generator):
 
     def _allocate_persistent_inputs(self) -> None:
         self._trace_token = self._device_tt(
+            torch.zeros((1, 1, 1, 32), dtype=torch.int32),
+            dtype=ttnn.uint32,
+        )
+        # Prefill sampling must not overwrite the decode trace's authoritative
+        # feedback token while another request continues in the batch.
+        self._prefill_sample_token = self._device_tt(
             torch.zeros((1, 1, 1, 32), dtype=torch.int32),
             dtype=ttnn.uint32,
         )
@@ -185,6 +192,11 @@ class MistralSmall24BGenerator(Generator):
         supplied = result[result >= 0].to(torch.int64)
         if torch.any(supplied >= self.model.config.num_blocks):
             raise ValueError("page-table entries must name an allocated physical block")
+        if getattr(self.model.config, "pooled_kv_cache", False):
+            # vLLM owns the physical-block pool.  Unused table columns may be
+            # padded with repeated sentinels/zeros by the scheduler and must not
+            # be expanded into a hidden per-slot standalone allocation.
+            return result.contiguous()
         if supplied.unique().numel() != supplied.numel():
             raise ValueError("physical cache blocks cannot be aliased between fixed slots")
         occupied = set(supplied.tolist())
@@ -327,6 +339,7 @@ class MistralSmall24BGenerator(Generator):
             page_table=page_device,
             kv_cache=kv_cache,
             return_hidden=True,
+            active_batch=active_batch,
         )
         return hidden, initial_logical, initial_padded
 
@@ -371,6 +384,43 @@ class MistralSmall24BGenerator(Generator):
                 if length - 1 == position:
                     final_logits[user] = host_logits[user]
         return last_device_logits, final_logits, per_position
+
+    def _run_suffix_decode_device_final(
+        self,
+        tokens: torch.Tensor,
+        *,
+        start: int,
+        page_device,
+        kv_cache,
+        prompt_lens: list[int],
+    ):
+        """Select each prompt's final suffix logits without a logits readback."""
+
+        final_rows = [None] * tokens.shape[0]
+        for position in range(start, max(prompt_lens)):
+            step_tokens = torch.zeros((self.batch,), dtype=torch.long)
+            positions = torch.full((self.batch,), -1, dtype=torch.long)
+            for user, length in enumerate(prompt_lens):
+                if position < length:
+                    step_tokens[user] = tokens[user, position]
+                    positions[user] = position
+            logits = self.model.decode_forward(
+                self._tokens_device(self._decode_token_host(step_tokens)),
+                *self._positions_device(positions),
+                page_table=page_device,
+                kv_cache=kv_cache,
+                advance_positions=False,
+            )
+            for user, length in enumerate(prompt_lens):
+                if length - 1 == position:
+                    final_rows[user] = ttnn.slice(
+                        logits,
+                        [0, 0, user, 0],
+                        [1, 1, user + 1, self.model.local_vocab_size],
+                        [1, 1, 1, 1],
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+        return final_rows
 
     def prefill_forward(
         self,
@@ -430,6 +480,153 @@ class MistralSmall24BGenerator(Generator):
             raise RuntimeError("failed to select every prompt's final logits")
         return torch.stack(final_logits, dim=0).unsqueeze(1)
 
+    def prefill_forward_device_sample(
+        self,
+        tokens: torch.Tensor,
+        *,
+        page_table,
+        kv_cache: Any,
+        prompt_lens: list[int],
+        top_k=1,
+        top_p=0.0,
+        temperature=1.0,
+    ):
+        """Prefill and run the canonical split sampler without logits readback."""
+
+        active_batch, _ = self._validate_prompt_inputs(tokens, prompt_lens)
+        if kv_cache is None:
+            raise ValueError("vLLM device prefill requires its caller-owned KV cache")
+        page_host = self._normalise_page_table(page_table, active_batch)
+        page_device = self._page_table_device(page_host)
+        self.set_sampling_params(
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
+            active_batch=active_batch,
+        )
+        hidden, initial_logical, _ = self._run_initial_prefill(
+            tokens,
+            page_device=page_device,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+        )
+        final_rows = [None] * active_batch
+        for user, length in enumerate(prompt_lens):
+            if length <= initial_logical:
+                selected = self.model.select_prefill_token_hidden(hidden, user, length - 1)
+                selected_logits = self.model.prefill_selected_hidden_logits([selected], fixed_sampling_rows=True)
+                final_rows[user] = ttnn.slice(
+                    selected_logits,
+                    [0, 0, 0, 0],
+                    [1, 1, 1, self.model.local_vocab_size],
+                    [1, 1, 1, 1],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+        if max(prompt_lens) > initial_logical:
+            suffix_rows = self._run_suffix_decode_device_final(
+                tokens,
+                start=initial_logical,
+                page_device=page_device,
+                kv_cache=kv_cache,
+                prompt_lens=prompt_lens,
+            )
+            for user, row in enumerate(suffix_rows):
+                if row is not None:
+                    final_rows[user] = row
+        if any(row is None for row in final_rows):
+            raise RuntimeError("failed to select every prompt's final device row")
+        logits = final_rows[0] if active_batch == 1 else ttnn.concat(final_rows, dim=2)
+        if int(logits.shape[-2]) < ttnn.TILE_SIZE:
+            logits = ttnn.pad(
+                logits,
+                [(0, 0), (0, 0), (0, ttnn.TILE_SIZE - int(logits.shape[-2])), (0, 0)],
+                value=0.0,
+            )
+        self._page_table_host = page_host
+        return self.model.sample_split(
+            logits,
+            k=self._sampling_k,
+            p=self._sampling_p,
+            temp=self._sampling_temp,
+            tt_out_tok=self._prefill_sample_token,
+        )
+
+    def note_prefilled_slots(self, slots) -> None:
+        self._slots_prefilled_since_decode.update(int(slot) for slot in slots)
+
+    def prepare_for_prefill(self) -> None:
+        """End a drained decode trace before prefill allocates TTNN buffers.
+
+        vLLM drains non-steady decode work before scheduling a prefill/layout
+        change, so its next decode input is authoritative.  Keeping the trace
+        capture alive across the prefill is unsafe: TTNN may reuse allocations
+        made while a trace is active and corrupt its persistent token/position
+        state.  The next decode recaptures from scheduler-owned state.
+        """
+
+        if self._trace_model_id is not None:
+            # The async host read proves the sampled-token transfer completed,
+            # but page reuse for a newly admitted request must also wait for
+            # every cache write from the preceding model trace. Fence once at
+            # this rare admission boundary; steady decode remains unfenced.
+            self._synchronize()
+            self._release_decode_traces()
+
+    def _set_default_decode_collectives(self, enabled: bool) -> None:
+        for layer in self.model.layers:
+            layer.force_default_decode_collective = enabled
+
+    @staticmethod
+    def _merge_reset_state(
+        host_tokens: torch.Tensor,
+        host_positions: torch.Tensor,
+        device_tokens: torch.Tensor,
+        device_positions: torch.Tensor,
+        slot_remap: torch.Tensor,
+        prefilled_slots: set[int],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Keep async-ahead device state for continuing slots on a layout reset."""
+
+        host_shape = host_tokens.shape
+        pos_shape = host_positions.shape
+        host_tokens = host_tokens.reshape(-1)
+        host_positions = host_positions.reshape(-1).to(torch.int64)
+        remap = slot_remap.reshape(-1).to(torch.long)
+        device_tokens = device_tokens.reshape(-1)[remap].to(host_tokens.dtype)
+        device_positions = device_positions.reshape(-1)[remap].to(torch.int64)
+        use_device = (device_positions == host_positions) | (device_positions == host_positions + 1)
+        use_device &= host_positions >= 0
+        # ``prefilled_slots`` names destination serving slots after the
+        # scheduler's layout change, whereas ``remap[row]`` names the old
+        # source slot.  Fresh destinations must always take host state.
+        for row in range(remap.numel()):
+            if row in prefilled_slots:
+                use_device[row] = False
+        merged_tokens = torch.where(use_device, device_tokens, host_tokens).reshape(host_shape)
+        merged_positions = torch.where(use_device, device_positions, host_positions).reshape(pos_shape)
+        return merged_tokens, merged_positions.to(host_positions.dtype)
+
+    def _merge_authoritative_reset_inputs(self, tokens, positions, slot_remap):
+        remap = (
+            torch.arange(self.batch, dtype=torch.int32)
+            if slot_remap is None
+            else torch.as_tensor(slot_remap, dtype=torch.int32).reshape(-1)
+        )
+        if remap.numel() != self.batch or sorted(remap.tolist()) != list(range(self.batch)):
+            raise ValueError("slot_remap must be a full permutation of serving slots")
+        device_tokens = _first_device_to_torch(self._trace_token).reshape(-1)[: self.batch]
+        device_positions = _first_device_to_torch(self._trace_current_pos).reshape(-1)[: self.batch]
+        merged = self._merge_reset_state(
+            tokens,
+            positions,
+            device_tokens,
+            device_positions,
+            remap,
+            self._slots_prefilled_since_decode,
+        )
+        self._slots_prefilled_since_decode.clear()
+        return merged
+
     def _copy_trace_state(
         self,
         *,
@@ -471,17 +668,33 @@ class MistralSmall24BGenerator(Generator):
         positions: torch.Tensor,
     ) -> None:
         self.model.sampler.load_device_buffers()
+        # Compile at the caller's real positions without touching vLLM's
+        # serving cache. One physical scratch page per active row is enough:
+        # mapping every logical page for that row to the same scratch block
+        # exercises the identical paged programs while keeping this temporary
+        # cache small even for a near-32K first request.
         self._copy_trace_state(
             tokens=tokens,
             positions=positions,
             page_host=page_host,
         )
+        # Paged-cache program hashes include the physical cache block count,
+        # so the scratch pair must match vLLM's cache geometry exactly.
+        scratch_num_blocks = int(kv_cache[0][0].shape[0])
+        scratch_cache = self.model.allocate_kv_cache(
+            num_blocks=scratch_num_blocks,
+            shared_across_layers=True,
+        )
+        scratch_page_host = torch.full_like(page_host, -1)
+        for row in range(active_batch):
+            scratch_page_host[row] = torch.arange(page_host.shape[1], dtype=torch.int32)
+        scratch_page = self._page_table_device(scratch_page_host)
         warm_logits = self.model.decode_forward(
             self._trace_token,
             self._trace_current_pos,
             self._trace_rotary_pos,
-            page_table=self._trace_page_table,
-            kv_cache=kv_cache,
+            page_table=scratch_page,
+            kv_cache=scratch_cache,
         )
         self.model.sample_split(
             warm_logits,
@@ -492,13 +705,11 @@ class MistralSmall24BGenerator(Generator):
         )
         self._synchronize()
         self.trace_stats["decode_warmups"] += 1
-        self._copy_trace_state(
-            tokens=tokens,
-            positions=positions,
-            page_host=page_host,
-        )
+        for tensor in scratch_cache[0]:
+            ttnn.deallocate(tensor, force=True)
+        ttnn.deallocate(scratch_page, force=True)
+        self._copy_trace_state(tokens=tokens, positions=positions, page_host=page_host)
         self._synchronize()
-
         model_trace = None
         sampling_trace = None
         model_open = False
@@ -558,11 +769,7 @@ class MistralSmall24BGenerator(Generator):
         self._trace_kv_cache = kv_cache
         self._trace_active_batch = active_batch
         self.trace_stats["captures"] += 1
-        self._copy_trace_state(
-            tokens=tokens,
-            positions=positions,
-            page_host=page_host,
-        )
+        self._copy_trace_state(tokens=tokens, positions=positions, page_host=page_host)
         self._synchronize()
 
     def _ensure_decode_traces(
@@ -588,6 +795,35 @@ class MistralSmall24BGenerator(Generator):
             )
         else:
             self._copy_trace_state(tokens=None, positions=None, page_host=page_host)
+
+    def prepare_decode_trace(
+        self,
+        tokens: torch.Tensor,
+        positions: torch.Tensor,
+        *,
+        page_table,
+        kv_cache,
+        top_k=1,
+        top_p=0.0,
+        temperature=1.0,
+    ) -> None:
+        """Compile/capture decode without replaying into the serving cache."""
+
+        active_batch = tokens.reshape(-1).numel()
+        page_host = self._normalise_page_table(page_table, active_batch)
+        self.set_sampling_params(
+            top_k=top_k,
+            top_p=top_p,
+            temperature=temperature,
+            active_batch=active_batch,
+        )
+        self._ensure_decode_traces(
+            kv_cache,
+            page_host,
+            active_batch=active_batch,
+            tokens=tokens,
+            positions=positions.reshape(-1),
+        )
 
     def _replay_split_sampling(self):
         if self._trace_model_id is None or self._trace_sampling_id is None:
@@ -645,12 +881,24 @@ class MistralSmall24BGenerator(Generator):
         self._copy_trace_state(tokens=tokens, positions=None, page_host=None)
 
     def _validate_page_coverage(self, page_host: torch.Tensor, positions: torch.Tensor) -> None:
+        used_pages: dict[int, tuple[int, int]] = {}
         for slot, value in enumerate(positions.reshape(-1).tolist()):
             if value < 0:
                 continue
             page = int(value) // PAGED_BLOCK_SIZE
             if page >= page_host.shape[1] or int(page_host[slot, page]) < 0:
                 raise ValueError(f"slot {slot} has no page for decode position {value}")
+            # Prefix caching is intentionally disabled for this adapter, so
+            # every physical page covered by active requests must be uniquely
+            # owned.  Ignore unused padded columns, which may repeat zero.
+            for logical_page in range(page + 1):
+                physical_page = int(page_host[slot, logical_page])
+                owner = used_pages.setdefault(physical_page, (slot, logical_page))
+                if owner != (slot, logical_page):
+                    raise ValueError(
+                        "active vLLM requests alias physical KV page "
+                        f"{physical_page}: slot/page {owner} and {(slot, logical_page)}"
+                    )
 
     def decode_forward(
         self,
@@ -664,6 +912,8 @@ class MistralSmall24BGenerator(Generator):
         top_k=1,
         top_p=0.0,
         temperature=1.0,
+        reset_batch: bool | None = None,
+        slot_remap=None,
         **kwargs: Any,
     ):
         """Decode with explicit token/position/page/cache state."""
@@ -687,6 +937,7 @@ class MistralSmall24BGenerator(Generator):
                 temperature=temperature,
                 active_batch=active_batch,
             )
+            had_trace = self._trace_model_id is not None
             self._ensure_decode_traces(
                 caches,
                 page_host,
@@ -694,22 +945,42 @@ class MistralSmall24BGenerator(Generator):
                 tokens=tokens,
                 positions=positions,
             )
-            self._copy_trace_state(tokens=tokens, positions=positions, page_host=page_host)
+            # Under async scheduling, reset_batch=False means token and
+            # position inputs may lag by one step.  The split sampling trace
+            # has already written the authoritative next token and advanced
+            # both position tensors, so refresh only scheduler-owned state.
+            effective_reset = reset_batch is not False or bool(self._slots_prefilled_since_decode)
+            if had_trace and effective_reset:
+                tokens, positions = self._merge_authoritative_reset_inputs(tokens, positions, slot_remap)
+            elif not had_trace:
+                self._slots_prefilled_since_decode.clear()
+            if not had_trace or effective_reset:
+                self._copy_trace_state(tokens=tokens, positions=positions, page_host=page_host)
+            else:
+                self._copy_trace_state(tokens=None, positions=None, page_host=page_host)
             return self._replay_split_sampling()
         if sampling_mode != "host":
             raise ValueError("sampling_mode must be 'host' or 'device'")
         if self._trace_model_id is not None:
+            # Switching from async device sampling to vLLM's explicit host
+            # compatibility path still starts from the device-authoritative
+            # feedback token/current position.  The host view can lag one step.
+            tokens, positions = self._merge_authoritative_reset_inputs(tokens, positions, slot_remap)
             self._release_decode_traces()
         token_device = self._tokens_device(self._decode_token_host(tokens))
         current_pos, rotary_pos = self._positions_device(positions)
-        logits = self.model.decode_forward(
-            token_device,
-            current_pos,
-            rotary_pos,
-            page_table=self._page_table_device(page_host),
-            kv_cache=caches,
-            advance_positions=False,
-        )
+        self._set_default_decode_collectives(True)
+        try:
+            logits = self.model.decode_forward(
+                token_device,
+                current_pos,
+                rotary_pos,
+                page_table=self._page_table_device(page_host),
+                kv_cache=caches,
+                advance_positions=False,
+            )
+        finally:
+            self._set_default_decode_collectives(False)
         return self._local_logits_to_torch(logits)[0, 0, :active_batch]
 
     def _prefill_device_sample(
@@ -977,6 +1248,7 @@ def build_generator(model_dir: str | Path, mesh_device, **kwargs: Any) -> Genera
         max_batch_size=max_batch_size,
         max_context_len=max_context_len,
         num_blocks=num_blocks,
+        pooled_kv_cache=bool(kwargs.pop("pooled_kv_cache", False)),
         prefill_chunk_size=int(kwargs.pop("prefill_chunk_size", 576)),
         precision_config_id=configured("precision_config_id", "inherited_optimized_default"),
         precision_config_path=configured("precision_config_path", None),

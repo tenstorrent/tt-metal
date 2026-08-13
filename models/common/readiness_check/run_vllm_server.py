@@ -96,6 +96,7 @@ from typing import Any, List, Optional
 
 import openai
 import requests
+from transformers import AutoTokenizer
 
 DEFAULT_PORT = 8000
 DEFAULT_BLOCK_SIZE = 64
@@ -158,9 +159,16 @@ _FATAL_LOG_PATTERNS = (
 _MESH_SHAPES: dict[str, tuple[int, int]] = {
     "N150": (1, 1),
     "N300": (1, 2),
+    "P300x2": (1, 4),
     "T3K": (1, 8),
     "TG": (8, 4),
 }
+
+
+def _stream_choice_is_token_event(choice: Any) -> bool:
+    """Count streamed token chunks, including tokens that decode to empty text."""
+
+    return choice.text is not None and choice.finish_reason is None
 
 
 def _find_plugin_tests_dir() -> Path:
@@ -235,7 +243,7 @@ def _launch_server(
     # Pass TT plugin config as a single JSON dict so JSON quoting can't be
     # mangled by intermediate shells. The dict already has
     # `sample_on_device_mode` enforced; callers extend via `tt_config`.
-    cmd += ["--plugin-config", json.dumps({"tt": tt_config})]
+    cmd += ["--additional-config", json.dumps({"tt": tt_config})]
     cmd += additional_args
 
     env = {
@@ -392,7 +400,7 @@ def _run_qualitative_prompts(
     prompts_file: Path,
     output_dir: Path,
 ) -> None:
-    """Run prompts through the server and save completions for manual review."""
+    """Run prompts through the checkpoint's declared serving format."""
     print(f"\n=== Running qualitative prompts from {prompts_file} ===")
 
     if not prompts_file.exists():
@@ -405,31 +413,51 @@ def _run_qualitative_prompts(
     print(f"  Loaded {len(prompts)} prompts")
     client = openai.OpenAI(base_url=f"{server_url.rstrip('/')}/v1", api_key="dummy")
 
+    tokenizer = AutoTokenizer.from_pretrained(hf_model, **_tokenizer_load_kwargs(hf_model))
+    use_chat = bool(getattr(tokenizer, "chat_template", None))
     results: List[dict[str, Any]] = []
     for i, prompt in enumerate(prompts, 1):
         print(f"\n  Prompt {i}/{len(prompts)}: {prompt[:60]}...")
 
-        greedy_text = (
-            client.completions.create(
-                model=hf_model,
-                prompt=prompt,
-                max_tokens=256,
-                temperature=0.0,
+        if use_chat:
+            messages = [{"role": "user", "content": prompt}]
+            greedy_text = (
+                client.chat.completions.create(model=hf_model, messages=messages, max_tokens=256, temperature=0.0)
+                .choices[0]
+                .message.content
             )
-            .choices[0]
-            .text
-        )
-        sampled_text = (
-            client.completions.create(
-                model=hf_model,
-                prompt=prompt,
-                max_tokens=256,
-                temperature=0.7,
-                top_p=0.9,
+            sampled_text = (
+                client.chat.completions.create(
+                    model=hf_model,
+                    messages=messages,
+                    max_tokens=256,
+                    temperature=0.7,
+                    top_p=0.9,
+                    extra_body={"top_k": 32},
+                )
+                .choices[0]
+                .message.content
             )
-            .choices[0]
-            .text
-        )
+            if greedy_text is None or sampled_text is None:
+                raise RuntimeError("chat completion returned an empty message")
+        else:
+            greedy_text = (
+                client.completions.create(model=hf_model, prompt=prompt, max_tokens=256, temperature=0.0)
+                .choices[0]
+                .text
+            )
+            sampled_text = (
+                client.completions.create(
+                    model=hf_model,
+                    prompt=prompt,
+                    max_tokens=256,
+                    temperature=0.7,
+                    top_p=0.9,
+                    extra_body={"top_k": 32},
+                )
+                .choices[0]
+                .text
+            )
 
         results.append(
             {
@@ -443,11 +471,71 @@ def _run_qualitative_prompts(
 
     output_file = output_dir / "vllm_qualitative_outputs.json"
     output_file.write_text(json.dumps(results, indent=2))
+    prompt_format_file = output_dir / "vllm_qualitative_prompt_format.json"
+    prompt_format_file.write_text(
+        json.dumps(
+            {
+                "endpoint": "/v1/chat/completions" if use_chat else "/v1/completions",
+                "message_format": ([{"role": "user", "content": "<prompt>"}] if use_chat else "<prompt>"),
+                "chat_template_owner": "vLLM tokenizer configuration" if use_chat else None,
+                "model": hf_model,
+                "greedy_sampling": {"temperature": 0.0, "max_tokens": 256},
+                "sampled_sampling": {
+                    "temperature": 0.7,
+                    "top_p": 0.9,
+                    "top_k": 32,
+                    "max_tokens": 256,
+                },
+            },
+            indent=2,
+        )
+    )
     print(f"\nSaved {len(results)} completions to {output_file}")
+    print(f"Prompt format metadata: {prompt_format_file}")
     print("Read both completions for each prompt and judge:")
     print("  - coherent and on-topic")
     print("  - no repetition loops or gibberish")
     print("  - greedy and sampled outputs both reasonable")
+
+
+def _tokenizer_load_kwargs(hf_model: str) -> dict[str, Any]:
+    """Return only checkpoint-specific tokenizer compatibility arguments."""
+
+    normalized = hf_model.lower().replace("_", "-")
+    if "mistral-small-24b-instruct-2501" in normalized:
+        return {"fix_mistral_regex": True}
+    return {}
+
+
+def _run_non_aligned_prompt_check(*, server_url: str, hf_model: str, output_dir: Path, prompt_tokens: int = 37) -> None:
+    """Prove serving accepts a prompt not aligned to page/tile/trace sizes."""
+
+    tokenizer = AutoTokenizer.from_pretrained(hf_model, **_tokenizer_load_kwargs(hf_model))
+    seed_text = "A direct non-aligned serving prompt checks ordinary request lengths. " * 16
+    token_ids = tokenizer.encode(seed_text, add_special_tokens=False)[:prompt_tokens]
+    if len(token_ids) != prompt_tokens:
+        raise RuntimeError(f"could not construct a {prompt_tokens}-token prompt")
+    client = openai.OpenAI(base_url=f"{server_url.rstrip('/')}/v1", api_key="dummy")
+    response = client.completions.create(
+        model=hf_model,
+        prompt=token_ids,
+        max_tokens=2,
+        temperature=0.0,
+    )
+    observed = response.usage.prompt_tokens if response.usage is not None else None
+    if observed != prompt_tokens:
+        raise RuntimeError(f"non-aligned prompt length changed: requested={prompt_tokens}, observed={observed}")
+    artifact = {
+        "requested_prompt_tokens": prompt_tokens,
+        "observed_prompt_tokens": observed,
+        "page_size": 32,
+        "aligned_to_page": prompt_tokens % 32 == 0,
+        "completion": response.choices[0].text,
+        "status": "pass",
+    }
+    output_file = output_dir / "non_aligned_prompt_check.json"
+    output_file.write_text(json.dumps(artifact, indent=2) + "\n")
+    print(f"\nNon-aligned prompt check passed: {prompt_tokens} tokens ({output_file})")
 
 
 def _vllm_cli_command() -> List[str]:
@@ -983,6 +1071,12 @@ def _main() -> None:
             print(f"\nServer ready at {server_url}")
             _hold_until_signal(server_proc, server_log)
             return
+
+        _run_non_aligned_prompt_check(
+            server_url=server_url,
+            hf_model=args.hf_model,
+            output_dir=output_dir,
+        )
 
         for stage in check_stages:
             if stage == STAGE_SAMPLING:

@@ -1,0 +1,22 @@
+{"event": "prefill", "prompt_lens": [32], "token_shape": [1, 32], "token_tail": [0, 0, 0, 0, 0, 0, 0, 0], "page_prefix": [0], "sampled": [1144], "empty_slots": null}
+{"event": "prefill", "prompt_lens": [32], "token_shape": [1, 32], "token_tail": [0, 0, 0, 0, 0, 0, 0, 0], "page_prefix": [0], "sampled": [1144], "empty_slots": null}
+{"event": "decode", "tokens": [0], "start_pos": [0], "page_prefix": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], "reset_batch": true, "slot_remap": null, "device_sampling": true}
+{"event": "decode", "tokens": [69957], "start_pos": [192], "page_prefix": [1, 2, 3, 4, 5, 6, 7, -1, -1, -1], "reset_batch": true, "slot_remap": null, "device_sampling": false}
+{"event": "decode", "tokens": [1033], "start_pos": [193], "page_prefix": [1, 2, 3, 4, 5, 6, 7, -1, -1, -1], "reset_batch": false, "slot_remap": null, "device_sampling": false}
+{"event": "decode", "tokens": [9380], "start_pos": [194], "page_prefix": [1, 2, 3, 4, 5, 6, 7, -1, -1, -1], "reset_batch": false, "slot_remap": null, "device_sampling": false}
+{"event": "prefill", "prompt_lens": [192], "token_shape": [1, 192], "token_tail": [21716, 41672, 9055, 1294, 6165, 6856, 1046, 4], "page_prefix": [8, 9, 10, 11, 12, 13, -1, -1, -1, -1], "sampled": [69957], "empty_slots": [0]}
+{"event": "decode", "tokens": [69957], "start_pos": [192], "page_prefix": [8, 9, 10, 11, 12, 13, 14, -1, -1, -1], "reset_batch": true, "slot_remap": null, "device_sampling": true}
+{"event": "decode", "tokens": [1033], "start_pos": [193], "page_prefix": [8, 9, 10, 11, 12, 13, 14, -1, -1, -1], "reset_batch": false, "slot_remap": null, "device_sampling": true}
+{"event": "decode", "tokens": [1033], "start_pos": [193], "page_prefix": [8, 9, 10, 11, 12, 13, 14, -1, -1, -1], "reset_batch": false, "slot_remap": null, "device_sampling": true}
+{"event": "decode", "tokens": [9380], "start_pos": [194], "page_prefix": [8, 9, 10, 11, 12, 13, 14, -1, -1, -1], "reset_batch": false, "slot_remap": null, "device_sampling": true}
+{"event": "decode", "tokens": [1681], "start_pos": [195], "page_prefix": [8, 9, 10, 11, 12, 13, 14, -1, -1, -1], "reset_batch": false, "slot_remap": null, "device_sampling": true}
+{"event": "decode", "tokens": [1261], "start_pos": [196], "page_prefix": [8, 9, 10, 11, 12, 13, 14, -1, -1, -1], "reset_batch": false, "slot_remap": null, "device_sampling": true}
+{"event": "decode", "tokens": [6165], "start_pos": [197], "page_prefix": [8, 9, 10, 11, 12, 13, 14, -1, -1, -1], "reset_batch": false, "slot_remap": null, "device_sampling": true}
+{"event": "decode", "tokens": [17984], "start_pos": [198], "page_prefix": [8, 9, 10, 11, 12, 13, 14, -1, -1, -1], "reset_batch": false, "slot_remap": null, "device_sampling": true}
+{"event": "decode", "tokens": [2100], "start_pos": [199], "page_prefix": [8, 9, 10, 11, 12, 13, 14, -1, -1, -1], "reset_batch": false, "slot_remap": null, "device_sampling": true}
+{"event": "decode", "tokens": [1049], "start_pos": [200], "page_prefix": [8, 9, 10, 11, 12, 13, 14, -1, -1, -1], "reset_batch": false, "slot_remap": null, "device_sampling": true}
+{"event": "decode", "tokens": [1046], "start_pos": [201], "page_prefix": [8, 9, 10, 11, 12, 13, 14, -1, -1, -1], "reset_batch": false, "slot_remap": null, "device_sampling": true}
+{"event": "decode", "tokens": [1603], "start_pos": [202], "page_prefix": [8, 9, 10, 11, 12, 13, 14, -1, -1, -1], "reset_batch": false, "slot_remap": null, "device_sampling": true}
+{"event": "decode", "tokens": [22361], "start_pos": [203], "page_prefix": [8, 9, 10, 11, 12, 13, 14, -1, -1, -1], "reset_batch": false, "slot_remap": null, "device_sampling": true}
+{"event": "decode", "tokens": [41672], "start_pos": [204], "page_prefix": [8, 9, 10, 11, 12, 13, 14, -1, -1, -1], "reset_batch": false, "slot_remap": null, "device_sampling": true}
+{"event": "decode", "tokens": [35807], "start_pos": [205], "page_prefix": [8, 9, 10, 11, 12, 13, 14, -1, -1, -1], "reset_batch": false, "slot_remap": null, "device_sampling": true}

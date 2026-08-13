@@ -1,0 +1,41 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Non-aligned prompt check passed: 37 tokens (/home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm/non_aligned_prompt_check.json)
+
+=== Running qualitative prompts from /home/mvasiljevic/tt-metal/models/common/readiness_check/vllm_prompts.txt ===
+  Loaded 6 prompts
+
+  Prompt 1/6: Write a haiku about machine learning....
+    Greedy : 'DataĠwhispersĠsoft,ĊAlgorithmsĠlearnĠandĠgrow,ĊKnowledgeĠbloomsĠanew.'
+    Sampled: 'AlgorithmsĠlearn,ĊWhisperingĠpatternsĠfromĠnoise,ĊKnowledgeĠtakesĠform.'
+
+  Prompt 2/6: Explain the difference between supervised and unsupervised l...
+    Greedy : "Sure!ĠHere'sĠaĠsimpleĠexplanation:ĊĊ1.Ġ**SupervisedĠLearning**:ĊĠĠĠ-Ġ**TrainingĠ"
+    Sampled: "Sure!ĠHere'sĠaĠsimpleĠbreakdown:ĊĊ-Ġ**SupervisedĠLearning**:ĠThisĠisĠlikeĠhaving"
+
+  Prompt 3/6: Complete this story: Once upon a time, in a faraway kingdom,...
+    Greedy : 'OnceĠuponĠaĠtime,ĠinĠaĠfarawayĠkingdom,ĠthereĠlivedĠaĠcuriousĠyoungĠinventorĠnam'
+    Sampled: '...aĠpeculiarĠartifactĠhiddenĠwithinĠanĠancientĠruin.ĠTheĠartifactĠwasĠunlikeĠan'
+
+  Prompt 4/6: What are the three laws of thermodynamics?...
+    Greedy : 'TheĠthreeĠlawsĠofĠthermodynamicsĠareĠfundamentalĠprinciplesĠthatĠdescribeĠhowĠen'
+    Sampled: 'TheĠthreeĠlawsĠofĠthermodynamicsĠareĠfundamentalĠprinciplesĠinĠphysicsĠthatĠdesc'
+
+  Prompt 5/6: Translate the following to French: "Hello, how are you today...
+    Greedy : 'TheĠtranslationĠofĠ"Hello,ĠhowĠareĠyouĠtoday?"ĠtoĠFrenchĠis:ĊĊ"Bonjour,ĠcommentĠ'
+    Sampled: 'TheĠtranslationĠtoĠFrenchĠis:Ġ"Bonjour,ĠcommentĠÃ§aĠvaĠaujourd\'huiĠ?"ĊĊHere\'sĠaĠ'
+
+  Prompt 6/6: Write a Python function to calculate the Fibonacci sequence....
+    Greedy : 'Certainly!ĠTheĠFibonacciĠsequenceĠisĠaĠseriesĠofĠnumbersĠwhereĠeachĠnumberĠisĠth'
+    Sampled: "Sure,Ġhere'sĠaĠPythonĠfunctionĠtoĠcalculateĠtheĠFibonacciĠsequence.ĠThisĠfunctio"
+
+Saved 6 completions to /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm/vllm_qualitative_outputs.json
+Prompt format metadata: /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm/vllm_qualitative_prompt_format.json
+Read both completions for each prompt and judge:
+  - coherent and on-topic
+  - no repetition loops or gibberish
+  - greedy and sampled outputs both reasonable
+
+============================================================
+vLLM checks complete. Results in /home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm
+============================================================

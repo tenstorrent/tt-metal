@@ -1,0 +1,44 @@
+{
+  "status": "pass",
+  "prompt_tokens": 32,
+  "selected_precision_config": "bfp4_lofi_bfp8kv_bf16ccl",
+  "vllm_path": "generator_vllm adapter with traced model+split-sampler decode",
+  "standalone_path": "full-model generator eager decode on the same caller-owned cache geometry",
+  "checks": {
+    "vllm_trace_run_to_run": {
+      "exact": true,
+      "max_abs": 0.0,
+      "pcc": 1.0,
+      "reference_argmax": 1278,
+      "candidate_argmax": 1278
+    },
+    "vllm_trace_batch_position_0": {
+      "exact": true,
+      "max_abs": 0.0,
+      "pcc": 1.0,
+      "reference_argmax": 1278,
+      "candidate_argmax": 1278
+    },
+    "vllm_trace_batch_position_1": {
+      "exact": true,
+      "max_abs": 0.0,
+      "pcc": 1.0,
+      "reference_argmax": 1278,
+      "candidate_argmax": 1278
+    },
+    "standalone_eager_baseline": {
+      "exact": false,
+      "max_abs": 0.375,
+      "pcc": 0.9998518824577332,
+      "reference_argmax": 1278,
+      "candidate_argmax": 1278
+    }
+  },
+  "digests": {
+    "trace_run_1": "6349686d69881192506b128149e7938b59d48472176a3ef0d726d9a9795783b6",
+    "trace_run_2": "6349686d69881192506b128149e7938b59d48472176a3ef0d726d9a9795783b6",
+    "trace_batch_position_0": "6349686d69881192506b128149e7938b59d48472176a3ef0d726d9a9795783b6",
+    "trace_batch_position_1": "6349686d69881192506b128149e7938b59d48472176a3ef0d726d9a9795783b6",
+    "standalone_eager": "26f9dc664a1d796ed57f83f8a6e110b639d8fc8b602913d705b2fc41ebdd179a"
+  }
+}

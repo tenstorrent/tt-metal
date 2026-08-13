@@ -615,8 +615,10 @@ class MultichipDecoder(OptimizedDecoder):
         decoder.decode_mlp_output_mem_config = _l1_width_sharded_memory_config(
             mesh_device, ttnn.TILE_SIZE, hidden_size, mlp_output_cores
         )
-        decoder.collective_workspace = None
-        decoder.collective_semaphore = None
+        decoder.collective_workspaces = None
+        decoder.collective_semaphores = None
+        decoder.collective_state = None
+        decoder.force_default_decode_collective = False
         if collective_family == "persistent":
             if shared_collective is None:
                 collective_workspace_mem_config = _l1_width_sharded_memory_config(
@@ -625,12 +627,15 @@ class MultichipDecoder(OptimizedDecoder):
                     hidden_size * TP_DEGREE,
                     mlp_output_cores,
                 )
-                decoder.collective_workspace = _replicate_to_mesh(
-                    torch.zeros((1, 1, batch, hidden_size * TP_DEGREE), dtype=torch.bfloat16),
-                    mesh_device,
-                    dtype=collective_workspace_dtype,
-                    memory_config=collective_workspace_mem_config,
-                )
+                decoder.collective_workspaces = [
+                    _replicate_to_mesh(
+                        torch.zeros((1, 1, batch, hidden_size * TP_DEGREE), dtype=torch.bfloat16),
+                        mesh_device,
+                        dtype=collective_workspace_dtype,
+                        memory_config=collective_workspace_mem_config,
+                    )
+                    for _ in range(2)
+                ]
                 grid_size = mesh_device.compute_with_storage_grid_size()
                 worker_grid = ttnn.CoreRangeSet(
                     {
@@ -640,22 +645,40 @@ class MultichipDecoder(OptimizedDecoder):
                         )
                     }
                 )
-                decoder.collective_semaphore = ttnn.create_global_semaphore(mesh_device, worker_grid, 0)
+                decoder.collective_semaphores = [
+                    ttnn.create_global_semaphore(mesh_device, worker_grid, 0) for _ in range(2)
+                ]
+                decoder.collective_state = {"index": 0}
             else:
-                if len(shared_collective) != 2:
-                    raise ValueError("shared_collective must contain (workspace, semaphore)")
-                decoder.collective_workspace, decoder.collective_semaphore = shared_collective
+                if len(shared_collective) != 3:
+                    raise ValueError("shared_collective must contain (workspaces, semaphores, state)")
+                (
+                    decoder.collective_workspaces,
+                    decoder.collective_semaphores,
+                    decoder.collective_state,
+                ) = shared_collective
                 expected_workspace_shape = (1, 1, batch, hidden_size * TP_DEGREE)
-                if tuple(decoder.collective_workspace.shape) != expected_workspace_shape:
-                    raise ValueError(
-                        f"shared collective workspace must have shape {expected_workspace_shape}, "
-                        f"got {tuple(decoder.collective_workspace.shape)}"
-                    )
-            decoder.shared_collective = (decoder.collective_workspace, decoder.collective_semaphore)
+                if len(decoder.collective_workspaces) != 2 or any(
+                    tuple(workspace.shape) != expected_workspace_shape for workspace in decoder.collective_workspaces
+                ):
+                    raise ValueError(f"shared collective workspaces must both have shape {expected_workspace_shape}")
+                if len(decoder.collective_semaphores) != 2:
+                    raise ValueError("shared collective must have two semaphores")
+            decoder.shared_collective = (
+                decoder.collective_workspaces,
+                decoder.collective_semaphores,
+                decoder.collective_state,
+            )
+            # Singular aliases retain the inspection/debug contract while the
+            # execution path intentionally ping-pongs the two resources.
+            decoder.collective_workspace = decoder.collective_workspaces[0]
+            decoder.collective_semaphore = decoder.collective_semaphores[0]
         else:
             if shared_collective is not None:
                 raise ValueError("shared_collective requires collective_family='persistent'")
             decoder.shared_collective = None
+            decoder.collective_workspace = None
+            decoder.collective_semaphore = None
         decoder.prefill_collective_workspace = None
         decoder.prefill_collective_semaphore = None
         if prefill_collective_family == "persistent":
@@ -831,19 +854,22 @@ class MultichipDecoder(OptimizedDecoder):
             raise ValueError(f"collective mode must be 'prefill' or 'decode', got {mode!r}")
         # Phase is explicit: a batch-1 prefill can also have M<=32, but it must
         # not silently inherit the decode CCL dtype/workspace policy.
-        if mode == "decode" and self.collective_family == "persistent":
+        if mode == "decode" and self.collective_family == "persistent" and not self.force_default_decode_collective:
             partial_hidden = ttnn.to_memory_config(partial_hidden, self.decode_mlp_output_mem_config)
-            return ttnn.experimental.all_reduce_async(
+            index = self.collective_state["index"]
+            reduced = ttnn.experimental.all_reduce_async(
                 partial_hidden,
-                self.collective_workspace,
+                self.collective_workspaces[index],
                 cluster_axis=self.tp_axis,
                 mesh_device=self.mesh_device,
-                multi_device_global_semaphore=self.collective_semaphore,
+                multi_device_global_semaphore=self.collective_semaphores[index],
                 dtype=self.collective_dtype,
                 memory_config=self.decode_mlp_output_mem_config,
                 topology=self.collective_topology,
                 num_links=self.num_links,
             )
+            self.collective_state["index"] = (index + 1) % 2
+            return reduced
         if (
             mode == "prefill"
             and self.prefill_collective_family == "persistent"
@@ -1082,6 +1108,7 @@ class MultichipDecoder(OptimizedDecoder):
         page_table=None,
         stacked_layout: bool = False,
         logical_seq_len: int | None = None,
+        active_batch: int | None = None,
     ):
         if self.prefill_weights_released:
             raise RuntimeError("prefill weights were released for decode-phase capacity and cannot be reused")
@@ -1173,7 +1200,14 @@ class MultichipDecoder(OptimizedDecoder):
         cache_key = key if key_cache.dtype == key.dtype else ttnn.typecast(key, key_cache.dtype)
         cache_value = value if value_cache.dtype == value.dtype else ttnn.typecast(value, value_cache.dtype)
 
-        for user_id in range(self.batch):
+        active_batch = self.batch if active_batch is None else int(active_batch)
+        if not 1 <= active_batch <= self.batch:
+            raise ValueError(f"active_batch must be in [1, {self.batch}], got {active_batch}")
+        # The physical prefill tensor remains padded to the configured batch,
+        # but only scheduler-owned rows may update paged KV.  Writing padded
+        # rows can alias a live vLLM page after cache reuse and corrupt a
+        # different request.
+        for user_id in range(active_batch):
             key_user = ttnn.slice(
                 cache_key,
                 [user_id, 0, 0, 0],
@@ -1247,6 +1281,7 @@ class MultichipDecoder(OptimizedDecoder):
         *,
         logical_seq_len: int,
         page_table=None,
+        active_batch: int | None = None,
     ):
         """Prefill one layer while preserving flattened DRAM layout for the next layer."""
 
@@ -1257,6 +1292,7 @@ class MultichipDecoder(OptimizedDecoder):
             page_table=page_table,
             stacked_layout=True,
             logical_seq_len=logical_seq_len,
+            active_batch=active_batch,
         )
 
     def decode_forward(

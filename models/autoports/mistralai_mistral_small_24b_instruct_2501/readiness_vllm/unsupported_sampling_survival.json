@@ -1,0 +1,12 @@
+{
+  "date": "2026-08-13 UTC",
+  "server_mode": "production on-device sampling; host compatibility disabled",
+  "checks": [
+    {"request": {"temperature": 0.7, "top_k": 100}, "status": 400, "supported_followup": 200, "health": 200},
+    {"request": {"temperature": 0.7, "top_k": 32, "seed": 42}, "status": 400, "supported_followup": 200, "health": 200},
+    {"request": {"temperature": 0, "top_k": 1, "logprobs": 2}, "status": 400, "supported_followup": 200, "health": 200},
+    {"request": {"temperature": 0.7, "top_k": 32, "min_p": 0.1}, "status": 400, "supported_followup": 200, "health": 200},
+    {"request": {"temperature": 0, "top_k": 1, "repetition_penalty": 1.1}, "status": 400, "supported_followup": 200, "health": 200}
+  ],
+  "verdict": "Unsupported production requests are rejected before EngineCore admission; a supported request and /health succeed after every rejection."
+}
