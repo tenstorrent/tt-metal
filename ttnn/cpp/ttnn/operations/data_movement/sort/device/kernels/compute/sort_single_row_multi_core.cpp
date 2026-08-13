@@ -13,6 +13,8 @@
 #include "api/compute/pack_untilize.h"
 #include "api/dataflow/dataflow_buffer.h"
 
+#include "sort_common.hpp"
+
 void kernel_main() {
     // Compile time args
     constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
@@ -88,23 +90,30 @@ void kernel_main() {
 
                         if (pair_id == processing_pair_id) {
                             if constexpr (is_row_major) {
+                                // rm_input_value_cb and rm_input_index_cb hold TILE_H
+                                // pair-rows: each CB page is 2 * TILE_W elements wide
+                                // (left tile row concatenated with right tile row).
+                                // tilize_block(cb, 2, out) reads 2048 elements as
+                                // 32 rows of 64 elements → produces 2 tiles.
                                 tilize_init(rm_input_value_cb_id, 2, input_tensor_cb_id);
-                                rm_input_value_dfb.wait_front(2 * TILE_H);
+                                rm_input_value_dfb.wait_front(TILE_H);
                                 input_tensor_dfb.reserve_back(2);
                                 tilize_block(rm_input_value_cb_id, 2, input_tensor_cb_id);
                                 input_tensor_dfb.push_back(2);
-                                rm_input_value_dfb.pop_front(2 * TILE_H);
+                                rm_input_value_dfb.pop_front(TILE_H);
                                 tilize_uninit(rm_input_value_cb_id, input_tensor_cb_id);
-                                binary_op_init_common(rm_input_index_cb_id, rm_input_index_cb_id, index_tensor_cb_id);
+                                // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+                                compute_kernel_hw_startup(rm_input_index_cb_id, rm_input_index_cb_id, index_tensor_cb_id);
 
                                 tilize_init(rm_input_index_cb_id, 2, index_tensor_cb_id);
-                                rm_input_index_dfb.wait_front(2 * TILE_H);
+                                rm_input_index_dfb.wait_front(TILE_H);
                                 index_tensor_dfb.reserve_back(2);
                                 tilize_block(rm_input_index_cb_id, 2, index_tensor_cb_id);
                                 index_tensor_dfb.push_back(2);
-                                rm_input_index_dfb.pop_front(2 * TILE_H);
+                                rm_input_index_dfb.pop_front(TILE_H);
                                 tilize_uninit(rm_input_index_cb_id, index_tensor_cb_id);
-                                binary_op_init_common(
+                                // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+                                compute_kernel_hw_startup(
                                     input_tensor_cb_id, index_tensor_cb_id, input_tensor_transposed_cb_id);
 
                                 ckernel::topk_tile_init();
@@ -168,6 +177,9 @@ void kernel_main() {
                                 }
                             }
 
+                            // UInt16-in-32b-DEST: mode-9 packer fixup before packing values (#50215).
+                            prepare_uint16_fp32_dest_value_tiles_for_pack(tile_input_low, tile_input_high);
+
                             tile_regs_commit();
 
                             input_tensor_dfb.pop_front(2 * one_tile);
@@ -203,6 +215,8 @@ void kernel_main() {
                                 transpose_init(input_tensor_transposed_cb_id);
                                 transpose_tile(input_tensor_transposed_cb_id, 0, input_dest_start);
                                 transpose_tile(input_tensor_transposed_cb_id, 1, input_dest_end);
+                                // UInt16-in-32b-DEST: transpose re-unpacks into low 16; fix up before pack (#50215).
+                                prepare_uint16_fp32_dest_value_tiles_for_pack(input_dest_start, input_dest_end);
                                 tile_regs_commit();
 
                                 input_tensor_transposed_dfb.pop_front(2 * one_tile);
@@ -260,27 +274,48 @@ void kernel_main() {
                             }
 
                             if constexpr (is_row_major) {
-                                // 2 tiles arranged 1-wide × 2-tall; block_ct_dim=1, block_rt_dim=2
-                                // → produces 2*TILE_H RM output rows, each 1 tile wide.
-                                pack_untilize_init<1>(input_tensor_output_cb_id, rm_output_value_cb_id);
+                                // pack_untilize_init already calls llk_pack_reconfig_data_format
+                                // internally, so a pack_reconfig_data_format call here would be a
+                                // no-op.  What is actually needed — and what pack_untilize_init
+                                // does not provide — is a full-word PCK_DEST_RD_CTRL reset
+                                // (llk_pack_hw_configure) and a W-counter / dest-offset reset
+                                // (llk_pack_dest_init) to clear the state left by the preceding
+                                // index pack_tile.  There is no public API for just those two
+                                // things yet, so compute_kernel_hw_startup is used as a workaround.
+                                compute_kernel_hw_startup(
+                                    input_tensor_cb_id, index_tensor_cb_id, rm_output_value_cb_id);
+                                // Untilize the 2 sorted tiles into TILE_H pair-rows,
+                                // matching the reader's pair-row input CB layout.
+                                // block_ct_dim=2, block_rt_dim=1 → TILE_H rows of
+                                // 2*TILE_W elements each (left tile columns followed
+                                // by right tile columns within each row).  The writer
+                                // splits each page back into two DRAM half-row writes.
+                                pack_untilize_init<2>(input_tensor_output_cb_id, rm_output_value_cb_id);
                                 input_tensor_output_dfb.wait_front(2);
-                                rm_output_value_dfb.reserve_back(2 * TILE_H);
-                                pack_untilize_block<1>(input_tensor_output_cb_id, 2, rm_output_value_cb_id);
+                                rm_output_value_dfb.reserve_back(TILE_H);
+                                pack_untilize_block<2>(input_tensor_output_cb_id, 1, rm_output_value_cb_id);
                                 input_tensor_output_dfb.pop_front(2);
-                                rm_output_value_dfb.push_back(2 * TILE_H);
+                                rm_output_value_dfb.push_back(TILE_H);
                                 pack_untilize_uninit(rm_output_value_cb_id);
-                                binary_op_init_common(
-                                    rm_input_index_cb_id, rm_input_index_cb_id, index_tensor_output_cb_id);
+                                // Reconfig the packer to the index-output format before the index
+                                // untilize. The output operand must be the untilize DESTINATION
+                                // (rm_output_index_cb_id), not its source (index_tensor_output_cb_id):
+                                // those two happen to share a data format today, so passing the
+                                // source only works by coincidence.
+                                // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+                                compute_kernel_hw_startup(
+                                    rm_input_index_cb_id, rm_input_index_cb_id, rm_output_index_cb_id);
 
-                                pack_untilize_init<1>(index_tensor_output_cb_id, rm_output_index_cb_id);
+                                pack_untilize_init<2>(index_tensor_output_cb_id, rm_output_index_cb_id);
                                 index_tensor_output_dfb.wait_front(2);
-                                rm_output_index_dfb.reserve_back(2 * TILE_H);
-                                pack_untilize_block<1>(index_tensor_output_cb_id, 2, rm_output_index_cb_id);
+                                rm_output_index_dfb.reserve_back(TILE_H);
+                                pack_untilize_block<2>(index_tensor_output_cb_id, 1, rm_output_index_cb_id);
                                 index_tensor_output_dfb.pop_front(2);
-                                rm_output_index_dfb.push_back(2 * TILE_H);
+                                rm_output_index_dfb.push_back(TILE_H);
                                 pack_untilize_uninit(rm_output_index_cb_id);
                                 // Reset compute state for the next pair's tilize.
-                                binary_op_init_common(rm_input_value_cb_id, rm_input_index_cb_id, input_tensor_cb_id);
+                                // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
+                                compute_kernel_hw_startup(rm_input_value_cb_id, rm_input_index_cb_id, input_tensor_cb_id);
                             }
 
                             processing_pair_id += number_of_available_cores;

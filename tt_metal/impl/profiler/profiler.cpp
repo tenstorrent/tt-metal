@@ -20,6 +20,7 @@
 #include <stack>
 #include <tracy/TracyTTDevice.hpp>
 #include <tt_metal.hpp>
+#include "tt_metal_profiler.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -497,6 +498,7 @@ bool doAllDispatchCoresComeAfterNonDispatchCores(
     const CoreType dispatch_core_type =
         resolve_dispatch_core_type(env, device->id(), dispatch_core_config);
     std::vector<CoreCoord> virtual_dispatch_cores;
+    virtual_dispatch_cores.reserve(logical_dispatch_cores.size());
     for (const CoreCoord& core : logical_dispatch_cores) {
         const CoreCoord virtual_dispatch_core =
             device->virtual_core_from_logical_core(core, dispatch_core_type);
@@ -587,6 +589,7 @@ void removeFabricMuxEvents(
     std::vector<std::variant<FabricEventMarkers, tracy::TTDeviceMarker>>& coalesced_events,
     const CoreCoord& fabric_mux_core) {
     std::vector<std::variant<FabricEventMarkers, tracy::TTDeviceMarker>> filtered_events;
+    filtered_events.reserve(coalesced_events.size());
     for (const auto& coalesced_event : coalesced_events) {
         if (std::holds_alternative<tracy::TTDeviceMarker>(coalesced_event)) {
             auto event = std::get<tracy::TTDeviceMarker>(coalesced_event);
@@ -1976,6 +1979,7 @@ void DeviceProfiler::readTsData16BMarkerData(
 
     nlohmann::json meta_data;
 #if defined(TRACY_ENABLE)
+    std::optional<NOCDebugEvent> noc_debug_event;
     if ((timer_id & kernel_profiler::PROFILER_TIMER_STATIC_ID_MASK) == kernel_profiler::NOC_TRACING_STATIC_ID) {
         using EMD = KernelProfilerNocEventMetadata;
 
@@ -2011,11 +2015,8 @@ void DeviceProfiler::readTsData16BMarkerData(
             const CoreCoord virtual_core =
                 soc_desc.translate_coord_to(physical_core, CoordSystem::NOC0, CoordSystem::TRANSLATED).to_pair();
             // NOLINTEND
-            noc_debug_state->push_event(
-                device_id,
-                timestamp,
-                get_processor_id(risc_type),
-                make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata.getLocalNocEventDstTrailer()));
+            noc_debug_event =
+                make_noc_debug_event(virtual_core, local_noc_event, trailer_metadata.getLocalNocEventDstTrailer());
         }
     }
 #endif
@@ -2047,6 +2048,15 @@ void DeviceProfiler::readTsData16BMarkerData(
     if (!new_marker_inserted) {
         return;
     }
+
+#if defined(TRACY_ENABLE)
+    // Only push NOC debug events if this is a new marker.
+    if (noc_debug_event.has_value()) {
+        MetalContext::instance(context_id)
+            .noc_debug_state()
+            ->push_event(device_id, timestamp, get_processor_id(risc_type), *noc_debug_event);
+    }
+#endif
 
     device_tracy_contexts.try_emplace({device_id, physical_core}, nullptr);
 
@@ -2862,7 +2872,11 @@ void DeviceProfiler::pollDebugDumpResults(
             for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
                 if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || risc_type == tracy::RiscType::NONE ||
                     (is_eth && risc_type != tracy::RiscType::ERISC) ||
-                    (!is_eth && risc_type == tracy::RiscType::ERISC)) {
+                    (!is_eth && risc_type == tracy::RiscType::ERISC) ||
+                    // WH/BH and Quasar RiscTypes occupy disjoint enum ranges, and the Quasar DRAM profiler
+                    // buffer is unsupported for now.
+                    (static_cast<uint8_t>(risc_type) >= static_cast<uint8_t>(tracy::RiscType::QUASAR_DM0) &&
+                     static_cast<uint8_t>(risc_type) <= static_cast<uint8_t>(tracy::RiscType::QUASAR_NEO3_TRISC3))) {
                     continue;
                 }
 
@@ -2939,6 +2953,7 @@ void DeviceProfiler::pollDebugDumpResults(
     // Figure out which DRAM profiler addresses need to be read
     std::set<uint8_t> stalled_dram_buffer_indices;
     std::vector<CoreCoord> virtual_cores_with_data;
+    virtual_cores_with_data.reserve(stalled_cores_with_data.size());
     for (const auto& [virtual_core, risc_types] : stalled_cores_with_data) {
         virtual_cores_with_data.push_back(virtual_core);
         for (const auto& risc_type : risc_types) {
@@ -2975,6 +2990,7 @@ void DeviceProfiler::pollDebugDumpResults(
     // Remaining L1 data not flushed to DRAM yet
     if (is_final_poll) {
         std::vector<CoreCoord> cores_with_l1_data;
+        cores_with_l1_data.reserve(virtual_cores.size());
         std::map<CoreCoord, std::set<tracy::RiscType>> riscs_with_l1_data;
 
         for (const auto& virtual_core : virtual_cores) {
@@ -2984,7 +3000,11 @@ void DeviceProfiler::pollDebugDumpResults(
             for (tracy::RiscType risc_type : enchantum::values_generator<tracy::RiscType>) {
                 if (risc_type == tracy::RiscType::TENSIX_RISC_AGG || risc_type == tracy::RiscType::NONE ||
                     (is_eth && risc_type != tracy::RiscType::ERISC) ||
-                    (!is_eth && risc_type == tracy::RiscType::ERISC)) {
+                    (!is_eth && risc_type == tracy::RiscType::ERISC) ||
+                    // WH/BH and Quasar RiscTypes occupy disjoint enum ranges, and the Quasar DRAM profiler
+                    // buffer is unsupported for now.
+                    (static_cast<uint8_t>(risc_type) >= static_cast<uint8_t>(tracy::RiscType::QUASAR_DM0) &&
+                     static_cast<uint8_t>(risc_type) <= static_cast<uint8_t>(tracy::RiscType::QUASAR_NEO3_TRISC3))) {
                     continue;
                 }
 

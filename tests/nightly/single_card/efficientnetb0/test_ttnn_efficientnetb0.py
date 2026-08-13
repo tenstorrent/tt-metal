@@ -1,1 +1,0 @@
-../../../../models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py

@@ -124,6 +124,7 @@ ExpPrecision get_data_exp_precision(std::span<const DataFormat> data_formats) {
 
 std::vector<DataFormat> get_unpack_src_formats(std::span<const DataFormat> data_formats) {
     std::vector<DataFormat> unpack_src_format;
+    unpack_src_format.reserve(data_formats.size());
     for (auto src_format : data_formats) {
         if (src_format == DataFormat::RawUInt32 || src_format == DataFormat::RawUInt16 ||
             src_format == DataFormat::RawUInt8) {
@@ -196,6 +197,7 @@ std::vector<DataFormat> get_unpack_dst_formats(
     }
 
     std::vector<DataFormat> unpack_dst_format;
+    unpack_dst_format.reserve(buf_formats.size());
 
     for (size_t i = 0; i < buf_formats.size(); i++) {
         DataFormat src_format = buf_formats[i];
@@ -376,6 +378,7 @@ std::vector<DataFormat> get_pack_src_formats(
     bool int_fpu_en,
     tt::ARCH arch) {
     std::vector<DataFormat> pack_src_formats;
+    pack_src_formats.reserve(data_formats.size());
     DataFormat pack_src_format;
     for (auto src_format : data_formats) {
         pack_src_format = get_single_pack_src_format(
@@ -388,6 +391,7 @@ std::vector<DataFormat> get_pack_src_formats(
 
 std::vector<DataFormat> get_pack_dst_formats(std::span<const DataFormat> buf_formats) {
     std::vector<DataFormat> pack_dst_format;
+    pack_dst_format.reserve(buf_formats.size());
     for (auto dst_format : buf_formats) {
         if (dst_format == DataFormat::RawUInt32 || dst_format == DataFormat::RawUInt16 ||
             dst_format == DataFormat::RawUInt8) {

@@ -1391,6 +1391,7 @@ std::vector<tt::tt_metal::CoreCoord> Cluster::get_fabric_ethernet_routers_betwee
     std::vector<tt::tt_metal::CoreCoord> fabric_ethernet_channels;
     const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(src_id);
     TT_FATAL(connected_chips.contains(dst_id), "Dst Chip {} is not connected to Src Chip {}", dst_id, src_id);
+    fabric_ethernet_channels.reserve(connected_chips.at(dst_id).size());
     for (const auto& eth_core : connected_chips.at(dst_id)) {
         if (this->device_eth_routing_info_.at(src_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
             fabric_ethernet_channels.push_back(eth_core);
@@ -1492,7 +1493,9 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(
             mmio_devices.emplace_back(chip_id);
         }
     }
-    for (auto chip_id : this->driver_->get_target_remote_device_ids()) {
+    const auto& remote_device_ids = this->driver_->get_target_remote_device_ids();
+    non_mmio_devices.reserve(remote_device_ids.size());
+    for (auto chip_id : remote_device_ids) {
         non_mmio_devices.emplace_back(chip_id);
     }
 

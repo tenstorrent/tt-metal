@@ -31,6 +31,12 @@ Config — a YAML manifest (like the runner's PREFILL_MANIFEST) or PREFILL_* env
   Any other top-level block is ignored here and returned by _apply_manifest_env() for another entry point
   to apply — that is how runners/migration_driver.py picks up ``migration:``.
 
+Multi-rank: launched under an MPI launcher (OMPI_COMM_WORLD_SIZE > 1, one process per pipeline host)
+the same entry point splits by rank — rank 0 is the master (feeds H2D, owns the LayerAck channel) and
+every other rank is a device-less validator that only reads its own host's KV back and PCCs it. The
+roles coordinate over MPI collectives, not files (see the "Multi-rank coordination" section below).
+Standalone (no launcher) it is just the master. Multi-rank requires PREFILL_PRODUCER_CHECK_PCC=1.
+
 Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order run):
   PREFILL_NUM_USERS              concurrent cache slots (default 1)
   PREFILL_PRODUCER_CHUNKS        chunks per request: "N" fixed, or "min,max" random (default "11")
@@ -173,7 +179,9 @@ def _load_env_config() -> None:
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
     CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
-    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
+    # Same 11-chunk default as the runner: a larger default here would clamp requests to a depth the
+    # runner's cache can't hold, and the runner asserts on the overrunning chunk.
+    MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
     NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", 61))
     ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL))
 
@@ -206,6 +214,28 @@ def _chunk_to_host_array(chunk_token_ids):
 # All device-less on purpose — none may touch a real ttnn device (that would take the CHIP_IN_USE
 # lock the runner holds and deadlock).
 # ---------------------------------------------------------------------------
+
+
+# Per-host filesystems: a table written under one of these by rank 0 is invisible to validators on
+# other hosts, which resolve the same path against their OWN local mount.
+_PER_HOST_FS_PREFIXES = ("/tmp", "/dev/shm", "/run", "/var/tmp")
+
+
+def _require_shared_table_path(world_size: int) -> None:
+    """Every validator reads the same serialized table rank 0 writes, so multi-rank requires it on
+    shared storage. Reject the per-host default early and symmetrically — same env + world_size on
+    every rank means all ranks exit together, never half-opening a coordination barrier — instead of
+    letting a remote validator silently read a missing/stale file."""
+    if world_size <= 1:
+        return
+    table_path = os.path.abspath(os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"))
+    if any(table_path == p or table_path.startswith(p + "/") for p in _PER_HOST_FS_PREFIXES):
+        logger.error(
+            f"[producer] PREFILL_MIGRATION_TABLE_PATH={table_path!r} is on per-host storage; multi-rank "
+            f"(world_size={world_size}) validators on other hosts cannot read rank 0's table. Point it at "
+            "shared/NFS storage (e.g. /data/...)."
+        )
+        sys.exit(1)
 
 
 def _read_kv_chunk_table(timeout_s: int):
@@ -602,7 +632,10 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
 def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
     """Read slot `slot_id`'s KV over [0, real_len) via the published table and PCC-check it against the
     golden trace. Dispatches on the model: MLA (single merged kvpe config) vs M3 (multi-config triple
-    cache). Returns the min PCC across layers."""
+    cache). Returns the min PCC across layers.
+
+    The reader is NOT adapter-pluggable — a new model whose cache is neither of those two layouts needs
+    a branch here (and its own decode), not just an adapter."""
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
@@ -733,7 +766,17 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block  # round up to a block
 
     min_pcc = 1.0
+    checked = 0
     for layer in range(NUM_LAYERS):
+        # A merged multi-rank table spans every host's layers, but this producer's device map holds only
+        # its co-located host's chips, so a layer owned by another rank resolves to no local unique_id.
+        # Skip it: each rank validates exactly the layers physically resident on its own machine.
+        loc0 = table.lookup(layer, 0, slot_id)
+        try:
+            _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
+        except KeyError:
+            continue
+
         # Read this layer's KV block by block over UMD, decode its physical cache format, and concat.
         decoded_rows = []
         for pos in range(0, read_len, tokens_per_block):
@@ -753,9 +796,18 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         _, pcc_pe = comp_pcc(golden_pe, device_kv[:, KV_LORA:])
 
         min_pcc = min(min_pcc, pcc_nope, pcc_pe)
+        checked += 1
         logger.info(f"[producer] slot {slot_id} layer {layer:>2} KV PCC: nope={pcc_nope:.5f} pe={pcc_pe:.5f}")
 
-    logger.info(f"[producer] slot {slot_id} KV PCC over [0,{real_len}) across {NUM_LAYERS} layers -> {min_pcc:.6f}")
+    logger.info(
+        f"[producer] slot {slot_id} KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
+        f"{min_pcc:.6f}"
+    )
+    # No local layer resolved to this rank's device map — min_pcc is still its 1.0 init, which would
+    # masquerade as a perfect pass. A rank that was asked to verify but owns no layers of this slot is a
+    # misconfiguration (wrong device map / stage split), so fail loudly instead of returning 1.0.
+    if checked == 0:
+        raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
 
     # config 1: index cache (sparse/DSA only). Validated the SAME way as config 0 — read block-by-block
     # via the table, decode, and PCC vs the golden indexer key. Config 1 holds all layers on GLM-5.1 and
@@ -786,7 +838,17 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             f"(PREFILL_NUM_LAYERS)."
         )
         min_index = 1.0
+        checked_index = 0
         for rank in range(n_index_layers):
+            # Same host-local filter as config 0: a merged multi-rank table spans every host's layers,
+            # so skip any index layer that resolves to no local unique_id (owned by another rank). Keyed
+            # by the full-indexer RANK (config 1's layer axis) -- same index the lookups below use.
+            loc0 = table.lookup(rank, 0, slot_id, 1)  # config 1 = index cache
+            try:
+                _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
+            except KeyError:
+                continue
+
             decoded_rows = []
             for pos in range(0, read_len, tokens_per_block):
                 loc = table.lookup(rank, pos, slot_id, 1)  # config 1 = index cache, keyed by full-layer rank
@@ -803,13 +865,15 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             golden_ik = _load_golden_index_k(trace_dir, golden_layer, real_len)
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
             min_index = min(min_index, pcc_index)
+            checked_index += 1
             logger.info(
                 f"[producer] slot {slot_id} layer {golden_layer:>2} (index rank {rank:>2}) "
                 f"index PCC: {pcc_index:.5f}"
             )
 
         logger.info(
-            f"[producer] slot {slot_id} index PCC over [0,{real_len}) across {n_index_layers} layers -> {min_index:.6f}"
+            f"[producer] slot {slot_id} index PCC over [0,{real_len}) across "
+            f"{checked_index}/{n_index_layers} local layers -> {min_index:.6f}"
         )
         min_pcc = min(min_pcc, min_index)
 
@@ -923,6 +987,109 @@ def _resolve_slot_prompts(cfg: ProducerConfig):
     return slot_traces, slot_lengths, pools_by_trace
 
 
+# Multi-rank coordination (device-less; GO/DONE over MPI collectives, not sync files)
+#
+# Only the barriers are MPI — the merged KV table and the device map are still delivered as files the
+# producer polls; the collectives just replace the old NFS GO/DONE sentinels.
+#
+# One producer runs per host under an MPI launcher (mpirun-ulfm), mirroring the pipeline runner's
+# ranks. rank 0 is the master (co-located with the runner's first rank): it alone feeds tokens over
+# H2D and owns the aggregated LayerAck channel. Every rank reads its OWN host's KV back and PCCs only
+# the layers resident on its machine (the merged table + a host-local device map filter to the local
+# layers automatically). Coordination is two collectives over the distributed context (host-side MPI,
+# NO mesh device): the master broadcasts the resident-slot map once every layer of every chunk has
+# acked — this releases the validators (GO) — then an allgather of each rank's PCC ok-flag both waits
+# for every validator's read-back to finish (DONE) and folds the verdicts, so the master holds the
+# runner's shutdown sentinel until the mesh/DRAM is safe to tear down.
+# ---------------------------------------------------------------------------
+
+
+def _mr_config():
+    """(rank, world_size). Under an MPI launcher (OMPI_COMM_WORLD_SIZE > 1) initialize the distributed
+    context and take rank/size from it. Standalone (the single-rank de-risk, no mpirun) skips MPI
+    entirely: 0 / 1, no coordination. rank 0 is the master; every other rank is a validator."""
+    if int(os.environ.get("OMPI_COMM_WORLD_SIZE", "1")) <= 1:
+        return (0, 1)
+    if not ttnn.distributed_context_is_initialized():
+        ttnn.init_distributed_context()
+    rank = int(ttnn.distributed_context_get_rank())
+    size = int(ttnn.distributed_context_get_size())
+    return (rank, size)
+
+
+def _mr_bcast_resident(rank: int, resident: dict) -> dict:
+    """Broadcast the master's resident-slot map (slot_id -> (chunks_pushed, actual_isl)) to every rank
+    via allgather_int — element [0] of each allgather is rank 0's contribution, giving a broadcast built
+    from the only value-carrying collective ttnn exposes (no native broadcast/scatter). Doubles as the
+    GO barrier: a validator blocks in the first
+    allgather until the master arrives (which happens only after it has drained every LayerAck).
+    Non-master ranks pass {} and receive the map. All ranks must issue the same number of allgathers in
+    the same order, so the slot count is broadcast first and then each slot's three ints."""
+    items = sorted(resident.items()) if rank == 0 else []
+    n = ttnn.distributed_context_allgather_int(len(items) if rank == 0 else 0)[0]
+    out: dict = {}
+    for k in range(n):
+        slot_id, chunks, isl = (items[k][0], items[k][1][0], items[k][1][1]) if rank == 0 else (0, 0, 0)
+        slot_id = ttnn.distributed_context_allgather_int(slot_id)[0]
+        chunks = ttnn.distributed_context_allgather_int(chunks)[0]
+        isl = ttnn.distributed_context_allgather_int(isl)[0]
+        out[slot_id] = (chunks, isl)
+    return out
+
+
+def _mr_allgather_verdict(ok: bool) -> list:
+    """Collective: every rank contributes its PCC ok-flag and receives all of them. Doubles as the DONE
+    barrier — the master cannot proceed to the shutdown sentinel until every validator has reached here
+    (i.e. finished its read-back)."""
+    return [bool(v) for v in ttnn.distributed_context_allgather_int(1 if ok else 0)]
+
+
+def _run_validator(rank: int, world_size: int) -> None:
+    """Non-master path: no H2D feed. Read the merged table, wait for the master's GO (the resident-map
+    broadcast), PCC this host's local layers, then join the verdict allgather (the master reads the
+    result). Exits non-zero on PCC failure."""
+    cfg = _config_from_env()
+    # A validator's whole job is read-back PCC, and the GO barrier's "every layer is written" guarantee
+    # comes from the master draining LayerAcks — which it only does when verify is on. Both ranks see the
+    # same env, so this exits on every rank symmetrically (before any collective) — no half-open barrier.
+    if not cfg.verify:
+        logger.error("[producer] multi-rank requires PREFILL_PRODUCER_CHECK_PCC=1 (validators only verify).")
+        sys.exit(1)
+    _require_shared_table_path(world_size)
+    timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
+    logger.info(f"[producer] validator rank={rank}/{world_size}: read-back only (no H2D feed)")
+
+    # GO before the table read: the master broadcasts the resident map only after draining every
+    # LayerAck, which also means rank 0 finished publishing this run's table. Reading after GO can't
+    # observe a stale prior-run table, and a read failure here still reaches the verdict allgather
+    # (ok=False) — the master already cleared GO, so it can't hang.
+    resident = _mr_bcast_resident(rank, {})
+    logger.info(f"[producer] validator rank={rank}: GO received, {len(resident)} resident slots")
+
+    try:
+        kv_table = _read_kv_chunk_table(timeout_s)
+    except Exception as e:
+        logger.error(f"[producer] validator: KV table read raised: {type(e).__name__}: {e}")
+        kv_table = None
+
+    stats = RunStats(resident=resident, total_pushes=0, push_ms=[], completed=0, wall_s=0.0)
+    ok = True
+    if kv_table is None:
+        logger.error("[producer] validator: no KV table available; cannot validate.")
+        ok = False
+    else:
+        try:
+            ok = _verify_resident_slots(kv_table, stats, cfg.pcc_threshold)
+        except Exception as e:
+            logger.error(f"[producer] validator KV read/PCC failed: {type(e).__name__}: {e}")
+            ok = False
+
+    _mr_allgather_verdict(ok)  # DONE barrier + verdict fold
+    logger.info(f"[producer] validator rank={rank}: DONE ok={ok}")
+    if not ok:
+        sys.exit(1)
+
+
 def main() -> None:
     # argparse is the SINGLE place argv is read: --manifest defaults to PREFILL_PRODUCER_MANIFEST, so one
     # parse covers both sources and unknown args still error out.
@@ -947,7 +1114,19 @@ def main() -> None:
         _apply_manifest_env(args.manifest)
     _load_env_config()
 
+    mr_rank, world_size = _mr_config()
+    if mr_rank != 0:
+        _run_validator(mr_rank, world_size)
+        return
+
     cfg = _config_from_env()
+    # See _run_validator: multi-rank coordination only holds together when every rank verifies (the GO
+    # barrier depends on the master draining LayerAcks, which is gated on verify). Assert it on the
+    # master too — same env on every rank means this exits symmetrically, never half-opening a barrier.
+    if world_size > 1 and not cfg.verify:
+        logger.error("[producer] multi-rank requires PREFILL_PRODUCER_CHECK_PCC=1 (all ranks verify).")
+        sys.exit(1)
+    _require_shared_table_path(world_size)
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
     timeout_s = int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60"))
     logger.info(
@@ -960,8 +1139,10 @@ def main() -> None:
     payload_bytes = service.payload_size_bytes()
     logger.info(f"[producer] attached; payload={payload_bytes}B")
 
-    # Read the KV table BEFORE pushing (the runner publishes it at setup).
-    kv_table = _read_kv_chunk_table(timeout_s)
+    # Read the KV table BEFORE pushing (the runner publishes it at setup). Only the read-back needs it,
+    # and a runner that publishes no table (no migration, no PREFILL_MOCK_MIGRATION) would otherwise cost
+    # a full connect timeout of dead air before the first push.
+    kv_table = _read_kv_chunk_table(timeout_s) if cfg.verify else None
     # The LayerAck channel is a shared counter and try_consume_all() REMOVES completions. Draining it
     # serves ONLY the golden-trace KV read-back below
 
@@ -970,8 +1151,8 @@ def main() -> None:
     ack_channel = _connect_layer_ack_channel(timeout_s) if cfg.verify else None
     if not cfg.verify:
         logger.info(
-            "[producer] CHECK_PCC off — not consuming the LayerAck channel (pure token feeder; "
-            "the runner's migration self-test owns it)"
+            "[producer] CHECK_PCC off — skipping the KV table read and not consuming the LayerAck "
+            "channel (pure token feeder; the runner's migration self-test owns it)"
         )
 
     # Per-slot prompts: each slot pushes tokens from (and is PCC'd against) its own trace. With no
@@ -1002,10 +1183,18 @@ def main() -> None:
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
 
-    # Wait for the runner's per-layer LayerAcks: NUM_LAYERS per chunk, for every chunk pushed.
+    # Wait for the runner's per-layer LayerAcks: NUM_LAYERS per chunk, for every chunk pushed. With a
+    # pipeline runner (num_ranks>1) the branch's LayerCompletionRouter funnels every rank's completions
+    # into this master channel, so this waits for ALL ranks' layers, not just the first stage's.
     _drain_layer_acks(ack_channel, NUM_LAYERS * stats.total_pushes)
 
-    # Golden PCC of every resident slot's KV, read back device-lessly over UMD (PREFILL_PRODUCER_CHECK_PCC).
+    # Multi-rank: all layers of all chunks are now written across every stage's DRAM. Release the
+    # validators (they PCC their own host's layers) by broadcasting the resident-slot map. Do it BEFORE
+    # the master's own read-back so the reads overlap across hosts; the broadcast is the GO barrier.
+    if world_size > 1:
+        _mr_bcast_resident(mr_rank, stats.resident)
+
+    # Opt-in: read the generated KV back per resident slot and PCC-check vs the golden trace.
     verify_ok = True
     if cfg.verify and kv_table is not None:
         try:
@@ -1016,6 +1205,15 @@ def main() -> None:
     elif cfg.verify:
         logger.error("[producer] PREFILL_PRODUCER_CHECK_PCC=1 but no KV chunk table available; skipping PCC.")
         verify_ok = False
+
+    # Multi-rank: the verdict allgather is the DONE barrier — it can't return until every validator has
+    # finished its read-back, so the shutdown sentinel below won't tear the mesh/DRAM down while one is
+    # still reading. Fold every rank's verdict (including this master's own, contributed as element [0]).
+    if world_size > 1:
+        verdicts = _mr_allgather_verdict(verify_ok)
+        for r, v in enumerate(verdicts):
+            logger.info(f"[producer] rank={r}: ok={v}")
+        verify_ok = all(verdicts)
 
     # Optional graceful shutdown (PR #48718): close the stream with an all -1 PrefillMetadata sentinel so
     # the runner breaks its request loop and tears down cleanly instead of blocking to SIGKILL. Sent LAST,

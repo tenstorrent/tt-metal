@@ -1137,6 +1137,7 @@ void topology_sat_append_preferred_hit_indicators(
         const auto& globs = enc.allowed_global_idx[t];
         const auto& row_lits = enc.assign_lit[t];
         std::vector<int> row_pref_lits;
+        row_pref_lits.reserve(globs.size());
         for (size_t k = 0; k < globs.size(); ++k) {
             if (std::binary_search(preferred_globals.begin(), preferred_globals.end(), globs[k])) {
                 row_pref_lits.push_back(row_lits[k]);
@@ -1281,6 +1282,7 @@ bool topology_sat_append_relaxed_channel_threshold_literals(
             const size_t k_hi = std::min(required, kMaxKPerEdge);
             for (size_t k = 1; k <= k_hi; ++k) {
                 std::vector<std::pair<int, int>> pair_lits;
+                pair_lits.reserve(std::min(gidx1.size() * gidx2.size(), kMaxPairsPerIndicator + 1));
                 for (size_t i1 = 0; i1 < gidx1.size(); ++i1) {
                     const size_t glob1 = gidx1[i1];
                     for (size_t i2 = 0; i2 < gidx2.size(); ++i2) {

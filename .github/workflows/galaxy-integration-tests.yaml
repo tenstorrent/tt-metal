@@ -12,10 +12,8 @@ on:
           - all
           - resnet50
           - unit
-          - sd35
           - wan22
           - mochi
-          - flux1
           - motif
           - qwenimage
       platform:
