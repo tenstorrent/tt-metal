@@ -386,11 +386,19 @@ class FunctionalDecoder(LightweightModule):
     def _linear_attention_prefill(self, hidden_states):
         output = _BalancedSequenceConcat(dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         sequence = hidden_states.shape[2]
+        chunk_index = 0
+        sequence_masks = getattr(self, "_sequence_masks", None)
+        conv_selectors = getattr(self, "_conv_state_selector_chunks", None)
         for start in range(0, sequence, LINEAR_PREFILL_CHUNK_SIZE):
             stop = min(start + LINEAR_PREFILL_CHUNK_SIZE, sequence)
             chunk = hidden_states[:, :, start:stop, :]
+            if sequence_masks is not None:
+                self._sequence_mask = sequence_masks[chunk_index]
+            if conv_selectors is not None:
+                self._conv_state_selectors = conv_selectors[chunk_index]
             chunk = self._linear_attention_prefill_chunk(chunk)
             output.append(chunk)
+            chunk_index += 1
         return output.finish()
 
     def _linear_attention_prefill_chunk(self, hidden_states):

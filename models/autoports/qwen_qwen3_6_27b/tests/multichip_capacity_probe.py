@@ -38,7 +38,7 @@ PAGE_SIZE = 64
 # overhead, separate decode/prefill/long-prefill objects, norms/misc tensors,
 # and per-layer RoPE.  This is intentionally more conservative than the unique
 # semantic-weight estimate because it models objects the current loader keeps.
-DEFAULT_WEIGHT_BYTES_PER_DEVICE = 10_599_141_888
+DEFAULT_WEIGHT_BYTES_PER_DEVICE = 13_460_453_888
 DEFAULT_LINEAR_STATE_BYTES_PER_DEVICE_B32 = 572_522_496
 DEFAULT_WORKSPACE_RESERVE_BYTES_PER_DEVICE = 1_969_152
 WEIGHT_RESIDENCY_BREAKDOWN = {
@@ -49,6 +49,9 @@ WEIGHT_RESIDENCY_BREAKDOWN = {
     "per_layer_rope_c262144": 2_147_483_648,
     "linear_projection_objects": 1_362_493_440,
     "linear_misc_constants": 9_441_792,
+    "replicated_token_embedding": 2_542_796_800,
+    "replicated_final_norm": 10_240,
+    "tp4_sharded_lm_head": 318_504_960,
 }
 LINEAR_STATE_BREAKDOWN_B32 = {
     "linear_convolution_state": 251_658_240,
@@ -149,10 +152,14 @@ def _worker(args: argparse.Namespace) -> int:
             weight_categories = (("selected_tp4_weights_override", args.weight_bytes),)
         if args.linear_state_bytes_b32 == DEFAULT_LINEAR_STATE_BYTES_PER_DEVICE_B32:
             state_categories = tuple(
-                (f"state_{name}", value * args.batch // 32) for name, value in LINEAR_STATE_BREAKDOWN_B32.items()
+                (f"state_{name}", value * args.batch // 32 * (2 if args.trace_snapshot else 1))
+                for name, value in LINEAR_STATE_BREAKDOWN_B32.items()
             )
         else:
-            state_categories = (("linear_state_override", args.linear_state_bytes_b32 * args.batch // 32),)
+            state_categories = ((
+                "linear_state_override",
+                args.linear_state_bytes_b32 * args.batch // 32 * (2 if args.trace_snapshot else 1),
+            ),)
         categories = (
             weight_categories + state_categories + (("measured_peak_warmed_trace_workspace", args.workspace_bytes),)
         )
@@ -169,8 +176,9 @@ def _worker(args: argparse.Namespace) -> int:
         # independently for every full-attention layer, as the decoder stack does.
         cache_blocks = args.batch * (args.worker_context // PAGE_SIZE)
         cache_shape = (cache_blocks, LOCAL_KV_HEADS, PAGE_SIZE, HEAD_DIM)
+        cache_copies = 2 if args.trace_snapshot else 1
         for layer in range(FULL_ATTENTION_LAYERS):
-            for cache_kind in ("key", "value"):
+            for cache_kind in (("key", "value") * cache_copies):
                 allocations.append(
                     ttnn.empty(
                         cache_shape,
@@ -188,8 +196,9 @@ def _worker(args: argparse.Namespace) -> int:
             "dtype": "bfloat8_b",
             "logical_payload_bytes_per_tensor_per_device": args.batch * args.worker_context * HEAD_DIM,
             "logical_payload_bytes_all_32_tensors_per_device": (
-                2 * FULL_ATTENTION_LAYERS * args.batch * args.worker_context * HEAD_DIM
+                2 * cache_copies * FULL_ATTENTION_LAYERS * args.batch * args.worker_context * HEAD_DIM
             ),
+            "copies": cache_copies,
         }
         result["memory_views"]["complete"] = _mesh_memory_views(mesh)
         result["success"] = True
@@ -244,6 +253,8 @@ def _run_candidate(args: argparse.Namespace, context: int, artifact_dir: Path) -
         "--trace-region-size",
         str(args.trace_region_size),
     ]
+    if args.trace_snapshot:
+        command.append("--trace-snapshot")
     started = time.perf_counter()
     with log_path.open("w") as log:
         completed = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=False)
@@ -302,6 +313,7 @@ def _controller(args: argparse.Namespace) -> int:
         "script": str(Path(__file__).resolve()),
         "mesh_shape": list(MESH_SHAPE),
         "fabric_opened": False,
+        "trace_snapshot": args.trace_snapshot,
         "batch": args.batch,
         "context_quantum": CONTEXT_QUANTUM,
         "maximum_context_requested": args.max_context,
@@ -346,6 +358,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--linear-state-bytes-b32", type=int, default=DEFAULT_LINEAR_STATE_BYTES_PER_DEVICE_B32)
     parser.add_argument("--workspace-bytes", type=int, default=DEFAULT_WORKSPACE_RESERVE_BYTES_PER_DEVICE)
     parser.add_argument("--trace-region-size", type=int, default=4_000_000)
+    parser.add_argument(
+        "--trace-snapshot", action="store_true",
+        help="Reserve a second full-attention KV-cache copy, matching B1 token-out trace capture.",
+    )
     parser.add_argument("--worker-context", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--worker-result-json", help=argparse.SUPPRESS)
     args = parser.parse_args()

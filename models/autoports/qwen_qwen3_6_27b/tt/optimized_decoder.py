@@ -1659,7 +1659,22 @@ class OptimizedDecoder(FunctionalDecoder):
             start = end
         return outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=2)
 
-    def prefill_forward(self, *, hidden_states, page_table, current_positions):
+    def prefill_forward(
+        self, *, hidden_states, page_table, current_positions, sequence_mask=None, conv_state_selectors=None,
+        cache_page_table=None,
+    ):
+        # Mixed-length serving metadata is consumed by the stateful linear
+        # mixer.  Keep it out of the established TP projection signatures.
+        self._sequence_masks = sequence_mask if isinstance(sequence_mask, (list, tuple)) else None
+        self._conv_state_selector_chunks = (
+            conv_state_selectors if conv_state_selectors and isinstance(conv_state_selectors[0], (list, tuple)) else None
+        )
+        self._sequence_mask = sequence_mask if self._sequence_masks is None else None
+        self._conv_state_selectors = conv_state_selectors if self._conv_state_selector_chunks is None else None
+        # Attention reads retain the caller's ordinary page table.  Cache
+        # fills may use -1 entries to skip inactive fixed slots without
+        # disturbing a live peer during slot reuse.
+        self._cache_page_table = page_table if cache_page_table is None else cache_page_table
         residual = hidden_states
         hidden_states = self._rms_norm(hidden_states, "input_norm")
         hidden_states = self._token_mixer_prefill(hidden_states, page_table, current_positions)
@@ -1669,7 +1684,8 @@ class OptimizedDecoder(FunctionalDecoder):
         hidden_states = self._mlp_prefill(hidden_states)
         return ttnn.add(residual, hidden_states)
 
-    def decode_forward(self, *, hidden_states, page_table, current_positions):
+    def decode_forward(self, *, hidden_states, page_table, current_positions, active_mask=None):
+        self._active_mask = active_mask
         residual = ttnn.to_memory_config(hidden_states, self.decode_residual_memory_config)
         hidden_states = self._rms_norm_decode(residual, "input_norm")
         if self.layer_kind == "linear_attention" and not self.policy.linear_packed_decode:

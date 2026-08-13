@@ -1,0 +1,1 @@
+CSV 'models/autoports/qwen_qwen3_6_27b/doc/full_model/artifacts/profile_reduced_v3/reports/ops_perf_results.csv' is missing the 'DEVICE ID' column.

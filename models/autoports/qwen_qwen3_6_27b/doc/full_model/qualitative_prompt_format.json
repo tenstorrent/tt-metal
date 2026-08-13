@@ -1,0 +1,14 @@
+{
+  "hf_model_id": "Qwen/Qwen3.6-27B",
+  "revision": "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9",
+  "tokenizer_class": "Qwen2Tokenizer",
+  "chat_template_present": true,
+  "prompt_mode": "chat",
+  "rendering_method": "tokenizer.apply_chat_template(messages, tokenize=true, add_generation_prompt=true)",
+  "primary_reference": "readiness_aime24_chat.refpt",
+  "shared_suite_source": "models/common/readiness_check/vllm_prompts.txt",
+  "shared_suite_runner": "models/autoports/qwen_qwen3_6_27b/tests/full_model_qualitative.py",
+  "shared_suite_output": "artifacts/qualitative/shared_suite.json",
+  "status": "shared suite HF and optimized TT outputs complete and manually reviewed",
+  "verdict": "six of six coherent and prompt-relevant; no repetition, wrong-language drift, prompt echo, control-token leakage, or suspicious early divergence"
+}

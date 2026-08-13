@@ -660,6 +660,13 @@ class MultichipDecoder(OptimizedDecoder):
             [self.caches["conv"][..., 1:], mixed], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         mixed = ttnn.silu(ttnn.sum(ttnn.multiply(next_conv_state, self.weights["conv"]), dim=-1, keepdim=True))
+        active_mask = getattr(self, "_active_mask", None)
+        if active_mask is not None:
+            conv_mask = ttnn.reshape(active_mask, (1, self.batch, 1, 1))
+            next_conv_state = ttnn.add(
+                ttnn.multiply(next_conv_state, conv_mask),
+                ttnn.multiply(self.caches["conv"], ttnn.add(ttnn.multiply(conv_mask, -1.0), 1.0)),
+            )
         ttnn.copy(next_conv_state, self.caches["conv"])
         mixed = ttnn.permute(mixed, (0, 3, 1, 2))
 
@@ -689,6 +696,12 @@ class MultichipDecoder(OptimizedDecoder):
         update = ttnn.multiply(ttnn.transpose(key, -2, -1), delta, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         recurrent = ttnn.add(recurrent, update)
         output = self._linear_recurrent_matmul(query, recurrent)
+        if active_mask is not None:
+            state_mask = ttnn.reshape(active_mask, (self.batch, 1, 1, 1))
+            recurrent = ttnn.add(
+                ttnn.multiply(recurrent, state_mask),
+                ttnn.multiply(recurrent_state, ttnn.add(ttnn.multiply(state_mask, -1.0), 1.0)),
+            )
         if state_dtype == ttnn.float32:
             ttnn.copy(recurrent, self.caches["recurrent"])
         else:
@@ -753,7 +766,19 @@ class MultichipDecoder(OptimizedDecoder):
 
         mixed = ttnn.permute(mixed, (0, 1, 3, 2))
         conv_input = ttnn.concat([self.caches["conv"], mixed], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        next_conv_state = conv_input[..., -self.caches["conv"].shape[-1] :]
+        selectors = getattr(self, "_conv_state_selectors", None)
+        if selectors is None:
+            next_conv_state = conv_input[..., -self.caches["conv"].shape[-1] :]
+        else:
+            # Selector j is one-hot at logical index prompt_len+j in the
+            # concatenated [old-state(4), prompt] axis.  This returns the exact
+            # four-token state independently for every batch row, including
+            # prompt_len=0 inactive rows, without stepping padding tokens.
+            selected = []
+            for selector in selectors:
+                selector = ttnn.reshape(selector, (1, self.batch, 1, sequence + 4))
+                selected.append(ttnn.sum(ttnn.multiply(conv_input, selector), dim=-1, keepdim=True))
+            next_conv_state = ttnn.concat(selected, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         convolved = ttnn.multiply(conv_input[..., 1 : sequence + 1], self.weights["conv"][..., 0:1])
         for kernel_index in range(1, self.caches["conv"].shape[-1]):
             convolved = ttnn.add(
@@ -793,6 +818,14 @@ class MultichipDecoder(OptimizedDecoder):
             ttnn.subtract(identity, ttnn.multiply(beta, ttnn.matmul(key_t, key))),
         )
         bias = ttnn.multiply(beta, ttnn.matmul(key_t, value))
+        sequence_mask = getattr(self, "_sequence_mask", None)
+        if sequence_mask is not None:
+            scan_mask = ttnn.reshape(sequence_mask, (self.batch, 1, sequence, 1))
+            scan_mask = ttnn.repeat(scan_mask, ttnn.Shape([1, value_heads, 1, 1]))
+            scan_mask = ttnn.reshape(scan_mask, (groups, sequence, 1, 1))
+            inverse_mask = ttnn.add(ttnn.multiply(scan_mask, -1.0), 1.0)
+            transform = ttnn.add(ttnn.multiply(transform, scan_mask), ttnn.multiply(identity, inverse_mask))
+            bias = ttnn.multiply(bias, scan_mask)
         distance = 1
         while distance < sequence:
             previous_transform = ttnn.concat([identity[:, :distance], transform[:, :-distance]], dim=1)
@@ -829,6 +862,18 @@ class MultichipDecoder(OptimizedDecoder):
 
     def _full_attention_decode(self, hidden_states, page_table, current_positions):
         cache_positions = ttnn.typecast(current_positions, ttnn.int32)
+        # paged_update_cache defines INT32 -1 as a per-user no-op.  Preserve
+        # the real positions for RoPE and SDPA, but suppress the stateful K/V
+        # write for inactive fixed slots.  This is trace-safe and avoids both
+        # scratch page-table remapping and any per-token host intervention.
+        update_positions = cache_positions
+        active_mask = getattr(self, "_active_mask", None)
+        if active_mask is not None:
+            # Keep predicate and selected values in the same integer domain.
+            # This avoids relying on the otherwise untested BF16-predicate /
+            # INT32-result ternary variant in this stateful cache boundary.
+            active_update_mask = ttnn.typecast(active_mask, ttnn.int32)
+            update_positions = ttnn.where(active_update_mask, cache_positions, -1)
         packed = self._tp_linear(
             hidden_states,
             "qkv_gate_decode",
@@ -848,10 +893,10 @@ class MultichipDecoder(OptimizedDecoder):
         q = self._partial_rope_decode(q, current_positions)
         k = self._partial_rope_decode(k, current_positions)
         ttnn.experimental.paged_update_cache(
-            self.caches["key"], k, update_idxs_tensor=cache_positions, page_table=page_table
+            self.caches["key"], k, update_idxs_tensor=update_positions, page_table=page_table
         )
         ttnn.experimental.paged_update_cache(
-            self.caches["value"], v, update_idxs_tensor=cache_positions, page_table=page_table
+            self.caches["value"], v, update_idxs_tensor=update_positions, page_table=page_table
         )
         attention = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             q,
@@ -866,6 +911,11 @@ class MultichipDecoder(OptimizedDecoder):
         )
         attention = ttnn.to_memory_config(attention, self.decode_attention_memory_config)
         attention = ttnn.experimental.nlp_concat_heads_decode(attention, num_heads=6)
+        # concat_heads_decode materializes the canonical 32-user decode tile.
+        # B=1 can subtile-broadcast, but mixed fixed-slot batches such as B=2
+        # require the gate to expose the same logical row extent.
+        if gate.shape[-2] < 32:
+            gate = ttnn.pad(gate, [(0, 0), (0, 0), (0, 32 - gate.shape[-2]), (0, 0)], value=0.0)
         attention = ttnn.multiply(attention, ttnn.sigmoid(gate))
         partial = self._tp_linear(
             attention,
@@ -899,16 +949,17 @@ class MultichipDecoder(OptimizedDecoder):
         v = ttnn.permute(ttnn.reshape(v, (self.batch, sequence, 1, 256)), (0, 2, 1, 3))
         q = self._partial_rope_prefill(self._per_head_norm_prefill(q, "q_norm"), current_positions)
         k = self._partial_rope_prefill(self._per_head_norm_prefill(k, "k_norm"), current_positions)
+        cache_page_table = getattr(self, "_cache_page_table", page_table)
         ttnn.experimental.paged_fill_cache(
             self.caches["key"],
             ttnn.typecast(k, self.policy.cache_dtype),
-            page_table,
+            cache_page_table,
             batch_idx_tensor=self.caches["batch_indices"],
         )
         ttnn.experimental.paged_fill_cache(
             self.caches["value"],
             ttnn.typecast(v, self.policy.cache_dtype),
-            page_table,
+            cache_page_table,
             batch_idx_tensor=self.caches["batch_indices"],
         )
         attention = ttnn.transformer.scaled_dot_product_attention(
@@ -944,7 +995,8 @@ class MultichipDecoder(OptimizedDecoder):
             length = end - start
             hidden = ttnn.slice(hidden_states, (0, 0, start, 0), (1, self.batch, end, 5120))
             positions = ttnn.slice(current_positions, (0, start), (self.batch, end))
-            pages = ttnn.slice(page_table, (0, start // page_size), (self.batch, math.ceil(end / page_size)))
+            cache_page_table = getattr(self, "_cache_page_table", page_table)
+            pages = ttnn.slice(cache_page_table, (0, start // page_size), (self.batch, math.ceil(end / page_size)))
             for name in ("k", "v"):
                 value = self._tp_linear(
                     hidden,

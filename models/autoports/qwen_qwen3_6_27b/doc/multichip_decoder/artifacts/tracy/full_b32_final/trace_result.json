@@ -1,0 +1,20 @@
+{
+  "baseline_candidate": "default",
+  "batch": 32,
+  "candidate": "default",
+  "capture_position_pcc": "0.9999905483945875",
+  "efficiency": 0.41432446548570057,
+  "fallback_audit": true,
+  "kind": "full",
+  "multichip_trace_median_ms": 0.8761007189750671,
+  "pcc": [
+    "0.9999922419259332",
+    "0.9999924312042708",
+    "0.9999920388454564"
+  ],
+  "single_chip_median_ms": 1.4519598484039307,
+  "single_chip_trace_replay": true,
+  "speedup": 1.6572978619428023,
+  "steps": 4,
+  "trace_replay": true
+}
