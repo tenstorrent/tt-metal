@@ -143,6 +143,8 @@ inline void llk_unpack_tilizeA_B_init(
 
 #if defined(REDUCE_OP)
     _llk_unpack_reduce_col_tilizeA_strided_init_<REDUCE_OP>(bfd_a, bfd_b, ct_dim, tensor_shape_A);
+#else
+    static_assert(false, "REDUCE_OP must be defined for tilizeA_B");
 #endif
 }
 
