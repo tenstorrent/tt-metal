@@ -27,8 +27,8 @@ struct Config {
         bool enable_model_cache = false;
         bool enable_fast_runtime_mode = true;
         // Validate the Metal 2.0 host-side program args: the ProgramSpec on MakeProgramFromSpec and the
-        // ProgramRunArgs on Set/UpdateProgramRunArgs. Off by default; CI turns it on.
-        bool validate_program_args = false;
+        // ProgramRunArgs on Set/UpdateProgramRunArgs.
+        bool validate_program_args = true;
         bool throw_exception_on_fallback = false;
         bool enable_logging = false;
         bool enable_graph_report = false;
