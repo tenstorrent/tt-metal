@@ -64,6 +64,7 @@ defect.
 | **F3** | a Python exception reported as "the PCC gate rejected the output" | **YES** | small |
 | **F9** | a local model dir is mistaken for a demo dir (`optimize` unusable by model id) | **YES** | small |
 | **F8** | the in-place refusal returns `rc=1`, so the supervisor resets the card 3x | **YES** | one line |
+| **F10** | the F9 workaround loses the model id → `optimize` cannot build its own PCC gate, though it wrote one | **YES** | small |
 | **F5** | systemic-pattern detector counts error NAMES, not families | **YES — low prio** | small |
 | **F4** | deliberately-wrong constructor, repaired on retry | **NO — works as designed** | — |
 
@@ -641,6 +642,81 @@ then read **2617 passed, 7 skipped**.
 
 Same symptom class (a missing dependency), opposite verdicts. The difference is entirely whether
 the tool declared it and checked for it.
+
+---
+
+## F10 — the F9 workaround loses the model id, so `optimize` cannot build its own correctness gate
+
+**Status: WORKED AROUND** · severity: `optimize` unusable without a hand-supplied `--pcc-test`
+· reported: not yet
+
+### What the user sees
+
+```
+Step 6/10  Mapping the model's pipelines & building perf tests
+  CANNOT CONTINUE — no usable correctness gate.
+  no --pcc-test supplied, and no cached HF reference for None. There is no ground truth to check
+  correctness against, so optimize would be free to commit edits that silently degrade the model.
+  PLEASE GIVE A PCC TEST TO RUN OPTIMIZE: pass --pcc-test <file>::<test>.
+```
+
+**The refusal itself is correct and worth crediting** — it will not make a model faster if it
+cannot prove the model is still right. The defect is the reason it got there.
+
+### The actual cause — two findings interacting
+
+Note `no cached HF reference for **None**`: the model id is `None`.
+
+1. `optimize <model-id>` fails, because F9 resolves any directory argument as a demo dir and our
+   model is a local folder.
+2. The workaround is `optimize <demo-dir>` — which works, but **the model id is then never
+   resolved**, so the stage that would auto-generate the PCC gate has no reference model to
+   compare against.
+
+So the documented "just point it at the directory" path cannot auto-generate a correctness gate,
+and the model-id path that could is broken by F9. Either one alone is survivable; together they
+close both routes.
+
+### The gate existed the whole time
+
+`emit-e2e` had already emitted `tests/e2e/test_e2e_pipeline.py`, which compares against the HF
+golden, declares `PCC_THRESHOLD = 0.95`, and prints exactly the format asked for:
+
+```python
+print("e2e PCC=%s" % min(float(pcc_call1), float(pcc_call2)), flush=True)
+```
+
+The tool produced its own correctness gate one stage earlier and could not find it.
+
+### Workaround
+
+Pass it explicitly:
+
+```
+--pcc-test models/demos/voxtral_tts_backbone/tests/e2e/test_e2e_pipeline.py::test_e2e_pipeline
+```
+
+### Suggested fix
+
+When the target is a planner-emitted demo, look for `tests/e2e/test_*.py` in that demo before
+declaring there is no gate — the tool wrote it. And resolve the model id from
+`bringup_status.json`, which sits in the same directory and records it.
+
+---
+
+## F8 (addendum) — a second refusal path also returns rc=1 and gets restarted
+
+The `CANNOT CONTINUE — no usable correctness gate` refusal also exits **rc=1**, so the supervisor
+retried it three times before giving up:
+
+```
+[optimize/cc] run failed (see messages above)
+[optimize/supervisor] child exited rc=1; 3 restart(s) exhausted.
+```
+
+Same root cause as F8: deliberate refusals must return the dedicated refusal code (**rc=3**), which
+the supervisor already handles correctly. At least two call sites return 1 instead — the in-place
+refusal and this one.
 
 ---
 
