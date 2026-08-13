@@ -34,6 +34,8 @@ def test_resnet_stability(
     model_location_generator,
     test_duration_seconds,
 ):
+    if ttnn.get_num_devices() >= 8:
+        pytest.skip("1- and 2-chip ResNet-50 test; the 8-chip variant lives in ttnn_resnet/tests/")
     logger.info(f"Running ResNet50 stability test for {test_duration_seconds} seconds")
 
     start = time.time()
