@@ -16,6 +16,10 @@ Why the numbers are computed the way they are:
 * **DEVICE KERNEL DURATION, not OP TO OP LATENCY.** The latter sums to ~126 ms/layer in a
   traced replay because it also counts the host-side gaps between invocations and
   profiler stalls. Device kernel/FW durations come from hardware counters and are sound.
+* **Invocation index accounts for ops called more than once per layer.** A layer runs five
+  matmuls and seven norms; the n-th row of an op code belongs to invocation
+  ``n // calls_per_invocation``, not to invocation ``n``. Getting this wrong keeps most of
+  the warmup rows and inflates every multi-call op several fold.
 * A few percent of rows have a NaN duration and are skipped; the count is reported so a
   silent undercount cannot be mistaken for a speedup.
 
@@ -48,16 +52,34 @@ def load(path, device_id=0, warmup=WARMUP_INVOCATIONS):
     d = df[df["DEVICE ID"] == device_id].copy()
     if d.empty:
         raise SystemExit(f"{path}: no rows for device {device_id}")
-    # Ops repeat in the same order every invocation, so cumcount within an op code is
-    # that op's invocation index.
-    d["slot"] = d.groupby("OP CODE").cumcount()
     # Count invocations from an op that runs EXACTLY once per layer. Taking the min over
     # all ops is wrong: ops that only appear during warmup (Tilize, for one) would cap the
     # count at their own row total and silently rescale every per-layer number.
     if (d["OP CODE"] == "SDPAOperation").any():
         n_inv = int((d["OP CODE"] == "SDPAOperation").sum())
     else:
-        n_inv = int(d.groupby("OP CODE")["slot"].max().max()) + 1
+        n_inv = int(d.groupby("OP CODE").size().max())
+
+    # Ops repeat in the same order every invocation, so the n-th row of an op code belongs
+    # to invocation n // (that op's calls per invocation). Using the raw cumcount as the
+    # invocation index -- as this did originally -- is only correct for ops called ONCE per
+    # layer. A layer runs five matmuls, so their cumcount runs 0..5*n_inv-1 and a
+    # `slot >= warmup` filter kept nearly every row, reporting ~6 layers of matmul as one:
+    # the layer total came out at 17.4 ms against a 4.36 ms measured replay.
+    slots, partial = [], []
+    for op, grp in d.groupby("OP CODE", sort=False):
+        per_inv = len(grp) / n_inv
+        if per_inv < 1 or abs(per_inv - round(per_inv)) > 1e-9:
+            # Not present in every invocation (warmup-only Tilize/Typecast, mostly). There is
+            # no sound per-layer number for these, so drop them and say so rather than
+            # divide by a fractional call count.
+            partial.append((op, len(grp)))
+            continue
+        s = grp.copy()
+        s["slot"] = s.groupby("OP CODE").cumcount() // int(round(per_inv))
+        slots.append(s)
+    d = pd.concat(slots) if slots else d.iloc[0:0].assign(slot=[])
+
     meas = d[d["slot"] >= warmup]
     n_meas = max(1, n_inv - warmup)
 
@@ -65,7 +87,7 @@ def load(path, device_id=0, warmup=WARMUP_INVOCATIONS):
     g["us_per_layer"] = g["sum"] / 1000 / n_meas
     g["calls_per_layer"] = g["count"] / n_meas
     g["nan_rows"] = meas.groupby("OP CODE")["dur"].apply(lambda s: int(s.isna().sum()))
-    return g.sort_values("us_per_layer", ascending=False), n_inv, n_meas
+    return g.sort_values("us_per_layer", ascending=False), n_inv, n_meas, partial
 
 
 def _shape_of(path, op="SDPAOperation", device_id=0):
@@ -80,7 +102,7 @@ def _shape_of(path, op="SDPAOperation", device_id=0):
 
 
 def summarize(path):
-    g, n_inv, n_meas = load(path)
+    g, n_inv, n_meas, partial = load(path)
     total = g["us_per_layer"].sum()
     shape = _shape_of(path)
     print(f"\n{path}")
@@ -90,6 +112,8 @@ def summarize(path):
     nan_total = int(g["nan_rows"].sum())
     if nan_total:
         print(f"  NOTE {nan_total} rows had no device duration and are excluded (undercount)")
+    if partial:
+        print(f"  NOTE not run every invocation, excluded: {', '.join(f'{o} ({n} rows)' for o, n in partial)}")
     print(f"\n  {'OP':32s} {'calls':>6s} {'us/layer':>9s} {'%':>6s} {'us/call':>8s}")
     for op, r in g.iterrows():
         print(
@@ -110,8 +134,8 @@ def summarize(path):
 
 
 def diff(base_path, cand_path):
-    b, _, _ = load(base_path)
-    c, _, _ = load(cand_path)
+    b, _, _, _ = load(base_path)
+    c, _, _, _ = load(cand_path)
     ops = sorted(set(b.index) | set(c.index))
     bt, ct = b["us_per_layer"].sum(), c["us_per_layer"].sum()
     print(f"\nbaseline  {base_path}\ncandidate {cand_path}\n")

@@ -29,6 +29,7 @@ from .operations import (
     effective_block_size,
     prefill_sdpa_program_config,
     prefill_short_lived_memcfg,
+    qkv_projection_is_tied,
     split_qkv_heads_prefill,
 )
 from .ring_prefill import ring_prefill_attention, write_chunk_to_ring_cache
@@ -362,7 +363,12 @@ def _prefill_forward_single(
     else:
         fill_page_table = chunk_page_table if is_chunked else page_table
 
-    xqkv = apply_qkv_projection(hidden_states, weights)
+    # Global layers tie K and V to one projection, so the fused weight would otherwise carry
+    # (and the matmul would compute) the same K columns twice. Take the Q+K weight and let the
+    # split read V back off K's columns. tied_qkv reflects what the projection actually used,
+    # since it falls back to the full weight when wqk was not built.
+    tied_qkv = qkv_projection_is_tied(weights, weights.is_global)
+    xqkv = apply_qkv_projection(hidden_states, weights, tied=tied_qkv)
 
     # Short-lived prefill activations in L1 when GEMMA4_PREFILL_L1_ACT=1 (Qwen36
     # #48861). o_proj / allreduce stay DRAM (CB clash with CCL).
@@ -374,6 +380,7 @@ def _prefill_forward_single(
         tp=tp,
         kv_replicated=weights.kv_replicated,
         memory_config=act_mc,
+        kv_tied=tied_qkv,
     )
 
     tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc)
@@ -987,7 +994,9 @@ def prefill_forward(
     seq_len = hidden_states.shape[-2]
     original_seq_len = seq_len
 
-    xqkv = apply_qkv_projection(hidden_states, weights)
+    # See _prefill_forward_single: global layers project Q+K only and the split re-reads K as V.
+    tied_qkv = qkv_projection_is_tied(weights, weights.is_global)
+    xqkv = apply_qkv_projection(hidden_states, weights, tied=tied_qkv)
     ttnn.deallocate(hidden_states)
 
     xqkv = ttnn.reshape(xqkv, [batch_size, 1, seq_len // batch_size, -1])
@@ -1001,6 +1010,7 @@ def prefill_forward(
         tp=tp,
         kv_replicated=weights.kv_replicated,
         memory_config=act_mc,
+        kv_tied=tied_qkv,
     )
     ttnn.deallocate(xqkv)
 
