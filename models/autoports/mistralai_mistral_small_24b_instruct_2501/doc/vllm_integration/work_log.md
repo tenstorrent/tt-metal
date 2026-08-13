@@ -66,4 +66,6 @@ Server ownership was checked with `pgrep -af 'run_vllm_server|vllm.entrypoints|E
 
 ## Commits
 
-Stage-owned plugin and root commit SHAs are recorded here after final review and cleanup.
+- Nested vLLM TT plugin: `98d51d0` (`Add Mistral Small 24B TT vLLM integration`)
+- Root implementation, tests, docs, and artifacts: `3381c24c309` (`Integrate Mistral Small 24B with vLLM`)
+- This SHA-record update is committed separately after the hashes exist. No commit was pushed.
