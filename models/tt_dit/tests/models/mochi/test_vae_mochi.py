@@ -362,7 +362,8 @@ def test_tt_resblock_decoder_dims(mesh_device, C, T, H_unpadded, W_unpadded, W_p
     logical width). The standalone resblock test doesn't cover this because those
     channels use clean W values that divide evenly by w_factor.
     """
-    skip_if_unsupported_num_links(mesh_device, num_links)
+    if tuple(mesh_device.shape) != (1, 1):
+        skip_if_unsupported_num_links(mesh_device, num_links)
 
     N = 1
     block_args = resblock_args.copy()
@@ -590,7 +591,8 @@ def create_random_causalupsampleblock_models(
 )
 def test_tt_upsample_forward(mesh_device, config, reset_seeds, num_links):
     """Test TtCausalUpsampleBlock against reference implementation."""
-    skip_if_unsupported_num_links(mesh_device, num_links)
+    if tuple(mesh_device.shape) != (1, 1):
+        skip_if_unsupported_num_links(mesh_device, num_links)
 
     in_channels = config["in_channels"]
     out_channels = config["out_channels"]
@@ -866,7 +868,8 @@ def load_dit(
     indirect=True,
 )
 def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, num_links):
-    skip_if_unsupported_num_links(mesh_device, num_links)
+    if tuple(mesh_device.shape) != (1, 1):
+        skip_if_unsupported_num_links(mesh_device, num_links)
 
     input_shape = config["input_shape"]
     N, C, T, H, W = input_shape
