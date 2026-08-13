@@ -9,9 +9,10 @@
  *
  * Each wrapper is a pure inline forwarder to `eltwise_chain` for one common shape, so a
  * simple op needs one call instead of a hand-written chain. The op is baked into the name
- * (`add`/`sub`/`mul`, or the SFPU op as a type parameter); broadcast and the grouped input/output
- * configurations carry their buffer ids, so the streaming case is a three-argument call
- * and the broadcast / held-operand cases stay a single call:
+ * (`add`/`sub`/`mul`/`square`/`sum_of_squares`, or the SFPU op as a type parameter).
+ * Broadcast and the grouped input/output configurations carry their buffer ids, so the
+ * streaming case is a three-argument call and the broadcast / held-operand cases stay a
+ * single call:
  *
  *     mul<input(dfb_a), input(dfb_b), output(dfb_out)>(IterationShape::tiles(n));
  *     sub<input(dfb_x), input(dfb_row, BroadcastDim::Col, WaitPolicy::PerTile, PopPolicy::None),
@@ -19,6 +20,7 @@
  *     unary<Exp<>, input(dfb_in), output(dfb_out)>(IterationShape::tiles(n));
  *     binary_sfpu<DivBinary<>, input(dfb_a), input(dfb_b), output(dfb_out)>(IterationShape::tiles(n));
  *     copy<input(dfb_in), output(dfb_out)>(IterationShape::one_tile());
+ *     sum_of_squares<input(dfb_in), row_output(dfb_out)>(IterationShape::grid(Ht, Wt));
  *
  * The shape argument is an `IterationShape`. A bare number is not accepted (the `uint32_t`
  * ctor is `explicit`): write `op<...>(IterationShape::tiles(n))`, `IterationShape::one_tile()`,
@@ -59,6 +61,29 @@ ALWI void mul(TypedIterationShape<Kind> shape);
 
 template <InputSpec Input, OutputSpec Output, IterationShapeKind Kind>
 ALWI void square(TypedIterationShape<Kind> shape);
+
+// ---------------------------------------------------------------------------
+// FPU row-wise sum of squares — for an Ht x Wt grid, emits Ht output tiles.
+//
+// This is the accumulating counterpart of square: x * x is accumulated in D0 across
+// each row and packed once at the end of that row. row_output exposes only the output
+// settings that apply to this shape; it supplies the per-row reserve/push lifecycle and
+// DEST accumulation mode.
+// ---------------------------------------------------------------------------
+
+struct RowOutputSpec {
+    uint32_t cb_id;
+    DataFormatReconfig reconfig;
+    PackRelu relu;
+};
+
+constexpr RowOutputSpec row_output(
+    uint32_t cb_id,
+    DataFormatReconfig reconfig = DataFormatReconfig::Enabled,
+    PackRelu relu = PackRelu::Disabled) noexcept;
+
+template <InputSpec Input, RowOutputSpec RowOutput>
+ALWI void sum_of_squares(TypedIterationShape<IterationShapeKind::Grid> shape);
 
 // ---------------------------------------------------------------------------
 // SFPU unary — CopyTile(D0) -> SfpuOp -> PackTile(D0). SfpuOp is the (DEST-only) op type.
