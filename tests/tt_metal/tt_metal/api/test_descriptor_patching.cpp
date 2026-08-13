@@ -39,8 +39,6 @@
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 #include <tt_stl/assert.hpp>
 
-#include "impl/buffers/circular_buffer_config_impl.hpp"
-
 #include "multi_device_fixture.hpp"
 
 namespace tt::tt_metal {
