@@ -30,11 +30,10 @@ namespace ckernel {
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void remainder_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_remainder_int32,
         (APPROX, 8 /* ITERATIONS */),
         idst0,
@@ -68,11 +67,10 @@ ALWI void remainder_int32_tile_init() {
  * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void remainder_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_remainder_uint32,
         (APPROX, 8 /* ITERATIONS */),
         idst0,

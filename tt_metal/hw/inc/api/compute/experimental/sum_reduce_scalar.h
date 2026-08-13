@@ -47,7 +47,7 @@ ALWI void sum_reduce_scalar_init(uint32_t icb) {
  * dest[i] to SrcA through a switch that only covers i in 0..7 and no-ops above that,
  * so a 9th tile would be silently dropped from the sum. Below that, the acquired DEST
  * must also hold every copied tile until the reduce consumes it, which caps num_tiles
- * at get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>(LLK_ASSERT_DEST_ACC_MODE()) --
+ * at get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>() --
  * 8 for half-sync/16-bit, 4 for half-sync/32-bit, 8 for full-sync/32-bit. Callers
  * pairing fp32 DEST with half-sync therefore get 4, not 8.
  *

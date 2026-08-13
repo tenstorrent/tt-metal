@@ -28,10 +28,9 @@ namespace ckernel {
  * | idx_addr        | Address at which array of output row indices is stored                     | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void reshuffle_rows_tile(uint32_t idst, uint32_t idx_addr) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_reshuffle_rows, (APPROX), idst, VectorMode::RC_custom, idx_addr));
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_reshuffle_rows, (APPROX), idst, VectorMode::RC_custom, idx_addr));
 }
 
 /**

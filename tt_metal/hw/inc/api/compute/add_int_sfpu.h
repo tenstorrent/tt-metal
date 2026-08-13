@@ -38,7 +38,7 @@ namespace ckernel {
  * | odst     | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <DataFormat data_format>
 ALWI void add_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #if defined(ARCH_QUASAR)
     static_assert(data_format == DataFormat::Int32, "Unsupported data format for add_int on Quasar. Supported: Int32");
@@ -54,7 +54,7 @@ ALWI void add_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         (data_format == DataFormat::UInt16) ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         _add_int_,
         (APPROX, 8 /* ITERATIONS */, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */),
         idst0,

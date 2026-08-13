@@ -35,14 +35,13 @@ namespace ckernel {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void binary_max_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #if defined(ARCH_QUASAR)
     MATH((llk_math_eltwise_binary_sfpu_binary_max_int32<APPROX>(idst0, idst1, odst)));
 #else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_binary_max_min_int32,
         (true /* IS_MAX */, false /* IS_UNSIGNED */),
         idst0,
@@ -84,11 +83,10 @@ ALWI void binary_max_int32_tile_init() {
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void binary_max_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_binary_max_min_int32,
         (true /* IS_MAX */, true /* IS_UNSIGNED */),
         idst0,
@@ -125,14 +123,13 @@ ALWI void binary_max_uint32_tile_init() {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void binary_max_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
 #if defined(ARCH_QUASAR)
     MATH((llk_math_eltwise_binary_sfpu_binary_max<APPROX>(idst0, idst1, odst, vector_mode)));
 #else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_binary_max_min,
         (true /* IS_MAX */),
         idst0,
@@ -172,14 +169,13 @@ ALWI void binary_max_tile_init() {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void binary_min_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #if defined(ARCH_QUASAR)
     MATH((llk_math_eltwise_binary_sfpu_binary_min_int32<APPROX>(idst0, idst1, odst)));
 #else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_binary_max_min_int32,
         (false /* IS_MAX */, false /* IS_UNSIGNED */),
         idst0,
@@ -221,11 +217,10 @@ ALWI void binary_min_int32_tile_init() {
  */
 // clang-format on
 #ifndef ARCH_QUASAR
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void binary_min_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_binary_max_min_int32,
         (false /* IS_MAX */, true /* IS_UNSIGNED */),
         idst0,
@@ -262,14 +257,13 @@ ALWI void binary_min_uint32_tile_init() {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void binary_min_tile(uint32_t idst0, uint32_t idst1, uint32_t odst, VectorMode vector_mode = VectorMode::RC) {
 #if defined(ARCH_QUASAR)
     MATH((llk_math_eltwise_binary_sfpu_binary_min<APPROX>(idst0, idst1, odst, vector_mode)));
 #else
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_binary_max_min,
         (false /* IS_MAX */),
         idst0,

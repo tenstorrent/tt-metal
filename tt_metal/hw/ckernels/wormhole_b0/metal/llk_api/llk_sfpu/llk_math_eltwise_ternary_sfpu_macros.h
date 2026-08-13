@@ -13,8 +13,8 @@
 /*
  * Keep macro preconditions outside the tt-llk params wrapper. DST_SYNC is
  * explicit so tests and non-standard kernel preludes can supply their own
- * sync mode. Dest accumulation mode is read at runtime via
- * LLK_ASSERT_DEST_ACC_MODE() so it stays correct after enable/disable_fp32_dest_acc.
+ * sync mode. Dest accumulation mode is read at runtime inside
+ * get_dest_max_tiles_rt so it stays correct after enable/disable_fp32_dest_acc.
  * DST_ACCUM remains in the call-macro signature for compatibility.
  */
 
@@ -28,16 +28,16 @@ inline __attribute__((always_inline)) void _sfpu_ternary_check_(
     std::uint32_t dst_index_out,
     [[maybe_unused]] VectorMode vector_mode) {
     LLK_ASSERT(
-        (dst_index_in0 < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>(LLK_ASSERT_DEST_ACC_MODE())),
+        (dst_index_in0 < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()),
         "dst_index_in0 exceeds max dest tiles");
     LLK_ASSERT(
-        (dst_index_in1 < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>(LLK_ASSERT_DEST_ACC_MODE())),
+        (dst_index_in1 < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()),
         "dst_index_in1 exceeds max dest tiles");
     LLK_ASSERT(
-        (dst_index_in2 < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>(LLK_ASSERT_DEST_ACC_MODE())),
+        (dst_index_in2 < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()),
         "dst_index_in2 exceeds max dest tiles");
     LLK_ASSERT(
-        (dst_index_out < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>(LLK_ASSERT_DEST_ACC_MODE())),
+        (dst_index_out < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()),
         "dst_index_out exceeds max dest tiles");
 }
 

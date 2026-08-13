@@ -28,7 +28,7 @@ namespace ckernel {
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <DataFormat DATA_FORMAT, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <DataFormat DATA_FORMAT>
 ALWI void logical_not_tile(uint32_t idst) {
     static_assert(
         DATA_FORMAT == DataFormat::Float32 || DATA_FORMAT == DataFormat::Float16_b ||
@@ -45,7 +45,7 @@ ALWI void logical_not_tile(uint32_t idst) {
                                                                                   : InstrModLoadStore::DEFAULT;
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_logical_not,
         (APPROX, INSTRUCTION_MODE, 8 /*ITERATIONS*/),
         idst,

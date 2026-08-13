@@ -35,14 +35,14 @@ namespace ckernel {
  * | odst                  | The index of the tile in DST register buffer to use as output            | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <DataFormat data_format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <DataFormat data_format>
 ALWI void where_tile(uint32_t idst0, uint32_t idst1, uint32_t idst2, uint32_t odst) {
 #ifdef ARCH_QUASAR
     MATH((llk_math_eltwise_ternary_sfpu_where<APPROX, data_format>(idst0, idst1, idst2, odst)));
 #else
     MATH((SFPU_TERNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         _calculate_where_,
         (APPROX, data_format, 8 /* ITERATIONS */),
         idst0,

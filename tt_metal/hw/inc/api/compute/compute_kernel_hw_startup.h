@@ -7,7 +7,6 @@
 #include "api/compute/common.h"
 #include "api/compute/src_order.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
-#include "llk_assert.h"
 
 #ifdef TRISC_UNPACK
 #include "llk_unpack_common_api.h"
@@ -120,8 +119,6 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) { compute_kerne
 ALWI void enable_fp32_dest_acc() {
     MATH((llk_math_set_fp32_dest_acc(true)));
     PACK((llk_pack_set_fp32_dest_acc(true)));
-    // Outside MATH/PACK macros so every TRISC thread updates its own copy.
-    LLK_ASSERT_SET_DEST_ACC_MODE(true);
 }
 #endif
 
@@ -145,22 +142,6 @@ ALWI void enable_fp32_dest_acc() {
 ALWI void disable_fp32_dest_acc() {
     MATH((llk_math_set_fp32_dest_acc(false)));
     PACK((llk_pack_set_fp32_dest_acc(false)));
-    // Outside MATH/PACK macros so every TRISC thread updates its own copy.
-    LLK_ASSERT_SET_DEST_ACC_MODE(false);
-}
-
-/**
- * Convenience wrapper to enable or disable FP32 dest accumulation.
- * Equivalent to enable_fp32_dest_acc() / disable_fp32_dest_acc().
- * Assert-enabled builds also update the per-thread tracker used by
- * dest-capacity LLK_ASSERTs (LLK_ASSERT_DEST_ACC_MODE).
- */
-ALWI void set_dest_accum_mode(bool enable) {
-    if (enable) {
-        enable_fp32_dest_acc();
-    } else {
-        disable_fp32_dest_acc();
-    }
 }
 #endif
 

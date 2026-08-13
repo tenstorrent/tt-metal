@@ -4,29 +4,6 @@
 
 #pragma once
 
-// Runtime dest-accumulation-mode tracker for assert-only dest-capacity checks.
-// Exists only when ENABLE_LLK_ASSERT is set; production builds never name the
-// symbol. Call sites read via LLK_ASSERT_DEST_ACC_MODE() so the variable is not
-// referenced outside assert builds. Writers update via LLK_ASSERT_SET_DEST_ACC_MODE
-// at shared APIs (enable/disable_fp32_dest_acc, and WH/BH llk_*_hw_configure)
-// so each TRISC thread updates its own copy when it configures.
-#ifdef ENABLE_LLK_ASSERT
-// C++17 inline variable: emitted only in TUs that ODR-use it, weak/merged at
-// link; per-thread storage since each TRISC thread is a separate build.
-inline bool dst_fp32_acc_en = false;
-#define LLK_ASSERT_DEST_ACC_MODE() (dst_fp32_acc_en)
-#define LLK_ASSERT_SET_DEST_ACC_MODE(enable) \
-    do                                       \
-    {                                        \
-        dst_fp32_acc_en = static_cast<bool>(enable); \
-    } while (0)
-#else
-// Production LLK_ASSERT is ((void)sizeof(cond)) — the condition is unevaluated,
-// so a constant placeholder compiles fine and the tracker symbol is never named.
-#define LLK_ASSERT_DEST_ACC_MODE() (false)
-#define LLK_ASSERT_SET_DEST_ACC_MODE(enable) ((void)0)
-#endif
-
 #ifdef ENABLE_LLK_ASSERT
 
 #define LLK_ASSERT_BLOCK(block_call) \

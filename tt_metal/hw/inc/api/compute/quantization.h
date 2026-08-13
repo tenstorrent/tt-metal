@@ -26,10 +26,9 @@ namespace ckernel {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void quant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_quant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_quant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
 }
 
 // clang-format off
@@ -46,10 +45,9 @@ ALWI void quant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void requant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_requant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_requant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
 }
 
 // clang-format off
@@ -66,10 +64,9 @@ ALWI void requant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void dequant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_dequant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_dequant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
 }
 
 // clang-format off

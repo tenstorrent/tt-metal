@@ -242,12 +242,11 @@ ALWI void tanh_tile(uint32_t idst) {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void square_tile(uint32_t idst) {
 #ifndef ARCH_QUASAR
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_square, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (APPROX), idst, VectorMode::RC));
 #else
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_square, (SFPU_ITERATIONS), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_square, (SFPU_ITERATIONS), idst, VectorMode::RC));
 #endif
 }
 
@@ -391,10 +390,9 @@ ALWI void signbit_tile_init() {
  * | idst            | The index of the tile in DST register buffer to modify the sign bit of     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void signbit_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_signbit, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
 }
 
 /**
@@ -418,10 +416,9 @@ ALWI void signbit_tile_int32_init() {
  * | idst            | The index of the tile in DST register buffer to modify the sign bit of     | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void signbit_tile_int32(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_signbit_int32, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit_int32, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
 }
 
 // clang-format off
@@ -438,9 +435,8 @@ ALWI void signbit_tile_int32(uint32_t idst) {
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void abs_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_abs, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs, (APPROX), idst, VectorMode::RC));
 }
 
 /**
@@ -464,9 +460,8 @@ ALWI void abs_tile_init() { MATH(SFPU_UNARY_INIT(abs)); }
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void abs_tile_int32(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_abs_int32, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_abs_int32, (APPROX), idst, VectorMode::RC));
 }
 
 // clang-format off
@@ -483,10 +478,9 @@ ALWI void abs_tile_int32(uint32_t idst) {
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sign_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sign, (APPROX), idst, VectorMode::RC, 1 /* exponent_size_8 */));
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sign, (APPROX), idst, VectorMode::RC, 1 /* exponent_size_8 */));
 }
 
 /**
@@ -508,9 +502,8 @@ ALWI void sign_tile_init() { MATH(SFPU_UNARY_INIT(sign)); }
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tiled_prod_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_tiled_prod, (APPROX), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tiled_prod, (APPROX), idst, VectorMode::RC));
 }
 
 /**
@@ -571,11 +564,10 @@ ALWI void power_tile_init() {
  * | param0          | The integer exponent value                                                 | uint32_t | Must be a non-negative integer exponent               | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void power_iterative_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_unary_power_iterative,
         (APPROX, 8 /* ITERATIONS */),
         idst,
@@ -631,9 +623,8 @@ ALWI void exp2_tile_init() { MATH(SFPU_UNARY_INIT_FN(exp2, sfpu::exp2_init, (tru
  * | param0          | The value the output is if the input is greater than 0                     | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void heaviside_tile(uint32_t idst, uint32_t param0) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_heaviside, (APPROX), idst, VectorMode::RC, param0));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_heaviside, (APPROX), idst, VectorMode::RC, param0));
 }
 
 /**
@@ -987,7 +978,7 @@ ALWI void sfpu_reduce_init() {
  * | format          | The data format for the add_top_row operation                            | DataFormat| Float32, Int32, UInt32                                | True     |
  */
 // clang-format on
-template <DataFormat format, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <DataFormat format>
 ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t dst_tile_out) {
     static_assert(
         format == DataFormat::Float32 || format == DataFormat::Int32 || format == DataFormat::UInt32,
@@ -995,7 +986,7 @@ ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t ds
 
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_add_top_row,
         (format),
         dst_tile_0,
@@ -1063,11 +1054,10 @@ ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_max_int32_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_unary_max_min_int32,
         (true /* IS_MAX */, false /* IS_UINT */, APPROX),
         idst,
@@ -1098,11 +1088,10 @@ ALWI void unary_max_int32_tile_init() {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_max_uint32_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_unary_max_min_int32,
         (true /* IS_MAX */, true /* IS_UINT */, APPROX),
         idst,
@@ -1133,11 +1122,10 @@ ALWI void unary_max_uint32_tile_init() {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_max_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_unary_max_min,
         (true /* IS_MAX */, APPROX),
         idst,
@@ -1165,10 +1153,9 @@ ALWI void unary_max_tile_init() { MATH(SFPU_UNARY_INIT_FN(unary_max, sfpu::unary
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void alt_complex_rotate90_tile(uint32_t idst) {
     MATH(
-        SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_alt_complex_rotate90, (APPROX), idst, VectorMode::RC));
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_alt_complex_rotate90, (APPROX), idst, VectorMode::RC));
 }
 
 /**
@@ -1192,11 +1179,10 @@ ALWI void alt_complex_rotate90_tile_init() { MATH(SFPU_UNARY_INIT(alt_complex_ro
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_min_int32_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_unary_max_min_int32,
         (false /* IS_MAX */, false /* IS_UINT */, APPROX),
         idst,
@@ -1228,11 +1214,10 @@ ALWI void unary_min_int32_tile_init() {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_min_uint32_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_unary_max_min_int32,
         (false /* IS_MAX */, true /* IS_UINT */, APPROX),
         idst,
@@ -1264,11 +1249,10 @@ ALWI void unary_min_uint32_tile_init() {
  * | param0          | The value to be compared with the input tensor                             | uint32_t |                                                       | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void unary_min_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_unary_max_min,
         (false /* IS_MAX */, APPROX),
         idst,

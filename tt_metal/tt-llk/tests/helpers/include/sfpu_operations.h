@@ -75,11 +75,7 @@
 #include "llk_sfpu/ckernel_sfpu_unary_power.h"
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
-// This header expects a DST_ACCUM_MODE macro; scope it to the include so it
-// doesn't clash with the DST_ACCUM_MODE template param used below.
-#define DST_ACCUM_MODE 0
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
-#undef DST_ACCUM_MODE
 #include "llk_sfpu/ckernel_sfpu_celu.h"
 #include "llk_sfpu/ckernel_sfpu_elu.h"
 #include "llk_sfpu/ckernel_sfpu_erfinv.h"

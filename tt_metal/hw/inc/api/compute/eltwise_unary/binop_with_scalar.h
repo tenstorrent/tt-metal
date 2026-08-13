@@ -112,11 +112,10 @@ ALWI void rsub_unary_tile(uint32_t idst, uint32_t param1) {
 */
 // clang-format on
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void add_unary_tile_int32(uint32_t idst, uint32_t param1) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_add_int32,
         (APPROX, 8 /* ITERATIONS */),
         idst,
@@ -139,11 +138,10 @@ ALWI void add_unary_tile_int32(uint32_t idst, uint32_t param1) {
 */
 // clang-format on
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sub_unary_tile_int32(uint32_t idst, uint32_t param1) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_sub_int32,
         (APPROX, 8 /* ITERATIONS */),
         idst,

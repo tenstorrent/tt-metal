@@ -14,20 +14,17 @@ namespace ckernel {
 
 ALWI void sfpu_sum_int_init() { MATH(SFPU_UNARY_INIT_FN(unused, sfpu::sum_int_init, (APPROX))); }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_sum_int_col(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sum_int_col, (APPROX), idst, VectorMode::R));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sum_int_col, (APPROX), idst, VectorMode::R));
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_sum_int_row(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_sum_int_row, (APPROX), idst, VectorMode::C));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sum_int_row, (APPROX), idst, VectorMode::C));
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void sfpu_add_int(uint32_t idst, uint32_t dst_offset = 2, int32_t iterations = 8) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, add_int, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, dst_offset));
+        DST_SYNC_MODE, DST_ACCUM_MODE, add_int, (APPROX, 8 /*ITERATIONS*/), idst, VectorMode::RC, dst_offset));
 }
 
 }  // namespace ckernel

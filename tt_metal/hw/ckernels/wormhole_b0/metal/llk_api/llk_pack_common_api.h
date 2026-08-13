@@ -33,7 +33,6 @@ inline void llk_pack_set_fp32_dest_acc(bool enable) { _llk_pack_set_fp32_dest_ac
  */
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_hw_configure(std::uint32_t pack_output) {
-    LLK_ASSERT_SET_DEST_ACC_MODE(is_fp32_dest_acc_en);
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);

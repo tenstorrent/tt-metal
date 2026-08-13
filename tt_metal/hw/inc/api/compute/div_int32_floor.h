@@ -30,11 +30,10 @@ namespace ckernel {
  * | odst                  | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void div_int32_floor_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_div_int32_floor,
         (APPROX, 8 /* ITERATIONS */),
         idst0,
@@ -42,11 +41,10 @@ ALWI void div_int32_floor_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         odst,
         VectorMode::RC)));
 }
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void div_int32_trunc_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        DST_ACCUM_MODE,
         calculate_div_int32_trunc,
         (APPROX, 8 /* ITERATIONS */),
         idst0,
