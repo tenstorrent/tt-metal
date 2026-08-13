@@ -1,0 +1,345 @@
+2026-08-12 22:57:13.106 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-12 22:57:14.955 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-12 22:57:14.955 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-12 22:57:14.955 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-12 22:57:14.955 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-12 22:57:14.967 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-12 22:57:14.967 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-12 22:57:15.044 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-12 22:57:15.044 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-12 22:57:15.044 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-12 22:57:15.044 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-12 22:57:15.046 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-12 22:57:15.254 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-12 22:57:15.376 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-12 22:57:15.376 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-12 22:57:15.376 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-12 22:57:15.376 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-12 22:57:15.376 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-12 22:57:15.416 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 22:57:15.417 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 22:57:15.417 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 22:57:15.418 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 22:57:15.418 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 22:57:15.419 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 22:57:15.419 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 22:57:15.420 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-12 22:57:15.420 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-12 22:57:15.448 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-12 22:57:15.448 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-12 22:57:15.449 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-12 22:57:15.450 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-12 22:57:15.450 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-12 22:57:15.450 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-12 22:57:21.552 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 22:57:21.552 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 22:57:21.552 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 22:57:21.552 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 22:57:21.601 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:21.924 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 22:57:21.924 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 22:57:21.924 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 22:57:21.924 | warning  |              Op | Fabric packet size 8192 B is suboptimal for transporting 1088 B pages. Configure 4352 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-12 22:57:22.076 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:22.078 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+MESH MeshShape([1, 4]) devices=4 grid=11-10
+AB       tp4              kind=sliding  mesh=1x4 batch=1 prefill8192=   19.25 ms  traced_decode@2048= 0.4572 ms/token  prefill_pcc=0.993700 decode_pcc=0.993488  (0.4572/0.4573/0.4572)
+2026-08-12 22:57:24.982 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:26.015 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:26.017 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+AB       oproj_c8_bw4     kind=sliding  mesh=1x4 batch=1 prefill8192=   18.91 ms  traced_decode@2048= 0.4563 ms/token  prefill_pcc=0.993700 decode_pcc=0.993503  (0.4563/0.4564/0.4564)
+2026-08-12 22:57:28.903 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:29.736 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:29.738 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+AB       oproj_c4_bw8     kind=sliding  mesh=1x4 batch=1 prefill8192=   19.00 ms  traced_decode@2048= 0.4583 ms/token  prefill_pcc=0.993700 decode_pcc=0.993476  (0.4583/0.4588/0.4583)
+2026-08-12 22:57:32.614 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:32.951 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1592192 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+FAILED oproj_c2_bw16    kind=sliding  TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1592192 B which is beyond max L1 size of 1572864 B | backtrace: | --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0x201495a) [0x7ec04d01495a] | --- tt::tt_metal::detail::ProgramImpl::valid
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/layer_ab.py", line 325, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/layer_ab.py", line 225, in run_candidate
+    tt_dec = dec.decode_forward(to_dev(mesh, token), current_pos=cur, page_table=pt, rope_pos_ids=rope)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 1741, in decode_forward
+    attn_out = self._decode_projection(gated, self.wo, role="o_proj", rows=rows)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py", line 1122, in _decode_projection
+    out = ttnn.linear(
+          ^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1592192 B which is beyond max L1 size of 1572864 B
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0x201495a) [0x7ec04d01495a]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x7ec04bf26cd9]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xf34ff8) [0x7ec04bf34ff8]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x7ec04bf255ef]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x19b) [0x7ec04bf2396b]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x7ec04bf08e68]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xe9b304) [0x7ec04be9b304]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x25a) [0x7ec04be9c93a]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764ef3) [0x7ec04dd64ef3]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764bcb) [0x7ec04dd64bcb]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x7ec04d952bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7ec04ee2a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7ec04ee2a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+2026-08-12 22:57:35.731 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:36.044 | critical |          Always | TT_THROW: Statically allocated circular buffers in program 246 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1039872 and static circular buffer region ends at 1139584 (assert.hpp:104)
+FAILED oproj_c1_bw32    kind=sliding  TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception | info: | Statically allocated circular buffers in program 246 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1039872 and static circular buffer region ends at 1139584 | backtrace: | --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023) [
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/layer_ab.py", line 325, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/layer_ab.py", line 225, in run_candidate
+    tt_dec = dec.decode_forward(to_dev(mesh, token), current_pos=cur, page_table=pt, rope_pos_ids=rope)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 1741, in decode_forward
+    attn_out = self._decode_projection(gated, self.wo, role="o_proj", rows=rows)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py", line 1122, in _decode_projection
+    out = ttnn.linear(
+          ^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception
+info:
+Statically allocated circular buffers in program 246 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1039872 and static circular buffer region ends at 1139584
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023) [0x7ec04a38d023]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x7ec04bf26cd9]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xf34ff8) [0x7ec04bf34ff8]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xff) [0x7ec04bf255ef]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x19b) [0x7ec04bf2396b]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x7ec04bf08e68]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xe9b304) [0x7ec04be9b304]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x25a) [0x7ec04be9c93a]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764ef3) [0x7ec04dd64ef3]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764bcb) [0x7ec04dd64bcb]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x7ec04d952bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7ec04ee2a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7ec04ee2a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+2026-08-12 22:57:38.829 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:39.487 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:39.489 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+AB       oproj_c4_bw4     kind=sliding  mesh=1x4 batch=1 prefill8192=   19.00 ms  traced_decode@2048= 0.4567 ms/token  prefill_pcc=0.993700 decode_pcc=0.993503  (0.4568/0.4572/0.4567)
+2026-08-12 22:57:45.107 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:45.539 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:45.541 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+AB       tp4              kind=full     mesh=1x4 batch=1 prefill8192=   18.81 ms  traced_decode@2048= 0.4258 ms/token  prefill_pcc=0.992220 decode_pcc=0.992188  (0.4258/0.4259/0.4258)
+2026-08-12 22:57:48.495 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:48.916 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:48.917 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+AB       oproj_c8_bw4     kind=full     mesh=1x4 batch=1 prefill8192=   18.59 ms  traced_decode@2048= 0.4259 ms/token  prefill_pcc=0.992220 decode_pcc=0.992196  (0.4259/0.4261/0.4259)
+2026-08-12 22:57:51.868 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:52.295 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:52.297 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+AB       oproj_c4_bw8     kind=full     mesh=1x4 batch=1 prefill8192=   18.54 ms  traced_decode@2048= 0.4275 ms/token  prefill_pcc=0.992220 decode_pcc=0.992201  (0.4277/0.4275/0.4277)
+2026-08-12 22:57:55.281 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:55.282 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1592192 B which is beyond max L1 size of 1572864 B (assert.hpp:104)
+FAILED oproj_c2_bw16    kind=full     TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception | info: | Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1592192 B which is beyond max L1 size of 1572864 B | backtrace: | --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0x201495a) [0x7ec04d01495a] | --- tt::tt_metal::detail::ProgramImpl::valid
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/layer_ab.py", line 325, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/layer_ab.py", line 225, in run_candidate
+    tt_dec = dec.decode_forward(to_dev(mesh, token), current_pos=cur, page_table=pt, rope_pos_ids=rope)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 1741, in decode_forward
+    attn_out = self._decode_projection(gated, self.wo, role="o_proj", rows=rows)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py", line 1122, in _decode_projection
+    out = ttnn.linear(
+          ^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1722: tt::exception
+info:
+Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1592192 B which is beyond max L1 size of 1572864 B
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0x201495a) [0x7ec04d01495a]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x7ec04bf26cd9]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29handle_mesh_adapter_cache_hitITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xb8) [0x7ec04bf25488]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x180) [0x7ec04bf23950]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x7ec04bf08e68]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xe9b304) [0x7ec04be9b304]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x25a) [0x7ec04be9c93a]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764ef3) [0x7ec04dd64ef3]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764bcb) [0x7ec04dd64bcb]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x7ec04d952bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7ec04ee2a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7ec04ee2a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+2026-08-12 22:57:58.179 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:57:58.180 | critical |          Always | TT_THROW: Statically allocated circular buffers in program 246 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1039872 and static circular buffer region ends at 1139584 (assert.hpp:104)
+FAILED oproj_c1_bw32    kind=full     TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception | info: | Statically allocated circular buffers in program 246 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1039872 and static circular buffer region ends at 1139584 | backtrace: | --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023) [
+Traceback (most recent call last):
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/layer_ab.py", line 325, in main
+    r = run_candidate(mesh, name, kind, layer_idx, state_dict, ref_layer, args)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/layer_ab.py", line 225, in run_candidate
+    tt_dec = dec.decode_forward(to_dev(mesh, token), current_pos=cur, page_table=pt, rope_pos_ids=rope)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py", line 1741, in decode_forward
+    attn_out = self._decode_projection(gated, self.wo, role="o_proj", rows=rows)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py", line 1122, in _decode_projection
+    out = ttnn.linear(
+          ^^^^^^^^^^^^
+  File "/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/impl/program/program.cpp:1779: tt::exception
+info:
+Statically allocated circular buffers in program 246 clash with L1 buffers on core range [0-0 - 7-9]. L1 buffer allocated at 1039872 and static circular buffer region ends at 1139584
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x98d023) [0x7ec04a38d023]
+ --- tt::tt_metal::detail::ProgramImpl::validate_circular_buffer_region(tt::tt_metal::IDevice const*)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x359) [0x7ec04bf26cd9]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29handle_mesh_adapter_cache_hitITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0xb8) [0x7ec04bf25488]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim21MatmulDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x180) [0x7ec04bf23950]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim21MatmulDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x508) [0x7ec04bf08e68]
+ --- ttnn::prim::matmul(ttnn::Tensor const&, ttnn::Tensor const&, std::optional<ttnn::Tensor> const&, std::optional<ttnn::Tensor> const&, ttnn::prim::MatmulParams const&)
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(+0xe9b304) [0x7ec04be9b304]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn10operations6matmul6linearERKNS_6TensorES4_RKSt8optionalIS3_EbbRKS5_IKN2tt8tt_metal12MemoryConfigEES5_IKNSA_8DataTypeEERKS5_IKSt7variantIJNS1_28MatmulMultiCoreProgramConfigENS1_33MatmulMultiCoreReuseProgramConfigENS1_42MatmulMultiCoreReuseMultiCastProgramConfigENS1_44MatmulMultiCoreReuseMultiCast1DProgramConfigENS1_53MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfigENS1_60MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfigEEEERKS5_IKSJ_IJNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEEENS0_5unary19BasicUnaryWithParamIJfEEEEEES5_IKNS_19ComputeKernelConfigEES5_IKNS_5types8CoreGridEERKS5_IKNSA_4TileEES5_IS2_ERKS5_IKNSA_12experimental20GlobalCircularBufferEERKS5_IN4ttsl10StrongTypeIhNSA_14SubDeviceIdTagEEEE+0x25a) [0x7ec04be9c93a]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764ef3) [0x7ec04dd64ef3]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x764bcb) [0x7ec04dd64bcb]
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/_ttnn.so(+0x352bc5) [0x7ec04d952bc5]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0xe920) [0x1621aa0]
+ --- python() [0x1876122]
+ --- python() [0x1686e59]
+ --- python(_PyEval_EvalFrameDefault+0x36f1) [0x1616871]
+ --- python(PyEval_EvalCode+0xe2) [0x1684e62]
+ --- python() [0x16a4982]
+ --- python() [0x17aebff]
+ --- python(_PyRun_SimpleFileObject+0x118) [0x17af3ac]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7ec04ee2a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7ec04ee2a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+2026-08-12 22:58:01.065 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:58:01.484 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-12 22:58:01.486 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+AB       oproj_c4_bw4     kind=full     mesh=1x4 batch=1 prefill8192=   18.63 ms  traced_decode@2048= 0.4262 ms/token  prefill_pcc=0.992220 decode_pcc=0.992196  (0.4264/0.4262/0.4262)
+nanobind: leaked 3 instances!
+ - leaked instance 0x7ebfd01ea718 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7ec04e07cd18 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7ec04e07cb38 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+nanobind: leaked 24 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 282 functions!
+ - leaked function ""
+ - leaked function "contains"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "worker_core_from_logical_core"
+ - leaked function ""
+ - leaked function "is_sharded"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "from_json"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-12 22:58:02.533 | info     |    BuildKernels | JIT cache stats: 414/436 hits (95.0%) [414 cached, 192 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-12 22:58:02.533 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-12 22:58:02.550 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-12 22:58:02.550 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-12 22:58:03.092 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-12 22:58:03.092 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-12 22:58:03.092 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

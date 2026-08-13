@@ -561,6 +561,86 @@ def minimal_matmul_subblocks(m_block: int, n_block: int, *, prefer_wide: bool) -
 #: bounds its program cache.
 DEFAULT_L1_SMALL_SIZE = 6144
 
+#: Which implementation carries the two reducing collectives, per mode.
+#:
+#: ``"wrapper"`` is ``ttnn.reduce_scatter`` / ``ttnn.all_gather`` / ``ttnn.all_reduce``:
+#: the composite ops, which create their own per-program global semaphores and
+#: allocate their own output and staging buffers.  ``"async"`` calls the
+#: primitives those wrappers lower to -- ``ttnn.experimental.reduce_scatter_minimal_async``
+#: and ``ttnn.experimental.all_gather_async`` -- with semaphores this layer owns
+#: and, optionally, staging buffers it owns ($optimize OPT-009).
+#:
+#: The reason to want it is not the buffers.  It is that the *all-gather* half of
+#: the reduction has no tuning surface through ``ttnn.all_gather``: the multichip
+#: stage's sweep records it as "not tunable" at 16.39 us, next to a reduce-scatter
+#: that one integer moved from 33.55 to 20.93.  The async op takes
+#: ``num_workers_per_link``, ``chunks_per_sync``, ``num_buffers_per_channel`` and
+#: ``use_optimal_ccl_for_llama``.
+#:
+#: **Split by payload, and the split is decided by one cost: the barrier
+#: semaphore.**  Both primitives take a ``barrier_semaphore``; omitting it on the
+#: all-gather lets the next op start against a fabric router that has not drained,
+#: which the watcher catches as *"subordinate_erisc detected invalid NOC command
+#: buffer state before starting the next kernel"* in ``fabric_erisc_router.cpp``
+#: (``doc/optimized_multichip_decoder/logs/watcher_run.log``).  It is therefore not
+#: optional -- and it is not free either:
+#:
+#: * at the **107 MB prefill** payload it costs 0.4 % (1351.4 against 1345.7 us)
+#:   and the async pair is still **14.7 %** faster than ``ttnn.all_reduce``'s
+#:   1583.9 us.  Prefill takes it;
+#: * at the **40 KB decode** payload the collective is pure fixed cost, so one
+#:   more synchronization round is a large fraction of it: with the barrier the
+#:   async decode step measures 0.4554 / 0.4248 ms/token against the wrappers'
+#:   0.4546 / 0.4238 (``logs/final_layer_ab.log``).  Decode keeps the wrappers.
+#:
+#: Without the barrier the async decode step measures 0.4501 / 0.4194 -- a 1.2 %
+#: win that is not available, because that is the configuration the watcher
+#: stopped the device on.  It is recorded rather than shipped.
+DEFAULT_DECODE_CCL_IMPL = "wrapper"
+DEFAULT_PREFILL_CCL_IMPL = "async"
+
+#: ``num_workers_per_link`` / ``chunks_per_sync`` / ``num_buffers_per_channel``
+#: for the async all-gather, per mode.  ``None`` keeps the op's own default.
+DEFAULT_DECODE_CCL_AG_WORKERS: int | None = 1
+DEFAULT_PREFILL_CCL_AG_WORKERS: int | None = None
+
+#: Give the async reduce-scatter this layer's own staging buffers instead of
+#: letting it allocate them per dispatch ($optimize OPT-009).
+#:
+#: **Off**, and the reason is correctness, not performance.  It is worth 0.36 % of
+#: traced decode (0.4523 -> 0.4507 ms/token, ``logs/ab_ccl_async.log``) and it is
+#: the only knob in this stage that failed a correctness bisect.
+#: ``reduce_scatter_minimal_async_create_intermediate_buffer`` returns an
+#: uninitialised chunk-paged staging pair, and the ring algorithm reads the penult
+#: intermediate before writing it on the first invocation: with the buffers first
+#: used inside decode, decode step 0 measured PCC 0.7395 (``full``) / 0.7749
+#: (``sliding``) against the identical layer without them, while steps 1-3 were
+#: bit-identical (``logs/regression_bisect.log``).  That is what broke
+#: ``test_multichip_matches_single_chip[12345-4-full]`` at 0.7268.
+#:
+#: Two fixes were implemented and measured -- a warm-up collective through the
+#: fresh buffers, then that plus a ``synchronize_device`` and eager allocation at
+#: build time (:meth:`MultichipDecoder._prewarm_decode_ccl_buffers`).  Each moved
+#: the fault rather than removing it: the first left the *default* configuration
+#: at 0.9721 on the first ``sliding`` decode step, the second left the
+#: wrapper-prefill/async-decode combination at 0.9605 on the first ``full`` one
+#: (``logs/regression_bisect_fixed.log``).  A fault that moves between arms and
+#: between runs of the same arm is a race, and an intermittently wrong first token
+#: is not a defect a *stacking baseline* may ship for 0.36 % -- 52 layers compose
+#: it, and the full-model and vLLM stages both decode without prefilling through
+#: this layer.
+#:
+#: The knob, the warm-up and the bisect harness are all kept: the async ops
+#: themselves are clean in every arm and carry the win, and this is a TTNN
+#: first-use contract worth re-testing when the op changes.
+DEFAULT_CCL_PERSISTENT_BUFFERS = False
+
+#: Hand the next layer the decode residual width-sharded in L1 instead of DRAM
+#: interleaved.  See ``OptimizedDecoder.decode_forward``; measured by
+#: ``bench/boundary_probe.py`` at 1.9-6.3 us per layer with a bit-identical
+#: output (PCC 1.000000000).
+DEFAULT_SHARDED_DECODE_IO = True
+
 
 def open_multichip_mesh(
     mesh_shape: tuple[int, int] = DEFAULT_MESH_SHAPE,
@@ -591,8 +671,14 @@ def open_multichip_mesh(
     )
 
 
+#: Global CCL semaphores per open mesh, keyed by ``id(mesh_device)``.  Shared by
+#: every layer on that mesh; see :meth:`MultichipDecoder._ccl_semaphores`.
+_CCL_SEMAPHORES: dict[int, dict] = {}
+
+
 def close_multichip_mesh(mesh: ttnn.MeshDevice, *, fabric_config: ttnn.FabricConfig | None = FABRIC_CONFIG) -> None:
     """Close a mesh opened by :func:`open_multichip_mesh` and drop the fabric."""
+    _CCL_SEMAPHORES.pop(id(mesh), None)
     ttnn.close_mesh_device(mesh)
     if fabric_config is not None:
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
@@ -766,6 +852,16 @@ class MultichipDecoder(OptimizedDecoder):
         ccl_rs_workers: int | None = None,
         prefill_ccl_rs_workers: int = DEFAULT_PREFILL_CCL_RS_WORKERS,
         decode_ccl_rs_workers: int = DEFAULT_DECODE_CCL_RS_WORKERS,
+        ccl_impl: str | None = None,
+        prefill_ccl_impl: str = DEFAULT_PREFILL_CCL_IMPL,
+        decode_ccl_impl: str = DEFAULT_DECODE_CCL_IMPL,
+        ccl_ag_workers: int | None = None,
+        prefill_ccl_ag_workers: int | None = DEFAULT_PREFILL_CCL_AG_WORKERS,
+        decode_ccl_ag_workers: int | None = DEFAULT_DECODE_CCL_AG_WORKERS,
+        ccl_persistent_buffers: bool = DEFAULT_CCL_PERSISTENT_BUFFERS,
+        ccl_chunks_per_sync: int | None = None,
+        ccl_buffers_per_channel: int | None = None,
+        ccl_num_links: int | None = None,
         **kwargs,
     ) -> None:
         kwargs.setdefault("decode_matmul", MULTICHIP_DECODE_MATMUL)
@@ -783,6 +879,19 @@ class MultichipDecoder(OptimizedDecoder):
         for mode in (self.prefill_ccl_mode, self.decode_ccl_mode):
             if mode not in ("all_reduce", "rs_ag"):
                 raise ValueError(f"a CCL mode must be 'all_reduce' or 'rs_ag', got {mode!r}")
+        self.prefill_ccl_impl = ccl_impl or prefill_ccl_impl
+        self.decode_ccl_impl = ccl_impl or decode_ccl_impl
+        for impl in (self.prefill_ccl_impl, self.decode_ccl_impl):
+            if impl not in ("wrapper", "async"):
+                raise ValueError(f"a CCL impl must be 'wrapper' or 'async', got {impl!r}")
+        self.prefill_ccl_ag_workers = ccl_ag_workers if ccl_ag_workers is not None else prefill_ccl_ag_workers
+        self.decode_ccl_ag_workers = ccl_ag_workers if ccl_ag_workers is not None else decode_ccl_ag_workers
+        self.ccl_persistent_buffers = ccl_persistent_buffers
+        self.ccl_chunks_per_sync = ccl_chunks_per_sync
+        self.ccl_buffers_per_channel = ccl_buffers_per_channel
+        self.ccl_num_links = ccl_num_links
+        self._ccl_sems = None
+        self._ccl_slot = 0
         decode_sdpa = kwargs.pop("decode_sdpa", None) or MULTICHIP_DECODE_SDPA
         super().__init__(decode_sdpa=decode_sdpa[:4], **kwargs)
         gx, gy, q_chunk, k_chunk = self.decode_sdpa
@@ -801,6 +910,34 @@ class MultichipDecoder(OptimizedDecoder):
         self.prefill_minimal_blocks = MULTICHIP_PREFILL_MINIMAL_BLOCKS
         if self.mesh_device.get_num_devices() != plan.tp:
             raise ValueError(f"plan targets {plan.tp} devices but the mesh has {self.mesh_device.get_num_devices()}")
+        self._prewarm_decode_ccl_buffers()
+
+    def _prewarm_decode_ccl_buffers(self) -> None:
+        """Allocate and warm the decode-shape persistent CCL staging, at build time.
+
+        The decode collective has exactly one payload shape -- one tile-row by
+        ``hidden_size``, because ``nlp_create_qkv_heads_decode`` caps the decode
+        batch at 32 and the activation is tile-padded to that
+        ($optimize OPT-005) -- so it can be built once here instead of on the
+        first token.  Doing it here rather than lazily is what keeps the warm-up
+        (and its ``synchronize_device``) out of ``decode_forward``, which matters
+        for two reasons: a traced capture must not contain either, and a
+        decode-only caller would otherwise pay a corrupted first token.  See
+        :meth:`_warm_persistent_buffers` for why the warm-up exists at all.
+        """
+        if not (self.ccl_persistent_buffers and self.decode_ccl_impl == "async"):
+            return
+        dtype = self.decode_ccl_dtype or self.activation_dtype
+        probe = ttnn.zeros(
+            [1, 1, TILE_SIZE, self.config.hidden_size],
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        for slot in range(2):
+            self._ccl_persistent_buffers(probe, slot)
+        ttnn.deallocate(probe)
 
     # ------------------------------------------------------------------ setup
 
@@ -825,6 +962,7 @@ class MultichipDecoder(OptimizedDecoder):
         boundary_cores: int = MULTICHIP_BOUNDARY_CORES,
         decode_sdpa: tuple | None = None,
         decode_fused_activation: bool | None = None,
+        sharded_decode_io: bool = DEFAULT_SHARDED_DECODE_IO,
         ccl_dtype: ttnn.DataType | None = None,
         prefill_ccl_dtype: ttnn.DataType | None = DEFAULT_PREFILL_CCL_DTYPE,
         decode_ccl_dtype: ttnn.DataType | None = DEFAULT_DECODE_CCL_DTYPE,
@@ -834,6 +972,16 @@ class MultichipDecoder(OptimizedDecoder):
         ccl_rs_workers: int | None = None,
         prefill_ccl_rs_workers: int = DEFAULT_PREFILL_CCL_RS_WORKERS,
         decode_ccl_rs_workers: int = DEFAULT_DECODE_CCL_RS_WORKERS,
+        ccl_impl: str | None = None,
+        prefill_ccl_impl: str = DEFAULT_PREFILL_CCL_IMPL,
+        decode_ccl_impl: str = DEFAULT_DECODE_CCL_IMPL,
+        ccl_ag_workers: int | None = None,
+        prefill_ccl_ag_workers: int | None = DEFAULT_PREFILL_CCL_AG_WORKERS,
+        decode_ccl_ag_workers: int | None = DEFAULT_DECODE_CCL_AG_WORKERS,
+        ccl_persistent_buffers: bool = DEFAULT_CCL_PERSISTENT_BUFFERS,
+        ccl_chunks_per_sync: int | None = None,
+        ccl_buffers_per_channel: int | None = None,
+        ccl_num_links: int | None = None,
         **kwargs,
     ) -> "MultichipDecoder":
         """Same contract as ``OptimizedDecoder.from_state_dict`` on a mesh.
@@ -1027,6 +1175,17 @@ class MultichipDecoder(OptimizedDecoder):
             ccl_rs_workers=ccl_rs_workers,
             prefill_ccl_rs_workers=prefill_ccl_rs_workers,
             decode_ccl_rs_workers=decode_ccl_rs_workers,
+            ccl_impl=ccl_impl,
+            prefill_ccl_impl=prefill_ccl_impl,
+            decode_ccl_impl=decode_ccl_impl,
+            ccl_ag_workers=ccl_ag_workers,
+            prefill_ccl_ag_workers=prefill_ccl_ag_workers,
+            decode_ccl_ag_workers=decode_ccl_ag_workers,
+            ccl_persistent_buffers=ccl_persistent_buffers,
+            ccl_chunks_per_sync=ccl_chunks_per_sync,
+            ccl_buffers_per_channel=ccl_buffers_per_channel,
+            ccl_num_links=ccl_num_links,
+            sharded_decode_io=sharded_decode_io,
             **({} if decode_fused_activation is None else {"decode_fused_activation": decode_fused_activation}),
         )
 
@@ -1065,6 +1224,9 @@ class MultichipDecoder(OptimizedDecoder):
         ``logs/fabric_packet_probe.log``).  See
         :data:`DEFAULT_DECODE_CCL_MODE`.
         """
+        impl = self.prefill_ccl_impl if prefill else self.decode_ccl_impl
+        if impl == "async":
+            return self._all_reduce_async(tensor, memory_config, prefill=prefill)
         if (self.prefill_ccl_mode if prefill else self.decode_ccl_mode) == "rs_ag":
             scattered = ttnn.reduce_scatter(
                 tensor,
@@ -1096,6 +1258,205 @@ class MultichipDecoder(OptimizedDecoder):
             topology=CCL_TOPOLOGY,
         )
         ttnn.deallocate(tensor)
+        return reduced
+
+    # --------------------------------------------- the async / persistent form
+
+    def _ccl_semaphores(self) -> dict:
+        """Global semaphores for the async collectives, shared across the mesh.
+
+        The composite wrappers create a semaphore per *program* and leave it in
+        ``L1_SMALL`` for the life of the program cache, which is what bounds a
+        mesh to 24 distinct CCL programs (:data:`DEFAULT_L1_SMALL_SIZE`).  These
+        are created once per mesh, live in the main L1 pool of a fixed core range
+        and are reused by every shape and every layer, so the async path does not
+        consume that budget at all -- a stacked model pays for **one** set, not
+        one per layer.
+
+        Two sets are cycled so the two collectives of one decode step cannot alias
+        a semaphore.  ``close_multichip_mesh`` drops the registry, because a
+        semaphore outlives neither the mesh that allocated it nor the address it
+        was allocated at.
+        """
+        key = id(self.mesh_device)
+        sems = _CCL_SEMAPHORES.get(key)
+        if sems is None:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+
+            # In L1_SMALL, for the same reason the wrapper reduce-scatter is asked
+            # to put its own there: a semaphore in the main L1 pool sits at the
+            # top of it for the life of the mesh, and the decode step has only
+            # 7,296 B of headroom (:data:`DEFAULT_L1_SMALL_SIZE`).  Twelve of them
+            # in the main pool overruns that and the *next* sharded-norm program
+            # fails with "Statically allocated circular buffers ... clash with L1
+            # buffers"; in L1_SMALL they are 12 x 256 B = 3,072 B of a 6,144 B
+            # region, and -- unlike the wrapper's per-program semaphores -- that
+            # is a *fixed* cost, not one that grows with the number of distinct
+            # CCL programs.
+            def sem():
+                return ttnn.create_global_semaphore(self.mesh_device, crs, 0, ttnn.BufferType.L1_SMALL)
+
+            # Seven semaphores, not fourteen.  ``reduce_scatter_minimal_async``
+            # takes three and ``all_gather_async`` two, and each takes its own
+            # barrier -- the all-gather's is not optional: omitting it lets the
+            # next op start against a fabric router that has not drained, which
+            # the watcher catches as "subordinate_erisc detected invalid NOC
+            # command buffer state before starting the next kernel" in
+            # fabric_erisc_router.cpp (logs/watcher_run.log).
+            #
+            # They are *not* double-buffered, because in this layer they cannot
+            # be reached concurrently: the two reductions are separated by the
+            # norm, the residual add and two matmuls that consume one's output to
+            # build the other's input, so they are ordered by data dependency
+            # rather than by convention.  The count matters because this region is
+            # shared with the wrapper collectives' one-semaphore-per-program
+            # allocations, and every 256 B here is one fewer distinct wrapper CCL
+            # program the mesh can hold before they spill into the main L1 pool
+            # and fragment it.  At fourteen, the 256-row prefill in
+            # test_collective_implementation_is_split_by_payload failed under
+            # watcher with "Statically allocated circular buffers in program 3568
+            # clash with L1 buffers"; at seven it passes.
+            sems = {
+                "rs": [sem() for _ in range(3)],
+                "ag": [sem() for _ in range(2)],
+                "rs_barrier": sem(),
+                "ag_barrier": sem(),
+            }
+            _CCL_SEMAPHORES[key] = sems
+        return sems
+
+    def _ccl_persistent_buffers(self, tensor: ttnn.Tensor, slot: int) -> list | None:
+        """``persistent_output_buffers`` for ``reduce_scatter_minimal_async``.
+
+        ``[intermediate, output, penult]`` -- the staging pair comes from the op's
+        own sizing helper so the layouts are guaranteed to match the contiguous
+        ring fast path, and the scattered output is this layer's.  Cached per
+        ``(rows, width, dtype, slot)``; ``slot`` alternates so the layer's two
+        reductions never share a buffer.
+
+        Only the *scatter* half is made persistent.  The all-gather output is left
+        to the op, because it is the tensor this method returns and callers
+        deallocate it -- handing them a buffer this layer intends to reuse next
+        token would be a use-after-free waiting for a scheduler change.
+
+        Allocated with ``ttnn.zeros`` rather than ``ttnn.from_torch`` so that
+        first use inside ``decode_forward`` is not a host round trip: the runtime
+        fallback audit (``test_no_host_fallback_in_forward``) traps exactly that.
+        """
+        key = (int(tensor.shape[-2]), int(tensor.shape[-1]), tensor.dtype, slot)
+        cache = self.__dict__.setdefault("_ccl_bufs", {})
+        if key not in cache:
+            staging = ttnn.experimental.reduce_scatter_minimal_async_create_intermediate_buffer(
+                tensor, dim=3, topology=CCL_TOPOLOGY
+            )
+            shape = list(tensor.shape)
+            shape[-1] //= self.plan.tp
+            out = ttnn.zeros(
+                shape,
+                dtype=tensor.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            cache[key] = [staging[0], out, staging[1]]
+            self._warm_persistent_buffers(tensor, cache[key], slot)
+        return cache[key]
+
+    def _warm_persistent_buffers(self, tensor: ttnn.Tensor, buffers: list, slot: int) -> None:
+        """Run one throwaway reduce-scatter through freshly allocated staging.
+
+        ``reduce_scatter_minimal_async_create_intermediate_buffer`` allocates the
+        chunk-paged staging pair but does not initialise it, and the ring
+        algorithm reads the penult intermediate before it has written it on the
+        **first** invocation.  Measured
+        (``bench/regression_bisect.py``, ``logs/regression_bisect.log``): with
+        persistent buffers first used inside decode, decode step 0 scores PCC
+        0.7395 (``full``) / 0.7749 (``sliding``) against the same layer without
+        them, while steps 1-3 are bit-identical (1.000000) -- a first-use fault,
+        not a numerical one.  It stayed hidden in the whole-layer A/B and in the
+        HF-reference suite because both warm the layer before they measure or
+        assert, and it only surfaced in
+        ``test_multichip_matches_single_chip[12345-4-full]``, which compares the
+        very first decode step against a single-chip TTNN baseline at 0.999.
+
+        Warming here turns every *real* first use into a second use.  It costs one
+        collective per distinct ``(rows, width, dtype, slot)``, once, and the
+        result is discarded.  A decode-only caller -- vLLM, or a generator that
+        never prefills through this layer -- is exactly the case that would
+        otherwise ship the corrupted step, so this cannot be left to the accident
+        that prefill happens to run first.
+        """
+        sems = self._ccl_semaphores()
+        # Not deallocated: the op writes into -- and returns -- ``buffers[1]``,
+        # which is the persistent output this layer keeps.
+        ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            persistent_output_buffers=buffers,
+            dim=3,
+            multi_device_global_semaphore=sems["rs"],
+            barrier_semaphore=sems["rs_barrier"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=CCL_TOPOLOGY,
+            num_workers_per_link=self.decode_ccl_rs_workers,
+        )
+        # Drain it.  The warm-up and the real call that follows share a semaphore
+        # set, and without a barrier between them the real call can observe the
+        # warm-up's counts: leaving this out measured PCC 0.9721 on the first
+        # ``sliding`` decode step (``logs/regression_bisect_fixed.log``) where the
+        # drained version is bit-identical.  Only ever reached outside trace
+        # capture, because :meth:`_prewarm_decode_ccl_buffers` has already run.
+        ttnn.synchronize_device(self.mesh_device)
+
+    def _all_reduce_async(self, tensor: ttnn.Tensor, memory_config: ttnn.MemoryConfig, *, prefill: bool):
+        """``reduce_scatter_minimal_async`` + ``all_gather_async``, tuned per half.
+
+        Same algebra and the same bytes as :meth:`_all_reduce`'s ``rs_ag`` form.
+        What it adds is a tuning surface on the *all-gather*, which
+        ``ttnn.all_gather`` does not expose, and caller-owned semaphores and
+        staging buffers.
+        """
+        sems = self._ccl_semaphores()
+        slot = self._ccl_slot
+        self._ccl_slot = (slot + 1) % 2
+        buffers = self._ccl_persistent_buffers(tensor, slot) if self.ccl_persistent_buffers else None
+        ag_workers = self.prefill_ccl_ag_workers if prefill else self.decode_ccl_ag_workers
+        tune = {
+            k: v
+            for k, v in (
+                ("chunks_per_sync", self.ccl_chunks_per_sync),
+                ("num_buffers_per_channel", self.ccl_buffers_per_channel),
+                ("num_links", self.ccl_num_links),
+            )
+            if v is not None
+        }
+        scattered = ttnn.experimental.reduce_scatter_minimal_async(
+            tensor,
+            persistent_output_buffers=buffers,
+            dim=3,
+            multi_device_global_semaphore=sems["rs"],
+            barrier_semaphore=sems["rs_barrier"],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=CCL_TOPOLOGY,
+            num_workers_per_link=self.prefill_ccl_rs_workers if prefill else self.decode_ccl_rs_workers,
+            **tune,
+        )
+        ttnn.deallocate(tensor)
+        reduced = ttnn.experimental.all_gather_async(
+            scattered,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=sems["ag"],
+            barrier_semaphore=sems["ag_barrier"],
+            memory_config=memory_config,
+            topology=CCL_TOPOLOGY,
+            **({} if ag_workers is None else {"num_workers_per_link": ag_workers}),
+            **tune,
+        )
+        if buffers is None:
+            ttnn.deallocate(scattered)
         return reduced
 
     # ------------------------------------------------------------ projections

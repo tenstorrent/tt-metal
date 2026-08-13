@@ -240,9 +240,20 @@ def multichip_mesh():
 #: two layer kinds does build hundreds, so it clears on either trigger below --
 #: whichever fires first -- at the cost of a recompile.
 PROGRAM_CACHE_LIMIT = 120
-#: Clear once fewer than this many bytes of the ``L1_SMALL`` region are free,
-#: i.e. with fewer than ~6 CCL programs' worth of room left.
-L1_SMALL_FREE_FLOOR = 1536
+#: Clear once fewer than this many bytes of the ``L1_SMALL`` region are free.
+#:
+#: Raised from 1536 B by the optimized stage.  Its async prefill collective holds
+#: **seven** global semaphores (1,792 B) for the life of the mesh, and
+#: ``clear_program_cache()`` does *not* release those -- they are the layer's, not
+#: a program's.  So the region a session actually has to play with is 4,352 B
+#: rather than 6,144, and a floor of 1536 leaves less headroom than it used to
+#: name.  Measured: at 1536 the 256-row prefill in
+#: ``test_collective_implementation_is_split_by_payload`` failed under watcher
+#: with *"Statically allocated circular buffers in program 3568 clash with L1
+#: buffers"* while passing in isolation; at 2560 the whole watcher list passes.
+#: The trigger is session position, not the layer -- which is the same thing
+#: ``PROGRAM_CACHE_LIMIT`` above is about.
+L1_SMALL_FREE_FLOOR = 2560
 
 
 @pytest.fixture(autouse=True)
@@ -372,7 +383,13 @@ def ccl_mode_of(decoder, phase: str) -> str:
     the two spellings move the same bytes and which one is configured is a
     measurement rather than a contract -- the tests read the knob and assert the
     number of *reductions*, and fall back to the fused op if the knob is absent.
+
+    ``ccl_impl="async"`` (the optimized default for both phases) always dispatches
+    the pair, whatever ``ccl_mode`` says, because the async primitives have no
+    fused form; the mode knob only chooses between the two *wrapper* spellings.
     """
+    if getattr(decoder, f"{phase}_ccl_impl", "wrapper") == "async":
+        return "rs_ag"
     return getattr(decoder, f"{phase}_ccl_mode", "all_reduce")
 
 
@@ -404,6 +421,18 @@ def build_multichip(
     payload = os.environ.get("MG_MULTICHIP_DECODE_CCL_DTYPE")
     if payload and "decode_ccl_dtype" not in build_kwargs:
         build_kwargs["decode_ccl_dtype"] = {"bfloat16": ttnn.bfloat16, "bfloat8_b": ttnn.bfloat8_b}[payload]
+    # ``MG_MULTICHIP_CCL_IMPL=wrapper`` / ``MG_MULTICHIP_SHARDED_DECODE_IO=0`` put
+    # the layer back on the multichip stage's collectives and layer boundary.
+    # They exist so the optimized stage's watcher and correctness evidence can be
+    # re-run against the *pre-stage* configuration as a control, from committed
+    # code rather than a source edit -- which is how
+    # ``logs/watcher_run_wrapper_control.log`` was produced.
+    impl = os.environ.get("MG_MULTICHIP_CCL_IMPL")
+    if impl and "ccl_impl" not in build_kwargs:
+        build_kwargs["ccl_impl"] = impl
+    sharded_io = os.environ.get("MG_MULTICHIP_SHARDED_DECODE_IO")
+    if sharded_io is not None and "sharded_decode_io" not in build_kwargs:
+        build_kwargs["sharded_decode_io"] = sharded_io not in ("0", "false", "no")
     # Values, not just names: keying on the kwarg names alone would let two builds
     # that differ only in a value (e.g. ``ccl_dtype``) share a cached decoder.
     key = (
@@ -508,17 +537,29 @@ class _CollectiveSpy:
     not a contract.
     """
 
+    #: The composite wrappers, on ``ttnn``.
     OPS = ("all_reduce", "reduce_scatter", "all_gather")
+    #: The async primitives those wrappers lower to, on ``ttnn.experimental``,
+    #: which the optimized stage calls directly so it can own the semaphores, the
+    #: staging buffers and the all-gather worker count.  Counted as the wrapper
+    #: they replace, because the contract these tests pin is *how many reductions
+    #: the layer performs*, not which spelling dispatches them.
+    ASYNC_OPS = {"reduce_scatter_minimal_async": "reduce_scatter", "all_gather_async": "all_gather"}
 
     def __init__(self):
         self.calls: list[dict] = []
         self._saved: dict = {}
+        self._saved_async: dict = {}
 
     def __enter__(self):
         for name in self.OPS:
             original = getattr(ttnn, name)
             self._saved[name] = original
             setattr(ttnn, name, self._trap(name, original))
+        for name, counts_as in self.ASYNC_OPS.items():
+            original = getattr(ttnn.experimental, name)
+            self._saved_async[name] = original
+            setattr(ttnn.experimental, name, self._trap(counts_as, original))
         return self
 
     def _trap(self, name, original):
@@ -539,6 +580,8 @@ class _CollectiveSpy:
     def __exit__(self, *exc):
         for name, original in self._saved.items():
             setattr(ttnn, name, original)
+        for name, original in self._saved_async.items():
+            setattr(ttnn.experimental, name, original)
         return False
 
     def reductions(self, mode: str) -> int:
@@ -1552,6 +1595,138 @@ def test_decode_uses_dram_sharded_matmuls(multichip_mesh, decoder_cache, kind):
 
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("kind", LAYER_KINDS)
+def test_collective_implementation_is_split_by_payload(multichip_mesh, decoder_cache, kind):
+    """Prefill reduces with the async primitives; decode reduces with the wrappers.
+
+    The split is a measurement, and the number that decides it is the *barrier
+    semaphore*.  Both async primitives take one, and omitting it on the
+    all-gather lets the next op start against a fabric router that has not
+    drained -- the watcher stops the device with "subordinate_erisc detected
+    invalid NOC command buffer state before starting the next kernel".  With the
+    barrier in place the async pair is 14.7 % faster than ``ttnn.all_reduce`` at
+    the 107 MB prefill payload and 0.2 % *slower* than the wrappers at the 40 KB
+    decode payload, where the collective is pure fixed cost and one more
+    synchronization round is a large fraction of it.
+
+    Both halves of that are asserted here, at dispatch level, because either one
+    silently flipping still computes the right answer.
+    """
+    decoder = build_multichip(multichip_mesh, decoder_cache, kind)
+    assert decoder.prefill_ccl_impl == "async"
+    assert decoder.decode_ccl_impl == "wrapper"
+    # This test runs a 256-row prefill *and* a decode against one decoder, and the
+    # 256-row sharded prefill norm is the L1-tightest window in the suite (see
+    # DEFAULT_L1_SMALL_SIZE).  ``_bound_ccl_semaphores`` releases accumulated CCL
+    # semaphores *after* each test, which is one test too late for this one: run
+    # late in a watcher session it failed with "Statically allocated circular
+    # buffers in program 3568 clash with L1 buffers" while passing in isolation.
+    # Ask for the region up front rather than depending on session position.
+    multichip_mesh.clear_program_cache()
+    page_table = make_page_table(multichip_mesh, 1, SHORT_MAX_SEQ, seed=515151)
+
+    saved = {name: getattr(ttnn, name) for name in _CollectiveSpy.OPS}
+    saved_async = {name: getattr(ttnn.experimental, name) for name in _CollectiveSpy.ASYNC_OPS}
+    seen: list[str] = []
+
+    def note(name, original):
+        def trap(*args, **kwargs):
+            seen.append(name)
+            return original(*args, **kwargs)
+
+        return trap
+
+    def watch():
+        for name, original in saved.items():
+            setattr(ttnn, name, note(f"wrapper:{name}", original))
+        for name, original in saved_async.items():
+            setattr(ttnn.experimental, name, note(f"async:{name}", original))
+
+    def unwatch():
+        for name, original in saved.items():
+            setattr(ttnn, name, original)
+        for name, original in saved_async.items():
+            setattr(ttnn.experimental, name, original)
+
+    # ---- prefill must be async, and must not touch a wrapper
+    watch()
+    try:
+        ttnn.deallocate(
+            decoder.prefill_forward(
+                to_device_hidden(multichip_mesh, R.synthetic_hidden_states(1, 256, seed=515152)),
+                page_table=page_table,
+                user_id=0,
+            )
+        )
+    finally:
+        unwatch()
+    assert not [
+        s for s in seen if s.startswith("wrapper:")
+    ], f"prefill must reduce with the async primitives, saw {seen}"
+    assert sum(1 for s in seen if s == "async:reduce_scatter_minimal_async") == 2, seen
+    assert sum(1 for s in seen if s == "async:all_gather_async") == 2, seen
+
+    # ---- decode must be the wrappers, and must not touch an async primitive
+    seen.clear()
+    current_pos, rope_pos_ids = decode_position_tensors(multichip_mesh, torch.tensor([64]))
+    watch()
+    try:
+        ttnn.deallocate(
+            decoder.decode_forward(
+                to_device_hidden(multichip_mesh, R.synthetic_hidden_states(1, 1, seed=515153)),
+                current_pos=current_pos,
+                page_table=page_table,
+                rope_pos_ids=rope_pos_ids,
+            )
+        )
+    finally:
+        unwatch()
+    assert not [s for s in seen if s.startswith("async:")], f"decode must reduce with the wrappers, saw {seen}"
+    assert sum(1 for s in seen if s == "wrapper:reduce_scatter") == 2, seen
+    assert sum(1 for s in seen if s == "wrapper:all_gather") == 2, seen
+
+    ttnn.deallocate(page_table)
+    for tensor in (current_pos, rope_pos_ids):
+        ttnn.deallocate(tensor)
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("kind", LAYER_KINDS)
+def test_decode_boundary_layout_is_a_fixed_point(multichip_mesh, decoder_cache, kind):
+    """A sharded decode input comes back as the same layout, and is not freed.
+
+    The inter-layer residual contract: the decode residual stays width-sharded in
+    L1 across the layer *boundary*, so a stack pays no ``sharded_to_interleaved``
+    /``interleaved_to_sharded`` pair per join (measured at 4.7 us on ``sliding``
+    and 10.7 us on ``full`` by ``bench/boundary_probe.py``).  Two things have to
+    hold for a stack to be able to use it: the layout is a fixed point, and the
+    layer does not deallocate a tensor its caller still owns.
+    """
+    decoder = build_multichip(multichip_mesh, decoder_cache, kind)
+    page_table = make_page_table(multichip_mesh, 1, SHORT_MAX_SEQ, seed=616161)
+    current_pos, rope_pos_ids = decode_position_tensors(multichip_mesh, torch.tensor([64]))
+    boundary = decoder.boundary_memcfg(TILE_SIZE, decoder.config.hidden_size)
+
+    interleaved = to_device_hidden(multichip_mesh, R.synthetic_hidden_states(1, 1, seed=616162))
+    from_dram = decoder.decode_forward(
+        interleaved, current_pos=current_pos, page_table=page_table, rope_pos_ids=rope_pos_ids
+    )
+    assert from_dram.memory_config() == boundary, "an interleaved input must still produce the boundary layout"
+
+    sharded_in = ttnn.interleaved_to_sharded(interleaved, boundary)
+    from_sharded = decoder.decode_forward(
+        sharded_in, current_pos=current_pos, page_table=page_table, rope_pos_ids=rope_pos_ids
+    )
+    assert from_sharded.memory_config() == boundary
+    assert ttnn.is_tensor_storage_on_device(sharded_in), "the layer must not free a tensor its caller owns"
+    # Same computation either way: the boundary layout changes conversions, not math.
+    assert torch.equal(first_device(from_dram), first_device(from_sharded))
+
+    for tensor in (interleaved, sharded_in, from_dram, from_sharded, page_table, current_pos, rope_pos_ids):
+        ttnn.deallocate(tensor)
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("kind", LAYER_KINDS)
 def test_decode_has_exactly_two_collectives(multichip_mesh, decoder_cache, kind):
     """Two reductions per decode step and two per prefill chunk, on a ring. No more.
 
@@ -1820,10 +1995,24 @@ def test_two_layers_stack(multichip_mesh):
             tt_token, current_pos=current_pos, page_table=page_table, rope_pos_ids=rope_pos_ids
         )
         assert decode_one.dtype == tt_token.dtype
-        assert decode_one.memory_config() == tt_token.memory_config()
+        # The decode boundary contract is the *optimized* one: width-sharded L1 on
+        # the boundary grid, not the DRAM-interleaved layout a caller may hand in.
+        # What a stacked model needs is that the contract is a fixed point -- layer
+        # n's output is exactly what layer n+1 returns -- so no conversion is
+        # needed at any join.  See doc/optimized_multichip_decoder/README.md.
+        expected_boundary = first.boundary_memcfg(TILE_SIZE, first.config.hidden_size)
+        assert decode_one.memory_config() == expected_boundary, (
+            f"decode output memory config {decode_one.memory_config()} is not the boundary contract "
+            f"{expected_boundary}, so a stacked model would need a conversion per layer"
+        )
         decode_two = second.decode_forward(
             decode_one, current_pos=current_pos, page_table=page_table, rope_pos_ids=rope_pos_ids
         )
+        assert decode_two.memory_config() == decode_one.memory_config(), (
+            "the decode boundary layout must be a fixed point across a layer, or a stack would "
+            "drift to a different layout at every join"
+        )
+        assert tuple(decode_two.shape) == tuple(decode_one.shape)
         assert_pcc(
             "multichip two-layer stack decode",
             reference_decode,
@@ -2087,15 +2276,17 @@ def test_decode_ccl_dtype_override(multichip_mesh, decoder_cache, reference_laye
 def test_ccl_mode_override(multichip_mesh, decoder_cache, reference_layers, ccl_mode):
     """Both reducer spellings compute the same layer, and dispatch what they claim.
 
-    The layer ships one mode for prefill and the other for decode on a 0.2-1.2 %
-    measurement, so both code paths are live and both have to be correct.  Forcing
-    a single mode on both phases is also the only way to see the pair's two
-    dispatches and the fused op's one against the *same* reference.
+    The mode knob chooses between the two *wrapper* spellings, so this test pins
+    ``ccl_impl="wrapper"``: the optimized default calls the async primitives
+    directly and they have no fused form, so ``ccl_mode`` is inert there.  Both
+    wrapper spellings stay live -- the A/B harness sweeps them, and the async
+    rejection in ``doc/optimized_multichip_decoder/README.md`` is measured against
+    them -- so both still have to be correct.
     """
     kind = LAYER_KIND_SLIDING
     layer_idx, layer = reference_layers[kind]
     try:
-        decoder = build_multichip(multichip_mesh, decoder_cache, kind, ccl_mode=ccl_mode)
+        decoder = build_multichip(multichip_mesh, decoder_cache, kind, ccl_mode=ccl_mode, ccl_impl="wrapper")
     except TypeError as error:  # pragma: no cover - only if the knob is withdrawn
         pytest.skip(f"this build has no ccl_mode knob, so there is one reducer spelling to test: {error}")
     assert ccl_mode_of(decoder, "prefill") == ccl_mode_of(decoder, "decode") == ccl_mode

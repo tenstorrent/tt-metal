@@ -874,11 +874,15 @@ class OptimizedDecoder(FusedDecoder):
         boundary_cores: int = BOUNDARY_CORES,
         decode_sdpa: tuple[int, int, int, int] | None = None,
         decode_fused_activation: bool = DECODE_FUSED_ACTIVATION,
+        sharded_decode_io: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.precision = precision
         self.decode_fused_activation = decode_fused_activation
+        #: Return the decode residual width-sharded in L1 instead of DRAM
+        #: interleaved -- the inter-layer contract described in ``decode_forward``.
+        self.sharded_decode_io = sharded_decode_io
         #: **One** persistent zero Q filler, at the full sliding-window length; see
         #: ``_prefill_sdpa_sliding``.  Shorter tails slice it rather than allocate.
         self._q_filler: ttnn.Tensor | None = None
@@ -898,12 +902,28 @@ class OptimizedDecoder(FusedDecoder):
                 "the MLP gate/up/down roles must share a core count: down consumes the gate/up product, "
                 f"got {[self.decode_matmul[r] for r in ('mlp_gate', 'mlp_up', 'mlp_down')]}"
             )
-        for role in ("wqkv", "attn_gate", "o_proj"):
+        for role in ("wqkv", "attn_gate"):
             if self.decode_matmul[role][0] != boundary_cores:
                 raise ValueError(
                     f"{role} must run on the boundary grid ({boundary_cores} cores) so the residual, norms "
                     f"and residual adds need no reshard; got {self.decode_matmul[role][0]}"
                 )
+        # ``o_proj`` is the one attention role allowed off the boundary grid
+        # ($optimize OPT-011).  Its ``in0`` is the *gated attention output*, not
+        # the residual, so a narrower working shard costs one ``ttnn.reshard`` of
+        # that tensor and nothing else -- the projection's own output goes
+        # straight into the row-parallel reduction (multichip) or the boundary
+        # memory config (single chip), never back into a residual add.  The
+        # reason to want one is that ``o_proj``'s K is the *attention* width, the
+        # smallest K in the layer, so the boundary grid can leave it with too few
+        # K-tiles per core for a useful ``in0_block_w``.
+        oproj_cores = self.decode_matmul["o_proj"][0]
+        attn_width = self.config.num_attention_heads * self.config.head_dim
+        if attn_width // TILE_SIZE % oproj_cores:
+            raise ValueError(
+                f"o_proj runs on {oproj_cores} cores, which must divide the {attn_width // TILE_SIZE} "
+                f"attention-output tiles so its in0 shard is not padded"
+            )
         self.boundary_cores = boundary_cores
         grid = self.mesh_device.compute_with_storage_grid_size()
         self.device_grid = grid
@@ -980,6 +1000,7 @@ class OptimizedDecoder(FusedDecoder):
         boundary_cores: int = BOUNDARY_CORES,
         decode_sdpa: tuple[int, int, int, int] | None = None,
         decode_fused_activation: bool = DECODE_FUSED_ACTIVATION,
+        sharded_decode_io: bool = False,
         **kwargs,
     ) -> "OptimizedDecoder":
         """Same contract as ``FusedDecoder.from_state_dict``, plus ``precision``.
@@ -1140,6 +1161,7 @@ class OptimizedDecoder(FusedDecoder):
             boundary_cores=boundary_cores,
             decode_sdpa=decode_sdpa,
             decode_fused_activation=decode_fused_activation,
+            sharded_decode_io=sharded_decode_io,
         )
 
     # -------------------------------------------------------------- projections
@@ -1645,7 +1667,17 @@ class OptimizedDecoder(FusedDecoder):
         rows = ((batch + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE
         norm_prg, norm_memcfg = self._decode_norm_configs(rows)
 
-        residual = ttnn.interleaved_to_sharded(hidden_states, norm_memcfg)
+        # Inter-layer residual contract.  The decode residual is width-sharded in
+        # L1 on the boundary grid for the whole layer; the only question is
+        # whether the *layer boundary* is that layout too.  When the caller hands
+        # one in already (``sharded_decode_io``), the entry
+        # ``interleaved_to_sharded`` and the exit ``sharded_to_interleaved`` --
+        # 2 x 425 KB of DRAM round trip per layer per token -- both disappear, and
+        # a stacked model hands one layer's output straight to the next with no
+        # conversion and no collective.  An interleaved input is still accepted so
+        # the public contract is unchanged.
+        aliased_input = hidden_states.is_sharded()
+        residual = hidden_states if aliased_input else ttnn.interleaved_to_sharded(hidden_states, norm_memcfg)
         normed = self.input_layernorm.sharded_forward(residual, norm_prg, norm_memcfg)
 
         xqkv_sharded = self._decode_projection(normed, self.wqkv, role="wqkv", rows=rows)
@@ -1714,17 +1746,22 @@ class OptimizedDecoder(FusedDecoder):
             gate,
             input_tensor_b_activations=[] if self.decode_fused_activation else [ttnn.UnaryOpType.SIGMOID],
             dtype=self.activation_dtype,
-            memory_config=self._sharded_memcfg(rows, attn_width, self.decode_matmul["o_proj"][0]),
+            memory_config=self._sharded_memcfg(rows, attn_width, self.decode_matmul["attn_gate"][0]),
         )
         ttnn.deallocate(out_sharded)
         ttnn.deallocate(gate)
+        # Pass-through when ``o_proj`` shares the gate's grid, which is the
+        # default; a narrower ``o_proj`` working shard (OPT-011) pays one reshard
+        # of this 32-tile tensor to widen the projection's K block.
+        gated = self._reshard_to(gated, self.decode_matmul["o_proj"][0], rows)
         attn_out = self._decode_projection(gated, self.wo, role="o_proj", rows=rows)
         ttnn.deallocate(gated)
 
         attn_normed = self.post_attention_layernorm.sharded_forward(attn_out, norm_prg, norm_memcfg)
         ttnn.deallocate(attn_out)
         hidden = ttnn.add(residual, attn_normed, memory_config=norm_memcfg)
-        ttnn.deallocate(residual)
+        if not aliased_input:  # never free a tensor the caller still owns
+            ttnn.deallocate(residual)
         ttnn.deallocate(attn_normed)
 
         mlp_in = self.pre_feedforward_layernorm.sharded_forward(hidden, norm_prg, norm_memcfg)
@@ -1738,6 +1775,8 @@ class OptimizedDecoder(FusedDecoder):
         out_sharded = ttnn.add(hidden, mlp_normed, memory_config=norm_memcfg)
         ttnn.deallocate(hidden)
         ttnn.deallocate(mlp_normed)
+        if self.sharded_decode_io:
+            return out_sharded
         out = ttnn.sharded_to_interleaved(out_sharded, ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(out_sharded)
         return out

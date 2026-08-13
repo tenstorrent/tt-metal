@@ -1,0 +1,220 @@
+2026-08-13 01:26:12.885 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1m============================= test session starts ==============================[0m
+[1mcollecting ... [0mcollected 4 items
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py::test_multichip_matches_single_chip[2049-1-sliding] 2026-08-13 01:26:14.624 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-13 01:26:14.624 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-13 01:26:14.624 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-13 01:26:14.624 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-13 01:26:14.636 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-13 01:26:14.636 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-13 01:26:14.714 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-13 01:26:14.714 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-13 01:26:14.714 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-13 01:26:14.714 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-13 01:26:14.715 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-13 01:26:14.979 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-13 01:26:16.552 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 01:26:16.553 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 01:26:16.553 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-13 01:26:16.553 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 01:26:16.553 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 01:26:16.595 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-13 01:26:19.213 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 01:26:19.213 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 01:26:19.213 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 01:26:19.213 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 01:26:19.213 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 01:26:19.262 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:19.263 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:19.263 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:19.263 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:19.263 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:19.263 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:19.263 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:19.263 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:19.264 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 01:26:19.281 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-13 01:26:19.284 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-13 01:26:19.285 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-13 01:26:19.286 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-13 01:26:19.286 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 01:26:19.286 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 01:26:22.810 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 01:26:22.849 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 01:26:22.851 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 01:26:22.853 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 01:26:23.138 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN prefill[sliding seq_len=2049 batch=1]: 0.9998387103407453
+2026-08-13 01:26:23.139 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN decode0[sliding seq_len=2049 batch=1]: 0.999858468453373
+2026-08-13 01:26:23.139 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN decode1[sliding seq_len=2049 batch=1]: 0.9998604382564171
+2026-08-13 01:26:23.139 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN decode2[sliding seq_len=2049 batch=1]: 0.9998529286819348
+2026-08-13 01:26:23.139 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN decode3[sliding seq_len=2049 batch=1]: 0.9998510125892082
+2026-08-13 01:26:23.139 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:234 - multichip vs single-chip TTNN worst[sliding seq_len=2049 batch=1]: 0.999839 on prefill
+[32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py::test_multichip_matches_single_chip[2049-1-full] 2026-08-13 01:26:24.919 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-13 01:26:26.901 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 01:26:26.901 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 01:26:26.901 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 01:26:26.902 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 01:26:26.902 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 01:26:26.951 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:26.952 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:26.952 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:26.952 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:26.952 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:26.952 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:26.952 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:26.952 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:26.953 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 01:26:26.963 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-13 01:26:26.964 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-13 01:26:26.965 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-13 01:26:26.966 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-13 01:26:26.966 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 01:26:26.966 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 01:26:29.796 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 01:26:29.817 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 01:26:29.819 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 01:26:29.820 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 01:26:30.100 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN prefill[full seq_len=2049 batch=1]: 0.9998068792341452
+2026-08-13 01:26:30.100 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN decode0[full seq_len=2049 batch=1]: 0.9998175225451529
+2026-08-13 01:26:30.100 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN decode1[full seq_len=2049 batch=1]: 0.9998157644410528
+2026-08-13 01:26:30.100 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN decode2[full seq_len=2049 batch=1]: 0.9998172096002699
+2026-08-13 01:26:30.101 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN decode3[full seq_len=2049 batch=1]: 0.9998251013312857
+2026-08-13 01:26:30.101 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:234 - multichip vs single-chip TTNN worst[full seq_len=2049 batch=1]: 0.999807 on prefill
+[32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py::test_multichip_matches_single_chip[12345-4-sliding] 2026-08-13 01:26:32.153 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-13 01:26:34.682 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 01:26:34.682 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 01:26:34.682 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 01:26:34.682 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 01:26:34.682 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 01:26:34.732 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:34.732 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:34.732 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:34.732 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:34.732 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:34.733 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:34.733 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:34.733 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:34.733 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 01:26:34.744 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-13 01:26:34.745 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-13 01:26:34.745 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-13 01:26:34.746 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-13 01:26:34.746 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 01:26:34.746 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 01:26:38.008 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 01:26:38.044 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 01:26:38.046 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 01:26:38.048 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 01:26:39.070 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN prefill[sliding seq_len=12345 batch=4]: 0.9997208800564498
+2026-08-13 01:26:39.070 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN decode0[sliding seq_len=12345 batch=4]: 0.9998437820537311
+2026-08-13 01:26:39.071 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN decode1[sliding seq_len=12345 batch=4]: 0.9998441438161644
+2026-08-13 01:26:39.071 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN decode2[sliding seq_len=12345 batch=4]: 0.9998427989848884
+2026-08-13 01:26:39.071 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN decode3[sliding seq_len=12345 batch=4]: 0.9998427359691657
+2026-08-13 01:26:39.071 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:234 - multichip vs single-chip TTNN worst[sliding seq_len=12345 batch=4]: 0.999721 on prefill
+[32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py::test_multichip_matches_single_chip[12345-4-full] 2026-08-13 01:26:41.152 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-13 01:26:43.698 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 01:26:43.698 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 01:26:43.698 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 01:26:43.698 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 01:26:43.698 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 01:26:43.747 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:43.748 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:43.748 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:43.748 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:43.748 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:43.748 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:43.748 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:43.748 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-13 01:26:43.749 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 01:26:43.760 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-13 01:26:43.760 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-13 01:26:43.761 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-13 01:26:43.762 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-13 01:26:43.762 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 01:26:43.762 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 01:26:47.032 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 01:26:47.070 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 01:26:47.072 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 01:26:47.074 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-13 01:26:48.141 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN prefill[full seq_len=12345 batch=4]: 0.9996087136489291
+2026-08-13 01:26:48.141 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN decode0[full seq_len=12345 batch=4]: 0.9991916638339985
+2026-08-13 01:26:48.142 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN decode1[full seq_len=12345 batch=4]: 0.9991827529521182
+2026-08-13 01:26:48.142 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN decode2[full seq_len=12345 batch=4]: 0.9991826015549865
+2026-08-13 01:26:48.142 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:226 - multichip vs single-chip TTNN decode3[full seq_len=12345 batch=4]: 0.9992018552082059
+2026-08-13 01:26:48.142 | INFO     | autoports.meta_models_muse_glimmer_30b.tests.test_multichip_vs_single_chip:test_multichip_matches_single_chip:234 - multichip vs single-chip TTNN worst[full seq_len=12345 batch=4]: 0.999183 on decode2
+[32mPASSED[0m
+
+[33m=============================== warnings summary ===============================[0m
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_multichip_decoder/test_results_vs_single_chip.xml -
+============================= slowest 25 durations =============================
+8.85s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py::test_multichip_matches_single_chip[12345-4-full]
+8.78s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py::test_multichip_matches_single_chip[12345-4-sliding]
+8.57s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py::test_multichip_matches_single_chip[2049-1-sliding]
+6.75s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py::test_multichip_matches_single_chip[2049-1-full]
+0.22s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py::test_multichip_matches_single_chip[12345-4-full]
+0.21s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py::test_multichip_matches_single_chip[2049-1-full]
+0.21s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py::test_multichip_matches_single_chip[12345-4-sliding]
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py::test_multichip_matches_single_chip[2049-1-sliding]
+
+(4 durations < 0.005s hidden.  Use -vv to show these durations.)
+[36m[1m=========================== short test summary info ============================[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py::[1mtest_multichip_matches_single_chip[2049-1-sliding][0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py::[1mtest_multichip_matches_single_chip[2049-1-full][0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py::[1mtest_multichip_matches_single_chip[12345-4-sliding][0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_vs_single_chip.py::[1mtest_multichip_matches_single_chip[12345-4-full][0m
+[33m======================== [32m4 passed[0m, [33m[1m3 warnings[0m[33m in 34.68s[0m[33m ========================[0m
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 4 instances!
+ - leaked instance 0x7488639bc278 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7488639bc098 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x748810801348 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x748810c35518 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 26 types!
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - ... skipped remainder
+nanobind: leaked 282 functions!
+ - leaked function "arch"
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "dims"
+ - leaked function ""
+ - leaked function "__repr__"
+ - leaked function "to_list"
+ - leaked function ""
+ - leaked function "__repr__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-13 01:26:49.922 | info     |    BuildKernels | JIT cache stats: 783/783 hits (100.0%) [783 cached, 1764 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-13 01:26:49.922 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-13 01:26:49.938 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-13 01:26:49.938 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-13 01:26:50.498 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-13 01:26:50.498 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-13 01:26:50.498 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
