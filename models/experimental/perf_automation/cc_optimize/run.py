@@ -885,13 +885,26 @@ def _claude_text(prompt: str, timeout_s: int = 300):
 
 
 def _blocks_ran(seq) -> int:
+    """How deep the deepest block the model actually ran was.
+
+    TWO SIGNPOST FORMATS, AND THIS READ ONLY ONE. A single-stack model emits
+    `PERF_BLOCK_SIGNPOST:7`; the moment a SECOND stack becomes visible the emitter switches to
+    `PERF_BLOCK_SIGNPOST:stack2:7` so each block can be attributed to its own stack. Splitting on the
+    first colon then parsed "stack2:7" as an integer, raised, was swallowed, and returned 0 -- read
+    downstream as the model having no discoverable block stacks at all, which REFUSES the run.
+
+    Measured on Voxtral 2026-08-12: the visibility repair made lm_layers discoverable, the walk went
+    from 1 device stack to 2 exactly as intended, the probe emitted 155 signposts -- and the run
+    refused, because succeeding is what changed the token format. A latent bug no single-stack model
+    could ever reach.
+    """
     m = -1
     for tok in seq or []:
-        if isinstance(tok, str) and tok.startswith("PERF_BLOCK_SIGNPOST:"):
-            try:
-                m = max(m, int(tok.split(":", 1)[1]))
-            except (ValueError, IndexError):
-                pass
+        if not isinstance(tok, str) or not tok.startswith(_SIGNPOST_TOKEN):
+            continue
+        parsed = _parse_signpost_payload(tok[len(_SIGNPOST_TOKEN) :])
+        if parsed is not None:
+            m = max(m, parsed[1])
     return m + 1
 
 
@@ -1084,14 +1097,28 @@ def _llm_depth_env(model_root: Path, cov: int) -> dict:
     return {}
 
 
+def _is_control(tok) -> bool:
+    """A bookkeeping token the probe wrote into the sequence, not an op the device ran.
+
+    The op filter used to name ONE prefix, so every control token invented later was silently
+    counted as work. That matters more than it sounds: the work signal is what decides INERT, so
+    markers would inflate the very number used to prove a depth cap did nothing -- an uncappable
+    model could look cappable purely from its own instrumentation. Caller markers are emitted per
+    block ENTRY and EXIT, which on a 32-layer stack is 64 phantom ops.
+    """
+    return isinstance(tok, str) and tok.startswith(
+        ("PERF_BLOCK_SIGNPOST:", "PERF_BLOCK_SIGNPOST_END:", "PERF_STAGE_SIGNPOST:", "PERF_CALLER:")
+    )
+
+
 def _work_signal(seq) -> int:
-    return sum(1 for t in seq or [] if isinstance(t, str) and not t.startswith(_SIGNPOST_TOKEN))
+    return sum(1 for t in seq or [] if isinstance(t, str) and not _is_control(t))
 
 
 def _op_block_count(seq) -> int:
     from collections import Counter
 
-    ops = [t for t in seq or [] if isinstance(t, str) and not t.startswith(_SIGNPOST_TOKEN)]
+    ops = [t for t in seq or [] if isinstance(t, str) and not _is_control(t)]
     vals = [c for c in Counter(ops).values() if c > 1]
     if not vals:
         return 0
@@ -1099,6 +1126,7 @@ def _op_block_count(seq) -> int:
 
 
 _SIGNPOST_TOKEN = "PERF_BLOCK_SIGNPOST:"
+_SIGNPOST_END_TOKEN = "PERF_BLOCK_SIGNPOST_END:"
 
 
 def _signpost_entries(seq) -> int:
@@ -1128,7 +1156,7 @@ def _signposts_usable(seq) -> bool:
     # DECOUPLED SIGNPOSTS ARE NOT SIGNPOSTS. A stack whose markers all land in a clump -- typically
     # trailing the ops entirely -- delimits nothing: every op would attribute to block 0. Presence is
     # necessary, interleaving is what makes them usable.
-    return any(isinstance(t, str) and not t.startswith(_SIGNPOST_TOKEN) for t in (seq or [])[idx[0] :])
+    return any(isinstance(t, str) and not _is_control(t) for t in (seq or [])[idx[0] :])
 
 
 def _block_start_positions(seq):
@@ -1140,7 +1168,7 @@ def _block_start_positions(seq):
         return [], "none"
     from collections import Counter
 
-    ops = [t for t in seq or [] if isinstance(t, str) and not t.startswith(_SIGNPOST_TOKEN)]
+    ops = [t for t in seq or [] if isinstance(t, str) and not _is_control(t)]
     counts = Counter(ops)
     anchor = next((t for t in ops if counts.get(t) == n), None)
     if anchor is None:
@@ -1220,11 +1248,39 @@ def _first_block_map(seq):
     starts, source = _block_start_positions(seq)
     if source == "signposts":
         # Per-stack maps: {stack_id: {op: first_block_idx}}
+        # ATTRIBUTE ONLY WHAT RAN INSIDE A BLOCK. The start marker says where a block begins; the END
+        # marker says where it stops. Without the closing edge every op after a stack's last block was
+        # credited to that block -- and "after the last block" is the entire rest of the model.
+        #
+        # Measured on Voxtral 2026-08-13: a normal encoder block dispatches 20 ops, and the last one
+        # was credited with 12573 -- 67% of the whole run -- including embedding, rms_norm, silu,
+        # scaled_dot_product_attention_decode and argmax, which are language-model decode ops not
+        # present in the encoder at all. Coverage therefore reported that the 32-layer encoder needed
+        # all 32 layers, when every one of its blocks is the same class emitting identical ops and 1-2
+        # would do. max() took that 32 as the window, capping to 32 changed no work, and the run
+        # profiled the entire model.
+        #
+        # An op emitted outside every block belongs to no stack: it is prologue, epilogue or another
+        # stage, and it cannot say anything about how deep a stack must be profiled.
+        # A LIFO, NOT A SINGLE SLOT. A stack can sit INSIDE a block -- experts within a layer, a
+        # decoder nested in a wrapper -- and closing the inner block must return to the enclosing one,
+        # not to "no block". Clearing instead of popping drops every op the outer block runs after the
+        # nested call, which under-sizes it: the ops that would have demanded a deeper window are
+        # simply not counted. Flat stacks behave identically either way, which is why this is easy to
+        # get wrong and never notice.
         per_stack: dict = {}
-        cur_stack = "stack0"
-        cur_block = 0
+        open_blocks: list = []
         for tok in seq or []:
             if not isinstance(tok, str):
+                continue
+            if tok.startswith(_SIGNPOST_END_TOKEN):
+                parsed = _parse_signpost_payload(tok[len(_SIGNPOST_END_TOKEN) :])
+                # Close the matching frame, not blindly the innermost: an unbalanced end (a block that
+                # raised before its start was recorded) must not unwind a frame it does not own.
+                for j in range(len(open_blocks) - 1, -1, -1):
+                    if parsed is None or open_blocks[j] == parsed:
+                        del open_blocks[j:]
+                        break
                 continue
             if tok.startswith(_SIGNPOST_TOKEN):
                 raw = tok[len(_SIGNPOST_TOKEN) :]
@@ -1232,16 +1288,19 @@ def _first_block_map(seq):
                 # A malformed payload must not reset the walk to block 0 -- that would attribute
                 # the whole rest of the stack to the shallowest window and shrink coverage to nothing.
                 if parsed is not None:
-                    cur_stack, cur_block = parsed
+                    open_blocks.append(parsed)
                 continue
-            per_stack.setdefault(cur_stack, {}).setdefault(tok, cur_block)
+            if not open_blocks or _is_control(tok):
+                continue
+            sid, idx = open_blocks[-1]
+            per_stack.setdefault(sid, {}).setdefault(tok, idx)
         return per_stack, source
 
     import bisect
 
     fb: dict = {}
     for i, tok in enumerate(seq or []):
-        if not isinstance(tok, str) or tok.startswith(_SIGNPOST_TOKEN):
+        if not isinstance(tok, str) or _is_control(tok):
             continue
         b = bisect.bisect_right(starts, i) - 1 if starts else 0
         fb.setdefault(tok, max(b, 0))
@@ -1436,6 +1495,316 @@ def _declared_depth(model_root, model_id: str = ""):
     return n if isinstance(n, int) and n > 0 else None
 
 
+def _is_emitted_model(model_root) -> bool:
+    """Did emit-e2e write this model, i.e. is it bound by emit-e2e's spec?
+
+    Structural, not a name or a flag: an emitted demo carries a _stubs/ directory of graduated
+    modules and the e2e_plan.json that routed them. A hand-written tt-metal model has neither.
+
+    This is what separates "must comply" from "measured through the ladder by design". gemma3 and
+    llama3_1_8b_p150 legitimately expose no discoverable stacks and are optimized through the
+    coverage ladder; refusing them would refuse the entire direct path. A model the tool GENERATED
+    has no such excuse -- its spec requires every repeated stack to be discoverable, and a violation
+    is a defect in what the tool just produced.
+    """
+    try:
+        root = Path(model_root)
+        return (root / "_stubs").is_dir() and (root / "e2e_plan.json").is_file()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+_STAGE_TOKEN = "PERF_STAGE_SIGNPOST:"
+
+
+def stacks_by_stage(seq) -> dict:
+    """{stage: [stack ids that ran in it]}, from execution order alone.
+
+    THE LINK BETWEEN A MEASUREMENT AND A KNOB. Coverage is sized per stack -- one saturates at 2,
+    another may need 8 -- and a model can accept a depth per stage. Between them nothing said which
+    stack IS the encoder: the walk labels stacks by traversal position, the knobs are named for
+    stages. So the tool sent max() to every stack and the shallow ones were profiled several times
+    deeper than they needed.
+
+    Execution order answers it without HF, without names and without a convention: whichever blocks
+    run between the encode and prefill boundaries belong to encode.
+
+    A STACK IN TWO WINDOWS IS NOT AMBIGUOUS. A text decoder runs in prefill AND decode, and it is one
+    physical stack, so it appears under both and the caller takes the max of their depths -- deep
+    enough for either. Ambiguity would be assigning it ONE stage; listing both is the fact.
+
+    Returns {} when no stage boundaries were emitted, which is the signal to fall back to a single
+    uniform depth rather than guess.
+    """
+    out, cur = {}, None
+    for tok in seq or []:
+        if not isinstance(tok, str):
+            continue
+        if tok.startswith(_STAGE_TOKEN):
+            cur = tok[len(_STAGE_TOKEN) :]
+            out.setdefault(cur, [])
+        elif tok.startswith(_SIGNPOST_TOKEN) and cur is not None:
+            body = tok[len(_SIGNPOST_TOKEN) :]
+            sid = body.split(":")[0] if ":" in body else "stack0"
+            if sid not in out[cur]:
+                out[cur].append(sid)
+    return {k: v for k, v in out.items() if v}
+
+
+def depth_per_stage(per_stack_cov: dict, seq) -> dict:
+    """{stage: depth} -- each stage deep enough for every stack that runs in it.
+
+    Conservative by construction: a stage takes the MAX over its stacks, and a stack shared by two
+    stages makes both at least that deep. Nothing ends up shallower than the single-number behaviour
+    it replaces, so the worst case is what the tool does today and the good case is cheaper.
+
+    Empty when the stage boundaries are missing -- no signposts, an uncalled stack, interleaved
+    stages -- and an empty answer means "use one uniform depth", which is the existing path.
+    """
+    by_stage = stacks_by_stage(seq)
+    if not by_stage or not per_stack_cov:
+        return {}
+    out = {}
+    for stage, sids in by_stage.items():
+        depths = [int(per_stack_cov[s]) for s in sids if s in per_stack_cov]
+        if depths:
+            out[stage] = max(depths)
+    return out
+
+
+def _facts_from(raw, sigs, seq) -> dict:
+    """The discovery facts a probe's output yields. One place, because a re-walk must produce the
+    same shape as the first walk -- recomputing three of the four fields by hand is how a repaired
+    model gets described by its unrepaired numbers."""
+    facts = _parse_facts(raw, sigs)
+    facts["all_ops"] = sorted(sigs)
+    facts["full_signal"] = _work_signal(seq)
+    facts["full_blocks"] = _blocks_ran(seq)
+    return facts
+
+
+def _stack_census(raw) -> list:
+    """What the probe's walk saw, both device and reference stacks. [] if it emitted no census."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from agent.stack_visibility import parse_census
+
+        return parse_census(raw)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _stack_evidence(model_root, seq) -> dict:
+    """What the model's structure is, from witnesses that need no HF reference.
+
+    THE REFERENCE CENSUS ONLY SERVES MODELS THAT CARRY A REFERENCE, and a model trained in-house or
+    shipped as a bare checkpoint carries none -- leaving the walk as the only statement of how many
+    stacks exist, which is the thing being checked. Two witnesses replace it:
+
+      checkpoint   Weight keys are paths and a repeated block prints its index into every one, so
+                   grouping keys gives a section count and a depth per section. No config, no
+                   transformers, no torch, no device -- and it reads keys, never values.
+
+      observed     Each plausible container's elements were bracketed during the probe, so a
+                   container whose elements all ran and all emitted the same op subsequence IS a
+                   stack. This is the only witness that names the exact PATH of a hidden stack, which
+                   turns the repair from a search into an edit.
+    """
+    out = {"checkpoint": {}, "observed": []}
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from agent.checkpoint_sections import declared_sections as _ckpt
+
+        out["checkpoint"] = _ckpt(model_root)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from agent.caller_stacks import stacks_that_ran
+
+        out["observed"] = stacks_that_ran(seq)
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def make_stacks_visible(model_root, stacks, rewalk=None, attempts: int = 2, evidence=None) -> dict:
+    """A stack the model runs and the walk cannot see -- ask for it to be held in a readable shape.
+
+    THE DISCREPANCY IS THE EVIDENCE. A pipeline built from HF weights carries the reference model,
+    whose stacks torch holds as ModuleLists of one class, so the walk always sees those. Two
+    reference stacks against one device stack is a measured fact: the model has more sections than
+    the device side exposes. It does not say what the missing stack looks like, and it does not need
+    to -- an agent reading the source can see which list is built from the reference's layers and run
+    in sequence by the forward.
+
+    WIDENING THE WALK'S RULE INSTEAD DOES NOT WORK. Two attempts on 2026-08-12: comparing attribute
+    sets scored every pair of torch modules as identical (all carry _parameters, _modules, training),
+    so three unrelated submodules registered as a stack and shadowed the real ones -- the walk went
+    from 5 stacks to 3 and lost an encoder. Comparing child-module names with framework internals
+    excluded still could not separate three wrappers around one layer kind from three submodules of a
+    model. Both made it worse than leaving it alone.
+
+    Verified by RE-WALKING, not by reading the diff: the caller supplies `rewalk`, the count either
+    falls or it did not work, and the feedback for the next round is the stack list as it now reads.
+    """
+    out = {"hidden": 0, "fixed": False, "rounds": 0}
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from agent.stack_visibility import (
+            _expected,
+            hidden_stack_count,
+            repair as _vis_repair,
+            retry_prompt,
+            stack_counts,
+        )
+
+        out["hidden"] = hidden_stack_count(stacks, _expected(evidence))
+        if out["hidden"] <= 0:
+            return out
+        _dev, _ref = stack_counts(stacks)
+        _decl = max(_ref, _expected(evidence))
+        print(
+            "  [optimize/cc] %d block stack(s) are hidden from the walk: %d exist, the device side "
+            "exposes %d. A hidden stack cannot be sized, capped or attributed, so it profiles at "
+            "FULL depth." % (out["hidden"], _decl, _dev),
+            flush=True,
+        )
+        for _o in (evidence or {}).get("observed") or []:
+            print(
+                "  [optimize/cc]   observed running: %s (%d blocks)" % (_o.get("path", "?"), _o.get("depth", 0)),
+                flush=True,
+            )
+        cur = stacks
+        for i in range(max(1, int(attempts))):
+            _vis_repair(model_root, cur, feedback=i > 0, evidence=evidence)
+            out["rounds"] = i + 1
+            if rewalk is None:
+                break
+            cur = rewalk() or cur
+            if hidden_stack_count(cur, _expected(evidence)) <= 0:
+                out["fixed"] = True
+                break
+            print(
+                "  [optimize/cc] still hidden after round %d; %s" % (i + 1, retry_prompt(cur).splitlines()[0]),
+                flush=True,
+            )
+        _d2, _r2 = stack_counts(cur)
+        print(
+            "  [optimize/cc] stack visibility after %d round(s): device stacks %d -> %d (reference %d)"
+            % (out["rounds"], _dev, _d2, _r2),
+            flush=True,
+        )
+    except Exception:  # noqa: BLE001 -- a repair that cannot run leaves the model as it was
+        pass
+    return out
+
+
+def make_model_cappable(model_root, seq=None, per_stack_cov=None, n_stacks=1) -> dict:
+    """The depth went nowhere -- get the model a knob that receives it.
+
+    CALLED ON THE INERT VERDICT, which is the only MEASURED proof that a model cannot be capped:
+    the cap was applied, the work signal did not move, so nothing consumed it. Everything else is
+    inference. A model can have five discoverable stacks and a factory that drops `layers` silently
+    (Voxtral: build_pipeline(device, model=None, **kwargs)), and it can equally have one stack and no
+    knob at all -- both land here, and both mean every profile builds the whole model. Measured on
+    Voxtral with the variable unset: n_layers=30, enc_a=32, enc_b=32, bulk=27.
+
+    The base knob is what meets the goal: ONE depth that reaches every repeated stack. Per-stage
+    overrides are added only when the run knows which stage each stack ran in, because a name taken
+    by position is worse than no name -- slicing PIPELINE_STAGES by stack count asked Voxtral for
+    `prefill_layers` when both of its visible stacks run in encode.
+
+    Opt-in, and verified by the same check that triggered it: after the edit the caller caps and
+    re-measures, so a repair that adds parameters without wiring them reports INERT exactly as an
+    unrepaired model does. Nothing here is trusted on the agent's word.
+    """
+    out = {"needed": [], "added": [], "attempted": False}
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from agent.stack_knob_repair import missing_knobs, repair as _knob_repair
+
+        stage_map = stacks_by_stage(seq) if seq else None
+        needed = missing_knobs(model_root, n_stacks, stage_map)
+        out["needed"] = needed
+        if not needed:
+            return out
+        # NOT BEHIND A FLAG. Capping is how this tool profiles at all: without a depth the builder
+        # can receive, every profile builds the whole model, and on a 3B multimodal pipeline that is
+        # 36.8M tracy zones, tracy's 32K source-location limit exceeded, a test process that never
+        # exits, and a run killed at its budget having measured nothing. An operator cannot opt in to
+        # the tool working -- either it makes the model measurable or it cannot do its job.
+        #
+        # This is not the same as editing a model for PERFORMANCE, which stays a decision. The depth
+        # argument changes no numerics at full depth (None means every layer, exactly as before); it
+        # exists so the profiler can look at a slice. It is instrumentation, and the run verifies it
+        # by re-measuring rather than trusting the edit.
+        print("  [optimize/cc] making the model cappable: adding %s" % ", ".join(needed), flush=True)
+        res = _knob_repair(model_root, _stack_paths(seq or []), needed)
+        out["attempted"] = True
+        out["added"] = res.get("added") or []
+        # SAY HOW MANY ROUNDS AND WHAT THE SIGNATURE ENDED UP AS. The first live run printed only
+        # "added nothing", which cannot distinguish "the agent was asked once and missed" from "it
+        # was asked three times and missed every time" -- and those want opposite fixes. The
+        # parameter list is the fact that decides it.
+        print(
+            "  [optimize/cc] knob repair after %d round(s): added %s; build_pipeline now takes (%s)"
+            % (res.get("rounds", 0), ", ".join(out["added"]) or "nothing", ", ".join(res.get("params") or [])),
+            flush=True,
+        )
+    except Exception:  # noqa: BLE001 -- a repair that cannot run leaves the model as it was
+        pass
+    return out
+
+
+def _stack_paths(seq) -> list:
+    """(stack id, block count) per stack, as the probe reported them -- the repair's targets."""
+    seen = {}
+    for tok in seq or []:
+        if not isinstance(tok, str) or not tok.startswith(_SIGNPOST_TOKEN):
+            continue
+        parsed = _parse_signpost_payload(tok[len(_SIGNPOST_TOKEN) :])
+        if parsed is None:
+            continue
+        sid, idx = parsed
+        seen[sid] = max(seen.get(sid, -1), idx)
+    return [(sid, top + 1, "block") for sid, top in sorted(seen.items())]
+
+
+def _declared_sections(model_root, model_id: str = "") -> list:
+    """Every block depth the config declares, per section, deepest first.
+
+    THE CONFIG IS THE AUTHORITY ON STRUCTURE, and it costs nothing: transformers has already parsed
+    it, so "how many repeated sections does this model have, and how deep is each" is answerable
+    before the device is touched -- no markers, no walk, no naming convention, no per-model code.
+
+    _walk_depths always collected this and _depth_from_mapping reduced it with max() one line later,
+    because both callers wanted a single ceiling. Voxtral-Mini-3B declares 32 for the audio tower and
+    32 for the text decoder; the tool saw one number, sized one depth, capped the text decoder and
+    left both encoders whole, and nothing could notice because the question was never asked.
+    """
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from agent.layer_depth import declared_section_depths
+
+        found = [int(d) for d in declared_section_depths(model_id=model_id, model_dir=model_root) if int(d) > 0]
+    except Exception:  # noqa: BLE001
+        found = []
+    if found:
+        return found
+    # NO CONFIG IS NOT NO STRUCTURE. declared_section_depths reads a transformers config, so every
+    # model that did not come from HF -- trained in-house, exported from a research repo, shipped as a
+    # bare checkpoint -- answered "no sections" and lost the one independent witness that says how
+    # many stacks there should be. The weights themselves declare it: a repeated block prints its
+    # index into every key it owns, so grouping keys gives a section count and a depth per section
+    # with no config, no transformers, no torch and no device.
+    try:
+        from agent.checkpoint_sections import declared_sections as _ckpt_sections
+
+        return sorted((int(d) for d in _ckpt_sections(model_root).values() if int(d) > 0), reverse=True)
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _cov_ladder(model_root, model_id: str = "") -> list:
     """The coverage-search rungs, BOUNDED BY THE MODEL'S DECLARED DEPTH.
 
@@ -1460,29 +1829,6 @@ def _cov_ladder(model_root, model_id: str = "") -> list:
     out = [d for d in rungs if d < full]
     out.append(full)
     return out
-
-
-def _signpost_cap_is_inert(repo_root, mcp_env, devices, node, case, cov: int, full_signal) -> bool:
-    """One probe at the chosen window: did capping there change the work at all?
-
-    The ladder gets this observation for free -- it RUNS the model at every rung. The signpost path
-    derives its number from a single full-depth probe and never runs capped, so without this it
-    exports a window it has never seen take effect. That is how gemma-3-12b-it, whose build_pipeline
-    has no depth parameter and whose perf test parses TT_PERF_LAYERS and drops it, was profiled at
-    full depth and reported as a capped run.
-
-    One probe, not the ladder's four, and it fails OPEN: an unreadable signal returns False (assume
-    the cap worked) rather than discarding a window the model may well be honouring. The cost of a
-    false negative is a mislabelled depth; the cost of a false positive is throwing away the whole
-    coverage window and profiling everything.
-    """
-    if os.environ.get("PERF_MCP_VERIFY_SIGNPOST_CAP", "1") != "1":
-        return False
-    try:
-        _sigs, _raw, seq_at = _run_op_sigs(repo_root, mcp_env, devices, node, case, cov)
-    except Exception:  # noqa: BLE001
-        return False
-    return _cap_took_effect(_work_signal(seq_at), full_signal) is False
 
 
 def _validate_signpost_window(window: int, stack_len: int, declared) -> tuple:
@@ -1593,7 +1939,27 @@ def _measure_cov(
                 f"({full_signal}) as the full model, so the cap never reached the builder. Refusing to "
                 f"report a coverage window measured against an uncapped model."
             )
-            return None
+            # THE MEASURED MOMENT: the cap was applied and nothing consumed it. Repair here, then
+            # re-measure -- if the knob now bites, the coverage search continues on a model that can
+            # actually be capped instead of abandoning the window.
+            _fix = make_model_cappable(model_root, seq=seq_d, n_stacks=1)
+            if _fix.get("added"):
+                sigs_r, _, seq_r = _run_op_sigs(repo_root, penv, devices, node, case, d)
+                if sigs_r and not _knob_is_inert(seq_r, full_signal, d, model_root):
+                    print(
+                        "  [optimize/cc] the knob now caps: work signal moved after the repair",
+                        flush=True,
+                    )
+                    sigs_d, seq_d = sigs_r, seq_r
+                else:
+                    print(
+                        "  [optimize/cc] still INERT after the repair -- the arguments were added "
+                        "but nothing consumed them; profiling FULL depth.",
+                        flush=True,
+                    )
+                    return None
+            else:
+                return None
         got = set(sigs_d)
         if want <= got:
             return d, [], "measured"
@@ -1684,10 +2050,147 @@ def _coverage_layers(
         return cached, facts
     sigs, raw, seq = _run_op_sigs(repo_root, mcp_env, devices, node, case, 0)
     if sigs:
-        facts = _parse_facts(raw, sigs)
-        facts["all_ops"] = sorted(sigs)
-        facts["full_signal"] = _work_signal(seq)
-        facts["full_blocks"] = _blocks_ran(seq)
+        facts = _facts_from(raw, sigs, seq)
+        # A STACK THE MODEL RUNS AND THE WALK CANNOT SEE -- REPAIRED HERE, BEFORE ANYTHING IS SIZED.
+        #
+        # This runs ahead of every check below because all of them read the walk's output: the
+        # empty-walk refusal, the declared-sections comparison, the depth repair and the coverage
+        # sizing. A model whose sections are half-visible passes each of them on the visible part
+        # alone -- markers emitted, coverage measured, a depth sized for whichever section happened
+        # to be readable, and the rest built at FULL depth with no error anywhere. Repairing first
+        # means those checks see the model as it actually is.
+        #
+        # The probe's census carries both kinds of stack, so the discrepancy needs no naming rule and
+        # no per-model code; the re-walk below is a real probe, which is what makes the verdict
+        # evidence rather than the agent's word.
+        _root = _model_root_from_node(repo_root, node)
+        _last = {}
+
+        def _rewalk():
+            s2, r2, q2 = _run_op_sigs(repo_root, mcp_env, devices, node, case, 0)
+            if s2:
+                _last.update(sigs=s2, raw=r2, seq=q2)
+            return _stack_census(r2)
+
+        make_stacks_visible(_root, _stack_census(raw), rewalk=_rewalk, evidence=_stack_evidence(_root, seq))
+        if _last:
+            # Every number below is read off the walk, so they come from the REPAIRED model or the
+            # repair would be invisible to the run that asked for it.
+            sigs, raw, seq = _last["sigs"], _last["raw"], _last["seq"]
+            facts = _facts_from(raw, sigs, seq)
+        # SAY IT WHEN THE MODEL'S BLOCKS COULD NOT BE FOUND. The probe walks the object the factory
+        # returned and tags every repeated stack the device runs; zero blocks means that walk found
+        # nothing, and everything downstream degrades quietly -- the ladder is climbed instead of
+        # read (four extra device probes, each reloading the weights), one depth is inferred for a
+        # model that may have several sections, and per-block attribution is unavailable for the
+        # whole run. Voxtral-Mini-3B ran that way for a full day without the reason ever being
+        # printed: full_blocks=0 appeared only inside a debug line nobody reads unless they already
+        # suspect it.
+        #
+        # Structural, not a name check: the walk accepts a list of same-typed callables or a hybrid
+        # sharing a base, so this fires for any model whose blocks are held in a shape it cannot see,
+        # whatever those classes are called.
+        if not facts["full_blocks"]:
+            # REFUSE, DO NOT RECOMMEND. Printing a suggestion here is what let Voxtral run for a day
+            # with full_blocks=0 buried in a debug line: the ladder was climbed instead of read (four
+            # device probes, each reloading weights), ONE depth was inferred for a three-section
+            # model, and per-block attribution was unavailable for every round. Every downstream
+            # number was still produced, which is what makes it dangerous -- the run looks like it
+            # worked.
+            _sections = _declared_sections(_model_root_from_node(repo_root, node), model_name or config_ref)
+            _msg = (
+                "the built model exposes NO discoverable block stacks: depth can only be inferred "
+                "and per-block attribution is impossible"
+            )
+            if len(_sections) > 1:
+                _msg += "; the config declares %d sections (depths %s), so %s" % (
+                    len(_sections),
+                    ", ".join(str(d) for d in _sections[:4]),
+                    "each needs to be reachable as its own stack",
+                )
+            _root = _model_root_from_node(repo_root, node)
+            _emitted = _is_emitted_model(_root)
+            print("  [optimize/cc] %s: %s." % ("REFUSING" if _emitted else "WARNING", _msg), flush=True)
+            print(
+                "  [optimize/cc] Hold each repeated stack as a list of same-typed blocks, or give "
+                "differing per-layer wrappers a common base, so the walk can see them.",
+                flush=True,
+            )
+            # ENFORCED FOR MODELS THE TOOL WROTE, reported for the ones it did not.
+            #
+            # emit-e2e's spec requires every repeated stack to be discoverable, and the HF config
+            # says how many sections there are to find -- so for an emitted model the two can be
+            # compared and a mismatch is a defect in the tool's own output, caught before a run
+            # spends hours on it. Voxtral shipped with none discoverable and nobody knew for a day.
+            #
+            # Hand-written tt-metal models legitimately
+            # have no discoverable stacks and are measured through the ladder -- gemma3 and
+            # llama3_1_8b_p150 both are, and blocking this path refuses them outright (proved by
+            # test_coverage_source_order, which exercises exactly that shape). The contract's own
+            # rule applies: only a COMPATIBILITY defect may block, and it must block BEFORE the
+            # device is touched. So enforcement lives in the depth-knob clause, which fails a
+            # factory that cannot accept a depth at all; what is left here is a loud, specific
+            # report at the moment the walk comes back empty.
+            if _emitted and os.environ.get("PERF_MCP_ALLOW_NO_STACKS") != "1":
+                raise SystemExit(EXIT_REFUSED)
+        else:
+            # FOUND SOME -- BUT THE CONFIG SAYS HOW MANY THERE SHOULD BE. A model can expose one
+            # discoverable stack and hide the rest, which reads as success everywhere: markers are
+            # emitted, coverage is measured, and the depth is sized for the section that happened to
+            # be visible. Voxtral did exactly this before its wrappers shared a base -- one encoder
+            # stack reporting, the other silent, one depth applied to both.
+            #
+            # The HF config is the independent witness: it declares a depth per section, already
+            # parsed by transformers, needing no device, no markers and no naming convention. Fewer
+            # stacks than declared sections means structure is hidden, and for a model the tool
+            # itself generated that is a defect in its output rather than a property to work around.
+            _root = _model_root_from_node(repo_root, node)
+            _sections = _declared_sections(_root, model_name or config_ref)
+            _seen = len(_stack_ids_from_seq(seq))
+            if len(_sections) > 1 and _seen < len(_sections):
+                print(
+                    "  [optimize/cc] %s: the config declares %d sections (depths %s) but only %d "
+                    "block stack(s) are discoverable -- the rest cannot be sized, capped or "
+                    "attributed."
+                    % (
+                        "REFUSING" if _is_emitted_model(_root) else "WARNING",
+                        len(_sections),
+                        ", ".join(str(d) for d in _sections[:4]),
+                        _seen,
+                    ),
+                    flush=True,
+                )
+                if _is_emitted_model(_root) and os.environ.get("PERF_MCP_ALLOW_NO_STACKS") != "1":
+                    raise SystemExit(EXIT_REFUSED)
+            # ONE KNOB PER STACK, ADDED BY THE AGENT THAT IS ALREADY HERE.
+            #
+            # A factory with a single depth argument forces every stack to one value -- or worse, the
+            # value reaches ONE stack and the rest build at FULL depth, which is not a tidiness issue
+            # but the entire cost. Voxtral-Mini-3B profiled 18729 ops and 35.2M tracy zones that way
+            # against 2471 once every stack was capped, and its baseline was killed at the budget
+            # leaving the run with no BEFORE number at all.
+            #
+            # Detection alone would only move the manual work earlier, so the run repairs it. The
+            # optimize loop already edits model source for every lever it tries, under a PCC gate
+            # that reverts anything breaking correctness, and the walk has just produced the stack
+            # paths so nothing is guessed. Whether the new knobs actually CAP is settled immediately
+            # below by the depth bridge, which caps and re-measures the work signal and reports INERT
+            # when the op count does not move -- the one check an edit cannot talk its way past.
+            # ONE PLACE DECIDES THIS, and it is the INERT verdict. An earlier version repaired
+            # here, off the walk's result -- which never fired, because a run that cannot cap reports
+            # INERT and leaves discovery before reaching this branch. What survives here is the
+            # per-stage refinement: the walk knows how many stacks there are, and make_model_cappable
+            # uses the execution-order mapping to name the overrides that go with them.
+            try:
+                _fix = make_model_cappable(_root, seq=seq, n_stacks=_seen)
+                if _fix.get("needed") and not _fix.get("added"):
+                    print(
+                        "  [optimize/cc] %d stacks; still missing %s after the repair attempt"
+                        % (_seen, ", ".join(_fix["needed"])),
+                        flush=True,
+                    )
+            except Exception:  # noqa: BLE001 -- a repair that cannot run leaves the model as it was
+                pass
         # SIGNPOSTS BEFORE THE LADDER. Both answer the same question -- what depth still contains
         # every op type -- but at very different prices. Signposts are already paid for: the k=0
         # probe above emitted them, so reading them costs nothing. The ladder REBUILDS the model at
@@ -1713,17 +2216,38 @@ def _coverage_layers(
                 _per_stack_cov[_sid] = _cov_s
                 _per_stack_deep[_sid] = sorted(op for op, b in _fb.items() if b >= _cov_s)
             if _signpost_ok and _per_stack_cov:
-                _cov_max = max(_per_stack_cov.values())
-                if _signpost_cap_is_inert(repo_root, mcp_env, devices, node, case, _cov_max, facts["full_signal"]):
-                    print(
-                        f"  [optimize/cc] depth knob is INERT on the signpost path: capping to {_cov_max} left the "
-                        f"work signal unchanged, so the cap never reached the builder. Profiling FULL depth."
-                    )
-                    _coverage_cache_put(repo_root, node, case, 0)
-                    facts["no_window"] = "knob_inert"
-                    return None, facts
-                else:
-                    _signpost = (_per_stack_cov, _per_stack_deep)
+                # PRINT THE PER-STACK NUMBERS, not just the value that survives.
+                #
+                # These are the inputs to every depth decision the run makes, and only max() reached
+                # the log -- so a run that profiled full depth said "capping to 32 left the work
+                # signal unchanged" without ever showing WHICH stack asked for 32. On Voxtral that
+                # hid the whole story: the encoders may saturate in a couple of blocks while the
+                # decoder's graduated stubs sit at 28..31 and drag the maximum to the full model.
+                # Deciding what to fix required a number nobody could see.
+                _per_stage = depth_per_stage(_per_stack_cov, seq)
+                print(
+                    "  [optimize/cc] coverage per stack: %s%s"
+                    % (
+                        ", ".join("%s=%s" % (k, v) for k, v in sorted(_per_stack_cov.items())),
+                        (" | per stage: " + ", ".join("%s=%s" % (k, v) for k, v in sorted(_per_stage.items())))
+                        if _per_stage
+                        else " | no stage boundaries -> one uniform depth",
+                    ),
+                    flush=True,
+                )
+                # NO SECOND VERIFICATION HERE. The depth bridge already applies the caps and
+                # measures: "did not reduce work ... ignoring" declines to enforce and profiles full
+                # depth, which is the same protection this used to claim -- against gemma3, whose
+                # perf test reads TT_PERF_LAYERS and whose builder drops it.
+                #
+                # This copy was worse in three ways. It probed at max(per-stack depths), which on a
+                # model whose deepest stack IS the model (Voxtral: encoder 32 of 32) asks for FULL
+                # depth, so the work signal could not move and the knob was declared dead -- a false
+                # INERT that discarded a correct window (stack0=2, stack2=32, stack3=3) and refused
+                # the run. It also threw away the WHOLE window rather than just declining to enforce
+                # it, and it spent an extra device probe to do so. One decision, measured once, in
+                # the place that applies it.
+                _signpost = (_per_stack_cov, _per_stack_deep)
         if _signpost is not None:
             _cov_dict, _deep_dict = _signpost
             blk_source = "signposts"

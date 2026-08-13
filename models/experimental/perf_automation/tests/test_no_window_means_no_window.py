@@ -89,8 +89,13 @@ def test_the_export_is_conditional_on_a_real_cap():
     """Previously unconditional: `os.environ["TT_PERF_LAYERS"] = str(_bl_cov)` ran even when _bl_cov
     was the invented 4."""
     src = BL.read_text()
-    i = src.index('os.environ["TT_PERF_LAYERS"] = str(_bl_cov)')
-    assert "if _bl_cov:" in src[max(0, i - 200) : i]
+    # The export now writes a SCALAR: _bl_cov is a per-stack dict, and str() of it wrote
+    # "{'stack3': 2, 'stack2': 2}" into the one variable a perf test parses -- which fails
+    # .isdigit(), yields None, and means ALL LAYERS. The baseline was therefore measured uncapped
+    # while every candidate after it ran capped. What this test pins is unchanged: the export happens
+    # only when there is a real cap to export.
+    i = src.index('os.environ["TT_PERF_LAYERS"] = str(_bl_scalar)')
+    assert "if _bl_cov:" in src[max(0, i - 1200) : i], "the export is no longer guarded by a real cap"
 
 
 def test_the_bridge_search_is_skipped_when_there_is_no_cap():
@@ -136,15 +141,6 @@ def test_the_ladder_floor_is_two():
     assert re.search(r"^\s*_cov\w*\s*=\s*2\s*$", window, re.M), window
 
 
-def test_the_signpost_path_still_refuses_an_inert_cap():
-    """The behaviour that produces the None this change now reads correctly. Reporting a window here
-    would label a FULL-MODEL profile as an N-layer one."""
-    src = RUN.read_text()
-    assert "depth knob is INERT on the signpost path" in src
-    i = src.index("depth knob is INERT on the signpost path")
-    assert "return None, facts" in src[i : i + 900]
-
-
 # ---------------------------------------------------------------- the reason is STATED, not inferred
 
 
@@ -155,25 +151,33 @@ def test_every_no_window_exit_states_why():
     src = RUN.read_text()
     i = src.index("def _coverage_layers")
     body = src[i : src.index("\ndef ", i + 1)]
+    # Two now, not three: the signpost path's own inert check was removed -- the bridge already
+    # measures the caps it applies, and this copy probed at max(per-stack depths), which asks for
+    # FULL depth on a model whose deepest stack is the model. What matters is unchanged and is
+    # asserted below: EVERY None exit states its reason.
     none_exits = body.count("return None, facts")
-    assert none_exits >= 3, none_exits
+    assert none_exits >= 2, none_exits
     assert (
         body.count('facts["no_window"]') == none_exits
     ), "a None exit that states no reason puts the caller back to guessing"
 
 
-def test_the_deliberate_case_is_named_distinctly():
-    """knob_inert is a MEASURED conclusion -- the cap was applied and changed nothing -- not a
-    failure. It must not read like one.
+def test_the_signpost_path_does_not_re_verify_what_the_bridge_measures():
+    """ONE DEPTH DECISION, MEASURED ONCE, WHERE IT IS APPLIED.
 
-    Pinned on what the run PRINTS rather than on a comment sitting near the assignment: the comment
-    was the thing an upstream merge dropped, and a comment is not the behaviour. The message has to
-    say the cap was applied and left the signal unchanged, which is what makes it a conclusion."""
+    The signpost path used to run its own inert check before returning a window, probing at
+    max(per-stack depths). On a model whose deepest stack IS the model -- Voxtral: audio encoder 32
+    of 32 -- that asks for FULL depth, so the work signal cannot move, and the knob was declared dead.
+    Measured 2026-08-13: a correct window (stack0=2, stack2=32, stack3=3) was discarded and the run
+    refused, on a model whose knobs were wired and working.
+
+    The bridge already covers the case it was guarding: it applies the caps, measures, and on no
+    reduction prints "did not reduce work ... ignoring" and enforces nothing -- which is the gemma3
+    protection, done against the depths that will actually be used.
+    """
     src = RUN.read_text()
-    i = src.index('facts["no_window"] = "knob_inert"')
-    window = src[max(0, i - 900) : i]
-    assert "INERT" in window, window
-    assert "unchanged" in window and "FULL depth" in window, window
+    assert "_signpost_cap_is_inert" not in src, "the duplicate verification is back"
+    assert "did not reduce work" in src, "the bridge's own measurement is gone too"
 
 
 def test_a_genuine_failure_is_named_distinctly():

@@ -101,12 +101,20 @@ def test_a_stack_entered_out_of_order_reads_the_index_not_the_order():
     assert (fb["OpA"], fb["OpB"], fb["OpC"]) == (5, 2, 9), fb
 
 
-def test_ops_before_the_first_signpost_land_in_block_zero():
-    """Embedding-side ops run before any block is entered. They belong to the shallowest window, not
-    to whatever block happens to follow them."""
+def test_ops_outside_every_block_belong_to_no_block():
+    """Embedding-side ops run before any block is entered, and they must not set a stack's depth.
+
+    This used to assert they land in block 0. Same effect on sizing -- block 0 never raises max() --
+    but attributing them at all was the loophole: with only a START marker, everything AFTER a
+    stack's last block was attributed to that block too, and on Voxtral that meant 12573 ops (67% of
+    the run, including the whole decode phase) credited to encoder block 31, which sized a 32-layer
+    encoder at 32 when 1 would do. Now a block has both edges and an op outside every block is
+    attributed to none.
+    """
     seq = ["Embedding"] + _pass(4)
     fb = _s0(_first_block_map(seq)[0])
-    assert fb["Embedding"] == 0
+    assert "Embedding" not in fb, "a pre-block op is still attributed to a block"
+    assert fb, "the blocks' own ops were lost too"
 
 
 def test_a_malformed_signpost_does_not_crash_or_reset_the_block():
