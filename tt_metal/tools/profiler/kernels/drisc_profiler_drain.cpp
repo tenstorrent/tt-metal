@@ -1833,18 +1833,6 @@ void kernel_main() {
                 if (frames_now != 0) {
                     const uint32_t mean_fill = static_cast<uint32_t>((total_words - words_at_sweep_start) / frames_now);
                     if (mean_fill < kFillTarget) {
-                        // Under-full: wait longer, and how MUCH longer scales with how far under we are.
-                        //
-                        // Two regimes, because "slightly under target" and "the rings are empty" want very
-                        // different responses. Near target, creep (x1.25) so the loop can settle. Below a
-                        // QUARTER of target -- i.e. there is barely any activity -- climb x5 per sweep and
-                        // reach the ceiling in ~6 sweeps instead of ~35-40, so a sparse workload stops paying
-                        // for unconditional 30 x 10,496 B span reads almost immediately.
-                        //
-                        // This is the replacement for seeding the gap high, which was measured and REJECTED:
-                        // it delayed the first sweep by up to 148 us and moved the knee (delay 15 went
-                        // 0/0/0/0 -> 35/100/107/75). Ramping fast costs nothing at the knee because the first
-                        // sweep still happens immediately and a busy workload never enters the sparse regime.
                         // Under-full: wait longer. STEEPER THAN IT LOOKS, and deliberately tuned by constants
                         // rather than by adding a branch -- `gap >> 1` is the same instruction as `gap >> 2`
                         // with a different immediate, and the floor is a literal, so this costs ZERO bytes of
@@ -1870,6 +1858,38 @@ void kernel_main() {
                         gap -= gap >> 3;  // over-target: ease down and settle
                     }
                 }
+            }
+        }
+        // MOVER-SIDE PACING, with a criterion and a ceiling of its own.
+        //
+        // A mover's job is to empty the DRAM frame ring, so the right signal is FRAMES AVAILABLE, not span
+        // fill: collapse to 0 the instant there is anything to move, back off only when the ring is empty.
+        // That never delays a real drain, and it targets the traffic that measurement showed is nearly all
+        // overhead -- ~1.6 M transactions to move ~380 MB on ResNet-50 (~240 B/txn), i.e. mostly 4 B head
+        // polls, plus 13-15% of a mover's egress spent on self-description simply because it samples every
+        // sweep and it sweeps every ~1.27 us.
+        //
+        // CEILING IS 10 us, not the filler's 148 us, and that asymmetry is the whole point. The earlier
+        // accident that seeded a mover at 148 us with no feedback path made it ~114x slower to drain and a
+        // 20 ms trace replay took ~100 ms to finish (FINDINGS §N+44). Pacing a CONSUMER is only safe while it
+        // is provably idle and while the backoff is short enough that one missed observation cannot extend the
+        // drain tail materially -- movers already trail the workload by ~2.5-2.9 ms.
+        //
+        // Room to do this at all: each role compiles its own ELF, and the mover binary is ~6,788 B against the
+        // 11,264 B code region -- ~4.4 KB spare, where a filler has ~36 B. This is the one place new device
+        // code fits.
+        if constexpr (kFillPct != 0 && kRole == kRoleMover) {
+            constexpr uint32_t kMoverGapMax = 13500;  // 10 us at 1.35 GHz
+            // Same busy/idle signal the sweep bookkeeping already uses at both roles, so there is no second
+            // definition of "did this sweep do anything" to drift.
+            if (frames != frames_at_sweep_start) {
+                gap = 0;  // frames were there: drain flat out, never pace a productive consumer
+            } else {
+                uint32_t inc = gap >> 1;
+                if (inc < 256u) {
+                    inc = 256u;
+                }
+                gap = (gap + inc > kMoverGapMax) ? kMoverGapMax : gap + inc;
             }
         }
         // THE PACING GAP, as its own depth-0 zone. A FILLER's controller settled it at 17,156 cycles (12.7 us)
