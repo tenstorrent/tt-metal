@@ -475,7 +475,11 @@ typename device_operation_t::tensor_return_value_t launch(
         [&input_tensors](const Tensor& t) { input_tensors.push_back(std::cref(t)); }, tensor_args);
 
     const auto operation_name = detail::get_operation_name<device_operation_t>(operation_attributes);
-    tt::tt_metal::GraphTracker::instance().track_function_start(operation_name, operation_attributes, input_tensors);
+    // Everything below can throw: validation, output allocation and, for the circular-buffer /
+    // L1 clash of #28836, program dispatch. The guard closes the tracked scope on those paths too,
+    // marking it aborted, so the capture does not lose the failing op and misnest everything after
+    // it.
+    tt::tt_metal::ScopedTrackedFunction tracked_function(operation_name, operation_attributes, input_tensors);
 
     for (const auto& input_tensor_ref : input_tensors) {
         const auto& input_tensor = input_tensor_ref.get();
@@ -499,7 +503,7 @@ typename device_operation_t::tensor_return_value_t launch(
     // Short-circuit for inactive MeshDevices (no-op). It is important this happens before any validation an op may
     // perform, as most of the MeshDevice calls will fail for inactive MeshDevices.
     if (mesh_device->get_view().get_devices().empty()) {
-        tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
+        tracked_function.end(tensor_return_value);
         return tensor_return_value;
     }
 
@@ -525,7 +529,7 @@ typename device_operation_t::tensor_return_value_t launch(
     detail::launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
         operation_attributes, tensor_args, tensor_return_value, mesh_device);
 
-    tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
+    tracked_function.end(tensor_return_value);
     return tensor_return_value;
 }
 

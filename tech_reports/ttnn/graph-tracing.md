@@ -610,6 +610,13 @@ Operation boundaries.
 **function_end params:**
 - `name`: Operation name
 - `duration_ns`: Wall-clock duration (optional)
+- `aborted`: `"true"` when the scope was left by an exception instead of returning (optional)
+- `abort_reason`: The exception's message, when one was recoverable (optional)
+
+A `function_end` is emitted on both the success and the failure path. C++ scopes instrumented with
+`tt::tt_metal::ScopedTrackedFunction` close from its destructor, which marks the node `aborted`
+when it detects an in-flight exception. This keeps the trace balanced: operations that run after a
+failure keep their real nesting instead of being recorded as children of the operation that died.
 
 ### tensor
 
@@ -657,14 +664,28 @@ Circular buffer events for streaming/multi-buffering.
 
 ### error
 
-The C++ graph processor does not emit error nodes directly. Instead, the Python importer detects **orphan operations** — `function_start` nodes without a matching `function_end` — and records them as `incomplete_operation` errors. Legacy JSON files with explicit error nodes are also supported.
+The C++ graph processor does not emit error nodes directly. A failing operation reaches the
+`errors` table by one of three routes, in order of preference:
+
+1. **Python-recorded exception.** The operation decorators call `ttnn.graph.record_python_operation_error()`
+   on the way out, putting the exception's type and message in the `python_io` sidecar. This is the
+   richest source and is used whenever it is present.
+2. **Abort marker.** A `function_end` with `aborted: "true"` (see above) reports the operation as
+   `aborted_operation`, carrying `abort_reason` as the message. This is what a C++-initiated capture
+   sees, where no Python decorator was involved. When the aborting scope is nested, the diagnostic is
+   attributed to the enclosing operation that the report lists.
+3. **Orphan operation.** A `function_start` with no matching `function_end` is recorded as an
+   `incomplete_operation`. Scopes that go through `ScopedTrackedFunction` no longer produce these, so
+   this path now mainly covers older reports and un-guarded call sites.
+
+Legacy JSON files with explicit error nodes are also supported.
 
 **Database `errors` table columns:**
 - `operation_id`: The operation where the error was detected
 - `operation_name`: Name of the operation
-- `error_type`: `"incomplete_operation"` (inferred) or explicit type from JSON
+- `error_type`: The Python exception type, `"aborted_operation"`, `"incomplete_operation"`, or an explicit type from JSON
 - `error_message`: Human-readable description
-- `stack_trace`: Empty (reserved for future use)
+- `stack_trace`: The Python stack at the failing operation, when recorded
 - `timestamp`: Empty (reserved for future use)
 
 ---

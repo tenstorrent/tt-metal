@@ -92,6 +92,8 @@ public:
     void track_function_end() override;
     void track_function_end(const std::any& output) override;
 
+    void track_function_abort(std::string_view reason) override;
+
     void begin_capture(RunMode mode) override;
 
     nlohmann::json end_capture() override;
@@ -161,7 +163,13 @@ private:
     template <typename T>
     void end_function_process(const std::vector<T>& tensor_vec);
 
-    void track_function_end_impl();
+    // Appends the function_end vertex for the innermost open scope and returns its node id, so
+    // callers can decorate it. Does not pop `current_op_id`.
+    node_id track_function_end_impl();
+
+    // Whether a function_start is open, i.e. whether `current_op_id` holds more than the
+    // capture_start sentinel it is seeded with. Callers must hold `mutex`.
+    bool has_open_function() const { return current_op_id.size() > 1; }
 
     void clean_hook();
 

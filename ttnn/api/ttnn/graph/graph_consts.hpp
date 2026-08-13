@@ -34,6 +34,9 @@ constexpr auto kBorrowsMemory = "borrows_memory";
 constexpr auto kDeviceId = "device_id";
 constexpr auto kDurationNs = "duration_ns";
 constexpr auto kMaxSizePerBank = "max_size_per_bank";
+// Set on a function_end that closes a scope left by an exception rather than by returning.
+constexpr auto kAborted = "aborted";
+constexpr auto kAbortReason = "abort_reason";
 
 // node names
 constexpr auto kNodeBuffer = "buffer";

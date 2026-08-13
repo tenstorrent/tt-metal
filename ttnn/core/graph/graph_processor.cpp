@@ -519,7 +519,7 @@ void GraphProcessor::track_function_start(
     graph[counter].input_tensors = current_input_tensors;
 }
 
-void GraphProcessor::track_function_end_impl() {
+node_id GraphProcessor::track_function_end_impl() {
     // Calculate duration - get end time first for accuracy
     uint64_t duration_ns = 0;
     if (!function_start_times.empty()) {
@@ -554,12 +554,37 @@ void GraphProcessor::track_function_end_impl() {
     if (stacking_level == 1 && capture_detailed_buffer_tracing_ && !captured_mesh_devices.empty()) {
         per_op_buffers_[function_start_id] = ttnn::reports::get_buffers(captured_mesh_devices);
     }
+
+    return counter;
 }
 
 void GraphProcessor::track_function_end() {
     const std::lock_guard<std::mutex> lock(mutex);
+    if (!has_open_function()) {
+        // An end with no matching start, e.g. a capture that began inside an already-open scope.
+        // Honouring it would pop the capture_start sentinel and leave every later end reading off
+        // an empty stack.
+        log_debug(tt::LogAlways, "Ignoring function_end with no open function_start");
+        return;
+    }
     this->track_function_end_impl();
-    TT_ASSERT(!current_op_id.empty());  // we should always have capture_start on top
+    current_op_id.pop();
+}
+
+void GraphProcessor::track_function_abort(std::string_view reason) {
+    const std::lock_guard<std::mutex> lock(mutex);
+    if (!has_open_function()) {
+        log_debug(tt::LogAlways, "Ignoring function_abort with no open function_start");
+        return;
+    }
+    // The scope is closed like any other so the trace stays balanced and later operations keep
+    // their real nesting; the marker is what tells the two apart downstream. There is no output
+    // to record: the operation never produced one.
+    const node_id end_id = this->track_function_end_impl();
+    graph[end_id].params[kAborted] = "true";
+    if (!reason.empty()) {
+        graph[end_id].params[kAbortReason] = std::string(reason);
+    }
     current_op_id.pop();
 }
 
@@ -572,6 +597,10 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     };
 
     const std::lock_guard<std::mutex> lock(mutex);
+    if (!has_open_function()) {
+        log_debug(tt::LogAlways, "Ignoring function_end with no open function_start");
+        return;
+    }
     this->track_function_end_impl();
 
     const auto* const it = std::ranges::find(
@@ -582,7 +611,6 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
     } else {
         log_debug(tt::LogAlways, "output any type name ignored: {}", output_tensors.type().name());
     }
-    TT_ASSERT(!current_op_id.empty());  // we should always have capture_start on top
     current_op_id.pop();
 }
 

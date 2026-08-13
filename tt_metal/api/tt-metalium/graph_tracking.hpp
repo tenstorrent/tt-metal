@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <any>
 #include <array>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -15,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
@@ -87,6 +89,12 @@ public:
     virtual void track_function_end() {};
     virtual void track_function_end(const std::any& /*output_tensors*/) {};
 
+    // Closes the scope opened by track_function_start when it is left by an in-flight exception
+    // rather than by returning. `reason` carries the exception's message when one was recoverable.
+    // A processor that does not override this sees no end at all for the failing scope, which is
+    // the pre-existing behaviour.
+    virtual void track_function_abort(std::string_view /*reason*/){};
+
     virtual void begin_capture(RunMode /*mode*/){};
 
     virtual nlohmann::json end_capture();
@@ -134,6 +142,12 @@ public:
     static GraphTracker& instance();
 
     bool is_enabled() const;
+
+    // Whether any processor is registered, i.e. whether the track_* calls below do anything.
+    // Unlike is_enabled() this also counts non-capture (background) processors, so it matches
+    // exactly the condition each track_* call tests before fanning out. ScopedTrackedFunction
+    // snapshots it so that a capture starting mid-scope never receives an unpaired end.
+    bool has_processors() const;
 
     void push_processor(const std::shared_ptr<IGraphProcessor>& processor);
     void pop_processor();
@@ -195,6 +209,9 @@ public:
         }
     }
 
+    // Close a tracked scope that is being left by an exception. There is no output to report.
+    void track_function_abort(std::string_view reason);
+
     bool hook_allocate(const Buffer* buffer);
 
     bool hook_deallocate(Buffer* buffer);
@@ -227,5 +244,82 @@ private:
 
     std::mutex hooked_buffers_mutex;
     std::unordered_set<const Buffer*> hooked_buffers;
+};
+
+// RAII pairing of GraphTracker::track_function_start with its end.
+//
+// The two calls used to be written as plain statements around the tracked body, so an exception
+// thrown in between skipped the end entirely. The processor was then left holding the dead scope:
+// the next end closed the wrong function, and every event after it was recorded one level too
+// deep, nested under an operation that never finished. That corrupts the whole remainder of a
+// capture which outlives the failure, such as the per-test capture behind the TTNN Visualizer
+// report.
+//
+// The destructor closes the scope on both paths and tells them apart, so a failing operation is
+// reported as aborted instead of silently unbalancing the trace. Call end() on the success path to
+// report the operation's output; anything left unclosed is finished by the destructor.
+class ScopedTrackedFunction {
+public:
+    template <class... Args>
+    explicit ScopedTrackedFunction(std::string_view function_name, Args&&... args) :
+        entry_uncaught_exceptions_(std::uncaught_exceptions()),
+        // Snapshot before the start so that a capture pushed inside this scope, which never saw
+        // the start, does not receive the matching end either.
+        started_(GraphTracker::instance().has_processors()) {
+        GraphTracker::instance().track_function_start(function_name, std::forward<Args>(args)...);
+    }
+
+    template <class ReturnType>
+    void end(ReturnType& output_tensors) {
+        if (std::exchange(ended_, true) || !started_) {
+            return;
+        }
+        GraphTracker::instance().track_function_end(output_tensors);
+    }
+
+    void end() {
+        if (std::exchange(ended_, true) || !started_) {
+            return;
+        }
+        GraphTracker::instance().track_function_end();
+    }
+
+    // Closes the scope as failed. Call from a catch block, where the message is in reach; the
+    // destructor cannot supply one (see below).
+    void abort(std::string_view reason) {
+        if (std::exchange(ended_, true) || !started_) {
+            return;
+        }
+        GraphTracker::instance().track_function_abort(reason);
+    }
+
+    ~ScopedTrackedFunction() {
+        if (ended_ || !started_) {
+            return;
+        }
+        // Destructors must not let an exception escape, least of all while one is already unwinding.
+        try {
+            if (std::uncaught_exceptions() > entry_uncaught_exceptions_) {
+                // No message: std::current_exception() only reports an exception that a handler has
+                // begun handling, and stack unwinding runs destructors before any handler is
+                // entered, so there is nothing to read here. Callers that want the text must use
+                // abort() from a catch block.
+                GraphTracker::instance().track_function_abort({});
+            } else {
+                GraphTracker::instance().track_function_end();
+            }
+        } catch (...) {  // NOLINT(bugprone-empty-catch)
+        }
+    }
+
+    ScopedTrackedFunction(const ScopedTrackedFunction&) = delete;
+    ScopedTrackedFunction(ScopedTrackedFunction&&) = delete;
+    ScopedTrackedFunction& operator=(const ScopedTrackedFunction&) = delete;
+    ScopedTrackedFunction& operator=(ScopedTrackedFunction&&) = delete;
+
+private:
+    int entry_uncaught_exceptions_;
+    bool started_;
+    bool ended_ = false;
 };
 }  // namespace tt::tt_metal
