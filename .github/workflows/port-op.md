@@ -291,20 +291,56 @@ steps:
       # the previous run committed.
       echo "PORT_BASE_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
 
-      # `category` was an input with a default of `data_movement`, which is right for one op. It is
-      # not a choice -- the op's directory is already somewhere in the tree and there is exactly one
-      # of it. Depth 3 so that a nested category like `eltwise/binary` resolves too; `scaffold.py`
-      # joins it with a slash either way. Pruning `codegen` keeps the port's own subdirectory from
-      # matching when an op is named after its parent.
-      matches=$(find ttnn/cpp/ttnn/operations -mindepth 2 -maxdepth 3 -type d -name "$PORT_OP" \
+      # `category` was an input with a default of `data_movement`, which is right for one op. It is not
+      # a choice: the op's directory is already in the tree, and the manifest already says which one.
+      #
+      # Naively globbing for the op's name is not enough, and `untilize` is the proof -- there are two,
+      # `data_movement/untilize` and `experimental/quasar/untilize`, structurally identical down to the
+      # filenames. The manifest's `native_entry` is the tiebreaker and it is authoritative: it names the
+      # ttnn symbol this port replaces. `ttnn.untilize` is the mainline op; a quasar port would say
+      # `ttnn.experimental.quasar.untilize`. So the namespace between `ttnn.` and the op name is the
+      # category path, and its absence means the op is not under `experimental/` at all.
+      #
+      # Read with sed rather than a YAML parser because this step runs before PyYAML is installed, and
+      # `native_entry` is a top-level scalar. Depth 3 so a nested category like `eltwise/binary`
+      # resolves; `scaffold.py` joins it with a slash either way. Pruning `codegen` keeps the port's own
+      # subdirectory from matching when an op is named after its parent.
+      manifest=".codegen/agentic_port/manifests/${PORT_OP}.yaml"
+      entry=$(sed -n 's/^native_entry:[[:space:]]*//p' "$manifest" | head -1)
+      [ -n "$entry" ] || { echo "::error::$manifest names no native_entry"; exit 1; }
+      # `ttnn.experimental.quasar.untilize` -> `experimental/quasar`; `ttnn.untilize` -> empty. The case
+      # statement is what makes the second one empty: after dropping `ttnn.`, a remainder with no dot
+      # left in it is the bare op name, so there is no namespace. Doing this with one sed chain instead
+      # silently yields `untilize` as the namespace, which then matches no directory at all.
+      rest=${entry#ttnn.}
+      case "$rest" in
+        *.*) namespace=$(printf '%s\n' "$rest" | sed 's/\.[^.]*$//; s/\./\//g') ;;
+        *) namespace="" ;;
+      esac
+      # A manifest whose entry point is a different op than the one being ported is a mismatch worth
+      # stopping on, not working around.
+      if [ "${rest##*.}" != "$PORT_OP" ]; then
+        echo "::error::$manifest is for $PORT_OP but its native_entry is $entry"
+        exit 1
+      fi
+
+      all=$(find ttnn/cpp/ttnn/operations -mindepth 2 -maxdepth 3 -type d -name "$PORT_OP" \
         -not -path '*/codegen/*' | sed 's|^ttnn/cpp/ttnn/operations/||; s|/'"$PORT_OP"'$||' | sort -u)
+      if [ -n "$namespace" ]; then
+        matches=$(printf '%s\n' "$all" | grep -x "$namespace" || true)
+      else
+        # A mainline entry point cannot live under `experimental/`, which is the directory carrying the
+        # `ttnn.experimental` namespace. Anything else is a real ambiguity and stops the run.
+        matches=$(printf '%s\n' "$all" | grep -v '^experimental/' || true)
+      fi
       count=$(printf '%s\n' "$matches" | grep -c . || true)
       if [ "$count" -ne 1 ]; then
-        echo "::error::expected exactly one ttnn/cpp/ttnn/operations/*/$PORT_OP, found $count: $matches"
+        echo "::error::$entry should name exactly one of these $PORT_OP directories, matched $count:"
+        printf '%s\n' "$all" | sed 's/^/  candidate: /'
         exit 1
       fi
       echo "PORT_CATEGORY=$matches" >> $GITHUB_ENV
-      echo "category resolved to $matches"
+      echo "category resolved to $matches, from native_entry $entry"
 
       # Resume is detected, not declared, so the same workflow serves a fresh port and a half-finished
       # one and there is no mode flag to get wrong. The signal is a *tracked* codegen directory: a
