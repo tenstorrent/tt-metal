@@ -6,7 +6,7 @@ import os
 import subprocess
 import sys
 
-from .program_descriptor_with_inline_kernels import VARIANTS
+from .program_descriptor_with_inline_kernels import MEASURED_NULLS, RECOMMENDED, VARIANTS
 
 _TEST = "tests/ttnn/unit_tests/operations/examples/test_tensix_all_reduce.py::test_tensix_all_reduce_device_perf"
 
@@ -23,9 +23,13 @@ def main():
     parser.add_argument(
         "--variant",
         nargs="+",
-        choices=("all",) + VARIANTS,
-        default=["all"],
-        help="algorithm(s) to measure; default: all",
+        choices=("all", "recommended") + VARIANTS,
+        default=["recommended"],
+        help=(
+            "algorithm(s) to measure. Default 'recommended' skips the measured nulls "
+            f"({', '.join(MEASURED_NULLS)}), which are ~4x off the best reducer at every size "
+            "measured; 'all' includes them."
+        ),
     )
     parser.add_argument(
         "--group-shape",
@@ -54,7 +58,12 @@ def main():
         if len(group_shape) != 2 or any(dimension < 1 for dimension in group_shape):
             parser.error("--group-shape must contain two positive dimensions")
 
-    selected = list(VARIANTS) if "all" in args.variant else list(dict.fromkeys(args.variant))
+    if "all" in args.variant:
+        selected = list(VARIANTS)
+    elif "recommended" in args.variant:
+        selected = list(RECOMMENDED)
+    else:
+        selected = list(dict.fromkeys(args.variant))
     env = dict(
         os.environ,
         AR_NUM_TILES=str(args.num_tiles),
