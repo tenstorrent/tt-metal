@@ -2,13 +2,27 @@
 
 **Issue:** [tenstorrent/tt-metal#49739 — [LLK] SFPU testing edge cases](https://github.com/tenstorrent/tt-metal/issues/49739)
 **Plan for what is left:** [SFPU_EDGE_CASE_EXPANSION_PLAN.md](SFPU_EDGE_CASE_EXPANSION_PLAN.md)
-**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-13 (revision 10)
+**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-13 (revision 11)
 **Scope:** All SFPU LLK kernels in `tt-metal/tt_metal/tt-llk`, audited through the tt-llk Python test
 infra (`tests/python_tests/`). Wormhole B0 and Blackhole share essentially the same SFPU kernel set
 (BH adds only `topk_xl`), so this audit treats them together and notes arch-specific gaps inline.
 Quasar has its own suite under `quasar/` and is **out of scope** — an op driven only from `quasar/`
 counts as untested here.
 
+> ### Revision 11 — the ISA answers the `NaN` comparison question, and reverses it
+>
+> `tt-isa-documentation` specifies a total order for FP32 — `-NaN < -Inf < ... < -0 < +0 < ... < +Inf
+> < +NaN` — on `SFPGT`, `SFPLE` and `SFPSWAP`, all routed through `SignMagIsSmaller()`. So §5.8's
+> measurement is documented behaviour and **the goldens are the wrong party**: they model IEEE's
+> unordered comparisons, which the SFPU does not implement. Seven of those nine ops become golden work
+> rather than kernel divergences; recording them as xfails would have been a permanent lie about
+> documented hardware.
+>
+> Two things the ISA did not close, both now scoped: `SFPSETCC` explicitly excludes a `NaN` operand
+> (so `Sign` and `Heaviside` stay open), and **the total order is Blackhole-only** — Wormhole has no
+> `SFPGT`/`SFPLE`, so the goldens may need arch-keying. §5.6 keeps the two questions that remain, and
+> records why the ISA cannot settle the approximation-contract one.
+>
 > ### Revision 10 — cat E closed, the scalar binops enrolled, and the CI hole shut
 >
 > Three of the plan's items are gone, and one of them was quietly undermining all the others.
@@ -109,8 +123,13 @@ Symbols in §4: **✅** the edge sweep drives this op; **⬜** it does not (with
 **⚠️** the op diverges from its golden at a driven edge (§5).
 
 In the **Cat B** column specifically, **🟡 §5.8** and **🟡 §5.9** are not "unknown" — they name the
-single kernel behaviour holding that op out. Every 🟡 row is waiting on one of two answers (§5.6), not
-on work of its own, which is why the 37 unenrolled ops are a shorter list than they look.
+single kernel behaviour holding that op out, which is why the 37 unenrolled ops are a shorter list than
+they look. The two markers now mean different things:
+
+- **🟡 §5.9** — waiting on §5.6's approximation-contract question. 23 ops, blocked on an owner.
+- **🟡 §5.8** — the SFPU's documented total order. 7 of these 9 are *not* blocked: the ISA settles them
+  and they need a golden that models the total order. Only `Sign` and `Heaviside` are still questions,
+  because they compare through `SFPSETCC`, whose contract excludes a `NaN` operand.
 
 ---
 
@@ -130,16 +149,16 @@ All figures re-derived from the tree on 2026-08-12 (see §7 for the commands).
 | Binary integer / ternary / scalar / reduce / FPU-binary ops | 5 / 5 / 5 / 3 / 3 |
 | `_OP_SINGULARITIES` entries | **21** — +2 for the ternary operand-C poles |
 | `_OP_EDGE_POINTS` entries | 43, plus `_OP_OPERAND_EDGE_POINTS` for `lerp`'s operand-C knees |
-| `SPECIALS_READY_OPS` (cat B opt-in) | **60 of 97 unary**, plus all **5 scalar binops**; of the 37 unary still outside, 32 are blocked on two kernel questions (§5.8, §5.9) rather than on per-op work |
+| `SPECIALS_READY_OPS` (cat B opt-in) | **60 of 97 unary**, plus all **5 scalar binops**; of the 37 unary still outside, 26 wait on the two questions in §5.6 and **7 are golden work the ISA has already settled** (§5.8) |
 | `(format, dest_acc)` triples that can carry specials | 7 cells of 50 (Wormhole); **3 of those 7 reachable and confirmed on Blackhole**. Carrying a `-0.0` is a strictly narrower gate — see §5.2 |
 | Ops diverging from their golden at a driven edge | 13 over 52 cells, of which **16 cells now arch-gated to Wormhole**; the 3 newest are cat-B and derived from the delivery rules rather than listed |
 | Host-side guards over the gates and metadata | 107 tests (`test_sfpu_domains.py`) |
 
 **Category status:** A ✅ closed for every op that has a boundary, unary **and ternary** · B 🟡 live
-for 60 of the 97 unary ops plus all 5 scalar binops; of the 37 still outside, 32 are held by two
-kernel behaviours (§5.8, §5.9) rather than by per-op work · C ✅ closed for the 5 ops whose kernels
-claim the full int32 range · D ✅ closed for all 43 knees, plus `lerp`'s weight boundaries · E ✅
-closed, unary and binary · F ⬜ 11 kernels untouched.
+for 60 of the 97 unary ops plus all 5 scalar binops; of the 37 still outside, 7 are golden work the ISA
+settles (§5.8) and 26 wait on §5.6's two questions · C ✅ closed for the 5 ops whose kernels claim the
+full int32 range · D ✅ closed for all 43 knees, plus `lerp`'s weight boundaries · E ✅ closed, unary
+and binary · F ⬜ 11 kernels untouched.
 
 **So five of the six categories are closed or bounded**, and what is left is one large build (F) and
 two questions someone else has to answer.
@@ -784,7 +803,7 @@ ops in hand.
 cast had invented. Nothing was failing, because `Signbit` is not enrolled for specials; it was waiting
 to.
 
-### 5.8 New: SFPU comparisons rank `NaN` above every finite value
+### 5.8 New: SFPU comparisons rank `NaN` above every finite value — and the ISA says so
 
 IEEE 754 makes every ordered comparison with a `NaN` operand false. The SFPU behaves as though `NaN`
 were larger than everything — which is what an unsigned magnitude comparison gives, since a `NaN` has an
@@ -808,9 +827,30 @@ Six more ops follow from the same rule, each returning its upper bound where IEE
 (the `x > 0` branch). Every value is that op's own dispatch constant, which is what makes the
 explanation checkable rather than plausible.
 
-Nine ops are held out of `SPECIALS_READY_OPS` by this one behaviour. It is unresolved for the same
-reason as `Sign`'s `-0.0` case: the ISA specifies `SFPSETCC` only for inputs that are not negative zero
-(`tt-isa-documentation WormholeB0/.../VectorUnit.md`), and says nothing about `NaN`. See §5.6.
+**The ISA specifies this, and it makes the golden the wrong party.** `SFPGT`, `SFPLE` and `SFPSWAP`
+each document a total order for FP32 — `-NaN < -Inf < ... < -0 < +0 < ... < +Inf < +NaN` — and all
+three route through `SignMagIsSmaller()`, which "treats C and D as sign-magnitude integers". The
+comparison is a bit-pattern compare remapped to two's complement, not an IEEE compare, so a `+NaN`
+outranking every finite value is by design
+(`tt-isa-documentation BlackholeA0/TensixTile/TensixCoprocessor/{SFPGT,SFPLE,SFPSWAP}.md`).
+
+So seven of the nine ops need goldens that model the total order, after which they enrol as ordinary
+passes. Recording them as kernel divergences would have written a permanent, plausible-looking lie
+about documented hardware.
+
+Two caveats keep the other two out, and one of them is architectural:
+
+- **`Sign` and `Heaviside` compare against zero**, which is `SFPSETCC`, and its contract is explicitly
+  conditioned: *"Provided that `VC` is neither negative zero nor any kind of NaN"*. `NaN` is outside it,
+  so their `1.0` is unspecified rather than documented — consistent with an `int32` test on a positive
+  NaN's bit pattern, but not guaranteed. Same shape as the `-0.0` caveat §5.2 already rests on.
+- **The total order is Blackhole-only.** `WormholeB0/.../VectorUnit.md` has no `SFPGT` and no `SFPLE`;
+  `SFPSETCC` is its only comparison, with the same NaN proviso. Nothing here has been measured on
+  Wormhole, so the goldens may need arch-keying rather than one model.
+
+The op→instruction mapping is inferred from the pass/fail split rather than read from the kernels.
+That split matches the total order exactly, which is strong, but confirm it before editing goldens.
+See §5.6.
 
 ### 5.9 The `Log` saturation is a whole-family behaviour, not one op
 
@@ -835,11 +875,25 @@ one answer settles 23 held-out ops.
 
 ### 5.6 What to raise with kernel owners
 
-Two questions, both cheap for an owner to adjudicate and expensive for a test to keep guessing about:
+Written up in full, with measured tables and a reproduce command, in `KERNEL_OWNER_QUESTIONS.md`.
+**Two remain**, after the ISA answered a third:
 
-1. **`Log` saturates non-finite inputs** (§5.5). Is that intended, and should it be documented? Until
-   it is answered there is no way to know whether the right outcome is a pass, an xfail or a bug.
-2. **`RsqrtCompat(0)` saturates to `1.7014118e38`** where plain `Rsqrt` at the same pole does not.
+1. **Approximation kernels do not propagate non-finite inputs** (§5.5, §5.9) — 23 ops. Is the input
+   clamp intended, and should it be documented? The ISA cannot settle this and it is worth knowing
+   why: it specifies the *primitives* only within stated ranges — `SFPARECIP` gives accuracy bounds
+   for `0 ≤ x < 2` and suggests following up with Newton-Raphson, `SFPLUTFP32` documents no handling
+   for `NaN`/`±inf` — so the out-of-range behaviour of a composition built on them is an LLK/API
+   decision by construction.
+2. **`RsqrtCompat(0)` saturates to `1.7014118e38`** where plain `Rsqrt` does not — 1 op. The ISA
+   narrows it: `SFPARECIP` saturates to `0x7f800000` (`+inf`) for an input below `2^-126`, so
+   `0x7F000000` (`2^127`) is not a value the instruction produces. The constant is a software clamp
+   added above the primitive, and `Rsqrt`'s `+inf` is what the hardware itself would give. The
+   question is therefore *why the clamp was added*, not which one the hardware does.
+
+**The `NaN` comparison question is answered** — see §5.8. `SFPGT`, `SFPLE` and `SFPSWAP` document a
+total order in which `+NaN` is the largest FP32 value, so seven of those nine ops are golden work
+rather than a question. `Sign` and `Heaviside` remain, because `SFPSETCC`'s contract excludes a `NaN`
+operand, and so does the Wormhole gap: that architecture has no `SFPGT`/`SFPLE` at all.
 
 The `signbit` question is **withdrawn**: §5.2's measurement shows the probe is not delivered on those
 six combinations, so there is no kernel contract to question there.
