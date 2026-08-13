@@ -265,9 +265,13 @@ def sfpu_total_order_key(value: float) -> int:
     as "-0 < +0", but SignMagIsSmaller() answers "is C less than D" and returns false either
     way for the pair -- and this suite's comparator cannot see a zero's sign regardless.
 
-    Caveat worth keeping in view: this is documented for **Blackhole**. Wormhole has no SFPGT
-    and no SFPLE at all -- SFPSETCC is its only comparison -- so the guarantee does not carry
-    over, and nothing here has been measured there.
+    Documented on both architectures, which is not what the first reading of the ISA said.
+    Wormhole has no SFPGT and no SFPLE, and that was taken to mean it has no total order --
+    but SFPSWAP.md carries the same SignMagIsSmaller() and the same chain, so the order is
+    specified there too. Measured green on a Wormhole n300 afterwards: all seven ops enrolled
+    against this model pass 8/8, and a direct probe reproduces the Blackhole answers value for
+    value. What these kernels lower to on Wormhole is still unread -- sfpi expands the
+    comparison in the compiler backend -- so treat that half as measured rather than derived.
     """
     bits = struct.unpack("<i", struct.pack("<f", value))[0]
     # Sign bit set -> negative side of the order, ranked by magnitude descending.

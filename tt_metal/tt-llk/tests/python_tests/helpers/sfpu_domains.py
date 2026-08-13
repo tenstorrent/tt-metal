@@ -2159,8 +2159,10 @@ SPECIALS_READY_OPS.update(
 # the total order their answers happen to coincide with IEEE's at a +NaN, which is exactly why
 # the pass/fail split across the six comparison ops identified the cause.
 #
-# Caveat, deliberately not hidden: the total order is documented for **Blackhole**. Wormhole has
-# no SFPGT and no SFPLE -- SFPSETCC is its only comparison -- so this model is unverified there.
+# The caveat this block used to carry -- "documented for Blackhole, unverified on Wormhole" -- is
+# withdrawn. Wormhole has no SFPGT and no SFPLE, which is what prompted the doubt, but SFPSWAP.md
+# documents the same total order, and a Wormhole n300 run has since put all seven ops at 8/8 with a
+# direct probe reproducing the Blackhole answers value for value. The order holds on both.
 SPECIALS_READY_OPS.update(
     {
         MathOperation.UnaryGt: "x > 0.5 under the SFPU's total order, in which +NaN is the "
