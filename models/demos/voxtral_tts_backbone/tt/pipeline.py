@@ -242,7 +242,7 @@ class VoxtralTtsBackbonePipeline:
         # exact values.
         self.w_lm_head = ttnn.from_torch(
             hf_model.lm_head.weight.detach().to(torch.bfloat16).transpose(0, 1).contiguous(),
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
         )
