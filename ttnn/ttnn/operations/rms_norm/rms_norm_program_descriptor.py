@@ -37,7 +37,15 @@ OUT_CB_DEPTH = 2  # cb_output_tiles double buffer (2.78x overlap, double_buffer/
 RM_IN_DEPTH = 2  # cb_rm_stage_in  tile-row window
 RM_OUT_DEPTH = 2  # cb_rm_stage_out tile-row window
 IN_CB_DEPTH = 1  # cb_input_tiles: exactly one block resident (in-place rewrite needs wr==rd)
-DM_CHUNK_TILES = 8  # tiles per NoC barrier, reader and writer alike
+DM_CHUNK_TILES = 8  # tiles per NoC barrier, reader and writer alike (the ROW_MAJOR
+# kernels convert this byte budget into sticks — see RM_CHUNK_STICKS there)
+
+# IN_CB_DEPTH is load-bearing at 1, not a free knob: the two in-place rewrites of x
+# (mask_tail_block, scale_block) rely on get_write_ptr() == get_read_ptr(), which only
+# holds when cb_input_tiles' capacity is EXACTLY the live block.  Turning it to 2 would
+# silently write x*r into the wrong half.  The overlap perf lamp must therefore be
+# measured as "smaller block_rows + a second buffer", never "same block, deeper CB".
+assert IN_CB_DEPTH == 1, "cb_input_tiles must be exactly one block deep (in-place rewrite)"
 
 # L1 budget. `l1_size_per_core()` is not bound to Python; the fallback is a
 # single named constant (conservative for WH/BH, both >= 1.4 MB usable).
@@ -347,9 +355,13 @@ def create_program_descriptor(
         _cb(CB_SQ_PARTIALS, B, stat_tile, ttnn.float32),
         _cb(CB_RMS_RECIP, B, stat_tile, ttnn.float32),
         _cb(CB_SCALER, 1, bf16_tile, ttnn.bfloat16),
-        _cb(CB_W_MASK, 1, bf16_tile, ttnn.bfloat16),
         _cb(CB_THREAD_SYNC, 1, bf16_tile, ttnn.bfloat16),
     ]
+    if mask_enabled:
+        # Only the W-mask path (TILE layout with W % 32 != 0) touches this CB;
+        # both the reader's prepare_reduce_mask and the compute kernel's
+        # mask_tail_block are gated on the same predicate.  Matches l1_ledger.md.
+        cbs.append(_cb(CB_W_MASK, 1, bf16_tile, ttnn.bfloat16))
     if has_gamma:
         cbs.append(_cb(CB_GAMMA_TILES, S, gamma_tile, gamma.dtype))
     if S_COUNT > 1:
@@ -378,6 +390,7 @@ def create_program_descriptor(
         stat_tile,
         DM_CHUNK_TILES,
         RM_IN_DEPTH * S,
+        1 if mask_enabled else 0,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(

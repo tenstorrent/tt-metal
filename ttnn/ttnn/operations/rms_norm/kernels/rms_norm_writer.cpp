@@ -45,6 +45,15 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<10>();
 
     constexpr uint32_t RM_STICK_PITCH = SLICE_HIDDEN_TILES * TILE_DIM * OUT_ELEM_BYTES;
+    static_assert(RM_STICK_PITCH % 16 == 0, "ROW_MAJOR staging stick pitch must be L1-aligned");
+
+    // Same byte-budget conversion as the reader: DM_CHUNK_TILES tiles' worth of
+    // bytes expressed in sticks (a stick is S*32 elements = S/32 of a tile),
+    // clamped to the 32 sticks of one tile-row.  Keeps both halves of the
+    // dataflow batching at the same granularity on both layouts.
+    constexpr uint32_t RM_CHUNK_STICKS_RAW = (DM_CHUNK_TILES * TILE_DIM) / SLICE_HIDDEN_TILES;
+    constexpr uint32_t RM_CHUNK_STICKS =
+        RM_CHUNK_STICKS_RAW < 1 ? 1 : (RM_CHUNK_STICKS_RAW > TILE_DIM ? TILE_DIM : RM_CHUNK_STICKS_RAW);
 
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_start = get_arg_val<uint32_t>(1);
@@ -106,7 +115,7 @@ void kernel_main() {
                             l1 + k * RM_STICK_PITCH,
                             output_accessor.get_noc_addr(stick, slice_base * TILE_DIM * OUT_ELEM_BYTES),
                             valid_w * OUT_ELEM_BYTES);
-                        if (++pending == DM_CHUNK_TILES) {
+                        if (++pending == RM_CHUNK_STICKS) {
                             noc_async_write_barrier();
                             pending = 0;
                         }

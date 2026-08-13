@@ -69,11 +69,31 @@ void kernel_main() {
     constexpr uint32_t STAT_TILE_BYTES = get_compile_time_arg_val(CT + 12);
     constexpr uint32_t DM_CHUNK_TILES = get_compile_time_arg_val(CT + 13);
     constexpr uint32_t RM_STAGE_IN_PAGES = get_compile_time_arg_val(CT + 14);  // rm_in_depth * S
-    constexpr auto in_args = TensorAccessorArgs<CT + 15>();
+    // Gates the W-mask CB: `prepare_reduce_mask` static_asserts on cb_w_mask's
+    // page FORMAT, so the call must sit in a discarded statement — not merely an
+    // untaken runtime branch — on the programs where the host does not declare
+    // that CB (TILE layout with W % 32 == 0, and every ROW_MAJOR program).
+    constexpr uint32_t MASK_ENABLED = get_compile_time_arg_val(CT + 15);
+    constexpr auto in_args = TensorAccessorArgs<CT + 16>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t BLOCK_TILES = BLOCK_ROWS * SLICE_HIDDEN_TILES;
     constexpr uint32_t RM_STICK_PITCH = SLICE_HIDDEN_TILES * TILE_DIM * IN_ELEM_BYTES;
+    // Both stick offsets used below (k * RM_STICK_PITCH, and the face-1 gamma
+    // relocation) must satisfy the 16 B L1 alignment.  S*32*elem is a multiple
+    // of 64 for every supported elem size, so this is a guard, not a rounding.
+    static_assert(RM_STICK_PITCH % 16 == 0, "ROW_MAJOR staging stick pitch must be L1-aligned");
+
+    // DM_CHUNK_TILES is a *byte-budget* knob ("this many tiles per NoC barrier"),
+    // and the ROW_MAJOR path moves sticks, not tiles.  One stick carries
+    // S*32 elements = S/32 of a tile, so the same budget is DM_CHUNK_TILES*32/S
+    // sticks.  Comparing the stick counter against DM_CHUNK_TILES directly (the
+    // pre-fix form) barriered every 8 sticks — at S=4/bf16 that is 2 KB per
+    // barrier against the TILE path's 16 KB, i.e. the same knob turned 8x finer
+    // on one layout.  Clamped to a tile-row (32 sticks), which is the CB window.
+    constexpr uint32_t RM_CHUNK_STICKS_RAW = (DM_CHUNK_TILES * TILE_DIM) / SLICE_HIDDEN_TILES;
+    constexpr uint32_t RM_CHUNK_STICKS =
+        RM_CHUNK_STICKS_RAW < 1 ? 1 : (RM_CHUNK_STICKS_RAW > TILE_DIM ? TILE_DIM : RM_CHUNK_STICKS_RAW);
 
     // ---- per-core runtime args ----
     constexpr uint32_t RT = mc.next_runtime_args_offset();
@@ -103,8 +123,10 @@ void kernel_main() {
     // the compute kernel's post-reduce finalize (never via PoolType::AVG, whose
     // scaler would divide by the PADDED tile width).
     calculate_and_prepare_reduce_scaler<cb_scaler, PoolType::SUM, ReduceDim::REDUCE_ROW>();
-    if (mask_valid_elems != 0) {
-        prepare_reduce_mask<cb_w_mask, ReduceDim::REDUCE_ROW>(mask_valid_elems);
+    if constexpr (MASK_ENABLED) {
+        if (mask_valid_elems != 0) {
+            prepare_reduce_mask<cb_w_mask, ReduceDim::REDUCE_ROW>(mask_valid_elems);
+        }
     }
 
     // =====================================================================
@@ -222,7 +244,7 @@ void kernel_main() {
                             input_accessor.get_noc_addr(stick, slice_base * TILE_DIM * IN_ELEM_BYTES),
                             l1 + k * RM_STICK_PITCH,
                             valid_w * IN_ELEM_BYTES);
-                        if (++pending == DM_CHUNK_TILES) {
+                        if (++pending == RM_CHUNK_STICKS) {
                             noc_async_read_barrier();
                             pending = 0;
                         }
