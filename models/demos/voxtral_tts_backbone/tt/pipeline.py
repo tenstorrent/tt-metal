@@ -291,6 +291,8 @@ class VoxtralTtsBackbonePipeline:
         )
         self._staged = None
         self._pinned = {}
+        #: The untilized logits row the last `_greedy_token` scanned.
+        self._flat_logits = None
 
     # ---------------------------------------------------------------- config
     def _stop_token_ids(self):
@@ -480,8 +482,13 @@ class VoxtralTtsBackbonePipeline:
         the unpadded row. Output contract is unchanged either way -- argmax
         returns UINT32 ROW_MAJOR -- so the token still feeds `ttnn.embedding`
         straight back with no host round-trip.
+
+        The untilized row is also stashed: it is the same values as `logits` in
+        1/32nd of the bytes (no tile padding), which is what the traced decode
+        loop copies out per step.
         """
-        return ttnn.argmax(ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT), dim=-1)
+        self._flat_logits = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.argmax(self._flat_logits, dim=-1)
 
     def _prompt_tail_logits(self, logits, prompt_len: int):
         """The last REAL prompt position — the one that predicts the first new
@@ -554,22 +561,102 @@ class VoxtralTtsBackbonePipeline:
         Each step consumes the PREVIOUS TT step's own argmax token out of the
         resident buffer — no reference token is injected at any joint. Returns
         device tensors; the caller reads them back once, after the run.
+
+        The decode step is CAPTURED ONCE and replayed per token when the device
+        was opened with a trace region: the step is already host-op free and
+        fixed-shape (that is what `decode_step` is built for), so re-issuing its
+        several hundred ops from Python every token is pure host overhead —
+        94% of this call's ttnn dispatches. A device without a trace region
+        falls back to the eager loop, which is the same math.
         """
         staged = self._as_staged(inputs)
         max_new_tokens = self.decode_horizon(staged["prompt_len"], max_new_tokens)
         state = self.decode_prefill(staged)
         step_logits = [state["first_logits"]]
         tokens = [state["first_token"]]
-        for _ in range(max_new_tokens - 1):
+        remaining = max_new_tokens - 1
+
+        if remaining > 0:
+            # One eager step first: it compiles the kernels the capture records,
+            # and it is a REAL token, so nothing is thrown away.
             logits, next_token = self.decode_step()
             step_logits.append(logits)
             tokens.append(next_token)
+            remaining -= 1
+
+        replay = self._capture_decode_step(remaining) if remaining > 0 else None
+        for step in range(remaining):
+            if replay is None:
+                logits, next_token = self.decode_step()
+            else:
+                trace_id, logits_buffer, token_buffer, logit_slots, token_slots = replay
+                ttnn.execute_trace(self.device, trace_id, cq_id=0, blocking=False)
+                # Every replay writes the SAME buffers, so each step's outputs
+                # are copied out before the next one overwrites them. The copy
+                # is of the UNTILIZED row, not the tile tensor: same values in
+                # 1/32nd of the bytes. It goes into a slot allocated BEFORE the
+                # capture -- allocating here instead hands back addresses the
+                # trace's own freed intermediates still get written to, which
+                # silently corrupts earlier steps.
+                logits, next_token = logit_slots[step], token_slots[step]
+                ttnn.copy(logits_buffer, logits)
+                ttnn.copy(token_buffer, next_token)
+            step_logits.append(logits)
+            tokens.append(next_token)
+        if replay is not None:
+            ttnn.release_trace(self.device, replay[0])
         return {
             "tokens": tokens,
             "step_logits": step_logits,
             "prompt_len": staged["prompt_len"],
             "max_new_tokens": max_new_tokens,
         }
+
+    def _capture_decode_step(self, slots: int):
+        """Capture one decode step, or None if this device has no trace region.
+
+        Capture RECORDS without executing, so the resident state the next replay
+        reads is exactly the state this call was entered with.
+
+        The per-step destination buffers are allocated FIRST, before the capture
+        allocates anything, so no slot can land on a trace-internal address.
+        """
+        trace_id = None
+        try:
+            logit_slots = [
+                ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([1, 1, self.vocab_size]),
+                    ttnn.bfloat16,
+                    ttnn.ROW_MAJOR_LAYOUT,
+                    self.device,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                )
+                for _ in range(slots)
+            ]
+            token_slots = [
+                ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([1, 1]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, self.device, ttnn.DRAM_MEMORY_CONFIG
+                )
+                for _ in range(slots)
+            ]
+            trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
+            _, next_token = self.decode_step()
+            ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+            return trace_id, self._flat_logits, next_token, logit_slots, token_slots
+        except Exception:  # noqa: BLE001 - no/too-small trace region: eager loop
+            # A capture that began must be closed even on the failure path, or
+            # the device is left recording and every later op disappears into a
+            # trace nobody replays.
+            if trace_id is not None:
+                try:
+                    ttnn.end_trace_capture(self.device, trace_id, cq_id=0)
+                except Exception:  # noqa: BLE001 - best-effort teardown
+                    pass
+                try:
+                    ttnn.release_trace(self.device, trace_id)
+                except Exception:  # noqa: BLE001 - best-effort teardown
+                    pass
+            return None
 
     # -------------------------------------------------------- readback (host)
     def token_ids(self, tokens) -> list:
