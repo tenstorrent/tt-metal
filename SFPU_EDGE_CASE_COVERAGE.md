@@ -2,7 +2,7 @@
 
 **Issue:** [tenstorrent/tt-metal#49739 — [LLK] SFPU testing edge cases](https://github.com/tenstorrent/tt-metal/issues/49739)
 **Plan for what is left:** [SFPU_EDGE_CASE_EXPANSION_PLAN.md](SFPU_EDGE_CASE_EXPANSION_PLAN.md)
-**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-13 (revision 14)
+**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-13 (revision 15)
 **Wormhole measurement:** [WORMHOLE_MEASUREMENT_RESULTS.md](WORMHOLE_MEASUREMENT_RESULTS.md)
 **Scope:** All SFPU LLK kernels in `tt-metal/tt_metal/tt-llk`, audited through the tt-llk Python test
 infra (`tests/python_tests/`). Wormhole B0 and Blackhole share essentially the same SFPU kernel set
@@ -10,7 +10,7 @@ infra (`tests/python_tests/`). Wormhole B0 and Blackhole share essentially the s
 Quasar has its own suite under `quasar/` and is **out of scope** — an op driven only from `quasar/`
 counts as untested here.
 
-> ### Revision 14 — the suite has run on Wormhole, and one family failed there
+> ### Revision 15 — the suite has run on Wormhole, and one family failed there
 >
 > Two claims that had never been exercised on Wormhole are now measured, and both hold: **`specials_safe()`'s
 > 7 cells** (250 variants, 85 failing — the §6 figures to the variant, so the table stays un-arch-keyed) and
@@ -31,6 +31,23 @@ counts as untested here.
 >
 > The two gates now assert nothing on either arch. Neither breaks CI — they are non-strict — which is why
 > they need naming.
+>
+> *Revision 14 below ran concurrently with this, not before it: the review round was
+> verified on Blackhole while the Wormhole measurement was in flight, which is why §5.10's
+> failures are reported against ops this PR had just enrolled.*
+>
+> ### Revision 14 — the review round, verified on Blackhole
+>
+> Twelve review comments addressed. The one that mattered most: this document *measured* that the
+> datacopy path converts `-0.0` to `+0.0` and then kept sending the probe there anyway.
+> `negative_zero_delivered()` now gates cat D's zero knee as well as cat B's specials, so
+> **`Signbit`'s six xfails are deleted rather than kept** — they could never XPASS, which makes them
+> the shape of thing that masks a regression instead of recording one.
+>
+> Verified on a Blackhole p300a: the three BH-reachable `Signbit` variants flipped from XFAIL to PASS,
+> unary went 21 → 18 xfailed, and no suite reports an XPASS. `xlogy`'s Float32 tolerance tightened
+> from 0.6 to 0.14 and the binary suite is unchanged at 739/531/36.
+
 >
 > ### Revision 13 — a review caught the shift rule, and this document had it wrong too
 >
@@ -197,7 +214,7 @@ All figures re-derived from the tree on 2026-08-12 (see §7 for the commands).
 | `_OP_EDGE_POINTS` entries | 43, plus `_OP_OPERAND_EDGE_POINTS` for `lerp`'s operand-C knees |
 | `SPECIALS_READY_OPS` (cat B opt-in) | **67 of 97 unary**, plus all **5 scalar binops**; all 30 unary still outside wait on §5.6's two questions or on a harness — none is work this suite can simply do |
 | `(format, dest_acc)` triples that can carry specials | 7 cells of 50, **re-confirmed on Wormhole** (250 variants, 85 failing); **3 of those 7 reachable and confirmed on Blackhole**. Carrying a `-0.0` is a strictly narrower gate — see §5.2 |
-| Ops diverging from their golden at a driven edge | 13 over 52 cells, of which **16 cells now arch-gated to Wormhole**; the 3 newest are cat-B and derived from the delivery rules rather than listed |
+| Ops diverging from their golden at a driven edge | 12 over 46 cells, of which **16 cells now arch-gated to Wormhole**. Down from 13 over 52: `Signbit`'s 6 were a stimulus limitation and are deleted, not xfailed (§5.2) |
 | Host-side guards over the gates and metadata | 107 tests (`test_sfpu_domains.py`) |
 
 **Category status:** A ✅ closed for every op that has a boundary, unary **and ternary** · B 🟡 live
@@ -214,7 +231,7 @@ compile-producer / compile-consumer flow that CI uses:
 
 | Suite | Result |
 |---|---|
-| `test_sfpu_unary.py` | 4995 passed · 1600 skipped · 21 xfailed · **0 xpassed** · 0 failed |
+| `test_sfpu_unary.py` | 5027 passed · 1601 skipped · 18 xfailed · **0 xpassed** · 0 failed |
 | `test_sfpu_binary.py` | 739 passed · 531 skipped · 36 xfailed · **0 xpassed** · 0 failed |
 | `test_sfpu_ternary.py` | 39 passed · 25 skipped · 0 failed |
 | `test_sfpu_binop_scalar.py` | 58 passed · 62 skipped · 0 failed |
@@ -745,7 +762,7 @@ Recorded first because it changes how the rest of §5 should be read. Measured o
 | Question | Answer | Consequence |
 |---|---|---|
 | Does the `SFPMAD` signed-zero group XPASS on Blackhole, as its ISA page predicts? | **Yes — all 16 cells**, and nothing else XPASSed | The `negative_zero_golden` class is now **arch-gated to Wormhole**, so Blackhole *asserts* the sign of a zero result |
-| Does `-0.0` actually reach DEST on the datacopy path? | **No** | §5.2's inference is confirmed by three unrelated ops; `Signbit`'s six xfails can never XPASS |
+| Does `-0.0` actually reach DEST on the datacopy path? | **No** | §5.2's inference is confirmed by three unrelated ops; `Signbit`'s six xfails have since been **deleted**, the probe being gated out instead |
 | Is approximate `exp`'s 5% rtol overshoot generational? | **Yes — Wormhole only.** Both reachable combinations XPASSed on Blackhole | `_APPROX_EXP_ACCURACY_XFAIL` is now arch-gated too, so Blackhole asserts approximate exp's accuracy |
 
 All three were *predictions on record* that the non-strict-xfail convention existed to settle, and all
@@ -799,9 +816,12 @@ datum arrives intact. A genuinely broken sign-bit read would fail on all 8.
 
 Consequences, both recorded in the suite's reason strings:
 
-- **`Signbit`'s 6 entries can never XPASS.** They record a *stimulus* limitation, not a kernel defect;
-  no kernel change can make an input arrive. The earlier reading of this as "a kernel-contract bug"
-  was wrong.
+- **`Signbit`'s 6 entries could never XPASS, and are now gone.** They recorded a *stimulus*
+  limitation, not a kernel defect — no kernel change can make an input arrive. Keeping them would have
+  left six standing non-strict xfails that can never fire, which masks a regression rather than
+  recording one, so `negative_zero_delivered()` now gates the `-0.0` knee off the datacopy pipelines
+  and the entries were deleted. A collection-time assertion pins that they stay deleted. The earlier
+  reading of this as "a kernel-contract bug" was wrong.
 - **`Sign` and `Heaviside` passing on those same 6 is vacuous** — the golden's answers for `-0.0`
   (0 and 0.5) coincide with the hardware's for `+0.0`, so the case agrees without testing what it
   names.
@@ -819,9 +839,10 @@ predicates — and gave the same answer:
 | `rsqrt(-0)` | `+inf` — same | `NaN` — a distinct answer, so a real `-0` arrived |
 | `sqrt(-0)` | `+0` — same | `NaN` — same |
 
-So `-0.0` genuinely is **not delivered** on the datacopy path. `Signbit`'s six xfails are confirmed as
-a stimulus limitation that can never XPASS, and `Sign`'s and `Heaviside`'s six passes there are
-confirmed vacuous.
+So `-0.0` genuinely is **not delivered** on the datacopy path. That measurement is now acted on
+rather than just recorded: the `-0.0` knee is gated out of the pipelines that cannot deliver it, which
+deleted `Signbit`'s six xfails outright and turned `Sign`'s and `Heaviside`'s six vacuous passes there
+into passes that no longer claim to test a signed zero.
 
 **That scoping is now enforced rather than advised.** `negative_zero_delivered(input_format, dest_acc)`
 gates the `-0` probe out of the cat-B injection wherever the datacopy path would substitute `+0.0`,

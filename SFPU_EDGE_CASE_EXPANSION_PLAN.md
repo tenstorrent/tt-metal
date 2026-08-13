@@ -369,7 +369,7 @@ from §4's 49, which are the same cause in every suite that injects a NaN:
 
 | Suite | Blackhole p300a | Wormhole n300 |
 |---|---|---|
-| `test_sfpu_unary.py` | 5030 passed · 1601 skipped · 21 xfailed · **0 xpassed** | 6034 passed · 533 skipped · **49 failed** · 30 xfailed · **6 xpassed** |
+| `test_sfpu_unary.py` | 5027 passed · 1601 skipped · 18 xfailed · **0 xpassed** | 6034 passed · 533 skipped · **49 failed** · 30 xfailed · **6 xpassed** |
 | `test_sfpu_binary.py` | 739 passed · 531 skipped · 36 xfailed · **0 xpassed** | 865 passed · 392 skipped · 33 xfailed · **16 xpassed** |
 | `test_sfpu_ternary.py` | 39 passed · 25 skipped | 39 passed · 25 skipped |
 | `test_sfpu_binop_scalar.py` | 68 passed · 72 skipped | 67 passed · 72 skipped · **1 failed** |
@@ -384,6 +384,12 @@ unary variants but skips 533 where Blackhole skips 1601, since `_skip_bh_unless_
 `dest_acc=No` row there. **Run both arches from now on** — every arch-keyed claim in this tree was written
 when only one of them had ever been exercised, and the first Wormhole run turned up a 10-op family and two
 dead arch gates in an afternoon.
+
+**The Blackhole column is current; the Wormhole column predates the review round.** Its unary figures
+were taken before `Signbit`'s six xfails were deleted and before the shift sweep dropped six redundant
+variants, so expect its `30 xfailed` and its collected count to move on the next Wormhole run. The 49
+failures are unaffected — they are §4's NaN-sign family, which none of those commits touched.
+
 
 **A non-zero `xpassed` count is a signal, not noise.** Both arch-gates in this tree were derived from
 one: 16 XPASS in the binary suite became the signed-zero gate, 4 in the unary suite became the
