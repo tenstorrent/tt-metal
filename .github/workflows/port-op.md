@@ -633,6 +633,34 @@ edit it, and do not try to regenerate it here — rendering it needs a real ttnn
 which this machine has. If it goes missing or drifts, that is a harness problem to report, not one to
 work around.
 
+### The correctness bar is parity with the generator, not perfection
+
+You are transliterating tt-dm-codegen. You ship its kernels verbatim and reproduce its host-side
+decisions, so **the bar is every in-scope case the generator itself passes** — not every in-scope case
+that exists. Every `verify` measures the generator against the same sweep and the same oracle as your
+port, on the same card in the same job, and reports both.
+
+So a `verify` verdict splits in-scope correctness three ways, and only the first one is yours to fix:
+
+- **`failures`** — the generator passes the case and your port does not. This is the list. It is the
+  only thing that keeps the correctness band from being a full pass.
+- **`prototype_gaps`** — neither passes it. The generator cannot serve the case, so your
+  transliteration was never going to either. These are excused, reported, and **not yours to fix**.
+  Do not chase them. Every previous run spent cycles trying, because the harness could not tell you.
+- **`diverges_from_prototype`** — your port passes a case the generator fails. Not a failure, but read
+  it as a warning: a faithful transliteration has no business being more correct than its source, so
+  it usually means you improvised somewhere instead of transliterating.
+
+Read those three lists before you change a line in response to a failing correctness band. A case in
+`prototype_gaps` cannot be fixed from inside the port, and the first `verify` is the earliest point
+anything can tell you which cases those are — so do not pre-emptively design around cases you think
+the generator cannot do, and do not narrow `supported_by_codegen()` to make failures disappear. That
+is caught separately and it is not what the excused list is for.
+
+If `prototype_gaps` is large, that is information about the generator, not a problem with your port.
+Say so in the pull request body and move on. And if the verdict says the prototype leg did not run,
+every in-scope case must pass — the harness will not excuse anything it did not measure.
+
 **Do not touch git history.** No `git push`, no `git commit --amend`, nothing that rewrites
 history, and never target `main`. Leave your work as uncommitted edits: that is exactly what `build`
 and `verify` snapshot and send to the machine that runs them, and it is what the pull-request output
