@@ -65,6 +65,12 @@ class TtMLP:
         mm = {"compute_kernel_config": self.compute_kernel_config} if self.compute_kernel_config else {}
         gate = ttnn.silu(ttnn.linear(x, self.w_gate, **mm))
         up = ttnn.linear(x, self.w_up, **mm)
+        if self.down_plan is not None and self.down_plan.is_decode_row(x):
+            # The SwiGLU product is down_proj's only consumer, so it is written
+            # STRAIGHT into the layout down_proj wants. Producing it interleaved
+            # and converting after is the same bytes plus a whole extra op.
+            hidden = ttnn.multiply(gate, up, memory_config=self.down_plan.input_memory_config)
+            return self.down_plan.run_presharded(hidden, self.w_down, self.compute_kernel_config)
         hidden = ttnn.multiply(gate, up)
         if self.down_plan is not None and self.down_plan.matches(hidden):
             return self.down_plan(hidden, self.w_down, self.compute_kernel_config)

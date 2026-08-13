@@ -93,19 +93,29 @@ class DecodeMatmulPlan:
             fused_activation=None,
         )
 
+    @staticmethod
+    def is_decode_row(x) -> bool:
+        """One tile row, single batch -- the decode step's activation shape.
+
+        Says nothing about the width, so a caller can ask it about a tensor
+        UPSTREAM of this matmul (e.g. the block input that will become its
+        operand) to decide whether the decode path applies.
+        """
+        shape = list(x.padded_shape)
+        if int(shape[-2]) != TILE:
+            return False
+        batch = 1
+        for dim in shape[:-2]:
+            batch *= int(dim)
+        return batch == 1
+
     def matches(self, x) -> bool:
         """True only for the ONE-tile-row decode activation of exactly this K.
 
         Prefill has many rows and is compute-bound, so it keeps the default
         routing; `per_core_M=1` above is only valid for the decode row anyway.
         """
-        shape = list(x.padded_shape)
-        if int(shape[-1]) != self.k or int(shape[-2]) != TILE:
-            return False
-        batch = 1
-        for dim in shape[:-2]:
-            batch *= int(dim)
-        return batch == 1
+        return int(list(x.padded_shape)[-1]) == self.k and self.is_decode_row(x)
 
     def shares_input_with(self, other) -> bool:
         """True when `other` consumes the SAME sharded activation as this plan.
