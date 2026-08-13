@@ -425,6 +425,65 @@ def fabric_config_for_mesh(mesh_shape):
 _FABRIC_APPLIED = False
 
 
+# Device-open parameters the model tests set and this path does not. conftest's mesh_device fixture
+# applies worker_l1_size / trace_region_size / num_command_queues from a test's device_params before
+# open_mesh_device (llama3_70b_galaxy asks for worker_l1_size=1345000), and none of them can be read
+# back off a live MeshDevice -- only arch, shape and get_num_devices are queryable. So a replayed op
+# runs on a differently configured device than the model used.
+#
+# The value is per-model, and the tracer does not record device_params today, so there is nothing
+# authoritative to read. Rather than hardcode one model's number for every op -- the same class of
+# mistake as defaulting a traced split_size to 32 -- these stay OFF unless explicitly supplied, and
+# the DEFAULTS BELOW REPRODUCE TODAY'S BEHAVIOUR EXACTLY: worker_l1_size/trace_region_size unset
+# (0 = ttnn's own default) and l1_small_size at the 79104 this path has always used to keep
+# model-traced vectors from OOMing.
+#
+# Env overrides exist so a batch can be run under the model's real configuration without a code
+# change, which is what makes an A/B on Galaxy possible:
+#   TTNN_SWEEP_WORKER_L1_SIZE     e.g. 1345000  (llama3_70b_galaxy)
+#   TTNN_SWEEP_TRACE_REGION_SIZE
+#   TTNN_SWEEP_L1_SMALL_SIZE      overrides the 79104 default
+# Once the tracer records device_params (see the _device_params.json sidecar written by
+# tracer_pytest_plugin), the per-vector values should be threaded through here instead of the env.
+_WORKER_L1_ENV = "TTNN_SWEEP_WORKER_L1_SIZE"
+_TRACE_REGION_ENV = "TTNN_SWEEP_TRACE_REGION_SIZE"
+_L1_SMALL_ENV = "TTNN_SWEEP_L1_SMALL_SIZE"
+
+
+def _int_env(name, default=0):
+    """Read a non-negative int from the environment, falling back to `default`."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logger.warning(f"SWEEPS: {name}={raw!r} is not an integer; using {default}")
+        return default
+    if value < 0:
+        logger.warning(f"SWEEPS: {name}={value} is negative; using {default}")
+        return default
+    return value
+
+
+def extra_device_open_kwargs(l1_small_size):
+    """The device-open kwargs beyond mesh_shape/dispatch, honouring env overrides.
+
+    Returns a dict to splat into ttnn.open_mesh_device. Only includes a key when it is non-zero,
+    so an unset override leaves ttnn on its own default and the call stays byte-identical to
+    before this existed."""
+    kwargs = {"l1_small_size": _int_env(_L1_SMALL_ENV, l1_small_size)}
+    worker_l1 = _int_env(_WORKER_L1_ENV, 0)
+    if worker_l1:
+        kwargs["worker_l1_size"] = worker_l1
+    trace_region = _int_env(_TRACE_REGION_ENV, 0)
+    if trace_region:
+        kwargs["trace_region_size"] = trace_region
+    if worker_l1 or trace_region or kwargs["l1_small_size"] != l1_small_size:
+        logger.info(f"SWEEPS: device-open overrides in effect: {kwargs}")
+    return kwargs
+
+
 def _apply_fabric_config(mesh_shape) -> None:
     """Set the fabric for an imminent open. DISABLED first, mirroring ccl_common: metal
     rejects a transition straight from one live config to another."""
@@ -784,8 +843,8 @@ def _open_mesh_device_configured(
     if "blackhole" in _arch:
         return ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(*mesh_shape),
-            l1_small_size=l1_small_size,
             dispatch_core_config=ttnn.DispatchCoreConfig(),
+            **extra_device_open_kwargs(l1_small_size),
         )
 
     # Prefer ETH dispatch on single-host clusters, for EVERY caller (explicit
@@ -818,8 +877,8 @@ def _open_mesh_device_configured(
         try:
             return ttnn.open_mesh_device(
                 mesh_shape=ttnn.MeshShape(*mesh_shape),
-                l1_small_size=l1_small_size,
                 dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
+                **extra_device_open_kwargs(l1_small_size),
             )
         except Exception:
             # ETH dispatch unavailable here — fall back to the logic below.
@@ -829,8 +888,8 @@ def _open_mesh_device_configured(
     if dispatch_core_axis is not None:
         return ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(*mesh_shape),
-            l1_small_size=l1_small_size,
             dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, dispatch_core_axis),
+            **extra_device_open_kwargs(l1_small_size),
         )
 
     # 1. Env-var override — but ETH dispatch overrides when 8x8 grid is needed.
@@ -928,8 +987,8 @@ def _open_mesh_device_configured(
         try:
             return ttnn.open_mesh_device(
                 mesh_shape=ttnn.MeshShape(*mesh_shape),
-                l1_small_size=l1_small_size,
                 dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, _override_axis),
+                **extra_device_open_kwargs(l1_small_size),
             )
         except Exception:
             # this dispatch axis/config isn't available on this cluster — fall through to the next open option
@@ -956,8 +1015,8 @@ def _open_mesh_device_configured(
             # multi-chip clusters), defeating the purpose of avoiding ETH here.
             return ttnn.open_mesh_device(
                 mesh_shape=ttnn.MeshShape(*mesh_shape),
-                l1_small_size=l1_small_size,
                 dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER, ttnn.DispatchCoreAxis.ROW),
+                **extra_device_open_kwargs(l1_small_size),
             )
         except Exception:
             # WORKER ROW dispatch unavailable here — fall through to the next open option
@@ -965,8 +1024,8 @@ def _open_mesh_device_configured(
         try:
             return ttnn.open_mesh_device(
                 mesh_shape=ttnn.MeshShape(*mesh_shape),
-                l1_small_size=l1_small_size,
                 dispatch_core_config=ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
+                **extra_device_open_kwargs(l1_small_size),
             )
         except Exception:
             # ETH dispatch unavailable on this cluster — fall through to the default open below
@@ -983,8 +1042,8 @@ def _open_mesh_device_configured(
         # whole grid ("Illegal kernel placement ... on dispatch cores", e.g. add).
         return ttnn.open_mesh_device(
             mesh_shape=ttnn.MeshShape(*mesh_shape),
-            l1_small_size=l1_small_size,
             dispatch_core_config=ttnn.DispatchCoreConfig(axis=use_axis),
+            **extra_device_open_kwargs(l1_small_size),
         )
     except Exception:
         # requested dispatch axis was rejected — caller falls back to a plain device open
@@ -992,8 +1051,8 @@ def _open_mesh_device_configured(
 
     return ttnn.open_mesh_device(
         mesh_shape=ttnn.MeshShape(*mesh_shape),
-        l1_small_size=l1_small_size,
         dispatch_core_config=ttnn.DispatchCoreConfig(),
+        **extra_device_open_kwargs(l1_small_size),
     )
 
 
