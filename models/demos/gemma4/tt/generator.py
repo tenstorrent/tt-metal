@@ -1062,10 +1062,12 @@ class ChunkedPrefillPageTableGuardMixin:
         Implemented here (not in ``tt_transformers``) by injecting the feedback
         buffer into ``sampling.sample`` for the duration of the parent call.
 
-        After an eager writeback we ``synchronize_device`` so the next
-        non-blocking decode trace on multi-chip (esp. P150x8) cannot race the
-        sampling all-gather / argmax that fills the feedback buffer — that race
-        showed up as long-prefill decode garbage on LB 12B (#51186).
+        After an eager writeback, a full ``synchronize_device`` is only needed when
+        the next decode may be submitted before a host ``to_torch`` of the sampled
+        tokens (vLLM ``supports_async_decode``). Demo paths always read tokens to
+        host after sample, which already orders the writeback on CQ0 — skipping
+        the barrier there recovers tok/s. Override with ``GEMMA4_DECODE_SAMPLE_SYNC``
+        (``0``/``1``); unset follows ``supports_async_decode``.
         """
         restores = []
         wrote_feedback = False
@@ -1111,7 +1113,7 @@ class ChunkedPrefillPageTableGuardMixin:
                 slot_remap=slot_remap,
                 enable_trace=enable_trace,
             )
-            if wrote_feedback:
+            if wrote_feedback and self._should_sync_after_eager_sample_writeback():
                 try:
                     mesh = getattr(self.model_args[0], "mesh_device", None)
                     if mesh is not None:
@@ -1122,6 +1124,20 @@ class ChunkedPrefillPageTableGuardMixin:
         finally:
             for sampling_module, orig_sample in restores:
                 sampling_module.sample = orig_sample
+
+    def _should_sync_after_eager_sample_writeback(self) -> bool:
+        """Whether to barrier after eager sampling writeback into the decode token buffer.
+
+        Async vLLM may enqueue the next decode before a host read of the sample;
+        multi-chip fabric completion of the sampler is not ordered by CQ alone
+        (#51186). Demo / sync host loops ``to_torch`` the sample before the next
+        step, so the barrier is redundant there.
+        """
+        override = os.environ.get("GEMMA4_DECODE_SAMPLE_SYNC")
+        if override is not None:
+            return override.lower() in ("1", "true", "yes")
+        caps = getattr(self, "model_capabilities", None) or {}
+        return bool(caps.get("supports_async_decode", False))
 
 
 class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
