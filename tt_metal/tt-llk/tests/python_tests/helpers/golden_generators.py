@@ -2767,18 +2767,24 @@ class UnarySFPUGolden:
         return float(round(x)) if math.isfinite(x) else x
 
     def _tan(self, x):
-        return math.tan(x)
+        # torch rather than math: math.tan *raises* ValueError("math domain error") on a
+        # non-finite input instead of returning one, which turns a cat-B probe into a test
+        # error. IEEE gives NaN for tan(+/-inf); tan(+/-0) = +/-0. Same change and same
+        # reason as _sin / _cos.
+        return self._torch_unary(x, torch.tan)
 
     def _atan(self, x):
         return math.atan(x)
 
     def _asin(self, x):
-        # Domain restricted to [-1, 1] by the stimuli spec.
-        return math.asin(x)
+        # Domain restricted to [-1, 1] by the stimuli spec -- but cat B injects specials from
+        # outside any domain, and math.asin raises on those rather than returning NaN. See
+        # _tan.
+        return self._torch_unary(x, torch.asin)
 
     def _acos(self, x):
-        # Domain restricted to [-1, 1] by the stimuli spec.
-        return math.acos(x)
+        # Domain restricted to [-1, 1] by the stimuli spec -- same caveat as _asin.
+        return self._torch_unary(x, torch.acos)
 
     def _sinh(self, x):
         return math.sinh(x)

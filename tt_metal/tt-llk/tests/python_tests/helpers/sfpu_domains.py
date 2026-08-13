@@ -1961,6 +1961,105 @@ SPECIALS_READY_OPS: Dict[MathOperation, str] = {
     "rsqrt(+/-0) = +/-inf. Same -0 divergence as Sqrt and the same unpack-to-dest scoping.",
 }
 
+# The third tranche, enrolled in bulk -- because the work was in finding out there was no work.
+#
+# Every op above was reasoned about one at a time, which was the right shape while the framework
+# was still wrong: each of the first two tranches turned up a defect that would have been
+# misattributed to the op in hand. With those fixed, the remaining question is per-op only in
+# principle. So the whole tail was driven at once instead: all 84 unenrolled ops with a golden,
+# over the full specials set, on every Blackhole-reachable triple. 48 agreed with their goldens
+# everywhere and are enrolled here. The other 34 diverge and stay out until each is understood --
+# a wall of failures with 34 different causes is exactly what per-op enrolment exists to prevent.
+#
+# What "agreed" is and is not evidence of. It says the golden and the kernel give the same answer
+# at every special the pipeline delivers, which is what this suite can establish. It does not
+# prove the golden independently correct: both could be wrong the same way. That risk is small
+# here because these goldens route through torch or are plain arithmetic on the input, and it is
+# the same standard the first two tranches were held to.
+_SPECIALS_READY_UNCHANGED: Tuple[MathOperation, ...] = (
+    MathOperation.Acosh,
+    MathOperation.Add1,
+    MathOperation.Asinh,
+    MathOperation.Atan,
+    MathOperation.Atanh,
+    MathOperation.Cbrt,
+    MathOperation.Ceil,
+    MathOperation.Celu,
+    MathOperation.Cosh,
+    MathOperation.Elu,
+    MathOperation.EqualZero,
+    MathOperation.Exp2,
+    MathOperation.ExpWithBase,
+    MathOperation.Expm1,
+    MathOperation.Floor,
+    MathOperation.Fmod,
+    MathOperation.GeluAppx,
+    MathOperation.GeluTanh,
+    MathOperation.GreaterThanEqualZero,
+    MathOperation.GreaterThanZero,
+    MathOperation.Hardmish,
+    MathOperation.LessThanEqualZero,
+    MathOperation.LessThanZero,
+    MathOperation.Log1p,
+    MathOperation.Lrelu,
+    MathOperation.Mish,
+    MathOperation.NotEqualZero,
+    MathOperation.Prelu,
+    MathOperation.Remainder,
+    MathOperation.Round,
+    MathOperation.Selu,
+    MathOperation.Signbit,
+    MathOperation.Silu,
+    MathOperation.Sinh,
+    MathOperation.Softplus,
+    MathOperation.Softshrink,
+    MathOperation.Softsign,
+    MathOperation.Tanhshrink,
+    MathOperation.Threshold,
+    MathOperation.Trunc,
+    MathOperation.UnaryLe,
+    MathOperation.UnaryLt,
+    MathOperation.UnaryMax,
+    MathOperation.Xielu,
+)
+
+# The three that needed the same one-line fix, and it is the third time this defect has been
+# found: math.acos / math.asin / math.tan *raise* ValueError("math domain error") on a non-finite
+# input rather than returning NaN, so a cat-B probe reached them as a test error. _sin and _cos
+# had it in the first tranche. Every remaining `math.*` call in a unary golden is a latent repeat.
+_SPECIALS_READY_TORCH_ROUTED: Tuple[MathOperation, ...] = (
+    MathOperation.Acos,
+    MathOperation.Asin,
+    MathOperation.Tan,
+)
+
+SPECIALS_READY_OPS.update(
+    {
+        op: "Enrolled in the third tranche with no golden change: driven over the full "
+        "specials set on every Blackhole-reachable triple and agreed with its golden at "
+        "each one. See _SPECIALS_READY_UNCHANGED for what that does and does not establish."
+        for op in _SPECIALS_READY_UNCHANGED
+    }
+)
+SPECIALS_READY_OPS.update(
+    {
+        op: "Enrolled in the third tranche once its golden moved off math.acos / math.asin / "
+        "math.tan, which raise on a non-finite input instead of returning NaN -- the same "
+        "defect _sin and _cos carried. Green on Blackhole afterwards."
+        for op in _SPECIALS_READY_TORCH_ROUTED
+    }
+)
+
+# Fill is enrolled, but read its entry narrowly: the kernel writes a compile-time constant and
+# its golden ignores the input, so driving specials through it asserts that a non-finite *input*
+# does not corrupt a constant fill -- and nothing at all about how Fill handles a NaN, because it
+# never looks at one. Recorded explicitly so the count is not read as 49 ops of NaN semantics.
+SPECIALS_READY_OPS[MathOperation.Fill] = (
+    "Input-independent: fill writes a constant, so every special maps to that constant. The "
+    "probe asserts the fill survives a non-finite input, not any NaN semantics. Green on "
+    "Blackhole."
+)
+
 # What is left of the tranche that Neg/Reciprocal/Sqrt/Rsqrt came from.
 #
 # Four of the five are now enrolled above. Of the divergences that held them back, the ones
