@@ -240,8 +240,14 @@ CAPTURE_MEANS = (
 )
 
 
-def check_capture_means() -> None:
-    """Re-derive the dtype-policy table's per-shape means from the capture."""
+def check_capture_means(work_log: str) -> None:
+    """Re-derive the dtype-policy table's per-shape means, and match the row that quotes them.
+
+    Recomputing the mean proves the *checker's* literal; it does not prove the
+    document still says it.  So the work log's own row is read back and compared
+    -- otherwise the figure is verified in the wrong place, which is the mistake
+    this file exists to stop making.
+    """
     rows = list(csv.DictReader((DOC / "tracy" / "sliding" / "decode_2048_perf_report.csv").open()))
     code = next(k for k in rows[0] if "OP CODE" in k.upper() or k.strip() == "Op Code")
     for literal, column, shape in CAPTURE_MEANS:
@@ -256,6 +262,11 @@ def check_capture_means() -> None:
             places = len(literal.split(".")[1])
             expect(abs(got - float(literal)) <= 0.5 * 10.0 ** (-places) * 2,
                    f"capture mean {literal} ({column}, {shape})", f"the capture's {len(values)} rows mean {got:.3f}")
+            row = next((line for line in work_log.splitlines()
+                        if line.strip().startswith("|") and shape in line), None)
+            expect(row is not None and any(abs(v - got) <= 0.5 * 10.0 ** (-places) * 2 for v in numbers(row)),
+                   f"work_log.md dtype row for {shape} ({column})",
+                   f"no cell equals the capture's {got:.3f}")
 
 
 CAPTURE_MEAN_VALUES = {float(literal) for literal, _, _ in CAPTURE_MEANS}
@@ -610,8 +621,10 @@ def main() -> int:
     # structural.  A number that is none of those has no evidence behind it.
     corpus, aggregates = artifact_corpus()
     rounded: dict[int, set] = {}
+    derived_checks = checks
     check_derived()
-    check_capture_means()
+    check_capture_means(work_log)
+    derived_checks = checks - derived_checks
     anchored = checks
     for name, text in (("README.md", readme), ("work_log.md", work_log),
                        ("context_contract.json", (DOC.parent / "context_contract.json").read_text()),
@@ -621,7 +634,8 @@ def main() -> int:
             expect(has_provenance(value, corpus, aggregates, rounded), f"{name}:{line_no} figure {value}",
                    "appears in no committed artifact and is not derivable from two that do")
 
-    print(f"checked {anchored} anchored claims (re-derived at their own table row) "
+    print(f"checked {anchored - derived_checks} anchored claims (re-derived at their own table row), "
+          f"{derived_checks} derived/capture figures (recomputed from their inputs), "
           f"and swept {checks - anchored} figures for provenance")
     for failure in failures:
         print(f"  STALE  {failure}")

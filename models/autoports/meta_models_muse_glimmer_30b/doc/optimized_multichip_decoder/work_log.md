@@ -391,7 +391,7 @@ collective.
 The barrier costs **0.13 %** here (1348.0 against 1346.3) against **0.2 %** of the
 whole decode step, which is why the two modes end up on different
 implementations: at 57.9 MB the collective is bandwidth-bound and the async op's
-tuning surface is worth 15 %; at 416 KB it is pure fixed cost and the async op is
+tuning surface is worth 15 %; at 416 KiB it is pure fixed cost and the async op is
 0.2 % slower than the wrapper it replaces.
 
 **Kept** for prefill: async pair, reduce-scatter 4 workers, all-gather op default,

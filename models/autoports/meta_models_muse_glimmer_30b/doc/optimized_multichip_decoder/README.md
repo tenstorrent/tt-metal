@@ -171,13 +171,13 @@ on its own:
 | payload | async, with AG barrier | wrapper |
 | --- | --- | --- |
 | prefill, 8192 rows, BFP8 -- 57.9 MB (op level) | **1348.0 μs** | 1588.7 (`all_reduce`) |
-| decode, 416 KB (traced whole layer, sliding / full) | 0.4554 / 0.4246 | **0.4545 / 0.4236** |
+| decode, 416 KiB (traced whole layer, sliding / full) | 0.4554 / 0.4246 | **0.4545 / 0.4236** |
 
 The decode rows do not overlap across their three rounds
 (`logs/final_layer_ab.log`), so 0.2 % is a real ordering, not noise. **Prefill
 takes the async pair** — 15.2 % off the collective, twice per layer, which the
 profiler sees as −2.9 % / −3.6 % of the 8192-token prefill window — and **decode
-keeps the wrappers**, because at 416 KB the collective is pure fixed cost and one
+keeps the wrappers**, because at 416 KiB the collective is pure fixed cost and one
 more synchronization round costs more than the async op's tuning surface buys.
 Removing the barrier would buy 0.13 % of the prefill collective (1346.3 against
 1348.0) and is not worth reopening the question.
@@ -208,7 +208,7 @@ and the reduce-scatter's, holding the all-gather at 4:
 
 This is the same latency-versus-bandwidth split the multichip stage found for the
 decode reduce-scatter, with the sign reversed by the payload: one worker wins the
-416 KB decode collective and loses the 57.9 MB prefill one by 93 %. The decode-side
+416 KiB decode collective and loses the 57.9 MB prefill one by 93 %. The decode-side
 worker sweep was measured on the pre-barrier build and is not repeated here,
 because decode does not ship the async op; it is in `logs/ab_ccl_async.log` and is
 marked superseded in [work log §2](work_log.md).
@@ -526,7 +526,7 @@ against the optimized path.
    uninitialised staging that the ring path reads before writing.
 2. **The async collective loses on the decode payload once it is used safely.**
    The all-gather's barrier semaphore is mandatory (the watcher stops the device
-   without it) and costs more at 416 KB than the async op's tuning surface buys.
+   without it) and costs more at 416 KiB than the async op's tuning surface buys.
    Decode therefore keeps the composite wrappers, and half of its reduction --
    the all-gather -- still has no tuning surface. That is a TTNN gap, not a
    choice: `ttnn.all_gather` should expose `num_workers_per_link`.

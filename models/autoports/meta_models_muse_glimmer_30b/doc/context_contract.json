@@ -1067,12 +1067,12 @@
     "collective_implementation": {
       "prefill": "ttnn.experimental.reduce_scatter_minimal_async + all_gather_async, rs 4 workers, all-gather op default, barrier semaphore on both",
       "decode": "ttnn.reduce_scatter(num_workers_per_link=1, use_l1_small_for_semaphores=True) + ttnn.all_gather",
-      "why_split": "With the all-gather's barrier semaphore present -- which is what ships -- the async pair is 15.2 % faster than ttnn.all_reduce at the 57.9 MB prefill payload (1348.0 vs 1588.7 us) and 0.2 % slower than the wrappers at the 416 KB decode payload (0.4554 / 0.4246 vs 0.4545 / 0.4236 ms/token, logs/final_layer_ab.log). The payload sizes are the reason: 8192 x 6656 x 1.0625 B (BFLOAT8_B) is bandwidth-bound and the async op's tuning surface is worth 15 %; 32 x 6656 x 2 B (BFLOAT16) is pure fixed cost and one more synchronization round outweighs it. A watcher trip in fabric_erisc_router.cpp was observed once on a pre-fix build that also carried the rejected persistent buffers; it has not reproduced with the barrier removed alone (logs/watcher_no_ag_barrier.log is watcher-clean), so the barrier is kept as op-contract practice and the split rests on the measurement.",
+      "why_split": "With the all-gather's barrier semaphore present -- which is what ships -- the async pair is 15.2 % faster than ttnn.all_reduce at the 57.9 MB prefill payload (1348.0 vs 1588.7 us) and 0.2 % slower than the wrappers at the 416 KiB decode payload (0.4554 / 0.4246 vs 0.4545 / 0.4236 ms/token, logs/final_layer_ab.log). The payload sizes are the reason: 8192 x 6656 x 1.0625 B (BFLOAT8_B) is bandwidth-bound and the async op's tuning surface is worth 15 %; 32 x 6656 x 2 B (BFLOAT16) is pure fixed cost and one more synchronization round outweighs it. A watcher trip in fabric_erisc_router.cpp was observed once on a pre-fix build that also carried the rejected persistent buffers; it has not reproduced with the barrier removed alone (logs/watcher_no_ag_barrier.log is watcher-clean), so the barrier is kept as op-contract practice and the split rests on the measurement.",
       "persistent_buffers": "rejected: 0.51 % faster on the one arm measured (sliding, logs/ab_ccl_async.log), intermittently wrong on the first decode step; see doc/optimized_multichip_decoder/README.md",
       "payload_bytes": {
         "prefill_8192_bfp8": 57933824,
         "decode_batch32_bf16": 425984,
-        "note": "8192 x 6656 x 1.0625 B and 32 tile-padded rows x 6656 x 2 B; the decode figure is the same tensor as persistent_memory_delta.decode_residual_l1_bytes_per_layer."
+        "note": "8192 x 6656 x 1.0625 B and 32 tile-padded rows x 6656 x 2 B; the decode figure is the same tensor as persistent_memory_delta.decode_residual_l1_bytes_per_layer. Quoted as 416 KiB (binary) and 57.9 MB (decimal) in the prose; the byte counts here are exact."
       }
     },
     "performance": {
