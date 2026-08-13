@@ -137,21 +137,30 @@ KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
 
 # Per-chunk baseline medians (seconds) for the no-PCC perf gate, pulled from a known-good CI run. Keyed
-# by (num_layers, n_chunks, num_iters) so only the exact config we have a CI number for is gated; every
-# other combo in the no-PCC sweep stays record-only. Each list has one entry per chunk (index c ==
-# chunk c). A single margin (the perf_margin pytest arg) is applied to every chunk. Recalibrate by
-# re-reading the "chunk timing stats" table from a fresh green CI run.
+# by (num_layers, n_chunks, num_iters, use_trace) so only the exact config we have a CI number for is
+# gated; every other combo in the no-PCC sweep stays record-only. Each list has one entry per chunk
+# (index c == chunk c). A single margin (the perf_margin pytest arg) is applied to every chunk.
+# Recalibrate by re-reading the "chunk timing stats" table from a fresh green CI run.
+#
+# use_trace is part of the key because traced replay and eager dispatch are different regimes, not a
+# small delta: the same L61/11-chunk/10-iter config measures 0.6-0.95 s/chunk traced but a flat ~1.10
+# s/chunk untraced (host-dispatch bound, so the depth ramp disappears). One shared baseline would fail
+# whichever half of the pair it was not calibrated on.
 KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S = {
-    # test_kimi_prefill_transformer_chunked_no_pcc[...-L61-chunks_eleven-ten_iters] (55k / code_debug).
-    # TODO: populate the 11 per-chunk medians from the first green code_debug 55k CI run's
-    # "chunk timing stats" table; until then this config runs record-only (no perf gate). The old 5-chunk
-    # longbook baseline was [1.330, 1.326, 1.326, 1.340, 1.369] (run 28753487696) -- chunks 0-4 should be
-    # ~unchanged (chunk c attends to KV[0:c*CHUNK] regardless of n_chunks); chunks 5-10 are new.
-    # (61, 11, 10): [...],
+    # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
+    # (55k / code_debug), from run 31675454129 job 94407856609 -- green, and stable within the run
+    # (per-chunk stddev <= 0.002 s over the 9 post-warmup iterations). The times rise with chunk index
+    # because chunk c attends to KV[0:c*CHUNK], so the MLA gather grows with depth.
+    (61, 11, 10, True): [0.605, 0.606, 0.653, 0.681, 0.711, 0.743, 0.760, 0.793, 0.842, 0.869, 0.905],
+    # The untraced twin (CI job "Blaze - Chunked Kimi perf (code_debug 55k, no trace)") stays
+    # record-only: its medians are a flat ~1.10 s but with per-chunk stddev up to 0.22 s within a single
+    # run (run 31670499441 job 94387075128) -- ~20% spread, which no meaningful band survives. Gate it
+    # once the eager-dispatch path is stable enough to have a real baseline.
+    # (61, 11, 10, False): [...],
 }
 # Default +/- tolerance band around each baseline chunk median (fraction). Overridable per test via the
 # perf_margin pytest argument (see test_prefill_block_perf.py's `margin` column for the design).
-DEFAULT_PERF_MARGIN = 0.05
+DEFAULT_PERF_MARGIN = 0.03
 
 # Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
 # accumulation headroom is pinned.
@@ -1681,7 +1690,7 @@ def run_chunked_transformer_updated(
 # ids: "traced" not "trace" — "notrace" CONTAINS "trace", so a -k "trace" term would match BOTH
 # modes and silently double a CI job. Matches the padded test's convention.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
-@pytest.mark.parametrize("perf_margin", [DEFAULT_PERF_MARGIN], ids=["margin5pct"])
+@pytest.mark.parametrize("perf_margin", [DEFAULT_PERF_MARGIN], ids=["margin3pct"])
 @pytest.mark.parametrize(
     "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
 )
@@ -1752,7 +1761,9 @@ def test_kimi_prefill_transformer_chunked_perf(
     # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert). The
     # baseline is only meaningful at preload_isl=0 (the recorded runs started from an empty cache).
     baseline_chunk_times_s = (
-        KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
+        KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters, use_trace))
+        if preload_isl == 0
+        else None
     )
     run_chunked_transformer_updated(
         variant,
@@ -1777,7 +1788,7 @@ def test_kimi_prefill_transformer_chunked_perf(
 # ids: "traced" not "trace" — "notrace" CONTAINS "trace", so a -k "trace" term would match BOTH
 # modes and silently double a CI job. Matches the padded test's convention.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
-@pytest.mark.parametrize("perf_margin", [DEFAULT_PERF_MARGIN], ids=["margin5pct"])
+@pytest.mark.parametrize("perf_margin", [DEFAULT_PERF_MARGIN], ids=["margin3pct"])
 @pytest.mark.parametrize(
     "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
 )
@@ -1844,7 +1855,9 @@ def test_kimi_prefill_transformer_chunked(
     # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert). The
     # baseline is only meaningful at preload_isl=0 (the recorded runs started from an empty cache).
     baseline_chunk_times_s = (
-        KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
+        KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters, use_trace))
+        if preload_isl == 0
+        else None
     )
     run_chunked_transformer_updated(
         variant,
