@@ -20,8 +20,50 @@ library's ttnn dispatch — `models/common/native_probe.py` sees it as native.
 from __future__ import annotations
 
 import torch
+import ttnn
 
 from models.common.rmsnorm import RMSNorm
+
+TILE = 32
+#: Core count the tt_transformers sharded-norm helper is tuned around. The real
+#: count is the divisor of the tile-width nearest this that fits the grid.
+_NORM_CORE_TARGET = 32
+
+
+def _decode_shard_plan(device, dim: int):
+    """Width-shard plan for a ONE-ROW (decode) norm, or None if it can't be made.
+
+    A decode row is `[1, 1, dim]`: the interleaved norm kernel parallelizes over
+    the ROW axis, so with a single row it has nothing to spread and lands on one
+    core. Splitting the EMBEDDING axis instead is what fills the grid, and that
+    means sharding the tensor -- a program config alone would be inert.
+    """
+    n_tiles = dim // TILE
+    grid = device.compute_with_storage_grid_size()
+    candidates = [c for c in range(1, grid.x * grid.y + 1) if n_tiles % c == 0]
+    candidates.sort(key=lambda c: abs(c - _NORM_CORE_TARGET))
+    for cores in candidates:
+        for rows in range(1, grid.y + 1):
+            if cores % rows or cores // rows > grid.x:
+                continue
+            core_grid = ttnn.CoreGrid(y=rows, x=cores // rows)
+            block_w = n_tiles // cores
+            subblock_w = next(s for s in (4, 3, 2, 1) if block_w % s == 0)
+            return (
+                ttnn.create_sharded_memory_config(
+                    shape=(1, 1, TILE, dim),
+                    core_grid=core_grid,
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                ),
+                ttnn.LayerNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=(core_grid.x, core_grid.y),
+                    subblock_w=subblock_w,
+                    block_h=1,  # one tile row -- the decode shape
+                    block_w=block_w,
+                    inplace=False,
+                ),
+            )
+    return None
 
 
 class TtRMSNorm:
@@ -29,8 +71,9 @@ class TtRMSNorm:
 
     _WEIGHT_KEY = "norm"
 
-    def __init__(self, canonical_instance) -> None:
+    def __init__(self, canonical_instance, decode_plan=None) -> None:
         self._impl = canonical_instance
+        self._decode_plan = decode_plan
 
     @classmethod
     def build(cls, device, torch_module):
@@ -48,11 +91,30 @@ class TtRMSNorm:
             weight_key=cls._WEIGHT_KEY,
             eps=float(eps),
         )
-        return cls(canonical)
+        return cls(canonical, _decode_shard_plan(device, dim))
+
+    def _is_decode_row(self, x) -> bool:
+        """One tile row of activation -- the decode step's `[1, 1, dim]`."""
+        shape = list(x.padded_shape)
+        if int(shape[-2]) != TILE:
+            return False
+        batch = 1
+        for dim in shape[:-2]:
+            batch *= int(dim)
+        return batch == 1
 
     def __call__(self, x, *_args, **_ignored):
-        # The canonical forward is `forward(x, mode)`; this harness exercises the
-        # non-sharded prefill path (interleaved in, interleaved out).
+        # Prefill has many rows, so the interleaved kernel already spreads over
+        # the row axis. Decode has ONE row and would otherwise run on a single
+        # core, so it goes through the width-sharded path instead.
+        if self._decode_plan is not None and self._is_decode_row(x):
+            input_memcfg, program_config = self._decode_plan
+            return self._impl(
+                ttnn.to_memory_config(x, input_memcfg),
+                mode="decode",
+                in_sharded=True,
+                norm_config={"sharded_program_config": program_config},
+            )
         return self._impl(x, mode="prefill")
 
 
