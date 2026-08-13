@@ -1,0 +1,26 @@
+{
+  "batch": 1,
+  "candidate": "multichip_prefill_l1",
+  "fallback_audit": true,
+  "iterations": 8,
+  "kind": "full",
+  "logical_sequence": 128,
+  "mesh": [
+    1,
+    4
+  ],
+  "pcc": "0.9999945998163279",
+  "replicas_equal": true,
+  "samples_ms": [
+    2.267856150865555,
+    2.185429446399212,
+    2.182682976126671,
+    2.143898978829384,
+    2.178434282541275,
+    2.2064996883273125,
+    2.994030714035034,
+    2.25880928337574
+  ],
+  "warmed_prefill_median_ms": 2.195964567363262,
+  "warmup": 2
+}

@@ -1,0 +1,72 @@
+{
+  "baseline_candidate": "default",
+  "batch": 32,
+  "candidate": "multichip_preallocated_ccl",
+  "capture_position_pcc": "1.0",
+  "deterministic_pcc": [
+    "1.0",
+    "1.0",
+    "1.0",
+    "1.0",
+    "1.0",
+    "1.0",
+    "1.0",
+    "1.0"
+  ],
+  "deterministic_replay": true,
+  "dram_memory_snapshots": {
+    "after_capture": {
+      "allocated_bytes": 123907072,
+      "free_bytes": 34022823936,
+      "largest_contiguous_bytes_free_per_bank": 4252041856,
+      "num_banks": 8,
+      "total_bytes": 34146731008
+    },
+    "after_first_warm": {
+      "allocated_bytes": 123907072,
+      "free_bytes": 34022823936,
+      "largest_contiguous_bytes_free_per_bank": 4252041856,
+      "num_banks": 8,
+      "total_bytes": 34146731008
+    },
+    "after_load": {
+      "allocated_bytes": 121970688,
+      "free_bytes": 34024760320,
+      "largest_contiguous_bytes_free_per_bank": 4252205696,
+      "num_banks": 8,
+      "total_bytes": 34146731008
+    },
+    "after_replays": {
+      "allocated_bytes": 123907072,
+      "free_bytes": 34022823936,
+      "largest_contiguous_bytes_free_per_bank": 4252041856,
+      "num_banks": 8,
+      "total_bytes": 34146731008
+    },
+    "after_second_warm": {
+      "allocated_bytes": 123907072,
+      "free_bytes": 34022823936,
+      "largest_contiguous_bytes_free_per_bank": 4252041856,
+      "num_banks": 8,
+      "total_bytes": 34146731008
+    }
+  },
+  "efficiency": 0.8949426206856741,
+  "fallback_audit": true,
+  "kind": "linear",
+  "multichip_trace_median_ms": 4.427624702453613,
+  "pcc": [
+    "1.0",
+    "1.0",
+    "1.0",
+    "1.0",
+    "1.0",
+    "1.0",
+    "1.0"
+  ],
+  "single_chip_median_ms": 15.84988021850586,
+  "single_chip_trace_replay": true,
+  "speedup": 3.5797704827426964,
+  "steps": 8,
+  "trace_replay": true
+}

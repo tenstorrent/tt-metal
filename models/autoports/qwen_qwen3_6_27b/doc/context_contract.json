@@ -146,6 +146,13 @@
     },
     "activation_dtype": "bfloat16",
     "ccl_dtype_initial_policy": "bfloat16",
+    "optimized_multichip_official_weight_decode_pcc": {
+      "full_attention_batch_1": 0.9997409391484262,
+      "full_attention_batch_32": 0.9996708514340147,
+      "linear_attention_batch_1": 0.9999055664899837,
+      "linear_attention_batch_32": 0.9999055132609224,
+      "artifact_root": "doc/optimized_multichip_decoder/artifacts/final/official_weights_b{1,32}.json"
+    },
     "full_attention_local_q_heads": 6,
     "full_attention_local_kv_heads": 1,
     "linear_attention_local_key_heads": 4,

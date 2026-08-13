@@ -1,0 +1,28 @@
+Traceback (most recent call last):
+  File "/home/mvasiljevic/tt-metal/python_env/bin/tt-perf-report", line 12, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/tt_perf_report/perf_report.py", line 1984, in main
+    generate_perf_report(
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/tt_perf_report/perf_report.py", line 2115, in generate_perf_report
+    df = merge_perf_traces(csv_files)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/tt_perf_report/perf_report.py", line 1831, in merge_perf_traces
+    df = pd.read_csv(csv_path, low_memory=False)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pandas/io/parsers/readers.py", line 1026, in read_csv
+    return _read(filepath_or_buffer, kwds)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pandas/io/parsers/readers.py", line 620, in _read
+    parser = TextFileReader(filepath_or_buffer, **kwds)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pandas/io/parsers/readers.py", line 1620, in __init__
+    self._engine = self._make_engine(f, self.engine)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pandas/io/parsers/readers.py", line 1880, in _make_engine
+    self.handles = get_handle(
+                   ^^^^^^^^^^^
+  File "/home/mvasiljevic/tt-metal/python_env/lib/python3.12/site-packages/pandas/io/common.py", line 873, in get_handle
+    handle = open(
+             ^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: ''

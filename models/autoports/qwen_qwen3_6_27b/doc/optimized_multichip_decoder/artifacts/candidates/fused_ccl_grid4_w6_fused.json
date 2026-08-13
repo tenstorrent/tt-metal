@@ -1,0 +1,42 @@
+{
+  "async_ccl": true,
+  "dtype": "BF16",
+  "fidelity": "HiFi2",
+  "fused_median_ms": 1.389297191053629,
+  "fused_samples_ms": [
+    1.4577824622392654,
+    1.4226362109184265,
+    1.4145607128739357,
+    1.389843411743641,
+    1.3767480850219727,
+    1.388750970363617,
+    1.398981548845768,
+    1.3726307079195976,
+    1.383751630783081,
+    1.3864077627658844
+  ],
+  "global_k": 6144,
+  "grid": [
+    8,
+    4
+  ],
+  "in0_block_w": 6,
+  "mesh": [
+    1,
+    4
+  ],
+  "mode": "fused",
+  "pcc": "0.9999375393456492",
+  "persistent_buffers": true,
+  "reduce_scatter_offset": [
+    0,
+    4
+  ],
+  "separate_median_ms": null,
+  "separate_samples_ms": [],
+  "shape": [
+    32,
+    1536,
+    5120
+  ]
+}
