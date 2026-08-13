@@ -235,13 +235,11 @@ def _device_params():
     }
     # ``trace_region_size`` must cover the CUMULATIVE size of every captured
     # trace, not the largest one: batch-1 warms a prefill trace per ISL bucket
-    # (128/512/1024) plus the decode trace, so the limit is first hit at the
-    # *last* end_trace_capture (decode). The old WH value of 30 MB sat ~15%
-    # under the 60-layer 31B footprint, so any per-layer op-count increase
-    # (e.g. the width-sharded prefill RMSNorm's reshard pair) hard-failed the
-    # demo with "Creating trace buffers of size N > trace_region_size".
-    # 64 MB leaves ~1.8x headroom and is negligible against WH's 12 GB/chip.
-    default_trace_region = 256_000_000 if is_blackhole() else 64_000_000
+    # plus the decode trace, so the limit is first hit at the *last*
+    # end_trace_capture (decode). Traced multi-chunk (auto on unbounded
+    # long-ISL demos) adds sp0/sp1 chunk traces; on WH 31B decode then needs
+    # ~68 MB — 64 MB fails. 96 MB leaves headroom; BH stays at 256 MB.
+    default_trace_region = 256_000_000 if is_blackhole() else 96_000_000
     params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", default_trace_region))
 
     router = fabric_router_config_from_env()
@@ -520,6 +518,14 @@ def test_demo_text(
     # Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK.
     lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
     bounded_sliding = lc["bounded_sliding"]
+    from models.demos.gemma4.tt.generator_trace import maybe_auto_enable_chunked_prefill_trace
+
+    maybe_auto_enable_chunked_prefill_trace(
+        batch_size=batch_size,
+        max_seq_len=max_seq_len,
+        prefill_chunk=lc["prefill_chunk"],
+        bounded_sliding=bounded_sliding,
+    )
 
     # ── Model (all optimizations applied inside create_tt_model) ───────────
     logger.info(
