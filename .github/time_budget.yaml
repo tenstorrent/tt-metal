@@ -108,9 +108,23 @@ ttnn:
     bh_loudbox: 85
     bh_p300: 85
     bh_quietbox_2: 85
+  e2e_tier1:
+    wh_n150: 8
+    wh_llmbox_perf: 6
+  unit_tier1:
+    wh_n150: 20
+    wh_llmbox: 8
+  e2e_tier3:
+    wh_n150: 21
+  unit_tier3:
+    wh_n150: 4
+  device_perf:
+    bh_p150b_civ2: 7
+    wh_n150: 5
+    wh_llmbox_perf: 8
   integration:
     wh_llmbox: 30
-    wh_galaxy: 250
+    wh_galaxy: 200
     wh_n150_civ2: 60
     bh_p100: 30
     bh_p150b_civ2_viommu: 30
@@ -118,7 +132,7 @@ ttnn:
   # test-framework assignment is being settled. Tracked in
   # https://github.com/tenstorrent/tt-metal/issues/44285
   profiler:
-    wh_llmbox: 150
+    wh_llmbox: 90
     wh_galaxy: 50
     wh_n150_civ2: 60
     wh_n300_civ2: 60
@@ -178,8 +192,6 @@ ttsim:
     sim_blackhole: 30
 
 shield:
-  e2e:
-    wh_llmbox: 110
   e2e_tier2:
     wh_n150: 150
     wh_n300: 30
@@ -312,8 +324,8 @@ models:
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
   frequent:
-    wh_n150: 408
-    wh_n300: 390
+    wh_n150: 348
+    wh_n300: 330
     wh_n150_civ2: 30
     wh_n300_civ2: 30
     bh_p150b_civ2: 120
@@ -345,7 +357,7 @@ models:
     bh_quietbox_2: 186
   e2e_tier3:
     wh_llmbox_perf: 75
-    wh_n150: 62
+    wh_n150: 65
     wh_n300: 60
     bh_p150: 7
     bh_p300: 8
@@ -381,9 +393,9 @@ models:
     bh_p300: 30
     bh_quietbox_2: 21
   integration:
-    wh_llmbox: 125
+    wh_llmbox: 110
   perf:
-    wh_llmbox_perf: 200
+    wh_llmbox_perf: 125
     wh_galaxy: 280
     wh_galaxy_perf: 90
   device_perf:
@@ -392,7 +404,7 @@ models:
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
-    wh_llmbox_perf: 90
+    wh_llmbox_perf: 80
     wh_galaxy: 345
     wh_galaxy_perf: 90
     bh_galaxy: 470

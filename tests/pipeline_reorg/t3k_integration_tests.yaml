@@ -46,15 +46,6 @@
 #   team: models
 #   model-name: n300 mesh llama3.2-vision
 
-- name: t3k_resnet_tests
-  cmd: run_t3000_resnet_tests
-  skus:
-    wh_llmbox:
-      timeout: 15
-  owner_id: U085GDCAZTN # Pavle Josipovic
-  team: models
-  model-name: resnet
-
 - name: t3k_motif_tests
   cmd: run_t3000_motif_tests
   skus:

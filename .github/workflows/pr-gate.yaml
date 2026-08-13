@@ -144,6 +144,9 @@ jobs:
       publish-package: true
       tracy: false
       skip-tt-train: false
+      # CI-internal only: consumers of these packages all run in docker images that
+      # already stage SFPI, so skip the redundant download. Never set for release builds.
+      use-system-sfpi: true
       # Treeless clone: skip the trees/blobs that dominate the tag fetch, but keep commits + tags
       # so git describe still yields a real version. Depth stays at the default.
       checkout-filter: tree:0
