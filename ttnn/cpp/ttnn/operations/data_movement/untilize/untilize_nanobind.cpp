@@ -31,6 +31,7 @@ void bind_untilize(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
                 sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
+                implementation (str, optional): "auto" (default), "native", or "codegen".
 
             Returns:
                 List of ttnn.Tensor: the output tensor.
@@ -44,6 +45,7 @@ void bind_untilize(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("use_multicore") = true,
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("implementation") = "auto");
 }
 }  // namespace ttnn::operations::data_movement::detail

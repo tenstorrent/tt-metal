@@ -4,6 +4,10 @@
 
 #include "untilize.hpp"
 
+#include <tt_stl/assert.hpp>
+
+#include "codegen/untilize_codegen_device_operation.hpp"
+#include "codegen/untilize_codegen_supported.hpp"
 #include "device/untilize_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -43,7 +47,48 @@ ttnn::Tensor untilize(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::string& implementation) {
+    namespace untilize_codegen = operations::data_movement::untilize_codegen;
+    // Validate before any early return so invalid values fail consistently.
+    const auto sel = untilize_codegen::parse_implementation(implementation);
+
+    if (sel != untilize_codegen::ImplementationSelector::Native) {
+        // Execution-control overrides (use_multicore=false, sub_core_grids) select
+        // placement/scheduling the codegen builders never honour -- they always
+        // dispatch over the full compute_with_storage_grid_size(). Neither "auto"
+        // nor "codegen" may silently ignore that; kept out of supported_by_codegen()
+        // per the task's own guidance since it is not a correctness/scope question.
+        const bool has_override = untilize_codegen::has_execution_control_override(use_multicore, sub_core_grids);
+        MemoryConfig output_mem_config = memory_config.value_or(input_tensor.memory_config());
+
+        // A sharded *destination* is served by build_untilize_sharded / build_untilize_i2s, separate
+        // builder entry points outside this manifest's scope, and the writer this port does build
+        // addresses the destination as one page per logical row -- an identity that fails the moment
+        // a ROW_MAJOR page becomes a shard width. Gated here rather than in supported_by_codegen(),
+        // which is about the input side, exactly as the merged `repeat` port gates it.
+        const bool codegen_output_ok = !output_mem_config.is_sharded();
+
+        if (sel == untilize_codegen::ImplementationSelector::Codegen) {
+            TT_FATAL(
+                !has_override,
+                "untilize: implementation=\"codegen\" does not support use_multicore=false or sub_core_grids "
+                "overrides -- codegen always dispatches over the full compute grid");
+            TT_FATAL(
+                codegen_output_ok && untilize_codegen::supported_by_codegen(input_tensor),
+                "untilize: implementation=\"codegen\" requires a supported input and an interleaved output memory "
+                "configuration");
+            return ttnn::prim::untilize_codegen(input_tensor, ttnn::prim::UntilizeCodegenParams{output_mem_config});
+        }
+
+        // Auto: codegen iff supported, not perf-demoted, and no execution-control override; else fall
+        // through to the native path below (including its own DRAM+padding redirect).
+        if (!has_override && codegen_output_ok && untilize_codegen::supported_by_codegen(input_tensor) &&
+            !untilize_codegen::is_demoted(input_tensor)) {
+            return ttnn::prim::untilize_codegen(input_tensor, ttnn::prim::UntilizeCodegenParams{output_mem_config});
+        }
+    }
+
     // If the input tensor is not sharded, on DRAM and logical shape != padded shape, then unpad the input tensor.
     // conv op_slicing logic requires the padding information to be present in the input tensor.
     if (!input_tensor.is_sharded() && input_tensor.memory_config().is_dram() &&
