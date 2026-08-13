@@ -45,19 +45,24 @@ def _replicate_mapper(device):
         return None
 
 
-def _stage(weight: torch.Tensor, device):
-    """Stage an `nn.Linear` weight (out, in) as a ttnn matmul operand (in, out)."""
+def _stage(weight: torch.Tensor, device, dtype=ttnn.bfloat16):
+    """Stage an `nn.Linear` weight (out, in) as a ttnn matmul operand (in, out).
+
+    `dtype` is the STORED format. Decode is DRAM-bandwidth bound on these
+    weights -- a projection's cost is the bytes it streams for one token -- so
+    the stored format, not the math fidelity, is the lever that moves it.
+    """
     host = weight.detach().to(torch.float32).transpose(0, 1).contiguous().to(torch.bfloat16)
     mapper = _replicate_mapper(device)
     if mapper is not None:
         return ttnn.from_torch(
             host,
-            dtype=ttnn.bfloat16,
+            dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             mesh_mapper=mapper,
         )
-    return ttnn.from_torch(host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    return ttnn.from_torch(host, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
 
 _TILE = 32
