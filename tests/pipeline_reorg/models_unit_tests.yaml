@@ -302,10 +302,10 @@
 
 - name: ResNet-50 unit tests
   cmd: |
-    pytest --timeout 1140 \
+    pytest --timeout 300 \
       models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_performant.py \
       models/demos/vision/classification/resnet50/wormhole/tests/test_ttnn_functional_resnet50_large.py
-    pytest --timeout 420 models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py
+    pytest --timeout 300 models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py
   model: resnet50
   model_family: ResNet
   skus:

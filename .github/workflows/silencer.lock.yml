@@ -943,7 +943,6 @@ jobs:
                         "enum": [
                           "all",
                           "mochi",
-                          "wan2.2-t2v-a14b",
                           "z-image-turbo"
                         ],
                         "type": "string"
@@ -1174,8 +1173,6 @@ jobs:
                         "enum": [
                           "all",
                           "tt-training-models",
-                          "sd35",
-                          "flux1-dev",
                           "motif",
                           "wan2-2",
                           "mochi",
@@ -1237,8 +1234,6 @@ jobs:
                         "description": "Select model to test",
                         "enum": [
                           "all",
-                          "sd35",
-                          "flux1",
                           "motif",
                           "wan22",
                           "mochi",
@@ -1348,10 +1343,8 @@ jobs:
                         "enum": [
                           "all",
                           "unit",
-                          "sd35",
                           "wan22",
                           "mochi",
-                          "flux1",
                           "motif",
                           "qwenimage"
                         ],
@@ -1612,9 +1605,7 @@ jobs:
                         "description": "Select model to test",
                         "enum": [
                           "all",
-                          "stable_diffusion_35_large",
                           "mochi",
-                          "flux1-dev",
                           "motif",
                           "qwenimage"
                         ],
@@ -1664,15 +1655,6 @@ jobs:
                         "description": "Enable Link Time Optimization (LTO)",
                         "type": "boolean"
                       },
-                      "model": {
-                        "default": "all",
-                        "description": "Filter tests by model name",
-                        "enum": [
-                          "all",
-                          "deepseek_prefill"
-                        ],
-                        "type": "string"
-                      },
                       "platform": {
                         "default": "Ubuntu 22.04",
                         "description": "Platform to build and test",
@@ -1721,8 +1703,6 @@ jobs:
                           "all",
                           "tteager",
                           "trace stress",
-                          "sd35_large",
-                          "flux1",
                           "motif",
                           "qwenimage",
                           "mochi",
@@ -1952,8 +1932,6 @@ jobs:
                         "description": "Select model to test",
                         "enum": [
                           "all",
-                          "sd35_large",
-                          "flux1-dev",
                           "motif",
                           "qwenimage",
                           "mochi",
@@ -2089,7 +2067,8 @@ jobs:
                           "ltx-2.3-pro-t2v",
                           "ltx-2.3-fast-t2v",
                           "ltx-2.3-pro-i2v",
-                          "ltx-2.3-fast-i2v"
+                          "ltx-2.3-fast-i2v",
+                          "resnet50"
                         ],
                         "type": "string"
                       },
@@ -2181,7 +2160,8 @@ jobs:
                           "wan-2.2-i2v",
                           "flux.1-schnell",
                           "flux.1-dev",
-                          "ltx-2.3"
+                          "ltx-2.3",
+                          "resnet50"
                         ],
                         "type": "string"
                       },
@@ -2466,13 +2446,13 @@ jobs:
                           "gemma-4-e4b",
                           "panoptic-deeplab",
                           "mistral-small-3.1-24b",
+                          "sd35",
                           "vggnet",
                           "bert-tiny",
                           "bert-large",
                           "distilbert",
                           "squeezebert",
-                          "mnist-mlp",
-                          "resnet50"
+                          "mnist-mlp"
                         ],
                         "type": "string"
                       },
@@ -2567,8 +2547,8 @@ jobs:
                           "panoptic-deeplab",
                           "bevformer",
                           "mistral-small-3.1-24b",
-                          "bert-large",
-                          "resnet50"
+                          "sd35",
+                          "bert-large"
                         ],
                         "type": "string"
                       },

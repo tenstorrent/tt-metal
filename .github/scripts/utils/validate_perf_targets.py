@@ -53,7 +53,6 @@ METRIC_NAME_MAP = {
     # Vision classifiers. Reported from a plain "inference" step rather than
     # inference_decode, since there is no decode phase to attribute them to.
     "fps": ("inference", "fps"),
-    "samples/s": ("inference", "samples/s"),
 }
 
 # Metrics that can be satisfied by more than one (step_name, measurement_name) pair.
@@ -77,7 +76,6 @@ ALLOWED_TARGET_METRIC_NAMES = {
     "top1",
     "top5",
     "fps",
-    "samples/s",
 }
 
 PREFILL_TIME_TO_TOKEN_KEY = "prefill_time_to_token"

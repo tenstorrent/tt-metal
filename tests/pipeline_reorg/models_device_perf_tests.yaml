@@ -109,13 +109,13 @@
   model: resnet50
   skus:
     bh_p150b_civ2:
-      timeout: 10
+      timeout: 7
       arch_dir: blackhole
     # Not a legacy leg -- the old step ran WH only on N300. Added because the conv/pool
     # teams develop on N150 too, and it is cheap. The nested-pytest deadlock that made
     # this SKU fail earlier was an import-time device probe in this PR, since fixed.
     wh_n150:
-      timeout: 10
+      timeout: 5
       arch_dir: wormhole
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
@@ -138,6 +138,6 @@
   model: resnet50
   skus:
     wh_llmbox_perf:
-      timeout: 60
+      timeout: 8
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn

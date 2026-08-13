@@ -1100,15 +1100,15 @@
     export HF_HUB_OFFLINE=0
     pytest --timeout 300 models/demos/vision/classification/resnet50/wormhole/demo/demo.py
     pytest --timeout 120 models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_stability.py -k "short"
-    pytest --timeout 360 models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_demo.py
+    pytest --timeout 300 models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_demo.py
   model: resnet50
   model_family: ResNet
   skus:
     wh_n150:
-      timeout: 10
+      timeout: 8
       tier: 1
     wh_llmbox_perf:
-      timeout: 7
+      timeout: 6
       tier: 1
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn

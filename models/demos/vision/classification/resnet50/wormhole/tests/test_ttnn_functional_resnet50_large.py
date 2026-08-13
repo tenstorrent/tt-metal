@@ -257,7 +257,7 @@ def create_test_infra(device, batch_size, act_dtype, weight_dtype, math_fidelity
     )
 
 
-@pytest.mark.timeout(600)
+@pytest.mark.timeout(900)  # 505s observed on wh_n150 with the watcher enabled
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
