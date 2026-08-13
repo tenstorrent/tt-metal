@@ -154,9 +154,11 @@ class TtHiFTGenerator:
         self.bins = self.n_fft // 2 + 1
         self.upsample_rates = tuple(upsample_rates)
 
-        # Trace cache, keyed on (mel_frames, batch_size). See `decode` for why capture
-        # waits for the second sighting of a geometry.
-        self._trace_enabled = os.environ.get("COSYVOICE_HIFT_TRACE", "1") != "0"
+        # Trace cache, keyed on (mel_frames, batch_size). Off unless a caller opts in
+        # with `enable_trace()` -- see there for why this is not a default.
+        _env = os.environ.get("COSYVOICE_HIFT_TRACE")
+        self._trace_forced = None if _env is None else (_env != "0")
+        self._trace_enabled = bool(self._trace_forced)
         self._trace_id = None
         self._trace_key = None
         self._trace_mel = None
@@ -395,17 +397,55 @@ class TtHiFTGenerator:
         """Drop any captured trace. Safe to call more than once."""
         self._release_trace()
 
+    def enable_trace(self, on: bool = True):
+        """Opt into trace capture for `decode`. **Off by default, and deliberately.**
+
+        Replaying is worth having: `43.3 -> 9.3 ms` per chunk on Blackhole at a streaming
+        geometry, `53 -> 19 ms` on n300. **Capturing is what makes it a trade.** Taking a
+        trace for a geometry the process has not captured before costs about `980 ms` on
+        both parts, against the `~34 ms` a replay saves -- so the crossover is near
+        **30 chunks**, roughly a minute of audio. Below that, enabling this makes the
+        stream slower; a 12-chunk stream measured `519 -> 1151 ms`.
+
+        Two things about that `980 ms` are worth writing down, because both were guessed
+        wrong first. It is **not** kernel compilation -- warming twice instead of once
+        moved it from `933` to `970 ms`. And it is **not** the first capture in the
+        process -- priming with a one-op trace first costs `0.4 ms` and changes nothing.
+        It is the first capture *of a given geometry*; a second capture of one already
+        seen costs about `110 ms`, which is why an in-session measurement flatters it.
+
+        No sighting-count heuristic can decide this, because it is a guess about the
+        future. The first attempt captured on a geometry's second sighting and the
+        end-to-end RTF gate caught it: that harness warms once and times the second call,
+        so it paid the capture and took one replay back, moving the vocoder stage from
+        `0.080 s` to `0.172 s` and RTF from `0.414` to `0.429`.
+
+        So it is off, including for `TtStreamingSynthesizer`, and a caller that knows its
+        stream is long asks for it. `COSYVOICE_HIFT_TRACE=1` or `=0` overrides.
+        """
+        if self._trace_forced is not None:
+            return  # an explicit environment setting outranks the caller
+        self._trace_enabled = on
+        if not on:
+            self._release_trace()
+
     def _capture(self, mel, s, key) -> bool:
         mel_frames, batch_size = key
         try:
             self._release_trace()
             self._trace_mel = ttnn.clone(mel)
             self._trace_s = ttnn.clone(s)
-            # Warm first. The program cache and every convolution's prepared-weight
-            # cache have to be populated before recording -- a JIT compile or a weight
-            # tilize *during* capture is host work, which is exactly what a trace
-            # cannot contain.
-            ttnn.deallocate(self._decode_impl(self._trace_mel, self._trace_s, mel_frames, batch_size))
+            # Warm twice. The program cache and every convolution's prepared-weight cache
+            # have to be populated before recording -- a JIT compile or a weight tilize
+            # during capture is host work a trace cannot contain, and it does not fail,
+            # it just lands inside the capture.
+            #
+            # Two passes rather than one follows the Informer bring-up's finding, but be
+            # aware it is not what dominates here: measured on a streamed geometry, one
+            # warm-up gave a 933 ms capture and two gave 970 ms. The cost is the first
+            # trace capture in the process, not kernel compilation.
+            for _ in range(2):
+                ttnn.deallocate(self._decode_impl(self._trace_mel, self._trace_s, mel_frames, batch_size))
             ttnn.synchronize_device(self.device)
 
             tid = ttnn.begin_trace_capture(self.device, cq_id=0)
@@ -449,11 +489,10 @@ class TtHiFTGenerator:
         the 282-frame utterance: `46.7 -> 14.3 ms` on Blackhole `p150b` and
         `47.4 -> 29.7 ms` on n300, bit-identical (`max|d| 0.000e+00`).
 
-        **Capture waits for the second sighting of a geometry**, because capturing costs
-        more than one untraced run (`74.7 ms` against `46.7 ms`). A one-shot synthesis
-        sees each geometry once and so never pays for a trace it cannot amortise;
-        streaming reuses its chunk geometry and picks the trace up automatically. Set
-        `COSYVOICE_HIFT_TRACE=0` to keep the vocoder untraced.
+        **Only when a caller has opted in with `enable_trace()`**, and then only from a
+        geometry's second sighting -- capture costs more than one untraced run, so it
+        has to be asked for by something that knows the geometry will repeat. See
+        `enable_trace` for the measurement behind that.
 
         Every shape here is a function of `mel_frames`, so the trace is bound to one
         length -- hence the key, and hence the release when the length changes.
