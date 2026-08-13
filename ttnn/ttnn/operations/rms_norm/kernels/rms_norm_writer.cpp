@@ -81,6 +81,13 @@
 // production payload itself column-valid (see `write_stat_payload`), so this switch
 // now ablates on top of that and is expressed in FACES rather than in a byte literal.
 #define RMSN_ABLATE_GATHER_BYTES 0
+// TEMPORARY ablation switch — MUST be 0 in committed code. 1 removes EVERY cross-core
+// dependency: no gather pull, no readiness semaphore, no rstd multicast. Each core just
+// hands its own compute the CB quanta it expects (filled with whatever L1 already held),
+// so no core ever waits on another. Output is garbage by design. The resulting wall is
+// the COMPUTE FLOOR: what the op would cost if every partial were already exactly where
+// it needs to be, i.e. the bound on what any data-movement change can possibly buy.
+#define RMSN_ABLATE_CROSSCORE 0
 
 namespace {
 constexpr uint32_t cb_scaler = 2;
@@ -232,10 +239,21 @@ void kernel_main() {
     // so it carries the reader's old HAS_ANY_TAIL gate.
     constexpr bool HAS_ANY_TAIL = get_compile_time_arg_val(9) != 0;
     constexpr bool TWO_STAGE = STAGE2_SPAN > 1;
+    // FLAT combine: no tree, and (since the row-split) no root either. Every core is
+    // a WORKER owning a slice of the tile-rows, and the finalized rstd is all-gathered
+    // rather than multicast from one core.
+    constexpr bool FLAT = !TWO_STAGE;
     constexpr uint32_t MCAST_CT_BASE = 10;
     constexpr uint32_t MCAST_RT_BASE = 22;
     constexpr auto mc = McastArgs<MCAST_CT_BASE, MCAST_RT_BASE>();
     constexpr auto dst_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
+    // The pull gather needs EVERY group member's coordinates, not just the leader's:
+    // a group's physical columns are not contiguous (worker columns skip the DRAM /
+    // PCIe / ARC columns — a (8,1) group lands on x = 1..6, 11, 12), so the root
+    // cannot derive peer coords by arithmetic. The host emits a flat
+    // [x0, y0, x1, y1, ...] table AFTER the multicast runtime args, whose length the
+    // McastArgs block reports, so the existing MCAST_RT_BASE contract is untouched.
+    constexpr uint32_t MEMBER_RT_BASE = mc.next_runtime_args_offset();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t row_tile_start = get_arg_val<uint32_t>(1);
@@ -315,23 +333,51 @@ void kernel_main() {
     // The identity B operand of the combine's Add accumulation (BinaryFpu needs two
     // CB inputs), read by the compute kernel of every core that runs a combine
     // chain — the row LEADERS (which is the root alone when the tree is flat, since
-    // is_leader == is_root there) and nobody else. It lives
-    // here rather than in the reader for one measured reason: the fill is a
-    // 4096-byte scalar store loop costing ~2.4 us, and in the reader it sat AHEAD
-    // of the input block on the critical path of every core. This BRISC is idle
-    // until the first partial is ready (~6 us on the root at the decode geometry),
-    // so the fill is free here and lands long before the combine chain waits on it.
-    if (is_leader) {
+    // is_leader == is_root there) and nobody else.
+    //
+    // ONLY ODD GROUP SIZES STILL NEED IT. The combine chains sum their gathered
+    // tiles PAIRWISE (`gather[c] + gather[c + span/2]`, accumulated in DEST), which
+    // needs no identity operand at all — see `cp_combine_l1` in the compute kernel.
+    // The halves only tile when the span is even, so an odd span falls back to the
+    // zero-padded chain and is the sole remaining consumer of this tile.
+    //
+    // NEVER FILL A CONSTANT TILE WITH A CPU STORE LOOP. This used to be a
+    // 4096-byte scalar dword loop, justified by "this BRISC is idle until the
+    // first partial anyway, so the fill is free". That premise is geometry-
+    // dependent and FALSE on the small sharded geometries: at WIDTH [32,128] x
+    // (8,1) the root's own partial is ready in ~260 ns (`wr_partial_wait` p50),
+    // so a 1211 ns fill sat squarely on the root's serial path and was, on its
+    // own, larger than this geometry's entire gap to production rms_norm.
+    // `noc.async_write_zeros` does the same fill as a chunked NoC loopback read
+    // from MEM_ZEROS_BASE (1211 -> 217 ns); the pairwise combine then removed the
+    // remaining 217 for every even span.
+    constexpr bool NEEDS_ZERO_TILE = (W_GROUP_SIZE % 2 != 0) || (TWO_STAGE && STAGE2_SPAN % 2 != 0);
+    // WHO needs it changed with the row-split: the FLAT combine now runs on EVERY core
+    // (each folds its own slice of tile-rows), not just on a single leader, so every
+    // core must have the identity operand. Only the two-stage tree still concentrates
+    // the fold on its leaders.
+    if (NEEDS_ZERO_TILE && (FLAT || is_leader)) {
         MaybeDeviceZoneScope("wr_zero_fill");
-        cb_reserve_back(cb_zero_tile, 1);
-        volatile tt_l1_ptr uint32_t* zp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_zero_tile));
-        for (uint32_t i = 0, n = get_tile_size(cb_zero_tile) / 4; i < n; ++i) {
-            zp[i] = 0;
-        }
-        cb_push_back(cb_zero_tile, 1);
+        CircularBuffer cb_zero_tile_obj(cb_zero_tile);
+        cb_zero_tile_obj.reserve_back(1);
+        noc.async_write_zeros(cb_zero_tile_obj, get_tile_size(cb_zero_tile), {.offset_bytes = 0});
+        noc.write_zeros_l1_barrier();
+        cb_zero_tile_obj.push_back(1);
     }
 
     const uint32_t stat_tile_bytes = get_tile_size(cb_stat_gather);
+    // Is the row-split worth taking? It parallelises combine+finalize across the group,
+    // but only if there is more than one tile-row's worth of work to hand out. At
+    // rows_t == 1 (the decode-shaped width shards) there is exactly ONE worker, so the
+    // split buys nothing and would trade an efficient one-to-many multicast for G
+    // unicasts from a single core — measured 3526 -> 4233 ns on (1,1,32,1024). Keep the
+    // proven root-gather + multicast there and split only when the work divides.
+    // MIRRORS the host's `_row_split_applies`: derived from PROGRAM constants only.
+    // Deriving it from block_row_tiles would let host and device disagree whenever the
+    // residency solve lands on R == 1, and the host sizes cb_stat_gather on this very
+    // predicate (streaming window when split, full R*G landing zone when not).
+    const uint32_t core_row_tiles = (num_blocks == 0) ? 0 : ((num_blocks - 1) * block_row_tiles + last_block_row_tiles);
+    const bool SPLIT = FLAT && (W_GROUP_SIZE > 1) && (core_row_tiles > 1);
     // cb_stat_gather holds exactly block_row_tiles * W_GROUP_SIZE pages and the
     // leader pushes/pops that many per block, so its write pointer is back at the
     // CB base at the start of every block — identical on every group member,
@@ -448,6 +494,24 @@ void kernel_main() {
     // Level 1: every member -> its row LEADER's cb_stat_gather, slot r*S1 + my_slot.
     // Flat (STAGE2_SPAN == 1) has leader == root and W_GROUP_SIZE == G, i.e. the
     // Phase 0 gather verbatim.
+    // PULL, NOT PUSH (flat combine). A member no longer writes its partial anywhere:
+    // it announces readiness with a semaphore and leaves the tiles in its OWN
+    // cb_stat_partial, where they stay valid until the block's multicast lands. The
+    // root then READS row r's G partials into a GATHER_DEPTH*G streaming window and
+    // its compute pops them before the root issues row r+1.
+    //
+    // Why this is the whole point: with push, the G members write whenever they are
+    // ready and never inspect the root's CB, so the root needs a landing slot for
+    // every (row, member) pair — O(R*G) resident, which is what forced
+    // MAX_GATHER_TILES to cut a tall shard into several blocks. With pull the
+    // CONSUMER initiates, so back-pressure is implicit (it simply does not issue the
+    // next row until it has space) and the buffer is O(G) for any R. The R-scaling
+    // moves to each member's own cb_stat_partial, where it was already paid.
+    //
+    // The payload is a whole stat tile rather than the column-valid prefix the push
+    // path sent: the reader picks the byte count here and the extra bytes are free —
+    // tt-npe puts this op at ~1% average / 9.6% peak NoC link utilisation with 0.0%
+    // congestion, so the gather is nowhere near bandwidth-bound.
     auto gather_partials = [&](uint32_t b, uint32_t rows_t) {
         {
             // Starved on this core's OWN statistics pipeline (reader read ->
@@ -455,9 +519,71 @@ void kernel_main() {
             MaybeDeviceZoneScope("wr_partial_wait");
             cb_wait_front(cb_stat_partial, rows_t);
         }
+#if RMSN_ABLATE_CROSSCORE
+        // No readiness signal, no pull: the leader simply publishes the CB quanta its
+        // compute expects and every core frees its own partials immediately.
+        if (is_leader) {
+            for (uint32_t r = 0; r < rows_t; ++r) {
+                cb_reserve_back(cb_stat_gather, W_GROUP_SIZE);
+                cb_push_back(cb_stat_gather, W_GROUP_SIZE);
+            }
+        }
+        cb_pop_front(cb_stat_partial, rows_t);
+        return;
+#endif
+        if (SPLIT) {
+            // SYMMETRIC READINESS. Every core tells every PEER "my partials exist";
+            // there is no root in the flat combine any more. G-1 atomics per core,
+            // all issued in parallel, and no data moves.
+            if constexpr (W_GROUP_SIZE > 1) {
+                for (uint32_t m = 0; m < W_GROUP_SIZE; ++m) {
+                    if (m == my_slot) {
+                        continue;
+                    }
+                    gather_sem.up(
+                        noc,
+                        get_arg_val<uint32_t>(MEMBER_RT_BASE + 2 * m),
+                        get_arg_val<uint32_t>(MEMBER_RT_BASE + 2 * m + 1),
+                        1);
+                }
+            }
+            {
+                MaybeDeviceZoneScope("wr_gather_sem_wait");
+                if constexpr (W_GROUP_SIZE > 1) {
+                    gather_sem.wait_min((b + 1) * (W_GROUP_SIZE - 1));
+                }
+            }
+            // Pull ONLY this worker's slice of the tile-rows.
+            const uint32_t rpw = (rows_t + W_GROUP_SIZE - 1) / W_GROUP_SIZE;
+            const uint32_t first = my_slot * rpw;
+            const uint32_t mine = (first >= rows_t) ? 0 : ((rows_t - first < rpw) ? (rows_t - first) : rpw);
+            const uint32_t peer_partial = get_read_ptr(cb_stat_partial);
+            // NOTE: not "wr_gather_issue" — that name at this line hashes to the same
+            // 16-bit zone id as the TRISC-FW firmware zone, which the profiler rejects
+            // at read time ("Source location hashes are colliding").
+            MaybeDeviceZoneScope("wr_gather_pull");
+            for (uint32_t r = first; r < first + mine; ++r) {
+                cb_reserve_back(cb_stat_gather, W_GROUP_SIZE);
+                const uint32_t dst = get_write_ptr(cb_stat_gather);
+                const uint32_t src = peer_partial + r * stat_tile_bytes;
+                for (uint32_t m = 0; m < W_GROUP_SIZE; ++m) {
+                    const uint32_t mx = get_arg_val<uint32_t>(MEMBER_RT_BASE + 2 * m);
+                    const uint32_t my = get_arg_val<uint32_t>(MEMBER_RT_BASE + 2 * m + 1);
+                    noc_async_read(get_noc_addr(mx, my, src), dst + m * stat_tile_bytes, stat_tile_bytes);
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_stat_gather, W_GROUP_SIZE);
+            }
+            return;
+        }
+        // NON-SPLIT (rows_t == 1): the original PUSH gather. Every member writes its
+        // single partial into the leader's slot in parallel and bumps the readiness
+        // semaphore. Pull is deliberately NOT used here: with one tile-row there is one
+        // worker, so a pull would serialise G read-issues onto that one core for no
+        // parallelism in return (measured 3526 -> 3729 ns on (1,1,32,1024)).
         const uint32_t src = get_read_ptr(cb_stat_partial);
         {
-            MaybeDeviceZoneScope("wr_gather_issue");
+            MaybeDeviceZoneScope("wr_gather_push");
             for (uint32_t r = 0; r < rows_t; ++r) {
                 const uint32_t dst = gather_base + (r * W_GROUP_SIZE + my_slot) * stat_tile_bytes;
                 write_stat_payload(src + r * stat_tile_bytes, get_noc_addr(leader_x, leader_y, dst), stat_tile_bytes);
@@ -470,18 +596,8 @@ void kernel_main() {
         cb_pop_front(cb_stat_partial, rows_t);
         if constexpr (W_GROUP_SIZE > 1) {
             if (!is_leader) {
-                // Ordered behind the write barrier above, so the partial has
-                // landed before the leader can observe the count.
-                //
-                // No atomic barrier follows: this increment and the
-                // `consumer_ready` increment that ReceiverPipe::receive() issues
-                // a few lines below are two independent non-posted atomics to the
-                // same core, and they may arrive in either order. That is safe
-                // because the ROOT drains them in a fixed order — wait_min() on
-                // THIS counter strictly precedes send()'s wait on consumer_ready
-                // — so an early consumer_ready arrival can never let the root run
-                // ahead of the gather. Preserve that ordering on the root if this
-                // handshake is ever restructured.
+                // Ordered behind the write barrier, so the partial has landed before
+                // the leader can observe the count.
                 gather_sem.up(noc, leader_x, leader_y, 1);
             }
         }
@@ -493,6 +609,64 @@ void kernel_main() {
             }
             cb_push_back(cb_stat_gather, rows_t * W_GROUP_SIZE);
         }
+    };
+
+    // --- distribute_rstd (FLAT + row-split) ----------------------------------
+    //
+    // COLLECT-THEN-BROADCAST, the shape production layernorm uses. Each worker
+    // finalized its OWN slice of the tile-rows, so the finished rstd starts scattered
+    // across the group and every core needs all of it.
+    //
+    // Every worker writes its slice into the ROOT's cb_rstd at its row offset (the
+    // root writes its own locally), signals, and the root then multicasts the WHOLE
+    // block once. That is `G-1` small writes plus ONE multicast, against the
+    // symmetric all-gather's G writes PER WORKER (64 transactions at G=8).
+    //
+    // It also keeps a SINGLE multicast sender, which is what makes the multicast
+    // usable at all here: G concurrent loopback multicasts over one rectangle do
+    // complete (once the rectangle is given start=HIGH, end=LOW for NoC1) but they
+    // contend on path reservation — measured median 23053 ns vs 22164 for unicast,
+    // with 11x the run-to-run spread. One sender has no such contention, and it is
+    // the mcast_pipe precondition ("single sender per receiver") rather than a
+    // violation of it.
+    //
+    // src == dst on the send: cb_rstd is both the root's assembled copy and the
+    // landing buffer, so the multicast EXCLUDES self (the root already holds it),
+    // which is exactly the src != dst / INCLUDE_SRC rule read the other way.
+    [[maybe_unused]] uint32_t rstd_expected = 0;
+    auto rstd_slice = [&](uint32_t rows_t, uint32_t& first, uint32_t& mine, uint32_t& workers) {
+        const uint32_t rpw = (rows_t + W_GROUP_SIZE - 1) / W_GROUP_SIZE;
+        first = my_slot * rpw;
+        mine = (first >= rows_t) ? 0 : ((rows_t - first < rpw) ? (rows_t - first) : rpw);
+        workers = (rows_t + rpw - 1) / rpw;
+    };
+
+    // Place this core's finished slice into the ROOT's cb_rstd, then release it.
+    auto contribute_rstd = [&](uint32_t rows_t, uint32_t rstd_base) {
+        uint32_t first, mine, workers;
+        rstd_slice(rows_t, first, mine, workers);
+        if (mine == 0) {
+            return workers;
+        }
+        {
+            // Starved on THIS core's own combine + finalize — now 1/G of the work the
+            // single root used to do alone.
+            MaybeDeviceZoneScope("wr_rstd_own_wait");
+            cb_wait_front(cb_rstd_send, mine);
+        }
+        {
+            MaybeDeviceZoneScope("wr_rstd_push");
+            noc_async_write(
+                get_read_ptr(cb_rstd_send),
+                get_noc_addr(leader_x, leader_y, rstd_base + first * stat_tile_bytes),
+                mine * stat_tile_bytes);
+            noc_async_write_barrier();
+        }
+        if (!is_leader) {
+            gather2_sem.up(noc, leader_x, leader_y, 1);
+        }
+        cb_pop_front(cb_rstd_send, mine);
+        return workers;
     };
 
     // Level 2 (two-stage only): every row LEADER -> the root's cb_stat_gather2,
@@ -532,6 +706,59 @@ void kernel_main() {
         }
     };
 
+    if (SPLIT) {
+        // Row-split: every core pulls and finalizes its OWN slice, contributes it to
+        // the root, and the root broadcasts the assembled block once. The mcast faces
+        // are built ONCE outside the loop (the ReceiverPipe ctor kernel-inits its
+        // data_ready cell, which must not re-run after the sender has started).
+        if (is_leader) {
+            auto sender = mc.sender(noc);
+            for (uint32_t b = 0; b < num_blocks; ++b) {
+                const uint32_t rows_t = (b + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
+                gather_partials(b, rows_t);
+                cb_reserve_back(cb_rstd, rows_t);
+                const uint32_t rstd_base = get_write_ptr(cb_rstd);
+                const uint32_t workers = contribute_rstd(rows_t, rstd_base);
+                {
+                    // Waiting on the OTHER workers' slices — 1/G of a combine each,
+                    // running concurrently, where this used to be the root's whole
+                    // serial combine + finalize.
+                    MaybeDeviceZoneScope("wr_rstd_peer_wait");
+                    if (workers > 1) {
+                        rstd_expected += workers - 1;
+                        gather2_sem.wait_min(rstd_expected);
+                    }
+                }
+                {
+                    // src == dst: the root already holds the assembled block, so the
+                    // multicast excludes self.
+                    MaybeDeviceZoneScope("wr_mcast_send");
+                    sender.send(rstd_base, rstd_base, rows_t * stat_tile_bytes);
+                }
+                cb_push_back(cb_rstd, rows_t);
+                cb_pop_front(cb_stat_partial, rows_t);
+                store_block(b, rows_t);
+            }
+        } else {
+            auto receiver = mc.receiver(noc);
+            for (uint32_t b = 0; b < num_blocks; ++b) {
+                const uint32_t rows_t = (b + 1 == num_blocks) ? last_block_row_tiles : block_row_tiles;
+                gather_partials(b, rows_t);
+                cb_reserve_back(cb_rstd, rows_t);
+                const uint32_t rstd_base = get_write_ptr(cb_rstd);
+                (void)contribute_rstd(rows_t, rstd_base);
+                {
+                    MaybeDeviceZoneScope("wr_mcast_recv");
+                    receiver.receive();
+                }
+                cb_push_back(cb_rstd, rows_t);
+                cb_pop_front(cb_stat_partial, rows_t);
+                store_block(b, rows_t);
+            }
+        }
+        return;
+    }
+
     // The two mcast faces are constructed ONCE, outside the block loop: the
     // ReceiverPipe ctor kernel-inits its data_ready cell, which must not be
     // re-run after the sender has started broadcasting.
@@ -552,12 +779,16 @@ void kernel_main() {
                 // src != dst selects INCLUDE_SRC loopback, so the root lands its own
                 // copy in cb_rstd through the same path as every other member.
                 MaybeDeviceZoneScope("wr_mcast_send");
+#if RMSN_ABLATE_CROSSCORE
+                (void)rstd_dst;
+#else
                 // Column-valid trim (Perf 1, I2): the LAST tile's face 3 is trailing
                 // garbage nobody reads, and SenderPipe's one contiguous byte count is
                 // exactly able to drop it. The interior faces 1/3 must still ride along
                 // (a single transfer cannot skip them), which is why the multicast keeps
                 // ~3/4 of the payload while the gather legs keep 1/2.
                 sender.send(get_read_ptr(cb_rstd_send), rstd_dst, rows_t * stat_tile_bytes - (stat_tile_bytes >> 2));
+#endif
             }
             cb_pop_front(cb_rstd_send, rows_t);
             cb_push_back(cb_rstd, rows_t);
@@ -574,8 +805,14 @@ void kernel_main() {
                 // The member's view of the WHOLE combine round: it blocks here
                 // until the root has gathered, summed, finalized and broadcast.
                 MaybeDeviceZoneScope("wr_mcast_recv");
+#if !RMSN_ABLATE_CROSSCORE
                 receiver.receive();
+#endif
             }
+            // NOTE: cb_stat_partial is popped by gather_partials on this path — it
+            // PUSHES its partial to the leader, so the tiles are free as soon as the
+            // write barrier retires. Do not pop again here; the split path's pull
+            // gather is the only one that has to defer the release.
             cb_push_back(cb_rstd, rows_t);
             store_block(b, rows_t);
         }

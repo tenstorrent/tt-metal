@@ -297,6 +297,10 @@ void kernel_main() {
     // strided offset under a caller-managed reserve/push, instead of streaming
     // chunk-major pages the writer would then have to un-permute.
     constexpr bool OUT_STRIDED = CHUNKED && !IS_RM_OUT;
+    // Run the gamma multiply BEFORE the rstd rendezvous ((x*gamma)*rstd instead of
+    // (x*rstd)*gamma) so it lands in the cp_wait_rstd shadow. Unchunked only — see the
+    // apply pass. Requires gamma, obviously.
+    constexpr bool PREMUL_GAMMA = HAS_GAMMA && !CHUNKED;
 
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
     const uint32_t block_row_tiles = get_arg_val<uint32_t>(1);
@@ -305,6 +309,10 @@ void kernel_main() {
     const uint32_t has_tail = get_arg_val<uint32_t>(4);
     const uint32_t is_root = get_arg_val<uint32_t>(5);
     const uint32_t is_leader = get_arg_val<uint32_t>(6);
+    // FLAT path: this core's WORKER index. The combine + finalize are split by
+    // tile-ROW across the group, so slot w handles rows [w*rpw, w*rpw + rpw).
+    const uint32_t my_slot = get_arg_val<uint32_t>(7);
+    constexpr bool FLAT = STAGE2_SPAN <= 1;
 
     {
         MaybeDeviceZoneScope("cp_hw_startup");
@@ -467,18 +475,45 @@ void kernel_main() {
         // gathered partials with one DEST accumulation. Flat (STAGE2_SPAN == 1) has
         // leader == root and W_GROUP_SIZE == G, so this IS the Phase 0 chain and it
         // packs straight into cb_stat_sum.
-        if (is_leader) {
+        // FLAT: every core is a worker over its own row slice (`mine` may be 0 when a
+        // short last block leaves high slots idle). TWO_STAGE keeps the leader gate.
+        // MIRRORS the host's `_row_split_applies` and the writer's SPLIT — program
+        // constants only, never block_row_tiles (see the writer for why).
+        const uint32_t core_row_tiles_ =
+            (num_blocks == 0) ? 0 : ((num_blocks - 1) * block_row_tiles + last_block_row_tiles);
+        const bool SPLIT = FLAT && (W_GROUP_SIZE > 1) && (core_row_tiles_ > 1);
+        const uint32_t rpw = (rows_t + W_GROUP_SIZE - 1) / W_GROUP_SIZE;
+        const uint32_t my_first = my_slot * rpw;
+        const uint32_t my_rows =
+            SPLIT ? ((my_first >= rows_t) ? 0 : ((rows_t - my_first < rpw) ? (rows_t - my_first) : rpw)) : rows_t;
+        const bool combines = SPLIT ? (my_rows != 0) : (is_leader != 0);
+        if (combines) {
 #if RMSN_ABLATE_COMBINE_MATH
+            // Folds ONE PAIR instead of all W_GROUP_SIZE/2 of them, keeping the
+            // gather CB's wait/pop quantum intact. Must NOT wait on cb_zero_tile:
+            // the writer only fills that tile for an ODD span (see the pairwise
+            // combine below), so an Upfront wait on it would hang at G even.
             cb_wait_front(cb_stat_gather, rows_t * W_GROUP_SIZE);
             ckl::eltwise_chain(
                 ckl::EltwiseShape::grid(rows_t, 1),
                 ckl::BinaryFpu<
-                    ckl::input(cb_stat_gather, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block),
-                    ckl::input(cb_zero_tile, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Scalar),
+                    ckl::input(
+                        cb_stat_gather,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::OperandKind::Block,
+                        ckl::TileOffset::Strided),
+                    ckl::input(
+                        cb_stat_gather,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::OperandKind::Block,
+                        ckl::TileOffset::Strided),
                     ckl::BinaryFpuOp::Add,
                     ckl::BroadcastDim::None,
                     ckl::Dst::D0,
-                    ckl::DestAccumulation::PerRow>{},
+                    ckl::DestAccumulation::PerRow>{
+                    ckl::StridedTileRange{0, W_GROUP_SIZE}, ckl::StridedTileRange{W_GROUP_SIZE / 2, W_GROUP_SIZE}},
                 ckl::PackTile<ckl::output(
                     TWO_STAGE ? cb_branch_sum : cb_stat_sum,
                     ckl::ReservePolicy::PerOuter,
@@ -489,33 +524,94 @@ void kernel_main() {
                     ckl::DestAccumulation::PerRow)>{});
             cb_pop_front(cb_stat_gather, rows_t * W_GROUP_SIZE);
 #else
-            {
-                // The PEER RENDEZVOUS, hoisted out of the chain's own
-                // WaitPolicy::Upfront so the group's gather latency is a separate
-                // number from the root's tile-add arithmetic. Waiting for the same
-                // count twice is idempotent — the helper's wait is then satisfied.
-                MaybeDeviceZoneScope("cp_gather_wait");
-                cb_wait_front(cb_stat_gather, rows_t * W_GROUP_SIZE);
+            // STREAMED, ONE TILE-ROW AT A TIME. The writer PULLS row r's G partials
+            // into a GATHER_DEPTH*G window and this loop pops them before the writer
+            // issues row r+1, so the gather buffer never scales with rows_t. That is
+            // what lets a tall shard run as ONE block.
+            //
+            // ROW granularity, not TILE granularity. Production layernorm streams a
+            // single tile at a time because `reduce_tile` folds one operand into DEST.
+            // Our fold is PAIRWISE — gather[i] + gather[i + G/2], accumulated in DEST —
+            // so it needs BOTH halves of a row resident simultaneously. One row is
+            // exactly the right window: it preserves the two-tiles-at-a-time
+            // accumulate with no raw LLK, and G pages is still O(G), not O(R*G).
+            for (uint32_t r = 0; r < my_rows; ++r) {
+                {
+                    // Peer rendezvous for THIS row, kept separate from the tile-add
+                    // arithmetic so gather latency stays its own number.
+                    MaybeDeviceZoneScope("cp_gather_wait");
+                    cb_wait_front(cb_stat_gather, W_GROUP_SIZE);
+                }
+                {
+                    MaybeDeviceZoneScope("cp_combine_l1");
+                    if constexpr (W_GROUP_SIZE % 2 == 0) {
+                        // PAIRWISE HALVES — no identity operand at all. Both inputs
+                        // point at cb_stat_gather; B is offset by G/2, so step i adds
+                        // gather[i] + gather[i + G/2] and DestAccumulation::WholeShape
+                        // sums those G/2 pair-sums into the row's G-way total. This is
+                        // the `{0, N}` idiom from the eltwise_l1_vs_dest_accumulate
+                        // example. `tiles(...)` is one contiguous shape, so the
+                        // accumulation scope is WholeShape (PerRow is rejected there).
+                        constexpr uint32_t HALF = W_GROUP_SIZE / 2;
+                        ckl::eltwise_chain(
+                            ckl::EltwiseShape::tiles(HALF),
+                            ckl::BinaryFpu<
+                                ckl::input(
+                                    cb_stat_gather,
+                                    ckl::WaitPolicy::None,
+                                    ckl::PopPolicy::None,
+                                    ckl::OperandKind::Block),
+                                ckl::input(
+                                    cb_stat_gather,
+                                    ckl::WaitPolicy::None,
+                                    ckl::PopPolicy::None,
+                                    ckl::OperandKind::Block,
+                                    ckl::TileOffset::Set),
+                                ckl::BinaryFpuOp::Add,
+                                ckl::BroadcastDim::None,
+                                ckl::Dst::D0,
+                                ckl::DestAccumulation::WholeShape>{0, HALF},
+                            ckl::PackTile<ckl::output(
+                                TWO_STAGE ? cb_branch_sum : cb_stat_sum,
+                                ckl::ReservePolicy::PerOuter,
+                                ckl::PushPolicy::PerOuter,
+                                ckl::DataFormatReconfig::Enabled,
+                                ckl::PackRelu::Disabled,
+                                ckl::L1Accumulation::Disabled,
+                                ckl::DestAccumulation::WholeShape)>{});
+                    } else {
+                        // ODD group size: the halves do not tile, so this row keeps the
+                        // zero identity operand — the only remaining consumer of
+                        // cb_zero_tile, and the only reason the writer still fills it.
+                        ckl::eltwise_chain(
+                            ckl::EltwiseShape::tiles(W_GROUP_SIZE),
+                            ckl::BinaryFpu<
+                                ckl::input(
+                                    cb_stat_gather,
+                                    ckl::WaitPolicy::None,
+                                    ckl::PopPolicy::None,
+                                    ckl::OperandKind::Block),
+                                ckl::input(
+                                    cb_zero_tile,
+                                    ckl::WaitPolicy::Upfront,
+                                    ckl::PopPolicy::None,
+                                    ckl::OperandKind::Scalar),
+                                ckl::BinaryFpuOp::Add,
+                                ckl::BroadcastDim::None,
+                                ckl::Dst::D0,
+                                ckl::DestAccumulation::WholeShape>{},
+                            ckl::PackTile<ckl::output(
+                                TWO_STAGE ? cb_branch_sum : cb_stat_sum,
+                                ckl::ReservePolicy::PerOuter,
+                                ckl::PushPolicy::PerOuter,
+                                ckl::DataFormatReconfig::Enabled,
+                                ckl::PackRelu::Disabled,
+                                ckl::L1Accumulation::Disabled,
+                                ckl::DestAccumulation::WholeShape)>{});
+                    }
+                }
+                cb_pop_front(cb_stat_gather, W_GROUP_SIZE);
             }
-            MaybeDeviceZoneScope("cp_combine_l1");
-            ckl::eltwise_chain(
-                ckl::EltwiseShape::grid(rows_t, W_GROUP_SIZE),
-                ckl::BinaryFpu<
-                    ckl::input(
-                        cb_stat_gather, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                    ckl::input(cb_zero_tile, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Scalar),
-                    ckl::BinaryFpuOp::Add,
-                    ckl::BroadcastDim::None,
-                    ckl::Dst::D0,
-                    ckl::DestAccumulation::PerRow>{},
-                ckl::PackTile<ckl::output(
-                    TWO_STAGE ? cb_branch_sum : cb_stat_sum,
-                    ckl::ReservePolicy::PerOuter,
-                    ckl::PushPolicy::PerOuter,
-                    ckl::DataFormatReconfig::Enabled,
-                    ckl::PackRelu::Disabled,
-                    ckl::L1Accumulation::Disabled,
-                    ckl::DestAccumulation::PerRow)>{});
 #endif
         }
 
@@ -532,46 +628,87 @@ void kernel_main() {
                     cb_wait_front(cb_stat_gather2, rows_t * STAGE2_SPAN);
                 }
                 MaybeDeviceZoneScope("cp_combine_l2");
-                ckl::eltwise_chain(
-                    ckl::EltwiseShape::grid(rows_t, STAGE2_SPAN),
-                    ckl::BinaryFpu<
-                        ckl::input(
-                            cb_stat_gather2, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                        ckl::input(
-                            cb_zero_tile, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Scalar),
-                        ckl::BinaryFpuOp::Add,
-                        ckl::BroadcastDim::None,
-                        ckl::Dst::D0,
-                        ckl::DestAccumulation::PerRow>{},
-                    ckl::PackTile<ckl::output(
-                        cb_stat_sum,
-                        ckl::ReservePolicy::PerOuter,
-                        ckl::PushPolicy::PerOuter,
-                        ckl::DataFormatReconfig::Enabled,
-                        ckl::PackRelu::Disabled,
-                        ckl::L1Accumulation::Disabled,
-                        ckl::DestAccumulation::PerRow)>{});
+                if constexpr (STAGE2_SPAN % 2 == 0) {
+                    // Pairwise halves, exactly as level 1 — see the comment there.
+                    constexpr uint32_t HALF2 = STAGE2_SPAN / 2;
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::grid(rows_t, HALF2),
+                        ckl::BinaryFpu<
+                            ckl::input(
+                                cb_stat_gather2,
+                                ckl::WaitPolicy::None,
+                                ckl::PopPolicy::None,
+                                ckl::OperandKind::Block,
+                                ckl::TileOffset::Strided),
+                            ckl::input(
+                                cb_stat_gather2,
+                                ckl::WaitPolicy::None,
+                                ckl::PopPolicy::None,
+                                ckl::OperandKind::Block,
+                                ckl::TileOffset::Strided),
+                            ckl::BinaryFpuOp::Add,
+                            ckl::BroadcastDim::None,
+                            ckl::Dst::D0,
+                            ckl::DestAccumulation::PerRow>{
+                            ckl::StridedTileRange{0, STAGE2_SPAN}, ckl::StridedTileRange{HALF2, STAGE2_SPAN}},
+                        ckl::PackTile<ckl::output(
+                            cb_stat_sum,
+                            ckl::ReservePolicy::PerOuter,
+                            ckl::PushPolicy::PerOuter,
+                            ckl::DataFormatReconfig::Enabled,
+                            ckl::PackRelu::Disabled,
+                            ckl::L1Accumulation::Disabled,
+                            ckl::DestAccumulation::PerRow)>{});
+                    cb_pop_front(cb_stat_gather2, rows_t * STAGE2_SPAN);
+                } else {
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::grid(rows_t, STAGE2_SPAN),
+                        ckl::BinaryFpu<
+                            ckl::input(
+                                cb_stat_gather2,
+                                ckl::WaitPolicy::Upfront,
+                                ckl::PopPolicy::AtEnd,
+                                ckl::OperandKind::Block),
+                            ckl::input(
+                                cb_zero_tile, ckl::WaitPolicy::Upfront, ckl::PopPolicy::None, ckl::OperandKind::Scalar),
+                            ckl::BinaryFpuOp::Add,
+                            ckl::BroadcastDim::None,
+                            ckl::Dst::D0,
+                            ckl::DestAccumulation::PerRow>{},
+                        ckl::PackTile<ckl::output(
+                            cb_stat_sum,
+                            ckl::ReservePolicy::PerOuter,
+                            ckl::PushPolicy::PerOuter,
+                            ckl::DataFormatReconfig::Enabled,
+                            ckl::PackRelu::Disabled,
+                            ckl::L1Accumulation::Disabled,
+                            ckl::DestAccumulation::PerRow)>{});
+                }
             }
         }
 
-        if (is_root) {
+        // FLAT: finalize only THIS worker's slice. This is the single biggest
+        // win of the row-split — the rsqrt used to run for every tile-row on one
+        // core while the rest of the group idled. TWO_STAGE still finalizes the whole
+        // block on the root, which is where its level-2 fold leaves cb_stat_sum.
+        if (SPLIT ? (my_rows != 0) : (is_root != 0)) {
             // finalize: rsqrt(sum * (1/W_true) + eps) -> the multicast source.
             // The 1/W uses the TRUE, unpadded W.
             MaybeDeviceZoneScope("cp_finalize");
 #if RMSN_ABLATE_FINALIZE == 1
             ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(rows_t),
+                ckl::EltwiseShape::tiles(my_rows),
                 ckl::CopyTile<ckl::input(cb_stat_sum)>{},
                 ckl::PackTile<ckl::output(cb_rstd_send)>{});
 #elif RMSN_ABLATE_FINALIZE == 2
             ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(rows_t),
+                ckl::EltwiseShape::tiles(my_rows),
                 ckl::CopyTile<ckl::input(cb_stat_sum)>{},
                 ckl::Rsqrt<>{},
                 ckl::PackTile<ckl::output(cb_rstd_send)>{});
 #else
             ckl::eltwise_chain(
-                ckl::EltwiseShape::tiles(rows_t),
+                ckl::EltwiseShape::tiles(my_rows),
                 ckl::CopyTile<ckl::input(cb_stat_sum)>{},
                 AddUnaryColValid<>{EPS_BITS},
                 RsqrtColValid<>{},
@@ -589,7 +726,9 @@ void kernel_main() {
             // combine + finalize + multicast. On a NON-root member this is the
             // single number that says how much of the wall the combine costs.
             MaybeDeviceZoneScope("cp_wait_rstd");
-            cb_wait_front(cb_rstd, rows_t);
+            if constexpr (!PREMUL_GAMMA) {
+                cb_wait_front(cb_rstd, rows_t);
+            }
         }
         if constexpr (OUT_STRIDED) {
             cb_reserve_back(cb_output_tiles, rows_t * CB_W_TILES);
@@ -674,7 +813,36 @@ void kernel_main() {
                     MaybeDeviceZoneScope("cp_wait_gamma");
                     cb_wait_front(cb_gamma_tiles, CB_CHUNK_TILES);
                 }
-                {
+                // GAMMA PRE-MULTIPLY. rms_norm is (x * rstd) * gamma, and multiplication
+                // COMMUTES, so the gamma pass can run BEFORE rstd exists — inside the
+                // window this core would otherwise spend blocked in `cp_wait_rstd`
+                // (6211 ns p50 on BLOCK_SHARDED (1,1,8192,1024), against a 3933 ns
+                // gamma pass). Ordering it (x * gamma) * rstd moves the gamma multiply
+                // off the post-rendezvous critical path entirely and leaves only the
+                // single Col-broadcast rstd multiply after the wait.
+                //
+                // Unchunked only: the pre-pass has to hold the WHOLE block in cb_normed
+                // before rstd lands, which is exactly what cb_normed is sized for at
+                // NUM_CHUNKS == 1. A chunked schedule streams cb_normed per chunk, so it
+                // keeps the original order.
+                //
+                // NOT precision-neutral in principle — it reorders two bf16 roundings —
+                // so it is gated on the precision baseline suite, not asserted to be free.
+                if constexpr (PREMUL_GAMMA) {
+                    {
+                        MaybeDeviceZoneScope("cp_premul_gamma");
+                        ckl::eltwise_chain(
+                            ckl::EltwiseShape::grid(rows_t, cols, apply_blk),
+                            ckl::BinaryFpu<in_spec, gamma_spec, ckl::BinaryFpuOp::Mul, ckl::BroadcastDim::Row>{src},
+                            ckl::PackTile<ckl::output(
+                                cb_normed, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
+                    }
+                    {
+                        // The rendezvous, now with the gamma pass already banked.
+                        MaybeDeviceZoneScope("cp_wait_rstd");
+                        cb_wait_front(cb_rstd, rows_t);
+                    }
+                } else {
                     // Pass 1 of the apply: x * rstd (Col broadcast) -> cb_normed.
                     MaybeDeviceZoneScope("cp_apply_scale");
                     ckl::eltwise_chain(
@@ -684,16 +852,22 @@ void kernel_main() {
                             cb_normed, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
                 }
 
-                MaybeDeviceZoneScope("cp_apply_gamma");
+                // Pass 2. Under PREMUL_GAMMA cb_normed already holds x*gamma, so what
+                // remains is the rstd Col-broadcast; otherwise it holds x*rstd and the
+                // gamma Row-broadcast remains. Same tile count either way — the pass
+                // that survives the rendezvous is simply the cheaper ordering.
+                constexpr auto second_spec = PREMUL_GAMMA ? rstd_spec : gamma_spec;
+                constexpr auto second_bcast = PREMUL_GAMMA ? ckl::BroadcastDim::Col : ckl::BroadcastDim::Row;
+                MaybeDeviceZoneScope("cp_apply_scale2");
                 if constexpr (OUT_STRIDED) {
                     ckl::eltwise_chain(
                         ckl::EltwiseShape::grid(rows_t, cols, apply_blk),
                         ckl::BinaryFpu<
                             ckl::input(
                                 cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                            gamma_spec,
+                            second_spec,
                             ckl::BinaryFpuOp::Mul,
-                            ckl::BroadcastDim::Row>{},
+                            second_bcast>{},
                         ckl::PackTile<out_strided>{ckl::StridedTileRange{chunk_base, CB_W_TILES}});
                 } else {
                     ckl::eltwise_chain(
@@ -701,9 +875,9 @@ void kernel_main() {
                         ckl::BinaryFpu<
                             ckl::input(
                                 cb_normed, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::OperandKind::Block),
-                            gamma_spec,
+                            second_spec,
                             ckl::BinaryFpuOp::Mul,
-                            ckl::BroadcastDim::Row>{},
+                            second_bcast>{},
                         ckl::PackTile<ckl::output(
                             cb_output_tiles, ckl::ReservePolicy::PerChunk, ckl::PushPolicy::PerChunk)>{});
                 }

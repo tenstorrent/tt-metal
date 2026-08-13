@@ -83,7 +83,7 @@ READER_ACCESSOR_CT_BASE = 9  # rms_norm_reader.cpp: TensorAccessorArgs<9>
 WRITER_MCAST_CT_BASE = 10  # rms_norm_writer.cpp: MCAST_CT_BASE
 WRITER_MCAST_RT_BASE = 22  # rms_norm_writer.cpp: MCAST_RT_BASE
 _READER_NUM_ARGS = 18  # rms_norm_reader.cpp get_arg_val<uint32_t>(0..17)
-_COMPUTE_NUM_ARGS = 7  # rms_norm_compute.cpp get_arg_val<uint32_t>(0..6)
+_COMPUTE_NUM_ARGS = 8  # rms_norm_compute.cpp get_arg_val<uint32_t>(0..7)
 
 # --------------------------------------------------------------------------
 # Blocking / buffer-depth knobs — single source of truth.
@@ -98,6 +98,29 @@ L1_RESERVE_BYTES = 131072  # kernel binaries, stack, semaphores, allocator slack
 # means the same NUMBER OF BYTES whichever format the statistics pipeline carries
 # (`_Geometry.stat_dtype`); a bf16 pipeline therefore admits twice the tiles.
 MAX_GATHER_TILES = 64
+# Depth of the FLAT combine's pull-streaming gather window, in tile-ROWS (each row is
+# G pages). 2 = double-buffered: the root's writer can pull row r+1 while its compute
+# still holds row r. 1 would force a strict ping-pong (main runs that way and pays for
+# it in `m_gather_wait`).
+GATHER_DEPTH = 2
+
+
+def _row_split_applies(core_row_tiles, G, stage2_span):
+    """Does the FLAT combine split its tile-rows across the group?
+
+    MUST NOT depend on R. `_cb_bytes` recovers `per_row_bytes` by differencing the CB
+    inventory at R = 1 and R = 2, which is only valid while every page count is AFFINE
+    in R. An R-dependent branch here silently reads as phantom per-row bytes: gating on
+    R made cb_stat_gather 8 pages at R=1 and a constant 16 at R=2, so the solve charged
+    +8 tiles/row that do not exist and roughly halved R.
+
+    `core_row_tiles` and `G` are both program constants, so the decision is stable
+    across the differencing. The kernels derive the SAME predicate on device from
+    (num_blocks, block_row_tiles, last_block_row_tiles) and W_GROUP_SIZE.
+    """
+    return stage2_span <= 1 and G > 1 and core_row_tiles > 1
+
+
 # Perf lamp P2 — an upper bound on the cores per reduction group. Maximum
 # occupancy is the default first step, but at tensor_row_tiles == 1 the selection
 # pushes w_group_size to the whole grid, leaving 3-4 hidden tiles of real work per
@@ -450,6 +473,7 @@ def _cb_specs(
     pin_out=False,
     w_chunk_tiles=None,
     stage2_span=1,
+    row_split=False,
 ):
     """THE statement of this op's CB inventory — `(index, num_pages, page_size, format)`.
 
@@ -494,7 +518,15 @@ def _cb_specs(
         (CB_STAT_PARTIAL, R, T_stat, stat_dtype),
         # Level-1 fan-in of the combine tree: `G` cores (flat root-gather) or, on a
         # two-stage grid combine, the `nx` cores of one grid ROW of the group.
-        (CB_STAT_GATHER, R * G, T_stat, stat_dtype),
+        #
+        # FLAT PATH: a STREAMING WINDOW of GATHER_DEPTH tile-rows, not a landing zone
+        # for all R of them. The root PULLS (see the writer), so it controls when each
+        # row's G partials move and simply does not issue row r+1's reads until its
+        # compute has popped row r — back-pressure that costs no messages because the
+        # consumer is the initiator. That makes this buffer O(G), independent of R,
+        # where the old push design needed O(R*G) resident because members wrote
+        # whenever they were ready without inspecting this CB.
+        (CB_STAT_GATHER, (GATHER_DEPTH * G) if row_split else (R * G), T_stat, stat_dtype),
         (CB_STAT_SUM, R, T_stat, stat_dtype),
         (CB_RSTD_SEND, R, T_stat, stat_dtype),
         (CB_RSTD, R, T_stat, stat_dtype),
@@ -622,6 +654,7 @@ def _cb_bytes(
     pin_out=False,
     w_chunk_tiles=None,
     stage2_span=1,
+    row_split=False,
 ):
     """`(fixed_bytes, per_row_bytes)` of the per-core CB footprint at `(C, G)`.
 
@@ -651,11 +684,49 @@ def _cb_bytes(
                 pin_out=pin_out,
                 w_chunk_tiles=w_chunk_tiles,
                 stage2_span=stage2_span,
+                row_split=row_split,
             )
         )
 
     at_1, at_2 = total(1), total(2)
     per_row_bytes = at_2 - at_1
+    import os as _os
+
+    if _os.environ.get("RMSN_DEBUG_L1"):
+
+        def _spec(R):
+            return {
+                cb: pages * ps
+                for cb, pages, ps, _ in _cb_specs(
+                    geo,
+                    C,
+                    G,
+                    R,
+                    is_rm_out,
+                    has_tail,
+                    input_cb_depth=depths[0],
+                    rm_cb_depth=depths[1],
+                    pin_in=pin_in,
+                    pin_out=pin_out,
+                    w_chunk_tiles=w_chunk_tiles,
+                    stage2_span=stage2_span,
+                    row_split=row_split,
+                )
+            }
+
+        a, b = _spec(1), _spec(2)
+        rows = []
+        for cb in sorted(set(a) | set(b)):
+            d = b.get(cb, 0) - a.get(cb, 0)
+            if d:
+                rows.append((d, cb, a.get(cb, 0)))
+        rows.sort(reverse=True)
+        print(
+            f"RMSN_L1 per_row_total={per_row_bytes} ({per_row_bytes/2048:.1f} tiles/row) pin_in={pin_in} pin_out={pin_out}",
+            flush=True,
+        )
+        for d, cb, base in rows:
+            print(f"RMSN_L1   cb{cb:<3} +{d:>7} B/row ({d/2048:.1f} tiles/row)", flush=True)
     return at_1 - per_row_bytes, per_row_bytes
 
 
@@ -672,6 +743,7 @@ def _max_block_row_tiles(
     pin_out=False,
     w_chunk_tiles=None,
     stage2_span=1,
+    row_split=False,
 ):
     """Closed-form L1 residency solve (a single expression, not a search).
 
@@ -689,6 +761,7 @@ def _max_block_row_tiles(
         pin_out=pin_out,
         w_chunk_tiles=w_chunk_tiles,
         stage2_span=stage2_span,
+        row_split=row_split,
     )
     if fixed_bytes + per_row_bytes > budget:
         return 0
@@ -696,13 +769,39 @@ def _max_block_row_tiles(
     # fan-in of the tree — `G` when flat, max(nx, ny) when two-stage.
     # MAX_GATHER_TILES is denominated in FP32-tile equivalents (see the knob), so a
     # bf16 statistics pipeline admits twice the tiles for the same L1 bytes.
+    #
+    # FLAT PATH: does not apply. The pull-streaming gather's window is GATHER_DEPTH*G
+    # tiles regardless of R, so the combine buffer no longer scales with the row count
+    # and no longer forces the assignment to be cut into blocks. R is then bounded only
+    # by the L1 budget below (and MIN_PIPELINE_BLOCKS), which lets a tall BLOCK shard
+    # run as ONE block instead of ceil(R_total / 16).
     gather_tile_cap = MAX_GATHER_TILES * FP32_TILE_BYTES // geo.stat_tile_bytes
-    cap = min(core_row_tiles, max(1, gather_tile_cap // max(G, stage2_span)))
+    if stage2_span > 1:
+        cap = min(core_row_tiles, max(1, gather_tile_cap // max(G, stage2_span)))
+    else:
+        cap = core_row_tiles
     if MIN_PIPELINE_BLOCKS > 1:
         # Perf lamp P1: cut the assignment into >= MIN_PIPELINE_BLOCKS blocks so
         # the depth-`input_cb_depth` input CB has a block to prefetch.
         cap = min(cap, max(1, _div_up(core_row_tiles, MIN_PIPELINE_BLOCKS)))
-    return max(1, min((budget - fixed_bytes) // per_row_bytes, cap))
+    _r = max(1, min((budget - fixed_bytes) // per_row_bytes, cap))
+    # BALANCE THE BLOCKS. The raw solve returns the LARGEST R that fits, which leaves a
+    # stub tail: at core_row_tiles=32 an R of 26 gives blocks of 26 + 6, and the 6-row
+    # tail has rpw=1 so only 6 of G cores get work. Re-deriving R from the block COUNT
+    # spreads the rows evenly (26 -> 16, i.e. 16 + 16) at identical L1 and identical
+    # block count, so the row-split has a full group to hand work to in every block.
+    _nb = _div_up(core_row_tiles, _r)
+    _r = _div_up(core_row_tiles, _nb)
+    import os as _os
+
+    if _os.environ.get("RMSN_DEBUG_R"):
+        print(
+            f"RMSN_R core_row_tiles={core_row_tiles} G={G} budget={budget} "
+            f"fixed={fixed_bytes} per_row={per_row_bytes} "
+            f"budget_rows={(budget - fixed_bytes)//per_row_bytes} cap={cap} -> R={_r}",
+            flush=True,
+        )
+    return _r
 
 
 def _select_candidates(geo, grid_x, grid_y, is_rm_out, budget, w_group_cap, w_group_min=1):
@@ -738,7 +837,17 @@ def _select_candidates(geo, grid_x, grid_y, is_rm_out, budget, w_group_cap, w_gr
             # An interleaved group is a FULL gc x gr rectangle by construction, so
             # its combine tree follows straight from the split.
             s1, s2 = _tree_for_box(G, gc, gr)
-            R = _max_block_row_tiles(geo, C, s1, core_row_tiles, is_rm_out, has_tail, budget, stage2_span=s2)
+            R = _max_block_row_tiles(
+                geo,
+                C,
+                s1,
+                core_row_tiles,
+                is_rm_out,
+                has_tail,
+                budget,
+                stage2_span=s2,
+                row_split=_row_split_applies(core_row_tiles, s1, s2),
+            )
             if R == 0:
                 continue
             score = (active_groups * G, -G, R)
@@ -1266,6 +1375,7 @@ def create_program_descriptor(
                 pin_in=pin_in,
                 pin_out=pin_out,
                 stage2_span=sh_s2,
+                row_split=_row_split_applies(max_row_count, sh_s1, sh_s2),
             )
             if R:
                 depths = candidate_depths
@@ -1284,6 +1394,7 @@ def create_program_descriptor(
                         is_rm_out,
                         has_tail_global,
                         budget,
+                        row_split=_row_split_applies(max_row_count, sh_s1, sh_s2),
                         depths=candidate_depths,
                         pin_in=pin_in,
                         pin_out=pin_out,
@@ -1310,6 +1421,10 @@ def create_program_descriptor(
     # is byte-identical to it — every group that is not a fully populated,
     # multi-row rectangle keeps that path.
     STAGE1_SPAN, STAGE2_SPAN = _combine_tree(groups, G)
+    # The FLAT combine's row-split decision. Derived ONLY from program constants so the
+    # CB inventory stays affine in R (see _row_split_applies), and mirrored on device by
+    # the kernels from (num_blocks, block_row_tiles, last_block_row_tiles).
+    ROW_SPLIT = _row_split_applies(max_row_count, STAGE1_SPAN, STAGE2_SPAN)
     TWO_STAGE = STAGE2_SPAN > 1
 
     all_cores = []
@@ -1396,6 +1511,8 @@ def create_program_descriptor(
             pin_out=pin_out,
             w_chunk_tiles=W_CHUNK,
             stage2_span=STAGE2_SPAN,
+            # MUST match what the residency solve assumed and what the kernels derive.
+            row_split=ROW_SPLIT,
         )
     ]
     if pin_in:
@@ -1552,7 +1669,27 @@ def create_program_descriptor(
                 f"rms_norm: writer runtime-arg layout drifted ({len(writer_own_args)} own args); "
                 f"update MCAST_RT_BASE in kernels/rms_norm_writer.cpp and WRITER_MCAST_RT_BASE here"
             )
-            writer_args[(cx, cy)] = writer_own_args + list(mc.runtime_args(ttnn.CoreCoord(cx, cy)))
+            # The pull gather's peer table, appended AFTER the multicast args (the
+            # kernel finds it at `mc.next_runtime_args_offset()`), so the pinned
+            # WRITER_MCAST_RT_BASE contract above is untouched. Flat [x0,y0,x1,y1,...]
+            # over the core's level-1 group, in slot order — the root indexes it by
+            # member. Physical worker columns are not contiguous, so these cannot be
+            # derived on device by arithmetic.
+            if TWO_STAGE:
+                # Level-1 group is this core's ROW of the mcast box; slot = cx - box_x0.
+                level1_cores = [(x, cy) for x in range(box_x0, box_x1 + 1)]
+            else:
+                # Flat: the group's members in slot order (slot = index in `members`).
+                level1_cores = [mm["core"] for mm in g["members"]]
+            assert len(level1_cores) == STAGE1_SPAN, (
+                f"rms_norm: level-1 member table ({len(level1_cores)}) != W_GROUP_SIZE "
+                f"({STAGE1_SPAN}); the writer indexes this table by slot up to W_GROUP_SIZE-1"
+            )
+            member_coords = []
+            for lcx, lcy in level1_cores:
+                v = device.worker_core_from_logical_core(ttnn.CoreCoord(lcx, lcy))
+                member_coords += [int(v.x), int(v.y)]
+            writer_args[(cx, cy)] = writer_own_args + list(mc.runtime_args(ttnn.CoreCoord(cx, cy))) + member_coords
 
             compute_own_args = [
                 num_blocks,
@@ -1562,6 +1699,11 @@ def create_program_descriptor(
                 has_tail,
                 is_root,
                 is_leader,
+                # Level-1 slot. On the FLAT path this is the core's WORKER INDEX: the
+                # combine + finalize are split by tile-ROW across the group, and slot w
+                # owns rows [w*rpw, w*rpw + rpw) of every block (rpw derived on device
+                # from rows_t, so a short last block needs no extra arg).
+                s1_slot,
             ]
             assert len(compute_own_args) == _COMPUTE_NUM_ARGS
             compute_args[(cx, cy)] = compute_own_args
