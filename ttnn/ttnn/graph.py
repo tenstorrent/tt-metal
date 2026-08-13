@@ -452,6 +452,14 @@ def record_python_operation(name, function_args, function_kwargs):
     _python_io_data.append(record)
 
 
+def record_python_operation_error(name, error_type, error_message):
+    """Attach the exception raised by an operation to its ``_python_io_data`` entry."""
+    for record in reversed(_python_io_data):
+        if record["name"] == name and "error" not in record:
+            record["error"] = {"type": error_type, "message": error_message}
+            return
+
+
 def store_output_tensor_ids(output_tensor_ids):
     """Attach output tensor IDs to the most recent _python_io_data entry.
 
