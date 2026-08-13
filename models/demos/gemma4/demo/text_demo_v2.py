@@ -195,20 +195,10 @@ def _host_sample(logits, temperature, top_p):
 
 
 def _default_ccl_packet_bytes():
-    """Ideal Fabric packet for dense Gemma4 width-sharded CCL pages.
+    """See :func:`models.demos.gemma4.tt.ccl.default_ccl_packet_bytes`."""
+    from models.demos.gemma4.tt.ccl import default_ccl_packet_bytes
 
-    Matches ``validate_packet_size`` / runtime guidance (≈3× page):
-      WH 31B: 2048 B pages → 6144 (Fabric warns on the 4352 default)
-      BH 31B: 1344 B pages → 5376
-      12B:    960 B pages  → 3840
-    Other models leave Fabric's default.
-    """
-    model = os.environ.get("HF_MODEL", "").lower()
-    if "31b" in model:
-        return 5376 if is_blackhole() else 6144
-    if "12b" in model:
-        return 3840
-    return None
+    return default_ccl_packet_bytes()
 
 
 def _device_params():
@@ -228,6 +218,8 @@ def _device_params():
     ``l1_small_size`` is set so all_gather semaphores land in L1_SMALL (avoids
     fragmenting the main L1 pool).
     """
+    from models.demos.gemma4.tt.ccl import fabric_router_config_from_env
+
     num_cqs = max(1, int(os.environ.get("GEMMA4_NUM_CQS", "1")))
     fabric_env = os.environ.get("GEMMA4_FABRIC", "1d").strip().lower()
     if fabric_env in ("ring", "1d_ring", "fabric_1d_ring"):
@@ -252,16 +244,8 @@ def _device_params():
     default_trace_region = 256_000_000 if is_blackhole() else 64_000_000
     params["trace_region_size"] = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", default_trace_region))
 
-    pkt_env = os.environ.get("GEMMA4_CCL_PACKET_BYTES")
-    if pkt_env is None:
-        pkt_bytes = _default_ccl_packet_bytes()
-    elif pkt_env.strip().lower() in ("0", "none", "default", ""):
-        pkt_bytes = None
-    else:
-        pkt_bytes = max(4352, int(pkt_env))
-    if pkt_bytes is not None:
-        router = ttnn.FabricRouterConfig()
-        router.max_packet_payload_size_bytes = pkt_bytes
+    router = fabric_router_config_from_env()
+    if router is not None:
         params["fabric_router_config"] = router
     return params
 

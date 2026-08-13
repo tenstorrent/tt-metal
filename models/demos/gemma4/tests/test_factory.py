@@ -483,11 +483,26 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
         mesh_shapes = [max(mesh_shapes, key=lambda s: s[0] * s[1])]
 
     extra = dict(device_params_extra or {})
+    # Match demo Fabric packet defaults so Tracy/PCC multi-device paths see the
+    # same AG packing as text_demo_v2 (WH 31B → 6144). Explicit extra wins.
+    # Skip on 1x1 (no fabric).
+    router = None
+    if "fabric_router_config" not in extra:
+        from models.demos.gemma4.tt.ccl import fabric_router_config_from_env
+
+        router = fabric_router_config_from_env()
+
+    def _device_params_for(shape):
+        params = {"fabric_config": None if shape == (1, 1) else ttnn.FabricConfig.FABRIC_1D, **extra}
+        if shape != (1, 1) and router is not None and "fabric_router_config" not in params:
+            params["fabric_router_config"] = router
+        return params
+
     if not mesh_shapes:
         params = [
             pytest.param(
                 (1, 1),
-                {"fabric_config": None, **extra},
+                _device_params_for((1, 1)),
                 id="1x1",
                 marks=pytest.mark.skip(reason="Not enough devices"),
             )
@@ -496,7 +511,7 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
         params = [
             pytest.param(
                 s,
-                {"fabric_config": None if s == (1, 1) else ttnn.FabricConfig.FABRIC_1D, **extra},
+                _device_params_for(s),
                 id=f"{s[0]}x{s[1]}",
             )
             for s in mesh_shapes
