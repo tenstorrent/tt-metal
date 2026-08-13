@@ -178,8 +178,6 @@ ttsim:
     sim_blackhole: 30
 
 shield:
-  e2e:
-    wh_llmbox: 110
   e2e_tier2:
     wh_n150: 150
     wh_n300: 30

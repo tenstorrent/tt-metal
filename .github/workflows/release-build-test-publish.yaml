@@ -77,6 +77,9 @@ jobs:
       fetch-depth: 0
       skip-tt-train: false
       enable-lto: false
+      # Released packages must be self-contained (bundle the SFPI JIT toolchain) since
+      # they're installed on machines with no /opt/tenstorrent/sfpi to fall back to.
+      use-system-sfpi: false
 
   build-artifact-tracy:
     name: "Build artifact with tracy (for testing)"
@@ -94,6 +97,9 @@ jobs:
       fetch-depth: 0
       skip-tt-train: false
       enable-lto: false
+      # Released packages must be self-contained (bundle the SFPI JIT toolchain) since
+      # they're installed on machines with no /opt/tenstorrent/sfpi to fall back to.
+      use-system-sfpi: false
 
   build-artifact-release:
     name: "Build artifact for release (without tracy)"
@@ -111,6 +117,9 @@ jobs:
       fetch-depth: 0
       skip-tt-train: false
       enable-lto: false
+      # Released packages must be self-contained (bundle the SFPI JIT toolchain) since
+      # they're installed on machines with no /opt/tenstorrent/sfpi to fall back to.
+      use-system-sfpi: false
 
   determine-test-skus:
     runs-on: ubuntu-slim
