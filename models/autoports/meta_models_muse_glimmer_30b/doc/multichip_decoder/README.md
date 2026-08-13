@@ -589,8 +589,10 @@ not say so. What is known about it, from three occurrences:
 * it does **not** self-recover: every time, the *next* process to open the mesh
   failed at startup with the same signature, and one `tt-smi -r` cleared it every
   time (work log §9.2, §17.3). The reset is bounded and no second reset was ever
-  needed; the third occurrence has the whole chain on record, ending in a passing
-  `logs/smoke_after_reset.log`;
+  needed. The third occurrence has every link on record: the abort in
+  `logs/watcher_run.log`, the wedged next process in
+  `logs/smoke_wedged_before_reset.log`, and the passing
+  `logs/smoke_after_reset.log` after one reset;
 * it has only ever been seen on the **watcher** path. The same 31 node ids run
   inside the 100-test acceptance suite with no such line, and neither the A/B, the
   eight Tracy captures, nor the comparison module has produced one.

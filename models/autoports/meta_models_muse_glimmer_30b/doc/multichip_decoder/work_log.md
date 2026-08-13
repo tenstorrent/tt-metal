@@ -584,11 +584,11 @@ not about the layer.
 | mesh smoke | `open_mesh_device(1x4)` + `all_reduce` -> `CCL_SMOKE_OK Shape([1, 1, 32, 256])` |
 | classification | infrastructure recovery from a TTNN submesh/fabric interaction, not a model correctness or performance result |
 
-Three more resets were needed later in the stage, all from the same Ethernet-core
+Four more resets were needed later in the stage, all from the same Ethernet-core
 signature and all bounded (one `tt-smi -r`, list before and after, CCL smoke to
 confirm): after the two correctness modules were run in **one** pytest invocation
 (the 1x1 mesh opens while the 1x4 session mesh is still owned), and after each of
-the two watcher runs' teardown aborts (§9.4). None of them is a model result; all
+the **three** watcher runs' teardown aborts (§9.4). None of them is a model result; all
 of them are recorded because the full-model stage opens and closes this mesh in
 every process and will meet the same signature.
 
@@ -1104,8 +1104,11 @@ this run is shorter; the *doubling* correction from round 5 was right, and
 The teardown fault reproduced for the **third** time, and this time the whole
 documented chain was exercised end to end: SIGABRT at mesh close after all 31
 tests reported, the next process (`bench/smoke.py`) failing at startup with the
-same ethernet-core signature, one `tt-smi -r` clearing it, and the smoke passing
-afterwards (prefill 0.99359, decode 0.99236, all three replicas bit-identical).
+same ethernet-core signature (`logs/smoke_wedged_before_reset.log` — the wedged
+process itself, so the middle link is an artifact too), one `tt-smi -r` clearing
+it, and the smoke passing afterwards: prefill 0.9935946577738217, decode
+0.9923626796510854, all three replicas bit-identical
+(`logs/smoke_after_reset.log`).
 The occurrence count in §9.4 and the README is updated from two to three.
 
 ### 17.4 Also corrected
@@ -1145,9 +1148,9 @@ rather than by reading the prose.
   left `README.md`'s "cleared it both times" and
   `context_contract.json`'s "has twice timed out" behind. Both fixed; the contract
   now also names the two artifacts that carry the third occurrence end to end.
-- **The recovery smoke was prose-only.** §17.3 quoted `prefill 0.99359, decode
-  0.99236` from a run whose log was never committed. `logs/smoke_after_reset.log`
-  is now committed and cited, and the figures are quoted at full precision.
+- **The recovery smoke was prose-only.** §17.3 quoted a prefill and a decode PCC
+  from a run whose log was never committed. `logs/smoke_after_reset.log` is now
+  committed and cited, and §17.3 quotes both figures to all 16 digits.
 
 Round 7 also measured the gate again and found roughly 25 figure-bearing blocks
 reaching an empty haystack, because citation inheritance was one block deep. It is
@@ -1177,3 +1180,48 @@ which must be one of the pass counts the committed runs actually produced.
 The four planted-defect tests now run clean: the round-7 live table, the round-6
 prose evasion, the round-6 population row, and a delegation naming a check that
 never ran.
+
+## 18. Review round 8: one contradiction left, and two more gate holes
+
+Round 8 returned a single required item and confirmed the rest of the stage. The
+item was §9.2 still enumerating "three more resets … after each of the **two**
+watcher runs' teardown aborts" while §9.4, the README and the contract had all
+been raised to three. Round 7 had raised the count in three documents; §17.5 said
+"Both fixed"; a fourth location existed and nobody had looked for it.
+
+That is now the second time a count was propagated by hand and missed a site, so
+it stopped being propagated by hand. `bench/check_reported_figures.py` derives the
+occurrence count once — from the timestamps §9.4 enumerates — and compares it
+against every statement of it in the README, this log and
+`context_contract.json`. Reverting any one document to "two" fails the gate.
+
+The same pass added two more derivations that had been left to prose: each PCC
+population's **worst** value (the counts, bars and total were already checked; the
+worst was not), and the wedged intermediate process of the teardown chain, which
+README called "the whole chain on record" while only the first and last links were
+committed. `logs/smoke_wedged_before_reset.log` is the middle link and is now
+committed and cited from both documents.
+
+### 18.1 The delegation was muting a block it did not name
+
+Round 7's `<!-- verified-by: … -->` marker was honoured when it appeared in a
+block *or in the block above*, so that a marker alone on its own line could reach
+the table it labels. Round 8 found the consequence: the `device:
+sliding/prefill_8192` delegation sits **inside** limitation 5's block, because the
+numbered items are not separated by blank lines — so it also muted limitation 6,
+which carries the real-weight margin that justifies rejecting the BFP8 decode
+payload. The three figures there were all correct, so nothing was wrong; the check
+had simply stopped looking at them.
+
+A marker now reaches the following block only when it is **alone** on its own
+block. A marker sharing a block with prose applies to that block and no further.
+Planting `0.995105 → 0.995305` in limitation 6 is caught; before the fix it passed
+silently.
+
+Round 8 also noted, correctly, that a `verified-by` label proves only that a check
+of that name ran and passed, not that the named check covers the figures in that
+block. That is a real limit. It is bounded by there being exactly two delegations
+in the tree, both named in this log and in §17.5, and by the delegation itself
+failing if the named check disappears — but "the marker names a check that
+verifies *these* figures" is not mechanically established, and a future stage that
+adds delegations should know that.

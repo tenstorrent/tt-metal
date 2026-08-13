@@ -127,12 +127,12 @@ def matmul_dram_rows(window: str) -> dict[str, tuple[float, float]]:
     }
 
 
-def pcc_populations() -> tuple[int, dict[str, int]]:
-    """``(total, {bar: count})`` from the generated PCC summary."""
+def pcc_populations() -> tuple[int, dict[str, int], dict[str, str]]:
+    """``(total, {bar: count}, {bar: worst})`` from the generated PCC summary."""
     text = (ROOT / "logs/pcc_summary.txt").read_text()
     total = int(re.search(r"^(\d+) asserted checks", text, re.MULTILINE).group(1))
-    counts = {bar: int(n) for n, bar in re.findall(r"^\s+(\d+) .*?bar (0\.\d+)", text, re.MULTILINE)}
-    return total, counts
+    rows = re.findall(r"^\s+(\d+) .*?bar (0\.\d+), worst (0\.\d+)", text, re.MULTILINE)
+    return total, {bar: int(n) for n, bar, _ in rows}, {bar: worst for _, bar, worst in rows}
 
 
 def script_to_logs() -> dict[str, list[str]]:
@@ -152,6 +152,18 @@ def script_to_logs() -> dict[str, list[str]]:
         if (ROOT / guess).exists():
             mapping.setdefault(f"bench/{probe.name}", set()).add(guess)
     return {name: sorted(logs) for name, logs in mapping.items()}
+
+
+def alone_marker(block: str, kind: str) -> re.Match | None:
+    """A marker reaches the *following* block only when it is alone on its own.
+
+    Round 8: a ``verified-by`` line sitting inside a numbered list item muted the
+    next item as well, silently dropping the block that carries the real-weight
+    margin.  A marker that shares a block with prose applies to that block only.
+    """
+    if block.strip().startswith("<!--") and block.strip().endswith("-->"):
+        return re.search(rf"<!-- {kind}:\s*(.+?)-->", block, re.DOTALL)
+    return None
 
 
 @functools.lru_cache(maxsize=None)
@@ -200,13 +212,13 @@ def cited_figure_violations(doc: pathlib.Path) -> list[str]:
         # Like the superseded marker, a delegation on its own line has to reach
         # the block it labels.
         verified = re.search(r"^<!-- verified-by:\s*(.+?)-->", block, re.MULTILINE) or (
-            index and re.search(r"^<!-- verified-by:\s*(.+?)-->", blocks[index - 1], re.MULTILINE)
+            index and alone_marker(blocks[index - 1], "verified-by")
         )
         if verified:
             verified_by.append((doc.name, verified.group(1).strip(), " ".join(block.split())[:60]))
             continue
         marker_here = re.search(r"^<!-- superseded", block, re.MULTILINE)
-        marker_above = index and re.search(r"^<!-- superseded", blocks[index - 1], re.MULTILINE)
+        marker_above = index and alone_marker(blocks[index - 1], "superseded")
         if marker_here or marker_above:
             # The marker must say why and point somewhere; an empty one would be
             # a silent mute for any live claim sharing the block.
@@ -509,7 +521,7 @@ def main() -> int:
     # ---- the PCC population counts, which are integers the figure check skips --
     # Round 6: the total was updated in both docs when the K/V test added eight
     # checks and the *row* was not, so the table contradicted its own total.
-    total, counts = pcc_populations()
+    total, counts, worsts = pcc_populations()
     for doc_name, path in (("README", README), ("work log", WORK_LOG)):
         text = path.read_text()
         failures.check(
@@ -525,6 +537,11 @@ def main() -> int:
         quoted = [rows[bar] for bar in counts if bar in rows]
         if len(quoted) == len(counts):
             failures.check(f"{doc_name}: PCC populations sum to the total", sum(quoted), total)
+        # ...and each population's worst, which the docs quote next to its bar.
+        for bar, worst in sorted(worsts.items()):
+            row = re.search(rf"\| \d+ \| {re.escape(bar)} \| \*?\*?(0\.\d+)", text)
+            if row:
+                failures.check(f"{doc_name}: PCC worst at bar {bar}", float(row.group(1)), float(worst))
 
     # ---- integer counts, which the figure check skips by design --------------
     # Structural integers (52 layers, 6656 columns) would drown that check, so
@@ -556,6 +573,25 @@ def main() -> int:
         if quoted - ran:
             print(f"   {doc_name} quotes {sorted(quoted - ran)}; the committed runs are {sorted(ran)}")
 
+    # ---- the teardown-fault occurrence count, in three documents -------------
+    # Round 8: work_log 9.4 said three, 9.2 said two.  The count is derived from
+    # the timestamps 9.4 enumerates and compared against every document that
+    # states it, so a future occurrence has one place to land.
+    log_text = WORK_LOG.read_text()
+    occurrences = len(re.search(r"Seen three times \(([^)]+)\)", log_text).group(1).split(" and ")[0].split(",")) + 1
+    words = {"two": 2, "three": 3, "four": 4, "five": 5}
+    for doc_name, text in (
+        ("README", README.read_text()),
+        ("work log", log_text),
+        ("contract", CONTRACT.read_text()),
+    ):
+        stated = {
+            words[w]
+            for w in re.findall(r"(?:from|has|Seen) (two|three|four|five)(?: more)? (?:occurrences|times)", text)
+        }
+        for count in sorted(stated):
+            failures.check(f"{doc_name}: teardown occurrence count", count, occurrences, exact=True)
+
     # ---- every figure a doc attributes to a log is in that log ---------------
     # The module's own docstring tables cite logs too, and round 5 found a stale
     # figure in one of them that nothing was checking.
@@ -572,7 +608,9 @@ def main() -> int:
     # over a CSV is not a substring of it).  The delegation is only honoured if
     # that check actually ran and passed -- otherwise it is a mute.
     ran = {label for label in failures.labels}
-    for doc_name, label, head in dict.fromkeys(delegated):  # a marker registers on its own block and the next
+    # A marker alone on its block registers for that block and the next; report
+    # each (document, label) once.
+    for doc_name, label, head in {(d, l): (d, l, h) for d, l, h in delegated}.values():
         matched = [name for name in ran if name.startswith(label)]
         ok = bool(matched) and not any(name in failures for name in matched)
         failures.check(f"{doc_name}: verified-by '{label}' ran and passed", int(ok), 1, exact=True)
