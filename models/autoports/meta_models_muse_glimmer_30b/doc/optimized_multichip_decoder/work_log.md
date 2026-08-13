@@ -746,3 +746,40 @@ no new contract.
 * `matmul_reduce_scatter_async` accepting only 2D-multicast matmul program
   configs, which is what keeps the fusion away from a DRAM-bound decode
   projection (§5).
+
+
+---
+
+## 12. Stage review
+
+Eight rounds. The verdicts, the commits and what each round actually found are
+tabulated in [README.md](README.md) under "Stage review"; the eighth returned
+`clean-pass` at `db4b0407df0`, and `6448b6dbc0f` carries its two non-required
+follow-ups.
+
+Two things in that history are worth carrying into the next stage rather than
+leaving in a table.
+
+**The reviews found engineering twice, and both times it was an argument rather
+than a measurement that was wrong.** Round 1: the `o_proj` working shard had been
+rejected against a configuration this stage had itself withdrawn, so the rejection
+had to be re-made against the shipped default (where the candidate *wins*, and is
+declined on its real costs instead). Round 2: the fractured prefill residual had
+been declined by the multichip stage and again here, both times on the grounds
+that it needs a second residual contract -- which is true of the *residual* and
+not of the *norm*, because this model's prefill norms sit between the reduction
+and the residual add. Implementing the norm half is the largest single change
+this stage ships. Both were caught by asking "is that argument actually true of
+this model", which is the question a table of numbers does not ask.
+
+**The reviews found the same evidence defect six rounds running**, and each round
+it was fixed by hand and reappeared somewhere else: a number quoted from a
+superseded run, or from no run at all. What ended it was `bench/check_reported_figures.py`
+-- and it took three attempts, because the first version asked whether a value
+appeared *somewhere across both documents* (0 of 271 single-document corruptions
+caught) and the second accepted agreement at one decimal place and a derivation
+searched over every pair of artifact values (100 % of all PCCs admitted). The
+version that works matches each claim at **its own stated precision**, deletes the
+derivation search in favour of declared derivations, and anchors the tables a
+reader acts on. The lesson for the next stage is the cheap one: write the check
+before the sixth round, not after it.

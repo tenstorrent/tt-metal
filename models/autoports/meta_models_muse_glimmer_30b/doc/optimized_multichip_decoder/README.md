@@ -431,6 +431,37 @@ defect, and what was done — is [work log §1.2](work_log.md). Its conclusions:
 * **no** fused matmul-CCL op is usable on this path, and that is a measurement
   rather than an API error — below.
 
+## Stage review
+
+Eight rounds of `$stage-review`; the eighth returned **`clean-pass`** at
+`db4b0407df0`. The commits, in order:
+
+| commit | what closed it |
+| --- | --- |
+| `5d6665b8391` | the stage itself |
+| `38c8f6b7743` | round 1: the watcher trip restated as observed-not-reproduced; the `o_proj` candidate re-measured against the shipped default; the watcher script's ANSI-anchored grep, which reported a stopped device as clean |
+| `ca3f97c5757` | round 2: the operation-topology audit's matmul costs were wrong by 2–3x against the CSV they cite; the withdrawn watcher claim was still live in shipped docstrings |
+| `7ca37e4e511` | round 2: the fractured prefill norm — deferred by the previous stage and by this one, then implemented after the review pointed out that this model's norms sit *between* the reduction and the residual add |
+| `d24ce54ea10` | round 3: `check_reported_figures.py`, after the review found the same defect class in a fourth consecutive round |
+| `92720b509a0` | round 4: that checker was near-vacuous (0 of 271 work-log-only corruptions caught) and had certified a real double-count |
+| `46f7beaa1f8` | round 5: the acceptance gate could not detect a failing test; the general provenance sweep |
+| `d45c8e122db` | round 6: the sweep was *still* vacuous (admitted 100 % of PCCs); rebuilt on own-precision matching with the derivation search deleted |
+| `db4b0407df0` | round 7: the payload sizes were wrong by 10.4x in shipped source, and the gate was blind to comma-grouped integers |
+| `6448b6dbc0f` | round 8's two clean-pass follow-ups |
+
+Rounds 1–2 found engineering: a rejection measured against a withdrawn baseline,
+an audit table off by 2–3x, and one optimization worth 9 % of prefill that two
+stages in a row had declined on an argument that did not apply to this model.
+Rounds 3–8 found evidence: the same defect class — a number with no artifact — in
+six consecutive rounds, which is what eventually produced a figure gate rather
+than a sixth round of hand-fixing. That gate now re-derives 208 claims at their
+own table row, recomputes 26 derived figures from their inputs, and sweeps 1,480
+more for provenance; `bench/run_suites.sh` fails on any of them.
+
+The honest summary of that history: this stage's *measurements* were sound from
+round 1 and its *reporting* was not, and it took a purpose-built check to
+converge.
+
 ## Measured and rejected
 
 Every row is a candidate this stage ran on this mesh, not a quotation.
