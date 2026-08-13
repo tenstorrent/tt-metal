@@ -342,11 +342,12 @@ void ClearKernelCache() { jit_build_cache_clear(); }
 
 std::atomic<uint64_t> detail::ProgramImpl::program_counter = 0;
 
-detail::ProgramImpl::ProgramImpl() :
+detail::ProgramImpl::ProgramImpl(ContextId context_id) :
 
     cached_device_hash_(std::nullopt),
-    programmable_core_count_(MetalContext::instance().hal().get_programmable_core_type_count()),
-    max_cbs_(MetalContext::instance().hal().get_arch_num_circular_buffers()),
+    context_id_(context_id),
+    programmable_core_count_(MetalContext::instance(context_id).hal().get_programmable_core_type_count()),
+    max_cbs_(MetalContext::instance(context_id).hal().get_arch_num_circular_buffers()),
     id(program_counter++) {
     for (uint32_t i = 0; i < programmable_core_count_; i++) {
         kernels_.push_back({});
@@ -509,7 +510,7 @@ KernelHandle detail::ProgramImpl::add_kernel(
 
     // Id is unique across all kernels on all core types
     KernelHandle id = this->num_kernels();
-    uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
+    uint32_t index = MetalContext::instance(context_id_).hal().get_programmable_core_type_index(programmable_core_type);
 
     auto new_kernel_core_type = kernel->get_kernel_programmable_core_type();
     auto new_kernel_processor_class = kernel->get_kernel_processor_class();
@@ -814,6 +815,7 @@ KernelGroup::KernelGroup(
     const CoreRangeSet& new_ranges,
     const dev_msgs::Factory& dev_msgs_factory) :
     programmable_core_type_index(programmable_core_type_index),
+    context_id_(program.get_context_id()),
 
     kernel_ids(std::move(kernel_ids)),
     launch_msg(dev_msgs_factory.create<dev_msgs::launch_msg_t>()),
@@ -825,7 +827,7 @@ KernelGroup::KernelGroup(
 
     // Slow dispatch uses fixed addresses for the kernel config, configured here statically
     // Fast dispatch kernel config management happens under the CQ and will re-program the base
-    const auto& hal = MetalContext::instance().hal();
+    const auto& hal = MetalContext::instance(context_id_).hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         kernel_config.kernel_config_base()[index] =
             hal.get_dev_addr(hal.get_programmable_core_type(index), HalL1MemAddrType::KERNEL_CONFIG);
@@ -958,7 +960,7 @@ KernelGroup::KernelGroup(
 }
 
 CoreType KernelGroup::get_core_type() const {
-    return MetalContext::instance().hal().get_core_type(this->programmable_core_type_index);
+    return MetalContext::instance(context_id_).hal().get_core_type(this->programmable_core_type_index);
 };
 
 std::vector<std::shared_ptr<KernelGroup>>& detail::ProgramImpl::get_kernel_groups(
@@ -1036,7 +1038,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         core_to_kernel_group_index_table_[programmable_core_type_index].resize(
             grid_extent_[programmable_core_type_index].x * grid_extent_[programmable_core_type_index].y,
             core_to_kernel_group_invalid_index);
-        const auto& hal = MetalContext::instance().hal();
+        const auto& hal = MetalContext::instance(context_id_).hal();
         for (auto& [kernels, cores] : map) {
             // Start inclusive, max exclusive
             uint32_t max_local_cb_end_index = 0;
@@ -1094,8 +1096,9 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                                         // This code should be modified to log the core type index if it isn't obvious.
                                         TT_ASSERT(
                                             programmable_core_type_index ==
-                                            MetalContext::instance().hal().get_programmable_core_type_index(
-                                                HalProgrammableCoreType::TENSIX));
+                                            MetalContext::instance(context_id_)
+                                                .hal()
+                                                .get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
 
                                         std::string cb_ids;
                                         for (uint32_t i = 0; i < max_cbs_; i++) {
@@ -1873,7 +1876,7 @@ void detail::ProgramImpl::add_semaphore(
 uint32_t detail::ProgramImpl::create_semaphore(const CoreRangeSet& crs, uint32_t initial_value, CoreType core_type) {
     TT_FATAL(!crs.ranges().empty(), "Expecting a non-empty CoreRangeSet!");
     TT_FATAL(
-        MetalContext::instance().is_coord_in_range(crs.ranges().back().end_coord, core_type),
+        MetalContext::instance(context_id_).is_coord_in_range(crs.ranges().back().end_coord, core_type),
         "Coordinates out of range");
 
     std::optional<uint32_t> semaphore_id;
@@ -2338,10 +2341,25 @@ void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     TTZoneScopedD(PROGRAM);
 
-    const auto& cluster = MetalContext::instance(extract_context_id(device)).get_cluster();
+    const ContextId device_context_id = extract_context_id(device);
+    // Metal 1.0 CreateProgram() always stores DEFAULT_CONTEXT_ID because no MetalEnv/device is
+    // available at construction. MetalContext::instance(DEFAULT_CONTEXT_ID) already bridges that
+    // case: when slot 0 is empty it aliases to a live non-default context (mock-only /
+    // coexistence) instead of opening silicon. Allow DEFAULT programs on any device so that
+    // bridge keeps working; do not overwrite context_id_. Reject only a real mismatch where the
+    // program was explicitly bound (Metal 2.0 MakeProgramFromSpec) to a different context.
+    TT_FATAL(
+        context_id_ == DEFAULT_CONTEXT_ID || context_id_ == device_context_id,
+        "Program {} was created for context_id {} but is being compiled on a device from context_id {}. "
+        "A program bound to a non-default context must be compiled on a device from that same context "
+        "(Metal 2.0 MakeProgramFromSpec / future CreateProgram(MetalEnv)).",
+        this->id,
+        context_id_.get(),
+        device_context_id.get());
 
-    const auto& build_env =
-        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
+    const auto& cluster = MetalContext::instance(device_context_id).get_cluster();
+
+    const auto& build_env = BuildEnvManager::get_instance(device_context_id).get_device_build_env(device->build_id());
 
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
@@ -2567,20 +2585,18 @@ uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_cor
 
 // TODO: Too low level for program.cpp. Move this to HAL, once we have support.
 bool detail::ProgramImpl::runs_on_noc_unicast_only_cores() {
+    const auto& hal = MetalContext::instance(context_id_).hal();
     return (
-        MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
-        not this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(
-                                        HalProgrammableCoreType::ACTIVE_ETH))
-                .empty());
+        hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH) != -1 and
+        not this->get_kernel_groups(hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH)).empty());
 }
 
 // TODO: Too low level for program.cpp. Move this to HAL, once we have support.
 bool detail::ProgramImpl::runs_on_noc_multicast_only_cores() {
+    const auto& hal = MetalContext::instance(context_id_).hal();
     return (
-        MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX) != -1 and
-        not this->get_kernel_groups(
-                    MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX))
-                .empty());
+        hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX) != -1 and
+        not this->get_kernel_groups(hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)).empty());
 }
 
 Program::Program(Program&& other) noexcept = default;
