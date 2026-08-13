@@ -14,6 +14,7 @@ v3.1 (no indexer weights → ttMLA never builds it).
 
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -32,6 +33,21 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
 # so this measures host operation setup / program-cache handling / command submission, not device completion.
 # The test driver resets and reads the counters once per chunk.
 _fused_ring_host_timing = {"calls": 0, "seconds": 0.0}
+
+
+@dataclass(frozen=True)
+class IndexerSelectionState:
+    """Device score output and the runtime metadata needed to finish index selection.
+
+    ``logits`` stays alive through ``select_local``. The returned local indices stay alive through
+    ``finalize_distribution``. Splitting the stages lets sparse MLA overlap only the restricted-grid
+    local top-k with its independent SP KV-prefix gather, then restore the default manager before the
+    optional TP redistribution.
+    """
+
+    logits: ttnn.Tensor
+    topk_valid_length: int
+    requires_tp_redistribution: bool
 
 
 def _fused_ring_host_timing_enabled() -> bool:
@@ -684,7 +700,7 @@ class TtIndexer:
         )
         ttnn.deallocate(k)
 
-    def forward(
+    def score(
         self,
         hidden_states: ttnn.Tensor,
         qr: ttnn.Tensor,
@@ -695,10 +711,12 @@ class TtIndexer:
         cache_layer_idx: int = 0,
         index_kv_cache: ttnn.Tensor = None,
         actual_end: int = None,
-    ) -> ttnn.Tensor:
-        """Indexer forward → top-k key indices [1, 1, S/sp, k] over the device index-key cache, SP-sharded
-        on the query axis (each chip scores its own S/sp rows; no Q/W all-gather). Fully on-device:
-        stems, RoPE, cache, logits, topk — no host.
+    ) -> IndexerSelectionState:
+        """Run indexer stems and scoring, returning device logits plus selection metadata.
+
+        The score is SP-sharded on the query axis (each chip scores its own S/sp rows; no Q/W
+        all-gather). Selection and optional TP redistribution are deliberately separate stages so a
+        caller can schedule another independent subdevice program beside local top-k.
 
         ``index_kv_cache``: the persistent per-user key cache, allocated by the caller and passed in every
         call — the same ownership as ttMLA's KVPE ``kvpe_cache``. ALWAYS required (the indexer never
@@ -864,18 +882,50 @@ class TtIndexer:
         # wq_b replicated -> each chip already holds the COMPLETE head-summed logit, so there is NO
         # partial-logit all-reduce over tp. This is the win: the removed step was a 2-CCL (RS+AG) all-reduce
         # spanning the full end_pos-wide logit (+ a TILE<->ROW_MAJOR round-trip), the indexer's dominant cost.
-        # Top-k key indices [1,1,S/sp,k] (ROW_MAJOR uint32). Future/pad -inf columns surface as the
-        # 0xFFFFFFFF sentinel that sparse_mla drops. The indexer score/cache contract requires a
-        # 16-element-aligned key prefix; this is independent of fixed top-k capacity.
+        # Future/pad -inf columns surface as the 0xFFFFFFFF sentinel during selection. The indexer
+        # score/cache contract requires a 16-element-aligned key prefix; this is independent of fixed
+        # top-k capacity.
         assert valid_pos % 16 == 0, f"indexer cache prefix must be 16-element aligned; got valid_pos={valid_pos}"
-        # valid_length bounds top-k to the populated prefix so the stale [valid_pos, T) tail is never
-        # ranked. topk_large_indices also requires valid_length <= T, which valid_pos satisfies.
-        topk_valid_length = valid_pos
-        idx = ttnn.experimental.topk_large_indices(logits, k=self.index_topk_capacity, valid_length=topk_valid_length)
+        # Block-cyclic logits are the full preallocated width T with a stale [valid_pos, T) tail (kv_len only
+        # wrote the real prefix); valid_length bounds top-k to that prefix so the tail is never read or ranked.
+        return IndexerSelectionState(
+            logits=logits,
+            topk_valid_length=valid_pos,
+            requires_tp_redistribution=tpsp,
+        )
+
+    def select_local(
+        self,
+        state: IndexerSelectionState,
+        *,
+        subdevice_id: ttnn.SubDeviceId | None = None,
+        sub_core_grids: ttnn.CoreRangeSet | None = None,
+    ) -> ttnn.Tensor:
+        """Select local top-k indices, optionally confined to one loaded subdevice/core grid."""
+        return ttnn.experimental.topk_large_indices(
+            state.logits,
+            k=self.index_topk_capacity,
+            valid_length=state.topk_valid_length,
+            subdevice_id=subdevice_id,
+            sub_core_grids=sub_core_grids,
+        )
+
+    def finalize_distribution(
+        self,
+        local_indices: ttnn.Tensor,
+        state: IndexerSelectionState,
+    ) -> ttnn.Tensor:
+        """Restore the [1,1,S/sp,k] contract after local top-k.
+
+        This stage contains default/full-grid layout conversions and the TP high-bandwidth gather. It
+        must run only after a sparse-MLA overlap manager has been cleared and both restricted branches
+        have joined.
+        """
+        idx = local_indices
         # TP×SP: topk ran on the TP-seq-sharded rows ([1,1,S/(sp·tp),k]); regather over TP back to the
         # [1,1,S/sp,k] contract so sparse_sdpa/mla.py are unchanged. (Redundant TP-round-trip for GLM's
         # head→seq reshard, which re-splits it; correct regardless. tp=1: no-op.)
-        if tpsp:
+        if state.requires_tp_redistribution:
             # Regather the TP-seq-sharded top-k indices back to [1,1,S/sp,k]. topk_large_indices emits
             # ROW_MAJOR uint32, and an all-gather on a ROW_MAJOR tensor is routed by use_composite_all_gather
             # to composite_all_gather -> all_broadcast, whose multicast over a partial cluster-axis line of a
@@ -893,6 +943,33 @@ class TtIndexer:
             # high_bw_all_gather returns a fresh wrapper around model-owned scratch; do not
             # deallocate its backing buffer on the hot path.
         return idx
+
+    def forward(
+        self,
+        hidden_states: ttnn.Tensor,
+        qr: ttnn.Tensor,
+        seq_len: int,
+        start_pos: int = 0,
+        rope_tensors: dict = None,
+        cache_user_id: int = 0,
+        cache_layer_idx: int = 0,
+        index_kv_cache: ttnn.Tensor = None,
+        actual_end: int = None,
+    ) -> ttnn.Tensor:
+        """Sequential compatibility wrapper for direct callers and non-overlapped sparse MLA."""
+        state = self.score(
+            hidden_states,
+            qr,
+            seq_len,
+            start_pos=start_pos,
+            rope_tensors=rope_tensors,
+            cache_user_id=cache_user_id,
+            cache_layer_idx=cache_layer_idx,
+            index_kv_cache=index_kv_cache,
+            actual_end=actual_end,
+        )
+        local_indices = self.select_local(state)
+        return self.finalize_distribution(local_indices, state)
 
 
 class NullIndexer:

@@ -1171,6 +1171,18 @@ def _make_l1_small_semaphore_pair(mesh_device, cores):
     )
 
 
+def _sparse_mla_overlap_grids(mesh_device):
+    """Return the exact per-chip sparse-MLA ownership profile for this system."""
+    grid = mesh_device.compute_with_storage_grid_size()
+    if grid.y != 10 or grid.x not in (11, 12):
+        pytest.skip(f"sparse MLA overlap requires an 11x10 QB2 or 12x10 LoudBox/Galaxy worker grid, got {grid}")
+    topk_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 9))])
+    gather_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(8, 0), ttnn.CoreCoord(grid.x - 1, 9))])
+    assert topk_grid.num_cores() == 80
+    assert gather_grid.num_cores() == (30 if grid.x == 11 else 40)
+    return topk_grid, gather_grid
+
+
 def _right_strip_subdevice_manager(mesh_device, owned_cores):
     """Build an isolated gather strip of exactly ``owned_cores`` on each chip.
 
@@ -1501,6 +1513,189 @@ def test_high_bw_all_gather_external_semaphore_runtime_controls_reuse(mesh_devic
                         actual[:, :, output_start : output_start + rows_this_call, :],
                         input_shard[batch_index : batch_index + 1, :, :rows_this_call, :],
                     )
+    finally:
+        ttnn.synchronize_device(rank_line)
+        rank_line.clear_loaded_sub_device_manager()
+        rank_line.remove_sub_device_manager(manager)
+
+
+@run_for_blackhole("sparse MLA top-k/KV gather overlap requires Blackhole fabric")
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
+def test_high_bw_all_gather_external_semaphore_independent_progress_with_topk(mesh_device):
+    """The gather sub-device completes while a longer exact-grid top-k remains in flight."""
+
+    rank_line, cluster_axis = _rank_line_mesh(mesh_device)
+    topk_grid, gather_grid = _sparse_mla_overlap_grids(rank_line)
+    manager = rank_line.create_sub_device_manager(
+        [ttnn.SubDevice([topk_grid]), ttnn.SubDevice([gather_grid])],
+        0,
+    )
+    gather_pair = _make_l1_small_semaphore_pair(rank_line, gather_grid)
+    ttnn.synchronize_device(rank_line)
+
+    # A short 8K prefix completes before the next eager host dispatch reaches the device (~1 ms on
+    # QB2), so it cannot demonstrate concurrency even with correct sub-device dispatch. Use a bounded
+    # long-prefix production proxy: Galaxy qualification separately covers the full 512K case.
+    rows, logits_width, k = 160, 256 * 1024, 512
+    host_logits = torch.zeros((rows, logits_width), dtype=torch.bfloat16)
+    # Consecutive BF16 bit patterns are distinct, unlike casting integers above 256 (which introduces
+    # ties and makes exact-index validation depend on tie-breaking).
+    distinct_values = torch.arange(0x3F80, 0x3F80 + k, dtype=torch.int32).to(torch.uint16).view(torch.bfloat16)
+    host_logits[:, -k:] = distinct_values
+    logits = ttnn.from_torch(
+        host_logits,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=rank_line,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(rank_line),
+    )
+    expected_topk = torch.topk(host_logits.float(), k, dim=-1, largest=True, sorted=True).indices
+    gather_input, gather_output = _make_external_semaphore_test_tensors(rank_line, cluster_axis)
+
+    def enqueue_topk():
+        return ttnn.experimental.topk_large_indices(
+            logits,
+            k=k,
+            subdevice_id=ttnn.SubDeviceId(0),
+            sub_core_grids=topk_grid,
+        )
+
+    def enqueue_gather():
+        return ttnn.experimental.high_bw_all_gather(
+            gather_input,
+            dim=2,
+            output_tensor=gather_output,
+            cluster_axis=cluster_axis,
+            subdevice_id=ttnn.SubDeviceId(1),
+            sub_core_grids=gather_grid,
+            num_links=_NUM_LINKS,
+            ready_semaphore=gather_pair[0],
+            data_valid_semaphore=gather_pair[1],
+        )
+
+    def under_manager(*enqueue_functions):
+        rank_line.load_sub_device_manager(manager)
+        try:
+            outputs = tuple(enqueue() for enqueue in enqueue_functions)
+            ttnn.synchronize_device(rank_line)
+        finally:
+            rank_line.clear_loaded_sub_device_manager()
+        return outputs
+
+    def under_overlap_manager(run_topk, run_gather):
+        enqueues = []
+        if run_topk:
+            enqueues.append(enqueue_topk)
+        if run_gather:
+            enqueues.append(enqueue_gather)
+        outputs = iter(under_manager(*enqueues))
+        return next(outputs) if run_topk else None, next(outputs) if run_gather else None
+
+    try:
+        # Warm the exact structural hashes together. This covers the cache-miss path before the
+        # independent-progress measurement exercises cache hits with persistent semaphores.
+        warm_topk, warm_gather = under_overlap_manager(True, True)
+
+        watcher_enabled = os.environ.get("TT_METAL_WATCHER", "0") not in ("", "0")
+        if watcher_enabled:
+            # Watcher and the real-time profiler both reserve debug/runtime resources.  The
+            # gather-scoped event below is the profiler-independent progress/deadlock proof;
+            # normal (non-Watcher) coverage retains the raw device-interval assertions.
+            profiled_outputs = under_manager(enqueue_topk, enqueue_gather)
+            overlap_records = ()
+        else:
+            profiled_outputs, overlap_records = profile_realtime_program(
+                rank_line,
+                lambda: under_manager(enqueue_topk, enqueue_gather),
+                collect_all=True,
+                record_timeout_seconds=5.0,
+                record_settle_seconds=1.0,
+            )
+        profiled_topk, profiled_gather = profiled_outputs
+        profiled_ops = []
+        for record in overlap_records:
+            sources = tuple(source.replace("\\", "/") for source in record["kernel_sources"])
+            if any("/experimental/topk_large_indices/" in source for source in sources):
+                op_name = "topk_large_indices"
+            elif any("/experimental/high_bw_all_gather/" in source for source in sources):
+                op_name = "high_bw_all_gather"
+            else:
+                continue
+            profiled_ops.append(
+                (
+                    op_name,
+                    record["runtime_id"],
+                    record["chip_id"],
+                    record["duration_ns"],
+                )
+            )
+        print(f"concurrent realtime-profiler records: {profiled_ops}")
+        records_by_chip = {}
+        for op_name, runtime_id, chip_id, duration_ns in profiled_ops:
+            chip_records = records_by_chip.setdefault(chip_id, {})
+            assert op_name not in chip_records, f"duplicate {op_name} realtime record on chip {chip_id}"
+            chip_records[op_name] = {
+                "runtime_id": runtime_id,
+                "duration_ns": duration_ns,
+            }
+        if watcher_enabled:
+            assert not records_by_chip
+        else:
+            for chip_id, chip_records in records_by_chip.items():
+                if set(chip_records) == {"topk_large_indices", "high_bw_all_gather"}:
+                    assert (
+                        chip_records["topk_large_indices"]["runtime_id"]
+                        != chip_records["high_bw_all_gather"]["runtime_id"]
+                    )
+
+        topk_latencies = []
+        for _ in range(3):
+            rank_line.load_sub_device_manager(manager)
+            try:
+                start_ns = time.perf_counter_ns()
+                isolated_topk = enqueue_topk()
+                topk_done = ttnn.record_event(rank_line, 0, [ttnn.SubDeviceId(0)])
+                ttnn.event_synchronize(topk_done)
+                topk_latencies.append(time.perf_counter_ns() - start_ns)
+                ttnn.synchronize_device(rank_line)
+            finally:
+                rank_line.clear_loaded_sub_device_manager()
+
+        # Record completion for only the gather sub-device. If dispatch serialized the programs,
+        # this event could not reach the host until the earlier top-k completed. With independent
+        # sub-device dispatch it returns substantially before the isolated top-k lower bound.
+        rank_line.load_sub_device_manager(manager)
+        try:
+            start_ns = time.perf_counter_ns()
+            combined_topk = enqueue_topk()
+            combined_gather = enqueue_gather()
+            gather_done = ttnn.record_event(rank_line, 0, [ttnn.SubDeviceId(1)])
+            ttnn.event_synchronize(gather_done)
+            gather_progress_ns = time.perf_counter_ns() - start_ns
+            topk_done = ttnn.record_event(rank_line, 0, [ttnn.SubDeviceId(0)])
+            ttnn.event_synchronize(topk_done)
+            ttnn.synchronize_device(rank_line)
+        finally:
+            rank_line.clear_loaded_sub_device_manager()
+
+        topk_lower_bound_ns = min(topk_latencies)
+        assert gather_progress_ns < 0.8 * topk_lower_bound_ns, (
+            f"gather event took {gather_progress_ns / 1e6:.3f} ms after concurrent enqueue; "
+            f"isolated top-k samples were {[round(value / 1e6, 3) for value in topk_latencies]} ms"
+        )
+
+        for topk_output in (warm_topk, profiled_topk, isolated_topk, combined_topk):
+            for shard in ttnn.get_device_tensors(topk_output):
+                actual = ttnn.to_torch(shard, dtype=torch.uint32).to(torch.int64)
+                assert torch.equal(actual, expected_topk)
+        _assert_exact_all_gather(gather_input, warm_gather, rank_line, ttnn.bfloat16)
+        _assert_exact_all_gather(gather_input, profiled_gather, rank_line, ttnn.bfloat16)
+        _assert_exact_all_gather(gather_input, combined_gather, rank_line, ttnn.bfloat16)
+        print(
+            f"sparse MLA overlap profile topk={topk_grid.num_cores()} gather={gather_grid.num_cores()}: "
+            f"gather_progress={gather_progress_ns / 1e6:.3f} ms, "
+            f"isolated_topk_min={topk_lower_bound_ns / 1e6:.3f} ms"
+        )
     finally:
         ttnn.synchronize_device(rank_line)
         rank_line.clear_loaded_sub_device_manager()
