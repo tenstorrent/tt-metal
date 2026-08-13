@@ -182,19 +182,12 @@ class GenerationConfig:
     top_k: int = 50
     top_p: float = 0.85  # nucleus cutoff (XTTS uses 0.85)
     repetition_penalty: float = 5.0  # XTTS uses 5.0
-    # Cap on audio codes. This is NOT a "stop earlier if you can" budget: the traced decode loop
-    # replays a fixed max_tokens steps and treats STOP as a post-loop trim (a captured trace cannot
-    # branch), so every step above what the text actually needs is ~9.4 ms of pure waste — 400 cost
-    # ~2 s per pass while real single-pass generations land at 160-210 codes. 240 sits above
-    # MAX_SINGLE_PASS_CODES (205) with margin for the overshoot the sampler is entitled to, and it
-    # also shrinks the KV cache (max_seq scales with it), so nothing that fits the pass is truncated.
+    # Traced decode replays a fixed max_tokens steps and trims STOP afterwards. 240 sits above
+    # max_single_pass_codes (205) with sampler overshoot room.
     max_tokens: int = 240
-    # STOP-suppression floor in audio codes. 0 = disabled, matches HF. Negative = auto
-    # (MIN_TOKENS_AUTO_FACTOR x the wrapped text length). A floor is only right for *long*
-    # prompts. Greedy, on the default text (96 wrapped tokens, needs ~196 codes): 0 stops at
-    # 152 codes and transcribes at CER 0.151, cut after "remarkable accuracy"; auto (floor 192)
-    # reaches 181 codes at CER 0.000. On a short prompt it inverts — "Hello from Tenstorrent."
-    # goes CER 0.273 -> 0.591, the floor forcing 12 extra codes of invented tail.
+    # STOP-suppression floor in audio codes. 0 = disabled (HF default). Negative = auto
+    # (min_tokens_auto_factor × wrapped text length). Useful for long prompts; on short ones it
+    # can force an invented tail.
     min_tokens: int = 0
     min_tokens_auto_factor: float = 2.0  # auto floor = factor x padded text length
     num_outputs: int = 1  # takes to generate; >1 = best-of-N by CER (coqui num_gpt_outputs=1)
@@ -211,35 +204,19 @@ GENERATION = GenerationConfig()
 class ChunkingConfig:
     """How much text fits one pass, and how text over that is split.
 
-    TWO code budgets, because the wall behaves differently in the two cases. It is an ALLOCATION
-    COLLISION ("Statically allocated circular buffers ... clash with L1 buffers"), not a clean size
-    limit, so it degrades as device open/close cycles accumulate in a process. Measured on p150 by
-    running the demo:
-
-      ONE pass, fresh device (words -> codes):  20->175 PASS | 23->177,182,184 PASS | 22->192 PASS
-                                                25->203 PASS | 24->207 PASS  <-- highest seen to pass
-                                                27-> FAIL cb-clash | 29-> FAIL
-      Nth pass, same process:                   a chunk estimated at ~204 codes FAILED as the 5th
-                                                cycle, while 207 passed as the 1st -> per-chunk
-                                                headroom SHRINKS with chunk count, so the chunk
-                                                budget must be lower.
-
-    Note the same text varies +/-4% run to run (23 words gave 177/182/184), so leave margin.
+    Two code budgets: a single pass on a fresh device can go higher than a later chunk in the
+    same process (L1 circular-buffer collision, not a clean size limit). Chunk budget is lower
+    on purpose.
     """
 
     max_text_ids: int = 352  # keep the padded text under MAX_TEXT_POS (404) with headroom
     max_single_pass_codes: int = 205  # above this, split into chunks
     max_chunk_codes: int = 165  # per chunk once splitting; lower than single-pass on purpose
     codes_per_id: float = 156 / 71.0  # measured: 71 text ids -> 156 audio codes
-    # Chunked takes share ONE capture, so the decode budget is baked into it: the vocoder always
-    # runs on this many latent frames (zero-padded past the codes actually generated) instead of on
-    # the exact length. It therefore has to sit above max_chunk_codes with margin for sampler
-    # overshoot, and below the ~205 codes where the vocoder's circular buffers start clashing with
-    # L1. 192 is a multiple of TILE (the decode accumulators tile cleanly) — the same budget the
-    # trace test uses.
+    # Chunked takes share one capture, so the vocoder always runs this many latent frames
+    # (zero-padded). Tile-aligned, above max_chunk_codes, below the ~205 L1 clash.
     chunk_max_tokens: int = 192
-    # Words in the longest sentence that still fits a pass. A sentence is never split, so a longer
-    # one cannot be made to fit and the caller is warned instead. ~3.7 text ids per word, measured.
+    # A sentence is never split. ~3.7 text ids per word.
     ids_per_word: float = 3.7
 
 
@@ -306,26 +283,19 @@ class DemoConfig:
     knobs. Change a default here rather than in the demo.
     """
 
-    # "can already" (not "can now"): "can now" is a /n/#/n/ nasal collision the vocoder
-    # merges into "cannow/cannot" — "already" starts with a vowel and transcribes cleanly (CER 0.008).
     text: str = (
         "Voice synthesis has come a long way, and modern systems can already generate "
         "natural sounding speech with remarkable accuracy. Hey how are you doing?."
     )
-    # DOWNLOADABLE by default (cached under torch.hub): four single-speaker coqui-ai/TTS LJSpeech
-    # test clips joined to ~32.6 s, clipped to gpt_cond_len (30 s) = 8 conditioning windows — the
-    # shapes this demo is tuned for. A single HF sample (en_sample.wav) is ~3 s / ONE window.
+    # Four LJSpeech clips joined to ~32.6 s, clipped to gpt_cond_len (30 s) = 8 conditioning windows.
     ref_audio: str = "LJ001-0001.wav+LJ001-0003.wav+LJ001-0004.wav+LJ001-0005.wav"
     language: str = DEFAULT_LANGUAGE
     output: str = "generated/xtts_demo/xtts_demo.wav"
     write_torch_ref: bool = False
 
     ref_seconds: int = GPT_COND_LEN_SEC  # conditioning window (coqui gpt_cond_len)
-    # Speaker-embedding window. coqui uses the whole reference (max_ref_length=30 s) here, but the
-    # speaker ENCODER does not fit one: 30 s clashes L1 ("circular buffers ... end at 1184832"
-    # against a buffer at 986496) in the ResNet, not in the mel frontend, which now chunks its
-    # framing and takes any length. 8 s runs, and a speaker embedding is pooled over time anyway,
-    # so it saturates well before this. The GPT conditioning above uses the FULL 30 s.
+    # Speaker-embedding window. Upstream uses the whole reference (up to 30 s); 30 s clashes L1
+    # in the SE-ResNet here. GPT conditioning still uses the full 30 s.
     spk_seconds: int = 8
 
     generation: GenerationConfig = field(default_factory=GenerationConfig)

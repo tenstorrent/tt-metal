@@ -38,8 +38,10 @@ from models.experimental.xtts.tt.xtts_gpt_model import TtXttsGptModel
         (96, 128),
     ],
 )
-@pytest.mark.parametrize("pcc", [0.99])
-def test_xtts_gpt_model(device, xtts_state_dict, text_len, mel_len, pcc, reset_seeds):
+# Text head is bf16; mel head weight is bfloat8_b, so they have separate gates.
+@pytest.mark.parametrize("pcc", [0.99])  # text head
+@pytest.mark.parametrize("mel_pcc", [0.99])
+def test_xtts_gpt_model(device, xtts_state_dict, text_len, mel_len, pcc, mel_pcc, reset_seeds):
     # Reference: embeddings + 30 blocks + ln_f + final_norm + heads, real weights.
     reference = reference_gpt_model(xtts_state_dict)
 
@@ -58,7 +60,7 @@ def test_xtts_gpt_model(device, xtts_state_dict, text_len, mel_len, pcc, reset_s
     tt_mel_logits = ttnn.to_torch(tt_mel_logits).float()[:, :mel_len, :NUM_AUDIO_TOKENS]
 
     text_pass, text_msg = comp_pcc(ref_text_logits, tt_text_logits, pcc)
-    mel_pass, mel_msg = comp_pcc(ref_mel_logits, tt_mel_logits, pcc)
+    mel_pass, mel_msg = comp_pcc(ref_mel_logits, tt_mel_logits, mel_pcc)
 
     logger.info(comp_allclose(ref_text_logits, tt_text_logits))
     logger.info(f"text_head (text_len={text_len}): {text_msg}")
@@ -66,4 +68,4 @@ def test_xtts_gpt_model(device, xtts_state_dict, text_len, mel_len, pcc, reset_s
     logger.info(f"mel_head (mel_len={mel_len}): {mel_msg}")
 
     assert text_pass, f"text_head logits PCC below {pcc}: {text_msg}"
-    assert mel_pass, f"mel_head logits PCC below {pcc}: {mel_msg}"
+    assert mel_pass, f"mel_head logits PCC below {mel_pcc}: {mel_msg}"

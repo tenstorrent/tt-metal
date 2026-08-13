@@ -15,7 +15,6 @@ from models.experimental.xtts.tt.xtts_hifigan import TtHifiganGenerator
 
 from models.experimental.xtts.config import TILE  # noqa: F401 — re-exported for callers
 
-# Tuned via test_hifi_decoder_matmul_sweep.py (BH): per_core_N=3 + BLOCK_SHARDED out.
 _MATMUL_PER_CORE_N = 3
 
 
@@ -37,7 +36,7 @@ class TtLatentUpsampler(LightweightModule):
             m1 = build_linear_interp_matrix(length_in, LATENT_SCALE)
             m2 = build_linear_interp_matrix(m1.shape[0], SR_SCALE)
             matrix = m2 @ m1
-            # Keep per-length constant in L1 (matmul in0; profiler flagged DRAM-interleaved).
+            # Keep per-length constant in L1 (matmul in0).
             self._matrix_cache[length_in] = ttnn.from_torch(
                 matrix,
                 layout=ttnn.TILE_LAYOUT,

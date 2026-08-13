@@ -37,6 +37,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.experimental.xtts.config import L1_SMALL_SIZE, NUM_LATENTS, SESSION_TRACE_REGION
 from models.experimental.xtts.reference.xtts_conditioning import MEL_SR, load_reference_audio
 from models.experimental.xtts.reference.xtts_gpt_generate import STOP_TEXT_TOKEN, wrap_text_ids
 from models.experimental.xtts.reference.xtts_hifi_decoder import OUTPUT_SAMPLE_RATE, XttsHifiDecoderFull
@@ -270,3 +271,132 @@ def test_tt_eval_traced(device, xtts_state_dict, reset_seeds):
     except Exception as e:
         logger.warning(f"SECS  skipped ({type(e).__name__}: {e})")
     logger.info("================================================================")
+
+
+# Paragraph past the single-pass code budget — scores the chunked traced path (seams included).
+EVAL_LONG_TEXT = (
+    "Voice synthesis has come a long way, and modern systems can already generate natural "
+    "sounding speech with remarkable accuracy. The hardest part is no longer the sound of a "
+    "single word, but the rhythm and emphasis that carry meaning across a whole sentence. "
+    "Good narration needs pacing, deliberate pauses, and a sense of where the important idea "
+    "actually sits. When those details land, a listener stops noticing the machine and simply "
+    "follows the story to its end."
+)
+
+
+@pytest.mark.timeout(2400)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": L1_SMALL_SIZE, "trace_region_size": SESSION_TRACE_REGION}],
+    indirect=True,
+)
+def test_tt_eval_traced_long(device, xtts_state_dict, reset_seeds):
+    """CER / UTMOS / SECS over a paragraph-length input, through the chunked traced session.
+
+    Same three backends as ``test_tt_eval_traced``, but driving the path the demo takes when text
+    does not fit one pass: split at sentence boundaries, every chunk padded to a common length and
+    replayed off a SINGLE capture, waveforms stitched with ``chunk_gap_seconds`` of silence. The
+    metrics therefore include the chunk-boundary prosody resets, which the single-utterance eval
+    cannot see. Each metric is best-effort: a missing backend logs a skip rather than failing."""
+    import os
+    import re
+
+    import numpy as np
+    import soundfile as sf
+    from scipy.signal import resample_poly
+
+    from models.experimental.xtts.config import AUDIO_POST, CHUNKING, SENTENCE_FINAL_PUNCT_RE
+    from models.experimental.xtts.demo.xtts_demo import _split_into_chunks
+
+    sd = xtts_state_dict
+
+    wav = load_reference_audio(sample="en_sample.wav", max_seconds=COND_SECONDS)  # [1, s] @ 22050
+    g = math.gcd(SPK_SR, MEL_SR)
+    spk_wav = torch.from_numpy(resample_poly(wav[0].numpy(), SPK_SR // g, MEL_SR // g).astype("float32")).unsqueeze(0)
+
+    # Demo-identical chunk prep. Every chunk must share ONE text length: the session captures a
+    # static text buffer, so a differently-sized chunk cannot be replayed through it.
+    chunk_texts = _split_into_chunks(EVAL_LONG_TEXT, "en")
+    wrapped = [
+        wrap_text_ids(preprocess_text(re.sub(SENTENCE_FINAL_PUNCT_RE, "", t.strip()), lang="en")) for t in chunk_texts
+    ]
+    pad_to = -(-max(w.shape[1] for w in wrapped) // TILE) * TILE
+    chunks = [F.pad(w, (0, pad_to - w.shape[1]), value=STOP_TEXT_TOKEN) for w in wrapped]
+    assert len(chunks) > 1, "EVAL_LONG_TEXT is meant to exceed a single pass; it no longer does"
+
+    tt = TtXtts(device, sd, XttsHifiDecoderFull(sd))
+    spk_wav_tt = ttnn.from_torch(
+        spk_wav.reshape(1, -1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
+    )
+
+    budget = CHUNKING.chunk_max_tokens
+    max_seq = -(-(NUM_LATENTS + pad_to + budget + 2) // TILE) * TILE
+    logger.info(
+        f"long eval: {len(EVAL_LONG_TEXT)} chars -> {len(chunks)} chunks, "
+        f"pad_to={pad_to}, budget={budget}, max_seq={max_seq}"
+    )
+
+    session = tt.traced_session(
+        wav,
+        spk_wav_tt,
+        pad_to,
+        max_seq,
+        budget,
+        temperature=TRACE_TEMPERATURE,
+        top_k=TRACE_TOP_K,
+        top_p=TRACE_TOP_P,
+        repetition_penalty=TRACE_REP,
+    )
+    gap = np.zeros(int(AUDIO_POST.chunk_gap_seconds * OUTPUT_SAMPLE_RATE), dtype="float32")
+    pieces, n_codes = [], 0
+    try:
+        for i, w in enumerate(chunks):
+            wav_i, codes_i, _ = session.run(w)
+            wav_i = wav_i.float().numpy().astype("float32")
+            n_codes += codes_i.shape[1]
+            if pieces:
+                pieces.append(gap)
+            pieces.append(wav_i)
+            logger.info(
+                f"  chunk {i + 1}/{len(chunks)}: {codes_i.shape[1]:3d} codes -> {len(wav_i) / OUTPUT_SAMPLE_RATE:.2f}s"
+            )
+    finally:
+        session.close()
+
+    wav_eval = np.concatenate(pieces)
+    out_dir = "generated/xtts"
+    os.makedirs(out_dir, exist_ok=True)
+    sf.write(f"{out_dir}/tt_eval_traced_long.wav", wav_eval, OUTPUT_SAMPLE_RATE)
+    logger.info(
+        f"long eval generation: {n_codes} codes over {len(chunks)} chunks -> "
+        f"{wav_eval.shape[0] / OUTPUT_SAMPLE_RATE:.2f}s audio at {out_dir}/tt_eval_traced_long.wav"
+    )
+
+    spk_np = spk_wav[0].numpy()  # 16 kHz reference-speaker audio (SECS target)
+    logger.info("======= XTTS objective eval metrics (TRACED, CHUNKED PARAGRAPH) =======")
+    try:
+        from models.experimental.xtts.eval.xtts_eval import compute_cer
+
+        cer, hyp = compute_cer(wav_eval, OUTPUT_SAMPLE_RATE, EVAL_LONG_TEXT)
+        logger.info(f"CER   (Whisper-large-v3, lower=better)        : {cer:.4f}")
+        logger.info(f"        whisper transcript: {hyp!r}")
+    except Exception as e:
+        logger.warning(f"CER   skipped ({type(e).__name__}: {e})")
+
+    try:
+        from models.experimental.xtts.eval.xtts_eval import compute_utmos
+
+        logger.info(
+            f"UTMOS (naturalness MOS 1-5, higher=better)    : {compute_utmos(wav_eval, OUTPUT_SAMPLE_RATE):.4f}"
+        )
+    except Exception as e:
+        logger.warning(f"UTMOS skipped ({type(e).__name__}: {e})")
+
+    try:
+        from models.experimental.xtts.eval.xtts_eval import compute_secs
+
+        secs = compute_secs(wav_eval, OUTPUT_SAMPLE_RATE, spk_np, SPK_SR)
+        logger.info(f"SECS  (ECAPA2 speaker cos-sim, higher=better)  : {secs:.4f}")
+    except Exception as e:
+        logger.warning(f"SECS  skipped ({type(e).__name__}: {e})")
+    logger.info("======================================================================")

@@ -3,35 +3,18 @@
 
 """Reference (pure-PyTorch) XTTS-v2 GPT autoregressive greedy generation.
 
-The ground-truth decode loop that the TTNN generator (Phase 2) is validated
-against. Mirrors coqui ``Xtts`` inference: build the GPT prompt
-``[cond_latents | text | start_audio]``, greedily sample audio codes one at a
-time until ``stop_audio_token``, and return the codes plus the mel-span GPT
-latents that feed the HiFiGAN decoder.
+Ground-truth decode loop for the TTNN generator. Mirrors coqui ``Xtts`` inference:
+build the GPT prompt ``[cond_latents | text | start_audio]``, greedily sample audio
+codes until ``stop_audio_token``, return codes plus the mel-span GPT latents for
+HiFi-GAN.
 
-**Greedy (argmax) is deliberate** — not XTTS's default temperature/top-k/top-p
-sampling. Greedy is deterministic, so the TTNN port can be checked for an *exact*
-code-sequence match (the strongest correctness anchor). Real XTTS sampling gives
-more natural audio; that is a later quality pass, not a correctness anchor.
+Greedy (argmax) is deterministic, so the TTNN port can be checked for an exact code
+match. Token constants from coqui/XTTS-v2 ``config.json`` + ``vocab.json``:
+  * audio: ``start_audio_token=1024``, ``stop_audio_token=1025``
+  * text wrapped ``[START(261)] + ([lang] + tokens) + [STOP(0)]``
 
-Token / prefix constants come from coqui/XTTS-v2 ``config.json`` + ``vocab.json``:
-  * audio: ``start_audio_token=1024``, ``stop_audio_token=1025`` (mel vocab 1026,
-    ``gpt_max_audio_tokens=605``).
-  * text is wrapped ``[START(261)] + ([lang] + tokens) + [STOP(0)]``.
-
-NOTE (faithfulness): ``config.json`` carries ``gpt_start/stop_text_token=None``;
-the coqui ``GPT`` constructor defaults are ``261``/``0``, which are exactly the
-``[START]``/``[STOP]`` ids in ``vocab.json`` — hence the wrapping above. This is
-not bit-verifiable here (``coqui-tts`` is not installed), but it only affects
-real-audio faithfulness: the loop defined here is the ground truth the TTNN port
-must reproduce regardless.
-
-NOTE (latent alignment): latents are *harvested in-loop* — code ``c_i`` sits at
-mel position ``i + 1`` (the ``start_audio`` token occupies mel position 0), and
-its latent is the post-``final_norm`` hidden state at that position. This is what
-the Phase-2 TTNN decode loop naturally produces too, so TT matches reference
-exactly. coqui's alternative (a separate ``return_latent`` pass over just the
-codes, positions starting at 0) is a faithfulness variant revisited at audio time.
+Latents are harvested in-loop: code ``c_i`` sits at mel position ``i + 1``
+(``start_audio`` occupies 0).
 """
 
 import torch

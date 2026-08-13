@@ -5,8 +5,7 @@
 
 Validates the TTNN SE-ResNet + attentive-statistics pooling against the pure-
 PyTorch reference, both from the real coqui/XTTS-v2 checkpoint. Input is a log-mel
-``[1, 64, T]`` (the STFT/mel frontend is a later phase); output is the 512-d
-L2-normalized speaker embedding ``g``.
+``[1, 64, T]``; output is the 512-d L2-normalized speaker embedding ``g``.
 
 Run:
     source python_env/bin/activate

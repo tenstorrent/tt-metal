@@ -3,23 +3,9 @@
 
 """End-to-end performance test for XTTS-v2 on Blackhole P150.
 
-Times ``TtXtts.inference_fully_traced()`` -- the same three-chained-trace (setup + decode +
-vocoder) path ``demo/xtts_demo.py`` uses -- on the demo's default text AND its default reference
-voice (30 s of audio = 8 conditioning windows; see REF_CLIPS), and asserts each replay leg plus
-the overall RTF stay within a generous margin of a baseline measured on this device
-(see README.md#performance):
-
-    205 codes -> 9.515 s audio | setup 0.042 s | decode 1.652 s (~8.06 ms/code) |
-    vocoder 0.021 s (~0.102 ms/code) | total replay 1.714 s | RTF 0.180
-
-Decode/vocoder are gated on a per-code RATE (ms/code), not absolute time, because the number of
-codes generated is itself sampled (temperature 0.65) and therefore not perfectly fixed run to
-run; ``reset_seeds`` makes it *close* to fixed, but a rate-based gate is robust either way. Setup
-and RTF are close to length-invariant, so they're gated directly.
-
-The margin is intentionally generous (40%) because this is XTTS's first perf baseline -- there is
-no run-to-run history yet to know normal hardware variance, and this repo has no CI wiring for
-this model (see README.md#ci) to progressively tighten it later.
+Times ``TtXtts.inference_fully_traced()`` (setup + decode + vocoder) on the demo's default text
+and 30 s reference voice. Replay legs and RTF are gated with a 40% margin of the README baseline.
+Decode/vocoder gates are per-code rates because sampled code count varies.
 
 Run:
     source python_env/bin/activate
@@ -48,32 +34,26 @@ from models.perf.perf_utils import prep_perf_report
 
 TILE = 32
 
-# Same reference voice as demo/xtts_demo.py's --ref-audio default: four single-speaker coqui-ai/TTS
-# LJSpeech clips joined to 32.6 s, clipped to gpt_cond_len (30 s) = 8 conditioning windows.
-# This USED to be a 3 s single-window clip, which left most of the conditioning encoder out of the
-# setup gate -- setup replay scales with the window count (measured: 1 window 12.8 ms, 3 windows
-# 21 ms, 8 windows 42 ms), so a 3 s reference gated under a third of what the demo actually runs.
+# Same reference voice as the demo default: four LJSpeech clips, clipped to 30 s (8 windows).
 REF_CLIPS = ("LJ001-0001.wav", "LJ001-0003.wav", "LJ001-0004.wav", "LJ001-0005.wav")
-COND_SECONDS = GPT_COND_LEN_SEC  # conditioning window (coqui gpt_cond_len), as the demo
-SPK_SECONDS = 8  # speaker-embedding window, as the demo -- 30 s clashes L1 in the speaker ResNet
+COND_SECONDS = GPT_COND_LEN_SEC
+SPK_SECONDS = 8  # demo speaker-embedding window; 30 s clashes L1 in the SE-ResNet
 
-# Same default text (after the demo's own trailing-punctuation strip) and sampling recipe as
-# demo/xtts_demo.py -- the scenario this baseline was measured on.
+# Same default text (after trailing-punctuation strip) and sampling as the demo.
 DEMO_TEXT = (
     "Voice synthesis has come a long way, and modern systems can already generate natural sounding "
     "speech with remarkable accuracy. Hey how are you doing"
 )
-MAX_NEW_TOKENS = 240  # demo default
+MAX_NEW_TOKENS = 240
 TEMPERATURE, TOP_K, TOP_P, REP_PENALTY = 0.65, 50, 0.85, 5.0
 
-# Baseline measured on Blackhole P150 (see README.md#performance), with a generous 40% margin --
-# see the module docstring for why. Retune these as real run-to-run history accumulates.
+# Baseline on Blackhole P150 (see README.md). 40% margin.
 MARGIN = 0.40
-EXPECTED_SETUP_S = 0.042  # 8 conditioning windows (see REF_CLIPS); was 0.013 on a 3 s 1-window clip
+EXPECTED_SETUP_S = 0.042
 EXPECTED_DECODE_MS_PER_CODE = 8.12
 EXPECTED_VOCODER_MS_PER_CODE = 0.116
-EXPECTED_RTF = 0.180  # includes the 8-window setup leg; was 0.177 on a 3 s 1-window clip
-EXPECTED_COMPILE_S = 44.0  # one-time trace capture + JIT; not gated, reported for the record only
+EXPECTED_RTF = 0.180
+EXPECTED_COMPILE_S = 44.0  # one-time capture + JIT; logged, not gated
 
 
 @pytest.mark.models_performance_bare_metal

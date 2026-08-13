@@ -4,9 +4,9 @@
 """Reference (pure-PyTorch) XTTS-v2 speaker encoder body (``ResNetSpeakerEncoder``).
 
 Coqui's SE-ResNet-34 that maps a log-mel spectrogram to the 512-d speaker
-embedding ``g`` that conditions the HiFi-GAN generator. The mel/STFT frontend
-(``torch_spec``) is a later phase; this module takes the mel ``[B, 64, T]`` and
-runs: (+1e-6, log) -> InstanceNorm1d -> conv stem -> 4 SE-ResNet stages
+embedding ``g`` that conditions the HiFi-GAN generator. This module takes the
+mel ``[B, 64, T]`` and runs: (+1e-6, log) -> InstanceNorm1d -> conv stem -> 4
+SE-ResNet stages
 ([3,4,6,3] SEBasicBlocks) -> attentive statistics pooling -> FC -> L2-norm.
 
 Reimplemented verbatim (no coqui-tts dep) so the real checkpoint slice
@@ -115,7 +115,7 @@ class ResNetSpeakerEncoder(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, mel, l2_norm=True):
-        # mel: [B, 64, T] (torch_spec output — the frontend is a later phase).
+        # mel: [B, 64, T]
         x = mel
         if LOG_INPUT:
             x = (x + 1e-6).log()

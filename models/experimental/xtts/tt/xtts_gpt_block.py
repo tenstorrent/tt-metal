@@ -194,8 +194,7 @@ def _mm_1d_config(device, m, k, n, fused_activation=None):
             fused_activation=fused_activation,
             mcast_in0=True,
         )
-    # Prefill: ibw=4 matches pre-5b00f99 accumulation; ibw=8 is faster but drops e2e
-    # spectrogram PCC (~0.984 vs ~0.993 on teacher-forced hello-world).
+    # Prefill: ibw=4; ibw=8 is faster but drops e2e spectrogram PCC.
     ibw = next(b for b in (4, 2, 1) if kt % b == 0)
     if mt < gy:
         cx = cy = pcn = None

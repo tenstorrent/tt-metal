@@ -258,9 +258,7 @@ def _run_isl_case(text_len):
         )
 
         if not chunked:
-            # Exact-ISL trim of a longer wrap (sentence ≈73 ids) drops the trailing [STOP].
-            # Without it the sampler drones toward the code cap and the vocoder CB-clashes —
-            # ISL 64 was the failure mode; the demo always keeps STOP (+ STOP pad) and passes.
+            # Exact-ISL trim of a longer wrap can drop the trailing [STOP]; restore it.
             wrapped = chunks[0][1][:, :text_len].contiguous().clone()
             if wrapped.shape[1] < text_len:
                 wrapped = F.pad(wrapped, (0, text_len - wrapped.shape[1]), value=STOP_TEXT_TOKEN)
