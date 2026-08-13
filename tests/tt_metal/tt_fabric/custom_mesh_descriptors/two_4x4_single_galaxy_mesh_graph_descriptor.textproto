@@ -1,8 +1,8 @@
-# Two 4x4 meshes packed onto a single BH galaxy (32 ASICs): M0 4x4 RING/RING (the "Middle"
-# split-host quadrants) + M1 4x4 RING/LINE (the complementary "Edge" quadrants), joined by a
-# 16-channel intermesh link. Exercises the 4x4_SplitHost_Middle / 4x4_SplitHost_Edge groupings
-# so the two full-torus-ish 4x4s tile one galaxy disjointly. Maps on the revC and revAB subtorus
-# single-pod quad mocks.
+# Two 4x4 meshes packed onto a single BH galaxy (32 ASICs): M0 4x4 RING/RING pinned to the
+# "Middle" quadrants (tray 1-4, asic {3,4,7,8}) + M1 4x4 RING/LINE pinned to the complementary
+# "Edge" quadrants (tray 1-4, asic {1,2,5,6}), joined by a 16-channel intermesh link. The pins
+# constrain each 4x4 to its host-half of the galaxy so the two tile one galaxy disjointly (no
+# special PGD grouping required). Maps on the revC and revAB subtorus single-pod quad mocks.
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
@@ -27,5 +27,15 @@ graph_descriptors {
     nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
     channels { count: 16 policy: RELAXED }
   }
+}
+# Pin M0 onto the Middle quadrants (tray 1-4, asic {3,4,7,8}) and M1 onto the Edge quadrants
+# (tray 1-4, asic {1,2,5,6}) so each is confined to its host-half and they tile disjointly.
+pinnings {
+  logical_fabric_node_id { mesh_id: 0 chip_id_regex: "0-15" }
+  physical_asic_position { tray_id_regex: "1-4" asic_location_regex: "3,4,7,8" }
+}
+pinnings {
+  logical_fabric_node_id { mesh_id: 1 chip_id_regex: "0-15" }
+  physical_asic_position { tray_id_regex: "1-4" asic_location_regex: "1,2,5,6" }
 }
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
