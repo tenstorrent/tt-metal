@@ -191,11 +191,22 @@ ttnn::Tensor widen_quantized_input_to_f32(const ttnn::Tensor& input) {
 
 // Narrow composite's fp result to the output dtype. Use quantize as the narrowing step
 // for int8 until typecast(int32 -> int8) is enabled (#50401).
-ttnn::Tensor narrow_composite_result(const ttnn::Tensor& shifted, ttnn::DataType c_dtype) {
+ttnn::Tensor narrow_composite_result(
+    const ttnn::Tensor& shifted,
+    ttnn::DataType c_dtype,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    std::optional<ttnn::Tensor> optional_output_tensor) {
     if (c_dtype != ttnn::DataType::INT8) {
-        return ttnn::typecast(shifted, c_dtype);
+        return ttnn::typecast(shifted, c_dtype, memory_config, optional_output_tensor);
     }
-    return ttnn::quantize(shifted, 1.0f, 0, /*axis=*/std::nullopt, ttnn::DataType::INT8, std::nullopt, std::nullopt);
+    return ttnn::quantize(
+        shifted,
+        1.0f,
+        0,
+        /*axis=*/std::nullopt,
+        ttnn::DataType::INT8,
+        memory_config,
+        std::move(optional_output_tensor));
 }
 
 }  // anonymous namespace
