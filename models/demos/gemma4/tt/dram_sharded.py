@@ -32,6 +32,28 @@ _DECODE_IN0_BLOCK_W_MAX = 2
 _OPROJ_TUNED = os.environ.get("GEMMA4_OPROJ_TUNED", "0") != "0"
 
 
+def prefill_matmul_lofi_enabled(m: int) -> bool:
+    """Use LoFi for tall auto DRAM-in0 prefills (above the tuned 1D band).
+
+    Isolate (``test_prefill_matmul_2048_isolate``, WH 1x8, gate_up 2048×5376×5376
+    bf16×bfp8): HiFi2 auto 2234 µs → LoFi 1851 µs (1.21x), PCC 0.999865 vs HiFi2.
+    Default ON; ``GEMMA4_PREFILL_MATMUL_LOFI=0`` opts out. Decode / short tuned
+    band keep HiFi2 (``interleaved_*_prefill_config``).
+    """
+    if os.environ.get("GEMMA4_PREFILL_MATMUL_LOFI", "1").lower() in ("0", "false", "no"):
+        return False
+    return int(m) > _PREFILL_CUTOFF
+
+
+def prefill_lofi_ckc():
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+
 def _roundup(a, b):
     return b * math.ceil(a / b)
 
@@ -392,9 +414,8 @@ def prefill_linear_above_cutoff(x, weight, *, out_memory_config=None):
     batch = m // _PREFILL_CUTOFF
     x_r = ttnn.reshape(x_work, (1, batch, _PREFILL_CUTOFF, n_in))
     pc = prefill_progcfg(_PREFILL_CUTOFF, n_in, n_out)
-    out_r = ttnn.linear(
-        x_r, weight, program_config=pc, compute_kernel_config=_prefill_hifi2_ckc(), memory_config=out_mc
-    )
+    ckc = prefill_lofi_ckc() if prefill_matmul_lofi_enabled(m) else _prefill_hifi2_ckc()
+    out_r = ttnn.linear(x_r, weight, program_config=pc, compute_kernel_config=ckc, memory_config=out_mc)
     return _restore(ttnn.reshape(out_r, (1, 1, m, int(out_r.shape[-1]))))
 
 

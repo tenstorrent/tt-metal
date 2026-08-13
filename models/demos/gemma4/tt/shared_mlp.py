@@ -29,6 +29,8 @@ from models.demos.gemma4.tt.dram_sharded import (
     interleaved_gate_up_prefill_config,
     matmul_rows,
     prefill_linear_above_cutoff,
+    prefill_lofi_ckc,
+    prefill_matmul_lofi_enabled,
     prefill_progcfg_1d_for_width_sharded_in0,
     should_prefill_long_2d,
 )
@@ -252,6 +254,10 @@ class SharedMLP:
         k = int(hidden_states.shape[-1])
         n = int(self.gate_up_proj.shape[-1])
         program_config, out_memcfg, compute_kernel_config = interleaved_gate_up_prefill_config(m, k, n)
+        # Above the tuned 1D band, auto DRAM-in0 keeps HiFi2 by default; LoFi is
+        # the isolate winner at M=2048 (1.21x, PCC≥0.9998 vs HiFi2).
+        if program_config is None and compute_kernel_config is None and prefill_matmul_lofi_enabled(m):
+            compute_kernel_config = prefill_lofi_ckc()
         # Decode (M<=TILE): the tuned prefill config declines, so the output would
         # follow the op default (DRAM) and the whole GeGLU group — 2x slice + the
         # gelu*mul — would run against DRAM at 3.6/3.6/6.9 us. The tensor is

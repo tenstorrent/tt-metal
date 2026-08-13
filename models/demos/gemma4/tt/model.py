@@ -491,6 +491,9 @@ class Gemma4Model:
         if is_mesh and tp > 1:
             per_device_padded = _compute_per_device_vocab(hf_config.vocab_size, tp)
             if per_device_padded <= 64 * 1024:
+                # tt_ccl=None: TopK path does not need AG semaphores. Force-argmax
+                # (allow_force_argmax) was tried with get_tt_ccl but untilize/argmax
+                # TT_FATALs on WH ("CBs clash with L1 buffers" on core [0-0]).
                 self.sampling = SamplingGenerator(
                     args=self._make_sampling_args(hf_config, mesh_device, tp),
                     mesh_device=mesh_device,
