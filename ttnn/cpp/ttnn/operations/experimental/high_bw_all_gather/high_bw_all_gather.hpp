@@ -7,6 +7,7 @@
 #include <optional>
 
 #include <tt-metalium/sub_device_types.hpp>
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -21,7 +22,9 @@ Tensor high_bw_all_gather(
     const std::optional<CoreRangeSet>& sub_core_grid = std::nullopt,
     std::optional<uint32_t> num_links = std::nullopt,
     std::optional<uint32_t> input_batch_index = std::nullopt,
-    std::optional<uint32_t> gathered_dim_size = std::nullopt);
+    std::optional<uint32_t> gathered_dim_size = std::nullopt,
+    const std::optional<GlobalSemaphore>& ready_semaphore = std::nullopt,
+    const std::optional<GlobalSemaphore>& data_valid_semaphore = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather
 
