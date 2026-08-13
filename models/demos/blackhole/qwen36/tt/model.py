@@ -659,15 +659,7 @@ class Qwen36Model:
             x = layer.forward(x, cos=cos, sin=sin, mode="prefill", chunk_size=128, valid_len=valid_len)
 
         # Last real position via one-hot matmul (not slice): bare slice breaks at long T (~49k+).
-        sel = torch.zeros(1, 1, 1, T, dtype=torch.float32)
-        sel[0, 0, 0, valid_len - 1] = 1.0
-        sel_tt = ttnn.from_torch(
-            sel,
-            dtype=x.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
+        sel_tt = self._row_selector(T, valid_len - 1, (1, 1, 1, T), x.dtype)
         x_last = ttnn.matmul(sel_tt, x)  # [1,1,1,dim_frac]
         ttnn.deallocate(sel_tt)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
@@ -2290,9 +2282,7 @@ class Qwen36Model:
             return self._masked_bucket_logits_tp(hidden, actual_len, bucket)
 
         # One-hot matmul for last row (fixed program per bucket; slice would recompile per length).
-        sel = torch.zeros(1, 1, bucket, dtype=torch.float32)
-        sel[0, 0, actual_len - 1] = 1.0
-        sel_tt = ttnn.from_torch(sel, dtype=hidden.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+        sel_tt = self._row_selector(bucket, actual_len - 1, (1, 1, bucket), hidden.dtype)
         x_last = ttnn.matmul(sel_tt, hidden)
         ttnn.deallocate(sel_tt)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
@@ -2302,15 +2292,7 @@ class Qwen36Model:
 
     def _masked_bucket_logits_tp(self, hidden, actual_len, bucket):
         """TP: one-hot select row actual_len-1, norm, lm_head. Returns replicated [1,1,vocab]."""
-        sel = torch.zeros(1, 1, 1, bucket, dtype=torch.float32)
-        sel[0, 0, 0, actual_len - 1] = 1.0
-        sel_tt = ttnn.from_torch(
-            sel,
-            dtype=hidden.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
+        sel_tt = self._row_selector(bucket, actual_len - 1, (1, 1, 1, bucket), hidden.dtype)
         x_last = ttnn.matmul(sel_tt, hidden)  # [1, 1, 1, dim]
         ttnn.deallocate(sel_tt)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
@@ -3338,6 +3320,21 @@ class Qwen36Model:
         return logits
 
     # Generator contract — decode
+
+    def _row_selector(self, length, index, shape, dtype):
+        """One-hot row selector, built on device as ``arange(length) == index``.
+
+        Replaces a host ``torch.zeros(..., length)`` with a single 1.0 written into it and then
+        uploaded — at long prefill lengths that host buffer is hundreds of KB per call, all of it
+        zeros. Values are identical: the comparison on exact integers yields exactly 1.0/0.0.
+
+        ``shape`` is the rank the caller's matmul expects ((1, 1, length) or (1, 1, 1, length)).
+        """
+        idx = ttnn.arange(0, length, 1, dtype=ttnn.float32, device=self.device)
+        idx = ttnn.reshape(ttnn.to_layout(idx, ttnn.TILE_LAYOUT), shape)
+        sel = ttnn.eq(idx, float(index))
+        ttnn.deallocate(idx)
+        return ttnn.typecast(sel, dtype)
 
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
         """Build HOST decode inputs: (tokens_tt, cur_pos_tt, rope_pos_idx, page_table_tt)."""
