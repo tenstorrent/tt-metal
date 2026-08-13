@@ -81,14 +81,15 @@ const bool is_int_fpu_en = false;
 #include "cmath_common.h"
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
-#ifdef SFPI_COMPAT_TEST
-#include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
-#include SFPI_COMPAT_HEADER
-#else
-#include "llk_sfpu/ckernel_sfpu_where.h"
-#include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
-#endif
 #include "params.h"
+#include "sfpu_operations_quasar.h"
+
+#ifndef SFPU_TERNARY_OPERATION_DEFINED
+constexpr auto SFPU_TERNARY_OPERATION = SfpuType::where;
+#endif
+#ifndef SFPU_TERNARY_SCALAR_DEFINED
+constexpr std::uint32_t SFPU_TERNARY_SCALAR = 0;
+#endif
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -125,29 +126,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
     }
 
-    _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
-#ifdef SFPI_COMPAT_TEST
-    SFPI_COMPAT_INIT();
-#endif
+    _llk_math_eltwise_ternary_sfpu_init_<SFPU_TERNARY_OPERATION>();
+    test_utils::init_ternary_sfpu_operation_quasar<SFPU_TERNARY_OPERATION, is_fp32_dest_acc_en, false>();
 
     // Runs calculate_where over the faces selected by VECTOR_MODE: cond=base+0,
     // true_val=base+1, false_val=base+2, result written to base+0. Faces
     // outside the selected set keep whatever the producer wrote into Dest before
     // SFPU ran (the cond tile, here), so Python asserts only processed faces.
-#ifdef SFPI_COMPAT_TEST
-    SFPI_COMPAT_CALL(params.DST_INDEX + 0u, params.DST_INDEX + 1u, params.DST_INDEX + 2u, params.DST_INDEX + 0u);
-#else
-    SFPU_TERNARY_CALL(
-        dest_sync,
-        is_fp32_dest_acc_en,
-        calculate_where,
-        (false /*APPROXIMATION_MODE*/),
-        params.DST_INDEX + 0u /*DST_IN0*/,
-        params.DST_INDEX + 1u /*DST_IN1*/,
-        params.DST_INDEX + 2u /*DST_IN2*/,
-        params.DST_INDEX + 0u /*DST_OUT*/,
-        VECTOR_MODE);
-#endif
+    test_utils::call_ternary_sfpu_operation_quasar<SFPU_TERNARY_OPERATION, dest_sync, is_fp32_dest_acc_en, false>(
+        params.DST_INDEX + 0u, params.DST_INDEX + 1u, params.DST_INDEX + 2u, params.DST_INDEX + 0u, VECTOR_MODE, src_format, SFPU_TERNARY_SCALAR);
 
     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
 }

@@ -5,11 +5,90 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
 
+#include "ckernel_sfpu_polyval.h"
+#include "cmath_common.h"
 #include "sfpi.h"
 
 namespace ckernel {
 namespace sfpu {
+
+// Blackhole-port API surface. Keep the algorithm here so callers can retain their Blackhole bodies; the older
+// Quasar _calculate_log_body_ entry points below remain available to existing Quasar kernels.
+template <bool FAST_APPROX, bool HAS_BASE_SCALING, bool is_fp32_dest_acc_en>
+sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const std::uint32_t log_base_scale_factor) {
+    sfpi::vFloat three_quarters = 0.75f;
+    sfpi::vInt e = sfpi::as<sfpi::vInt>(a) - sfpi::as<sfpi::vInt>(three_quarters);
+
+    if constexpr (!FAST_APPROX) {
+        a = a * 1.0f + 0.0f;
+    }
+
+    e = sfpi::as<sfpi::vInt>(sfpi::setman(sfpi::as<sfpi::vFloat>(e), 0));
+    sfpi::vFloat m = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vInt>(a) - e);
+    sfpi::vFloat result = std::numeric_limits<float>::quiet_NaN();
+
+    m -= 1.0f;
+
+    v_if(a >= 0.0f) {
+        sfpi::vFloat r;
+        sfpi::vFloat s = m * m;
+        sfpi::vFloat e_float;
+        if constexpr (is_fp32_dest_acc_en) {
+            r = -0x1.92cp-5f;
+            r = r * m + 0x1.b84p-4f;
+            r = r * m + -0x1.0c4p-3f;
+            r = r * m + 0x1.274p-3f;
+            r = r * m + -0x1.55p-3f;
+            r = r * m + 0x1.998p-3f;
+            sfpi::vMag abs_e = sfpi::abs(e);
+            r = r * m + sfpi::vConstFloatPrgm1;
+            e_float = sfpi::convert<sfpi::vFloat>(abs_e, sfpi::RoundMode::Nearest);
+            r = r * m + sfpi::vConstFloatPrgm2;
+            sfpi::vFloat neg_half = -0.5f;
+            r = __builtin_rvtt_sfpmad(r.get(), m.get(), neg_half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        } else {
+            sfpi::vMag abs_e = sfpi::abs(e);
+            sfpi::vFloat neg_quarter = -0.25f;
+            r = neg_quarter * m + sfpi::vConstFloatPrgm1;
+            e_float = sfpi::convert<sfpi::vFloat>(abs_e, sfpi::RoundMode::Nearest);
+            r = r * m + sfpi::vConstFloatPrgm2;
+        }
+
+        a = sfpi::addexp(a, -1);
+
+        r = r * s + m;
+        e_float = sfpi::copysgn(e_float, sfpi::as<sfpi::vFloat>(e));
+        result = e_float * sfpi::vConstFloatPrgm0 + r;
+
+        if constexpr (HAS_BASE_SCALING) {
+            result *= sfpi::as<sfpi::vFloat>(sfpi::vUInt(log_base_scale_factor));
+        }
+
+        v_if(sfpi::exexp(a, sfpi::ExponentMode::Biased) - 255 >= 0) { result *= a; }
+        v_endif;
+    }
+    v_endif;
+
+    return result;
+}
+
+template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
+inline void log_init() {
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    const float LOG_TWO = 0.693147182f;
+    const float TWO_TO_M23 = 1.19209290e-7f;
+    sfpi::vConstFloatPrgm0 = LOG_TWO * TWO_TO_M23;
+
+    if constexpr (is_fp32_dest_acc_en) {
+        sfpi::vConstFloatPrgm1 = -0x1.00001ap-2f;
+        sfpi::vConstFloatPrgm2 = 0x1.555572p-2f;
+    } else {
+        sfpi::vConstFloatPrgm1 = 0x1.744p-2f;
+        sfpi::vConstFloatPrgm2 = -0x1.008p-1f;
+    }
+}
 
 template <bool HAS_BASE_SCALING>
 sfpi_inline void _calculate_log_body_(const std::uint32_t log_base_scale_factor, const std::uint32_t dst_idx = 0) {

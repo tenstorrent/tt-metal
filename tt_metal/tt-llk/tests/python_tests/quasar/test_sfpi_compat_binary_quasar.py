@@ -3,14 +3,12 @@
 
 """Quasar tests for binary kernels whose Blackhole implementation uses SFPI.
 
-The selected production header is always the Quasar header.  A variant skips
-until that header exists, then uses the normal Quasar unpack/SFPU/pack harness
-and the shared LLK binary golden.
+Each variant selects a ported operation through the normal Quasar
+unpack/SFPU/pack harness and compares it with the shared LLK binary golden.
 """
 
 from dataclasses import dataclass
 from itertools import product
-from pathlib import Path
 
 import pytest
 import torch
@@ -23,16 +21,11 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
-from helpers.test_variant_parameters import APPROX_MODE, TemplateParameter
+from helpers.test_variant_parameters import APPROX_MODE
 from quasar.test_eltwise_binary_sfpu_quasar import (
     _TILE_INDEX_VARIANTS,
     _run_sfpu_binary_llk_golden,
     _stage_binary_operands,
-)
-
-_QSR_SFPU = "../../../../hw/ckernels/quasar/metal/llk_api/llk_sfpu"
-_QSR_SFPU_DIR = (
-    Path(__file__).resolve().parents[4] / "hw/ckernels/quasar/metal/llk_api/llk_sfpu"
 )
 
 
@@ -49,28 +42,6 @@ class SfpiBinaryCase:
 
     def __repr__(self) -> str:
         return f"{self.kernel}:{self.mathop.name}"
-
-
-@dataclass
-class SFPI_COMPAT_BINARY_KERNEL(TemplateParameter):
-    case: SfpiBinaryCase
-
-    def convert_to_cpp(self) -> str:
-        template_args = ", ".join(self.case.template_args)
-        runtime_args = "".join(f", {arg}" for arg in self.case.runtime_args)
-        call = (
-            "SFPU_BINARY_CALL(dest_sync, is_fp32_dest_acc_en, "
-            f"{self.case.function}, ({template_args}), src0, src1, dst, "
-            f"VectorMode::RC{runtime_args})"
-        )
-        return "\n".join(
-            [
-                "#define SFPI_COMPAT_TEST",
-                f'#define SFPI_COMPAT_HEADER "{_QSR_SFPU}/ckernel_sfpu_{self.case.kernel}.h"',
-                f"#define SFPI_COMPAT_INIT() {self.case.init}",
-                f"#define SFPI_COMPAT_CALL(src0, src1, dst) {call}",
-            ]
-        )
 
 
 _FLOAT_FORMATS = (
@@ -306,10 +277,6 @@ _VARIANTS = [
 def test_sfpi_compat_binary_quasar(
     case, formats, dest_acc, implied_math_format, tile_indices
 ):
-    header = _QSR_SFPU_DIR / f"ckernel_sfpu_{case.kernel}.h"
-    if not header.is_file():
-        pytest.skip(f"Quasar SFPI kernel has not landed yet: {header.name}")
-
     torch.manual_seed(42)
     _run_sfpu_binary_llk_golden(
         formats,
@@ -317,10 +284,7 @@ def test_sfpi_compat_binary_quasar(
         implied_math_format,
         tile_indices,
         case.mathop,
-        "ADD",  # Bypassed by SFPI_COMPAT_CALL in the C++ harness.
+        case.mathop.cpp_enum_value,
         prepare_stimuli=lambda *args: _prepare_stimuli(case, *args),
-        extra_templates=(
-            APPROX_MODE(ApproximationMode.No),
-            SFPI_COMPAT_BINARY_KERNEL(case),
-        ),
+        extra_templates=(APPROX_MODE(ApproximationMode.No),),
     )

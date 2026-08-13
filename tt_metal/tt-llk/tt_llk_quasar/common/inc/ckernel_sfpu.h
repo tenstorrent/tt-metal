@@ -23,6 +23,15 @@ namespace ckernel
 using namespace ckernel::math;
 using namespace ckernel::trisc;
 
+namespace sfpu
+{
+// Blackhole-port compatibility API. Quasar additionally restores LREG11's architectural -1.0 default here.
+inline void _init_sfpu_config_reg()
+{
+    ckernel::math::_init_sfpu_config_reg_();
+}
+} // namespace sfpu
+
 /**
  * @brief Programs SFPU addrmods
  */

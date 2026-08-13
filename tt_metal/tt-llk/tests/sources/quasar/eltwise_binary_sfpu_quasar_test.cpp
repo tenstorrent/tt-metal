@@ -135,10 +135,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "params.h"
 #include "sfpu_operations_quasar.h"
-#ifdef SFPI_COMPAT_TEST
-#include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
-#include SFPI_COMPAT_HEADER
-#endif
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -223,11 +219,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // ADDR_MOD_0/1 or bank-0 programming, so both initializers can remain in
         // the INIT zone before the measured TILE_LOOP.
         _llk_math_eltwise_sfpu_init_();
-#ifdef SFPI_COMPAT_TEST
-        SFPI_COMPAT_INIT();
-#else
-        test_utils::init_binary_sfpu_operation_quasar<SFPU_BINARY_OP, SFPU_SIGN_MAGNITUDE>(params.ZERO_POINT);
-#endif
+        test_utils::init_binary_sfpu_operation_quasar<SFPU_BINARY_OP, SFPU_SIGN_MAGNITUDE, is_fp32_dest_acc_en>(params.ZERO_POINT);
         PROFILER_SYNC();
     }
     {
@@ -254,9 +246,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
                     }
                 }
-#ifdef SFPI_COMPAT_TEST
-                SFPI_COMPAT_CALL(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX);
-#else
                 test_utils::call_binary_sfpu_operation_quasar<
                     SFPU_BINARY_OP,
                     dest_sync,
@@ -264,7 +253,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     SFPU_DST_ROUNDING_MODE,
                     SFPU_ITERATIONS,
                     SFPU_SIGN_MAGNITUDE>(SRC0_TILE_IDX, SRC1_TILE_IDX, DST_TILE_IDX, math_format);
-#endif
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();

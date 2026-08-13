@@ -232,7 +232,12 @@ class SFPU_TERNARY_OP(TemplateParameter):
     ternary_mathop: MathOperation = None
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{self.ternary_mathop.cpp_enum_value};"
+        return "\n".join(
+            [
+                "#define SFPU_TERNARY_OPERATION_DEFINED",
+                f"constexpr auto SFPU_TERNARY_OPERATION = SfpuType::{self.ternary_mathop.cpp_enum_value};",
+            ]
+        )
 
 
 @dataclass
@@ -246,7 +251,12 @@ class SFPU_TERNARY_SCALAR(TemplateParameter):
     ternary_scalar_bits: int = 0x40000000  # 2.0f
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr std::uint32_t SFPU_TERNARY_SCALAR = {self.ternary_scalar_bits}u;"
+        return "\n".join(
+            [
+                "#define SFPU_TERNARY_SCALAR_DEFINED",
+                f"constexpr std::uint32_t SFPU_TERNARY_SCALAR = {self.ternary_scalar_bits}u;",
+            ]
+        )
 
 
 @dataclass

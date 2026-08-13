@@ -5,7 +5,6 @@
 
 from dataclasses import dataclass
 from itertools import product
-from pathlib import Path
 
 import pytest
 import torch
@@ -41,10 +40,6 @@ from helpers.tile_constants import MAX_NUM_FACES, MAX_TILE_ELEMENTS
 from helpers.utils import passed_test
 
 _CPP_SOURCE = "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp"
-_QSR_SFPU = "../../../../hw/ckernels/quasar/metal/llk_api/llk_sfpu"
-_QSR_SFPU_DIR = (
-    Path(__file__).resolve().parents[4] / "hw/ckernels/quasar/metal/llk_api/llk_sfpu"
-)
 
 
 @dataclass(frozen=True)
@@ -65,22 +60,22 @@ class SfpiSpecialCase:
 
 
 @dataclass
-class SFPI_COMPAT_SPECIAL_KERNEL(TemplateParameter):
+class SFPI_SPECIAL_OPERATION(TemplateParameter):
     case: SfpiSpecialCase
 
     def convert_to_cpp(self) -> str:
-        lines = [
-            "#define SFPI_COMPAT_TEST",
-            f'#define SFPI_COMPAT_HEADER "{_QSR_SFPU}/ckernel_sfpu_{self.case.kernel}.h"',
-            f"#define SFPI_COMPAT_INIT() {self.case.init}",
-            "#define SFPI_COMPAT_CALL(dst_index) "
-            f"SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, {self.case.function}, "
-            f"({self.case.template_args}), dst_index, VectorMode::{self.case.vector_mode}"
-            f"{self.case.runtime_args})",
-        ]
-        if self.case.tile_count > 1:
-            lines.append("#define SFPI_COMPAT_SINGLE_CALL")
-        return "\n".join(lines)
+        op = {
+            "alt_complex_rotate90": "alt_complex_rotate90",
+            "int_sum_col": "int_sum_col",
+            "int_sum_row": "int_sum_row",
+            "bitwise_and": "unary_bitwise_and",
+            "bitwise_or": "unary_bitwise_or",
+            "bitwise_xor": "unary_bitwise_xor",
+            "mask_float": "mask",
+            "mask_int32": "int_mask",
+            "tiled_prod": "tiled_prod",
+        }[self.case.name]
+        return f"constexpr auto SFPU_UNARY_OPERATION = SfpuType::{op};"
 
 
 _BF16_FP32 = (
@@ -233,10 +228,6 @@ _VARIANTS = [
 def test_sfpi_compat_special_quasar(
     case, formats, dest_acc, dest_sync, implied_math_format
 ):
-    header = _QSR_SFPU_DIR / f"ckernel_sfpu_{case.kernel}.h"
-    if not header.is_file():
-        pytest.skip(f"Quasar SFPI kernel has not landed yet: {header.name}")
-
     source, golden = _invariant_stimuli(case, formats)
     unpack_to_dest = (
         formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
@@ -245,7 +236,7 @@ def test_sfpi_compat_special_quasar(
         _CPP_SOURCE,
         formats,
         templates=[
-            SFPI_COMPAT_SPECIAL_KERNEL(case),
+            SFPI_SPECIAL_OPERATION(case),
             APPROX_MODE(ApproximationMode.No),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),

@@ -3,14 +3,12 @@
 
 """Quasar tests for unary kernels whose Blackhole implementation uses SFPI.
 
-Each variant includes exactly one Quasar kernel header and drives it through the
-normal Quasar unpack/SFPU/pack pipeline. A case skips while that header is absent,
-then activates automatically when the corresponding implementation lands.
+Each variant selects a ported operation through the normal Quasar
+unpack/SFPU/pack pipeline and compares it with the shared LLK golden.
 """
 
 from dataclasses import dataclass
 from itertools import product
-from pathlib import Path
 
 import pytest
 import torch
@@ -43,6 +41,7 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
+    MATH_OP,
     NUM_FACES,
     PERF_RUN_TYPE,
     TEST_FACE_DIMS,
@@ -50,18 +49,16 @@ from helpers.test_variant_parameters import (
     TYPECAST_FORMATS,
     UNPACKER_ENGINE_SEL,
     PerfRunType,
-    TemplateParameter,
 )
 from helpers.tile_constants import MAX_NUM_FACES
 from helpers.utils import passed_test
 
 _CPP_SOURCE = "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp"
-_QSR_SFPU = "../../../../hw/ckernels/quasar/metal/llk_api/llk_sfpu"
-_QSR_SFPU_DIR = (
-    Path(__file__).resolve().parents[4] / "hw/ckernels/quasar/metal/llk_api/llk_sfpu"
-)
-_FLOAT_FORMATS = input_output_formats(
+_BROAD_FLOAT_FORMATS = input_output_formats(
     [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32], same=True
+)
+_STANDARD_FLOAT_FORMATS = input_output_formats(
+    [DataFormat.Float16_b, DataFormat.Float32], same=True
 )
 
 
@@ -73,35 +70,12 @@ class SfpiUnaryCase:
     template_args: tuple[str, ...]
     init: str = "(void)0"
     runtime_args: tuple[str, ...] = ()
-    formats: tuple[InputOutputFormat, ...] = tuple(_FLOAT_FORMATS)
+    formats: tuple[InputOutputFormat, ...] = tuple(_STANDARD_FLOAT_FORMATS)
     integer: bool = False
+    broad: bool = False
 
     def __repr__(self) -> str:
         return f"{self.kernel}:{self.mathop.name}"
-
-
-@dataclass
-class SFPI_COMPAT_KERNEL(TemplateParameter):
-    """Emit the test-only include and direct SFPU dispatch for one SFPI body."""
-
-    case: SfpiUnaryCase
-
-    def convert_to_cpp(self) -> str:
-        template_args = ", ".join(self.case.template_args)
-        call_args = "".join(f", {arg}" for arg in self.case.runtime_args)
-        call = (
-            "SFPU_UNARY_CALL(dest_sync, is_fp32_dest_acc_en, "
-            f"{self.case.function}, ({template_args}), dst_index, VectorMode::RC"
-            f"{call_args})"
-        )
-        return "\n".join(
-            [
-                "#define SFPI_COMPAT_TEST",
-                f'#define SFPI_COMPAT_HEADER "{_QSR_SFPU}/ckernel_sfpu_{self.case.kernel}.h"',
-                f"#define SFPI_COMPAT_INIT() {self.case.init}",
-                f"#define SFPI_COMPAT_CALL(dst_index) {call}",
-            ]
-        )
 
 
 def _case(
@@ -113,6 +87,7 @@ def _case(
     runtime_args=(),
     formats=None,
     integer=False,
+    broad=False,
 ):
     return SfpiUnaryCase(
         mathop=mathop,
@@ -121,8 +96,13 @@ def _case(
         template_args=tuple(template_args),
         init=init,
         runtime_args=tuple(runtime_args),
-        formats=tuple(_FLOAT_FORMATS if formats is None else formats),
+        formats=tuple(
+            _BROAD_FLOAT_FORMATS
+            if broad and formats is None
+            else _STANDARD_FLOAT_FORMATS if formats is None else formats
+        ),
         integer=integer,
+        broad=broad,
     )
 
 
@@ -142,6 +122,7 @@ SFPI_UNARY_CASES = (
         "ckernel::ActivationType::Hardsigmoid",
         "SFPU_ITERATIONS",
         init="hardsigmoid_init<APPROX_MODE>()",
+        broad=True,
     ),
     _case(
         MathOperation.Add1, "add1", "calculate_add1", "APPROX_MODE", "SFPU_ITERATIONS"
@@ -181,6 +162,7 @@ SFPI_UNARY_CASES = (
         "SFPU_ITERATIONS",
         init="celu_init()",
         runtime_args=("0x3f800000u", "0x3f800000u"),
+        broad=True,
     ),
     _case(
         MathOperation.Digamma,
@@ -199,6 +181,7 @@ SFPI_UNARY_CASES = (
         "SFPU_ITERATIONS",
         init="elu_init()",
         runtime_args=("0x3f800000u",),
+        broad=True,
     ),
     _case(
         MathOperation.Erf,
@@ -230,6 +213,7 @@ SFPI_UNARY_CASES = (
         "is_fp32_dest_acc_en",
         "SFPU_ITERATIONS",
         init="exp2_init<APPROX_MODE, is_fp32_dest_acc_en>()",
+        broad=True,
     ),
     _case(
         MathOperation.Expm1,
@@ -415,6 +399,7 @@ SFPI_UNARY_CASES = (
         "is_fp32_dest_acc_en",
         "SFPU_ITERATIONS",
         init="tanhshrink_init<APPROX_MODE, is_fp32_dest_acc_en>()",
+        broad=True,
     ),
     *(
         _case(
@@ -505,7 +490,11 @@ def _input_spec(case, formats):
 def _valid_dest_accs(case, formats):
     if case.integer or formats.input_format.is_32_bit():
         return (DestAccumulation.Yes,)
-    return (DestAccumulation.No, DestAccumulation.Yes)
+    if formats.input_format == DataFormat.Float16:
+        return (DestAccumulation.Yes,)
+    if case.broad:
+        return (DestAccumulation.No, DestAccumulation.Yes)
+    return (DestAccumulation.Yes,)
 
 
 def _generate_combinations():
@@ -552,10 +541,6 @@ def test_sfpi_compat_unary_quasar(case_formats_dest_acc_sync_implied_dims):
         input_dimensions,
     ) = case_formats_dest_acc_sync_implied_dims[0]
 
-    header = _QSR_SFPU_DIR / f"ckernel_sfpu_{case.kernel}.h"
-    if not header.is_file():
-        pytest.skip(f"Quasar SFPI kernel is not implemented yet: {header.name}")
-
     spec = _input_spec(case, formats)
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -594,7 +579,7 @@ def test_sfpi_compat_unary_quasar(case_formats_dest_acc_sync_implied_dims):
         _CPP_SOURCE,
         formats,
         templates=[
-            SFPI_COMPAT_KERNEL(case),
+            MATH_OP(case.mathop),
             APPROX_MODE(ApproximationMode.No),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),

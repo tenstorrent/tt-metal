@@ -5,7 +5,6 @@
 
 from dataclasses import dataclass
 from itertools import product
-from pathlib import Path
 
 import pytest
 import torch
@@ -32,20 +31,16 @@ from helpers.test_variant_parameters import (
     IMPLIED_MATH_FORMAT,
     MATH_OP,
     NUM_FACES,
+    SFPU_TERNARY_OP,
     SFPU_TERNARY_SCALAR,
     TEST_FACE_DIMS,
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
     VECTOR_MODE,
-    TemplateParameter,
 )
 from helpers.utils import passed_test
 
 _CPP_SOURCE = "sources/quasar/sfpu_where_quasar_test.cpp"
-_QSR_SFPU = "../../../../hw/ckernels/quasar/metal/llk_api/llk_sfpu"
-_QSR_SFPU_DIR = (
-    Path(__file__).resolve().parents[4] / "hw/ckernels/quasar/metal/llk_api/llk_sfpu"
-)
 _SCALAR_BITS = 0x3FC00000  # 1.5f
 _FACE_SIZE = 16 * 16
 _PROCESSED_FACES = {
@@ -65,10 +60,6 @@ _FORMATS_DEST_ACC = (
     ),
     (InputOutputFormat(DataFormat.Float32, DataFormat.Float32), DestAccumulation.Yes),
 )
-_ADDCMUL_FORMATS_DEST_ACC = (
-    (InputOutputFormat(DataFormat.Float16, DataFormat.Float16), DestAccumulation.No),
-    *_FORMATS_DEST_ACC,
-)
 
 
 @dataclass(frozen=True)
@@ -84,29 +75,6 @@ class SfpiTernaryCase:
         return f"{self.kernel}:{self.mathop.name}"
 
 
-@dataclass
-class SFPI_COMPAT_TERNARY_KERNEL(TemplateParameter):
-    case: SfpiTernaryCase
-    data_format: DataFormat
-
-    def convert_to_cpp(self) -> str:
-        runtime_args = ", SFPU_TERNARY_SCALAR" if self.case.scalar else ""
-        call = (
-            "SFPU_TERNARY_CALL(dest_sync, is_fp32_dest_acc_en, "
-            f"{self.case.function}, (APPROX_MODE, is_fp32_dest_acc_en, "
-            f"DataFormat::{self.data_format.name}, SFPU_ITERATIONS), "
-            f"in0, in1, in2, out, VECTOR_MODE{runtime_args})"
-        )
-        return "\n".join(
-            [
-                "#define SFPI_COMPAT_TEST",
-                f'#define SFPI_COMPAT_HEADER "{_QSR_SFPU}/ckernel_sfpu_{self.case.kernel}.h"',
-                f"#define SFPI_COMPAT_INIT() {self.case.init}",
-                f"#define SFPI_COMPAT_CALL(in0, in1, in2, out) {call}",
-            ]
-        )
-
-
 SFPI_TERNARY_CASES = (
     SfpiTernaryCase(
         MathOperation.SfpuAddcdiv,
@@ -120,7 +88,6 @@ SFPI_TERNARY_CASES = (
         "addcmul",
         "calculate_addcmul",
         scalar=True,
-        formats=_ADDCMUL_FORMATS_DEST_ACC,
     ),
     SfpiTernaryCase(MathOperation.SfpuLerp, "lerp", "calculate_lerp"),
     SfpiTernaryCase(
@@ -171,10 +138,6 @@ def _generate_operand(data_format, seed, spec):
 def test_sfpi_compat_ternary_quasar(
     case, formats_dest_acc, implied_math_format, vector_mode
 ):
-    header = _QSR_SFPU_DIR / f"ckernel_sfpu_{case.kernel}.h"
-    if not header.is_file():
-        pytest.skip(f"Quasar SFPI kernel has not landed yet: {header.name}")
-
     formats, dest_acc = formats_dest_acc
     spec_ab = StimuliSpec.uniform(low=-1.0, high=1.0)
     spec_c = (
@@ -204,6 +167,7 @@ def test_sfpi_compat_ternary_quasar(
         formats,
         templates=[
             MATH_OP(case.mathop),
+            SFPU_TERNARY_OP(case.mathop),
             APPROX_MODE(ApproximationMode.No),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
@@ -213,7 +177,6 @@ def test_sfpi_compat_ternary_quasar(
             DEST_SYNC(),
             VECTOR_MODE(vector_mode),
             SFPU_TERNARY_SCALAR(_SCALAR_BITS),
-            SFPI_COMPAT_TERNARY_KERNEL(case, formats.input_format),
         ],
         runtimes=[
             TILE_COUNT(tile_count * 3),
