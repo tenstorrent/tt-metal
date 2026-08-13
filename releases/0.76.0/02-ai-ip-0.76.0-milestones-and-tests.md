@@ -5,6 +5,10 @@ Author:   Dimitri Gnidash
 Modified: 2026-08-06
 Retrieved: 2026-08-13
 Reproduced as authored; no content changes.
+Known gap, carried from the source: AIIPSW-9 (LLK: ResNet on Horizon) reads
+"to be filled out". No test data had been supplied for that milestone as of the
+2026-08-06 snapshot -- it is an open item with the Horizon team, not an omission
+in transcription.
 -->
 
 # AI IP SW Milestones and Tests

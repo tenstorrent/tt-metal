@@ -4,29 +4,35 @@ URL:       https://docs.google.com/document/d/14gIEpKja0xPf9TZ7caCBMGSrbaB2aYi8i
 Owner:     Sapna Fun Bahadur Khatri
 Created / last updated: 2026-08-12
 Retrieved: 2026-08-13
-Reproduced as authored; no content changes. Level 3 rows marked <...> are
-           placeholders in the source document, not omissions.
+Reproduced as authored, with these editorial changes:
+  - repository links repointed from /tree/main/ to /tree/v0.76.0/ so this record
+    keeps pointing at the tree that shipped (all 14 paths verified at the tag)
+  - two stray "**" removed; they were bold-whitespace spans in the Google Doc
+    that did not survive conversion
+  - an "Editor's note" added under Level 2 recording the op folders that do not
+    follow the documented shape
+Level 3 rows marked <...> are placeholders in the source document, not omissions.
 -->
 
 # Kernel Ops Delivery - Folder Structure
 
 **Feature(s) this release:** Quasar ResNet Kernel Ops
-**Source:** [tenstorrent/tt-metal - ttnn](https://github.com/tenstorrent/tt-metal/tree/main/ttnn)
+**Source:** [tenstorrent/tt-metal - ttnn](https://github.com/tenstorrent/tt-metal/tree/v0.76.0/ttnn)
 
 ## Level 1 - Common (used by Wormhole, Blackhole, Quasar, and any new designs)
 
- - [tt-metal/ttnn/cpp/ttnn/operations/](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/operations) - the op library (33 op families; see breakdown below)
- - [tt-metal/ttnn/cpp/ttnn/kernel/](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/kernel) - device-side kernel entry points shared across ops
- - [tt-metal/ttnn/cpp/ttnn/kernel_lib/](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/kernel_lib) - shared device-kernel helper library
- - [tt-metal/ttnn/cpp/ttnn/graph/](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/graph) - graph capture / trace support
- - [tt-metal/ttnn/cpp/ttnn-nanobind/](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn-nanobind) - Python binding layer
- - [tt-metal/ttnn/api/ttnn/](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/api/ttnn) - public C++ headers (tensor/, distributed/, graph/, common/, services/)
- - [tt-metal/ttnn/core/](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/core) - core implementation (tensor/, distributed/, graph/, services/)
- - [tt-metal/ttnn/ttnn/](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/ttnn) - Python API (operations/, distributed/, experimental_loader/)
- - [tt-metal/ttnn/tt_lib/](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tt_lib) - legacy compatibility layer (fused_ops/, fallback_ops/)
- - [tt-metal/ttnn/examples/](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/examples) - reference ops (add/, lab_eltwise_binary/, lab_multicast/)
- - [tt-metal/ttnn/tutorials/](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/tutorials) - tutorials (basic_python/)
- - [tt-metal/ttnn/test/](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/test) - library-local tests
+ - [tt-metal/ttnn/cpp/ttnn/operations/](https://github.com/tenstorrent/tt-metal/tree/v0.76.0/ttnn/cpp/ttnn/operations) - the op library (33 op families; see breakdown below)
+ - [tt-metal/ttnn/cpp/ttnn/kernel/](https://github.com/tenstorrent/tt-metal/tree/v0.76.0/ttnn/cpp/ttnn/kernel) - device-side kernel entry points shared across ops
+ - [tt-metal/ttnn/cpp/ttnn/kernel_lib/](https://github.com/tenstorrent/tt-metal/tree/v0.76.0/ttnn/cpp/ttnn/kernel_lib) - shared device-kernel helper library
+ - [tt-metal/ttnn/cpp/ttnn/graph/](https://github.com/tenstorrent/tt-metal/tree/v0.76.0/ttnn/cpp/ttnn/graph) - graph capture / trace support
+ - [tt-metal/ttnn/cpp/ttnn-nanobind/](https://github.com/tenstorrent/tt-metal/tree/v0.76.0/ttnn/cpp/ttnn-nanobind) - Python binding layer
+ - [tt-metal/ttnn/api/ttnn/](https://github.com/tenstorrent/tt-metal/tree/v0.76.0/ttnn/api/ttnn) - public C++ headers (tensor/, distributed/, graph/, common/, services/)
+ - [tt-metal/ttnn/core/](https://github.com/tenstorrent/tt-metal/tree/v0.76.0/ttnn/core) - core implementation (tensor/, distributed/, graph/, services/)
+ - [tt-metal/ttnn/ttnn/](https://github.com/tenstorrent/tt-metal/tree/v0.76.0/ttnn/ttnn) - Python API (operations/, distributed/, experimental_loader/)
+ - [tt-metal/ttnn/tt_lib/](https://github.com/tenstorrent/tt-metal/tree/v0.76.0/ttnn/tt_lib) - legacy compatibility layer (fused_ops/, fallback_ops/)
+ - [tt-metal/ttnn/examples/](https://github.com/tenstorrent/tt-metal/tree/v0.76.0/ttnn/examples) - reference ops (add/, lab_eltwise_binary/, lab_multicast/)
+ - [tt-metal/ttnn/tutorials/](https://github.com/tenstorrent/tt-metal/tree/v0.76.0/ttnn/tutorials) - tutorials (basic_python/)
+ - [tt-metal/ttnn/test/](https://github.com/tenstorrent/tt-metal/tree/v0.76.0/ttnn/test) - library-local tests
 
 ### Op families under ttnn/cpp/ttnn/operations/
 
@@ -59,7 +65,7 @@ Ops are written once against the Metalium API, and the hardware abstraction laye
 | --- | --- | --- | --- |
 | L2.1 | Wormhole (B0) | — | No architecture-specific op folder; runs the Level 1 op library unchanged |
 | L2.2 | Blackhole | — | No architecture-specific op folder; runs the Level 1 op library unchanged |
-| L2.3 | Quasar | [tt-metal/ttnn/cpp/ttnn/operations/experimental/quasar/](https://github.com/tenstorrent/tt-metal/tree/main/ttnn/cpp/ttnn/operations/experimental/quasar) | "28 op folders - compute, convolution, layout, sharding, slicing, movement" |
+| L2.3 | Quasar | [tt-metal/ttnn/cpp/ttnn/operations/experimental/quasar/](https://github.com/tenstorrent/tt-metal/tree/v0.76.0/ttnn/cpp/ttnn/operations/experimental/quasar) | "28 op folders - compute, convolution, layout, sharding, slicing, movement" |
 
 ### L2.3 Quasar - expanded
 
@@ -74,9 +80,16 @@ Ops are written once against the Metalium API, and the hardware abstraction laye
 
 Each op folder follows the standard shape: device/ (program factory), device/kernels/{compute, dataflow}/ (device kernels), and the host-side op definition.
 
+> **Editor's note (not in the source document).** Verified against the `v0.76.0` tag:
+> 22 of the 27 op folders match that shape. Four are host-side wrappers with no
+> `device/` directory and no kernels — `reallocate/`, `to_device/`, `to_layout/` and
+> `to_memory_config/` — and `reduction/` nests one level deeper, with the program
+> factory at `reduction/generic/device/`. The source document's count of 28 op
+> folders is 27 at the tag.
+
 ## Level 3 - Sub-architecture / program (the customer delivery)
 
-The repository holds one **Quasar op tree. There are no separate program directories - each program delivers the same experimental/quasar/ tree, distinguished by the release milestone and the feature list below.
+The repository holds one Quasar op tree. There are no separate program directories - each program delivers the same experimental/quasar/ tree, distinguished by the release milestone and the feature list below.
 
 | Level | Program | Delivered from | Feature this release |
 | --- | --- | --- | --- |
@@ -84,4 +97,4 @@ The repository holds one **Quasar op tree. There are no separate program directo
 | L3.2 | Quasar Trinity | ttnn/cpp/ttnn/operations/experimental/quasar/ | Quasar ResNet Kernel Ops |
 | L3.3 | Quasar Saturn | ttnn/cpp/ttnn/operations/experimental/quasar/ | &lt;...&gt; |
 
-**This delivery contains:** all of Level 1 plus **the full Quasar op tree (experimental/quasar/).
+**This delivery contains:** all of Level 1 plus the full Quasar op tree (experimental/quasar/).
