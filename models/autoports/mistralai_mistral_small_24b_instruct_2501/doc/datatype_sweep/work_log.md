@@ -60,4 +60,4 @@ HF_HUB_OFFLINE=1 python models/autoports/mistralai_mistral_small_24b_instruct_25
 - Non-aligned prompt: pass.
 - vLLM: deliberately not started.
 - Stage review: independent rereview `clean-pass`; see `stage_review.md`.
-- Stage-owned implementation/evidence commit SHA: recorded after checkpoint below.
+- Stage-owned implementation/evidence commit SHA: `c86a4a95d1a` (`Add Mistral Small 24B datatype sweep`).
