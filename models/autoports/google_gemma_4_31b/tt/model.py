@@ -196,6 +196,7 @@ class DecodeTraceState:
         default_factory=lambda: {
             "model_trace_replays": 0,
             "token_host_refreshes": 0,
+            "token_device_refreshes": 0,
             "position_host_refreshes": 0,
             "rope_host_refreshes": 0,
             "page_table_refreshes": 0,
@@ -904,6 +905,7 @@ class Gemma4FullModel:
         page_table_generations: Sequence[int],
         prompt_lengths: Sequence[int],
         active_batch_size: int,
+        refresh_tokens_from_host: bool = True,
     ) -> DecodeTraceState:
         batch_size = int(tokens.shape[0])
         positions = tuple(int(value) for value in start_pos.reshape(-1).tolist())
@@ -971,9 +973,16 @@ class Gemma4FullModel:
             self.trace_state.page_table_identities = [id(table) for table in page_tables]
             self.trace_state.page_table_generations = [int(generation) for generation in page_table_generations]
             self.trace_state.batch_size = batch_size
-        else:
+        elif refresh_tokens_from_host:
             self.write_trace_tokens_from_host(tokens)
-            self.write_trace_positions_from_host(start_pos)
+        else:
+            # A device-resident first token is copied by the caller after
+            # state normalization.  Do not overwrite it with host zeros when
+            # reusing an existing same-shape trace input.
+            pass
+        if self.trace_state.token_input is not None and self.trace_state.rope_position is not None:
+            if self.trace_state.initial_positions is not None:
+                self.write_trace_positions_from_host(start_pos)
         self.trace_state.active_batch_size = int(active_batch_size)
         self.trace_state.prompt_lengths = lengths
         self.trace_state.initial_positions = start_pos.to(torch.int32).reshape(-1).clone()
@@ -987,6 +996,19 @@ class Gemma4FullModel:
         values = torch.as_tensor(tokens, dtype=torch.int32).reshape(1, 1, 1, state.batch_size)
         _copy_host_to_mesh(ttnn.from_torch(values, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT), state.token_input)
         state.counters["token_host_refreshes"] += 1
+
+    def write_trace_tokens_from_device(self, tokens: ttnn.Tensor) -> None:
+        state = self.trace_state
+        if state.token_input is None:
+            raise RuntimeError("trace token input is not initialized")
+        token_shape = tuple(int(tokens.shape[index]) for index in range(len(tokens.shape)))
+        state_shape = tuple(int(state.token_input.shape[index]) for index in range(len(state.token_input.shape)))
+        if token_shape != state_shape:
+            raise ValueError("device token input must match the persistent trace token shape")
+        if tokens is state.token_input:
+            return
+        ttnn.copy(tokens, state.token_input)
+        state.counters["token_device_refreshes"] += 1
 
     def write_trace_positions_from_host(self, positions: torch.Tensor | Sequence[int]) -> None:
         state = self.trace_state

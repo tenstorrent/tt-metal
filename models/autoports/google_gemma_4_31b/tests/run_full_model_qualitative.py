@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import gc
 import json
 import os
@@ -391,19 +392,52 @@ def _run_benchmark_only(args: argparse.Namespace) -> None:
         raise ValueError("benchmark warmups must be nonnegative and repeats must be positive")
     reference = load_reference(args.benchmark_reference)
     prompt_token_ids = reference.entries[0].prompt_tokens.reshape(-1).tolist()
+    tensor_cache = getattr(args, "tensor_cache", None)
+    status_path = getattr(args, "benchmark_status", None)
+
+    def record_status(phase: str, **details) -> None:
+        status = {
+            "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "phase": phase,
+            "tensor_cache": str(tensor_cache.resolve()) if tensor_cache is not None else None,
+            **details,
+        }
+        print(json.dumps(status), flush=True)
+        if status_path is not None:
+            status_path.parent.mkdir(parents=True, exist_ok=True)
+            status_path.write_text(json.dumps(status, indent=2) + "\n", encoding="utf-8")
+
+    record_status("opening_mesh")
     mesh = open_readiness_mesh_device("P150_X4", "FABRIC_1D")
     generator = None
     runtime_precision = None
     try:
         config = _model_config_from_environment()
-        generator = build_generator(model_dir=args.model_dir, mesh_device=mesh, model_config=config)
+        record_status("constructing_generator")
+        generator = build_generator(
+            model_dir=args.model_dir,
+            mesh_device=mesh,
+            model_config=config,
+            tensor_cache_path=tensor_cache,
+        )
+        record_status("generator_ready")
         runtime_precision = generator.model.precision_runtime_summary()
-        for _ in range(args.benchmark_warmups):
+        for warmup in range(args.benchmark_warmups):
+            record_status("warmup_started", sample=warmup + 1, total=args.benchmark_warmups)
             generator.benchmark_token_out_no_readback(prompt_token_ids, max_new_tokens=args.benchmark_tokens)
-        samples = [
-            generator.benchmark_token_out_no_readback(prompt_token_ids, max_new_tokens=args.benchmark_tokens)
-            for _ in range(args.benchmark_repeats)
-        ]
+            record_status("warmup_completed", sample=warmup + 1, total=args.benchmark_warmups)
+        samples = []
+        for repeat in range(args.benchmark_repeats):
+            record_status("sample_started", sample=repeat + 1, total=args.benchmark_repeats)
+            samples.append(
+                generator.benchmark_token_out_no_readback(prompt_token_ids, max_new_tokens=args.benchmark_tokens)
+            )
+            record_status(
+                "sample_completed",
+                sample=repeat + 1,
+                total=args.benchmark_repeats,
+                metrics=samples[-1],
+            )
     finally:
         if generator is not None:
             generator.teardown()
@@ -435,6 +469,7 @@ def _run_benchmark_only(args: argparse.Namespace) -> None:
     }
     args.benchmark_output.parent.mkdir(parents=True, exist_ok=True)
     args.benchmark_output.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    record_status("output_written", output=str(args.benchmark_output.resolve()))
 
 
 def run(args: argparse.Namespace) -> None:
@@ -562,6 +597,16 @@ def _main() -> None:
     parser.add_argument("--benchmark-output", type=Path)
     parser.add_argument("--benchmark-warmups", type=int, default=1)
     parser.add_argument("--benchmark-repeats", type=int, default=5)
+    parser.add_argument(
+        "--tensor-cache",
+        type=Path,
+        help="explicit TTNN tensor-cache root used during full-model construction",
+    )
+    parser.add_argument(
+        "--benchmark-status",
+        type=Path,
+        help="optional live benchmark phase/status sidecar",
+    )
     parser.add_argument(
         "--benchmark-only",
         action="store_true",

@@ -800,7 +800,8 @@ class Gemma4Generator(Generator):
     def prepare_token_out_decode(
         self,
         *,
-        first_input_tokens: Sequence[int] | torch.Tensor,
+        first_input_tokens: Sequence[int] | torch.Tensor | None,
+        first_input_device_tokens: ttnn.Tensor | None = None,
         start_positions: Sequence[int] | torch.Tensor,
         page_table=None,
         kv_cache=None,
@@ -814,8 +815,17 @@ class Gemma4Generator(Generator):
         force_argmax: bool = False,
         seed: int | Sequence[int] | torch.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, Any]:
-        tokens = torch.as_tensor(first_input_tokens, dtype=torch.int32).reshape(-1, 1)
         positions = torch.as_tensor(start_positions, dtype=torch.int32).reshape(-1)
+        if first_input_device_tokens is None:
+            if first_input_tokens is None:
+                raise ValueError("first_input_tokens are required without a device token buffer")
+            tokens = torch.as_tensor(first_input_tokens, dtype=torch.int32).reshape(-1, 1)
+        else:
+            if first_input_tokens is not None:
+                raise ValueError("provide either host or device first-input tokens, not both")
+            if tuple(int(first_input_device_tokens.shape[index]) for index in range(3)) != (1, 1, 1):
+                raise ValueError("device first-input tokens must have shape [1,1,1,batch]")
+            tokens = torch.zeros((positions.numel(), 1), dtype=torch.int32)
         if tokens.shape[0] != positions.numel() or not 1 <= tokens.shape[0] <= self.max_batch_size:
             raise ValueError("token and position rows must match within max_batch_size")
         normalized_prompt_lengths, active_batch_size = self._normalize_decode_slots(
@@ -826,6 +836,8 @@ class Gemma4Generator(Generator):
             tokens = torch.cat((tokens, torch.zeros((padding, 1), dtype=torch.int32)))
             positions = torch.cat((positions, torch.full((padding,), -1, dtype=torch.int32)))
             normalized_prompt_lengths += (0,) * padding
+        if first_input_device_tokens is not None and int(first_input_device_tokens.shape[-1]) != int(tokens.shape[0]):
+            raise ValueError("device first-input token buffer must match the padded physical decode batch")
         sampling_seeds = self._normalize_sampling_seeds(
             seed,
             active_slots=[value >= 0 for value in positions.tolist()],
@@ -861,7 +873,10 @@ class Gemma4Generator(Generator):
             page_table_generations=page_table_generations,
             prompt_lengths=normalized_prompt_lengths,
             active_batch_size=active_batch_size,
+            refresh_tokens_from_host=first_input_device_tokens is None,
         )
+        if first_input_device_tokens is not None:
+            self.model.write_trace_tokens_from_device(first_input_device_tokens)
         if state.trace_id is not None:
             self.model.refresh_trace_page_tables(page_tables, generations=page_table_generations)
             if not force_argmax and not self._is_semantic_greedy(top_k=top_k, top_p=top_p, temperature=temperature):
@@ -953,11 +968,19 @@ class Gemma4Generator(Generator):
         )
         first_buffer = self._new_token_buffer(1)
         first_output, _ = self._sample_eager(prefill_logits, tt_out_tok=first_buffer)
-        first_token = self.read_sampled_token(first_output)
+        # Measure device-complete sampler-ready TTFT without reading the token.
+        # This is one request-boundary fence, not a per-token decode fence.
+        ttnn.synchronize_device(self.mesh_device)
+        self.model.trace_state.counters["synchronizations"] += 1
         prefill_logits.deallocate(True)
-        first_buffer.deallocate(True)
         ttft = time.perf_counter()
-        self.prepare_token_out_decode(first_input_tokens=[first_token], start_positions=[len(prompt_token_ids)])
+        self.prepare_token_out_decode(
+            first_input_tokens=None,
+            first_input_device_tokens=first_output,
+            start_positions=[len(prompt_token_ids)],
+            pad_to_max_batch=False,
+        )
+        first_buffer.deallocate(True)
         steady_start = time.perf_counter()
         for _ in range(max_new_tokens - 2):
             self.decode_next_token_traced()
@@ -1083,7 +1106,10 @@ class Gemma4Generator(Generator):
 
 def build_generator(model_dir: str | Path, mesh_device, **kwargs) -> Gemma4Generator:
     model_config = kwargs.pop("model_config", None)
-    precision_config_path = kwargs.pop("precision_config_path", None) or os.environ.get("GEMMA4_31B_PRECISION_CONFIG")
+    explicit_precision_config_path = kwargs.pop("precision_config_path", None)
+    precision_config_path = explicit_precision_config_path
+    if model_config is None and precision_config_path is None:
+        precision_config_path = os.environ.get("GEMMA4_31B_PRECISION_CONFIG")
     if model_config is None and kwargs.get("model") is not None:
         model_config = kwargs["model"].config
     if model_config is None:
@@ -1101,7 +1127,7 @@ def build_generator(model_dir: str | Path, mesh_device, **kwargs) -> Gemma4Gener
             if precision_config_path is not None
             else Gemma4FullModelConfig(**config_fields)
         )
-    elif precision_config_path is not None:
+    elif explicit_precision_config_path is not None:
         raise ValueError("precision_config_path cannot be combined with an explicit model_config")
     return Gemma4Generator(model_dir=model_dir, mesh_device=mesh_device, model_config=model_config, **kwargs)
 

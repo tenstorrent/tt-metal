@@ -536,6 +536,59 @@ def test_optimized_token_out_has_no_host_logits_boundary():
         assert "torch.argmax" not in source
         assert "logits_to_torch" not in source
 
+    benchmark_source = inspect.getsource(Gemma4Generator.benchmark_token_out_no_readback)
+    assert "read_sampled_token" not in benchmark_source
+    assert "first_input_device_tokens=first_output" in benchmark_source
+    assert "self._new_token_buffer(1)" in benchmark_source
+    assert "pad_to_max_batch=False" in benchmark_source
+
+
+def test_device_token_handoff_skips_host_refresh_on_trace_state_reuse(monkeypatch):
+    model = Gemma4FullModel.__new__(Gemma4FullModel)
+    token_input = object()
+    model.trace_state = DecodeTraceState(
+        token_input=token_input,
+        rope_position=object(),
+        batch_size=2,
+        initial_positions=torch.tensor([4, -1], dtype=torch.int32),
+    )
+    host_token_writes = []
+    position_writes = []
+    monkeypatch.setattr(model, "write_trace_tokens_from_host", lambda values: host_token_writes.append(values))
+    monkeypatch.setattr(model, "write_trace_positions_from_host", lambda values: position_writes.append(values))
+
+    state = model.initialize_trace_state(
+        tokens=torch.zeros((2, 1), dtype=torch.int32),
+        start_pos=torch.tensor([5, -1], dtype=torch.int32),
+        page_tables=[],
+        page_table_generations=[],
+        prompt_lengths=[5, 0],
+        active_batch_size=1,
+        refresh_tokens_from_host=False,
+    )
+
+    assert state.token_input is token_input
+    assert host_token_writes == []
+    assert len(position_writes) == 1
+
+
+def test_device_token_handoff_copies_source_to_persistent_input_once(monkeypatch):
+    class FakeTensor:
+        shape = (1, 1, 1, 2)
+
+    source = FakeTensor()
+    target = FakeTensor()
+    model = Gemma4FullModel.__new__(Gemma4FullModel)
+    model.trace_state = DecodeTraceState(token_input=target)
+    copies = []
+    monkeypatch.setattr(ttnn, "copy", lambda src, dst: copies.append((src, dst)))
+
+    model.write_trace_tokens_from_device(source)
+
+    assert copies == [(source, target)]
+    assert model.trace_state.counters["token_device_refreshes"] == 1
+    assert model.trace_state.counters["token_host_refreshes"] == 0
+
 
 def test_eager_device_logits_release_model_owned_decode_inputs():
     source = inspect.getsource(Gemma4FullModel.decode_forward)

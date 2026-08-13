@@ -47,7 +47,7 @@ def test_selected_multichip_paths_normalize_every_paged_update_operand():
     tail_source = inspect.getsource(OptimizedDecoder._fill_bounded_sliding_cache_exact)
 
     decode_normalize = decode_source.index("k = self._prepare_cache_update_input(k)")
-    decode_branch = decode_source.index("if config.cache_position_modulo is None:")
+    decode_branch = decode_source.index("if config.cache_position_modulo is None and cache_geometry_matches:")
     assert decode_normalize < decode_branch
     assert "v = self._prepare_cache_update_input(v)" in decode_source
 

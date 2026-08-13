@@ -429,6 +429,17 @@ def test_reduced_full_model_prefill_split_greedy_and_trace():
         mixed_tokens_out, _ = generator._sample_eager(mixed_logits, tt_out_tok=mixed_output_buffer)
         sampled_rows = ttnn.to_torch(ttnn.get_device_tensors(mixed_tokens_out)[0]).reshape(-1)[:2]
         assert all(0 <= int(token) < generator.model.vocab_size for token in sampled_rows)
+        generator.prepare_token_out_decode(
+            first_input_tokens=None,
+            first_input_device_tokens=mixed_tokens_out,
+            start_positions=[mixed_lengths[0], -1],
+            prompt_lengths=[mixed_lengths[0], 0],
+            active_batch_size=1,
+        )
+        assert generator.model.trace_state.counters["token_host_refreshes"] == 0
+        assert generator.model.trace_state.counters["token_device_refreshes"] == 1
+        assert generator.model.trace_state.counters["sampled_token_readbacks"] == 0
+        assert generator._sampling_trace_output[0] is generator.model.trace_state.token_input
         mixed_logits.deallocate(True)
         mixed_output_buffer.deallocate(True)
         generator.reset()
@@ -577,14 +588,19 @@ def test_reduced_full_model_token_out_perf_signposts():
             prompt_lens=[len(prompt)],
             return_device_logits=True,
         )
-        first_buffer = generator._new_token_buffer(1)
+        first_buffer = generator._new_token_buffer(generator.max_batch_size)
         first_output, _ = generator._sample_eager(logits, tt_out_tok=first_buffer)
-        first_token = generator.read_sampled_token(first_output)
+        ttnn.synchronize_device(mesh)
+        generator.model.trace_state.counters["synchronizations"] += 1
         logits.deallocate(True)
-        first_buffer.deallocate(True)
         ttft = time.perf_counter()
 
-        generator.prepare_token_out_decode(first_input_tokens=[first_token], start_positions=[len(prompt)])
+        generator.prepare_token_out_decode(
+            first_input_tokens=None,
+            first_input_device_tokens=first_output,
+            start_positions=[len(prompt)],
+        )
+        first_buffer.deallocate(True)
         # The profiler records model construction, prefill, warmup, and both
         # trace captures before the signposted steady window. Flush that setup
         # traffic so the finite device buffers retain every selected replay.
@@ -617,7 +633,8 @@ def test_reduced_full_model_token_out_perf_signposts():
         assert result["trace_counters"]["token_host_refreshes"] == 0
         assert result["trace_counters"]["page_table_refreshes"] == 0
         assert result["trace_counters"]["full_logits_readbacks"] == 0
-        assert result["trace_counters"]["sampled_token_readbacks"] == 1
+        assert result["trace_counters"]["sampled_token_readbacks"] == 0
+        assert result["trace_counters"]["token_device_refreshes"] == 1
         assert generator._sampling_trace_output[0] is generator.model.trace_state.token_input
     finally:
         if generator is not None:

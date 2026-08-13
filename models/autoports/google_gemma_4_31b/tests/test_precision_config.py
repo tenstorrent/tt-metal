@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import ttnn
+import models.autoports.google_gemma_4_31b.tt.generator as generator_module
 from models.autoports.google_gemma_4_31b.tests.run_full_model_qualitative import (
     _model_config_from_environment,
     _run_benchmark_only,
@@ -68,6 +69,21 @@ def test_normal_construction_and_token_out_harness_consume_precision_artifact(mo
     config = _model_config_from_environment()
     assert config.precision_config_id == "baseline_bfp8attn_bfp4mlp_lofi_bf16lm"
     assert config.precision_config_path == str(BASELINE.resolve())
+
+
+def test_explicit_model_config_owns_policy_when_environment_also_names_a_config(monkeypatch):
+    explicit = Gemma4FullModelConfig()
+    monkeypatch.setenv("GEMMA4_31B_PRECISION_CONFIG", str(BASELINE))
+    monkeypatch.setattr(generator_module, "Gemma4Generator", lambda **kwargs: kwargs["model_config"])
+
+    assert generator_module.build_generator(MODEL_DIR, object(), model_config=explicit) is explicit
+    with pytest.raises(ValueError, match="cannot be combined"):
+        generator_module.build_generator(
+            MODEL_DIR,
+            object(),
+            model_config=explicit,
+            precision_config_path=BASELINE,
+        )
 
 
 def test_selected_precision_is_the_normal_default_when_stage_artifact_exists(monkeypatch):
