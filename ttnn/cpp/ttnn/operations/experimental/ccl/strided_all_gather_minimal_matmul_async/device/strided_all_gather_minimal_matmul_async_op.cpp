@@ -125,7 +125,8 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
     const std::optional<const Tensor>& fused_ternary_input_a,
     const std::optional<const Tensor>& fused_ternary_input_b,
     std::optional<float> fused_ternary_scalar,
-    int32_t chunks) {
+    int32_t chunks,
+    ttnn::experimental::prim::MMSignalAggregatorMode mm_signal_aggregator_mode) {
     using OperationType = ttnn::experimental::prim::StridedAllGatherMinimalMatmulAsync;
 
     // addcmul uses value=1 (torch default) when ternary inputs are given without an explicit scalar
@@ -177,7 +178,8 @@ std::vector<Tensor> strided_all_gather_minimal_matmul_async(
         strided_all_gather_core_grid_offset,
         read_local_from_input,
         devices,
-        ag_op};
+        ag_op,
+        mm_signal_aggregator_mode};
     auto tensor_args = OperationType::tensor_args_t{
         input_tensor, weight_tensor, persistent_output_buffer, bias, fused_ternary_input_a, fused_ternary_input_b};
 
