@@ -80,16 +80,17 @@ inline void llk_unpack_A_init(
                     operand_id, tensor_shape, 1);
             }
         } else {
+            static_assert(
+                !(DST_ACCUM_MODE && !unpack_to_dest),
+                "32BIT_DEST is not supported for broadcast when unpack_to_dest is false");
             // Unlike the unary path above, the broadcast LLK takes no TensorShape, so it does not scale
             // its L1 tile index by the face count. Full-tile only until it is converted (tt-metal #47597).
             LLK_ASSERT(
-                get_operand_tensor_shape(operand_id).total_num_faces() == ckernel::MAX_NUM_FACES,
-                "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
-
+                tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM &&
+                    tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
+                "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-            constexpr bool is_fp32_dest_acc_en = unpack_to_dest ? false : DST_ACCUM_MODE;
-            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, unpack_to_dest, is_fp32_dest_acc_en>(
-                operand_id, 1);
+            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, unpack_to_dest>(operand_id, 1);
         }
     }
 }
@@ -115,6 +116,7 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
+    LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
     WAYPOINT("UPAW");
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
@@ -156,6 +158,7 @@ template <
     bool unpack_to_dest = false>
 inline void llk_unpack_A_block(
     const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
+    LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
     const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx;

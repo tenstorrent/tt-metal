@@ -39,6 +39,10 @@ void RunningStatistics::validate_tensors(
     check_tensor_stat(batch_mean, "batch_mean_shape", C);
     check_tensor_stat(batch_var, "batch_var_shape", C);
 
+    TT_FATAL(
+        running_mean.has_value() || running_var.has_value(),
+        "running_statistics requires at least one of running_mean / running_var");
+
     // running_mean (1, C, 1, 1)
     if (running_mean.has_value()) {
         check_tensor_stat(running_mean.value(), "running_mean_shape", C);

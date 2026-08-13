@@ -32,16 +32,19 @@ def main():
     records = []
     lock = threading.Lock()
 
-    def collect_record(record):
-        entry = {
-            "runtime_id": record.runtime_id,
-            "chip_id": record.chip_id,
-            "start_timestamp": record.start_timestamp,
-            "end_timestamp": record.end_timestamp,
-            "frequency_ghz": record.frequency,
-        }
+    def collect_records(batch):
+        entries = [
+            {
+                "runtime_id": record.runtime_id,
+                "chip_id": record.chip_id,
+                "start_timestamp": record.start_timestamp,
+                "end_timestamp": record.end_timestamp,
+                "frequency_ghz": record.frequency,
+            }
+            for record in batch.records
+        ]
         with lock:
-            records.append(entry)
+            records.extend(entries)
 
     # Read imagenet labels (same source as models/conftest.py)
     labels_path = "models/sample_data/imagenet_class_labels.txt"
@@ -70,7 +73,7 @@ def main():
         sys.exit(5)
 
     # Register callback to capture device-side program records
-    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_record)
+    handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(collect_records)
 
     try:
         from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import run_resnet_inference

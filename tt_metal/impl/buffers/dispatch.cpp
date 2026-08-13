@@ -35,10 +35,13 @@
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt_stl/overloaded.hpp>
 #include "tt_metal/api/tt-metalium/experimental/pinned_memory.hpp"
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 
 namespace tt::tt_metal::buffer_dispatch {
+
+using experimental::per_core_allocation::get_shard_base_address;
 
 // ====== Utility Functions for Writes ======
 
@@ -344,8 +347,8 @@ public:
     void reset_params_for_core(const CoreCoord& core, const BufferCorePageMapping& core_page_mapping) {
         this->core = core;
         this->core_page_mapping_it = core_page_mapping.begin();
-        this->address =
-            this->buffer->address() + core_page_mapping.device_start_page * this->buffer->aligned_page_size();
+        this->address = get_shard_base_address(*this->buffer, core) +
+                        core_page_mapping.device_start_page * this->buffer->aligned_page_size();
         if (this->buffer->is_dram()) {
             this->address += this->buffer->device()->allocator()->get_bank_offset(
                 BufferType::DRAM, this->buffer->device()->dram_channel_from_logical_core(core));
@@ -698,14 +701,17 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
 
     // Build sub-commands on the fly with coalescing
     std::vector<CQDispatchWritePackedLargeUnicastSubCmd> write_sub_cmds;
+    write_sub_cmds.reserve(CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_UNICAST_MAX_SUB_CMDS);
     std::vector<CQPrefetchRelayLinearPackedSubCmd> relay_sub_cmds;
+    relay_sub_cmds.reserve(CQ_PREFETCH_CMD_RELAY_LINEAR_PACKED_MAX_SUB_CMDS);
     uint32_t relay_stream_offset = 0;
 
     const CoreCoord virtual_core = buffer.device()->virtual_core_from_logical_core(core, buffer.core_type());
     const uint32_t noc_xy_addr = buffer.device()->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core);
 
     // Calculate base destination address for this core
-    uint32_t dst_base_address = buffer.address() + (core_page_mapping.device_start_page * buffer.aligned_page_size());
+    uint32_t dst_base_address =
+        get_shard_base_address(buffer, core) + (core_page_mapping.device_start_page * buffer.aligned_page_size());
     if (buffer.is_dram()) {
         dst_base_address += buffer.device()->allocator()->get_bank_offset(
             BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(core));
@@ -1242,8 +1248,8 @@ bool write_to_device_buffer(
                         for (const BufferCorePageMapping& core_page_mapping :
                              buffer_page_mapping->core_page_mappings[core_id]) {
                             // Check destination L1 address alignment
-                            uint32_t dst_address =
-                                buffer.address() + (core_page_mapping.device_start_page * buffer.aligned_page_size());
+                            uint32_t dst_address = get_shard_base_address(buffer, cores[core_id]) +
+                                                   (core_page_mapping.device_start_page * buffer.aligned_page_size());
                             if (buffer.is_dram()) {
                                 dst_address += buffer.device()->allocator()->get_bank_offset(
                                     BufferType::DRAM, buffer.device()->dram_channel_from_logical_core(cores[core_id]));
@@ -1543,7 +1549,7 @@ void copy_sharded_buffer_from_core_to_completion_queue(
     ttsl::Span<const SubDeviceId> sub_device_ids,
     const CoreCoord core,
     CoreType dispatch_core_type) {
-    auto address = buffer.address();
+    auto address = get_shard_base_address(buffer, core);
 
     if (buffer.is_dram()) {
         address += buffer.device()->allocator()->get_bank_offset(

@@ -39,8 +39,8 @@ static void run_dfb_size_override_test(
     const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(data_entry_size, workload);
-    MeshTensor in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    MeshTensor out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    MeshTensor in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    MeshTensor out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     experimental::DataMovementHardwareConfig dm_producer_cfg;
     experimental::DataMovementHardwareConfig dm_consumer_cfg;

@@ -36,6 +36,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
     std::size_t logical_n,
+    std::size_t logical_l,
     const SDPAProgramConfig& program_config,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
@@ -52,7 +53,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     bool is_balanced,
     bool is_cross,
     std::optional<uint32_t> kv_cache_batch_idx,
-    std::optional<uint32_t> kv_actual_isl) {
+    std::optional<uint32_t> kv_actual_isl,
+    const std::optional<ttnn::Tensor>& attention_sink,
+    std::optional<uint32_t> sliding_window_size,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -67,6 +72,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         persistent_output_buffer_v,
         joint_strategy,
         logical_n,
+        logical_l,
         program_config,
         dim,
         multi_device_global_semaphore,
@@ -83,7 +89,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         compute_kernel_config,
         strategy,
         kv_cache_batch_idx,
-        kv_actual_isl);
+        kv_actual_isl,
+        attention_sink,
+        sliding_window_size,
+        persistent_output_buffer_joint_k,
+        persistent_output_buffer_joint_v);
     return outputs;
 }
 
@@ -107,7 +117,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
     bool use_column_major_ccl,
     bool is_balanced,
     std::optional<uint32_t> kv_cache_batch_idx,
-    std::optional<uint32_t> kv_actual_isl) {
+    std::optional<uint32_t> kv_actual_isl,
+    const std::optional<ttnn::Tensor>& slot_id,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
+    std::optional<uint32_t> kv_cache_num_layers,
+    std::optional<uint32_t> kv_cache_layer_idx) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
     return ttnn::transformer::ring_mla(
@@ -130,7 +144,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
         compute_kernel_config,
         strategy,
         kv_cache_batch_idx,
-        kv_actual_isl);
+        kv_actual_isl,
+        slot_id,
+        kv_actual_isl_tensor,
+        kv_cache_num_layers,
+        kv_cache_layer_idx);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -582,6 +600,10 @@ void bind_sdpa(nb::module_& mod) {
             persistent_output_buffer_v (ttnn.Tensor): Persistent buffer for gathered V tensor.
             joint_strategy (str): Strategy for joint attention. Must be "rear".
             logical_n (int): The logical sequence length N before sharding across devices.
+            logical_l (int, optional): The full prompt (joint) sequence length L before sharding.
+                Pass the full L when joint_tensor_q/k/v are sharded L/P per device.
+                The op infers the sharded path when per-device joint seq == logical_l / ring_size.
+                If 0 (default) or omitted, behaves as the replicated path (backward-compatible).
             program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
             scale (float, optional): Scale factor for QK^T. Defaults to None.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to None.
@@ -603,6 +625,19 @@ void bind_sdpa(nb::module_& mod) {
             kv_actual_isl (int, optional): Prior valid global KV length before this fixed-size chunk.
                 When passed, enables KV-pad-aware rotation and derives current valid tokens as
                 logical_n - kv_actual_isl.
+            attention_sink (ttnn.Tensor, optional): Per-query-head attention sink with logical shape
+                [1 x nqh x 1 x 1], sharded across the tensor-parallel head axis and replicated across
+                the sequence-parallel ring. The ring-attention sink path requires BF16, streaming
+                compute, causal separate-K/V attention, and supports both full-causal and
+                sliding-window attention. Defaults to None.
+            sliding_window_size (int, optional): Causal attention window in tokens. The ring reader and
+                compute kernels prune K chunks outside the window. Ring attention currently supports the
+                GPT-OSS specialization: a 128-token window, local 8Q:1K:1V heads with D64, BF16 Q,
+                BFP8_B K/V, SP4 production or SP8 test topology, and chunked prefill without joint tokens.
+            persistent_output_buffer_joint_k (ttnn.Tensor, optional): Persistent buffer for the
+                gathered joint K tensor [b x nhv x L x dv]. Allocated internally when omitted.
+            persistent_output_buffer_joint_v (ttnn.Tensor, optional): Persistent buffer for the
+                gathered joint V tensor [b x nhv x L x dv]. Allocated internally when omitted.
 
         Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
         length is less than input_tensor_k's (Q is the latest slab; K is the populated
@@ -618,8 +653,8 @@ void bind_sdpa(nb::module_& mod) {
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
               - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dv].
-              - The attention output for the joint Q/K/V shape    [b x nh x L x dv].
-              - The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L) x 1]
+              - The attention output for the joint Q/K/V shape [b x nh x L/num_devices x dv] (or [b x nh x L x dv] on the replicated path).
+              - The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L/num_devices) x 1]
         )doc";
 
     ttnn::bind_function<"ring_joint_scaled_dot_product_attention", "ttnn.transformer.">(
@@ -637,6 +672,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("persistent_output_buffer_v").noconvert(),
         nb::arg("joint_strategy"),
         nb::arg("logical_n"),
+        nb::arg("logical_l") = 0,
         nb::arg("program_config").noconvert(),
         nb::arg("scale") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
@@ -653,7 +689,11 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("is_balanced").noconvert() = false,
         nb::arg("is_cross").noconvert() = false,
         nb::arg("kv_cache_batch_idx").noconvert() = nb::none(),
-        nb::arg("kv_actual_isl").noconvert() = nb::none());
+        nb::arg("kv_actual_isl").noconvert() = nb::none(),
+        nb::arg("attention_sink") = nb::none(),
+        nb::arg("sliding_window_size") = nb::none(),
+        nb::arg("persistent_output_buffer_joint_k").noconvert() = nb::none(),
+        nb::arg("persistent_output_buffer_joint_v").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.
@@ -718,7 +758,11 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("use_column_major_ccl") = false,
         nb::arg("is_balanced").noconvert() = false,
         nb::arg("kv_cache_batch_idx").noconvert() = nb::none(),
-        nb::arg("kv_actual_isl").noconvert() = nb::none());
+        nb::arg("kv_actual_isl").noconvert() = nb::none(),
+        nb::arg("slot_id").noconvert() = nb::none(),
+        nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
+        nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
+        nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
 
     const auto* exp_ring_joint_doc = R"doc(
         ExpRingJointAttention operation that efficiently performs non-causal attention over two

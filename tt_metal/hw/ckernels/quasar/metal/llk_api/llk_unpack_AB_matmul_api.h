@@ -79,6 +79,8 @@ inline void llk_unpack_AB_matmul(
     const std::uint32_t kt_dim = 1) {
     // In0/InA -> srcB
     // In1/InB -> srcA
+    LLK_TDMA_GUARD_NOTE_TDMA(operandA);  // TEN-4746: real unpack (UNPACR) disarms these dfbs
+    LLK_TDMA_GUARD_NOTE_TDMA(operandB);
 
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);

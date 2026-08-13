@@ -10,7 +10,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/tensor/tensor_apis.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 
 #include <algorithm>
 #include <filesystem>
@@ -48,7 +48,7 @@ MeshTensor build_pad_value_const_mesh_tensor(const PadInputs& tensor_args, float
     auto& cq = device->mesh_command_queue();
     // NOTE: The const buffer is always in L1 (mirrors the legacy factory).
     const MemoryConfig mem_cfg{TensorMemoryLayout::INTERLEAVED, BufferType::L1};
-    return tt::tt_metal::enqueue_write_tensor(cq, host_pad.host_tensor(), *device, mem_cfg);
+    return cq.enqueue_write_tensor(host_pad.host_tensor(), mem_cfg);
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -173,7 +173,8 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
                   "num_local_unpadded_Y",
                   "full_unpadded_X_nbytes",
                   "num_local_W"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ------------------------------------------------------------------------
@@ -199,7 +200,8 @@ ttnn::device_operation::ProgramArtifacts PadRmReaderWriterProgramFactory::create
                   "full_padded_X_nbytes",
                   "dst_stick_offset",
                   "num_local_W"}},
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // ------------------------------------------------------------------------

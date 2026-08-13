@@ -171,7 +171,7 @@ keys. Common values:
 | WH Galaxy         | `wh_galaxy` / `wh_galaxy_perf` |
 | BH P150           | `bh_p150`                   |
 | BH P300           | `bh_p300` (LFC-mode — see [Blackhole weight-cache modes](#blackhole-weight-cache-modes)) |
-| BH QuietBox 2     | `bh_quietbox_2` (2× P300)   |
+| BH QuietBox 2     | `bh_quietbox_2` (2× P300; `yyz4-mnt-models` cache mode — see [Blackhole weight-cache modes](#blackhole-weight-cache-modes)) |
 | BH Galaxy         | `bh_galaxy` / `bh_galaxy_perf` |
 
 > **Blackhole status:** BH SKUs are first-class citizens of the 3-tier
@@ -179,8 +179,8 @@ keys. Common values:
 > `models/model_ci_tiers.md`, the registry yamls, and the relevant
 > workflow `model:` dropdowns the same way you'd add WH rows — but
 > read [Blackhole weight-cache modes](#blackhole-weight-cache-modes)
-> first if your model targets BH P300 (LFC) or any of the local-disk
-> runners.
+> first if your model targets BH P300 (LFC), BH QuietBox 2
+> (`yyz4-mnt-models`), or any of the local-disk runners.
 
 ---
 
@@ -296,18 +296,39 @@ and is consumed by [`models-e2e-tests-impl.yaml`](../.github/workflows/models-e2
 / [`models-unit-tests-impl.yaml`](../.github/workflows/models-unit-tests-impl.yaml)
 when each tier job spins up its container.
 
+The table below mirrors `.github/sku_config.yaml` — check that file for the
+authoritative mapping before relying on it.
+
 | `weights-cache-mode` | Host source mounted at `/mnt/MLPerf/huggingface` | Used by SKUs |
 |---|---|---|
-| `cloud-mlperf` | `/mnt/MLPerf/huggingface` (shared NFS) | `bh_p150`, `bh_loudbox`, `bh_deskbox`, BH Galaxy SKUs, all WH SKUs |
-| `local-disk` | `/localdev/blackhole_demos/huggingface_data` (per-runner) | `bh_quietbox_2`, `bh_llmbox`, `bh_p150_perf` |
-| `lfc` | (no mount — weights fetched at job start) | `bh_p300`, `bh_p150b_civ2` |
+| `cloud-mlperf` | `/mnt/MLPerf/huggingface` (shared NFS) | `bh_p150`, `bh_loudbox` |
+| `yyz4-mnt-models` | `/mnt/models/huggingface` (YYZ4 Exabox NFS mount) | `bh_quietbox_2`, `bh_quietbox_2_iommu` |
+| `local-disk` | `/localdev/blackhole_demos/huggingface_data` (per-runner) | `bh_p150_perf` |
+| `lfc` | `/localdev/blackhole_demos/huggingface_data` (per-runner, `:rw`; not pre-populated — see below) | `bh_p300`, `bh_p300_viommu`, `bh_p150b_civ2` |
+| *(field absent)* | `/mnt/MLPerf` — the **whole tree**, not just `huggingface` | all WH SKUs, BH Galaxy, `bh_p100*`, `bh_sc*`, and every other SKU with no `weights-cache-mode` |
+
+The `(field absent)` fallback mounts the whole `/mnt/MLPerf` tree rather than
+just the `huggingface` subdirectory, which is what preserves access to
+`/mnt/MLPerf/tt_dnn-models` for the WH entries that still read from it.
 
 For most BH SKUs you don't need to do anything special — the standard
 `HF_MODEL=<org>/<name>` + `TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/<org>/<name>`
 pattern works because the impl yaml maps the host cache into the
 canonical path.
 
-**Exception: LFC-mode SKUs (`bh_p300`).** The cache is not pre-populated
+> **Note on the `tt_cache` org separator:** two forms are in use —
+> nested (`tt_cache/<org>/<name>`) and double-dash
+> (`tt_cache/<org>--<name>`). This is **not** a WH-vs-BH split; it is a
+> per-model artifact of how that model's cache was first populated, and
+> it stays with the model across SKUs. Gemma-4 and GPT-OSS use
+> double-dash on WH and BH alike (`tt_cache/google--gemma-4-E2B-it` on
+> `wh_n150`, `tt_cache/openai--gpt-oss-20b` on `wh_llmbox_perf`), while
+> Llama and Qwen use the nested form on both (including on
+> `bh_quietbox_2`). Copy whichever form the entry you are porting
+> already used, or the job pays a full cold-cache weight conversion on
+> every run.
+
+**Exception: LFC-mode SKUs (`bh_p300`, `bh_p300_viommu`, `bh_p150b_civ2`).** The cache is not pre-populated
 on these runners; the test job must pull the weights itself at the
 start of each run. Bundle the `wget` into the test's `cmd:` (not into
 the workflow yaml — keep SKU-specific behavior co-located with the

@@ -5,9 +5,10 @@
 import time
 from typing import Optional
 
-from ttexalens.tt_exalens_lib import (
+from ttexalens.tt_exalens_lib import read_word_from_device
+
+from .device_io import (
     read_from_device,
-    read_word_from_device,
     write_to_device,
     write_words_to_device,
 )
@@ -100,7 +101,6 @@ class Stream:
                 raise TimeoutError(
                     f"Stream: timed out after {timeout}s waiting for free space"
                 )
-            time.sleep(0.001)
 
     def _consumer_poll_avail(self) -> int:
         """Poll for number of available bytes."""
@@ -122,7 +122,6 @@ class Stream:
                 raise TimeoutError(
                     f"Stream: timed out after {timeout}s waiting for data"
                 )
-            time.sleep(0.001)
 
     def init(self) -> None:
         """Initialize the stream. Should be called only once, before all operations."""

@@ -1,4 +1,5 @@
 set(HW_JIT_API_HEADERS
+    inc/experimental/blaze_rt_arg.h
     inc/api/alignment.h
     inc/api/compile_time_args.h
     inc/api/remote_circular_buffer.h
@@ -102,6 +103,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/fast_untilize.h
     inc/api/compute/experimental/mul_reduce_scalar.h
     inc/api/compute/experimental/semaphore.h
+    inc/api/compute/experimental/sum_reduce_scalar.h
     inc/api/compute/binary_fmod.h
     inc/api/compute/gcd.h
     inc/api/compute/isclose.h
@@ -141,6 +143,7 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/circular_buffer.h
     inc/api/dataflow/dataflow_buffer.h
     inc/experimental/kernel_args.h
+    inc/experimental/blaze_named_args.h
     inc/api/dataflow/noc_semaphore.h
     inc/api/core_local_mem.h
     inc/api/tensor/noc_traits.h

@@ -4,6 +4,7 @@
 
 import ttnn
 from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
+from models.demos.minimax_m3.utils.profiler_utils import COARSE, FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
 
 from .attention import Attention, AttentionConfig
@@ -32,7 +33,10 @@ class DecoderLayer:
         use_ep_moe=False,
         ep_seq_len_per_chip=1024,
         sequence_parallel=False,
+        cache_layer_idx=None,
     ):
+        # layer_idx is global (weights + dense/MoE/sparse selection); cache_layer_idx is the local index
+        # for the KV-cache slot (None => single-rank, equal to layer_idx).
         self.input_layernorm = RMSNorm(
             mesh_device,
             hf_config,
@@ -133,12 +137,18 @@ class DecoderLayer:
             ccl_manager=ccl_manager,
             mesh_config=mesh_config,
             program_config=attention_program_config,
-            layer_idx=layer_idx,
+            global_layer_idx=layer_idx,
+            local_layer_idx=cache_layer_idx,
             transformation_mats=transformation_mats,
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "self_attn"),
         )
         self.mesh_device = mesh_device
         self.layer_idx = layer_idx
+        # Profiling zone name for this layer. M3 layers 0-2 are dense (dense attention + dense MLP)
+        # and 3-59 are sparse (MSA + MoE) — sparse_attention_freq and moe_layer_freq agree — so one
+        # tag describes the whole layer. Inner zone names are relative; the parser composes the full
+        # path from the nesting (see utils/profiler_utils.py).
+        self.zone_name = f"layer{layer_idx:02d}_{'sparse' if is_sparse else 'dense'}"
 
     def __call__(
         self,
@@ -158,35 +168,42 @@ class DecoderLayer:
 
         # hidden_states: [1, 1, tokens/num_rows, hidden_size/num_columns]
         # residual: [1, 1, tokens/num_rows, hidden_size/num_columns]
-        residual = hidden_states
-        hidden_states_post_norm = self.input_layernorm(hidden_states)
+        with zone(self.zone_name, COARSE):
+            residual = hidden_states
+            with zone("input_norm", FINE):
+                hidden_states_post_norm = self.input_layernorm(hidden_states)
 
-        # additional all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
-        # hidden_states_post_norm: [1, 1, tokens/num_rows, hidden_size]
-        hidden_states = self.self_attn(
-            hidden_states_post_norm,
-            rope_mats=position_embeddings,
-            position_idx=position_idx,
-            kv_cache=kv_cache,
-            user_id=user_id,
-            batch_size=batch_size,
-            cached_len=cached_len,
-            indexed_rope=indexed_rope,
-        )
-        hidden_states_post_norm.deallocate(True)
+            # additional all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
+            # hidden_states_post_norm: [1, 1, tokens/num_rows, hidden_size]
+            with zone("attn", COARSE):
+                hidden_states = self.self_attn(
+                    hidden_states_post_norm,
+                    rope_mats=position_embeddings,
+                    position_idx=position_idx,
+                    kv_cache=kv_cache,
+                    user_id=user_id,
+                    batch_size=batch_size,
+                    cached_len=cached_len,
+                    indexed_rope=indexed_rope,
+                )
+            hidden_states_post_norm.deallocate(True)
 
-        # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
-        hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
-        residual.deallocate(True)
-        residual = hidden_states
-        hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
-        # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
+            # after reduce scatter at end of attn: [1, 1, global_batch//num_rows, hidden_size/num_columns]
+            with zone("residual_attn", FINE):
+                hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+            residual.deallocate(True)
+            residual = hidden_states
+            with zone("post_attn_norm", FINE):
+                hidden_states_post_norm = self.post_attention_layernorm(hidden_states)
+            # another all_gather (cluster_axis=1) to get [1, 1, global_batch//num_rows, hidden_size]
 
-        hidden_states = self.mlp(hidden_states_post_norm)
-        hidden_states_post_norm.deallocate(True)
+            with zone("mlp", COARSE):
+                hidden_states = self.mlp(hidden_states_post_norm)
+            hidden_states_post_norm.deallocate(True)
 
-        # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]
-        hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
-        residual.deallocate(True)
+            # TODO: replace all_reduce at end of MLP with reduce_scatter so we get [1, 1, global_batch//num_rows, hidden_size/num_columns]
+            with zone("residual_mlp", FINE):
+                hidden_states = ttnn.add(residual, hidden_states, output_tensor=hidden_states)
+            residual.deallocate(True)
 
         return hidden_states

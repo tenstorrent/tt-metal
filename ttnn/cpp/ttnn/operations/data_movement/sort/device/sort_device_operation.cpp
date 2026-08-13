@@ -12,6 +12,15 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 constexpr uint32_t SORT_WT_THRESHOLD = 64;
+// UINT16 + ROW_MAJOR uses a lower SingleCore threshold: the SingleCore RM path
+// promotes the value CBs (rm_input_cb, rm_value_output_cb) from UInt16 to
+// Float32 (2× storage) and its per-row page size scales with the full W (Wt *
+// TILE_W * 4 B), so at Wt = 64 the sum of static CBs exceeds the ~1.5 MB L1
+// budget.  The MultiCore factory's UINT16 RM path uses per-tile pages and does
+// not scale with Wt, so we route Wt > 32 UINT16 RM inputs there.  Empirically
+// Wt = 32 stays comfortably below the L1 cap (~1.1 MB static CBs); Wt = 64
+// OOMs during program allocation.
+constexpr uint32_t SORT_WT_THRESHOLD_UINT16_ROW_MAJOR = 32;
 
 SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
@@ -38,11 +47,22 @@ SortDeviceOperation::program_factory_t SortDeviceOperation::select_program_facto
             index_dtype,
             SortProgramFactoryCrossCoreDataExchange::CrossCoreDataExchangeSortSlicingStrategy::USE_AS_MANY_CORES);
 
-    if (Wt <= SORT_WT_THRESHOLD) {
+    const bool is_uint16 = (input_dtype == DataType::UINT16);
+    const uint32_t single_core_wt_threshold =
+        (is_uint16 && is_row_major) ? SORT_WT_THRESHOLD_UINT16_ROW_MAJOR : SORT_WT_THRESHOLD;
+
+    if (Wt <= single_core_wt_threshold) {
         // Single-core implementation
         return SortProgramFactorySingleRowSingleCore{};
     }
-    if (Wt <= total_number_of_tiles_for_hybrid_approach) {
+    // UINT16 support in the CrossCore factory would require Float32 intermediate,
+    // peer, and rm_value_output CBs (c_4, c_6, c_8, c_13) plus reader/writer
+    // element-wise UInt16↔Float32 conversion loops.  Until that is wired up,
+    // route UINT16 inputs above the SingleCore threshold through the MultiCore
+    // DRAM factory, which already has both reader and writer UInt16↔Float32
+    // conversion paths for TILE and ROW_MAJOR (see
+    // SortProgramFactorySingleRowMultiCore and its dataflow kernels).
+    if (!is_uint16 && Wt <= total_number_of_tiles_for_hybrid_approach) {
         // Hybrid implementation
         return SortProgramFactoryCrossCoreDataExchange{};
     }
@@ -79,6 +99,13 @@ void SortDeviceOperation::validate_on_program_cache_miss(
         input.dtype());
 
     const bool is_row_major = (input.layout() == Layout::ROW_MAJOR);
+
+    // UINT16 support: the reader/writer kernels of both the SingleCore and
+    // MultiCore factories perform an element-wise UInt16↔Float32 software
+    // conversion for both TILE and ROW_MAJOR layouts, so any Wt is accepted.
+    // The CrossCore factory does NOT yet include the equivalent conversion;
+    // select_program_factory routes UINT16 with Wt > SORT_WT_THRESHOLD to
+    // MultiCore to work around that.
 
     // Width must be a multiple of 64 regardless of layout.
     // For TILE the relevant dimension is the padded width; for ROW_MAJOR it is
@@ -127,10 +154,11 @@ void SortDeviceOperation::validate_on_program_cache_miss(
                     tensor_args.output_tensors.at(1)->dtype() == DataType::UINT32,
                 "Output indices tensor dtype must be UINT16 or UINT32. Got output indices tensor dtype: {}",
                 tensor_args.output_tensors.at(1)->dtype());
-            if (tensor_args.input_tensor.dtype() == DataType::FLOAT32) {
+            if (tensor_args.input_tensor.dtype() == DataType::FLOAT32 ||
+                tensor_args.input_tensor.dtype() == DataType::UINT16) {
                 TT_FATAL(
                     tensor_args.output_tensors.at(1)->dtype() == DataType::UINT32,
-                    "Output indices tensor dtype must be UINT32 when input dtype is FLOAT32 "
+                    "Output indices tensor dtype must be UINT32 when input dtype is FLOAT32 or UINT16 "
                     "(fp32_dest_acc_en forces 32-bit index tiles). Got: {}",
                     tensor_args.output_tensors.at(1)->dtype());
             }
@@ -152,15 +180,17 @@ SortDeviceOperation::spec_return_value_t SortDeviceOperation::compute_output_spe
     // (uint16) or INT32 (uint32) mode in the SFPU to track indices, so the CB
     // format must match.
     //
-    // When the input dtype forces fp32_dest_acc_en (currently FLOAT32) the
-    // DEST registers are in 32-bit mode and topk reads indices via the INT32
-    // path; UINT16 index tiles (2KB) would not match the writer-generated
-    // 32-bit tiles (4KB) sized to that mode and the writer would overrun the
-    // index CB.  Force UINT32 indices in that case so CB sizing, writer tile
-    // generation, and LLK SFPU mode all agree.
+    // When fp32_dest_acc_en is enabled the DEST registers are 32-bit and topk
+    // reads/writes indices via the INT32 path; UINT16 index tiles (2 KB) would
+    // not match the 4 KB tiles that mode produces, overrunning the index CB.
+    // Force UINT32 indices whenever the sort runs in 32-bit DEST mode, which
+    // currently happens for:
+    //   • FLOAT32 input (direct fp32 comparison)
+    //   • UINT16 input  (uint16 int → fp32 via hardware unpack, exact 0..65535)
     const bool input_is_fp32 = (tensor_args.input_tensor.dtype() == DataType::FLOAT32);
+    const bool input_is_uint16 = (tensor_args.input_tensor.dtype() == DataType::UINT16);
     DataType index_dtype = DataType::UINT16;
-    if (output_shape[-1] >= std::numeric_limits<uint16_t>::max() || input_is_fp32) {
+    if (output_shape[-1] >= std::numeric_limits<uint16_t>::max() || input_is_fp32 || input_is_uint16) {
         index_dtype = DataType::UINT32;
     }
 

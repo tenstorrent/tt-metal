@@ -538,6 +538,7 @@ void syncAllDevices(ChipId host_connected_device) {
     for (auto& sender : profiler_state_manager->device_device_time_pair) {
         for (auto& receiver : sender.second) {
             std::vector<std::pair<uint64_t, uint64_t>> timePairs;
+            timePairs.reserve(receiver.second.size() / 2);
             for (int i = 0; i < receiver.second.size(); i += 2) {
                 uint64_t senderTime = (receiver.second[i].first + receiver.second[i + 1].first) / 2;
                 timePairs.push_back({senderTime, receiver.second[i].second});
@@ -822,6 +823,11 @@ bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& vir
     const ChipId device_id = device->id();
     const uint8_t device_num_hw_cqs = device->num_hw_cqs();
     const auto& dispatch_core_config = get_dispatch_core_config();
+    const CoreType dispatch_core_type =
+        resolve_dispatch_core_type(
+            MetalEnvAccessor(tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_env()).impl(),
+            device_id,
+            dispatch_core_config);
     std::vector<CoreCoord> dispatch_cores;
     for (const CoreCoord& core : tt::get_logical_dispatch_cores(
              MetalEnvAccessor(tt::tt_metal::MetalContext::instance(extract_context_id(device)).get_env()).impl(),
@@ -829,7 +835,7 @@ bool areAllCoresDispatchCores(IDevice* device, const std::vector<CoreCoord>& vir
              device_num_hw_cqs,
              dispatch_core_config)) {
         const CoreCoord virtual_dispatch_core =
-            device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config));
+            device->virtual_core_from_logical_core(core, dispatch_core_type);
         dispatch_cores.push_back(virtual_dispatch_core);
     }
 
@@ -1065,10 +1071,11 @@ std::vector<CoreCoord> getVirtualCoresForProfiling(const IDevice* device, const 
     }
 
     if (env.get_rtoptions().get_profiler_do_dispatch_cores()) {
+        const CoreType dispatch_core_type =
+            resolve_dispatch_core_type(env, device_id, dispatch_core_config);
         for (const CoreCoord& core :
              tt::get_logical_dispatch_cores(env, device_id, device_num_hw_cqs, dispatch_core_config)) {
-            const CoreCoord curr_core =
-                device->virtual_core_from_logical_core(core, get_core_type_from_config(dispatch_core_config));
+            const CoreCoord curr_core = device->virtual_core_from_logical_core(core, dispatch_core_type);
             virtual_cores.push_back(curr_core);
         }
     }

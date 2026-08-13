@@ -15,9 +15,7 @@ on:
         type: choice
         options:
           - all
-          - mistral-small-3.1-24b
           - mochi
-          - wan2.2-t2v-a14b
           - z-image-turbo
       system-type:
         description: "Select system type to test"
@@ -166,7 +164,7 @@ jobs:
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
   blackhole-demo-tests:
