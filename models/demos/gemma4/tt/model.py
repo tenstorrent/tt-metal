@@ -357,7 +357,8 @@ class Gemma4Model:
         # Stash for prefill inputs computed in ``prepare_inputs_prefill``.
         # The Generator interface splits prefill into prepare→forward, but
         # forward's signature doesn't carry the host-side input_ids/embeds
-        # the model needs for per-layer inputs, so we cache them here.
+        # PLI needs, so we cache them here. ``_prefill_embeds_torch`` is only
+        # filled when PLI is configured (E2B/E4B); 31B leaves it None.
         # Direct callers (text_demo, unit tests) pass them explicitly to
         # ``ttnn_prefill_forward`` and bypass this stash.
         self._prefill_input_ids_torch = None
@@ -1548,8 +1549,7 @@ class Gemma4Model:
         batched_prefill=False,
         **kwargs,
     ):
-        """Build prefill device inputs and cache the host-side state needed
-        for per-layer inputs.
+        """Build prefill device inputs and cache host-side PLI state.
 
         Returns a 6-tuple matching
         ``models/tt_transformers/tt/model.py:prepare_inputs_prefill``:
@@ -1563,9 +1563,10 @@ class Gemma4Model:
         refresh the absolute start via ``copy_host_to_device``); otherwise
         ``None`` and the generator passes a Python int into
         ``ttnn_prefill_forward``.
-        """
-        import torch.nn.functional as F
 
+        Host ``_prefill_embeds_torch`` is only computed when PLI is configured
+        (E2B/E4B); non-PLI models (31B) skip the vocab-table ``F.embedding``.
+        """
         del start_pos, last_token_idx, global_user_id, user_id, batched_prefill, kwargs
 
         device = None if trace_enabled else self.mesh_device
@@ -1632,7 +1633,12 @@ class Gemma4Model:
         self._prefill_input_ids_torch = tokens_torch
         self._prefill_batch_size = batch_size
         self._prefill_seq_len_per_user = per_user_seq_len
-        if self._embed_weight_cpu is not None:
+        # Host embeds feed PLI only. Unconditional F.embedding over the vocab
+        # table was ~32 ms of start→Embeddings host gap at ISL 2048 on 31B
+        # (no PLI); skip when PLI is off. Same gate as _compute_per_layer_inputs.
+        if self.hidden_size_per_layer_input and self.per_layer_input_weights and self._embed_weight_cpu is not None:
+            import torch.nn.functional as F
+
             self._prefill_embeds_torch = F.embedding(tokens_torch, self._embed_weight_cpu).float() * self.embed_scale
         else:
             self._prefill_embeds_torch = None
