@@ -225,7 +225,7 @@ CPMAddPackage(
     NAME nanobind
     GITHUB_REPOSITORY wjakob/nanobind
     GIT_TAG
-        2a61ad2494d09fecb2e13322c1383342c299900d # 2.12.0
+        86e5626728fc282637a6c338597120913dded1bb # 2.14.0
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "NB_USE_SUBMODULE_DEPS ON"
