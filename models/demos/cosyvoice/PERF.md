@@ -780,13 +780,41 @@ traced time (`14.3 → 8.3 ms`). Untraced cost tracks the *op count*, which the 
 only once dispatch is gone does the time track the work. So the speedup grows as chunks get shorter
 — which is the streaming case.
 
-**Capture costs more than one untraced call**, so `decode` waits for a geometry's second sighting
-before recording. A one-shot synthesis sees each `mel_frames` once and never pays for a trace it
-cannot amortise; streaming reuses its chunk geometry and picks the trace up on its own.
-`COSYVOICE_HIFT_TRACE=0` disables it. Needs the device opened with a `trace_region_size`; without
-one, capture fails, the fallback logs once, and the vocoder stays untraced.
+**Capturing is what makes this a trade, and it is dearer than a single-call measurement suggests.**
+Taking a trace for a geometry the process has not captured before costs about `980 ms` on both
+parts. Against `~34 ms` saved per replay the crossover is near **30 chunks** — roughly a minute of
+audio — so the cache is **off by default**, including for `TtStreamingSynthesizer`.
 
-At the utterance level this is worth `0.032 s` on `p150b` and `0.016–0.031 s` on n300 — real, but the
+Measured over a repeated middle-chunk geometry (`mel_frames = 172`), cumulative:
+
+| chunks | `p150b` off | `p150b` on | n300 off | n300 on |
+|---:|---:|---:|---:|---:|
+| 1 | `43 ms` | `46 ms` | `101 ms` | `49 ms` |
+| 2 | `88 ms` | `1058 ms` | `160 ms` | `1157 ms` |
+| 12 | `519 ms` | `1151 ms` | `640 ms` | `1347 ms` |
+
+Per chunk after capture: `43.3 → 9.3 ms` on `p150b` (`4.7×`) and `53 → 19 ms` on n300 (`2.8×`).
+
+Two wrong guesses at that `980 ms`, both worth recording so they are not made again. It is **not**
+kernel compilation — warming twice instead of once moved it `933 → 970 ms`. It is **not** the first
+capture in the process — priming with a one-op trace costs `0.4 ms` and changes nothing. It is the
+first capture *of a given geometry*: a second capture of one already seen costs `~110 ms`, which is
+why an in-session measurement flatters it and why the figure first recorded here was `110 ms`.
+
+No sighting-count heuristic can decide this, because it is a guess about the future. The first
+version tried anyway, capturing on a geometry's second sighting, and the RTF gate caught it — that
+harness warms once and times the second call:
+
+| `p150b`, one-shot RTF gate | vocoder stage | total | RTF |
+|---|---:|---:|---:|
+| capture on second sighting | `0.172 s` | `1.406 s` | `0.429` |
+| off (the default) | `0.058 s` | `1.271 s` | `0.388` |
+
+A caller that knows its stream is long opts in with `enable_trace()`; `COSYVOICE_HIFT_TRACE=1`/`=0`
+overrides. Needs the device opened with a `trace_region_size`; without one, capture fails, the
+fallback logs once, and the vocoder stays untraced.
+
+At the utterance level a *replayed* decode is worth `0.032 s` on `p150b` and `0.016–0.031 s` on n300 — real, but the
 vocoder is only 4 % of end-to-end, so it does not move RTF much. On n300 it is `0.575 → 0.570`; even
 a vocoder that cost nothing at all would only reach `0.551`, so **RTF `0.5` is not reachable from
 here** — the LLM is 71 % of a Wormhole utterance and would have to give up `0.246 s`. This is worth
