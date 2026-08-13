@@ -1319,14 +1319,8 @@
   cmd: |
     export HF_MODEL=BAAI/bge-m3 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/BAAI/bge-m3
     exit_code=0
-    pytest --timeout 300 \
-      models/demos/wormhole/bge_m3/tests/pcc/test_layernorm.py \
-      models/demos/wormhole/bge_m3/tests/pcc/test_embeddings.py \
-      models/demos/wormhole/bge_m3/tests/pcc/test_mlp.py \
-      models/demos/wormhole/bge_m3/tests/pcc/test_attention.py \
-      models/demos/wormhole/bge_m3/tests/pcc/test_transformer_block.py || exit_code=$?
-    pytest --timeout 600 models/demos/wormhole/bge_m3/tests/pcc/test_model.py || exit_code=$?
-    pytest --timeout 600 models/demos/wormhole/bge_m3/tests/pcc/test_generator_vllm.py || exit_code=$?
+    pytest --timeout 600 -rA models/demos/wormhole/bge_m3/tests/pcc/test_model.py || exit_code=$?
+    pytest --timeout 600 -rA models/demos/wormhole/bge_m3/tests/pcc/test_generator_vllm.py || exit_code=$?
     exit $exit_code
   model: bge_m3
   skus:
