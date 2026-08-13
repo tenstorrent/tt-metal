@@ -28,11 +28,6 @@ CONV_SPLIT_MODES = ("off", "weight", "full")
 # 128 lives in `blockings_minimax_h3_audio`.
 DEFAULT_MAX_C_IN_BLOCK = 128
 
-# Channel width `SnakeBeta`'s timestep fold aims for. Above ~256 the per-row cost starts climbing
-# (11.3 ns/row at C=256 against 4.2 at C=8) and the returns flatten, so 256 is the measured knee rather
-# than an arbitrary round number. Override per layer with `SnakeBeta(fold_target=...)`.
-DEFAULT_FOLD_TARGET_CHANNELS = 256
-
 
 def weights_variant(split_mode: str, tap_matmul: bool, max_c_in_block: int = DEFAULT_MAX_C_IN_BLOCK) -> str:
     """Cache-key suffix for the precision levers that change the prepared parameter set.
@@ -1429,21 +1424,18 @@ class SnakeBeta(Module):
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config=None,
-        fold_target: int = DEFAULT_FOLD_TARGET_CHANNELS,
     ) -> None:
         super().__init__()
         self.channels = channels
         self.alpha_logscale = alpha_logscale
         self.eps = 1e-9
         self.parallel_config = parallel_config
-        self.fold_target = fold_target
         # Under channel-TP, pad α/β to the C-shard unit to match the padded activation.
         unit = channel_align_unit(parallel_config) if channel_axis(parallel_config) is not None else 1
         self._aligned_channels = aligned_channels(channels, unit)
         self.alpha = Parameter(total_shape=[1, 1, self._aligned_channels], device=mesh_device, dtype=dtype)
         self.beta = Parameter(total_shape=[1, 1, self._aligned_channels], device=mesh_device, dtype=dtype)
         self._ab_shard = None
-        self._ab_folded: dict = {}
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         for name in ("alpha", "beta"):
@@ -1462,59 +1454,6 @@ class SnakeBeta(Module):
                         t[..., real:] = 1.0
                 state[name] = t.contiguous()
 
-    def _fold_factor(self, local_T: int, C: int) -> int:
-        """How many timesteps to fold into the channel axis, to make rows wide and few.
-
-        `snake_beta` is elementwise with per-channel alpha/beta, so folding F consecutive timesteps
-        into C is an exact re-indexing -- provided alpha/beta repeat with period C, which `_folded_ab`
-        arranges. F must divide the local T exactly; padding to make it divide would cost an op at the
-        *unfolded* row count, which is the very thing being avoided.
-
-        The factor to maximise is the row count, not tile occupancy. Holding total elements fixed and
-        varying C measures:
-
-            C      rows    fp32 ms   ns/row    GB/s   vs C=8
-            8   662 424      2.765      4.2    23.0    1.00x
-           32   165 606      0.751      4.5    84.7    3.68x
-          128    41 401      0.293      7.1   216.7    9.42x
-          256    20 700      0.235     11.3   271.0   11.78x
-
-        A row costs ~4.2 ns almost regardless of what it carries, so the same data is 11.8x cheaper at
-        C=256 than at C=8. An earlier version stopped at one tile width (C=32) on the assumption that a
-        full tile was the goal; that took 3.68x where ~11x was available. Tile occupancy is
-        second-order -- C=168 pads to 192 and still wins, because it cut rows 21-fold.
-
-        Nor does F need to be a power of two, and C >= 32 is no reason to stop: it only has to divide
-        T. At the production lengths that is worth far more than the old rule allowed --
-        T=165606/C=8 admits 21 (not 2), T=331212/C=8 admits 28 (not 4), and T=124206/C=32 admits 6
-        where the old rule folded not at all.
-        """
-        if channel_axis(self.parallel_config) is not None:
-            return 1
-        max_f = max(1, self.fold_target // C)
-        for f in range(min(max_f, local_T), 1, -1):
-            if local_T % f == 0:
-                return f
-        return 1
-
-    def _folded_ab(self, fold: int):
-        """alpha/beta repeated `fold` times along C, cached per repeat count.
-
-        Serves both the tile-fold (`_fold_factor`) and `channel_repeat`, since both need exactly the
-        same thing: the per-channel parameters tiled so they line up with a widened channel axis.
-        """
-        cached = self._ab_folded.get(fold)
-        if cached is None:
-            a, b = self._ab_shard
-            # ttnn.repeat, not a last-dim concat: alpha/beta are (1, 1, C) fp32, and concat on the
-            # last dim truncates the mantissa to TF32 whenever the row is not a multiple of the 64B
-            # buffer alignment (see `_pad_channels_to_aligned`). Folding only happens for C <= 128,
-            # so C=8 and C=24 were corrupting the snake parameters in every band that folds.
-            shape = ttnn.Shape([1, 1, fold])
-            cached = (ttnn.repeat(a, shape), ttnn.repeat(b, shape))
-            self._ab_folded[fold] = cached
-        return cached
-
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
         # α, β per-channel; C-shard under channel-TP.
         if self._ab_shard is None:
@@ -1524,16 +1463,6 @@ class SnakeBeta(Module):
             )
         a, b = self._ab_shard
 
-        B, T, C = int(x_BTC.shape[0]), int(x_BTC.shape[1]), int(x_BTC.shape[2])
-        fold = self._fold_factor(T, C) if x_BTC.layout == ttnn.ROW_MAJOR_LAYOUT else 1
-        if fold > 1:
-            # Fold in ROW_MAJOR, where the reshape is a free re-interpretation of contiguous rows;
-            # doing it after tilizing would be a real data movement.
-            a, b = self._folded_ab(fold)
-            x_BTC = ttnn.reshape(x_BTC, (B, T // fold, C * fold))
-
         x_tile = ttnn.to_layout(x_BTC, ttnn.TILE_LAYOUT) if x_BTC.layout != ttnn.TILE_LAYOUT else x_BTC
         y = ttnn.snake_beta(x_tile, a, b)
-        if fold > 1:
-            y = ttnn.reshape(ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT), (B, T, C))
         return y
