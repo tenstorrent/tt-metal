@@ -166,6 +166,7 @@ void Synchronize(
         return;
     }
     if (mesh_cq.has_value()) {
+        TT_FATAL(mesh_cq.value().device() == &device, "MeshCommandQueue belongs to a different MeshDevice");
         mesh_cq.value().finish(sub_device_ids);
     } else {
         for (uint8_t cq_id = 0; cq_id < device.num_hw_cqs(); ++cq_id) {
