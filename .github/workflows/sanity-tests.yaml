@@ -200,6 +200,9 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       skip-tt-train: false
       enable-lto: ${{ inputs.enable-lto || false }}
+      # CI-internal only: consumers of these packages all run in docker images that
+      # already stage SFPI, so skip the redundant download. Never set for release builds.
+      use-system-sfpi: true
       ref: ${{ inputs.ref || github.sha }}
       checkout-filter: tree:0
 

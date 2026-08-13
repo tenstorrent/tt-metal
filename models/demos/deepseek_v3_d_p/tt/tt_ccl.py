@@ -131,6 +131,14 @@ class TT_CCL:
         # MLA, keyed by shape signature. See get_mla_chunked_kv_buffer.
         self.mla_chunked_kv_buffers: dict[tuple, "ttnn.Tensor"] = {}
 
+        # Persistent full-capacity sparse-MLA KV-prefix gather buffers shared by every layer's MLA.
+        # See get_mla_sparse_kv_gather_buffer.
+        self.mla_sparse_kv_gather_buffers: dict[tuple, "ttnn.Tensor"] = {}
+
+        # Persistent TP high-bandwidth all-gather outputs shared by MLA layers.  Their sequence
+        # capacity is the fixed prefill chunk length, not the growing KV-cache length.
+        self.mla_high_bw_all_gather_buffers: dict[tuple, "ttnn.Tensor"] = {}
+
         # Persistent ring-indexer gathered-K scratch buffers shared by every layer's DSA indexer,
         # keyed by shape signature. See get_indexer_ring_k_buffer.
         self.indexer_ring_k_buffers: dict[tuple, "ttnn.Tensor"] = {}
@@ -220,6 +228,45 @@ class TT_CCL:
                 ),
             )
         return self.mla_chunked_kv_buffers[key]
+
+    def get_mla_sparse_kv_gather_buffer(self, *, seq_len, row_width, dtype, layout):
+        """Return the full-capacity output scratch for sparse MLA's SP KV-prefix gather.
+
+        The sparse cache has a fixed maximum sequence length. Each layer gathers one selected cache slot
+        into this replicated batch-1 scratch, overwriting it before sparse SDPA consumes the selected
+        indices. Layers run serially, so one stable-address buffer per cache representation is sufficient
+        for the model and avoids per-prefix allocations.
+        """
+        import torch
+
+        key = (seq_len, row_width, dtype, layout)
+        if key not in self.mla_sparse_kv_gather_buffers:
+            self.mla_sparse_kv_gather_buffers[key] = ttnn.from_torch(
+                torch.zeros(1, 1, seq_len, row_width),
+                device=self.mesh_device,
+                layout=layout,
+                dtype=dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        return self.mla_sparse_kv_gather_buffers[key]
+
+    def get_mla_high_bw_all_gather_buffer(self, *, name, shape, dtype, layout):
+        """Return an MLA TP all-gather output allocated during model construction.
+
+        Layers execute serially, so one buffer for each fixed activation shape can be shared across the
+        model.  ``shape`` is the maximum (fixed) prefill chunk shape seen by the corresponding gather.
+        """
+        key = (name, tuple(shape), dtype, layout)
+        if key not in self.mla_high_bw_all_gather_buffers:
+            self.mla_high_bw_all_gather_buffers[key] = ttnn.empty(
+                shape,
+                dtype=dtype,
+                layout=layout,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        return self.mla_high_bw_all_gather_buffers[key]
 
     def get_indexer_ring_k_buffer(self, *, local_k, sp_axis):
         """Return the persistent full-K output buffer for the fused ring indexer.
