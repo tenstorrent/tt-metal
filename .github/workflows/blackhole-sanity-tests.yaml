@@ -123,9 +123,7 @@ on:
   # push:
   #  branches: ["main"]
 
-run-name: >-
-  ${{ (inputs.enable-watcher == true && 'Blackhole sanity tests (watcher enabled)')
-  || 'Blackhole sanity tests' }}
+run-name: ":warning: WARNING :warning:: This Pipeline is depricated, all tests moved to `sanity-tests.yaml`"
 
 permissions:
   actions: read
