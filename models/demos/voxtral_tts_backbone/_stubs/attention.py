@@ -24,6 +24,8 @@ from __future__ import annotations
 import torch
 import ttnn
 
+from models.demos.voxtral_tts_backbone._stubs.decode_matmul import build_plan
+
 
 def _is_mesh_device(device) -> bool:
     try:
@@ -89,6 +91,8 @@ class TtAttention:
         self.n_heads, self.n_kv_heads, self.head_dim = dims
         self.scaling = scaling
         self.kv_write_memory_config = _kv_write_memory_config(self.n_kv_heads, self.head_dim)
+        # K and V share a shape, so one plan serves both.
+        self.kv_plan = build_plan(device, int(self.wk.shape[-2]), int(self.wk.shape[-1]))
         # HiFi4 + fp32 accumulate: the projections and the SDPA feed a 0.99 PCC
         # gate, and bf16 LoFi accumulation is what usually costs those digits.
         try:
@@ -139,6 +143,18 @@ class TtAttention:
         first = ttnn.slice(x, [0, 0, 0, 0], [shape[0], shape[1], shape[2], half])
         second = ttnn.slice(x, [0, 0, 0, half], [shape[0], shape[1], shape[2], self.head_dim])
         return ttnn.concat([ttnn.neg(second), first], dim=-1)
+
+    def _kv_proj(self, hidden_states, weight, mm):
+        """K/V projection, on the full grid for the decode shape.
+
+        These are the NARROWEST projections in the block (3072 -> 1024, only 32
+        output tiles), which is exactly the case `ttnn.linear` routes worst: at
+        decode it reached 118 GB/s, less than a quarter of the device's DRAM
+        bandwidth and by far the lowest of any projection here.
+        """
+        if self.kv_plan is not None and self.kv_plan.matches(hidden_states):
+            return self.kv_plan(hidden_states, weight, self.compute_kernel_config)
+        return ttnn.linear(hidden_states, weight, **mm)
 
     def _apply_rope(self, x, cos, sin):
         return ttnn.add(ttnn.multiply(x, cos), ttnn.multiply(self._rotate_half(x), sin))
@@ -196,8 +212,8 @@ class TtAttention:
         mm = {"compute_kernel_config": self.compute_kernel_config} if self.compute_kernel_config else {}
 
         query = self._split_heads(ttnn.linear(hidden_states, self.wq, **mm), self.n_heads)
-        key = self._split_heads(ttnn.linear(hidden_states, self.wk, **mm), self.n_kv_heads)
-        value = self._split_heads(ttnn.linear(hidden_states, self.wv, **mm), self.n_kv_heads)
+        key = self._split_heads(self._kv_proj(hidden_states, self.wk, mm), self.n_kv_heads)
+        value = self._split_heads(self._kv_proj(hidden_states, self.wv, mm), self.n_kv_heads)
 
         query = self._apply_rope(query, cos, sin)
         key = self._apply_rope(key, cos, sin)
