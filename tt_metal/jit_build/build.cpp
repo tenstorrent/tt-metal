@@ -185,6 +185,14 @@ void JitBuildEnv::init(
         "-Wno-error=unused-but-set-variable -Wno-unused-variable "
         "-Wno-unused-function ";
 
+    // Escape hatch for compiler experiments: extra flags appended to every
+    // JIT-built kernel.  These participate in the build hash below, so
+    // changing them invalidates the kernel cache rather than silently reusing
+    // objects built with different flags.
+    if (const char* extra = std::getenv("TT_METAL_KERNEL_EXTRA_CFLAGS")) {
+        this->cflags_ += std::string(extra) + " ";
+    }
+
     // Defines
     this->defines_ = "";
     for (const auto& device_kernel_define : device_kernel_defines) {

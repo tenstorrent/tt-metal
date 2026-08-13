@@ -14,7 +14,7 @@
 #define TT_OP_ADDDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
     TT_OP(0x58, (((OpBisConst) << 23) + ((ResultRegIndex) << 12) + ((OpBRegIndex) << 6) + ((OpARegIndex) << 0)))
 #define TT_ADDDMAREG_VALID(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    (ckernel::is_valid(OpBisConst, 1) && ckernel::is_valid(ResultRegIndex, 6) && ckernel::is_valid(OpBRegIndex, 6) && ckernel::is_valid(OpARegIndex, 6))
+    (ckernel::is_valid(OpBisConst, 1) && ckernel::is_valid(ResultRegIndex, 11) && ckernel::is_valid(OpBRegIndex, 6) && ckernel::is_valid(OpARegIndex, 6))
 #define TT_ADDDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
     ckernel::instrn_buffer[0] = TT_OP_ADDDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex)
 #define TTI_ADDDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
@@ -53,7 +53,7 @@
 #define TT_OP_ATCAS(MemHierSel, SwapVal, CmpVal, Sel32b, DataRegIndex, AddrRegIndex) \
     TT_OP(0x64, (((MemHierSel) << 23) + ((SwapVal) << 18) + ((CmpVal) << 14) + ((Sel32b) << 12) + ((DataRegIndex) << 6) + ((AddrRegIndex) << 0)))
 #define TT_ATCAS_VALID(MemHierSel, SwapVal, CmpVal, Sel32b, DataRegIndex, AddrRegIndex)                                                   \
-    (ckernel::is_valid(MemHierSel, 1) && ckernel::is_valid(SwapVal, 4) && ckernel::is_valid(CmpVal, 4) && ckernel::is_valid(Sel32b, 2) && \
+    (ckernel::is_valid(MemHierSel, 1) && ckernel::is_valid(SwapVal, 5) && ckernel::is_valid(CmpVal, 4) && ckernel::is_valid(Sel32b, 2) && \
      ckernel::is_valid(DataRegIndex, 6) && ckernel::is_valid(AddrRegIndex, 6))
 #define TT_ATCAS(MemHierSel, SwapVal, CmpVal, Sel32b, DataRegIndex, AddrRegIndex) \
     ckernel::instrn_buffer[0] = TT_OP_ATCAS(MemHierSel, SwapVal, CmpVal, Sel32b, DataRegIndex, AddrRegIndex)
@@ -357,7 +357,7 @@
 #define TT_OP_MULDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
     TT_OP(0x5a, (((OpBisConst) << 23) + ((ResultRegIndex) << 12) + ((OpBRegIndex) << 6) + ((OpARegIndex) << 0)))
 #define TT_MULDMAREG_VALID(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    (ckernel::is_valid(OpBisConst, 1) && ckernel::is_valid(ResultRegIndex, 6) && ckernel::is_valid(OpBRegIndex, 6) && ckernel::is_valid(OpARegIndex, 6))
+    (ckernel::is_valid(OpBisConst, 1) && ckernel::is_valid(ResultRegIndex, 11) && ckernel::is_valid(OpBRegIndex, 6) && ckernel::is_valid(OpARegIndex, 6))
 #define TT_MULDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
     ckernel::instrn_buffer[0] = TT_OP_MULDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex)
 #define TTI_MULDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
@@ -533,7 +533,7 @@
 #define TT_OP_SETDMAREG(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b) \
     TT_OP(0x45, (((Payload_SigSelSize) << 22) + ((Payload_SigSel) << 8) + ((SetSignalsMode) << 7) + ((RegIndex16b) << 0)))
 #define TT_SETDMAREG_VALID(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b)                                       \
-    (ckernel::is_valid(Payload_SigSelSize, 2) && ckernel::is_valid(Payload_SigSel, 16) && ckernel::is_valid(SetSignalsMode, 1) && \
+    (ckernel::is_valid(Payload_SigSelSize, 2) && ckernel::is_valid(Payload_SigSel, 14) && ckernel::is_valid(SetSignalsMode, 1) && \
      ckernel::is_valid(RegIndex16b, 7))
 #define TT_SETDMAREG(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b) \
     ckernel::instrn_buffer[0] = TT_OP_SETDMAREG(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b)
@@ -541,13 +541,13 @@
     INSTRUCTION_WORD(TT_OP_SETDMAREG(Payload_SigSelSize, Payload_SigSel, SetSignalsMode, RegIndex16b))
 
 #define TT_OP_SETDVALID(setvalid)    TT_OP(0x57, (((setvalid) << 0)))
-#define TT_SETDVALID_VALID(setvalid) (ckernel::is_valid(setvalid, 16))
+#define TT_SETDVALID_VALID(setvalid) (ckernel::is_valid(setvalid, 24))
 #define TT_SETDVALID(setvalid)       ckernel::instrn_buffer[0] = TT_OP_SETDVALID(setvalid)
 #define TTI_SETDVALID(setvalid)      INSTRUCTION_WORD(TT_OP_SETDVALID(setvalid))
 
 #define TT_OP_SETIBRWC(rwc_cr, rwc_bias, set_inc_ctrl) TT_OP(0x39, (((rwc_cr) << 18) + ((rwc_bias) << 6) + ((set_inc_ctrl) << 0)))
 #define TT_SETIBRWC_VALID(rwc_cr, rwc_bias, set_inc_ctrl) \
-    (ckernel::is_valid(rwc_cr, 4) && ckernel::is_valid(rwc_bias, 12) && ckernel::is_valid(set_inc_ctrl, 6))
+    (ckernel::is_valid(rwc_cr, 6) && ckernel::is_valid(rwc_bias, 12) && ckernel::is_valid(set_inc_ctrl, 6))
 #define TT_SETIBRWC(rwc_cr, rwc_bias, set_inc_ctrl)  ckernel::instrn_buffer[0] = TT_OP_SETIBRWC(rwc_cr, rwc_bias, set_inc_ctrl)
 #define TTI_SETIBRWC(rwc_cr, rwc_bias, set_inc_ctrl) INSTRUCTION_WORD(TT_OP_SETIBRWC(rwc_cr, rwc_bias, set_inc_ctrl))
 
@@ -868,7 +868,7 @@
     INSTRUCTION_WORD(TT_OP_SHIFTDMAREG(OpBisConst, OpSel, ResultRegIndex, OpBRegIndex, OpARegIndex))
 
 #define TT_OP_SHIFTXA(log2_amount2, shift_mode)    TT_OP(0x17, (((log2_amount2) << 2) + ((shift_mode) << 0)))
-#define TT_SHIFTXA_VALID(log2_amount2, shift_mode) (ckernel::is_valid(log2_amount2, 18) && ckernel::is_valid(shift_mode, 2))
+#define TT_SHIFTXA_VALID(log2_amount2, shift_mode) (ckernel::is_valid(log2_amount2, 22) && ckernel::is_valid(shift_mode, 2))
 #define TT_SHIFTXA(log2_amount2, shift_mode)       ckernel::instrn_buffer[0] = TT_OP_SHIFTXA(log2_amount2, shift_mode)
 #define TTI_SHIFTXA(log2_amount2, shift_mode)      INSTRUCTION_WORD(TT_OP_SHIFTXA(log2_amount2, shift_mode))
 
@@ -919,7 +919,7 @@
 #define TT_OP_SUBDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
     TT_OP(0x59, (((OpBisConst) << 23) + ((ResultRegIndex) << 12) + ((OpBRegIndex) << 6) + ((OpARegIndex) << 0)))
 #define TT_SUBDMAREG_VALID(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
-    (ckernel::is_valid(OpBisConst, 1) && ckernel::is_valid(ResultRegIndex, 6) && ckernel::is_valid(OpBRegIndex, 6) && ckernel::is_valid(OpARegIndex, 6))
+    (ckernel::is_valid(OpBisConst, 1) && ckernel::is_valid(ResultRegIndex, 11) && ckernel::is_valid(OpBRegIndex, 6) && ckernel::is_valid(OpARegIndex, 6))
 #define TT_SUBDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
     ckernel::instrn_buffer[0] = TT_OP_SUBDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex)
 #define TTI_SUBDMAREG(OpBisConst, ResultRegIndex, OpBRegIndex, OpARegIndex) \
@@ -1110,7 +1110,7 @@
 // than issue.  The operands are cast because the builtins are typed and the
 // callers pass scoped enums the old arithmetic macros accepted implicitly.
 //
-// Redirected: 119 of 127.  These have no matching intrinsic or a
+// Redirected: 121 of 129.  These have no matching intrinsic or a
 // different operand shape, and keep their original definitions:
 //   INCRWC, MOP_CFG, PACR, PACR_SETREG, REPLAY, SFPLUTFP32, SFPSETMAN, SFP_STOCH_RND
 // --------------------------------------------------------------------------
@@ -1279,6 +1279,16 @@
 #define TT_MULDMAREG(a0, a1, a2, a3) __builtin_rvtt_muldmareg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
 #undef TTI_MULDMAREG
 #define TTI_MULDMAREG(a0, a1, a2, a3) TT_MULDMAREG(a0, a1, a2, a3)
+// TTI_NOP and TTI_DMANOP take no operands, so they are object-like macros
+// rather than function-like ones, and there is no TT_ (runtime) spelling to
+// redirect -- a NOP has nothing to compute at runtime.  Routing them through
+// intrinsics matters out of proportion to what they do: as inline asm they
+// were opaque to pass_rvtt_config, and the packer pads its config sequences
+// with them, so each one discarded the tracked config state mid-sequence.
+#undef TTI_DMANOP
+#define TTI_DMANOP __builtin_rvtt_ttdmanop()
+#undef TTI_NOP
+#define TTI_NOP __builtin_rvtt_ttnop()
 #undef TT_MVMUL
 #define TT_MVMUL(a0, a1, a2, a3) __builtin_rvtt_bh_mvmul((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
 #undef TTI_MVMUL

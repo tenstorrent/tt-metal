@@ -227,6 +227,16 @@ inline void store_blocking(volatile T *ptr, U &&val)
     // - memory clobber
     //     - prevent reordering of transactions that occur after the store before the store by the COMPILER
 
+#if defined(__riscv_xtttensixbh)
+    // The intrinsic assembles to the identical store/reload/consume sequence.
+    // It exists so the store is a recognisable insn carrying its address:
+    // pass_rvtt_config has to treat inline asm as possibly issuing a Tensix
+    // instruction or writing config, so each of these discarded the tracked
+    // config state, and they sit in the middle of the config sequences.  Only
+    // the three TRISCs build with the Tensix extension, so keep the asm for
+    // BRISC/NCRISC, where the builtin is not registered.
+    __builtin_rvtt_store_blocking((std::uint32_t)ptr, raw);
+#else
     asm volatile(
         "sw %[raw], (%[ptr])\n\t"
         "lw %[raw], (%[ptr])\n\t"
@@ -234,16 +244,24 @@ inline void store_blocking(volatile T *ptr, U &&val)
         : [raw] "+r"(raw)
         : [ptr] "r"(ptr)
         : "memory");
+#endif
 }
 
 inline void tensix_sync()
 {
-    store_blocking(&pc_buf_base[1], 0);
+    // PC_BUF_BASE rather than pc_buf_base: the global is a PTR_CONST holding
+    // exactly this macro (trisck.cc), but it is defined in another TU, so
+    // every use costs a load and -- the reason it matters here -- the address
+    // reaching pass_rvtt_config is not a compile-time constant, leaving the
+    // store an unresolvable barrier that discards the tracked config state.
+    // These two addresses are Manual TTSync's CoprocessorDoneCheck and
+    // MOPExpanderDoneCheck, not PCBufs; the legacy name is misleading.
+    store_blocking(reinterpret_cast<volatile std::uint32_t *>(PC_BUF_BASE + 1 * sizeof(std::uint32_t)), 0);
 }
 
 inline void mop_sync()
 {
-    store_blocking(&pc_buf_base[2], 0);
+    store_blocking(reinterpret_cast<volatile std::uint32_t *>(PC_BUF_BASE + 2 * sizeof(std::uint32_t)), 0);
 }
 
 inline void sync_regfile_write(const std::uint32_t index);

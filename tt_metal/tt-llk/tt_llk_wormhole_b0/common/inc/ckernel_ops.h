@@ -1006,7 +1006,7 @@
 // than issue.  The operands are cast because the builtins are typed and the
 // callers pass scoped enums the old arithmetic macros accepted implicitly.
 //
-// Redirected: 110 of 118.  These have no matching intrinsic or a
+// Redirected: 112 of 120.  These have no matching intrinsic or a
 // different operand shape, and keep their original definitions:
 //   INCRWC, MOP_CFG, PACR_SETREG, REPLAY, SFPLUTFP32, SFPSETMAN, SFP_STOCH_RND, UNPACR_NOP
 // --------------------------------------------------------------------------
@@ -1167,6 +1167,16 @@
 #define TT_MULDMAREG(a0, a1, a2, a3) __builtin_rvtt_muldmareg((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
 #undef TTI_MULDMAREG
 #define TTI_MULDMAREG(a0, a1, a2, a3) TT_MULDMAREG(a0, a1, a2, a3)
+// TTI_NOP and TTI_DMANOP take no operands, so they are object-like macros
+// rather than function-like ones, and there is no TT_ (runtime) spelling to
+// redirect -- a NOP has nothing to compute at runtime.  Routing them through
+// intrinsics matters out of proportion to what they do: as inline asm they
+// were opaque to pass_rvtt_config, and the packer pads its config sequences
+// with them, so each one discarded the tracked config state mid-sequence.
+#undef TTI_DMANOP
+#define TTI_DMANOP __builtin_rvtt_ttdmanop()
+#undef TTI_NOP
+#define TTI_NOP __builtin_rvtt_ttnop()
 #undef TT_MVMUL
 #define TT_MVMUL(a0, a1, a2, a3) __builtin_rvtt_wh_mvmul((unsigned)(a0), (unsigned)(a1), (unsigned)(a2), (unsigned)(a3))
 #undef TTI_MVMUL
