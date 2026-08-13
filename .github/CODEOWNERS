@@ -650,3 +650,12 @@ tt-train/tests/**/CMakeLists.txt @mdragulaTT @vmelnykovTT @dyurshevichTT @zbacze
 tech_reports/LLMs/vLLM_integration.md @viktorpusTT @tchedaTT @tenstorrent/codeowner-bypass
 tech_reports/real_time_profiler/ @mo-tenstorrent @yusufbashiTT @tenstorrent/codeowner-bypass
 models/experimental/yunet @tvardhineniTT @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+
+# ── LLK perf infrastructure: restricted ownership ──
+# Later than the broad tt_metal/tt-llk/tests/ and .github/ rules above, so these
+# win for perf paths only (CODEOWNERS = last match wins). codeowner-bypass kept as
+# the emergency escape hatch. Layout-agnostic: helpers/perf* matches both today's
+# flat modules and the future helpers/perf/ package.
+tt_metal/tt-llk/tests/python_tests/helpers/perf* @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT @tenstorrent/codeowner-bypass
+tt_metal/tt-llk/tests/python_tests/**/perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT @tenstorrent/codeowner-bypass
+tt_metal/tt-llk/tests/python_tests/**/test_perf_*.py @nstojicTT @ndivnicTT @sstanisicTT @mvlahovicTT @skrsmanovicTT @tenstorrent/codeowner-bypass

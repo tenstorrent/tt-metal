@@ -1063,8 +1063,8 @@ def test_kimi_prefill_transformer_chunked_padded(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
-                # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores.
-                "l1_small_size": 768,
+                # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores and rest for other needs.
+                "l1_small_size": 1152,
             },
             2,
             ttnn.Topology.Linear,
@@ -1964,8 +1964,8 @@ def test_ds_prefill_transformer_chunked_no_pcc(
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores.
-                "l1_small_size": 768,
+                # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores and rest for other needs.
+                "l1_small_size": 1152,
             },
             2,
             ttnn.Topology.Linear,
