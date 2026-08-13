@@ -717,6 +717,19 @@ void device_module(nb::module_& m_device) {
         Experimental: If Slow Dispatch is enabled, this function disables the ability to run multiple non-overlapping programs concurrently on the same device.
         )doc");
     m_device.def(
+        "set_configure_only",
+        [](tt::tt_metal::distributed::MeshDevice* /*device*/, bool enable) {
+            tt::tt_metal::experimental::DispatchContext::get().set_configure_only(enable);
+        },
+        nb::arg("device"),
+        nb::arg("enable"),
+        R"doc(
+        Experimental, slow dispatch only: while enabled, launching a program writes its binaries, circular
+        buffer configs, runtime args and launch message to L1 but sends no go signal and does not wait, so
+        the kernel config block can be read back (read_kernel_config / read_core_l1) without the program
+        ever running. Process-wide; bracket exactly the dispatch to capture with it.
+        )doc");
+    m_device.def(
         "is_asynchronous_slow_dispatch_enabled",
         [](tt::tt_metal::distributed::MeshDevice* device) {
             return tt::tt_metal::experimental::DispatchContext::get().is_asynchronous_slow_dispatch_enabled(device);

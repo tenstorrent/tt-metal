@@ -499,7 +499,6 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {
         CoreType core_type = hal.get_core_type(programmable_core_type_index);
-        HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(programmable_core_type_index);
         for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
             auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
 
@@ -513,7 +512,7 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
                 physical_core,
                 local_launch_msg.view(),
                 kg->go_msg.view(),
-                hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
+                /*send_go=*/!experimental::DispatchContext::get().is_configure_only());
         }
     }
 }
@@ -985,12 +984,11 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
             std::unordered_set<CoreCoord> not_done_cores;
             const auto& hal = MetalContext::instance().hal();
+            const bool configure_only = experimental::DispatchContext::get().is_configure_only();
             for (uint32_t programmable_core_type_index = 0;
                  programmable_core_type_index < logical_cores_used_in_program.size();
                  programmable_core_type_index++) {
                 CoreType core_type = hal.get_core_type(programmable_core_type_index);
-                HalProgrammableCoreType programmable_core_type =
-                    hal.get_programmable_core_type(programmable_core_type_index);
                 for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
                     auto* kg = program.impl().kernels_on_core(logical_core, programmable_core_type_index);
                     // Raw runtime id matches Tracy / fast dispatch; profiler ingest encodes with device_id once.
@@ -1007,16 +1005,16 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                         physical_core,
                         kg->launch_msg.view(),
                         kg->go_msg.view(),
-                        hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH));
+                        /*send_go=*/!configure_only);
                 }
             }
-            if (wait_until_cores_done) {
+            if (wait_until_cores_done && !configure_only) {
                 // Wait for all cores to be done
                 llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
             }
         }
     }  // Profiler scope end
-    if (wait_until_cores_done) {
+    if (wait_until_cores_done && !experimental::DispatchContext::get().is_configure_only()) {
         detail::ReadDeviceProfilerResults(device);
     }
 }

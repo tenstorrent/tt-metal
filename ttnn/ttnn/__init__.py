@@ -390,6 +390,7 @@ from ttnn.device import (
     get_optimal_dram_bank_to_logical_worker_assignment,
     enable_asynchronous_slow_dispatch,
     disable_asynchronous_slow_dispatch,
+    set_configure_only,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,

@@ -35,6 +35,12 @@ public:
     void enable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device);
     void disable_asynchronous_slow_dispatch(distributed::MeshDevice* mesh_device);
     bool is_asynchronous_slow_dispatch_enabled(distributed::MeshDevice* mesh_device) const;
+    // Configure-only dispatch: slow-dispatch launches write the program (binaries, CB configs,
+    // runtime args, launch message) to L1 but never send the go signal or wait, so the kernel
+    // config block can be read back without the program having run. Process-wide; the caller
+    // brackets one dispatch with it.
+    void set_configure_only(bool enable) { configure_only_ = enable; }
+    bool is_configure_only() const { return configure_only_; }
 
     void reset();
 
@@ -49,6 +55,7 @@ private:
     friend struct Deleter;
 
     bool fast_dispatch_enabled_ = false;
+    bool configure_only_ = false;
     uint32_t num_fd_inits_ = 0;
     // SD command queues stashed during an FD session, restored on terminate.
     // Defined in the .cpp to avoid exposing MeshCommandQueueBase in this header.
