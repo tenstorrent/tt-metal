@@ -5,9 +5,9 @@ torch/diffusers reference, then decode twice -- once on CPU (the ground truth) a
 and score the device output against the CPU one. Every WAV is written so the difference can be heard
 rather than only read off a table.
 
-Batch is 2 throughout, matching the shipping working point that every other timing in this work uses
-("stereo" is carried as batch 2; the autoencoder itself is mono). Mono clips are duplicated across the
-two batch slots, so the device time here is directly comparable to the 1.105 s figure elsewhere.
+Batch is 2 throughout, matching the shipping working point ("stereo" is carried as batch 2; the
+autoencoder itself is mono). Mono clips are duplicated across the two batch slots, so the device time
+here is directly comparable to `decode_bench.py`'s medians.
 
 The decoder is built once and reused across clips, so the reported time is steady-state decode and
 excludes model construction, weight upload and JIT.
@@ -35,9 +35,9 @@ if not WEIGHTS:
     raise SystemExit("set MINIMAX_H3_MODEL_PATH to a MiniMax-H3 diffusers snapshot")
 
 # Mesh / sharding / trace, all env-gated so the default stays exactly the single-device run this
-# script has always been. The acceptance criterion for the whole effort is >= 49.45 dB **against the
-# CPU reference**, and the T-parallel test only ever scores sharded against unsharded -- a different,
-# looser bar (40 dB). So the shipping configuration has to be scored here, not there.
+# script has always been. The acceptance criterion is PSNR **against the CPU reference**, and the
+# T-parallel test only ever scores sharded against unsharded -- a different, looser bar (40 dB). So the
+# shipping configuration has to be scored here, not there.
 #
 #   CVD_MESH=4x8 CVD_T_FACTOR=8 CVD_MESH_AXIS=1 CVD_TRACED=1 python cpu_vs_device.py
 #
