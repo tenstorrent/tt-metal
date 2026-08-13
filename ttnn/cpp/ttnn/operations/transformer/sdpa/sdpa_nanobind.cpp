@@ -263,7 +263,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<SDPAProgramConfig>& program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<PagedCacheGeometryOverride> paged_cache_geometry,
+    bool fuse_concat_heads) {
     if (chunk_start_idx_tensor_opt.has_value()) {
         return ttnn::transformer::chunked_scaled_dot_product_attention(
             input_tensor_q,
@@ -275,7 +276,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
             memory_config,
             program_config,
             compute_kernel_config,
-            paged_cache_geometry);
+            paged_cache_geometry,
+            fuse_concat_heads);
     }
     if (!chunk_start_idx_arg.has_value()) {
         throw std::runtime_error(
@@ -292,7 +294,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention_wrapper(
         memory_config,
         program_config,
         compute_kernel_config,
-        paged_cache_geometry);
+        paged_cache_geometry,
+        fuse_concat_heads);
 }
 
 }  // namespace
@@ -324,6 +327,7 @@ void bind_sdpa(nb::module_& mod) {
             program_config (SDPAProgramConfig, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to `None`.
             attention_sink (ttnn.Tensor, optional): Defaults to `None`. [1 x nqh x 1 x 1]. Single attention sink value per head. The kernel will efficiently replicate this value across all query positions.
+            fuse_concat_heads (bool, optional): Defaults to `False`. Emit the output already concatenated over heads as [B, 1, Sq, NQH*DH] instead of the default head-major [B, NQH, Sq, DH]. Values are bit-identical; only tile placement changes. Lets callers drop a separate nlp_concat_heads pass. Interleaved non-chunked, non-MLA, non-windowed only.
             cu_window_seqlens (ttnn.Tensor, optional): Defaults to `None`. 1D int32/uint32 ROW_MAJOR tensor of cumulative window boundaries [0, w1, w1+w2, ..., s]. When provided, computes block-diagonal (windowed) attention where each token attends only within its window; the mask is built on-device. Non-causal; mutually exclusive with attn_mask/is_causal/sliding_window_size.
 
 
@@ -348,7 +352,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("attention_sink") = nb::none(),
-        nb::arg("cu_window_seqlens") = nb::none());
+        nb::arg("cu_window_seqlens") = nb::none(),
+        nb::arg("fuse_concat_heads") = false);
 
     ttnn::bind_function<"sparse_sdpa", "ttnn.transformer.">(
         mod,
@@ -522,7 +527,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("memory_config").noconvert() = nb::none(),
         nb::arg("program_config").noconvert() = nb::none(),
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
-        nb::arg("paged_cache_geometry").noconvert() = nb::none());
+        nb::arg("paged_cache_geometry").noconvert() = nb::none(),
+        nb::arg("fuse_concat_heads") = false);
 
     const auto* const joint_doc = R"doc(
         JointAttention operation that efficiently performs non-causal attention over two

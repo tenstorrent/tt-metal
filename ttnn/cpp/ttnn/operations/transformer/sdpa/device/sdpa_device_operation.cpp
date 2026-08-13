@@ -117,6 +117,20 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         }
     };
 
+    if (attrs.fuse_concat_heads) {
+        // Concat-heads output only exists on the plain interleaved path. The chunked/paged,
+        // MLA and windowed variants each define their own output contract, and a silent
+        // mismatch there would corrupt results rather than fail, so reject explicitly.
+        // MLA and windowed each define their own output contract; a silent mismatch there
+        // would corrupt results rather than fail, so reject explicitly.
+        //
+        // The chunked/paged path IS supported: chunking only shifts the output ROW via
+        // write_offset, while fuse_concat_heads only remaps the head to a COLUMN range.
+        // The two are orthogonal, and the output tensor is Q-shaped either way.
+        TT_FATAL(!use_mla, "fuse_concat_heads is not supported with MLA");
+        TT_FATAL(!attrs.is_windowed, "fuse_concat_heads is not supported with windowed attention");
+    }
+
     auto validate_regular_mode = [&]() {
         TT_FATAL(
             !(attrs.is_causal && tensors.attn_mask.has_value()),
@@ -493,6 +507,11 @@ SDPAOperation::spec_return_value_t SDPAOperation::compute_output_specs(
     if (attrs.use_mla) {
         shape[3] = attrs.head_dim_v.value_or(shape[3]);
     }
+    if (attrs.fuse_concat_heads) {
+        // [B, NQH, Sq, DH] -> [B, 1, Sq, NQH*DH]: same tiles, concat-heads placement.
+        shape[3] = shape[1] * shape[3];
+        shape[1] = 1;
+    }
     return tt::tt_metal::TensorSpec(
         shape, TensorLayout(tensors.q.dtype(), PageConfig(Layout::TILE), attrs.output_mem_config));
 }
@@ -602,7 +621,8 @@ Tensor sdpa(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<Tensor>& cu_window_seqlens,
-    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    bool fuse_concat_heads) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -619,6 +639,7 @@ Tensor sdpa(
             .is_windowed = cu_window_seqlens.has_value(),
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
+            .fuse_concat_heads = fuse_concat_heads,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

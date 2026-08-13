@@ -43,9 +43,13 @@ void kernel_main() {
     // Windowed (block-diagonal) mask generation flags. Fixed scalar slots BEFORE the tensor-accessor
     // block so the accessor offset chain stays intact for all configs.
     constexpr bool use_windowed_mask = get_compile_time_arg_val(25) == 1;
+    // Emit directly in concat-heads layout [B, 1, Sq, NQH*vDHt] instead of head-major
+    // [B, NQH, Sq, vDHt], so the caller can drop the separate nlp_concat_heads pass.
+    // Values are unchanged -- only where each tile lands.
+    constexpr bool fuse_concat_heads = get_compile_time_arg_val(26) == 1;
 
     // out accessor, then the cu_window accessor chained immediately after it (before the CB-id block).
-    constexpr auto out_args = TensorAccessorArgs<26>();
+    constexpr auto out_args = TensorAccessorArgs<27>();
     constexpr auto cu_window_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
@@ -83,7 +87,11 @@ void kernel_main() {
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
 
-    const auto out_tile_shape = TensorTileShape(B, NQH, valid_Sqt, vDHt);
+    const auto out_tile_shape =
+        fuse_concat_heads ? TensorTileShape(B, 1, valid_Sqt, NQH * vDHt) : TensorTileShape(B, NQH, valid_Sqt, vDHt);
+    // Tiles between consecutive output rows: the full concatenated width when fused,
+    // otherwise just this head's width (contiguous).
+    const uint32_t out_row_stride = fuse_concat_heads ? (NQH * vDHt) : vDHt;
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
 
@@ -191,7 +199,10 @@ void kernel_main() {
             const uint32_t out_row_start_tile = std::min(q_chunk * Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_end_tile = std::min(out_row_start_tile + Sq_chunk_t, valid_Sqt);
             const uint32_t out_row_tile_count = out_row_end_tile - out_row_start_tile;
-            uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
+            // Fused: this head owns columns [nq*vDHt, (nq+1)*vDHt) of the single wide row.
+            uint32_t out_tile_id = fuse_concat_heads
+                                       ? out_tile_shape.id_of(nb, 0, write_offset + out_row_start_tile, nq * vDHt)
+                                       : out_tile_shape.id_of(nb, nq, write_offset + out_row_start_tile, 0);
             if constexpr (use_streaming_compute) {
                 // Streaming: drain per row-group (cb_out is a 2-slot ping-pong).
                 // Compute always pushes Sq_chunk_t rows; rows past out_row_tile_count
@@ -206,7 +217,8 @@ void kernel_main() {
                     out_tile_id,
                     tile_bytes,
                     out_subblock_h,
-                    barrier_threshold);
+                    barrier_threshold,
+                    out_row_stride);
             } else {
                 write_block(
                     noc,
@@ -217,7 +229,8 @@ void kernel_main() {
                     vDHt,
                     out_tile_id,
                     tile_bytes,
-                    barrier_threshold);
+                    barrier_threshold,
+                    out_row_stride);
             }
         }
     }  // close phase

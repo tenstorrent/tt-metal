@@ -526,6 +526,12 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
 
     const bool use_zigzag_balancing = is_causal;
 
+    // Emit the output already concatenated over heads ([B, 1, Sq, NQH*vDHt]) so callers can
+    // drop the separate nlp_concat_heads pass. Only the writer's tile mapping changes; every
+    // value is bit-identical. Restricted to the plain interleaved path -- the chunked, joint,
+    // ring and MLA variants have their own output contracts.
+    const bool fuse_concat_heads = operation_attributes.fuse_concat_heads;
+
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       B,
                                                       NQH,
@@ -629,6 +635,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
         k_partial_col,                                 // arg 23: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),   // arg 24
         static_cast<uint32_t>(is_windowed),            // arg 25: windowed block-diagonal mask generation
+        static_cast<uint32_t>(fuse_concat_heads),      // arg 26: emit concat-heads layout directly
     };
 
     // out accessor, then the cu_window accessor chained right after it (before the CB-id block) so the

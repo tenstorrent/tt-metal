@@ -44,7 +44,8 @@ ttnn::Tensor scaled_dot_product_attention(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<ttnn::Tensor>& attention_sink,
-    const std::optional<ttnn::Tensor>& cu_window_seqlens) {
+    const std::optional<ttnn::Tensor>& cu_window_seqlens,
+    bool fuse_concat_heads) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -92,7 +93,9 @@ ttnn::Tensor scaled_dot_product_attention(
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
         kernel_config_val,
-        cu_window_seqlens);
+        cu_window_seqlens,
+        std::nullopt,  // paged_cache_geometry
+        fuse_concat_heads);
 }
 
 // Legacy: chunk_start_idx as scalar (part of program cache key).
@@ -106,7 +109,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    bool fuse_concat_heads) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -131,7 +135,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::move(program_config),
         kernel_config_val,
         std::nullopt,  // cu_window_seqlens
-        paged_cache_geometry);
+        paged_cache_geometry,
+        fuse_concat_heads);
 }
 
 // Flexible: chunk_start_idx in device tensor [1]; read at runtime (for tracing).
@@ -145,7 +150,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    bool fuse_concat_heads) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -170,7 +176,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::move(program_config),
         kernel_config_val,
         std::nullopt,  // cu_window_seqlens
-        paged_cache_geometry);
+        paged_cache_geometry,
+        fuse_concat_heads);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
