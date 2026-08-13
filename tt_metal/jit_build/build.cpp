@@ -466,9 +466,13 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         this->temp_objs_.push_back(jit_build::utils::FileRenamer::generate_temp_path(obj_path));
     }
 
-    // Prepend root path to srcs, but not to outputs (objs) due to device dependency
+    // Prepend root path to srcs, but not to outputs (objs) due to device dependency.
+    // An absolute path is already complete -- that is how a custom firmware source
+    // outside this tree is named.
     for (string& src : this->srcs_) {
-        src = env_.root_ + src;
+        if (src.empty() || src.front() != '/') {
+            src = env_.root_ + src;
+        }
     }
 
     // Append hw build objects compiled offline
