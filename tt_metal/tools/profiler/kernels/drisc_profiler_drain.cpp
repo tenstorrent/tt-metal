@@ -223,6 +223,9 @@ constexpr uint32_t kNfSlots = 2 * kNfN;  // flat: noc * kNfN + k, NoC 0 first
 struct NocFpState {
     uint32_t prev[kNfSlots];
     uint64_t life[kNfSlots];
+    // THIS sweep's deltas, i.e. what the per-sweep PP_DATA sample ships. Free: nf_sample_regs already computes
+    // each delta to fold it into life[], so keeping it costs one store and no extra register read.
+    uint32_t last[kNfSlots];
     // The workload window: from the START of the first sweep that did work to the END of the last one. Same
     // work-triggered definition self-profiling settled on (FINDINGS N+41), and the whole reason there are two
     // blocks rather than one -- a drainer is resident from device open, so a lifetime figure is dominated by
@@ -269,7 +272,9 @@ static __attribute__((noinline)) void nf_sample_regs(NocFpState* s) {
     const uint64_t t0 = get_timestamp();
     for (uint32_t i = 0; i < kNfSlots; i++) {
         const uint32_t cur = NOC_STATUS_READ_REG(i / kNfN, kIds[i % kNfN]);
-        s->life[i] += static_cast<uint64_t>(static_cast<uint32_t>(cur - s->prev[i]));
+        const uint32_t d = cur - s->prev[i];
+        s->last[i] = d;
+        s->life[i] += static_cast<uint64_t>(d);
         s->prev[i] = cur;
     }
     s->cost += get_timestamp() - t0;
@@ -337,17 +342,20 @@ void kernel_main() {
     constexpr uint32_t kShipRepeat = get_compile_time_arg_val(10);
     // 1 = resync the software NoC mirrors from hardware at entry (see the wedge note below). 0 = diagnostic.
     constexpr uint32_t kNocInit = get_compile_time_arg_val(11);
-    // ABLATION knobs. kAblate=1 strips the drain loop down to EGRESS ONLY: no worker reads, no per-core
-    // processing, just re-shipping the same pre-staged bytes. kAblateSpin stands in for the sweep so the PCIe
-    // push keeps its normal cadence; kAblateSlots is how many staging slots go out per iteration.
-    constexpr uint32_t kAblate = get_compile_time_arg_val(12);
-    constexpr uint32_t kAblateSpin = get_compile_time_arg_val(13);
-    constexpr uint32_t kAblateSlots = get_compile_time_arg_val(14);
-    // How many pushes make up one ablated 'sweep'. A real busy sweep walks the grid in batches of kNStage and
-    // ships each one, so 110 cores / 7 slots = 16 pushes per sweep. Shipping ONCE per iteration instead
-    // under-drives egress badly (measured 4.2 GB/s vs the real 16.2) because the per-push credit wait, write
-    // barrier and notify stop being amortised the way they really are.
-    constexpr uint32_t kAblateBatches = get_compile_time_arg_val(15);
+    // Args 12..15 were the ABLATION knobs (kAblate / kAblateSpin / kAblateSlots / kAblateBatches) and are now
+    // DEAD -- deliberately left in place rather than renumbered, because arg indices appear in JIT cache keys
+    // and in the N+41 notes, and a silent shift would make old logs unreadable against new ones. The host
+    // still passes four values here; nothing reads them.
+    //
+    // Removed because the technique was superseded three times over, not because it stopped working:
+    //   * The ROLE SPLIT already IS the ablated case -- a MOVER has no worker grid, no per-core scan and
+    //     reports `proc 0.0 us`, so a switch that strips those stages is redundant on a kernel without them.
+    //   * INSTRUMENTATION replaced SUBTRACTION: per-phase self-zones plus per-NoC NIU counters separate read
+    //     from write cost inside ONE run, and decomposition needs no second arm to difference against.
+    //   * It could never reach where this is going: `static_assert(kSelfZones == 0 || kAblate == 0)` made it
+    //     mutually exclusive with self-profiling, so it can never run with the zones or the footprint series.
+    // kShipRepeat (arg 10) KEEPS the one capability that was unique to it -- zero-read egress, re-shipping
+    // staged frames with no read or proc phase -- and unlike the ablation it composes with self-zones.
     // Non-zero => the host recomputed the PCIe tile encoding for THIS NoC's mirrored coordinate space.
     constexpr uint32_t kPcieEncOverride = get_compile_time_arg_val(16);
 
@@ -453,6 +461,20 @@ void kernel_main() {
     // none is ever written as a literal: test_cluster_bh.cpp carries a misnamed 0xffb202e0 and copying a
     // literal from there would propagate the error into a number nobody could check.
     constexpr uint32_t kNocFootprint = get_compile_time_arg_val(37);
+    // PER-SWEEP SERIES (the plot source), separate from the out[] totals above and currently FORCED OFF.
+    //
+    // The totals fit; the per-sweep PP_DATA sample does NOT. Measured on the DRISC code region, all with
+    // zones + footprint both on (limit 11,264 B):
+    //   ablation removed, no series ....... see FINDINGS N+43   <- this build
+    //   + series, first cut ............... 11,508  (244 over)
+    //   + shared self_mark_w0 prologue .... 11,348  ( 84 over)
+    //   + constexpr index table ........... 11,332  ( 68 over)
+    //   + noinline on the prologue ........ 11,332  (no effect: GCC ignores the attribute there)
+    // 68 B short with no candidate left that does not either degrade a REPORTED number into a silent zero
+    // (dropping the posted-write check or the instrument-cost timing) or risk silent truncation (packing the
+    // four 32-bit deltas into two 16-bit pairs). So the emitter is kept, compiled out, and the shortfall is a
+    // documented number rather than a broken build -- see FINDINGS N+43 for the options.
+    constexpr uint32_t kNocFpSeries = 0;
     constexpr bool kSelfPhases = kSelfZones != 0 && kSelfDetail != 0;
     // The self frame lives in staging slot kNStage -- one PAST every slot the drain pipeline can touch. The
     // host reserves it by passing (nstage - 1) as kNStage when this is on, so DRISC L1 does not grow and the
@@ -491,9 +513,6 @@ void kernel_main() {
     static_assert(kSelfZones == 0 || kSelfHoldCycles >= 1, "a 0-cycle window hold would trace nothing");
     static_assert(kSelfDetail <= 1, "detail is 0 (SWEEP + PACE) or 1 (full per-batch phases)");
     static_assert(kSelfZones == 0 || kSelfMaxFrames >= 1, "self-profiling with a 0 frame budget captures nothing");
-    // The ablation pre-fills and re-ships staging slots [0, kAblateSlots) forever and never runs the sweep
-    // body, so there is nothing to self-profile and its staged bytes would collide with the self frame.
-    static_assert(kSelfZones == 0 || kAblate == 0, "self-profiling and the egress ablation are mutually exclusive");
 
     static_assert(kSpanBytes <= NOC_MAX_BURST_SIZE, "the fused span read must fit one NoC burst");
     static_assert(kNumRisc <= kernel_profiler::PROFILER_SPSC_MAX_RISC, "control layout too small");
@@ -1041,18 +1060,28 @@ void kernel_main() {
     // Append one 2-word marker at an ALREADY-READ timestamp. Publishes first if the ring is too full to hold
     // a sticky plus a marker; a marker is only ever dropped if that publish could not free it (egress dead),
     // and then it is counted rather than lost silently.
-    auto self_mark = [&](uint32_t zone_id, uint32_t type, uint64_t ts) {
+    // Takes a RAW word0 rather than (type, zone_id) so the PP_DATA sample can share this prologue: the room
+    // check, the publish-and-carry-on path and the sticky-timer refresh are the fiddly parts, and having two
+    // copies of them cost 244 B of DRISC code the region does not have. Returns whether the words were
+    // actually written -- a caller appending a PAYLOAD after the header must not write orphan words when the
+    // header was dropped.
+    // NOINLINE, and this does NOT reintroduce the N+41 regression. That finding was about the `self_on` CHECK:
+    // burying it inside the emitter cost a real call on every sweep whether or not anything was captured. Here
+    // the call sites keep their own `if constexpr (kSelfPhases)` / `if (self_on)` guards, so a call happens only
+    // when a marker is actually being written -- the rare path. What it buys is large: this prologue calls
+    // self_publish(), so inlining it at ~10 sites replicated the whole publish path ~10 times.
+    auto self_mark_w0 = [&](uint32_t w0, uint64_t ts) __attribute__((noinline)) -> bool {
         if constexpr (kSelfZones == 0) {
-            (void)zone_id;
-            (void)type;
+            (void)w0;
             (void)ts;
-            return;
+            return false;
         } else {
         if (!self_on || self_busy) {
-            return;
+            return false;
         }
-        // 3 = worst case (1-word sticky + 2-word marker). Leave a margin so a run can never exceed the ring
-        // capacity, which the host clamps (spsc_span_live) rather than trusts.
+        // The margin is 8 words, which covers every shape that uses this: 1-word sticky + 2-word marker = 3,
+        // and 1 + 2 + SPSC_NOCFP_WORDS = 7 for a footprint sample. Leave a margin so a run can never exceed
+        // the ring capacity, which the host clamps (spsc_span_live) rather than trusts.
         // RING FULL -> PUBLISH AND CARRY ON. Publishing HERE rather than once per sweep is what makes tracing
         // every sweep affordable: a frame carries as many markers as the ring holds (~250 at full detail, ~63
         // SWEEP/PACE pairs at detail 0) instead of the handful one sweep produces. A marker is only lost if the
@@ -1061,7 +1090,7 @@ void kernel_main() {
             self_publish();
             if (self_tail - self_head > kRingWords - 8u) {
                 self_dropped++;
-                return;
+                return false;
             }
         }
         const uint32_t hi = static_cast<uint32_t>(ts >> 32);
@@ -1070,12 +1099,16 @@ void kernel_main() {
             self_tail++;
             self_hi = hi;
         }
-        self_ring[self_tail % kRingWords] = kernel_profiler::spsc_marker_w0(type, zone_id);
+        self_ring[self_tail % kRingWords] = w0;
         self_tail++;
         self_ring[self_tail % kRingWords] = static_cast<uint32_t>(ts & 0xFFFFFFFFu);
         self_tail++;
         self_markers++;
+        return true;
         }
+    };
+    auto self_mark = [&](uint32_t zone_id, uint32_t type, uint64_t ts) {
+        (void)self_mark_w0(kernel_profiler::spsc_marker_w0(type, zone_id), ts);
     };
     // A whole zone from two timestamps the caller already has. Emitted AFTER the fact, which is only sound
     // because both markers carry explicit times: the pair lands in the stream in increasing-time order, which
@@ -1083,6 +1116,44 @@ void kernel_main() {
     auto self_zone = [&](uint32_t zone_id, uint64_t t_begin, uint64_t t_end) {
         self_mark(zone_id, kernel_profiler::SPSC_TYPE_ZONE_START, t_begin);
         self_mark(zone_id, kernel_profiler::SPSC_TYPE_ZONE_END, t_end);
+    };
+    // One VARIABLE-LENGTH PP_DATA packet carrying this sweep's NoC counter deltas: 1 header + 1 timestamp +
+    // SPSC_NOCFP_WORDS payload. The payload layout is the shared contract in profiler_common.h, not a local
+    // convention -- see SpscNocFpWord there for why one timestamp covers all four values.
+    //
+    // Needs BOTH knobs: the sample rides the self-zone marker stream, so TT_METAL_PERF_DEBUG_NOC_FOOTPRINT
+    // alone produces the out[] totals but NO per-sweep series and hence no plots.
+    //
+    // The existing kRingWords - 8 headroom check already covers the worst case here: 1 sticky + 1 header +
+    // 1 timestamp + 4 payload = 7 words.
+    auto self_nocfp = [&](uint64_t ts) {
+        if constexpr (kSelfZones == 0 || kNocFootprint == 0) {
+            (void)ts;
+            return;
+        } else {
+            // Header + timestamp through the shared prologue; the payload only if that actually landed.
+            if (!self_mark_w0(
+                    kernel_profiler::spsc_data_w0(
+                        kernel_profiler::SPSC_DATA_ID_NOCFP, kernel_profiler::SPSC_NOCFP_WORDS),
+                    ts)) {
+                return;
+            }
+            // ROLE-SPECIALISED, read straight out of nf.last[] at compile-time indices -- no intermediate
+            // array, which is where the last of the code budget went. A filler reads on kReadNoc and writes on
+            // NOC_INDEX; a mover does both on NOC_INDEX. The four counters this role does NOT use are the
+            // provable zeros (out[] still ships all eight, which is where that proof is kept).
+            constexpr uint32_t kRd = ((kRole == kRoleMover) ? uint32_t{NOC_INDEX} : uint32_t{kReadNoc}) * kNfN;
+            constexpr uint32_t kWr = uint32_t{NOC_INDEX} * kNfN;
+            // A constexpr INDEX table, not a value array: the four slots to ship are known at compile time, so
+            // this lands in .rodata and the loop copies nf.last[] -> ring directly. Building a value array on
+            // the stack first cost ~40 B of code for nothing.
+            static constexpr uint32_t kIdx[kernel_profiler::SPSC_NOCFP_WORDS] = {
+                kRd + kNfRdW, kRd + kNfRdT, kWr + kNfWrW, kWr + kNfWrT};
+            for (uint32_t i = 0; i < kernel_profiler::SPSC_NOCFP_WORDS; i++) {
+                self_ring[self_tail % kRingWords] = nf.last[kIdx[i]];
+                self_tail++;
+            }
+        }
     };
     // TURN INSTRUMENTATION ON MID-SWEEP, at the moment work is discovered.
     //
@@ -1148,16 +1219,6 @@ void kernel_main() {
         }
         }
     };
-
-    // Fill the staging area once for the ablation: egress must ship deterministic bytes, and uninitialised
-    // L1 would make a corruption result unreadable if we ever needed one.
-    if constexpr (kAblate != 0) {
-        volatile tt_l1_ptr uint32_t* stg = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kStageBase);
-        const uint32_t nwords = (kAblateSlots * kSlotBytes) / 4;
-        for (uint32_t i = 0; i < nwords; i++) {
-            stg[i] = 0xAB000000u | (i & 0x00FFFFFFu);
-        }
-    }
 
     // ---- MOVER bring-up probe: prove BOTH directions of the peer-L1 handshake before any data moves ----
     //
@@ -1267,32 +1328,7 @@ void kernel_main() {
             }
         }
 
-        // ---- ABLATION: egress only (kAblate=1) ----
-        //
-        // Everything that touches the worker grid is compiled out. The staged bytes are a fixed pattern
-        // written once at init and never refreshed, so the PCIe push, the socket credit loop, the write
-        // barrier and the notify all run exactly as they do in a real capture while the read side does not
-        // exist. A spin replaces the sweep so pushes keep their normal spacing -- without it the loop would
-        // ship far faster than the real drainer and change the very thing being measured.
-        //
-        // This is NOT a capture: the host receives the same mock bytes forever. Run with
-        // TT_METAL_PERF_DEBUG_NO_DECODE=1 and read the page/byte counters.
-        if constexpr (kAblate != 0) {
-            if constexpr (kAblateSpin != 0) {
-                const uint64_t until = get_timestamp() + kAblateSpin;
-                while (get_timestamp() < until) {
-                }
-            }
-            for (uint32_t b = 0; b < kAblateBatches && !egress_dead; b++) {
-                ship_run(0, kAblateSlots);
-                frames += kAblateSlots;
-                // Tick the heartbeat per PUSH, not per iteration. The host's liveness check wants movement
-                // within 200 ms, and one ablated iteration is 16 pushes -- most of it legitimately parked in
-                // the credit wait at 511/512 occupancy, which reads as "failed to start" if hb only moves
-                // once per iteration.
-                *hb = sweeps * kAblateBatches + b + 1;
-            }
-        } else if constexpr (kRole == kRoleMover) {
+        if constexpr (kRole == kRoleMover) {
         // ---- MOVER: kNPeer DRAM rings -> staging -> the existing D2H socket ----
         //
         // No worker grid, no control-vector scan, no head write-back. The frames in the ring are already
@@ -1715,6 +1751,13 @@ void kernel_main() {
             c_busy += sweep_cyc;
         }
         nf_end(t_sweep0, sweep_cyc, frames != frames_at_sweep_start);
+        // Per-sweep NoC sample, stamped at the sweep's END so it lines up with the DRISC-SWEEP zone that just
+        // closed. ROLE-SPECIALISED: a filler reads on kReadNoc and writes on NOC_INDEX, a mover does both on
+        // NOC_INDEX, so only that role's four counters are compiled -- the other four are the provable zeros
+        // (out[] still ships all eight, which is where that proof is kept).
+        if constexpr (kNocFpSeries != 0) {
+            self_nocfp(t_sweep0 + sweep_cyc);
+        }
 
         // ---- close this sweep's SWEEP zone; the PACE zone and the publish come AFTER the gap ----
         //
