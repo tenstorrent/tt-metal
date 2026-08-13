@@ -401,6 +401,13 @@ now tunnels and the far side answers, where before squid answered 403 without th
 leaving the cluster. The API's own reply to an unauthenticated probe is a 404, which is the point --
 a 404 is the service talking, and a 403 was the proxy refusing to let us talk to it.
 
+**The agent job moved onto `tt-ubuntu-2204-N150-viommu-stable` on 2026-08-13.** Half the collapse, and
+the half that costs rather than saves: build and measurement are still dispatched into
+`port-measure.yaml`, because `build-artifact.yaml` is a reusable workflow and a step cannot call one,
+so the job now holds a card-bearing runner for hours while doing no card work. It was taken anyway
+because being local to the hardware is the precondition for the other half. Until a local incremental
+build replaces the round trip, this trades an N150 for nothing, and that is the right thing to fix next.
+
 So the reason for the two-workflow split is gone, and the collapse it was blocking is now the plan:
 one in-cluster job with a local incremental build, which is both simpler and far faster per cycle.
 The hosted runner was never a good host for this -- four cores, and the probe watched its build rate
