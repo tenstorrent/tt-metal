@@ -63,8 +63,9 @@ class KimiK3Config:
     # matmul by holding the tuned program config fixed and varying in0_block_w 56 -> 28: byte-identical
     # clash addresses. Raising this needs moe_grouped_topk's CB footprint reduced.
     #
-    # Consumed as the DEFAULT per-chip depth by TtMoEGateConfig.from_model_cfg, i.e. by the gate test.
-    # The MoE/serving path is unaffected: TtMoe passes its actual seq_len_per_chip explicitly.
+    # Consumed by TtMoEGateConfig.from_model_cfg both as the default per-chip depth and as the
+    # enforced ceiling on any explicit sp_dim. Callers that know their per-chip sequence pass it and
+    # are still bound by the ceiling -- the gate test at 640, TtMoe at its actual seq_len_per_chip.
     MAX_GATE_SEQ_LEN_PER_CHIP = 3200
 
     # Device-mode scores-PCC bar for the gate test, relaxing the shared 0.93. Read by

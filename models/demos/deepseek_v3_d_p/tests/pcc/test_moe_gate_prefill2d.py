@@ -61,6 +61,35 @@ GATE_MODELS = {
     "dsv4_flash": DeepSeekV4FlashConfig,
 }
 
+# Per-chip sequence every gate case runs at, overriding each model's TtMoEGateConfig default. 640 is
+# the production target and the depth the MoE tests drive the gate at, and it clears K3's L1 ceiling
+# (KimiK3Config.MAX_GATE_SEQ_LEN_PER_CHIP), which from_model_cfg still enforces on top of this.
+# Applied at construction, not by assigning config.sp_dim afterwards: __post_init__ re-keys the tuned
+# matmul program configs by sp_dim, so a later assignment turns every lookup into a miss and silently
+# drops the gate matmul to TTNN's default tiling.
+GATE_SP_DIM = 640
+
+
+def _gate_config(gate_model: str) -> TtMoEGateConfig:
+    """Gate config at GATE_SP_DIM, minus tuned matmul entries authored for a different depth.
+
+    A tuned entry encodes its shard height in per_core_M, but TtMoEGateConfig re-keys every entry to
+    the sp_dim in use, so one tuned at 4096 claims to apply at 640 while still carrying per_core_M=2
+    -- and the matmul rejects it outright: "per_core_M (2) must equal shard_shape[0] (32) / in0_tile
+    height (32)". Entries that already match this depth are kept (K3's is authored at 640); the rest
+    are dropped so TTNN picks its default tiling, which is what the untuned models do here anyway.
+    """
+    config = TtMoEGateConfig.from_model_cfg(GATE_MODELS[gate_model], sp_dim=GATE_SP_DIM)
+    shard_height = (config.sp_dim + config.num_cores - 1) // config.num_cores
+    shard_height = ((shard_height + 31) // 32) * 32
+    config.mm_configs = {
+        key: value
+        for key, value in config.mm_configs.items()
+        if not isinstance(key, tuple) or value.per_core_M == shard_height // 32
+    }
+    return config
+
+
 # First MoE layer in DeepSeek-V3 (metadata moe_layer_offset == 3); the golden
 # trace stores its gate input as post_attn_norm_layer_3.
 _MOE_LAYER_IDX = 3
@@ -388,7 +417,7 @@ def test_forward_pass(
     random.seed(42)
     torch.manual_seed(42)
 
-    config = TtMoEGateConfig.from_model_cfg(GATE_MODELS[gate_model])
+    config = _gate_config(gate_model)
     config.ccl_config["NUM_LINKS"] = num_links
     adjust_shapes_for_testing(config, mesh_device)
 
@@ -563,7 +592,7 @@ def test_hash_gate_forward_pass(
     random.seed(42)
     torch.manual_seed(42)
 
-    config = TtMoEGateConfig.from_model_cfg(GATE_MODELS[gate_model])
+    config = _gate_config(gate_model)
     config.ccl_config["NUM_LINKS"] = num_links
     adjust_shapes_for_testing(config, mesh_device)
 
