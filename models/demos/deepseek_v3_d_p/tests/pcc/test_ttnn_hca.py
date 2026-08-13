@@ -118,8 +118,10 @@ def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len):
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3)),
     )
 
+    # One chunk on its own, so the mask spans exactly this call's padded entries.
+    tt_model.alloc_tables(hidden_padded.shape[1], hidden_padded.shape[1], hidden_padded.shape[1] // compress_rate)
     signpost("HCA_START")
-    compressed_kv_tt, mask_block_tt = tt_model(tt_input, position_ids, seq_len_actual=seq_len_actual)
+    compressed_kv_tt, mask_block_tt = tt_model(tt_input, seq_len_actual=seq_len_actual)
     signpost("HCA_END")
     # Fully replicated (SP-gathered + TP-replicated): take a single replica.
     compressed_kv_out = ttnn.to_torch(
@@ -201,8 +203,9 @@ def test_hca_forward(device, seq_len):
     )
 
     logger.debug("Running ttnn TtHCA forward")
+    state = tt_model.alloc_state(seq_len)  # a one-chunk prefill still owns its state
     signpost("HCA_START")
-    out_tt = tt_model(tt_input, position_ids)
+    out_tt = tt_model(tt_input, state=state)
     signpost("HCA_END")
     out = ttnn.to_torch(out_tt).squeeze(1)  # [B, 1, S, hidden] -> [B, S, hidden]
     logger.debug(f"TTNN output shape: {tuple(out.shape)}")
@@ -267,8 +270,9 @@ def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len):
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=ms, dims=(2, 3)),  # seq @ SP, hidden @ TP
     )
 
+    state = tt_model.alloc_state(hidden_padded.shape[1])  # a one-chunk prefill still owns its state
     signpost("HCA_START")
-    out_tt = tt_model(tt_input, position_ids, seq_len_actual=seq_len_actual)
+    out_tt = tt_model(tt_input, seq_len_actual=seq_len_actual, state=state)
     signpost("HCA_END")
     out = ttnn.to_torch(
         out_tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(2, 3))
@@ -359,7 +363,6 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, ch
         # Fixed device width every chunk; a short final chunk is padded up to it.
         chunk = torch.zeros(batch, chunk_size, config.hidden_size)
         chunk[:, :valid] = hidden[:, kv_actual : kv_actual + valid]
-        chunk_pos = torch.arange(kv_actual, kv_actual + valid).unsqueeze(0).expand(batch, -1)
 
         tt_in = ttnn.from_torch(
             chunk.unsqueeze(1),
@@ -368,7 +371,7 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, ch
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=ms, dims=(2, 3)),
         )
-        out_tt = tt_model(tt_in, chunk_pos, seq_len_actual=valid, state=state)
+        out_tt = tt_model(tt_in, seq_len_actual=valid, state=state)
         out = ttnn.to_torch(
             out_tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(2, 3))
         ).squeeze(1)[:, :valid]
@@ -509,7 +512,7 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology, nam
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=ms, dims=(2, 3)),
         )
-        out_tt = tt_model(tt_in, chunk_pos, seq_len_actual=valid, state=state)
+        out_tt = tt_model(tt_in, seq_len_actual=valid, state=state)
         out = ttnn.to_torch(
             out_tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(2, 3))
         ).squeeze(1)[:, :valid]
