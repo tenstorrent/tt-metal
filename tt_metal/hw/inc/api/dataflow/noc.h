@@ -100,8 +100,9 @@ private:
     template <AddressType address_type>
     using addr_underlying_t = std::conditional_t<address_type == AddressType::LOCAL_L1, uintptr_t, uint64_t>;
 
-    // NOC APIs cannot accept cached addresses. For the cached addresses returned by dfb.get_read/write_ptr()
-    // and passed to NOC APIs, convert them to the uncached address. This conversion is for Quasar DM only.
+    // NOC APIs cannot accept uncached addresses. On Quasar DM, dfb.get_read/write_ptr() and a DFB scoped
+    // lock's get_ptr() hand out the UNCACHED L1 alias, so any such address arriving here is mapped back to
+    // its cached view before it reaches a NOC API.
     static FORCE_INLINE uint32_t l1_cached_view(uint32_t addr) {
 #if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
         return (addr >= MEM_L1_UNCACHED_BASE && addr < MEM_L1_UNCACHED_BASE + MEM_L1_SIZE) ? addr - MEM_L1_UNCACHED_BASE
