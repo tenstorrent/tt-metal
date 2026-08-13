@@ -42,3 +42,18 @@ Success ends with: `The simulated X280 hello world ran. All checks passed.`
 ```bash
 ./run.sh --clean
 ```
+
+## Atomic bench
+
+`src/atomic_bench.c` is the tt-llm-engine AMO micro-benchmark, built for this
+ISS. There is no host/NOC, so `iss_host_stub.c` writes the `AB_CONFIG_READY`
+mailbox before `main`. After that wait succeeds the firmware prints
+`AB_CONFIG_READY: config latched on ISS`, then runs a short `amoadd.d` check
+(the full 4-hart mailbox phases are not driven on Spike).
+
+```bash
+./run_atomic_bench.sh
+```
+
+Success includes `AB_CONFIG_READY: config latched on ISS` and
+`amoadd.d xN -> counter=N OK`.

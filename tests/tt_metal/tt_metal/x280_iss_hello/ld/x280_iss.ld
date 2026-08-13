@@ -13,6 +13,7 @@ ENTRY(_start)
 LIM_BASE  = 0x08001000;
 LIM_SIZE  = 0x0011F000;
 STACK_SIZE = 0x4000;
+NUM_HARTS = 4;
 
 MEMORY {
     lim (rwx) : ORIGIN = LIM_BASE, LENGTH = LIM_SIZE
@@ -46,7 +47,7 @@ SECTIONS {
         *(COMMON)
         . = ALIGN(16);
         _stack_bottom = .;
-        . += STACK_SIZE;
+        . += STACK_SIZE * NUM_HARTS;
         _stack_top = .;
     } > lim
 
