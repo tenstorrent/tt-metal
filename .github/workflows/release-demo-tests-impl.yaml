@@ -36,14 +36,24 @@ on:
         description: "URL to gist containing models_e2e_tests.yaml (optional, falls back to local file if not provided). Security: Only GitHub gist/raw URLs allowed, validated before download."
     outputs:
       matrix:
-        description: "Filtered matrix of legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
+        description: "Filtered matrix of single-host legs that ran (consumed by ai_summary/run for INFRA_FAILURE reconciliation)."
         value: ${{ jobs.load-test-matrix.outputs.matrix }}
+      matrix_multihost:
+        description: "Filtered matrix of exabox multihost legs that ran."
+        value: ${{ jobs.load-test-matrix.outputs.matrix_multihost }}
+
+# Default to read-only. Only the multihost job needs id-token (multihost-ci runner chart), which it
+# grants on the job itself. Single-host legs pull the dev container image, so packages: read is the default.
+permissions:
+  contents: read
+  packages: read
 
 jobs:
   load-test-matrix:
     runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.apply-filters.outputs.matrix }}
+      matrix_multihost: ${{ steps.apply-filters.outputs.matrix_multihost }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/models_e2e_tests.yaml
     steps:
@@ -113,14 +123,27 @@ jobs:
               ($m | ascii_downcase | split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0))) as $toks
               | [ .[] | select((.model | ascii_downcase) as $mm | any($toks[]; . as $t | $mm | contains($t))) ]')
           fi
-          if [ "$FILTERED" = "[]" ]; then
+          # Split into single-host (container) and multihost (exabox) legs. Multihost legs are
+          # tagged with "multihost": true by prepare_test_matrix.py when their SKU is an
+          # exabox multihost SKU (runs_on exabox-multihost* / allocation block).
+          SINGLE=$(echo "$FILTERED" | jq -c '[.[] | select(.multihost != true)]')
+          MULTI=$(echo "$FILTERED" | jq -c '[.[] | select(.multihost == true)]')
+          emit() {  # $1 = output name, $2 = compact JSON array
+            if [ -z "$2" ] || [ "$2" = "[]" ]; then
+              echo "$1=[]" >> $GITHUB_OUTPUT
+            else
+              {
+                echo "$1<<EOF"
+                echo "$2"
+                echo "EOF"
+              } >> $GITHUB_OUTPUT
+            fi
+          }
+          if [ "$SINGLE" = "[]" ] && [ "$MULTI" = "[]" ]; then
             echo "::warning::No tests found for tier=${TIER}, release_ready=true, model=${MODEL}. Pipeline will be skipped."
-            echo "matrix=[]" >> $GITHUB_OUTPUT
-          else
-            echo "matrix<<EOF" >> $GITHUB_OUTPUT
-            echo "$FILTERED" >> $GITHUB_OUTPUT
-            echo "EOF" >> $GITHUB_OUTPUT
           fi
+          emit matrix "$SINGLE"
+          emit matrix_multihost "$MULTI"
 
   release-demo-tests:
     needs: load-test-matrix
@@ -247,3 +270,24 @@ jobs:
           job-name: ${{ matrix.test-group.name }}
       - uses: ./docker-job/.github/actions/cleanup
         if: always()
+
+  # Multihost (exabox) release tests — lifecycle lives in models-e2e-tests-multihost-impl.yaml.
+  # Legs are routed here when prepare_test_matrix.py marks them "multihost": true
+  # (SKU runs_on contains an exabox-multihost* label) and load-test-matrix collects
+  # them into matrix_multihost.
+  release-demo-tests-multihost:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.matrix_multihost != '[]' }}
+    # OIDC may be required by the multihost-ci runner chart; grant it here rather than
+    # workflow-wide. Job-level permissions replace inherited defaults, so restate reads too.
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+    secrets: inherit
+    uses: ./.github/workflows/models-e2e-tests-multihost-impl.yaml
+    with:
+      docker-image: ${{ inputs.docker-image }}
+      build-artifact-name: ${{ inputs.build-artifact-name }}
+      wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      matrix: ${{ needs.load-test-matrix.outputs.matrix_multihost }}

@@ -227,6 +227,12 @@ scaleout:
     bh_loudbox: 80
     bh_p300: 80
     bh_quietbox_2: 80
+  # Per-tier e2e budgets for DeepSeek supercluster tests now living in
+  # tests/pipeline_reorg/models_e2e_tests.yaml (consumed by models-e2e / release-demo).
+  e2e_tier1:
+    bh_sc1: 20
+    bh_sc4: 90
+    bh_sc16: 150
 
 runtime:
   pr_gate:
