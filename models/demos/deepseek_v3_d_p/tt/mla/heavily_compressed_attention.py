@@ -16,26 +16,11 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
-def _buf_for_width(width: int) -> int:
-    """Rows the tail_tile write assembles at once: the up to TILE_SIZE-1 entries already in the open tile
-    plus one chunk's worth, rounded to whole tiles. 64 for a 4096-token chunk, 96 for 5120."""
-    return -(-(ttnn.TILE_SIZE - 1 + width) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-
-
-def _tail_tile_buf(chunk_tokens: int, compress_rate: int) -> int:
-    return _buf_for_width(-(-int(chunk_tokens) // compress_rate))
-
-
-def hca_block_bias(position_ids: torch.Tensor, compressed_len: int, compress_rate: int) -> torch.Tensor:
-    """Per-query causal mask: query ``t`` may attend entry ``w`` only if ``t >= (w+1)*compress_rate``."""
-    batch, seq_len = position_ids.shape
-    entry_indices = torch.arange(compressed_len)
-    causal_threshold = (position_ids + 1) // compress_rate
-    block_bias = torch.zeros(batch, 1, seq_len, compressed_len)
-    return block_bias.masked_fill(
-        entry_indices.view(1, 1, 1, -1) >= causal_threshold.unsqueeze(1).unsqueeze(-1),
-        float("-inf"),
-    )
+def _cache_write_rows(chunk_entries: int) -> int:
+    """How many cache rows one write covers: this chunk's new entries plus the 0..31 rows already sitting in
+    the last tile. The cache is written a whole tile at a time, so this rounds up to whole tiles -- 64 rows
+    for a 4096-token chunk, 96 for 5120."""
+    return -(-(ttnn.TILE_SIZE - 1 + chunk_entries) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
 
 
 class _TtHCABase(LightweightModule):
@@ -59,21 +44,13 @@ class _TtHCABase(LightweightModule):
         # Handed over at its source dtype: from_torch quantizes straight to weights_dtype, and a bf16
         # stop on the way to bfloat8_b would pre-round away what the block exponent could still keep.
         torch_weight = weight.detach().transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0)
-        mesh_mapper = None
-        if self.is_mesh:
-            if tp_shard_dim is not None and self.tp_factor > 1:
-                dims = [None, None]
-                dims[self.tp_axis] = tp_shard_dim
-                mesh_mapper = ttnn.ShardTensor2dMesh(self.device, mesh_shape=tuple(self.device.shape), dims=dims)
-            else:
-                mesh_mapper = ttnn.ReplicateTensorToMesh(self.device)
         return ttnn.from_torch(
             torch_weight,
             device=self.device,
             dtype=self.weights_dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=self.memory_config,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=self._mesh_mapper(tp_dim=tp_shard_dim),
         )
 
     def _from_torch(self, x: torch.Tensor, mesh_mapper=None, dtype=None):
@@ -88,11 +65,19 @@ class _TtHCABase(LightweightModule):
             mesh_mapper=mesh_mapper,
         )
 
-    def _sp_shard_mapper(self, dim: int = 2):
-        if not (self.is_mesh and self.sp_factor > 1):
-            return ttnn.ReplicateTensorToMesh(self.device) if self.is_mesh else None
+    def _mesh_mapper(self, sp_dim: int | None = None, tp_dim: int | None = None):
+        """How one host tensor lands on the mesh: split ``sp_dim`` across the SP axis, ``tp_dim`` across the
+        TP axis, replicate along whichever axis is left. Both None means fully replicated; a single device
+        needs no mapper."""
+        if not self.is_mesh:
+            return None
         dims = [None, None]
-        dims[self.sp_axis] = dim
+        if sp_dim is not None and self.sp_factor > 1:
+            dims[self.sp_axis] = sp_dim
+        if tp_dim is not None and self.tp_factor > 1:
+            dims[self.tp_axis] = tp_dim
+        if dims == [None, None]:
+            return ttnn.ReplicateTensorToMesh(self.device)
         return ttnn.ShardTensor2dMesh(self.device, mesh_shape=tuple(self.device.shape), dims=dims)
 
     def _f32(self, x: torch.Tensor, mesh_mapper=None):
@@ -115,13 +100,13 @@ class _TtHCABase(LightweightModule):
 
         float32, not the block dtype: the comparison is on integers up to width-1 and bf16 is only exact to
         256 -- measured, bf16 misses 640 of 328K elements at entry_count 300 and 4480 of 5M at 7863."""
-        shard = self._sp_shard_mapper(dim=2)
+        sp_mapper = self._mesh_mapper(sp_dim=2)
         rate = self.compress_rate if hasattr(self, "compress_rate") else self.compressor.compress_rate
         return {
             "seq": seq_global,
             "width": width,
-            "thr": self._f32(((torch.arange(seq_global) + 1) // rate).float().view(1, 1, seq_global, 1), shard),
-            "ic": self._f32(torch.arange(seq_global).float().view(1, 1, seq_global, 1), shard),
+            "thr": self._f32(((torch.arange(seq_global) + 1) // rate).float().view(1, 1, seq_global, 1), sp_mapper),
+            "ic": self._f32(torch.arange(seq_global).float().view(1, 1, seq_global, 1), sp_mapper),
             "w": self._f32(torch.arange(width).float().view(1, 1, 1, width)),
             "ec": self._scalar_buffer(ttnn.float32),
             "rl": self._scalar_buffer(ttnn.float32),
@@ -157,7 +142,6 @@ class _TtHCABase(LightweightModule):
 
     def _mask_block(self, seq: int, width: int, first_window_position: int, seq_len_actual: int):
         """The mask's compressed columns, built on device: 0 where a query may attend an entry, -inf else.
-        Replaces the host ``hca_block_bias``, which now only serves the tests as a reference.
 
         A query in global row j may attend entry w while ``w < entry_count + (j+1)//compress_rate``, so with
         ``thr[j] = (j+1)//compress_rate`` the whole block is ONE broadcast comparison against a 1-element
@@ -211,17 +195,12 @@ class _TtHCABase(LightweightModule):
 
         Only ``base`` moves between chunks, so forward pushes 4 bytes rather than computing sp*rows indices
         on host -- the same shape MLA's per-chunk metadata uses (tt_prefill_runtime.py:481)."""
-        mapper = None
-        if self.is_mesh:
-            dims = [None, None]
-            dims[self.sp_axis] = 0
-            mapper = ttnn.ShardTensor2dMesh(self.device, mesh_shape=tuple(self.device.shape), dims=dims)
         const = ttnn.from_torch(
             torch.arange(self.sp_factor * rows, dtype=torch.int32).view(self.sp_factor, rows),
             device=self.device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mapper,
+            mesh_mapper=self._mesh_mapper(sp_dim=0),
         )
         return const, self._scalar_buffer(ttnn.uint32, shape=(1, 1), layout=ttnn.ROW_MAJOR_LAYOUT)
 
@@ -249,12 +228,8 @@ class _TtHCABase(LightweightModule):
             sin = -sin
         cos = cos.repeat_interleave(2, dim=-1).unsqueeze(1)
         sin = sin.repeat_interleave(2, dim=-1).unsqueeze(1)
-        mesh_mapper = None
-        if self.is_mesh and self.sp_factor > 1:
-            dims = [None, None]
-            dims[self.sp_axis] = 2
-            mesh_mapper = ttnn.ShardTensor2dMesh(self.device, mesh_shape=tuple(self.device.shape), dims=dims)
-        return self._from_torch(cos, mesh_mapper=mesh_mapper), self._from_torch(sin, mesh_mapper=mesh_mapper)
+        sp_mapper = self._mesh_mapper(sp_dim=2)
+        return self._from_torch(cos, mesh_mapper=sp_mapper), self._from_torch(sin, mesh_mapper=sp_mapper)
 
 
 class TtHCACompressor(_TtHCABase):
@@ -517,13 +492,7 @@ class TtHCA(_TtHCABase):
         # Pre-divided by scale: SDPA scales BOTH QK and the sink internally, the reference scales only
         # QK -- dividing here cancels the kernel's extra multiply. TP-sharded to match the query heads.
         sinks_host = sinks.detach().reshape(1, self.num_heads, 1, 1) / self.scaling
-        if self.is_mesh and self.tp_factor > 1:
-            sink_dims = [None, None]
-            sink_dims[self.tp_axis] = 1
-            sink_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=sink_dims)
-            self.sinks_sdpa = self._from_torch(sinks_host, mesh_mapper=sink_mapper)
-        else:
-            self.sinks_sdpa = self._from_torch(sinks_host)
+        self.sinks_sdpa = self._from_torch(sinks_host, mesh_mapper=self._mesh_mapper(tp_dim=1))
 
         self.wq_a = self._to_tt_linear_weight(q_a_proj_weight, tp_shard_dim=2)
         self.wq_b = self._to_tt_linear_weight(q_b_proj_weight, tp_shard_dim=3)
@@ -538,13 +507,7 @@ class TtHCA(_TtHCABase):
         self.o_groups = int(o_groups)
         in_per_group = self.num_heads * self.head_dim // self.o_groups
         o_a_grouped = o_a_proj_weight.detach().view(self.o_groups, -1, in_per_group).transpose(1, 2).unsqueeze(0)
-        o_a_mapper = None
-        if self.is_mesh and self.tp_factor > 1:
-            o_a_dims = [None, None]
-            o_a_dims[self.tp_axis] = 1
-            o_a_mapper = ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=o_a_dims)
-
-        self.wo_a = self._from_torch(o_a_grouped, mesh_mapper=o_a_mapper, dtype=self.weights_dtype)
+        self.wo_a = self._from_torch(o_a_grouped, mesh_mapper=self._mesh_mapper(tp_dim=1), dtype=self.weights_dtype)
         self.wo_b = self._to_tt_linear_weight(o_b_proj_weight, tp_shard_dim=2)
 
         self.trans_mat = self._from_torch(get_rot_transformation_mat())
@@ -573,10 +536,10 @@ class TtHCA(_TtHCABase):
         carry, sw = self.sliding_window, self.sliding_window
         raw = carry + seq_global
         sk_pad = -(-(raw + cap) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
-        shard = self._sp_shard_mapper(dim=2)
+        sp_mapper = self._mesh_mapper(sp_dim=2)
 
-        ic = self._f32(torch.arange(seq_global).float().view(1, 1, seq_global, 1), shard)
-        ic_lo = self._f32((torch.arange(seq_global) - sw).float().view(1, 1, seq_global, 1), shard)
+        ic = self._f32(torch.arange(seq_global).float().view(1, 1, seq_global, 1), sp_mapper)
+        ic_lo = self._f32((torch.arange(seq_global) - sw).float().view(1, 1, seq_global, 1), sp_mapper)
         jc = self._f32((torch.arange(raw) - carry).float().view(1, 1, 1, raw))
 
         # j <= i  and  i - j < sw, both with kv_actual cancelled
@@ -615,13 +578,13 @@ class TtHCA(_TtHCABase):
         # The write rewrites whole tiles from the tile boundary below entry_count, so the last write can
         # reach past the entries themselves. ``chunk_tokens`` sizes that headroom; single-shot is one chunk.
         chunk = chunk_tokens or max_seq_len
-        capacity += _tail_tile_buf(chunk, self.compressor.compress_rate)
+        width = -(-int(chunk) // self.compressor.compress_rate)
+        capacity += _cache_write_rows(width)
         # forward must build no host tensors, so every one-hot the write can ever need is built here. The
         # slab width is fixed -- it is part of the program shape, so the no-recompile contract already
         # forbids it moving -- but r_e reaches every value once chunks carry differing real lengths, so a
         # chunked state needs the whole TILE_SIZE set. Single-shot writes once, at r_e = 0, and keeps no
         # tail, so it needs no take matrices at all.
-        width = -(-int(chunk) // self.compressor.compress_rate)
         self._build_tail_tile_matrices(
             width,
             range(ttnn.TILE_SIZE) if chunk_tokens is not None else (0,),
@@ -928,7 +891,7 @@ class TtHCA(_TtHCABase):
 
         A pair is 24 KB for chunk 5120 (18 KB shift + 6 KB take, both independent of head_dim), so the
         whole TILE_SIZE set is 768 KB per chip -- negligible beside the compressed cache itself."""
-        tile, buf = ttnn.TILE_SIZE, _buf_for_width(width)
+        tile, buf = ttnn.TILE_SIZE, _cache_write_rows(width)
         for r_e in r_es:
             # merged row i takes src row i + (tile - r_e), for the r_e + width rows that carry entries;
             # the rest stay zero, so nothing reads past src.

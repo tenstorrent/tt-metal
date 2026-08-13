@@ -142,10 +142,10 @@ def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len):
     logger.debug(f"mesh compressor PCC: {pcc_message}")
     assert pcc_passed, f"HCA mesh compressor PCC test failed: {pcc_message}"
 
-    # The compressor now emits the mask's compressed columns straight to device, which is what production
-    # consumes -- hca_block_bias is only the reference. The block spans every entry the cache can hold and
-    # every PADDED query row, so slice it down to what the reference covers: real rows x this call's
-    # entries. Values are only 0 and -inf, both exact in bfloat16, so the check stays exact.
+    # The compressor emits the mask's compressed columns straight to device, so this checks what production
+    # consumes. The block spans every entry the cache can hold and every PADDED query row, while the
+    # reference covers only real rows x this call's entries, so slice it down to that. Values are only 0 and
+    # -inf, both exact in bfloat16, so the check stays exact.
     mask_block = ttnn.to_torch(
         mask_block_tt,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 3)),
