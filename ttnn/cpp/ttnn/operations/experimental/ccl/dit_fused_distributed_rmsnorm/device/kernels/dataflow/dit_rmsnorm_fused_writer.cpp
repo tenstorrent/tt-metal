@@ -65,9 +65,8 @@ void kernel_main() {
     // map (tile_row, col_tile) → (head, t_row, t_col_in_head) to address the
     // right page in the 4D output.
     constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(11);
-    // total_num_tile_rows is a runtime arg (rt[4]); it is only an output-page stride and
-    // grows with resolution, so keeping it compile-time forced a per-resolution recompile.
-    constexpr auto output_args = TensorAccessorArgs<12>();
+    constexpr uint32_t total_num_tile_rows = get_compile_time_arg_val(12);
+    constexpr auto output_args = TensorAccessorArgs<13>();
 
     // Scalar/eps/trans_mat population args (appended after the output accessor).
     // The writer always populates compute's reduce_scalar_* / epsilon /
@@ -92,10 +91,6 @@ void kernel_main() {
     // trans_mat base address for the writer-side scalar/trans_mat population
     // (only read when fuse_rope). 0 when no RoPE.
     const uint32_t transformation_mat_addr = get_arg_val<uint32_t>(arg_idx++);
-    // total_num_tile_rows (rt[4]): output-page stride, moved from CT so the binary is
-    // resolution-invariant. Read unconditionally here (before the dead is_tp_1==0 fabric
-    // branch, which never compiles for this kernel — it is only created with is_tp_1==1).
-    const uint32_t total_num_tile_rows = get_arg_val<uint32_t>(arg_idx++);
 
     const uint32_t output_tile_bytes = get_tile_size(output_cb);
     const auto output_accessor = TensorAccessor(output_args, output_addr);

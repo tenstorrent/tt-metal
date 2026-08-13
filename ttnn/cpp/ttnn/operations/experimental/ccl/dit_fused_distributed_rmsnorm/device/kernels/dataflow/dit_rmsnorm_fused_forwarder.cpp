@@ -53,15 +53,13 @@ constexpr uint32_t num_forwarders = get_compile_time_arg_val(7);
 constexpr uint32_t group_size = get_compile_time_arg_val(8);    // workers in this forwarder's group
 constexpr uint32_t max_rounds = get_compile_time_arg_val(9);    // ceil(num_tile_rows / num_workers)
 constexpr uint32_t stick_bytes = get_compile_time_arg_val(10);  // 128 (32 fp32)
-// num_chunks_per_device (= num_forwarders * max_rounds, pages/device) is a runtime arg (rt[2]):
-// pure page stride that grows with resolution. NOTE: max_rounds is still compile-time (it sizes
-// present_count[max_rounds] below), so this kernel is NOT yet fully resolution-invariant — see the
-// follow-up to give present_count a fixed cap + runtime bound.
+constexpr uint32_t num_chunks_per_device =
+    get_compile_time_arg_val(11);  // = num_forwarders * max_rounds (pages/device)
 // Grid-uniform semaphore ids (created on the whole core grid -> same L1 addr on
 // every worker + forwarder core, so no cross-core address args are needed).
-constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(11);  // workers inc; forwarder waits
-constexpr uint32_t go_sem_id = get_compile_time_arg_val(12);       // forwarder incs; workers wait
-constexpr auto stats_dram_args = TensorAccessorArgs<13>();
+constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(12);  // workers inc; forwarder waits
+constexpr uint32_t go_sem_id = get_compile_time_arg_val(13);       // forwarder incs; workers wait
+constexpr auto stats_dram_args = TensorAccessorArgs<14>();
 
 void kernel_main() {
     size_t arg_idx = 0;
@@ -69,10 +67,6 @@ void kernel_main() {
     // out_ready_sem: a GlobalSemaphore — PEER forwarders fuse-inc it over fabric
     // (same L1 addr on every chip). Local pointer for the wait + reset.
     const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-    // rt[2]: num_chunks_per_device (page stride, moved from CT so the binary is
-    // resolution-invariant w.r.t. this arg). Read before the variable-length worker-coord /
-    // present_count / fabric-connection rt args.
-    const uint32_t num_chunks_per_device = get_arg_val<uint32_t>(arg_idx++);
     // group worker NoC coords (x,y) x group_size, then present_count[r]. Sized by
     // the constexpr CT args (group_size / max_rounds) so large-row configs (e.g.
     // wan self_sp4_N18944 -> 592 tile-rows / 32 workers = 19 rounds) don't overflow
