@@ -1,0 +1,86 @@
+name: Fetch TTSim
+description: |
+  Download every simulator binary of the pinned tenstorrent/ttsim release and upload
+  them as one artifact for the sim jobs in the same workflow to consume via
+  .github/actions/setup-ttsim.
+
+  The release tag comes from tt_metal/ttsim-version, and all libttsim_*.so assets are
+  fetched rather than a named subset: which binary a SKU uses is declared by its
+  ttsim_lib in .github/sku_config.yaml, so adding a simulator topology needs no change
+  here. ttsim is a public repo, so the default GITHUB_TOKEN is enough to read its
+  releases and no third-party downloader is involved.
+
+  The caller must have checked out this action's directory and the version file, e.g.
+    sparse-checkout: |
+      .github/actions/fetch-ttsim
+      tt_metal/ttsim-version
+
+inputs:
+  artifact-name:
+    description: Name of the uploaded artifact; must match what setup-ttsim downloads.
+    required: false
+    default: 'ttsim-binaries'
+  version-file:
+    description: File holding the tenstorrent/ttsim release tag to download.
+    required: false
+    default: 'tt_metal/ttsim-version'
+  github-token:
+    description: Token used for the release download. The default is enough for a public repo.
+    required: false
+    default: ${{ github.token }}
+  retention-days:
+    description: Artifact retention. One day by default; it is only consumed within the run.
+    required: false
+    default: '1'
+
+runs:
+  using: composite
+  steps:
+    - name: Download ttsim release binaries
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+        if [[ ! -f "${{ inputs.version-file }}" ]]; then
+          echo "::error::${{ inputs.version-file }} not found. Add it to the job's sparse-checkout."
+          exit 1
+        fi
+        version=$(tr -d '[:space:]' < "${{ inputs.version-file }}")
+        if [[ -z "$version" ]]; then
+          echo "::error::${{ inputs.version-file }} is empty; expected a tenstorrent/ttsim release tag."
+          exit 1
+        fi
+
+        echo "Downloading libttsim_*.so from tenstorrent/ttsim@$version"
+        rm -rf /tmp/ttsim
+        mkdir -p /tmp/ttsim
+        gh release download "$version" \
+          --repo tenstorrent/ttsim \
+          --pattern 'libttsim_*.so' \
+          --dir /tmp/ttsim
+
+        # The release also ships *_aarch64.so builds of each library. Every sim runner is
+        # x86_64 and sku_config's ttsim_lib names the x86 asset, so drop them instead of
+        # doubling the artifact that each sim job downloads. Sim on ARM runners would need
+        # ttsim_lib to become arch-aware first.
+        rm -f /tmp/ttsim/*_aarch64.so
+
+        # --pattern matching nothing is not an error for gh, so check before publishing an
+        # artifact that would fail every sim job later with a missing-binary error instead.
+        shopt -s nullglob
+        libs=(/tmp/ttsim/libttsim_*.so)
+        if [[ ${#libs[@]} -eq 0 ]]; then
+          echo "::error::tenstorrent/ttsim@$version has no libttsim_*.so assets."
+          exit 1
+        fi
+        echo "Fetched ${#libs[@]} simulator binaries:"
+        ls -lh /tmp/ttsim
+
+    - name: Upload ttsim binaries artifact
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: /tmp/ttsim/
+        if-no-files-found: error
+        retention-days: ${{ inputs.retention-days }}

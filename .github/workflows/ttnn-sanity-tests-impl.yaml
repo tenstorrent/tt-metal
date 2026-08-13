@@ -134,36 +134,18 @@ jobs:
     if: ${{ needs.load-test-matrix.outputs.has-sim == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout ttsim version
+      - name: Checkout fetch-ttsim action and pinned ttsim version
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: tt_metal/ttsim-version
+          sparse-checkout: |
+            .github/actions/fetch-ttsim
+            tt_metal/ttsim-version
           sparse-checkout-cone-mode: false
-      - name: Read ttsim version
-        id: ttsim-version
-        run: echo "version=$(cat tt_metal/ttsim-version)" >> "$GITHUB_OUTPUT"
-      - name: Download wormhole_b0 ttsim binary
-        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
-        with:
-          repository: tenstorrent/ttsim
-          tag: ${{ steps.ttsim-version.outputs.version }}
-          fileName: libttsim_wh.so
-          out-file-path: /tmp/ttsim
-      - name: Download blackhole ttsim binary
-        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
-        with:
-          repository: tenstorrent/ttsim
-          tag: ${{ steps.ttsim-version.outputs.version }}
-          fileName: libttsim_bh.so
-          out-file-path: /tmp/ttsim
-      - name: Upload ttsim binaries artifact
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        with:
-          name: ttsim-binaries
-          path: /tmp/ttsim/
-          if-no-files-found: error
-          retention-days: 1
+          ref: ${{ inputs.ref || github.sha }}
+      - name: ⬇️  Fetch ttsim
+        uses: ./.github/actions/fetch-ttsim
+        timeout-minutes: 10
 
   ttnn:
     needs: [load-test-matrix, fetch-ttsim]
@@ -228,7 +210,7 @@ jobs:
       # header before kernels are JIT-compiled. Wormhole sim only; this patches the runner's
       # /opt/venv (so it must run here, not in load-test-matrix). Remove once LLK ships a fix.
       - name: Apply ttsim wormhole workaround patches
-        if: ${{ matrix.test-group.sku == 'sim_wormhole_b0' }}
+        if: ${{ startsWith(matrix.test-group.sku, 'sim_wh') }}
         run: |
           HEADER=$(find /opt/venv -name "cunpack_common.h" -path "*wormhole_b0*" 2>/dev/null | head -1)
           echo "Patching: $HEADER"
@@ -376,7 +358,7 @@ jobs:
         if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         env:
-          PYTEST_ADDOPTS: "-p no:timeout -n 4 ${{ matrix.test-group.sku == 'sim_wormhole_b0' && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || matrix.test-group.sku == 'sim_blackhole' && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+          PYTEST_ADDOPTS: "-p no:timeout -n 4 ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
           # Cap PyTorch/ATen host-side OpenMP threads and use passive waiting. A brief host
           # reference-tensor op is enough to spin up the OpenMP/MKL thread pool; its worker
           # threads then busy-wait for the rest of the job, which is where most of the CPU
@@ -392,7 +374,7 @@ jobs:
           # with --lf for actionable diagnostics.
           export cmd=$(printf '%s' '${{ matrix.test-group.cmd }}' | sed -E 's/[[:space:]]+--timeout[[:space:]]+[0-9]+//g')
           # PYTEST_ADDOPTS for the serial fallback re-run (drops -n 4); applied only on retry.
-          export SERIAL_ADDOPTS="-p no:timeout ${{ matrix.test-group.sku == 'sim_wormhole_b0' && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || matrix.test-group.sku == 'sim_blackhole' && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
+          export SERIAL_ADDOPTS="-p no:timeout ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || '' }}"
           # Wrap the whole sim run in the host-load sidecar so its usage report covers both
           # the parallel run and any serial re-run. Written to /work/mem_report.json (even
           # on failure — emitted before the sidecar exits) so the Upload mem report step
