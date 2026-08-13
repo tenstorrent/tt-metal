@@ -120,18 +120,26 @@
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
 
-# This is an END-TO-END model-perf test, not a device-perf one: it carries
+# This is an END-TO-END model-perf test, not a device-perf one. It carries
 # model_perf_t3000 / model_perf_tg rather than models_device_performance_bare_metal, and
-# it emits no device-perf CSV (the impl's report steps are guarded on that file existing,
-# so the job is unaffected). It lives here because the tiered CI has no e2e-perf pipeline
-# and this registry is the only one with a perf identity.
+# what it asserts is host wall-clock: run_perf_resnet times "compile" and
+# "run_model_pipeline_<n>cqs" with models.common.utility_functions.profiler and checks them
+# against PERF_EXPECTATIONS (inference_time 0.0033-0.0175s, compile_time 60s). It never
+# looks at device kernel duration, which is what the sibling test_perf_device_resnet50.py
+# entry above measures via a nested tracy run. It lives here because the tiered CI has no
+# e2e-perf pipeline and this registry is the only one with a perf identity.
+#
+# Consequence worth knowing: the impl's "Merge test reports" step still runs and still
+# produces a Models_Device_Perf_*.csv, merged from the host-side perf_ttnn_resnet50_*.csv
+# that prep_perf_report writes. Its CHECK pass is vacuous -- there are no device-kernel
+# rows to threshold, so check_device_perf_results iterates nothing. Harmless, but the
+# report machinery does run rather than being skipped.
 #
 # It is the one ResNet-50 test the migration would otherwise drop: it ran as
 # t3k_CNN_resnet50_model_perf_tests in t3k_perf_tests.yaml (wh_llmbox_perf, 75 min), and
 # its only other reference is run_tg_model_perf_tests.sh, which no workflow invokes.
 #
-# The timeout is a placeholder sized off the legacy 75-minute budget; replace it with the
-# measured step duration plus margin after the first run.
+# Timeout is the measured step duration (3.5 min in run 31612240250) x ~1.5.
 - name: ResNet-50 e2e model perf tests
   cmd: |
     pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_perf_e2e_resnet50.py -m model_perf_t3000
