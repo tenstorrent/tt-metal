@@ -224,7 +224,7 @@ int main() {
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), add_mesh_workload, true);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), multiply_and_subtract_mesh_workload, true);
     // =========== Step 5: Trace the MeshWorkloads using the Workload Dispatch CQ ===========
-    auto trace_id = BeginTraceCapture(workload_cq);
+    auto trace_id = mesh_device->begin_mesh_trace(workload_cq);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), add_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), multiply_and_subtract_mesh_workload, false);
     mesh_device->end_mesh_trace(workload_cq, trace_id);

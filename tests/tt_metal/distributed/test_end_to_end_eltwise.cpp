@@ -297,7 +297,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
 
     EnqueueMeshWorkload(cq, mesh_workload, true /* blocking */);
 
-    auto trace_id = BeginTraceCapture(cq);
+    auto trace_id = mesh_device_->begin_mesh_trace(cq);
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
     mesh_device_->end_mesh_trace(cq, trace_id);
 
@@ -361,7 +361,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
 
     EnqueueMeshWorkload(cq, mesh_workload, true /* blocking */);
 
-    auto trace_id = BeginTraceCapture(cq);
+    auto trace_id = mesh_device_->begin_mesh_trace(cq);
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
     mesh_device_->end_mesh_trace(cq, trace_id);
 
@@ -478,7 +478,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), multiply_and_subtract_mesh_workload, true);
 
-    auto trace_id = BeginTraceCapture(workload_cq);
+    auto trace_id = mesh_device_->begin_mesh_trace(workload_cq);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), multiply_and_subtract_mesh_workload, false);
     mesh_device_->end_mesh_trace(workload_cq, trace_id);

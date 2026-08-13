@@ -135,7 +135,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTrace) {
 
     distributed::EnqueueWriteMeshBuffer(data_movement_queue, input, input_data, true);
 
-    auto tid = distributed::BeginTraceCapture(mesh_command_queue);
+    auto tid = this->device_->begin_mesh_trace(mesh_command_queue);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
     this->device_->end_mesh_trace(mesh_command_queue, tid);
 
@@ -190,7 +190,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoop
         distributed::EnqueueWriteMeshBuffer(data_movement_queue, input, input_data, true);
 
         if (not trace_captured) {
-            trace_id = distributed::BeginTraceCapture(mesh_command_queue);
+            trace_id = this->device_->begin_mesh_trace(mesh_command_queue);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
             this->device_->end_mesh_trace(mesh_command_queue, trace_id);
             trace_captured = true;
@@ -274,7 +274,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
     }
 
     // Capture trace on a trace queue
-    auto tid = distributed::BeginTraceCapture(mesh_command_queue);
+    auto tid = this->device_->begin_mesh_trace(mesh_command_queue);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
     this->device_->end_mesh_trace(mesh_command_queue, tid);
 
@@ -317,7 +317,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
     workload.add_program(device_range_, std::move(simple_program));
 
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, true);
-    auto tid = distributed::BeginTraceCapture(mesh_command_queue);
+    auto tid = this->device_->begin_mesh_trace(mesh_command_queue);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, kNonBlocking);
     mesh_device->end_mesh_trace(mesh_command_queue, tid);
 
@@ -371,7 +371,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
 
     distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, true);
 
-    auto tid = distributed::BeginTraceCapture(mesh_command_queue);
+    auto tid = this->device_->begin_mesh_trace(mesh_command_queue);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
     mesh_device->end_mesh_trace(mesh_command_queue, tid);
 
@@ -437,7 +437,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramDeviceCapture) {
 
         if (!has_trace) {
             // Program must be cached first
-            tid = distributed::BeginTraceCapture(mesh_command_queue);
+            tid = this->device_->begin_mesh_trace(mesh_command_queue);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
             mesh_device->end_mesh_trace(mesh_command_queue, tid);
             has_trace = true;
@@ -524,7 +524,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
     }
 
     // Capture trace on a trace queue
-    auto tid = distributed::BeginTraceCapture(mesh_command_queue);
+    auto tid = this->device_->begin_mesh_trace(mesh_command_queue);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload0, kNonBlocking);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload1, kNonBlocking);
     mesh_device->end_mesh_trace(mesh_command_queue, tid);
@@ -617,7 +617,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
     }
 
     // Capture trace on a trace queue
-    auto tid = distributed::BeginTraceCapture(mesh_command_queue);
+    auto tid = this->device_->begin_mesh_trace(mesh_command_queue);
     for (uint32_t i = 0; i < num_programs; i++) {
         distributed::EnqueueMeshWorkload(mesh_command_queue, workloads[i], kNonBlocking);
     }
@@ -901,7 +901,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
         const bool use_trace = (rand() % 2) == 0;
         if (use_trace) {
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            const distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_command_queue);
+            const distributed::MeshTraceId trace_id = this->device_->begin_mesh_trace(mesh_command_queue);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
             this->device_->end_mesh_trace(mesh_command_queue, trace_id);
             trace_ids.push_back(trace_id);
@@ -955,7 +955,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
         if (use_trace) {
             ;
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            const distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_command_queue);
+            const distributed::MeshTraceId trace_id = this->device_->begin_mesh_trace(mesh_command_queue);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
             this->device_->end_mesh_trace(mesh_command_queue, trace_id);
             trace_ids.push_back(trace_id);
@@ -1021,7 +1021,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
         if (use_trace) {
             ;
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            const distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_command_queue);
+            const distributed::MeshTraceId trace_id = this->device_->begin_mesh_trace(mesh_command_queue);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
             this->device_->end_mesh_trace(mesh_command_queue, trace_id);
             trace_ids.push_back(trace_id);
@@ -1140,7 +1140,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueDFBProgramTrace) {
 
     // --- Trace capture: enqueue twice with different DFB configs ---
 
-    auto tid = distributed::BeginTraceCapture(mesh_command_queue);
+    auto tid = this->device_->begin_mesh_trace(mesh_command_queue);
 
     // First enqueue: config A, output to output_addr_a.
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);

@@ -1105,10 +1105,7 @@ int main(int argc, char** argv) {
             // it's a one-time setup cost that is amortised when the same
             // trace is replayed many times in real workloads.
             //
-            // Note: BeginTraceCapture is the only trace API exposed as a free
-            // distributed:: function; end / replay / release are MeshDevice
-            // member methods.
-            const distributed::MeshTraceId tid = distributed::BeginTraceCapture(cq);
+            const distributed::MeshTraceId tid = mesh_device->begin_mesh_trace(cq);
             for (uint32_t i = 0; i < cfg.num_programs; ++i) {
                 const uint32_t program_index = i + 1;
                 launch(program_index, program_index);

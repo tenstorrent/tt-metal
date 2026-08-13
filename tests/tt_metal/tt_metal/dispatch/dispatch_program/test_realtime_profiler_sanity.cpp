@@ -392,7 +392,7 @@ TEST(RealtimeProfilerSanity, TraceReplayResolvesKernelSources) {
         prog.set_runtime_id(static_cast<uint64_t>(kTraceRuntimeId));
     }
 
-    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_cq);
+    distributed::MeshTraceId trace_id = mesh_device->begin_mesh_trace(mesh_cq);
     distributed::EnqueueMeshWorkload(mesh_cq, workload, false);
     mesh_device->end_mesh_trace(mesh_cq, trace_id);
     mesh_device->replay_mesh_trace(mesh_cq, trace_id, true);

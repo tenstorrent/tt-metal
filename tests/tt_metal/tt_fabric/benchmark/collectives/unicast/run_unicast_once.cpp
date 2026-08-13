@@ -286,7 +286,7 @@ Notes:
     Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
     Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/true);
     // 2) Capture p.trace_iters enqueues back-to-back
-    auto trace_id = Dist::BeginTraceCapture(mcq);
+    auto trace_id = mesh->begin_mesh_trace(mcq);
     for (uint32_t i = 0; i < p.trace_iters; ++i) {
         Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
         Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/false);

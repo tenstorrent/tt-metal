@@ -73,7 +73,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceSingleReplay) {
 
     // Capture trace
     tt_metal::detail::WriteToDeviceL1(dev, node, address, zeros);
-    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(cq);
+    distributed::MeshTraceId trace_id = mesh_device->begin_mesh_trace(cq);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     mesh_device->end_mesh_trace(cq, trace_id);
 
@@ -136,7 +136,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTraceMultipleReplays) {
     ASSERT_EQ(warm_up_result[0], value);
 
     // Capture trace
-    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(cq);
+    distributed::MeshTraceId trace_id = mesh_device->begin_mesh_trace(cq);
     distributed::EnqueueMeshWorkload(cq, workload, false);
     mesh_device->end_mesh_trace(cq, trace_id);
 
@@ -215,7 +215,7 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
     tt_metal::detail::ReadFromDeviceL1(dev, node, address_0, sizeof(uint32_t), warm_up_0);
     ASSERT_EQ(warm_up_0[0], value_0);
 
-    distributed::MeshTraceId trace_id_0 = distributed::BeginTraceCapture(cq0);
+    distributed::MeshTraceId trace_id_0 = mesh_device->begin_mesh_trace(cq0);
     distributed::EnqueueMeshWorkload(cq0, wl0, false);
     mesh_device->end_mesh_trace(cq0, trace_id_0);
 
@@ -226,7 +226,7 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, QuasarTraceMultipleReplaysAcros
     tt_metal::detail::ReadFromDeviceL1(dev, node, address_1, sizeof(uint32_t), warm_up_1);
     ASSERT_EQ(warm_up_1[0], value_1);
 
-    distributed::MeshTraceId trace_id_1 = distributed::BeginTraceCapture(cq1);
+    distributed::MeshTraceId trace_id_1 = mesh_device->begin_mesh_trace(cq1);
     distributed::EnqueueMeshWorkload(cq1, wl1, false);
     mesh_device->end_mesh_trace(cq1, trace_id_1);
 

@@ -10,7 +10,6 @@
 #include "device.hpp"
 #include "mesh_device.hpp"
 #include "mesh_device_impl.hpp"
-#include "mesh_trace.hpp"
 #include "mesh_workload_impl.hpp"
 #include "tt-metalium/program.hpp"
 #include "dispatch/system_memory_manager.hpp"
@@ -152,12 +151,6 @@ bool EventQuery(const MeshEvent& event) {
     return event_completed;
 }
 
-MeshTraceId BeginTraceCapture(MeshCommandQueue& mesh_cq) {
-    auto trace_id = MeshTrace::next_id();
-    mesh_cq.device()->begin_mesh_trace(mesh_cq, trace_id);
-    return trace_id;
-}
-
 void Synchronize(
     MeshDevice& device,
     ttsl::optional_reference<MeshCommandQueue> mesh_cq,
@@ -187,9 +180,7 @@ void Synchronize(MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<co
 }
 
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id) {
-    auto trace_id = MeshTrace::next_id();
-    device->begin_mesh_trace(device->mesh_command_queue(cq_id), trace_id);
-    return trace_id;
+    return device->begin_mesh_trace(device->mesh_command_queue(cq_id));
 }
 
 void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids) {

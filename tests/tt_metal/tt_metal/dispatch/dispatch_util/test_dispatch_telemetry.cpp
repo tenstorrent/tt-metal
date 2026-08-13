@@ -778,7 +778,7 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchCoreProgramCountForTraceReplay) {
     num_programs++;
 
     constexpr uint32_t num_traced_programs = 16;
-    auto trace_id = distributed::BeginTraceCapture(cq);
+    auto trace_id = mesh_device->begin_mesh_trace(cq);
     for (uint32_t i = 0; i < num_traced_programs; ++i) {
         distributed::EnqueueMeshWorkload(cq, workload, false);
         num_programs++;

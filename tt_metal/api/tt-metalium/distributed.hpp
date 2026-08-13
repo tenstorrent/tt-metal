@@ -106,16 +106,14 @@ void EventSynchronize(const MeshEvent& event);
 // Returns true if the CQ has completed recording the event, false otherwise.
 bool EventQuery(const MeshEvent& event);
 
-MeshTraceId BeginTraceCapture(MeshCommandQueue& mesh_cq);
-
 void Synchronize(
     MeshDevice& device,
     ttsl::optional_reference<MeshCommandQueue> mesh_cq,
     ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
 [[deprecated(
-    "Use BeginTraceCapture(MeshCommandQueue&) instead. BeginTraceCapture(MeshDevice*, uint8_t) will be removed after "
-    "September 9th, 2026.")]]
+    "Use MeshDevice::begin_mesh_trace(MeshCommandQueue&) instead. BeginTraceCapture(MeshDevice*, uint8_t) will be "
+    "removed after September 9th, 2026.")]]
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
 
 // Takes the device by pointer, so the reference-taking overload above is the only candidate for a MeshDevice lvalue

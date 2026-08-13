@@ -410,7 +410,7 @@ private:
             distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
-        const distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(mesh_command_queue);
+        const distributed::MeshTraceId trace_id = this->device_->begin_mesh_trace(mesh_command_queue);
         for (auto& workload : this->workloads) {
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
         }

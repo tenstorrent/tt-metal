@@ -489,7 +489,7 @@ MeshTraceId setup_trace_if_enabled(
     MeshTraceId tid;
     if (info.use_trace) {
         const std::size_t cq_id = 0;
-        tid = BeginTraceCapture(mesh_device->mesh_command_queue(cq_id));
+        tid = mesh_device->begin_mesh_trace(mesh_device->mesh_command_queue(cq_id));
         executor.execute_programs();
         mesh_device->end_mesh_trace(mesh_device->mesh_command_queue(cq_id), tid);
         Finish(mesh_device->mesh_command_queue(cq_id));

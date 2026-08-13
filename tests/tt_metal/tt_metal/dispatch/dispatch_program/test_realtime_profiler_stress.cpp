@@ -206,7 +206,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
     // memory pressure; the dispatch commands captured in the trace are
     // independent per-enqueue, so dispatch_s still fires 4096 separate
     // kernel_start pulses on replay.
-    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(cq);
+    distributed::MeshTraceId trace_id = mesh_device->begin_mesh_trace(cq);
     for (uint32_t i = 0; i < kNumProgramsInTrace; ++i) {
         distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
     }
@@ -304,7 +304,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
     auto& cq = mesh_device->mesh_command_queue(0);
     distributed::EnqueueMeshWorkload(cq, workload, true);
 
-    distributed::MeshTraceId trace_id = distributed::BeginTraceCapture(cq);
+    distributed::MeshTraceId trace_id = mesh_device->begin_mesh_trace(cq);
     for (uint32_t i = 0; i < kNumProgramsInTrace; ++i) {
         distributed::EnqueueMeshWorkload(cq, workload, false);
     }
