@@ -44,11 +44,23 @@ inline void llk_pack_untilize_init(std::uint32_t pack_output) {
         "only 1x32 and 2x32 tiny tiles supported for pack untilize on Quasar");
 
     if (tensor_shape.total_num_faces() == ckernel::trisc::NUM_FACES) {
-        const std::uint8_t bfd_id = llk_pack_program_bfd_(output_id);
-        _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(bfd_id, tensor_shape);
+        llk_pack_program_bfd_(output_id);
+        if constexpr (ckernel::TRISC_ID == 2) {
+            _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(
+                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape);
+        } else {
+            _llk_pack_untilize_init_<full_ct_dim, block_ct_dim>(
+                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack1>(), tensor_shape);
+        }
     } else {
-        const std::uint8_t bfd_id = llk_pack_program_bfd_<ckernel::trisc::L1AccessMode::Strided>(output_id);
-        _llk_pack_untilize_strided_init_<full_ct_dim, block_ct_dim>(bfd_id, tensor_shape);
+        llk_pack_program_bfd_<ckernel::trisc::L1AccessMode::Strided>(output_id);
+        if constexpr (ckernel::TRISC_ID == 2) {
+            _llk_pack_untilize_strided_init_<full_ct_dim, block_ct_dim>(
+                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), tensor_shape);
+        } else {
+            _llk_pack_untilize_strided_init_<full_ct_dim, block_ct_dim>(
+                ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack1>(), tensor_shape);
+        }
     }
 }
 

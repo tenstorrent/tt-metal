@@ -27,7 +27,7 @@
 *
 * Each operand gets a BFD id allocated from the unpack partition and its table entry is programmed here;
 * the DFB ids are used only to fetch buffer info, never as BFD ids. Mind the role flip: operandA feeds
-* UNPACR1 -> SrcB (UnpB slot) and operandB feeds UNPACR0 -> SrcA (UnpA slot).
+* UNPACR1 -> SrcB (Unp1) and operandB feeds UNPACR0 -> SrcA (Unp0).
 */
 template <bool TRANSPOSE_EN = false>
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
@@ -50,10 +50,15 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         get_operand_tensor_shape(operandB_id).total_num_faces() == ckernel::MAX_NUM_FACES,
         "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
 
-    const std::uint8_t bfd_for_a = llk_unpack_program_bfd_<ckernel::trisc::BfdResource::UnpB>(operandA_id);
-    const std::uint8_t bfd_for_b = llk_unpack_program_bfd_<ckernel::trisc::BfdResource::UnpA>(operandB_id);
+    llk_unpack_program_bfd_<ckernel::trisc::BfdResource::Unp1>(operandA_id);
+    llk_unpack_program_bfd_<ckernel::trisc::BfdResource::Unp0>(operandB_id);
 
-    _llk_unpack_matmul_init_<TRANSPOSE_EN>(bfd_for_a, bfd_for_b, ct_dim, rt_dim, kt_dim);
+    _llk_unpack_matmul_init_<TRANSPOSE_EN>(
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
+        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
+        ct_dim,
+        rt_dim,
+        kt_dim);
 }
 
 /**

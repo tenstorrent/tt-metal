@@ -51,16 +51,16 @@ inline void llk_unpack_A_init(
         static_assert(BType == BroadcastType::NONE, "On Quasar, only BroadcastType::NONE is supported for dest reuse");
 
         // For Quasar, the unp_sel field is ignored if binary_reuse_dest != EltwiseBinaryReuseDestType::NONE
-        // CB_UNP in the reuse-dest MOP is UNP_B for DEST_TO_SRCA, UNP_A otherwise — allocate accordingly
-        constexpr ckernel::trisc::BfdResource res = binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA
-                                                        ? ckernel::trisc::BfdResource::UnpB
-                                                        : ckernel::trisc::BfdResource::UnpA;
-        const std::uint8_t bfd_id = llk_unpack_program_bfd_<res>(operand_id);
+        // CB_UNP in the reuse-dest MOP is UNP_B for DEST_TO_SRCA, UNP_A otherwise — program Unp1/Unp0 accordingly
+        constexpr ckernel::trisc::BfdResource engine = binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA
+                                                           ? ckernel::trisc::BfdResource::Unp1
+                                                           : ckernel::trisc::BfdResource::Unp0;
+        llk_unpack_program_bfd_<engine>(operand_id);
         _llk_unpack_unary_operand_init_<
             p_unpacr::UNP_A,
             false /* TRANSPOSE_EN */,
             false /* IS_32b_DEST_EN */,
-            binary_reuse_dest>(bfd_id, tensor_shape, 1);
+            binary_reuse_dest>(ckernel::trisc::bfd_current<engine>(), tensor_shape, 1);
     } else {
         if constexpr (BType == BroadcastType::NONE) {
             LLK_ASSERT(
@@ -70,22 +70,22 @@ inline void llk_unpack_A_init(
             // Route to UNP_DEST purely on the op-writer flag (no format inspection). A 16-bit
             // operand is unpacked to DEST here too when the op writer requested it.
             if constexpr (unpack_to_dest) {
-                const std::uint8_t bfd_id = llk_unpack_program_bfd_<ckernel::trisc::BfdResource::UnpDest>(operand_id);
+                llk_unpack_program_bfd_<ckernel::trisc::BfdResource::Unp0>(operand_id);
                 _llk_unpack_unary_operand_init_<
                     p_unpacr::UNP_DEST,
                     false /*transpose*/,
                     DST_ACCUM_MODE,
                     binary_reuse_dest,
-                    true>(bfd_id, tensor_shape, 1);
+                    true>(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape, 1);
                 return;
             }
-            const std::uint8_t bfd_id = llk_unpack_program_bfd_<ckernel::trisc::BfdResource::UnpA>(operand_id);
+            llk_unpack_program_bfd_<ckernel::trisc::BfdResource::Unp0>(operand_id);
             if (transpose_of_faces && within_face_16x16_transpose) {
                 _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, true, DST_ACCUM_MODE, binary_reuse_dest, false>(
-                    bfd_id, tensor_shape, 1);
+                    ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape, 1);
             } else {
                 _llk_unpack_unary_operand_init_<p_unpacr::UNP_A, false, DST_ACCUM_MODE, binary_reuse_dest, false>(
-                    bfd_id, tensor_shape, 1);
+                    ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), tensor_shape, 1);
             }
         } else {
             static_assert(
@@ -98,10 +98,11 @@ inline void llk_unpack_A_init(
                     tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
                 "Unary broadcast currently only supports 32x32 tiles (face_r_dim=16, 2x2 faces)");
             constexpr std::uint32_t unp_sel = unpack_to_dest ? p_unpacr::UNP_A : p_unpacr::UNP_B;
-            constexpr ckernel::trisc::BfdResource res =
-                unpack_to_dest ? ckernel::trisc::BfdResource::UnpA : ckernel::trisc::BfdResource::UnpB;
-            const std::uint8_t bfd_id = llk_unpack_program_bfd_<res>(operand_id);
-            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, unpack_to_dest>(bfd_id, 1);
+            constexpr ckernel::trisc::BfdResource engine =
+                unpack_to_dest ? ckernel::trisc::BfdResource::Unp0 : ckernel::trisc::BfdResource::Unp1;
+            llk_unpack_program_bfd_<engine>(operand_id);
+            _llk_unpack_unary_broadcast_operands_init_<unp_sel, BType, unpack_to_dest>(
+                ckernel::trisc::bfd_current<engine>(), 1);
         }
     }
 }

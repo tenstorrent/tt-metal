@@ -23,19 +23,27 @@ inline constexpr bool always_false_v = false;
 
 /**
  * @brief Allocate a BFD id from the pack partition, program its table entry from the output's
- * DFB info (shape, L1 base, formats), and return the id to bake into the MOP. The DFB id is used
- * only to fetch buffer info — it never doubles as the BFD id.
+ * DFB info (shape, L1 base, formats), and record the id in the pack engine's current slot. The DFB
+ * id is used only to fetch buffer info — it never doubles as the BFD id.
  *
  * @tparam MODE: L1 access mode for the descriptor; Strided collapses y/z dims to 1 for the
  * PACR_STRIDE untilize sequences.
  */
 template <ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
-inline std::uint8_t llk_pack_program_bfd_(const std::uint32_t output_id) {
+inline void llk_pack_program_bfd_(const std::uint32_t output_id) {
     // TODO: with multiple TCs are there multiple descriptors? Only tc_slots[0] is programmed.
-    return ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, MODE>(
-        get_output_tensor_shape(output_id),
-        get_local_dfb_interface(output_id).tc_slots[0].base_addr,
-        static_cast<std::uint32_t>(pack_dst_format[output_id]));
+    if constexpr (ckernel::TRISC_ID == 2) {
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0, MODE>(
+            get_output_tensor_shape(output_id),
+            get_local_dfb_interface(output_id).tc_slots[0].base_addr,
+            static_cast<std::uint32_t>(pack_dst_format[output_id]));
+    } else {
+        static_assert(ckernel::TRISC_ID == 3, "pack BFD programming requires TRISC2 or TRISC3");
+        ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack1, MODE>(
+            get_output_tensor_shape(output_id),
+            get_local_dfb_interface(output_id).tc_slots[0].base_addr,
+            static_cast<std::uint32_t>(pack_dst_format[output_id]));
+    }
 }
 
 /**

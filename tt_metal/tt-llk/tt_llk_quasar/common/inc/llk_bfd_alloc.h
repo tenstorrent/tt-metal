@@ -7,6 +7,7 @@
 
 #include "ckernel_trisc_common.h"
 #include "ckernel_trisc_id.h"
+#include "llk_assert.h"
 
 // Buffer descriptor (BFD) id allocator.
 //
@@ -43,20 +44,36 @@
 namespace ckernel::trisc
 {
 
-// TDMA resources that consume buffer descriptors. One "current id" slot each; which slots a
-// thread actually uses depends on its TRISC role (UNP_* on T0, PACK* on T2/T3).
+// Real UNPACR/PACR hardware engines that consume buffer descriptors. One "current id" slot each;
+// compile-time ownership ties each engine to a TRISC role (see bfd_engine_owned_by_trisc).
 enum class BfdResource : std::uint8_t
 {
-    UnpA = 0,
-    UnpB,
-    UnpS,
-    UnpDest,
+    Unp0 = 0,
+    Unp1,
+    Unp2,
     Pack0,
     Pack1,
     Count
 };
 
 constexpr std::uint8_t BFD_TABLE_NUM_ENTRIES = 32;
+
+constexpr bool bfd_engine_owned_by_trisc(const BfdResource engine, const std::uint32_t trisc)
+{
+    switch (engine)
+    {
+        case BfdResource::Unp0:
+        case BfdResource::Unp1:
+            return trisc == 0;
+        case BfdResource::Pack0:
+            return trisc == 2;
+        case BfdResource::Unp2:
+        case BfdResource::Pack1:
+            return trisc == 3;
+        default:
+            return false;
+    }
+}
 
 // TRISC1 (math) gets no partition. Base/size are constexpr so allocation has no runtime table.
 constexpr std::uint8_t bfd_partition_base(const std::uint32_t trisc)
@@ -92,7 +109,8 @@ constexpr std::uint8_t bfd_partition_size(const std::uint32_t trisc)
 struct BfdAllocatorState
 {
     std::uint8_t next;                                                   // next id to hand out; valid only when initialized
-    std::uint8_t current[static_cast<std::uint8_t>(BfdResource::Count)]; // most recent id per resource
+    std::uint8_t current[static_cast<std::uint8_t>(BfdResource::Count)]; // most recent id per engine
+    bool valid[static_cast<std::uint8_t>(BfdResource::Count)];           // set on first alloc per engine; bss zero-init
     std::uint32_t generation;                                            // wrap count (debug breadcrumb)
     bool initialized;                                                    // lazy init: globals are bss zero-init only, no dynamic init on device
 };
@@ -102,15 +120,16 @@ inline BfdAllocatorState bfd_state; // zero-init; next initialized lazily to the
 
 /**
  * @brief Allocate the next buffer descriptor id for this thread's partition and record it as the
- * current id for resource R. Wraps to the partition base when the partition is exhausted.
- * @tparam R: TDMA resource the id will drive (sets the bfd_current<R>() slot)
+ * current id for engine E. Wraps to the partition base when the partition is exhausted.
+ * @tparam E: hardware engine the id will drive (sets the bfd_current<E>() slot)
  * @return buffer descriptor id to program and bake into the MOP
  */
-template <BfdResource R>
+template <BfdResource E>
 inline std::uint8_t bfd_alloc()
 {
     static_assert(ckernel::TRISC_ID != 1, "math TRISC owns no buffer descriptors");
-    static_assert(R < BfdResource::Count, "invalid BFD resource");
+    static_assert(E < BfdResource::Count, "invalid BFD engine");
+    static_assert(bfd_engine_owned_by_trisc(E, ckernel::TRISC_ID), "BFD engine not owned by compiling TRISC");
     constexpr std::uint8_t base = bfd_partition_base(ckernel::TRISC_ID);
     constexpr std::uint8_t end  = base + bfd_partition_size(ckernel::TRISC_ID);
 
@@ -121,7 +140,8 @@ inline std::uint8_t bfd_alloc()
     }
 
     const std::uint8_t id                           = bfd_state.next;
-    bfd_state.current[static_cast<std::uint8_t>(R)] = id;
+    bfd_state.current[static_cast<std::uint8_t>(E)] = id;
+    bfd_state.valid[static_cast<std::uint8_t>(E)]   = true;
     const std::uint8_t next                         = id + 1;
     bfd_state.next                                  = (next >= end) ? base : next;
     bfd_state.generation += (next >= end) ? 1 : 0;
@@ -129,32 +149,33 @@ inline std::uint8_t bfd_alloc()
 }
 
 /**
- * @brief Most recently allocated id for resource R on this thread.
- * @note Only meaningful after at least one bfd_alloc<R>() on this thread; before that it is 0.
+ * @brief Most recently allocated id for engine E on this thread.
+ * @note Asserts if no bfd_alloc<E>() has run yet on this thread.
  */
-template <BfdResource R>
+template <BfdResource E>
 inline std::uint8_t bfd_current()
 {
-    return bfd_state.current[static_cast<std::uint8_t>(R)];
+    static_assert(ckernel::TRISC_ID != 1, "math TRISC owns no buffer descriptors");
+    static_assert(E < BfdResource::Count, "invalid BFD engine");
+    static_assert(bfd_engine_owned_by_trisc(E, ckernel::TRISC_ID), "BFD engine not owned by compiling TRISC");
+    LLK_ASSERT(bfd_state.valid[static_cast<std::uint8_t>(E)], "bfd_current before first bfd_alloc");
+    return bfd_state.current[static_cast<std::uint8_t>(E)];
 }
 
 /**
- * @brief One-stop op-init sequence: allocate the next buffer descriptor id for resource R,
- * construct the descriptor from the L1 buffer info, and program the table entry. The returned
- * id is baked into the op's MOP by the caller.
- * @tparam R: TDMA resource the id will drive
+ * @brief One-stop op-init sequence: allocate the next buffer descriptor id for engine E,
+ * construct the descriptor from the L1 buffer info, and program the table entry.
+ * @tparam E: hardware engine the id will drive
  * @tparam MODE: L1 access mode (Continuous, or Strided for PACR/UNPACR_STRIDE tiny-tiles)
  * @param tensor_shape: Tile/face dimensions and shape of the buffer
  * @param l1_base_addr: base address of the buffer in L1 (16B units)
  * @param l1_data_format: L1 data encoding format
- * @return the allocated buffer descriptor id
  */
-template <BfdResource R, L1AccessMode MODE = L1AccessMode::Continuous>
-inline std::uint8_t bfd_alloc_and_program(const TensorShape& tensor_shape, const std::uint32_t l1_base_addr, const std::uint32_t l1_data_format)
+template <BfdResource E, L1AccessMode MODE = L1AccessMode::Continuous>
+inline void bfd_alloc_and_program(const TensorShape& tensor_shape, const std::uint32_t l1_base_addr, const std::uint32_t l1_data_format)
 {
-    const std::uint8_t id = bfd_alloc<R>();
+    const std::uint8_t id = bfd_alloc<E>();
     _configure_buf_desc_table_(id, construct_buf_desc<MODE>(tensor_shape, l1_base_addr, l1_data_format));
-    return id;
 }
 
 } // namespace ckernel::trisc
