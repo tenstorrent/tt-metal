@@ -576,6 +576,7 @@ def test_sparse_tp_sharded_kv_matches_sp_multichunk(mesh_device, device_params, 
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
         is_chunked=True,
+        active_seq_len=CHUNK,  # fixed physical activation slab (256 global / sp=2 = 128 local)
         layer_num=1,
         tp_shard_kv=False,
     )
@@ -590,6 +591,7 @@ def test_sparse_tp_sharded_kv_matches_sp_multichunk(mesh_device, device_params, 
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
         is_chunked=True,
+        active_seq_len=CHUNK,  # same slab as the SP-only control above
         layer_num=1,
         tp_shard_kv=True,
     )
