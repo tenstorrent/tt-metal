@@ -223,6 +223,19 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     const bool is_output_tensor_given =
         !tensor_args.optional_output_tensors.empty() && tensor_args.optional_output_tensors.at(0).has_value();
     if (is_output_tensor_given) {
+        // The program factory derives the writer's page geometry from the input tiles
+        // ({in0 tile height, in1 tile width}), not from the output tensor, so an optional
+        // output with any other tile would be paged differently than the writer writes it.
+        const auto& optional_output_tile = tensor_args.optional_output_tensors.at(0)->tensor_spec().tile();
+        TT_FATAL(
+            optional_output_tile.get_height() == in0_tile.get_height() &&
+                optional_output_tile.get_width() == in1_tile.get_width(),
+            "Optional output tensor tile {}x{} must match the output tile {}x{} derived from the input tiles",
+            optional_output_tile.get_height(),
+            optional_output_tile.get_width(),
+            in0_tile.get_height(),
+            in1_tile.get_width());
+
         const auto& optional_output_shape = tensor_args.optional_output_tensors.at(0)->logical_shape();
         const auto expanded_output_shape = compute_sparse_matmul_output_shape(
             input_tensor_a,
@@ -341,11 +354,8 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     SparseMatmulDeviceOperation::tensor_return_value_t output_tensors;
     const auto& optional_output_tensors = tensor_args.optional_output_tensors;
     const auto& input_tensors = tensor_args.input_tensors;
-    // A caller that hands in an output tensor sized for exactly `nnz` blocks is asking for the
-    // compact layout, in which the writer front-packs one block per non-zero sparsity entry and
-    // therefore writes every element of that output. Pre-zeroing it would be redundant work, so
-    // skip it -- but only in that case: every other caller still relies on the zero-fill to leave
-    // the skipped blocks at zero.
+    // A compact output is fully written by the in1 writer (one block per non-zero sparsity entry),
+    // so it skips the zero-fill below; expanded outputs rely on it to zero the skipped blocks.
     const bool compact_output = !optional_output_tensors.empty() && optional_output_tensors[0].has_value() &&
                                 operation_attributes.nnz.has_value() &&
                                 optional_output_tensors[0]->logical_shape() ==
