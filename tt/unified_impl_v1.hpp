@@ -31,15 +31,60 @@ inline Block::Block(const Storage& storage) : cb_id(storage.cb_id), num_tiles(st
 
 inline Block::Block(uint32_t cb_id, uint32_t num_tiles) : cb_id(cb_id), num_tiles(num_tiles) {}
 
-inline Block::Block(Block&& o) {
-    cb_id = o.cb_id;
-    num_tiles = o.num_tiles;
+inline Block::Block(const Storage& storage, Retained) : cb_id(storage.cb_id), num_tiles(storage.num_tiles) {
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    must_consume = false;
+#endif
+}
+
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+inline Block::~Block() { ASSERT(!must_consume || consumed); }
+#endif
+
+// A move transfers the OBLIGATION rather than discharging it: the destination
+// inherits must_consume/consumed unchanged, and only the source goes silent.
+// Clearing the flag on the destination instead would let `Block b2 =
+// std::move(b1);` launder the debt -- b2 could then be dropped without a pop
+// and nothing would complain.
+inline Block::Block(Block&& o) : cb_id(o.cb_id), num_tiles(o.num_tiles) {
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    ASSERT(o.must_consume);  // a retained block belongs to its accumulator
+    must_consume = o.must_consume;
+    consumed = o.consumed;
+    o.must_consume = false;
+    o.consumed = true;
+    o.cb_id = kMovedFrom;
+    o.num_tiles = kMovedFrom;
+#endif
 }
 
 inline Block& Block::operator=(Block&& o) {
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    ASSERT(o.must_consume);             // a retained block belongs to its accumulator
+    ASSERT(!must_consume || consumed);  // do not drop pages this Block still owes
+#endif
     cb_id = o.cb_id;
     num_tiles = o.num_tiles;
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    must_consume = o.must_consume;
+    consumed = o.consumed;
+    o.must_consume = false;
+    o.consumed = true;
+    o.cb_id = kMovedFrom;
+    o.num_tiles = kMovedFrom;
+#endif
     return *this;
+}
+
+inline void Block::consume() {
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    // Catches a retained block reaching a consumer directly -- passing
+    // accumulate(node, /*finish=*/false) straight into noc_store elides the
+    // move, so the check in the move constructor never runs.
+    ASSERT(must_consume);
+    ASSERT(!consumed);
+    consumed = true;
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -72,7 +117,10 @@ Block Accumulator<Mode>::accumulate(const Node& node, bool finish, Epilogue epil
     }
 
     reload = !finish;
-    return finish ? Block(out_storage) : Block(acc_storage);
+    // A mid-accumulation Block is RETAINED: its pages stay with the
+    // accumulator, so it may be neither transferred nor consumed. Only the
+    // finishing Block carries an obligation to reach a consumer.
+    return finish ? Block(out_storage) : Block(acc_storage, Block::Retained{});
 }
 
 template <AccumulatorMode Mode>
@@ -85,6 +133,7 @@ void Accumulator<Mode>::clear() {
 // ---------------------------------------------------------------------------
 
 inline ComputeBlock::ComputeBlock(Block block) : cb_id(block.cb_id), num_tiles(block.num_tiles) {
+    block.consume();
 #if defined(IS_COMPUTE_THREAD) && IS_COMPUTE_THREAD
     cb_wait_front(cb_id, num_tiles);
 #endif
@@ -258,6 +307,7 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, Fn fn) {
 
 template <int thread, typename Accessor>
 NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, uint32_t block_idx) {
+    block.consume();
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait_front(block.cb_id, block.num_tiles);
@@ -278,6 +328,7 @@ NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, uint32_t blo
 
 template <int thread, typename Fn>
 NocAsyncWriteTx<thread> noc_store(Block block, Fn fn) {
+    block.consume();
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait_front(block.cb_id, block.num_tiles);
@@ -296,6 +347,7 @@ NocAsyncWriteTx<thread> noc_store(Block block, Fn fn) {
 template <int thread>
 NocAsyncCopyTx<thread, /*SrcIsLocal=*/false> noc_read(
     const Storage& storage, Block block, Coord coord, uint32_t offset) {
+    block.consume();
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait_front(block.cb_id, block.num_tiles);
@@ -314,6 +366,7 @@ NocAsyncCopyTx<thread, /*SrcIsLocal=*/false> noc_read(
 template <int thread>
 NocAsyncCopyTx<thread, /*SrcIsLocal=*/true> noc_write(
     const Storage& storage, Block block, Coord coord, uint32_t offset) {
+    block.consume();
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
         cb_wait_front(block.cb_id, block.num_tiles);
