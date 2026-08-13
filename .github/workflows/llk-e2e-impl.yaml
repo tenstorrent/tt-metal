@@ -17,6 +17,7 @@ on:
 permissions:
   checks: write
   contents: read
+  packages: write
 
 env:
   LLK_PATH: tt_metal/tt-llk
