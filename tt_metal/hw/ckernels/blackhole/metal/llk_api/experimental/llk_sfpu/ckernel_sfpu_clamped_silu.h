@@ -7,15 +7,17 @@
 
 #pragma once
 
+#include <cstdint>
+
 // Fused activation mode constants for DRAMStreamingMatmul.
-static constexpr uint32_t FUSED_ACT_NONE = 0;
-static constexpr uint32_t FUSED_ACT_SILU = 1;
-static constexpr uint32_t FUSED_ACT_CLAMPED_GATE = 2;
-static constexpr uint32_t FUSED_ACT_CLAMPED_UP = 3;
-static constexpr uint32_t FUSED_ACT_GELU = 4;
-static constexpr uint32_t FUSED_ACT_CLAMP_ONLY = 5;
-static constexpr uint32_t FUSED_ACT_SITU_GATE = 6;
-static constexpr uint32_t FUSED_ACT_SCALED_TANH = 7;
+static constexpr std::uint32_t FUSED_ACT_NONE = 0;
+static constexpr std::uint32_t FUSED_ACT_SILU = 1;
+static constexpr std::uint32_t FUSED_ACT_CLAMPED_GATE = 2;
+static constexpr std::uint32_t FUSED_ACT_CLAMPED_UP = 3;
+static constexpr std::uint32_t FUSED_ACT_GELU = 4;
+static constexpr std::uint32_t FUSED_ACT_CLAMP_ONLY = 5;
+static constexpr std::uint32_t FUSED_ACT_SITU_GATE = 6;
+static constexpr std::uint32_t FUSED_ACT_SCALED_TANH = 7;
 
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_sigmoid.h"
@@ -25,7 +27,7 @@ namespace sfpu {
 
 // Gate activation: clamp(x, max=limit) * sigmoid(alpha * clamp(x, max=limit))
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_clamped_silu_gate(uint32_t limit_bits, uint32_t alpha_bits) {
+inline void calculate_clamped_silu_gate(std::uint32_t limit_bits, std::uint32_t alpha_bits) {
     sfpi::vFloat alpha_f = sfpi::as<sfpi::vFloat>(sfpi::vInt(alpha_bits));
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -48,7 +50,7 @@ inline void calculate_clamped_silu_gate(uint32_t limit_bits, uint32_t alpha_bits
 
 // Up activation: clamp(x, -limit, limit) + 1.0
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_clamped_up(uint32_t limit_bits) {
+inline void calculate_clamped_up(std::uint32_t limit_bits) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
@@ -70,7 +72,7 @@ inline void calculate_clamped_up(uint32_t limit_bits) {
 
 // Clamp-only activation: clamp(x, -limit, limit).
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_clamped(uint32_t limit_bits) {
+inline void calculate_clamped(std::uint32_t limit_bits) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
@@ -92,7 +94,7 @@ inline void calculate_clamped(uint32_t limit_bits) {
 
 // Kimi K3 SiTU gate: beta * tanh(x / beta) * sigmoid(x).
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_situ_gate(uint32_t beta_bits, uint32_t beta_reciprocal_bits) {
+inline void calculate_situ_gate(std::uint32_t beta_bits, std::uint32_t beta_reciprocal_bits) {
     sfpi::vFloat beta = sfpi::as<sfpi::vFloat>(sfpi::vInt(beta_bits));
     sfpi::vFloat beta_reciprocal = sfpi::as<sfpi::vFloat>(sfpi::vInt(beta_reciprocal_bits));
 #pragma GCC unroll 8
@@ -113,7 +115,7 @@ inline void calculate_situ_gate(uint32_t beta_bits, uint32_t beta_reciprocal_bit
 
 // Optional Kimi K3 SiTU up transform: beta * tanh(x / beta).
 template <bool is_fp32_dest_acc_en, int ITERATIONS>
-inline void calculate_scaled_tanh(uint32_t beta_bits, uint32_t beta_reciprocal_bits) {
+inline void calculate_scaled_tanh(std::uint32_t beta_bits, std::uint32_t beta_reciprocal_bits) {
     sfpi::vFloat beta = sfpi::as<sfpi::vFloat>(sfpi::vInt(beta_bits));
     sfpi::vFloat beta_reciprocal = sfpi::as<sfpi::vFloat>(sfpi::vInt(beta_reciprocal_bits));
 #pragma GCC unroll 8

@@ -36,6 +36,7 @@
 
 #include <cstdint>
 
+#include "ckernel.h"
 #include "sfpi.h"
 
 namespace ckernel

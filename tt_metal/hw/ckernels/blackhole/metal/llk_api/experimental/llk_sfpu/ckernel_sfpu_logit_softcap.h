@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_tanh.h"
 
@@ -14,7 +16,7 @@ namespace ckernel {
 namespace sfpu {
 
 template <int ITERATIONS>
-inline void calculate_logit_softcap(uint32_t cap_bits, uint32_t) {
+inline void calculate_logit_softcap(std::uint32_t cap_bits, std::uint32_t) {
     for (int d = 0; d < ITERATIONS; d++) {
         // ponytail: compute tanh first, load cap after -> cap not live across the
         // register-heavy tanh (was an SFPI reload ICE at -O3). Algebraically identical.
