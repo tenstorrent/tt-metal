@@ -83,6 +83,20 @@ def test_ccl_async_env(monkeypatch):
     assert ccl_async_enabled() is True
 
 
+def test_fabric_router_clamps_wh_packet_bytes(monkeypatch):
+    """WH Fabric max payload is 7616; oversized env overrides must not FATAL open."""
+    from models.common.utility_functions import is_blackhole
+    from models.demos.gemma4.tt.ccl import fabric_router_config_from_env
+
+    if is_blackhole():
+        pytest.skip("WH-only packet ceiling")
+    monkeypatch.setenv("HF_MODEL", "google/gemma-4-31B-it")
+    monkeypatch.setenv("GEMMA4_CCL_PACKET_BYTES", "8192")
+    router = fabric_router_config_from_env()
+    assert router is not None
+    assert router.max_packet_payload_size_bytes == 7616
+
+
 def test_prefill_l1_act_env(monkeypatch):
     monkeypatch.delenv("GEMMA4_PREFILL_L1_ACT", raising=False)
     assert prefill_short_lived_memcfg() == ttnn.DRAM_MEMORY_CONFIG
