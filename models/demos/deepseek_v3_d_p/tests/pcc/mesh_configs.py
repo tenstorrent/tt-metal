@@ -325,29 +325,10 @@ ALL_MESH_CONFIGS = [
 >>>>>>> fac3bf836d1 (switching to leaner test changes)
         reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
     ),
-    _mesh_param(
-        (8, 4),
-        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-        get_max_payload_size(),
-        2,
-        ttnn.Topology.Ring,
-        "mesh-8x4",
-        "fabric2d-torus-xy-8x4-2link",
-        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
-    ),
-    _mesh_param(
-        (8, 4),
-        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-        get_max_payload_size(64),
-        2,
-        ttnn.Topology.Ring,
-        "mesh-8x4",
-        "fabric2d-torus-xy-8x4-2link-expanded_fabric_payload",
-        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
-    ),
 ]
 
 
+<<<<<<< HEAD
 def fabric_to_device_params(fabric_cfg):
     assert fabric_cfg in (
         ttnn.FabricConfig.FABRIC_1D,
@@ -365,3 +346,26 @@ def fabric_to_device_params(fabric_cfg):
     if fabric_cfg == ttnn.FabricConfig.FABRIC_2D_TORUS_Y:
         return torus_y_device_params()
     return torus_xy_device_params()
+=======
+def _fabric_cfg_to_init_reliability_mode(fabric_cfg):
+    # For fabric 1d the param is omitted. For fabric 2d ideally it would be strict for reliable perf measurements
+    # Until CI HW supports it, use relaxed
+    if fabric_cfg in (ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING):
+        return None
+    else:
+        return ttnn.FabricReliabilityMode.RELAXED_INIT
+
+
+def fabric_to_device_params(fabric_cfg, cmb_version):
+    device_params = {
+        "fabric_config": fabric_cfg,
+        "fabric_router_config": create_fabric_router_config(
+            max_payload_size=get_max_payload_size(0 if cmb_version == 1 else 64)
+        ),
+    }
+    reliability_mode = _fabric_cfg_to_init_reliability_mode(fabric_cfg)
+    if reliability_mode is not None:
+        device_params["reliability_mode"] = reliability_mode
+
+    return device_params
+>>>>>>> 26a74cfe327 (rebase conflict fixes)

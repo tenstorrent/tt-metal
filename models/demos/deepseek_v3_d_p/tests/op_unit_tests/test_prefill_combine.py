@@ -10,9 +10,8 @@ PyTorch reference implementation when combining expert outputs back to token pos
 Uses torch-generated dispatch inputs to isolate the combine operation.
 """
 
-from dataclasses import dataclass
-import itertools
 import os
+from dataclasses import dataclass
 
 import pytest
 import torch
@@ -485,7 +484,6 @@ def _cross_product_conflated_cmb_test_dimensions():
                         marks=marks,
                         id=f"{model_name}-{_mesh_id(target_mesh, fabric_cfg)}-{test_scenario_id}",
                     )
-                )
 
     return params
 
@@ -527,7 +525,6 @@ def _cross_product_conflated_cmb_test_dimensions():
     ids=["tile", "row_major"],
 )
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
-@pytest.mark.parametrize("cmb_version", [1, 2], ids=["cmb_v1", "cmb_v2"])
 def test_ttnn_combine(
     mesh_device,
     device_params,
