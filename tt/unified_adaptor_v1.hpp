@@ -126,6 +126,21 @@ inline std::uint64_t get_noc_addr(uint32_t) {
     ASSERT(false);
     return 0;
 }
+// The CB address accessors are data-movement-only too, and a custom routine that
+// targets a peer's buffer reaches for them (it addresses the peer by its own copy
+// of the same circular buffer). Compute never has a NOC address to form.
+inline uint32_t get_write_ptr(uint32_t) {
+    ASSERT(false);
+    return 0;
+}
+inline uint32_t get_read_ptr(uint32_t) {
+    ASSERT(false);
+    return 0;
+}
+
+// The thread's NOC, for a routine that passes it explicitly.
+inline constexpr uint8_t noc_index = 0;
+
 inline void noc_async_read_barrier(uint8_t = 0) { ASSERT(false); }
 inline void noc_async_write_barrier(uint8_t = 0) { ASSERT(false); }
 inline void noc_async_writes_flushed(uint8_t = 0) { ASSERT(false); }
