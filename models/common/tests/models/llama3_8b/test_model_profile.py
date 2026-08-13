@@ -7,15 +7,18 @@ import inspect
 from unittest.mock import MagicMock
 
 import pytest
+import torch
 
 import ttnn
 from models.common.models.llama3_8b.model import (
     Llama31DecoderPrecision,
     TransformerBlock1D,
     TransformerBlock1DConfig,
+    _make_llama31_8b_rope_config,
     _resolve_llama31_8b_architecture_profile,
     build_llama3_transformer_1d_config,
 )
+from models.common.modules.rope.rope_1d import RotarySetup1D
 
 
 @pytest.mark.parametrize(
@@ -76,6 +79,48 @@ def test_blackhole_p150x4_profile_semantic_snapshot():
     assert profile.enable_minimal_qkv is True
     assert profile.enable_minimal_ff2 is True
     assert profile.lm_head_max_columns_per_device == 4008
+
+
+def test_blackhole_batch32_rope_uses_attention_decode_grid():
+    """Keep fused Q/K rotary's 64 shards on the attention program's 8x8 cores."""
+    profile = _resolve_llama31_8b_architecture_profile(
+        arch=ttnn.device.Arch.BLACKHOLE,
+        cluster_type=ttnn.cluster.ClusterType.P150_X4,
+        device_name="P150",
+        model_name="Llama-3.1-8B-Instruct",
+        dram_grid_width=8,
+    )
+    mesh_device = MagicMock()
+    physical_grid = ttnn.CoreCoord(12, 10)
+    mesh_device.compute_with_storage_grid_size.return_value = physical_grid
+    decode_grid = profile.attention_decode_transformation_core_grid or physical_grid
+
+    rope_config = _make_llama31_8b_rope_config(
+        rope_cos=torch.zeros(1, 1, 2048, 128),
+        rope_sin=torch.zeros(1, 1, 2048, 128),
+        max_batch_size=32,
+        head_dim=128,
+        mesh_device=mesh_device,
+        decode_transformation_core_grid=decode_grid,
+    )
+
+    assert rope_config.use_qk_fused is True
+    assert rope_config.max_batch_size * 2 == 64
+    assert (rope_config.core_grid.x, rope_config.core_grid.y) == (8, 8)
+    assert rope_config.core_grid != physical_grid
+
+    resolved = RotarySetup1D.from_config(rope_config).config
+    assert resolved.batch_size_per_device_group == 64
+    assert (resolved.batch_grid.bounding_box().grid_size().x, resolved.batch_grid.bounding_box().grid_size().y) == (
+        8,
+        8,
+    )
+    # The failing 12x10-derived placement used cores x=8..11 but stopped at
+    # y=5. Fused Q/K uses y=0..7 at x=0..7, and the runtime failure was first
+    # observed at (0, 6).
+    assert resolved.batch_grid.contains(ttnn.CoreCoord(0, 6))
+    assert not resolved.batch_grid.contains(ttnn.CoreCoord(8, 0))
+    assert resolved.decode_trans_mat_mem_config.shard_spec.grid == resolved.batch_grid
 
 
 @pytest.mark.parametrize(

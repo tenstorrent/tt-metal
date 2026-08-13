@@ -263,6 +263,35 @@ def _resolve_llama31_8b_architecture_profile(
     raise ValueError(f"Unsupported Llama 3.1 8B architecture: {arch}")
 
 
+def _make_llama31_8b_rope_config(
+    *,
+    rope_cos,
+    rope_sin,
+    max_batch_size: int,
+    head_dim: int,
+    mesh_device,
+    decode_transformation_core_grid,
+) -> Rope1DConfig:
+    """Build RoPE setup on the same decode grid used by attention.
+
+    Fused Q/K decode places the batch-32 Q and K tensors on an 8x8 core
+    region.  Blackhole's physical compute grid is wider, so allowing RoPE to
+    derive its batch grid from the device would distribute its 64 shards over
+    a different set of cores.  Keep the setup and consuming attention
+    program on one model-profile-owned grid, matching TTTv1's Blackhole
+    RotarySetup policy.
+    """
+    return Rope1DConfig(
+        cos_matrix=LazyWeight(source=rope_cos, device=mesh_device),
+        sin_matrix=LazyWeight(source=rope_sin, device=mesh_device),
+        max_batch_size=max_batch_size,
+        head_dim=head_dim,
+        device=mesh_device,
+        use_qk_fused=True,
+        core_grid=decode_transformation_core_grid,
+    )
+
+
 # =============================================================================
 # TransformerBlock1D
 # =============================================================================
@@ -955,6 +984,9 @@ def build_llama3_transformer_1d_config(
         model_name=model_name,
         dram_grid_width=dram_grid_size.x,
     )
+    decode_transformation_core_grid = (
+        architecture_profile.attention_decode_transformation_core_grid or mesh_device.compute_with_storage_grid_size()
+    )
     is_galaxy_cluster = cluster_type in (
         ttnn.cluster.ClusterType.GALAXY,
         ttnn.cluster.ClusterType.TG,
@@ -1030,6 +1062,7 @@ def build_llama3_transformer_1d_config(
 
     def ccl_topology():
         if cluster_type in (
+            ttnn.cluster.ClusterType.P150_X2,
             ttnn.cluster.ClusterType.P300_X2,
             ttnn.cluster.ClusterType.P150_X4,
             ttnn.cluster.ClusterType.P150_X8,
@@ -1338,13 +1371,13 @@ def build_llama3_transformer_1d_config(
         )
 
     def make_rope_config() -> Rope1DConfig:
-        return Rope1DConfig(
-            cos_matrix=LazyWeight(source=rope_cos, device=mesh_device),
-            sin_matrix=LazyWeight(source=rope_sin, device=mesh_device),
+        return _make_llama31_8b_rope_config(
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
             max_batch_size=max_batch_size,
             head_dim=head_dim,
-            device=mesh_device,
-            use_qk_fused=True,
+            mesh_device=mesh_device,
+            decode_transformation_core_grid=decode_transformation_core_grid,
         )
 
     def norm_weight_name(layer_num: int | None, weight_key: str, state_dict_prefix: str | None = None) -> str:
@@ -1544,10 +1577,7 @@ def build_llama3_transformer_1d_config(
                 8 if arch == ttnn.device.Arch.WORMHOLE_B0 else architecture_profile.mlp_prefill_dram_shard_grid_width
             ),
             decode_create_qkv_head_grid=architecture_profile.attention_decode_create_qkv_head_grid,
-            decode_transformation_core_grid=(
-                architecture_profile.attention_decode_transformation_core_grid
-                or mesh_device.compute_with_storage_grid_size()
-            ),
+            decode_transformation_core_grid=decode_transformation_core_grid,
             prefill_qkv_minimal_matmul=architecture_profile.enable_minimal_qkv,
             transformation_mat_decode=transformation_mats.get("decode"),
             transformation_mat_prefill=transformation_mats.get("prefill"),

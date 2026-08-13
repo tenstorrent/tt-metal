@@ -3,10 +3,12 @@
 
 """Pure semantic snapshots for Qwen3-32B WH/BH module composition."""
 
+import inspect
 import json
 from pathlib import Path
 
 import pytest
+import torch
 
 import ttnn
 from models.common.models.qwen3_32b import weight_utils
@@ -14,6 +16,7 @@ from models.common.models.qwen3_32b.model import (
     QWEN3_32B_ACCURACY,
     QWEN3_32B_INTERMEDIATE_SIZE,
     QWEN3_32B_PERFORMANCE,
+    Qwen3_32B,
     _qwen3_attention_config,
     _qwen3_lm_head_config,
     _qwen3_mlp_config,
@@ -21,9 +24,11 @@ from models.common.models.qwen3_32b.model import (
     _resolve_qwen3_32b_sku_overlay,
 )
 from models.common.modules.attention.attention_1d import Attention1DConfig
+from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.lm_head.lm_head_1d import LMHead1DConfig
 from models.common.modules.mlp.mlp_1d import MLP1DConfig
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1DConfig
+from models.common.modules.rope.rope_1d import Rope1DConfig, _resolve_rope_config
 
 
 class _FakeMesh:
@@ -139,6 +144,38 @@ def test_blackhole_p150x4_overlay_and_lm_splits(monkeypatch):
     assert overlay.prefill_minimal_matmul is True
     assert overlay.disable_batched_prefill is True
     assert weight_utils.lm_head_split_sizes(151936, 4, overlay.lm_head_max_columns_per_device) == [4008] * 9 + [1912]
+
+
+def test_rope_uses_attention_decode_transformation_grid():
+    source = inspect.getsource(Qwen3_32B.from_pretrained)
+
+    assert "core_grid=sku.attention_decode_transformation_grid" in source
+
+
+def test_blackhole_rope_resolves_to_attention_row_major_8x4_lane_grid(monkeypatch):
+    monkeypatch.delenv("DISABLE_MINIMAL_MATMUL", raising=False)
+    overlay = _resolve_qwen3_32b_sku_overlay(
+        arch=ttnn.device.Arch.BLACKHOLE,
+        cluster_type=ttnn.cluster.ClusterType.P150_X4,
+        num_dev=4,
+        mesh_device=_FakeMesh(),
+    )
+    table = LazyWeight(torch.zeros(1, 1, 128, 128))
+    resolved = _resolve_rope_config(
+        Rope1DConfig(
+            cos_matrix=table,
+            sin_matrix=table,
+            max_batch_size=32,
+            head_dim=128,
+            device=object(),
+            core_grid=overlay.attention_decode_transformation_grid,
+        )
+    )
+    expected = ttnn.num_cores_to_corerangeset(32, ttnn.CoreCoord(8, 8), row_wise=True)
+
+    assert resolved.batch_grid == expected
+    assert resolved.decode_trans_mat_mem_config.shard_spec.grid == expected
+    assert resolved.cos_sin_shard_mem_config.shard_spec.grid == expected
 
 
 @pytest.mark.parametrize(

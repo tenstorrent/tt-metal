@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from models.demos.utils.trace_region_sizes import resolve_trace_region_size
+
 _DEMO_PATH = "models/common/tests/demos/llama33_70b/demo.py"
 _DEMO_SOURCE = Path(_DEMO_PATH).read_text(encoding="utf-8")
 _DEMO_TREE = ast.parse(_DEMO_SOURCE, filename=_DEMO_PATH)
@@ -43,8 +45,12 @@ def test_demo_case_manifest_is_preserved():
     assert ast.literal_eval(optimizations.args[1]) == ["performance", "accuracy"]
 
 
-def test_demo_keeps_unmodified_trace_region_until_measured():
-    assert '"trace_region_size": 50_000_000' in _DEMO_SOURCE
+def test_demo_resolves_central_trace_region_size_for_each_supported_sku():
+    source = ast.unparse(_function("_ttnn_mesh_device_param_from_env"))
+    assert "resolve_trace_region_size('llama3.3-70b', env)" in source
+    assert '"trace_region_size": 50_000_000' not in _DEMO_SOURCE
+    assert resolve_trace_region_size("llama3.3-70b", "T3K") == 90_000_000
+    assert resolve_trace_region_size("llama3.3-70b", "P150x4") == 96_000_000
 
 
 def test_demo_collects_physical_p150x4_without_adding_unmeasured_perf_targets():
@@ -135,11 +141,23 @@ def test_perf_registers_actual_prefill_before_closed_world_trace_activation():
 def test_eval_uses_decode_only_trace_and_registers_representative_prefill_eagerly():
     create = _calls("_run_eval_repeat_batch32", "create_executor")[0]
     create_keywords = {keyword.arg: keyword.value for keyword in create.keywords}
-    assert ast.literal_eval(create_keywords["trace_mode"]) == "decode_only"
+    assert (
+        ast.unparse(create_keywords["trace_mode"])
+        == "eval_decode_trace_mode(os.environ.get('EVAL_DECODE_MODE', 'traced'))"
+    )
     warmup = _calls("_run_eval_repeat_batch32", "_warmup_demo_executor")[0]
     warmup_keywords = {keyword.arg: ast.unparse(keyword.value) for keyword in warmup.keywords}
     assert warmup_keywords["prefill_compile_case"] == "representative_prefill"
     assert "prefill_compile_execution" not in warmup_keywords
+    source = ast.unparse(_function("_run_eval_repeat_batch32"))
+    assert "page_table_mode=os.environ.get('EVAL_PAGE_TABLE_MODE', 'slot-stable')" in source
+    assert "'EVAL_IDENTICAL_PROMPT_INDEX'" in source
+    assert "'EVAL_ACTIVE_BATCH_SIZE'" in source
+
+
+def test_prefill_ab_override_does_not_mutate_frozen_model_args():
+    assert "model.model_args.disable_batched_prefill = True" not in _DEMO_SOURCE
+    assert _DEMO_SOURCE.count("shared prefill runtime reads DISABLE_BATCHED_PREFILL") == 2
 
 
 def test_shared_special_token_guard_is_used_on_free_running_output():

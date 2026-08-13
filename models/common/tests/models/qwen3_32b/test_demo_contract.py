@@ -53,6 +53,39 @@ def test_demo_case_manifest_is_preserved():
     assert ast.literal_eval(optimizations.args[1]) == ["performance", "accuracy"]
 
 
+def test_cross_cardinality_experiment_is_standalone_fixed_and_host_deterministic():
+    function = _function("test_qwen3_32b_p150x4_cross_cardinality")
+    source = ast.unparse(function)
+    assert "get_device_name(mesh_device) != 'P150x4'" in source
+    assert "sampling_params=None" in source
+    assert "assert_cross_cardinality_consistency(outputs_by_cardinality)" in source
+    assert "disable_batched_prefill=prefill_mode == 'sequential'" not in source
+    assert ast.literal_eval(
+        next(
+            node.value
+            for node in _DEMO_TREE.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "_CROSS_CARDINALITIES" for target in node.targets)
+        )
+    ) == (1, 2, 4, 32)
+    assert "qwen3-32b-request-{index:02d}" in _DEMO_SOURCE
+    warmup_call = _calls("test_qwen3_32b_p150x4_cross_cardinality", "_warmup_demo_executor")[0]
+    compile_case = next(keyword.value for keyword in warmup_call.keywords if keyword.arg == "prefill_compile_case")
+    assert ast.unparse(compile_case) == "(input_tokens, prompt_lens)"
+    warmup_page_table = next(keyword.value for keyword in warmup_call.keywords if keyword.arg == "page_table")
+    assert ast.unparse(warmup_page_table) == "page_table[:cardinality]"
+
+
+def test_cross_cardinality_override_is_explicit_and_canonical_cases_do_not_use_it():
+    create_call = _calls("test_qwen3_32b_p150x4_cross_cardinality", "create_model")[0]
+    assert any(keyword.arg == "disable_batched_prefill" for keyword in create_call.keywords)
+    canonical_calls = _calls("test_qwen3_32b", "create_model")
+    assert canonical_calls
+    assert all(
+        not any(keyword.arg == "disable_batched_prefill" for keyword in call.keywords) for call in canonical_calls
+    )
+
+
 def test_demo_resolves_qwen3_trace_region_and_matches_ring_fabric():
     assert 'resolve_trace_region_size("qwen3-32b", env)' in _DEMO_SOURCE
     assert '"trace_region_size": 50_000_000' not in _DEMO_SOURCE
@@ -70,7 +103,7 @@ def test_demo_exposes_p150x4_and_uses_canonical_device_naming():
 
 
 def test_required_bh_gate_failures_are_not_converted_to_fixture_skips():
-    assert 'mesh_device_name in {"P150", "P150X4"}' in _COMMON_CONFTEST_SOURCE
+    assert 'mesh_device_name in {"P150", "P300", "P150X4"}' in _COMMON_CONFTEST_SOURCE
     assert "if blackhole_selected:\n                raise" in _COMMON_CONFTEST_SOURCE
 
 
@@ -130,7 +163,12 @@ def test_eval_repeat_uses_decode_only_trace_mode():
     call = _calls("_run_eval_repeat_batch32", "TracedQwen3_32BExecutor")[0]
     trace_mode = next(keyword for keyword in call.keywords if keyword.arg == "trace_mode")
 
-    assert ast.literal_eval(trace_mode.value) == "decode_only"
+    assert ast.unparse(trace_mode.value) == "eval_decode_trace_mode(os.environ.get('EVAL_DECODE_MODE', 'traced'))"
+
+
+def test_eval_repeat_defaults_to_tttv1_slot_stable_page_table_with_diagnostic_override():
+    source = ast.unparse(_function("_run_eval_repeat_batch32"))
+    assert "page_table_mode=os.environ.get('EVAL_PAGE_TABLE_MODE', 'slot-stable')" in source
 
 
 def test_eval_repeat_warms_executor_before_shared_perf_runner_replay():

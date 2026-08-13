@@ -128,9 +128,9 @@ def ttnn_mesh_device(request):
         pytest.skip(f"{__file__}: mesh_device fixture called without parametrization")
 
     mesh_device_name = os.environ.get("MESH_DEVICE", "").strip().upper()
-    blackhole_selected = mesh_device_name in {"P150", "P150X4"}
+    blackhole_selected = mesh_device_name in {"P150", "P300", "P150X4"}
     if ttnn.device.is_blackhole() and not blackhole_selected:
-        pytest.skip(f"{__file__}: select Blackhole explicitly with MESH_DEVICE=P150 or P150x4")
+        pytest.skip(f"{__file__}: select Blackhole explicitly with MESH_DEVICE=P150, P300, or P150x4")
     if blackhole_selected and not ttnn.device.is_blackhole():
         pytest.skip(f"{__file__}: MESH_DEVICE={mesh_device_name} requires a Blackhole device")
 
@@ -168,6 +168,14 @@ def ttnn_mesh_device(request):
         pytest.skip(
             "Exact P150x4 hardware coverage requires a physical P150_X4 cluster; submeshes are not SKU-equivalent"
         )
+    if blackhole_selected and mesh_device_name == "P300" and req_shape == (1, 2):
+        cluster_type = ttnn.cluster.get_cluster_type()
+        if cluster_type not in (ttnn.cluster.ClusterType.P150_X2, ttnn.cluster.ClusterType.P300_X2):
+            pytest.skip(
+                "P300 or P300-equivalent development coverage requires a directly connected physical "
+                "two-chip Blackhole cluster; "
+                f"got {cluster_type}"
+            )
     allowed = _allowed_req_shapes_for_system(sys_shape)
     if req_shape not in allowed:
         pytest.skip(
