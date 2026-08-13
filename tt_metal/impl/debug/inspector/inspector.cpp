@@ -309,7 +309,6 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
     }
     try {
         std::lock_guard<std::mutex> lock(data->mesh_sockets_mutex);
-        std::erase_if(data->mesh_sockets_data, [](const auto& s) { return s.config_buffer.expired(); });
         const distributed::SocketSenderSize sender_size;
         auto config_buffer = socket->get_config_buffer();
         const bool is_sender = socket->get_socket_endpoint_type() == distributed::SocketEndpoint::SENDER;
@@ -352,7 +351,7 @@ void Inspector::mesh_socket_created(const distributed::MeshSocket* socket) noexc
         if (socket_data.connections.empty()) {
             return;  // this rank owns no endpoint of this socket
         }
-        data->mesh_sockets_data.push_back(std::move(socket_data));
+        data->mesh_sockets_data.insert_or_assign(config_buffer.get(), std::move(socket_data));
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log mesh socket created: {}", e.what());
     }

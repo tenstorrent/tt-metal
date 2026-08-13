@@ -163,12 +163,14 @@ void Data::rpc_get_mesh_devices(rpc::Inspector::GetMeshDevicesResults::Builder& 
 
 void Data::rpc_get_sockets(rpc::Inspector::GetSocketsResults::Builder& results) {
     std::lock_guard<std::mutex> lock(mesh_sockets_mutex);
-    // Drop endpoints whose config buffer is gone: that L1 may already belong to an unrelated
-    // buffer, and nothing in the md struct would reveal the mismatch.
-    std::erase_if(mesh_sockets_data, [](const auto& s) { return s.config_buffer.expired(); });
+    // Drop endpoints whose config buffer is gone or deallocated
+    std::erase_if(mesh_sockets_data, [](const auto& entry) {
+        auto config_buffer = entry.second.config_buffer.lock();
+        return !config_buffer || !config_buffer->is_allocated();
+    });
     auto sockets = results.initSockets(mesh_sockets_data.size());
     uint32_t i = 0;
-    for (const auto& socket_data : mesh_sockets_data) {
+    for (const auto& [config_buffer, socket_data] : mesh_sockets_data) {
         auto socket = sockets[i++];
         socket.setIsSender(socket_data.is_sender);
         socket.setConfigBufferAddress(socket_data.config_buffer_address);

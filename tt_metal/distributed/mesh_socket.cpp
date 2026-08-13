@@ -258,6 +258,7 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
         data_buffer_ = create_socket_data_buffer(device, config_);
     }
     this->connect_with_peer(context);
+    Inspector::mesh_socket_created(this);
 }
 
 void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedContext>& context) {
@@ -302,7 +303,6 @@ void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedC
         std::vector<Rank> recv_ranks = get_ranks_for_mesh_id(config_.receiver_mesh_id.value(), rank_translation_table_);
         execute_with_timeout([&]() { barrier_across_send_recv_ranks(sender_ranks, recv_ranks, context); });
     }
-    Inspector::mesh_socket_created(this);
 }
 
 std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(

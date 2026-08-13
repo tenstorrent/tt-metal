@@ -72,7 +72,7 @@ private:
     std::unordered_map<uint64_t, inspector::ProgramData> programs_data;
     std::unordered_map<int, uint64_t> kernel_id_to_program_id;
     std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data;
-    std::vector<inspector::MeshSocketData> mesh_sockets_data;
+    std::unordered_map<const distributed::MeshBuffer*, inspector::MeshSocketData> mesh_sockets_data;
     std::unordered_map<uint64_t, inspector::MeshWorkloadData> mesh_workloads_data;
     static constexpr size_t kRuntimeEntriesCapacity = 8192;
     std::array<inspector::MeshWorkloadRuntimeEntry, kRuntimeEntriesCapacity> runtime_entries{};
