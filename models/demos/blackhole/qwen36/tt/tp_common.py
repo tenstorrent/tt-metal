@@ -1058,6 +1058,48 @@ def sharded_decode_matmul(
     )
 
 
+def permute_rope_channels(w_tt, head_dim, rope_dim, n_groups, has_gate=False):
+    """Reorder each head_dim-wide group (n_groups of them) along the LAST axis of `w_tt` so the
+    two rope-active half-blocks (old[0:rope_dim/2), old[rope_dim/2:rope_dim)) land head_dim/2
+    apart, matching rotary_embedding_hf's fixed rotate_half pairing distance for a call on the
+    FULL head_dim -- see apply_partial_rope_decode/apply_partial_rope_prefill in rope_tp.py,
+    which call the op once on the whole (permuted) head_dim instead of slicing out rope_dim and
+    concatenating the pass-through tail back on.
+
+    has_gate=True: each group is actually [Q(head_dim) | gate(head_dim)] interleaved (the raw HF
+    q_proj layout used by the non-fused weight path); only the Q half is permuted, gate is passed
+    through untouched.
+
+    Pure ttnn ops (reshape/slice/concat) on an already-uploaded device tensor, run once per weight
+    at load time -- not per token. QK^T is invariant to any fixed permutation applied identically
+    to Q and K's head_dim axis (it's just a re-summed dot product), so this never needs undoing
+    downstream. V is never permuted (never rotated), and q_norm/k_norm's weight (an elementwise
+    per-channel scale) must go through this same permutation so it still lines up with wherever
+    its channel moved to.
+    """
+    half_rope, half_full = rope_dim // 2, head_dim // 2
+    group_width = head_dim * (2 if has_gate else 1)
+    lead = list(w_tt.shape)[:-1]
+    r = ttnn.reshape(w_tt, (*lead, n_groups, group_width))
+    ndim = len(r.shape)
+
+    def _s(lo, hi):
+        starts = [0] * ndim
+        ends = list(r.shape)
+        starts[-1], ends[-1] = lo, hi
+        return ttnn.slice(r, starts, ends)
+
+    a = _s(0, half_rope)  # old[0:half_rope) -> new[0:half_rope), unmoved
+    b = _s(half_rope, rope_dim)  # old[half_rope:rope_dim) -> new[half_full:half_full+half_rope)
+    p1 = _s(rope_dim, rope_dim + (half_full - half_rope))  # pass-through -> new[half_rope:half_full)
+    p2 = _s(half_full + half_rope, head_dim)  # pass-through -> new[half_full+half_rope:head_dim)
+    pieces = [a, p1, b, p2]
+    if has_gate:
+        pieces.append(_s(head_dim, group_width))  # gate, untouched
+    out = ttnn.concat(pieces, dim=-1)
+    return ttnn.reshape(out, (*lead, n_groups * group_width))
+
+
 def replicate(torch_tensor, mesh, cache_path, dtype=ttnn.bfloat16):
     """Small tensor (norm/bias) -> replicated on every device."""
     if torch_tensor.dim() == 1:

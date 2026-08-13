@@ -494,22 +494,27 @@ class Qwen36Model:
         return None
 
     def _rope_from_idx(self, idx):
-        """cos/sin [1, B, 1, rope_dim] gathered ON DEVICE from a [1, B] position index.
+        """cos/sin [1, B, 1, head_dim] gathered ON DEVICE from a [1, B] position index.
 
         Replaces the old host-computed, host-packed rope pair: the tables are resident (built in
         prepare_decode_inputs_host, outside any trace) and each step is a ttnn.embedding row fetch.
         Trace-safe: pure device ops, and the index arrives through the same persistent buffer the
         packed cos/sin used to, so nothing is baked at capture time.
-        """
-        from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables
 
-        rd = self.args.rope_head_dim
+        Gathers from the FULL head_dim-wide table (_rope_dev_tables_full, pre-widened once via
+        tp_common.permute_rope_channels' layout) so apply_partial_rope_decode can rotate the whole
+        head_dim in a single call -- the gather itself stays the same single ttnn.embedding op as
+        before, just wider, so this adds zero device ops per decode step.
+        """
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables_full
+
+        hd, rd = self.args.head_dim, self.args.rope_head_dim
         B = int(idx.shape[-1])
-        tbl_cos, tbl_sin = _rope_dev_tables(self.device, rd, self.args.max_seq_len, self.args.rope_theta)
+        tbl_cos, tbl_sin = _rope_dev_tables_full(self.device, hd, rd, self.args.max_seq_len, self.args.rope_theta)
 
         def _gather(tbl):
-            r = ttnn.embedding(idx, tbl)  # ROW_MAJOR [1, B, rope_dim]
-            r = ttnn.reshape(r, (1, B, 1, rd))  # metadata-only while ROW_MAJOR
+            r = ttnn.embedding(idx, tbl)  # ROW_MAJOR [1, B, head_dim]
+            r = ttnn.reshape(r, (1, B, 1, hd))  # metadata-only while ROW_MAJOR
             return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
 
         return _gather(tbl_cos), _gather(tbl_sin)
@@ -693,6 +698,7 @@ class Qwen36Model:
             self.args.max_seq_len,
             self.args.rope_theta,
             torch.tensor([pos + self.rope.rope_delta], dtype=torch.int32),
+            head_dim=self.args.head_dim,
         )
         cur_pos_tt = ttnn.from_torch(
             torch.tensor([pos], dtype=torch.int32),
@@ -1056,17 +1062,32 @@ class Qwen36Model:
         return x
 
     def _rope_tp_cos_sin_torch(self, start, length):
-        """Torch cos/sin tables [1, 1, length, rope_head_dim] for SEQUENCE positions
+        """Torch cos/sin tables [1, 1, length, head_dim] for SEQUENCE positions
         [start, start+length), in the rope_tp (HF split-halves) format consumed by
         apply_partial_rope_prefill. Single source of truth for the TP masked-bucket and
         traced chunk-outer prefill paths (so the captured trace's cos/sin are byte-identical
         to the eager path's). M-RoPE-aware: when a multimodal request staged a per-sequence
         table (build_request_rope) this slices it; otherwise it is ordinary 1D RoPE at
-        positions [start, start+length) — byte-identical to the pre-M-RoPE behaviour."""
-        rd = self.args.rope_head_dim
+        positions [start, start+length) — byte-identical to the pre-M-RoPE behaviour.
+
+        Widened from rope_head_dim to the full head_dim (cos=1/sin=0 in the pass-through region,
+        rope-active half relocated head_dim/2 away) to match tp_common.permute_rope_channels' Q/K
+        weight layout, so apply_partial_rope_prefill's single full-width rotary call reproduces the
+        old slice-rotate-concat result exactly. Still pure torch, still one table per call --
+        nothing new added to the non-TP path, which calls self.rope.prefill_cos_sin_torch directly
+        and never goes through this wrapper.
+        """
+        rd, hd = self.args.rope_head_dim, self.args.head_dim
+        half_rope, half_full = rd // 2, hd // 2
         cos_t, sin_t = self.rope.prefill_cos_sin_torch(start, length)  # [length, rd] bf16
-        cos = cos_t.reshape(1, 1, length, rd)
-        sin = sin_t.reshape(1, 1, length, rd)
+        if hd == rd:
+            return cos_t.reshape(1, 1, length, rd), sin_t.reshape(1, 1, length, rd)
+        pad_w = half_full - half_rope
+        ones_pad = torch.ones(length, pad_w, dtype=cos_t.dtype)
+        zeros_pad = torch.zeros(length, pad_w, dtype=sin_t.dtype)
+        cos_half, sin_half = cos_t[:, :half_rope], sin_t[:, :half_rope]
+        cos = torch.cat([cos_half, ones_pad, cos_half, ones_pad], dim=-1).reshape(1, 1, length, hd)
+        sin = torch.cat([sin_half, zeros_pad, sin_half, zeros_pad], dim=-1).reshape(1, 1, length, hd)
         return cos, sin
 
     def _forward_prefill_chunk_tp(
@@ -3327,7 +3348,7 @@ class Qwen36Model:
 
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
         """Build HOST decode inputs: (tokens_tt, cur_pos_tt, rope_pos_idx, page_table_tt)."""
-        from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables
+        from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables_full
 
         B = tokens.shape[0]
         tokens_tt = ttnn.from_torch(tokens.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -3359,12 +3380,25 @@ class Qwen36Model:
             from models.demos.blackhole.qwen36.tt.generator_interface import pack_rope_host
 
             if self.num_devices > 1:
-                rd = self.args.rope_head_dim
+                # TP: widen to full head_dim, cos=1/sin=0 in the pass-through region, rope-active
+                # half relocated head_dim/2 away -- matches tp_common.permute_rope_channels' Q/K
+                # weight layout, so apply_partial_rope_decode's single full-width rotary call
+                # reproduces the old slice-rotate-concat result exactly. Still one combined
+                # [2,B,1,head_dim] host build + single upload, same shape-class as before, just
+                # wider -- the trace-capture host-write constraint above is unaffected.
+                rd, hd = self.args.rope_head_dim, self.args.head_dim
+                half_rope, half_full = rd // 2, hd // 2
                 inv_freq = 1.0 / (self.args.rope_theta ** (torch.arange(0, rd, 2).float() / rd))
                 freqs = torch.outer(rope_pos_vec.float(), inv_freq)  # [B, rd/2]
                 emb = torch.cat([freqs, freqs], dim=-1)
-                cos = emb.cos().reshape(1, B, 1, rd).to(torch.bfloat16)
-                sin = emb.sin().reshape(1, B, 1, rd).to(torch.bfloat16)
+                cos_r, sin_r = emb.cos().to(torch.bfloat16), emb.sin().to(torch.bfloat16)
+                pad_w = half_full - half_rope
+                ones_pad, zeros_pad = torch.ones(B, pad_w, dtype=torch.bfloat16), torch.zeros(
+                    B, pad_w, dtype=torch.bfloat16
+                )
+                cos_half, sin_half = cos_r[:, :half_rope], sin_r[:, :half_rope]
+                cos = torch.cat([cos_half, ones_pad, cos_half, ones_pad], dim=-1).reshape(1, B, 1, hd)
+                sin = torch.cat([sin_half, zeros_pad, sin_half, zeros_pad], dim=-1).reshape(1, B, 1, hd)
                 rope_packed = ttnn.from_torch(
                     torch.cat([cos, sin], dim=0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
                 )
@@ -3372,7 +3406,9 @@ class Qwen36Model:
                 cos_host, sin_host = self.rope.get_cos_sin_host(int(rope_pos_vec[0]))
                 rope_packed = pack_rope_host(cos_host, sin_host)
         else:
-            _rope_dev_tables(self.device, self.args.rope_head_dim, self.args.max_seq_len, self.args.rope_theta)
+            _rope_dev_tables_full(
+                self.device, self.args.head_dim, self.args.rope_head_dim, self.args.max_seq_len, self.args.rope_theta
+            )
             rope_packed = ttnn.from_torch(
                 rope_pos_vec.to(torch.int32).reshape(1, B), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
             )

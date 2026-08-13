@@ -151,6 +151,30 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     # QK norms: HF-correct zero-centered (1+weight), used uniformly at prefill AND decode
     tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + 1.0, mesh, None)
     tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32) + 1.0, mesh, None)
+
+    # Permute Q/K's (and their norms') head_dim channels so a single full-width rotary_embedding_hf
+    # call reproduces today's slice-rotate-concat partial-RoPE result exactly -- see
+    # tpc.permute_rope_channels and apply_partial_rope_decode/apply_partial_rope_prefill in
+    # rope_tp.py. One-time, ttnn-ops-only, done here at load time (not per token). Must stay in
+    # lockstep with every cos/sin producer that feeds this attention layer's rope calls.
+    hd, rd = args.head_dim, args.rope_head_dim
+    nh_local, kv_local = args.n_local_heads, args.n_local_kv_heads
+    if fused_qkv:
+        q_w_ = nh_local * hd
+        kv_w_ = kv_local * hd
+        w = tw["wqkv_fused"]
+        ends = list(w.shape)
+        q_part = ttnn.slice(w, [0, 0], [ends[0], q_w_])
+        k_part = ttnn.slice(w, [0, q_w_], [ends[0], q_w_ + kv_w_])
+        rest = ttnn.slice(w, [0, q_w_ + kv_w_], ends)  # v | gate, untouched
+        q_perm = tpc.permute_rope_channels(q_part, hd, rd, nh_local)
+        k_perm = tpc.permute_rope_channels(k_part, hd, rd, kv_local)
+        tw["wqkv_fused"] = ttnn.concat([q_perm, k_perm, rest], dim=-1)
+    else:
+        tw["wqkv"] = tpc.permute_rope_channels(tw["wqkv"], hd, rd, nh_local, has_gate=True)
+        tw["wk"] = tpc.permute_rope_channels(tw["wk"], hd, rd, kv_local)
+    tw["q_norm"] = tpc.permute_rope_channels(tw["q_norm"], hd, rd, 1)
+    tw["k_norm"] = tpc.permute_rope_channels(tw["k_norm"], hd, rd, 1)
     return tw
 
 
@@ -519,8 +543,8 @@ class TPAttention:
 
         q = self._qk_norm(q, tw["q_norm"], ttnn.L1_MEMORY_CONFIG)
         k = self._qk_norm(k, tw["k_norm"], ttnn.L1_MEMORY_CONFIG)
-        q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
-        k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
+        q = apply_partial_rope_prefill(q, cos_tt, sin_tt)
+        k = apply_partial_rope_prefill(k, cos_tt, sin_tt)
 
         # Fill per-head KV cache for decode (stateful path only)
         if self.k_caches is not None:
@@ -648,8 +672,8 @@ class TPAttention:
         q = self._qk_norm(q, tw["q_norm"], _L1)
         k = self._qk_norm(k, tw["k_norm"], _L1)
 
-        q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
-        k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
+        q = apply_partial_rope_decode(q, cos_tt, sin_tt, B)
+        k = apply_partial_rope_decode(k, cos_tt, sin_tt, B)
 
         # SDPA-decode grid: use the real device grid (11x10=110 cores on P150x4), not a
         # hardcoded 64. cores_per_head = grid_total/B (sdpa_decode_program_factory.cpp), so a
@@ -810,8 +834,8 @@ class TPAttention:
 
         q = self._qk_norm(q, tw["q_norm"], ttnn.L1_MEMORY_CONFIG)
         k = self._qk_norm(k, tw["k_norm"], ttnn.L1_MEMORY_CONFIG)
-        q = apply_partial_rope_prefill(q, cos_tt, sin_tt, NH, self.rope_dim)
-        k = apply_partial_rope_prefill(k, cos_tt, sin_tt, NKV, self.rope_dim)
+        q = apply_partial_rope_prefill(q, cos_tt, sin_tt)
+        k = apply_partial_rope_prefill(k, cos_tt, sin_tt)
 
         # bf8 SDPA: paged_fill_cache doesn't cast — cast K/V to cache dtype before fill
         if self._sdpa_bf8:

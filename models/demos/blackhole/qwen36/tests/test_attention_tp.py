@@ -82,7 +82,9 @@ def test_attention_tp(mesh_device, B, reset_seeds, ensure_gc, request):
     cur_tt = ttnn.from_torch(
         cur, dtype=ttnn.int32, device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
     )
-    cos, sin = rot_mats_decode(mesh_device, args.rope_head_dim, args.max_seq_len, args.rope_theta, cur)
+    cos, sin = rot_mats_decode(
+        mesh_device, args.rope_head_dim, args.max_seq_len, args.rope_theta, cur, head_dim=args.head_dim
+    )
 
     out = attn.forward_decode(x_tt, cur_tt, cos, sin)
     out_t = ttnn.to_torch(out, mesh_composer=tp_composer(mesh_device))[0, 0].float()
@@ -115,7 +117,9 @@ def test_attention_tp(mesh_device, B, reset_seeds, ensure_gc, request):
     cur1_tt = ttnn.from_torch(
         cur1, dtype=ttnn.int32, device=mesh_device, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
     )
-    cos1, sin1 = rot_mats_decode(mesh_device, args.rope_head_dim, args.max_seq_len, args.rope_theta, cur1)
+    cos1, sin1 = rot_mats_decode(
+        mesh_device, args.rope_head_dim, args.max_seq_len, args.rope_theta, cur1, head_dim=args.head_dim
+    )
     x2 = replicate_to_device(mesh_device, torch.randn(1, 1, B, args.dim, dtype=torch.bfloat16))
     out2 = attn.forward_decode(x2, cur1_tt, cos1, sin1)
     out2_t = ttnn.to_torch(out2, mesh_composer=tp_composer(mesh_device))
@@ -145,7 +149,7 @@ def test_attention_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
     # attn._fuse_agmm); otherwise the model's ff_norm gathers before handing attention a full-width
     # input, so the test must match.
     x_tt = shard_to_device(mesh_device, x, dim=-1) if attn._fuse_agmm else replicate_to_device(mesh_device, x)
-    cos, sin = rot_mats_prefill(mesh_device, args.rope_head_dim, S, args.rope_theta)
+    cos, sin = rot_mats_prefill(mesh_device, args.rope_head_dim, S, args.rope_theta, head_dim=args.head_dim)
     out = attn.forward_prefill(x_tt, cos, sin)
     out_t = ttnn.to_torch(out, mesh_composer=tp_composer(mesh_device))[0, 0].float()
 
@@ -227,9 +231,14 @@ def test_attention_tp_paged(mesh_device, reset_seeds, ensure_gc, request):
 
     xp = torch.randn(1, 1, S, args.dim, dtype=torch.bfloat16)
     xd = torch.randn(1, 1, 1, args.dim, dtype=torch.bfloat16)
-    cos_p, sin_p = rot_mats_prefill(mesh_device, args.rope_head_dim, S, args.rope_theta)
+    cos_p, sin_p = rot_mats_prefill(mesh_device, args.rope_head_dim, S, args.rope_theta, head_dim=args.head_dim)
     cos_d, sin_d = rot_mats_decode(
-        mesh_device, args.rope_head_dim, args.max_seq_len, args.rope_theta, torch.tensor([S], dtype=torch.int32)
+        mesh_device,
+        args.rope_head_dim,
+        args.max_seq_len,
+        args.rope_theta,
+        torch.tensor([S], dtype=torch.int32),
+        head_dim=args.head_dim,
     )
     cur_tt = ttnn.from_torch(
         torch.tensor([S], dtype=torch.int32),
@@ -333,7 +342,7 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     def prefill_user(attn, x_u, blocks):
         """Prefill one B=1 sequence into the given physical blocks (model's B=1 contract)."""
         L = x_u.shape[-2]
-        cos_p, sin_p = rot_mats_prefill(mesh_device, rd, L, theta)
+        cos_p, sin_p = rot_mats_prefill(mesh_device, rd, L, theta, head_dim=HD)
         pt = rm_pt([blocks])  # [1, bpu]
         _x_dev = (
             shard_to_device(mesh_device, x_u, dim=-1) if _fused_prefill_in else replicate_to_device(mesh_device, x_u)
@@ -361,7 +370,9 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
         a.set_paged_kv_cache(k_c, v_c)
         prefill_user(a, xp[u], list(range(bpu)))
         pos = prompt_lens[u]
-        cos_d, sin_d = rot_mats_decode(mesh_device, rd, max_seq, theta, torch.tensor([pos], dtype=torch.int32))
+        cos_d, sin_d = rot_mats_decode(
+            mesh_device, rd, max_seq, theta, torch.tensor([pos], dtype=torch.int32), head_dim=HD
+        )
         out_u = a.forward_decode(
             replicate_to_device(mesh_device, xd[u]), cur_pt([pos]), cos_d, sin_d, page_table=rm_pt([list(range(bpu))])
         )
@@ -375,7 +386,9 @@ def test_attention_tp_paged_peruser(mesh_device, B, reset_seeds, ensure_gc, requ
     for u in range(B):
         prefill_user(a_b, xp[u], list(range(u * bpu, (u + 1) * bpu)))
     x_dec = torch.cat(xd, dim=2)  # [1, 1, B, dim], row u = user u's decode token
-    cos_db, sin_db = rot_mats_decode(mesh_device, rd, max_seq, theta, torch.tensor(prompt_lens, dtype=torch.int32))
+    cos_db, sin_db = rot_mats_decode(
+        mesh_device, rd, max_seq, theta, torch.tensor(prompt_lens, dtype=torch.int32), head_dim=HD
+    )
     page_table_b = rm_pt([list(range(u * bpu, (u + 1) * bpu)) for u in range(B)])  # [B, bpu]
     out_b = a_b.forward_decode(
         replicate_to_device(mesh_device, x_dec), cur_pt(prompt_lens), cos_db, sin_db, page_table=page_table_b
@@ -419,10 +432,13 @@ def test_attention_tp_qknorm_offset(mesh_device):
     q_norm_w = torch.full((HD,), 0.75) + 0.01 * torch.randn(HD)
     k_norm_w = torch.full((HD,), 0.60) + 0.01 * torch.randn(HD)
     state_dict = {
-        "q_proj.weight": torch.randn(DIM, NH * HD * 2) * 0.02,  # fused [Q,gate], column-parallel
-        "k_proj.weight": torch.randn(DIM, NKV * HD) * 0.02,
-        "v_proj.weight": torch.randn(DIM, NKV * HD) * 0.02,
-        "o_proj.weight": torch.randn(NH * HD, DIM) * 0.02,
+        # Standard HF nn.Linear layout [out_features, in_features] -- matches every real
+        # checkpoint (and what permute_rope_channels' per-head reshape assumes after shard_w's
+        # transpose); q_proj is fused [Q,gate] per head, column-parallel.
+        "q_proj.weight": torch.randn(NH * HD * 2, DIM) * 0.02,
+        "k_proj.weight": torch.randn(NKV * HD, DIM) * 0.02,
+        "v_proj.weight": torch.randn(NKV * HD, DIM) * 0.02,
+        "o_proj.weight": torch.randn(DIM, NH * HD) * 0.02,
         "q_norm.weight": q_norm_w,
         "k_norm.weight": k_norm_w,
     }
@@ -444,14 +460,25 @@ def test_attention_tp_qknorm_offset(mesh_device):
 
     tw = load_attention_weights_tp(mesh_device, state_dict, _Args(), cache_dir=None)
 
+    # load_attention_weights_tp also permutes q_norm/k_norm's head_dim channels (see
+    # tp_common.permute_rope_channels) so the +1-offset weight still lines up with wherever its
+    # channel moved to. Apply the same reordering to the raw reference before comparing.
+    def _permute_1d(w, head_dim, rope_dim):
+        half_rope, half_full = rope_dim // 2, head_dim // 2
+        a, b = w[:half_rope], w[half_rope:rope_dim]
+        p1, p2 = w[rope_dim : rope_dim + (half_full - half_rope)], w[half_full + half_rope : head_dim]
+        return torch.cat([a, p1, b, p2])
+
     # Gather a single replica and compare against the RAW input (no +1).
     comp = ttnn.ConcatMeshToTensor(mesh_device, dim=0) if nd > 1 else None
     q_loaded = ttnn.to_torch(tw["q_norm"], mesh_composer=comp).float().reshape(-1)[:HD]
     k_loaded = ttnn.to_torch(tw["k_norm"], mesh_composer=comp).float().reshape(-1)[:HD]
+    q_norm_perm = _permute_1d(q_norm_w, HD, _Args.rope_head_dim)
+    k_norm_perm = _permute_1d(k_norm_w, HD, _Args.rope_head_dim)
 
-    q_err_raw = (q_loaded - q_norm_w).abs().max().item()
-    q_err_plus1 = (q_loaded - (q_norm_w + 1.0)).abs().max().item()
-    k_err_raw = (k_loaded - k_norm_w).abs().max().item()
+    q_err_raw = (q_loaded - q_norm_perm).abs().max().item()
+    q_err_plus1 = (q_loaded - (q_norm_perm + 1.0)).abs().max().item()
+    k_err_raw = (k_loaded - k_norm_perm).abs().max().item()
     logger.info(f"q_norm: |loaded-raw|={q_err_raw:.4f}  |loaded-(raw+1)|={q_err_plus1:.4f}")
     logger.info(f"k_norm: |loaded-raw|={k_err_raw:.4f}")
 

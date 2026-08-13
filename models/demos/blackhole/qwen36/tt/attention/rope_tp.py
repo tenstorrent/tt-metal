@@ -250,7 +250,65 @@ def apply_interleaved_mrope(freqs, mrope_section):
     return freqs_t
 
 
+def _pad_rope_to_head_dim(device, cos_tt, sin_tt, head_dim, rope_dim):
+    """Widen rope_dim-wide cos/sin ttnn tensors (last axis) to head_dim, with cos=1/sin=0 in the
+    pass-through region and the two rope-active half-blocks relocated head_dim/2 apart -- matching
+    tp_common.permute_rope_channels' weight layout, so a single full-width rotary_embedding_hf call
+    on the (correspondingly permuted) Q/K reproduces today's slice-rotate-concat result exactly.
+
+    Pure ttnn ops. The two rope-active copies are both read from the input's own first half:
+    every producer of cos/sin here builds `emb` via `torch.cat([freqs, freqs], dim=-1)`, so cos/
+    sin's own two halves are already identical -- safe to reuse the same slice twice.
+    """
+    if head_dim == rope_dim:
+        return cos_tt, sin_tt
+    half_rope, half_full = rope_dim // 2, head_dim // 2
+    pad_width = half_full - half_rope
+    lead = list(cos_tt.shape)[:-1]
+    layout = cos_tt.layout
+
+    def _const_pad(value):
+        return ttnn.from_torch(
+            torch.full((*lead, pad_width), value, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=layout,
+            device=device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
+
+    def _half(t):
+        starts = [0] * len(t.shape)
+        ends = list(t.shape)
+        ends[-1] = half_rope
+        return ttnn.slice(t, starts, ends)
+
+    ones_pad, zeros_pad = _const_pad(1.0), _const_pad(0.0)
+    cos_half, sin_half = _half(cos_tt), _half(sin_tt)
+    cos_full = ttnn.concat([cos_half, ones_pad, cos_half, ones_pad], dim=-1)
+    sin_full = ttnn.concat([sin_half, zeros_pad, sin_half, zeros_pad], dim=-1)
+    return cos_full, sin_full
+
+
 _ROPE_DEV_TABLES = {}
+_ROPE_DEV_TABLES_FULL = {}
+
+
+def _rope_dev_tables_full(device, head_dim, rope_dim, n_rows, theta):
+    """Like _rope_dev_tables, but the cached table is pre-widened to full head_dim (see
+    _pad_rope_to_head_dim) so the per-step gather (ttnn.embedding) stays a single op, just wider --
+    zero added device ops per decode step. Rebuilt (via ttnn ops on the existing rope_dim-wide
+    table, not by recomputing trig) whenever the underlying table grows."""
+    if head_dim == rope_dim:
+        return _rope_dev_tables(device, rope_dim, n_rows, theta)
+    base_cos, base_sin = _rope_dev_tables(device, rope_dim, n_rows, theta)
+    key = (id(device), int(head_dim), int(rope_dim), float(theta))
+    ent = _ROPE_DEV_TABLES_FULL.get(key)
+    rows = int(base_cos.shape[0])
+    if ent is not None and ent["rows"] >= rows:
+        return ent["cos"], ent["sin"]
+    cos_full, sin_full = _pad_rope_to_head_dim(device, base_cos, base_sin, head_dim, rope_dim)
+    _ROPE_DEV_TABLES_FULL[key] = {"rows": rows, "cos": cos_full, "sin": sin_full}
+    return cos_full, sin_full
 
 
 def _rope_dev_tables(device, rope_dim, n_rows, theta):
@@ -283,14 +341,20 @@ def _rope_dev_tables(device, rope_dim, n_rows, theta):
     return ent["cos"], ent["sin"]
 
 
-def rot_mats_decode(device, rope_dim, max_seq_len, theta, positions):
-    """Return [cos, sin] each [1, B, 1, rope_dim] for the given per-user positions.
+def rot_mats_decode(device, rope_dim, max_seq_len, theta, positions, head_dim=None):
+    """Return [cos, sin] each [1, B, 1, head_dim] (head_dim defaults to rope_dim, i.e. unchanged
+    for any caller not passing it) for the given per-user positions.
+
+    head_dim != rope_dim widens the tables to match tp_common.permute_rope_channels' Q/K weight
+    layout, for callers that feed apply_partial_rope_decode's now-full-width, no-slice-no-concat
+    path (see _pad_rope_to_head_dim / _rope_dev_tables_full).
 
     Fully on device: the cos/sin tables are resident (built once, grown on demand) and the
     per-user rows are fetched with ttnn.embedding, so the only host->device traffic per step is
     the [B] index vector. A position past the current table end (M-RoPE rope_delta can push
     rope_pos beyond max_seq_len) grows the table rather than dropping to host trig.
     """
+    head_dim = head_dim or rope_dim
     if is_blackhole():
         # Blackhole executes the pre-migration statements verbatim (see e83017ce0ec).
         inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2).float() / rope_dim))
@@ -314,10 +378,11 @@ def rot_mats_decode(device, rope_dim, max_seq_len, theta, positions):
             device=device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
-        return cos_tt, sin_tt
+        return _pad_rope_to_head_dim(device, cos_tt, sin_tt, head_dim, rope_dim)
     pos_i = positions.to(torch.int64).reshape(-1)
     assert int(pos_i.min()) >= 0, f"negative rope position {int(pos_i.min())}"
-    tbl_cos, tbl_sin = _rope_dev_tables(device, rope_dim, int(pos_i.max()) + 1, theta)
+    n_rows = int(pos_i.max()) + 1
+    tbl_cos, tbl_sin = _rope_dev_tables_full(device, head_dim, rope_dim, n_rows, theta)
     B = int(positions.shape[0])
     idx = ttnn.from_torch(
         pos_i.to(torch.int32).reshape(1, B),
@@ -328,8 +393,8 @@ def rot_mats_decode(device, rope_dim, max_seq_len, theta, positions):
     )
 
     def _gather(tbl):
-        r = ttnn.embedding(idx, tbl)  # ROW_MAJOR [1, B, rope_dim]
-        r = ttnn.reshape(r, (1, B, 1, rope_dim))  # metadata-only while ROW_MAJOR
+        r = ttnn.embedding(idx, tbl)  # ROW_MAJOR [1, B, head_dim]
+        r = ttnn.reshape(r, (1, B, 1, head_dim))  # metadata-only while ROW_MAJOR
         return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
 
     cos_tt, sin_tt = _gather(tbl_cos), _gather(tbl_sin)
@@ -337,25 +402,33 @@ def rot_mats_decode(device, rope_dim, max_seq_len, theta, positions):
     return cos_tt, sin_tt
 
 
-def rot_mats_prefill(device, rope_dim, seq_len, theta, position_ids=None, mrope_section=None, attention_scaling=1.0):
-    """Return [cos, sin] each [1, 1, seq_len, rope_dim].
+def rot_mats_prefill(
+    device, rope_dim, seq_len, theta, position_ids=None, mrope_section=None, attention_scaling=1.0, head_dim=None
+):
+    """Return [cos, sin] each [1, 1, seq_len, head_dim] (head_dim defaults to rope_dim, i.e.
+    unchanged for any caller not passing it).
+
+    head_dim != rope_dim widens the tables to match tp_common.permute_rope_channels' Q/K weight
+    layout, for callers that feed apply_partial_rope_prefill's now-full-width, no-slice-no-concat
+    path (see _pad_rope_to_head_dim / _rope_dev_tables_full).
 
     position_ids: 3D M-RoPE indices [3, bs, seq_len] (or 2D [bs, seq_len], expanded inside
     get_rot_mats). When None, defaults to text positions arange(seq_len) — the (t==h==w) case
     where interleaved-mrope collapses to ordinary 1D RoPE, so the result is independent of
     mrope_section and identical to the pre-M-RoPE behaviour.
     """
+    head_dim = head_dim or rope_dim
     if position_ids is None and not is_blackhole():
         # Text-only on Wormhole: positions are exactly arange(seq_len), i.e. a contiguous prefix of
         # the RoPE table, so slice it on device instead of recomputing the trig on host and DMAing
         # a [1,1,seq_len,rope_dim] cos+sin pair across. (t==h==w here, so interleaved-mrope
         # collapses to ordinary 1D RoPE and mrope_section is irrelevant -- same values.)
         # Blackhole falls through to the original host path below: unchanged flow.
-        tbl_cos, tbl_sin = _rope_dev_tables(device, rope_dim, seq_len, theta)
+        tbl_cos, tbl_sin = _rope_dev_tables_full(device, head_dim, rope_dim, seq_len, theta)
 
         def _slice(tbl):
-            r = ttnn.slice(tbl, [0, 0], [seq_len, rope_dim])  # ROW_MAJOR: no tile alignment needed
-            r = ttnn.reshape(r, (1, 1, seq_len, rope_dim))  # metadata-only while ROW_MAJOR
+            r = ttnn.slice(tbl, [0, 0], [seq_len, head_dim])  # ROW_MAJOR: no tile alignment needed
+            r = ttnn.reshape(r, (1, 1, seq_len, head_dim))  # metadata-only while ROW_MAJOR
             return ttnn.to_layout(r, ttnn.TILE_LAYOUT)
 
         return _slice(tbl_cos), _slice(tbl_sin)
@@ -370,62 +443,63 @@ def rot_mats_prefill(device, rope_dim, seq_len, theta, position_ids=None, mrope_
         base = half // 3
         mrope_section = [base, base, half - 2 * base]
     cos, sin = get_rot_mats(inv_freq, position_ids, mrope_section, attention_scaling)
-    cos = ttnn.from_torch(
+    cos_tt = ttnn.from_torch(
         cos.reshape(1, 1, seq_len, rope_dim).to(torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
-    sin = ttnn.from_torch(
+    sin_tt = ttnn.from_torch(
         sin.reshape(1, 1, seq_len, rope_dim).to(torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),
     )
-    return cos, sin
+    return _pad_rope_to_head_dim(device, cos_tt, sin_tt, head_dim, rope_dim)
 
 
-def apply_partial_rope_decode(x, cos_tt, sin_tt, n_heads, batch_size, rope_dim):
-    """x: [1, B, n_heads, HD]; cos/sin: [1, B, 1, rope_dim]; rotates first rope_dim dims.
+def apply_partial_rope_decode(x, cos_tt, sin_tt, batch_size):
+    """x: [1, B, n_heads, HD], head_dim channels PRE-PERMUTED by tp_common.permute_rope_channels
+    (applied once to the Q/K projection weight at load time). cos/sin: [1, B, 1, HD], pre-widened
+    to full head_dim by _pad_rope_to_head_dim / _rope_dev_tables_full using the same layout.
 
-    Fused HF-convention rotate-half via ttnn.experimental.rotary_embedding_hf. The op's native
-    decode mode (is_decode_mode=True) hard-requires HEIGHT_SHARDED input + cos/sin, but qwen36's
-    decode attention runs interleaved (q/k are sharded_to_interleaved right after head-split). To
-    avoid the reshards that sharding would add, transpose the interleaved tensor to a prefill-shaped
-    [1, n_heads, B, rope_dim] (batch plays the seq role) and use the interleaved-friendly prefill
-    mode (is_decode_mode=False), then transpose back. Partial: only the first rope_dim is rotated;
-    the tail passes through.
+    Single ttnn.experimental.rotary_embedding_hf call on the WHOLE head_dim -- no slice, no concat.
+    This reproduces the old slice-rotate-concat partial-RoPE result exactly: see
+    tp_common.permute_rope_channels for why (rotate_half's fixed pairing distance now lands on the
+    relocated rope-active channels, and cos=1/sin=0 in the pass-through region is a no-op there).
+
+    Still needs the transpose-to-prefill-shape trick: the op's native decode mode
+    (is_decode_mode=True) hard-requires HEIGHT_SHARDED input, but qwen36's decode attention runs
+    interleaved (q/k are sharded_to_interleaved right after head-split). To avoid the reshards that
+    sharding would add, transpose the interleaved tensor to a prefill-shaped [1, n_heads, B, HD]
+    (batch plays the seq role) and use the interleaved-friendly prefill mode (is_decode_mode=False),
+    then transpose back.
     """
-    hd = x.shape[-1]
-    B = batch_size
-    x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, B, n_heads, rope_dim))
-    x_rope_t = ttnn.transpose(x_rope, 1, 2)  # [1, n_heads, B, rope_dim]
-    ttnn.deallocate(x_rope)
-    # decode cos/sin [1, B, 1, rope_dim] -> prefill [1, 1, B, rope_dim] (broadcast over heads)
-    cos_p = ttnn.reshape(cos_tt, (1, 1, B, rope_dim))
-    sin_p = ttnn.reshape(sin_tt, (1, 1, B, rope_dim))
+    B, hd = batch_size, x.shape[-1]
+    x_t = ttnn.transpose(x, 1, 2)  # [1, n_heads, B, HD]
+    # decode cos/sin [1, B, 1, HD] -> prefill [1, 1, B, HD] (broadcast over heads)
+    cos_p = ttnn.reshape(cos_tt, (1, 1, B, hd))
+    sin_p = ttnn.reshape(sin_tt, (1, 1, B, hd))
     roped_t = ttnn.experimental.rotary_embedding_hf(
-        x_rope_t, cos_p, sin_p, is_decode_mode=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        x_t, cos_p, sin_p, is_decode_mode=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    ttnn.deallocate(x_rope_t)
-    roped = ttnn.to_memory_config(ttnn.transpose(roped_t, 1, 2), ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(x_t)
+    result = ttnn.to_memory_config(ttnn.transpose(roped_t, 1, 2), ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(roped_t)
-    if rope_dim == hd:
-        return roped
-    x_pass = ttnn.to_memory_config(ttnn.slice(x, (0, 0, 0, rope_dim), (1, B, n_heads, hd)), ttnn.DRAM_MEMORY_CONFIG)
-    result = ttnn.concat([roped, x_pass], dim=-1)
-    ttnn.deallocate(roped)
-    ttnn.deallocate(x_pass)
     return result
 
 
-def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim):
-    """x: [1, n_heads, seq_len, HD]; cos/sin: [1, 1, seq_len, rope_dim].
+def apply_partial_rope_prefill(x, cos_tt, sin_tt):
+    """x: [1, n_heads, seq_len, HD], head_dim channels PRE-PERMUTED by
+    tp_common.permute_rope_channels (applied once to the Q/K projection weight at load time).
+    cos/sin: [1, 1, seq_len, HD], pre-widened to full head_dim by _pad_rope_to_head_dim /
+    _rope_tp_cos_sin_torch using the same layout.
 
-    Fused HF-convention rotate-half via ttnn.experimental.rotary_embedding_hf (replaces manual
-    slice/neg/concat/mul/add). Partial: only the first rope_dim is rotated; tail passes through.
+    Single ttnn.experimental.rotary_embedding_hf call on the WHOLE head_dim -- no slice, no concat.
+    This reproduces the old slice-rotate-concat partial-RoPE result exactly: see
+    tp_common.permute_rope_channels for why.
     """
     # Prefill-only: roped q/k feed SDPA directly; L1 is safe at S=2048 (SDPA CBs fit; verified).
     #
@@ -445,15 +519,4 @@ def apply_partial_rope_prefill(x, cos_tt, sin_tt, n_heads, rope_dim):
     # resolve at S=2048 for the paged/chunked SDPA path specifically. Left at unconditional L1 (only
     # lever that helped at all was `cap`, which shrank but did not eliminate the S=2048 overflow).
     _L1 = ttnn.L1_MEMORY_CONFIG
-    hd = x.shape[-1]
-    seq_len = x.shape[-2]
-    x_rope = ttnn.slice(x, (0, 0, 0, 0), (1, n_heads, seq_len, rope_dim), memory_config=_L1)
-    roped = ttnn.experimental.rotary_embedding_hf(x_rope, cos_tt, sin_tt, is_decode_mode=False, memory_config=_L1)
-    ttnn.deallocate(x_rope)
-    if rope_dim == hd:
-        return roped
-    x_pass = ttnn.slice(x, (0, 0, 0, rope_dim), (1, n_heads, seq_len, hd), memory_config=_L1)
-    result = ttnn.concat([roped, x_pass], dim=-1, memory_config=_L1)
-    ttnn.deallocate(roped)
-    ttnn.deallocate(x_pass)
-    return result
+    return ttnn.experimental.rotary_embedding_hf(x, cos_tt, sin_tt, is_decode_mode=False, memory_config=_L1)
