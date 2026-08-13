@@ -1851,18 +1851,13 @@ def test_kimi_prefill_transformer_chunked(
 ):
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
-    # Gate against the CI baseline only for the exact config we have a recorded number for; every other
-    # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert). Two
-    # hard conditions on top of the table lookup:
-    #   use_trace   -- the baselines are trace-replay numbers, and the untraced path is a different
-    #                  regime (flat ~1.10 s/chunk, ~20% within-run spread), so it is NEVER gated. This
-    #                  is the guard, not the table's contents: adding an untraced entry cannot arm it.
-    #   preload_isl -- the baseline only means anything at 0 (the recorded runs started from an empty cache).
-    baseline_chunk_times_s = (
-        KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters))
-        if (use_trace and preload_isl == 0)
-        else None
-    )
+    # ALWAYS record-only -- this accuracy test is never perf-gated. It shares the perf test's
+    # parametrization but NOT its is_high_power() skipif, so it can run on a standard-power Blackhole,
+    # where KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S -- measured on a >=130W galaxy -- describes nothing. Gating
+    # here would fail an accuracy run for a timing reason, on hardware the baseline never covered, and the
+    # timing table is incidental to this test anyway (see check_pcc below). The perf gate belongs to, and
+    # stays in, test_kimi_prefill_transformer_chunked_perf.
+    baseline_chunk_times_s = None
     run_chunked_transformer_updated(
         variant,
         config_only,
@@ -1876,6 +1871,8 @@ def test_kimi_prefill_transformer_chunked(
         num_iters,
         routing_use_l1_small_for_semaphores=True,
         baseline_chunk_times_s=baseline_chunk_times_s,
+        # Inert while baseline_chunk_times_s is None (print_duration_table only uses the margin when it
+        # has a baseline); kept for id/signature symmetry with the perf test.
         perf_margin=perf_margin,
         preload_isl=preload_isl,
         check_pcc=True,  # this test exists for the KV PCC; the timing table is incidental
