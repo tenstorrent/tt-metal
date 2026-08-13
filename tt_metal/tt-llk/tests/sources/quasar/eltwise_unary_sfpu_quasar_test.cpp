@@ -137,7 +137,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_eltwise_unary_datacopy.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "params.h"
+#ifdef SFPI_COMPAT_TEST
+#include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
+#include SFPI_COMPAT_HEADER
+#else
 #include "sfpu_operations_quasar.h"
+#endif
 
 using namespace ckernel;
 using namespace ckernel::math;
@@ -209,7 +214,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // ADDR_MOD_0/1 or bank-0 programming, so both initializers can remain in
         // the INIT zone before the measured TILE_LOOP.
         _llk_math_eltwise_sfpu_init_();
+#ifdef SFPI_COMPAT_TEST
+        SFPI_COMPAT_INIT();
+#else
         test_utils::init_unary_sfpu_operation_quasar<SFPU_UNARY_OPERATION, is_fp32_dest_acc_en, APPROX_MODE>();
+#endif
         PROFILER_SYNC();
     }
     {
@@ -224,6 +233,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         else if constexpr (PERF_RUN_TYPE != PerfRunType::PACK_ISOLATE)
         {
             const DataFormat sfpu_format = static_cast<DataFormat>(formats.sfpu_math);
+#ifdef SFPI_COMPAT_TEST
+            (void)sfpu_format;
+#endif
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 if constexpr (!unpack_to_dest)
@@ -237,6 +249,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
                     }
                 }
+#ifdef SFPI_COMPAT_TEST
+#ifdef SFPI_COMPAT_SINGLE_CALL
+                SFPI_COMPAT_CALL(DST_INDEX);
+#else
+                for (std::uint32_t i = 0; i < TILE_CNT; ++i)
+                {
+                    SFPI_COMPAT_CALL(DST_INDEX + i);
+                }
+#endif
+#else
                 for (std::uint32_t i = 0; i < TILE_CNT; ++i)
                 {
                     test_utils::call_unary_sfpu_operation_quasar<
@@ -248,6 +270,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         TYPECAST_IN_FORMAT,
                         TYPECAST_OUT_FORMAT>(DST_INDEX + i, sfpu_format);
                 }
+#endif
                 if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                 {
                     _llk_math_set_dvalid_<p_cleardvalid::SFPU, dest_sync>();
