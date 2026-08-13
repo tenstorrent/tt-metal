@@ -8,7 +8,7 @@
 
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::detail {
 
 // Verification-only entry points that pin which untilize prim runs.
 //
@@ -18,7 +18,9 @@ namespace ttnn::operations::data_movement {
 // native over its supported scope and faster on device, and neither is observable through an entry
 // point that silently picks one. They are bound only under `ttnn._ttnn.operations.data_movement`
 // and are deliberately not registered into the `ttnn.*` namespace, so they are reachable from
-// tests and the port's sweep harness without being part of the public API.
+// tests and the port's sweep harness without being part of the public API. This header is likewise
+// kept out of the installed `api` file set, and they sit in `detail` rather than alongside the real
+// op entries so that a caller reaching for one has to say so.
 //
 // Prefer `ttnn::untilize` everywhere else, including for native-only cases: it already declines to
 // route sharded, non-tile, or execution-control-constrained cases to codegen.
@@ -36,4 +38,4 @@ ttnn::Tensor untilize_force_native(
 ttnn::Tensor untilize_force_codegen(
     const ttnn::Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::detail

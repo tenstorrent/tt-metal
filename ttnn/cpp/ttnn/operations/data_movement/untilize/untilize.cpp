@@ -86,6 +86,8 @@ ttnn::Tensor untilize_native(
     return operations::data_movement::build_ndiml_untilize(base_untilize)(input_tensor);
 }
 
+namespace detail {
+
 ttnn::Tensor untilize_force_native(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
@@ -115,6 +117,8 @@ ttnn::Tensor untilize_force_codegen(
 
     return build_ndiml_untilize(dispatch)(input_tensor);
 }
+
+}  // namespace detail
 
 }  // namespace ttnn::operations::data_movement
 

@@ -52,7 +52,7 @@ void bind_untilize(nb::module_& mod) {
     // meant to stay reachable only via this private module. See untilize_force.hpp.
     mod.def(
         "untilize_force_native",
-        &ttnn::operations::data_movement::untilize_force_native,
+        &untilize_force_native,
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
@@ -66,7 +66,7 @@ void bind_untilize(nb::module_& mod) {
 
     mod.def(
         "untilize_force_codegen",
-        &ttnn::operations::data_movement::untilize_force_codegen,
+        &untilize_force_codegen,
         nb::arg("input_tensor"),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none(),
