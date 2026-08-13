@@ -5,13 +5,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.reference.kda.ops import sigmoid_gated_rms_norm_reference
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, assert_bit_identical
 
 pytestmark = [
@@ -24,6 +27,32 @@ _SEQUENCE = 64
 _NUM_HEADS = 12
 _VALUE_DIM = 128
 _EPSILON = 1e-5
+
+
+@dataclass(frozen=True)
+class _ProductionCase:
+    case_id: str
+    num_heads: int
+    sequence: int
+    expected_duration_ns: int
+
+
+_PRODUCTION_BATCH = 1
+_PRODUCTION_VALUE_DIM = 128
+_PRODUCTION_INPUT_DTYPE = ttnn.bfloat16
+_PRODUCTION_OUTPUT_DTYPE = ttnn.bfloat16
+_PRODUCTION_PERF_MARGIN = 0.05
+
+# Calibrated 2026-08-13 on bh_loudbox host bh-lb-42, P150b firmware 19.5.0.0,
+# operation commit 012a3aef206. Seven samples per case produced ranges
+# 186342-188082 ns, 186847-187676 ns, and 186821-187901 ns respectively; the
+# inline references are their medians. The 5% symmetric margin covers the <1%
+# observed spread plus board/thermal variance while still guarding regressions.
+_PRODUCTION_CASES = (
+    _ProductionCase("sp1-tp8-local", num_heads=12, sequence=5120, expected_duration_ns=187_149),
+    _ProductionCase("sp2-tp4-local", num_heads=24, sequence=2560, expected_duration_ns=187_277),
+    _ProductionCase("sp4-tp2-local", num_heads=48, sequence=1280, expected_duration_ns=186_913),
+)
 
 
 def _torch_dtype(dtype: ttnn.DataType) -> torch.dtype:
@@ -98,6 +127,7 @@ def _run(
     num_heads: int = _NUM_HEADS,
     epsilon: float = _EPSILON,
     memory_config: ttnn.MemoryConfig | None = None,
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
     output_dtype: ttnn.DataType = ttnn.float32,
 ) -> ttnn.Tensor:
     return ttnn.experimental.kda.sigmoid_gated_rms_norm(
@@ -107,63 +137,229 @@ def _run(
         num_heads,
         epsilon=epsilon,
         memory_config=memory_config,
+        compute_kernel_config=compute_kernel_config,
         output_dtype=output_dtype,
     )
 
 
-@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
-@pytest.mark.parametrize("output_dtype", [ttnn.float32, ttnn.bfloat16])
-def test_sigmoid_gated_rms_norm_production_contract(
+def _production_compute_kernel_config(device: ttnn.Device) -> ttnn.DeviceComputeKernelConfig:
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
+def _reference(
+    host: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
+    *,
+    batch: int,
+    sequence: int,
+    num_heads: int,
+    value_dim: int,
+    output_dtype: ttnn.DataType,
+) -> torch.Tensor:
+    inputs, gate, weight = host
+    return (
+        sigmoid_gated_rms_norm_reference(
+            inputs.reshape(batch, num_heads, sequence, value_dim).permute(0, 2, 1, 3),
+            gate.reshape(batch, sequence, num_heads, value_dim),
+            weight,
+            eps=_EPSILON,
+        )
+        .reshape(batch, sequence, num_heads * value_dim)
+        .to(_torch_dtype(output_dtype))
+    )
+
+
+def _collect_eager_results(
+    device: ttnn.Device,
+    run: Callable[[], ttnn.Tensor],
+    *,
+    count: int = 3,
+) -> tuple[list[ttnn.Tensor], list[torch.Tensor]]:
+    device_outputs = []
+    host_outputs = []
+    cache_entries = None
+    for _ in range(count):
+        output_tt = run()
+        ttnn.synchronize_device(device)
+        output = ttnn.to_torch(output_tt).clone()
+        device_outputs.append(output_tt)
+        host_outputs.append(output)
+        if cache_entries is None:
+            cache_entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == cache_entries
+    return device_outputs, host_outputs
+
+
+def _assert_output_contract(
+    output_tt: ttnn.Tensor,
+    output: torch.Tensor,
+    device_inputs: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor],
+    *,
+    batch: int,
+    sequence: int,
+    num_heads: int,
+    value_dim: int,
+    output_dtype: ttnn.DataType,
+) -> None:
+    assert output_tt.dtype == output_dtype
+    assert output_tt.layout == ttnn.TILE_LAYOUT
+    assert output_tt.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+    assert tuple(output.shape) == (batch, sequence, num_heads * value_dim)
+    assert all(output_tt.buffer_address() != tensor.buffer_address() for tensor in device_inputs)
+
+
+def _assert_accurate_and_deterministic(expected: torch.Tensor, actual: list[torch.Tensor], *, name: str) -> None:
+    for invocation, output in enumerate(actual):
+        assert_accurate(expected, output, name=f"{name} invocation {invocation}", pcc_threshold=0.999)
+    for invocation, output in enumerate(actual[1:], start=1):
+        assert_bit_identical(actual[0], output, name=f"{name} invocation 0 vs {invocation}")
+
+
+def _assert_inputs_unchanged(
+    before: tuple[torch.Tensor, ...],
+    device_inputs: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor],
+) -> None:
+    for name, snapshot, tensor in zip(("input", "gate", "weight"), before, device_inputs, strict=True):
+        assert_bit_identical(snapshot, ttnn.to_torch(tensor), name=f"{name} immutability")
+
+
+@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32-input", "bf16-input"])
+@pytest.mark.parametrize("output_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32-output", "bf16-output"])
+def test_sigmoid_gated_rms_norm_is_accurate_and_deterministic(
     device: ttnn.Device, input_dtype: ttnn.DataType, output_dtype: ttnn.DataType
 ) -> None:
-    """Validate production geometry, numerics, cache reuse, trace, residency, and ownership."""
-    host, device_tensors = _device_inputs(device, input_dtype=input_dtype)
-    inputs, gate, weight = host
-    input_tt, gate_tt, weight_tt = device_tensors
-    expected = sigmoid_gated_rms_norm_reference(
-        inputs.reshape(_BATCH, _NUM_HEADS, _SEQUENCE, _VALUE_DIM).permute(0, 2, 1, 3),
-        gate.reshape(_BATCH, _SEQUENCE, _NUM_HEADS, _VALUE_DIM),
-        weight,
-        eps=_EPSILON,
-    ).reshape(_BATCH, _SEQUENCE, _NUM_HEADS * _VALUE_DIM)
-    expected = expected.to(_torch_dtype(output_dtype))
-
-    input_snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in device_tensors)
+    host, device_inputs = _device_inputs(device, input_dtype=input_dtype)
+    input_tt, gate_tt, weight_tt = device_inputs
+    expected = _reference(
+        host,
+        batch=_BATCH,
+        sequence=_SEQUENCE,
+        num_heads=_NUM_HEADS,
+        value_dim=_VALUE_DIM,
+        output_dtype=output_dtype,
+    )
+    input_snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in device_inputs)
 
     def run() -> ttnn.Tensor:
         with ttnn.manage_config("throw_exception_on_fallback", True):
             return _run(input_tt, gate_tt, weight_tt, output_dtype=output_dtype)
 
-    output_tt = run()
-    assert output_tt.dtype == output_dtype
-    assert output_tt.layout == ttnn.TILE_LAYOUT
-    assert output_tt.memory_config() == ttnn.DRAM_MEMORY_CONFIG
-    assert tuple(ttnn.to_torch(output_tt).shape) == (_BATCH, _SEQUENCE, _NUM_HEADS * _VALUE_DIM)
-    assert all(output_tt.buffer_address() != tensor.buffer_address() for tensor in device_tensors)
+    device_outputs, host_outputs = _collect_eager_results(device, run)
+    _assert_output_contract(
+        device_outputs[0],
+        host_outputs[0],
+        device_inputs,
+        batch=_BATCH,
+        sequence=_SEQUENCE,
+        num_heads=_NUM_HEADS,
+        value_dim=_VALUE_DIM,
+        output_dtype=output_dtype,
+    )
+    _assert_accurate_and_deterministic(expected, host_outputs, name=f"{input_dtype} to {output_dtype}")
+    _assert_inputs_unchanged(input_snapshots, device_inputs)
 
-    cache_entries = device.num_program_cache_entries()
-    repeated_tt = run()
-    ttnn.synchronize_device(device)
-    assert device.num_program_cache_entries() == cache_entries
 
-    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    traced_tt = run()
-    ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    for _ in range(2):
-        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
-    ttnn.synchronize_device(device)
+@pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
+def test_sigmoid_gated_rms_norm_production_is_accurate_and_deterministic(
+    device: ttnn.Device, case: _ProductionCase
+) -> None:
+    host, device_inputs = _device_inputs(
+        device,
+        batch=_PRODUCTION_BATCH,
+        sequence=case.sequence,
+        num_heads=case.num_heads,
+        value_dim=_PRODUCTION_VALUE_DIM,
+        input_dtype=_PRODUCTION_INPUT_DTYPE,
+    )
+    input_tt, gate_tt, weight_tt = device_inputs
+    expected = _reference(
+        host,
+        batch=_PRODUCTION_BATCH,
+        sequence=case.sequence,
+        num_heads=case.num_heads,
+        value_dim=_PRODUCTION_VALUE_DIM,
+        output_dtype=_PRODUCTION_OUTPUT_DTYPE,
+    )
+    input_snapshots = tuple(ttnn.to_torch(tensor).clone() for tensor in device_inputs)
+    compute_kernel_config = _production_compute_kernel_config(device)
 
-    eager = ttnn.to_torch(output_tt)
-    repeated = ttnn.to_torch(repeated_tt)
-    traced = ttnn.to_torch(traced_tt)
-    assert_accurate(expected, eager, name="eager", pcc_threshold=0.999)
-    assert_bit_identical(eager, repeated, name="eager repeat")
-    assert_bit_identical(eager, traced, name="trace replay")
+    def run() -> ttnn.Tensor:
+        with ttnn.manage_config("throw_exception_on_fallback", True):
+            return _run(
+                input_tt,
+                gate_tt,
+                weight_tt,
+                num_heads=case.num_heads,
+                compute_kernel_config=compute_kernel_config,
+                output_dtype=_PRODUCTION_OUTPUT_DTYPE,
+            )
 
-    for name, before, tensor in zip(("input", "gate", "weight"), input_snapshots, device_tensors, strict=True):
-        assert_bit_identical(before, ttnn.to_torch(tensor), name=f"{name} immutability")
+    device_outputs, host_outputs = _collect_eager_results(device, run)
+    _assert_output_contract(
+        device_outputs[0],
+        host_outputs[0],
+        device_inputs,
+        batch=_PRODUCTION_BATCH,
+        sequence=case.sequence,
+        num_heads=case.num_heads,
+        value_dim=_PRODUCTION_VALUE_DIM,
+        output_dtype=_PRODUCTION_OUTPUT_DTYPE,
+    )
+    _assert_accurate_and_deterministic(expected, host_outputs, name=case.case_id)
+    _assert_inputs_unchanged(input_snapshots, device_inputs)
 
-    ttnn.release_trace(device, trace_id)
+
+@pytest.mark.parametrize("case", _PRODUCTION_CASES, ids=lambda case: case.case_id)
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
+@skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
+def test_sigmoid_gated_rms_norm_production_performance(device: ttnn.Device, case: _ProductionCase) -> None:
+    if not ttnn.device.IsProgramRealtimeProfilerActive():
+        pytest.fail("Real-time profiler must be active for sigmoid-gated RMSNorm performance checks")
+
+    _, (input_tt, gate_tt, weight_tt) = _device_inputs(
+        device,
+        batch=_PRODUCTION_BATCH,
+        sequence=case.sequence,
+        num_heads=case.num_heads,
+        value_dim=_PRODUCTION_VALUE_DIM,
+        input_dtype=_PRODUCTION_INPUT_DTYPE,
+    )
+    compute_kernel_config = _production_compute_kernel_config(device)
+
+    def run() -> ttnn.Tensor:
+        return _run(
+            input_tt,
+            gate_tt,
+            weight_tt,
+            num_heads=case.num_heads,
+            compute_kernel_config=compute_kernel_config,
+            output_dtype=_PRODUCTION_OUTPUT_DTYPE,
+        )
+
+    output_tt, perf_record = profile_realtime_program(device, run)
+    duration_ns = perf_record["duration_ns"]
+    lower = case.expected_duration_ns * (1 - _PRODUCTION_PERF_MARGIN)
+    upper = case.expected_duration_ns * (1 + _PRODUCTION_PERF_MARGIN)
+    assert output_tt.dtype == _PRODUCTION_OUTPUT_DTYPE
+    assert tuple(output_tt.shape) == (
+        _PRODUCTION_BATCH,
+        case.sequence,
+        case.num_heads * _PRODUCTION_VALUE_DIM,
+    )
+    logger.info(
+        f"sigmoid-gated RMSNorm {case.case_id}: duration={duration_ns:.0f} ns, "
+        f"reference={case.expected_duration_ns} ns, band=[{lower:.0f}, {upper:.0f}] ns, "
+        f"profiler_runtime_id={perf_record['runtime_id']}"
+    )
+    assert lower <= duration_ns <= upper, (
+        f"{case.case_id} duration {duration_ns:.0f} ns outside [{lower:.0f}, {upper:.0f}] ns "
+        f"(reference {case.expected_duration_ns} ns, margin +/- {_PRODUCTION_PERF_MARGIN * 100:.0f}%)"
+    )
 
 
 def test_sigmoid_gated_rms_norm_program_key_includes_epsilon(device: ttnn.Device) -> None:
