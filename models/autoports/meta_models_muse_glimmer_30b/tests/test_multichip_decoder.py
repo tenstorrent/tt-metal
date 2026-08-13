@@ -249,8 +249,8 @@ PROGRAM_CACHE_LIMIT = 120
 #: rather than 6,144, and a floor of 1536 leaves less headroom than it used to
 #: name.  Measured: at 1536 the 256-row prefill in
 #: ``test_collective_implementation_is_split_by_payload`` failed under watcher
-#: with *"Statically allocated circular buffers in program 3568 clash with L1
-#: buffers"* while passing in isolation; at 2560 the whole watcher list passes.
+#: with *"Statically allocated circular buffers ... clash with L1 buffers"* while
+#: passing in isolation; at 2560 the whole watcher list passes.
 #: The trigger is session position, not the layer -- which is the same thing
 #: ``PROGRAM_CACHE_LIMIT`` above is about.
 L1_SMALL_FREE_FLOOR = 2560
@@ -434,8 +434,8 @@ def build_multichip(
     if sharded_io is not None and "sharded_decode_io" not in build_kwargs:
         build_kwargs["sharded_decode_io"] = sharded_io not in ("0", "false", "no")
     # ``MG_MULTICHIP_CCL_AG_BARRIER=0`` drops the all-gather's barrier semaphore.
-    # It is never a shipped configuration -- it makes the watcher stop the device
-    # -- and it exists so that rejection is reproducible from committed code:
+    # It is never a shipped configuration, and it exists so that the arm without
+    # the barrier is reproducible from committed code:
     # ``MG_MULTICHIP_CCL_IMPL=async MG_MULTICHIP_CCL_AG_BARRIER=0 bash
     # doc/optimized_multichip_decoder/bench/run_watcher.sh`` is what produced
     # ``logs/watcher_no_ag_barrier.log``.
@@ -1607,15 +1607,12 @@ def test_decode_uses_dram_sharded_matmuls(multichip_mesh, decoder_cache, kind):
 def test_collective_implementation_is_split_by_payload(multichip_mesh, decoder_cache, kind):
     """Prefill reduces with the async primitives; decode reduces with the wrappers.
 
-    The split is a measurement, and the number that decides it is the *barrier
-    semaphore*.  Both async primitives take one, and omitting it on the
-    all-gather lets the next op start against a fabric router that has not
-    drained -- the watcher stops the device with "subordinate_erisc detected
-    invalid NOC command buffer state before starting the next kernel".  With the
-    barrier in place the async pair is 14.7 % faster than ``ttnn.all_reduce`` at
-    the 107 MB prefill payload and 0.2 % *slower* than the wrappers at the 40 KB
-    decode payload, where the collective is pure fixed cost and one more
-    synchronization round is a large fraction of it.
+    The split is a measurement.  With the barrier semaphore both primitives ship
+    with, the async pair is **15.2 %** faster than ``ttnn.all_reduce`` at the
+    107 MB prefill payload (1348.0 against 1588.7 us) and **0.2 % slower** than
+    the wrappers at the 40 KB decode payload (0.4555 / 0.4244 against 0.4545 /
+    0.4238 ms/token), where the collective is pure fixed cost and one more
+    synchronization round outweighs the async op's tuning surface.
 
     Both halves of that are asserted here, at dispatch level, because either one
     silently flipping still computes the right answer.
@@ -1628,7 +1625,7 @@ def test_collective_implementation_is_split_by_payload(multichip_mesh, decoder_c
     # DEFAULT_L1_SMALL_SIZE).  ``_bound_ccl_semaphores`` releases accumulated CCL
     # semaphores *after* each test, which is one test too late for this one: run
     # late in a watcher session it failed with "Statically allocated circular
-    # buffers in program 3568 clash with L1 buffers" while passing in isolation.
+    # buffers ... clash with L1 buffers" while passing in isolation.
     # Ask for the region up front rather than depending on session position.
     multichip_mesh.clear_program_cache()
     page_table = make_page_table(multichip_mesh, 1, SHORT_MAX_SEQ, seed=515151)

@@ -593,25 +593,25 @@ DEFAULT_L1_SMALL_SIZE = 6144
 #: ``num_workers_per_link``, ``chunks_per_sync``, ``num_buffers_per_channel`` and
 #: ``use_optimal_ccl_for_llama``.
 #:
-#: **Split by payload, and the split is decided by one cost: the barrier
-#: semaphore.**  Both primitives take a ``barrier_semaphore``; omitting it on the
-#: all-gather lets the next op start against a fabric router that has not drained,
-#: which the watcher catches as *"subordinate_erisc detected invalid NOC command
-#: buffer state before starting the next kernel"* in ``fabric_erisc_router.cpp``
-#: (``doc/optimized_multichip_decoder/logs/watcher_run.log``).  It is therefore not
-#: optional -- and it is not free either:
+#: **Split by payload.**  At the 107 MB prefill payload the async pair is
+#: **15.2 %** faster than ``ttnn.all_reduce`` -- 1348.0 against 1588.7 us, at the
+#: shipped BFP8 payload and packet size
+#: (``doc/optimized_multichip_decoder/logs/prefill_ccl_probe.log``).  At the 40 KB
+#: decode payload it is **0.2 % slower** than the composite wrappers -- 0.4555 /
+#: 0.4244 against 0.4545 / 0.4238 ms/token, three non-overlapping rounds each
+#: (``doc/optimized_multichip_decoder/logs/final_layer_ab.log``) -- because there
+#: the collective is pure fixed cost and the async op's extra synchronization
+#: outweighs its tuning surface.  So prefill takes it and decode does not.
 #:
-#: * at the **107 MB prefill** payload it costs 0.4 % (1351.4 against 1345.7 us)
-#:   and the async pair is still **14.7 %** faster than ``ttnn.all_reduce``'s
-#:   1583.9 us.  Prefill takes it;
-#: * at the **40 KB decode** payload the collective is pure fixed cost, so one
-#:   more synchronization round is a large fraction of it: with the barrier the
-#:   async decode step measures 0.4554 / 0.4248 ms/token against the wrappers'
-#:   0.4546 / 0.4238 (``logs/final_layer_ab.log``).  Decode keeps the wrappers.
-#:
-#: Without the barrier the async decode step measures 0.4501 / 0.4194 -- a 1.2 %
-#: win that is not available, because that is the configuration the watcher
-#: stopped the device on.  It is recorded rather than shipped.
+#: Both primitives are given a ``barrier_semaphore``, the all-gather's included.
+#: It costs 0.13 % of the prefill collective (1348.0 against 1346.3 without) and
+#: it is kept because every other model in the tree passes one and the op takes
+#: one -- **not** because this stage established what happens without it.  A
+#: fabric ERISC watcher assert was observed once, on a build that also carried the
+#: persistent staging buffers :data:`DEFAULT_CCL_PERSISTENT_BUFFERS` rejects, and
+#: it has **not** reproduced with the barrier removed on its own: see
+#: ``logs/watcher_no_ag_barrier.log``, which is watcher-clean, and the full
+#: account in ``doc/optimized_multichip_decoder/work_log.md`` section 10.1.
 DEFAULT_DECODE_CCL_IMPL = "wrapper"
 DEFAULT_PREFILL_CCL_IMPL = "async"
 
@@ -908,9 +908,9 @@ class MultichipDecoder(OptimizedDecoder):
         self.ccl_buffers_per_channel = ccl_buffers_per_channel
         self.ccl_num_links = ccl_num_links
         #: Pass ``all_gather_async`` its barrier semaphore.  **Always true in any
-        #: shipped configuration**; the knob exists only so the unsafe arm can be
-        #: reproduced from committed code.  ``False`` is 1.2 % faster on the decode
-        #: payload and makes the watcher stop the device -- see
+        #: shipped configuration**; the knob exists only so the arm without it can
+        #: be reproduced from committed code.  Dropping it is worth 0.13 % of the
+        #: prefill collective and is not taken -- see
         #: :data:`DEFAULT_DECODE_CCL_IMPL` and
         #: ``doc/optimized_multichip_decoder/logs/watcher_no_ag_barrier.log``.
         self.ccl_ag_barrier = ccl_ag_barrier
@@ -1317,12 +1317,9 @@ class MultichipDecoder(OptimizedDecoder):
                 return ttnn.create_global_semaphore(self.mesh_device, crs, 0, ttnn.BufferType.L1_SMALL)
 
             # Seven semaphores, not fourteen.  ``reduce_scatter_minimal_async``
-            # takes three and ``all_gather_async`` two, and each takes its own
-            # barrier -- the all-gather's is not optional: omitting it lets the
-            # next op start against a fabric router that has not drained, which
-            # the watcher catches as "subordinate_erisc detected invalid NOC
-            # command buffer state before starting the next kernel" in
-            # fabric_erisc_router.cpp (logs/watcher_run.log).
+            # takes three and ``all_gather_async`` two, and each is given its own
+            # barrier; see DEFAULT_DECODE_CCL_IMPL for what the all-gather's
+            # barrier is and is not known to buy.
             #
             # They are *not* double-buffered, because in this layer they cannot
             # be reached concurrently: the two reductions are separated by the
@@ -1334,8 +1331,8 @@ class MultichipDecoder(OptimizedDecoder):
             # program the mesh can hold before they spill into the main L1 pool
             # and fragment it.  At fourteen, the 256-row prefill in
             # test_collective_implementation_is_split_by_payload failed under
-            # watcher with "Statically allocated circular buffers in program 3568
-            # clash with L1 buffers"; at seven it passes.
+            # watcher with "Statically allocated circular buffers ... clash with
+            # L1 buffers"; at seven it passes.
             sems = {
                 "rs": [sem() for _ in range(3)],
                 "ag": [sem() for _ in range(2)],
@@ -1395,7 +1392,7 @@ class MultichipDecoder(OptimizedDecoder):
         them, while steps 1-3 are bit-identical (1.000000) -- a first-use fault,
         not a numerical one.  It stayed hidden in the whole-layer A/B and in the
         HF-reference suite because both warm the layer before they measure or
-        assert, and it only surfaced in
+        assert, and it surfaced in
         ``test_multichip_matches_single_chip[12345-4-full]``, which compares the
         very first decode step against a single-chip TTNN baseline at 0.999.
 

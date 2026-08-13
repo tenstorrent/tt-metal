@@ -1,3 +1,8 @@
+# SUPERSEDED. This run measured the async-decode collective, which this stage
+# withdrew: with the all-gather barrier semaphore it is 0.2 % slower than the
+# composite wrappers, and the persistent staging buffers in the *_persist run
+# are rejected on correctness. Kept only so the sweep is reproducible.
+# The stage result is logs/final_layer_ab.log.
 2026-08-12 23:09:59.797 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
 Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
 2026-08-12 23:10:01.644 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)

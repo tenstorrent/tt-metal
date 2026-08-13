@@ -121,11 +121,9 @@ def main():
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     topology=CCL_TOPOLOGY,
                     **({} if ag_workers is None else {"num_workers_per_link": ag_workers}),
-                    # The all-gather takes a barrier semaphore too, and omitting
-                    # it is what tripped the fabric ERISC watcher assert in
-                    # ``logs/watcher_run.log``.  It is not free, so it is measured
-                    # rather than assumed: ``ag_barrier_on=False`` reproduces the
-                    # unsafe-but-faster arm for the record.
+                    # The all-gather takes a barrier semaphore too, and the layer
+                    # passes one.  It is not free, so it is measured rather than
+                    # assumed: ``ag_barrier_on=False`` is the arm without it.
                     **({"barrier_semaphore": ag_barrier} if ag_barrier_on else {}),
                 )
                 ttnn.deallocate(sc)

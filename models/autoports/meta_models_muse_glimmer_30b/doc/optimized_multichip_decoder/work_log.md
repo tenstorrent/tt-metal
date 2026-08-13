@@ -36,27 +36,43 @@ and priced from the multichip stage's committed Tracy table
 
 | # | op / group | μs | share | is it a defect? | action |
 | --- | --- | --- | --- | --- | --- |
-| 1 | `interleaved_to_sharded` (layer input) | ~2 | 0.5 % | **yes** — a DRAM round trip whose only purpose is to cross the layer boundary | §4, removed |
+| 1 | `interleaved_to_sharded` (layer input) | ~1.9 | 0.4 % | **yes** — a DRAM round trip whose only purpose is to cross the layer boundary | §4, removed |
 | 2 | `rms_norm` input_layernorm (sharded) | 8.4 | 1.9 % | no | — |
-| 3 | `wqkv` matmul, DRAM-sharded, BFP8 | 61.2 | 13.9 % | no — Q/K/V already packed | §6 (attn-gate packing), rejected |
-| 4 | `sharded_to_interleaved` → `nlp_create_qkv_heads_decode` | ~6 | 1.4 % | no — exact op-contract requirement (tt-metal #16667, `head_dim % shard_width`) | — |
+| 3 | `wqkv` matmul, DRAM-sharded, BFP8 | 22.3 | 5.0 % | no — Q/K/V already packed | §6 (attn-gate packing), rejected |
+| 4 | `sharded_to_interleaved` → `nlp_create_qkv_heads_decode` | ~1.5 | 0.3 % | no — exact op-contract requirement (tt-metal #16667, `head_dim % shard_width`) | — |
 | 5 | 2 per-head QK `rms_norm` | 7.5 | 1.7 % | no | — |
-| 6 | RoPE gather + tilize + transpose + 2 `rotary_embedding_hf` | 22.6 | 5.1 % | no — position-dependent, `sliding` only | — |
-| 7 | `paged_update_cache` | ~5 | 1.1 % | no | — |
+| 6 | RoPE gather + tilize + transpose + 2 `rotary_embedding_hf` | 21.7 | 4.9 % | no — position-dependent, `sliding` only | — |
+| 7 | `paged_update_cache` | 5.7 | 1.3 % | no | — |
 | 8 | `SdpaDecode` | 20.9 | 4.7 % | no — program config and `max_cores_per_head_batch` already swept | §7 (cache dtype) |
-| 9 | concat heads + `interleaved_to_sharded` | ~10 | 2.3 % | no | — |
-| 10 | `attn_gate` matmul (**same input as #3**) | 55.5 | 12.6 % | **candidate** — repeated same-input projection (OPT-001) | §6, rejected on measurement |
-| 11 | `ttnn.mul` (gate) | 6.5 | 1.5 % | no | — |
-| 12 | `o_proj` matmul | 50.6 | 11.5 % | **yes** — 62.5 % of peak DRAM, `in0_block_w=2`, the one row marked SLOW that moved against the single-chip layer | §3 (OPT-011) |
+| 9 | concat heads + `interleaved_to_sharded` | ~2.5 | 0.6 % | no | — |
+| 10 | `attn_gate` matmul (**same input as #3**) | 19.4 | 4.4 % | **candidate** — repeated same-input projection (OPT-001) | §6, rejected on measurement |
+| 11 | `ttnn.mul` (gate) | ~6.5 | 1.5 % | no | — |
+| 12 | `o_proj` matmul | 21.3 | 4.8 % | **yes** — 62.4 % of peak DRAM, `in0_block_w=2`, the one row marked SLOW that moved against the single-chip layer | §3 (OPT-011) |
 | 13 | **`ReduceScatter` + `AllGather`** (attention) | 26.6 | 6.0 % | **yes** — untunable all-gather, per-program semaphores, per-dispatch staging | §2, §5 |
-| 14 | `rms_norm` post_attention + `ttnn.add` | 15.0 | 3.4 % | candidate — replicated, does not shrink with TP | §8 (fractured residual) |
+| 14 | `rms_norm` post_attention + `ttnn.add` | ~14.9 | 3.4 % | candidate — replicated, does not shrink with TP | §8 (fractured residual) |
 | 15 | `rms_norm` pre_feedforward | 8.4 | 1.9 % | as #14 | §8 |
-| 16 | `mlp_gate`, `mlp_up` matmuls (**same input**) | 2 x 43.6 | 19.8 % | **candidate** — paired gate/up (OPT-010) | §6, rejected on measurement |
-| 17 | `ttnn.mul` (SiLU fused) | 6.5 | 1.5 % | no | — |
-| 18 | `mlp_down` matmul | 43.6 | 9.9 % | no — BFP4, unpack-bound, inherited TTNN limitation | — |
+| 16 | `mlp_gate`, `mlp_up` matmuls (**same input**) | **127.7** | **28.9 %** | **candidate** — paired gate/up (OPT-010) | §6, rejected on measurement |
+| 17 | `ttnn.mul` (SiLU fused) | ~6.5 | 1.5 % | no | — |
+| 18 | `mlp_down` matmul | **63.9** | **14.5 %** | no — BFP4, unpack-bound, inherited TTNN limitation | — |
 | 19 | **`ReduceScatter` + `AllGather`** (MLP) | 26.6 | 6.0 % | as #13 | §2, §5 |
-| 20 | `rms_norm` post_feedforward + `ttnn.add` | 15.0 | 3.4 % | as #14 | §8 |
-| 21 | `sharded_to_interleaved` (layer output) | ~2 | 0.5 % | **yes** — as #1 | §4, removed |
+| 20 | `rms_norm` post_feedforward + `ttnn.add` | ~14.9 | 3.4 % | as #14 | §8 |
+| 21 | `sharded_to_interleaved` (layer output) | ~1.9 | 0.4 % | **yes** — as #1 | §4, removed |
+
+Per-op-code totals, which is what the CSV actually groups by, so the rows above
+that share an op code are split by their known count rather than measured
+separately: six matmuls 254.6 μs (57.7 %), six `LayerNorm` 41.2 (9.3 %), four
+`BinaryNg` 26.0 (5.9 %), four collectives 53.2 (12.0 %), `SdpaDecode` 20.9
+(4.7 %), and the remaining movement/RoPE/cache ops 45.6 (10.3 %). Step total
+441.5 μs.
+
+**The three MLP matmuls are 43.4 % of the decode step on their own** — 127.7 for
+the gate/up pair and 63.9 for `mlp_down` — against 14.2 % for all three attention
+projections together. That is the single most important line in this table and it
+is why §11.3 names the BFP4 MLP rows as the largest remaining lever: they are
+unpack-bound at 52 % of peak DRAM and the fix is a TTNN change, not a model one.
+It also puts the candidates this stage did pursue in proportion: `o_proj` is
+4.8 % of the step, so OPT-011's whole ceiling there is a fraction of a percent
+(§3 measures 0.11 %), and the attention-gate packing candidate is 4.4 %.
 
 Reshard/layout conversions in the measured decode path: **four** (#1, #4, #9,
 #21). #4 is an op contract. #9 feeds the gate multiply. #1 and #21 exist only to
@@ -494,7 +510,7 @@ which is what the assert describes. What is **not** established is that it cause
 this trip. Re-running the same 35 node ids with the barrier deliberately removed,
 from committed code
 (`MG_MULTICHIP_CCL_IMPL=async MG_MULTICHIP_CCL_AG_BARRIER=0 WATCHER_TAG=_no_ag_barrier`),
-is **watcher-clean**: `logs/watcher_no_ag_barrier.log`, every counter 0, 33 passed
+is **watcher-clean**: `logs/watcher_no_ag_barrier.log`, every **watcher** pattern 0 (`Watcher detected`, `tripped`, `sanitize`, `TT_ASSERT`, `DEBUG_ASSERT`, `out of bounds`); the `fault`/`Error` counters are not 0 and are not watcher findings — they match `error code: -1` priority warnings, a pydantic deprecation and the word *error* inside `std::runtime_error` in the teardown abort, 33 passed
 and 2 expected assertion failures (the split-payload contract test correctly
 refusing a forced-async decode).
 
@@ -505,7 +521,9 @@ async decode step is 0.2 % slower than the wrappers *with* the barrier
 (0.4555 / 0.4244 against 0.4545 / 0.4238, three non-overlapping rounds each), and
 that measurement alone decides it. A pre-stage control run
 (`logs/watcher_run_wrapper_control.log`) is also clean, so nothing here indicts the
-inherited path either.
+inherited path either — though that control predates the `tests reported:` guard
+and its own test list, so by this section's own standard it is weaker evidence
+than the two runs above.
 
 The lesson worth carrying forward: a watcher run's evidence is the console plus
 the dump plus a positive count of tests that actually ran, and each of those three
@@ -559,9 +577,9 @@ shipped path's numbers and not an earlier candidate's:
 | prefill 8192 sliding / full | 18211.6 / 17925.2 | **17687.1 / 17272.0** | **−2.88 / −3.64 %** | 30 / 28 |
 
 The prefill row is the important one: whole-layer end-to-end could not resolve the
-prefill change at all (§8), and device time shows it plainly at 3.7-5.1 %, which
-is larger than the 2.7 % the collective arithmetic predicts and in the same
-direction.  The decode op count drops by exactly one -- the
+prefill change at all (§8), and device time shows it plainly at 2.88-3.64 %, which
+is close to the 2.6 % the collective arithmetic predicts (2 x 241 us saved on an
+18,200 us chunk) and in the same direction.  The decode op count drops by exactly one -- the
 `sharded_to_interleaved` the boundary contract removes.
 
 Per-op, `sliding` decode @2048, μs per replay:
@@ -595,9 +613,9 @@ Three items on the decode window, all addressed:
    `SdpaDecode`.  The measured window **is** a traced replay
    (`ttnn.execute_trace`), so the advice is a profiler artifact: the device
    profiler inflates dispatch gaps, which is why this stage reports device time
-   and end-to-end from separate runs.  The reconciliation is the proof -- 438.3 μs
-   of device time against 454.6 μs end-to-end for `sliding` decode, a 16.3 μs
-   (3.6 %) gap across 45 ops, where the profiled window claims 10 μs on one op.
+   and end-to-end from separate runs.  The reconciliation is the proof -- 438.8 μs
+   of device time against 454.5 μs end-to-end for `sliding` decode, a 15.7 μs
+   (3.5 %) gap across 45 ops, where the profiled window claims 10 μs on one op.
 
 ## 11. Rejected, deferred and remaining
 
@@ -617,7 +635,7 @@ inheriting the estimate, and the price has changed:
   fractured residual moves identical bytes on a ring -- it is in running the norm
   and the residual add at 1664 wide instead of 6656;
 * the collectives in that comparison were the *wrappers*.  This stage's async
-  prefill pair is **14.7 %** faster than the `all_reduce` the `replicated` arm
+  prefill pair is **15.2 %** faster than the `all_reduce` the `replicated` arm
   used, and the whole `replicated` arm is 8242 μs of which the two reductions are
   ~3170.  Re-pricing the arm with the collective this stage ships removes ~485 μs
   from `replicated` and the same ~485 from `fractured`, so the *absolute* gap

@@ -971,7 +971,12 @@
       "decode_sliding": 46,
       "decode_full": 36
     },
-    "device_op_count_note": "One fewer op per decode step: the layer-exit sharded_to_interleaved the boundary contract removes. The decode collectives are unchanged (ReduceScatter 29.36 + AllGather 24.09 us/replay), because decode keeps the composite wrappers."
+    "device_op_count_note": "One fewer op per decode step: the layer-exit sharded_to_interleaved the boundary contract removes. The decode collectives are unchanged (ReduceScatter 29.36 + AllGather 24.09 us/replay), because decode keeps the composite wrappers.",
+    "traced_decode_pct_change": {
+      "sliding@2048": -0.57,
+      "full@2048": -0.51
+    },
+    "traced_decode_pct_change_note": "mean of the repeat rows on each side of logs/final_layer_ab.log: (0.4574+0.4571)/2 -> (0.4547+0.4545+0.4547)/3 and (0.4257+0.4264)/2 -> (0.4238+0.4239+0.4240)/3. Best-to-best is -0.57 % / -0.45 %."
   },
   "tests": {
     "total": 108,
@@ -1109,7 +1114,12 @@
         "decode_sliding": 46,
         "decode_full": 36
       },
-      "device_op_count_note": "One fewer op per decode step: the layer-exit sharded_to_interleaved the boundary contract removes. The decode collectives are unchanged (ReduceScatter 29.36 + AllGather 24.09 us/replay), because decode keeps the composite wrappers."
+      "device_op_count_note": "One fewer op per decode step: the layer-exit sharded_to_interleaved the boundary contract removes. The decode collectives are unchanged (ReduceScatter 29.36 + AllGather 24.09 us/replay), because decode keeps the composite wrappers.",
+      "traced_decode_pct_change": {
+        "sliding@2048": -0.57,
+        "full@2048": -0.51
+      },
+      "traced_decode_pct_change_note": "mean of the repeat rows on each side of logs/final_layer_ab.log: (0.4574+0.4571)/2 -> (0.4547+0.4545+0.4547)/3 and (0.4257+0.4264)/2 -> (0.4238+0.4239+0.4240)/3. Best-to-best is -0.57 % / -0.45 %."
     },
     "tests": {
       "total": 108,
@@ -1139,7 +1149,7 @@
     "watcher": {
       "env": "TT_METAL_WATCHER=10 TT_METAL_WATCHER_APPEND=0 TT_METAL_WATCHER_NOINLINE=1",
       "tests": 35,
-      "result": "clean: 35 passed, every counter 0 in both the dump (24,136 lines, 21 dumps) and the console",
+      "result": "clean: 35 passed, and every watcher pattern 0 (Watcher detected / tripped / sanitize / TT_ASSERT / DEBUG_ASSERT / out of bounds) in both the dump (24,136 lines, 21 dumps) and the console. The fault/Error counters are not 0 and are not watcher findings: 'error code: -1' priority warnings, a pydantic deprecation, and the word 'error' inside std::runtime_error in the known teardown abort.",
       "log": "doc/optimized_multichip_decoder/logs/watcher_run.log",
       "found_and_fixed": "The first watcher run stopped the device: 'subordinate_erisc detected invalid NOC command buffer state before starting the next kernel' in fabric_erisc_router.cpp. That build called all_gather_async without its barrier semaphore and also carried the persistent staging buffers this stage rejects. The barrier was added. The trip has NOT reproduced with the barrier removed on its own (logs/watcher_no_ag_barrier.log, every counter 0), so the cause is not established; the shipped path is watcher-clean either way.",
       "known_teardown_fault": "unchanged from the multichip stage: closing the 1x4 FABRIC_1D_RING mesh can time out returning ethernet core 29-25 to base firmware, after every test has reported; recoverable with one bounded tt-smi -r."

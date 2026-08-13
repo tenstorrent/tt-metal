@@ -3,7 +3,7 @@
 An optimization pass over the [multichip decoder](../multichip_decoder/README.md),
 in place, on the same four Blackhole dies. Same public contract, same paged
 semantics, same 131072-token capability, the **same correctness floor to the sixth
-decimal** — and **0.53–0.55 % faster traced decode** plus **2.9–3.6 % faster
+decimal** — and **0.55 % faster traced decode** plus **2.9–3.6 % faster
 prefill device time**, taking the decode speedup against one chip from
 2.39x/2.49x to **2.40x/2.50x**.
 
@@ -31,13 +31,16 @@ two or three times in that same process as its own repeat control.
 
 | window | before | after | delta |
 | --- | --- | --- | --- |
-| traced decode, sliding @2048 | 0.4574 / 0.4571 | **0.4547 / 0.4545 / 0.4547** | **−0.55 %** |
-| traced decode, full @2048 | 0.4257 / 0.4264 | **0.4238 / 0.4239 / 0.4240** | **−0.53 %** |
+| traced decode, sliding @2048 | 0.4574 / 0.4571 | **0.4547 / 0.4545 / 0.4547** | **−0.57 %** |
+| traced decode, full @2048 | 0.4257 / 0.4264 | **0.4238 / 0.4239 / 0.4240** | **−0.51 %** |
 | prefill 8192, sliding | 19.31 / 19.09 ms | 19.64 / 18.98 / 19.20 ms | inside the spread |
 | prefill 8192, full | 18.89 / 18.88 ms | 18.28 / 18.43 / 19.06 ms | inside the spread |
 
-Traced decode reproduces to 1e-4 within a run and across runs, so 0.52 % is an
-order of magnitude above the noise.
+The delta quoted is **mean-of-the-repeats to mean-of-the-repeats** — (0.4574 +
+0.4571)/2 against (0.4547 + 0.4545 + 0.4547)/3, and likewise for `full` — and every
+other percentage in this document uses the same rule. Best-to-best gives −0.57 % /
+−0.45 %. Traced decode reproduces to 1e-4 within a run and across runs, so the
+effect is an order of magnitude above the noise either way.
 
 Warmed prefill is much noisier — the same configuration measured three times in
 one process spans 3.4 % (`sliding`) and 4.1 % (`full`), which is larger than the
@@ -47,7 +50,13 @@ faster** (§[Collectives](#collectives)), and confirmed by device time, which dr
 **2.88 % (`sliding`) / 3.64 % (`full`)** on the 8192-token window.
 
 Against one chip, both measured in the same harness on the same host
-(`logs/final_layer_ab_single.log`):
+(`logs/final_layer_ab_single.log`). One asymmetry is worth naming rather than
+banking: `sharded_decode_io` lives in `OptimizedDecoder` and defaults to `False`
+there, so the 1-chip arm still pays the layer-exit `sharded_to_interleaved` that
+the 4-chip arm no longer does. That is most of what moved 2.39x → 2.40x and
+2.49x → 2.50x, and a single-chip stage could take the same 0.5 % whenever it wants
+it. The speedup is a comparison of two shipped defaults, not a claim that
+tensor parallelism got better:
 
 | window | 1 chip | 4 chips | speedup | was |
 | --- | --- | --- | --- | --- |
@@ -55,6 +64,12 @@ Against one chip, both measured in the same harness on the same host
 | traced decode, full @2048 | 1.0604 | **0.4238 ms/token** | **2.50x** | 2.49x |
 | prefill 8192, sliding | 44.21 | 18.98 ms | 2.33x | 2.30x |
 | prefill 8192, full | 44.37 | 18.28 ms | 2.43x | 2.33x |
+
+The two prefill rows are **not a claim**, for the same reason the Result table's
+prefill rows are not: at 3.4–4.1 % same-config spread this harness cannot resolve
+a 3 % change, and the ratio inherits that spread from both sides. The prefill
+result this stage does claim is the op-level collective and the device-time
+window, below.
 
 Device time from the eight committed Tracy windows, decode divided by its 8
 replays, against the multichip stage's tables captured the same way:
@@ -128,7 +143,7 @@ Two things have to be said about that, and the second is uncomfortable:
   watcher script takes a `WATCHER_TAG`). Re-running the same 35 node ids with the
   barrier deliberately removed, from committed code
   (`MG_MULTICHIP_CCL_IMPL=async MG_MULTICHIP_CCL_AG_BARRIER=0`), is **watcher-clean**:
-  `logs/watcher_no_ag_barrier.log`, every counter 0.
+  `logs/watcher_no_ag_barrier.log`, every **watcher** pattern 0 (`Watcher detected`, `tripped`, `sanitize`, `TT_ASSERT`, `DEBUG_ASSERT`, `out of bounds`); the `fault`/`Error` counters are not 0 and are not watcher findings — they match `error code: -1` priority warnings, a pydantic deprecation and the word *error* inside `std::runtime_error` in the teardown abort.
 
 So the honest statement is: a fabric-level watcher trip was observed once on a
 build with two defects in it, one of which (persistent buffers) is independently
@@ -271,6 +286,7 @@ layer *boundary* as well:
 | fixed point | layer *n*'s output is exactly what layer *n+1* returns, asserted by `test_decode_boundary_layout_is_a_fixed_point` and `test_two_layers_stack` |
 | ownership | the layer **does not free** a sharded input; the caller still owns it |
 | compatibility | a DRAM-interleaved input is still accepted and still produces the boundary layout, so the contract is a superset of the multichip one |
+| **not validated** | a sharded input is taken as the residual **without** checking its memory config against the boundary spec (`aliased_input = hidden_states.is_sharded()`). A caller handing in a differently-sharded tensor gets undefined behaviour rather than an error. `test_decode_boundary_layout_is_a_fixed_point` only exercises the matching config, so full-model bringup must hand in exactly the layout in this table |
 
 `prefill_forward` is unchanged: DRAM-interleaved in, DRAM-interleaved out, which is
 right for its regime (its activations are large and interleaved) and is already a
@@ -326,7 +342,7 @@ Every row is a candidate this stage ran on this mesh, not a quotation.
 | `all_gather_matmul_async` (gathered-input `o_proj`, OPT-008) | rejected: 64.74 μs fused / 65.84 unfused against **44.91** for the shipped decomposition — 44 % slower *with* the fusion | `logs/fused_ccl_gathered_input.log` |
 | packed `wqkv`+`attn_gate` (OPT-001) | rejected: 41.05 vs **40.50** μs. `in0_block_w=13` is legal here, unlike on one chip, so this rejection is about the split cost, not the block size | `logs/packing_probe.log` |
 | packed MLP gate/up (OPT-010) | rejected: 145.66 vs **142.96** μs at `in0_block_w=13`; 4 and 2 are illegal (`(shard_shape[1]/tile_width) % in0_block_w == 0`), 1 costs 87 % | `logs/packing_probe.log` |
-| `o_proj` working shard at 8 cores, `in0_block_w=4` (OPT-011) | rejected **on the shipped path**: it *wins*, 0.4542 / 0.4236 against 0.4546 / 0.4238 (0.11 % / 0.05 %, rounds non-overlapping) -- and costs an extra reshard op, the single-grid invariant three structural tests assert, and 13 % of the multichip-vs-single-chip PCC headroom (0.999183 -> 0.999159 against a 0.999 bar). Not a good trade for a stacking baseline | `logs/ab_oproj_workshard_final.log`, `logs/ab_oproj_workshard.log` |
+| `o_proj` working shard at 8 cores, `in0_block_w=4` (OPT-011) | rejected **on the shipped path**: it *wins* on `sliding` (0.4541 / 0.4543 / 0.4538 against 0.4547 / 0.4545 / 0.4547, non-overlapping) and is inside the noise on `full` (0.4236 / 0.4237 / 0.4238 against 0.4238 / 0.4239 / 0.4240, overlapping at 0.4238) -- and costs an extra reshard op, the single-grid invariant three structural tests assert, and PCC headroom: shipping it moved the worst vs-single-chip check to **0.999159** against a 0.999 bar, from 0.999183. Not a good trade for a stacking baseline | `logs/ab_oproj_workshard_final.log` (the shipped-geometry rows are its `tp4`/`tp4b`/`tp4c`), `logs/ab_oproj_workshard.log` |
 | `o_proj` at 4 / 2 / 1 cores | rejected: 4 cores slower; 2 and 1 fail L1 with the exact circular-buffer messages | `logs/ab_oproj_workshard.log` |
 | BFP4 attention weights (OPT-007) | rejected on the **released checkpoint, on this topology**: 0.49 % faster decode, prefill PCC 0.9695 / 0.9732 and decode PCC 0.9818 / 0.9748 against a 0.995 bar | `logs/real_weight_precision.log` |
 | BF16 attention weights | rejected: 57 % / 61 % slower decode, no PCC gain | `logs/real_weight_precision.log` |
@@ -414,9 +430,13 @@ against the optimized path.
    (`matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp:240` fixes the
    worker count to the DRAM bank count).
 5. **`o_proj` still runs at 62 % of peak DRAM.** The narrower working shard that
-   OPT-011 points at was implemented and measured; it wins 0.20 % against the old
-   collective and loses 0.07 % against the new one, and the wider block sizes fail
-   L1. The enabling code is kept so the candidate stays expressible.
+   OPT-011 points at was implemented and measured against the shipped default,
+   where it **wins** 0.11 % / 0.05 % — and it is still not taken, because it costs
+   an extra reshard, the single-grid invariant three structural tests assert, and
+   13 % of the multichip-vs-single-chip PCC headroom. The wider block sizes fail
+   L1 with recorded errors. See the rejection table and [work log §3](work_log.md);
+   the enabling code is kept so the candidate stays expressible. `o_proj` is
+   4.8 % of the decode step, so the whole ceiling here is a fraction of a percent.
 6. **The hidden-size RMSNorms still do not shrink with TP**, and the fractured
    residual that would quarter them is still refuted for decode on the multichip
    stage's floor-corrected measurement. For prefill it is not refuted; see
