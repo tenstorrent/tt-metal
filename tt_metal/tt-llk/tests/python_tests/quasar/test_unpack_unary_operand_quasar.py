@@ -23,6 +23,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
@@ -74,7 +75,6 @@ def generate_unpack_unary_operand_combinations(
     Returns: List of (format, dest_acc, transpose_en, unpacker_sel, input_dimensions) tuples
     """
     combinations = []
-    perf_dimensions = [32, 32]
     perf_tile_dims = (32, 32)
     dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
 
@@ -96,26 +96,32 @@ def generate_unpack_unary_operand_combinations(
         )
 
         if is_perf:
-            if in_fmt.is_32_bit():
-                continue
             # Same packer constraint as the correctness path: non-Fp32 input cannot
             # pack to Fp32 when dest is in 16-bit mode.
             if in_fmt != DataFormat.Float32 and fmt.output_format == DataFormat.Float32:
                 continue
-            for dest_acc in (DestAccumulation.No,):
+            perf_dest_acc_modes = (
+                dest_acc_modes if in_fmt.is_32_bit() else (DestAccumulation.No,)
+            )
+            for dest_acc in perf_dest_acc_modes:
                 for dest_sync in dest_sync_modes:
-                    for unpacker_sel in (UnpackerEngine.UnpA,):
-                        combinations.append(
-                            (
-                                fmt,
-                                dest_acc,
-                                dest_sync,
-                                Transpose.No,
-                                unpacker_sel,
-                                runtime(perf_dimensions),
-                                runtime(perf_tile_dims),
-                            )
-                        )
+                    perf_dimensions = generate_perf_input_dimensions(
+                        dest_acc, dest_sync, use_largest_fallback=True
+                    )
+                    for transpose_en in transpose_modes:
+                        for unpacker_sel in unpacker_engines:
+                            for dimensions in perf_dimensions:
+                                combinations.append(
+                                    (
+                                        fmt,
+                                        dest_acc,
+                                        dest_sync,
+                                        transpose_en,
+                                        unpacker_sel,
+                                        dimensions,
+                                        runtime(perf_tile_dims),
+                                    )
+                                )
             continue
 
         for dest_acc in dest_acc_modes:
@@ -157,7 +163,7 @@ def generate_unpack_unary_operand_combinations(
                                         dest_sync,
                                         transpose_en,
                                         unpacker_sel,
-                                        runtime(dimensions),
+                                        dimensions,
                                         runtime(tile_dims),
                                     )
                                 )

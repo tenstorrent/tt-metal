@@ -61,6 +61,12 @@ BINARY_BROADCAST_FORMATS = input_output_formats(
     ],
 ) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
 
+BROADCAST_TYPES = [
+    BroadcastType.Column,
+    BroadcastType.Row,
+    BroadcastType.Scalar,
+]
+
 
 def binary_broadcast_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
@@ -82,14 +88,6 @@ def binary_broadcast_math_fidelities(format, mathop, *, is_perf=False):
     return get_valid_math_fidelities(format, mathop)
 
 
-def binary_broadcast_input_dimensions(dest_acc, dest_sync_mode, *, is_perf=False):
-    if is_perf:
-        # Nested list: parametrize treats a flat list as multiple values, so
-        # [32, 32] would become input_dimensions=32 (int) and break generate_stimuli.
-        return [[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM]]
-    return generate_unary_input_dimensions(dest_acc, dest_sync_mode)
-
-
 @pytest.mark.quasar
 @parametrize(
     formats=BINARY_BROADCAST_FORMATS,
@@ -99,19 +97,15 @@ def binary_broadcast_input_dimensions(dest_acc, dest_sync_mode, *, is_perf=False
         MathOperation.Elwsub,
         MathOperation.Elwmul,
     ],
-    broadcast_type=[
-        BroadcastType.Column,
-        BroadcastType.Row,
-        BroadcastType.Scalar,
-    ],
+    broadcast_type=BROADCAST_TYPES,
     math_fidelity=lambda formats, mathop: binary_broadcast_math_fidelities(
         formats, mathop
     ),
     implied_math_format=lambda formats: binary_broadcast_implied_math_formats(formats),
     dest_sync_mode=lambda: binary_broadcast_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(
-        lambda dest_acc, dest_sync_mode: binary_broadcast_input_dimensions(
-            dest_acc, dest_sync_mode, is_perf=False
+        lambda dest_acc, dest_sync_mode: generate_unary_input_dimensions(
+            dest_acc, dest_sync_mode
         )
     ),
     run_types=[[PerfRunType.L1_TO_L1]],

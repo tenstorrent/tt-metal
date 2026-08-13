@@ -21,6 +21,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     calculate_edgecase_dest_indices,
+    generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
@@ -81,7 +82,6 @@ def generate_eltwise_unary_datacopy_combinations(
         if is_perf:
             tile_dims = (16, 16)
             tile_shape = construct_tile_shape(tile_dims)
-            dimensions = [32, 32]
             for dest_acc in dest_acc_modes:
                 if (
                     in_fmt != DataFormat.Float32
@@ -90,18 +90,22 @@ def generate_eltwise_unary_datacopy_combinations(
                 ):
                     continue
                 for dest_sync in dest_sync_modes:
+                    dimensions_list = generate_perf_input_dimensions(
+                        dest_acc, dest_sync, tile_shape
+                    )
                     for data_copy_type in data_copy_types:
-                        combinations.append(
-                            (
-                                fmt,
-                                dest_acc,
-                                data_copy_type,
-                                runtime(dimensions),
-                                dest_sync,
-                                runtime(0),
-                                runtime(tile_dims),
+                        for dimensions in dimensions_list:
+                            combinations.append(
+                                (
+                                    fmt,
+                                    dest_acc,
+                                    data_copy_type,
+                                    dimensions,
+                                    dest_sync,
+                                    runtime(0),
+                                    runtime(tile_dims),
+                                )
                             )
-                        )
             continue
 
         for dest_acc in dest_acc_modes:
@@ -139,7 +143,7 @@ def generate_eltwise_unary_datacopy_combinations(
                                         fmt,
                                         dest_acc,
                                         data_copy_type,
-                                        runtime(dimensions),
+                                        dimensions,
                                         dest_sync,
                                         runtime(edgecase_dest_index),
                                         runtime(tile_dims),

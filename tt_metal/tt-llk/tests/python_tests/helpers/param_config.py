@@ -622,6 +622,64 @@ def generate_unary_input_dimensions(dest_acc, dest_sync=DestSync.Half, tile_shap
     ]
 
 
+PERF_INPUT_DIMENSIONS = (
+    [256, 32],
+    [32, 256],
+    [512, 32],
+    [32, 512],
+)
+
+
+def select_perf_input_dimensions(functional_dimensions, *, use_largest_fallback=True):
+    """Select perf matrices from the dimensions supported by a functional test.
+
+    Keep supported target matrices in ``PERF_INPUT_DIMENSIONS`` order. If the
+    functional test supports none of them, optionally keep only its largest
+    matrix. Prefer the taller matrix when multiple supported matrices have the
+    same area.
+    """
+    normalized_dimensions = [list(dimensions) for dimensions in functional_dimensions]
+    supported_dimensions = {tuple(dimensions) for dimensions in normalized_dimensions}
+    selected_dimensions = [
+        dimensions.copy()
+        for dimensions in PERF_INPUT_DIMENSIONS
+        if tuple(dimensions) in supported_dimensions
+    ]
+    if selected_dimensions:
+        return selected_dimensions
+    if not normalized_dimensions or not use_largest_fallback:
+        return []
+
+    return [
+        max(
+            normalized_dimensions,
+            key=lambda dimensions: (
+                dimensions[0] * dimensions[1],
+                dimensions[0],
+            ),
+        )
+    ]
+
+
+def generate_perf_input_dimensions(
+    dest_acc,
+    dest_sync=DestSync.Half,
+    tile_shape=None,
+    *,
+    use_largest_fallback=True,
+):
+    """Select perf matrices from unary functional coverage."""
+    if tile_shape is None:
+        tile_shape = construct_tile_shape()
+
+    functional_dimensions = generate_unary_input_dimensions(
+        dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+    )
+    return select_perf_input_dimensions(
+        functional_dimensions, use_largest_fallback=use_largest_fallback
+    )
+
+
 def get_num_blocks_and_num_tiles_in_block(
     dest_sync: DestSync,
     dest_acc: DestAccumulation,

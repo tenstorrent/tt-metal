@@ -22,6 +22,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
@@ -63,8 +64,8 @@ def generate_qsr_pack_combinations(
 
     Args:
         formats_list: List of input/output format pairs
-        is_perf: Restrict combinations to SyncHalf, NoRelu, a 16x16 tile,
-            and a 32x32 input for performance measurements.
+        is_perf: Restrict combinations to SyncHalf, a 16x16 tile, and perf
+            input dimensions for performance measurements.
 
     Returns:
         List of (format, dest_acc, dest_sync, input_dimensions, relu_type,
@@ -127,13 +128,9 @@ def generate_qsr_pack_combinations(
         # Threshold ReLU modes are not supported for integer pack_src formats
         # (mirroring the pytest.skip guard in the test body).
         relu_types = (
-            [PackerReluType.NoRelu]
-            if is_perf
-            else (
-                [PackerReluType.NoRelu, PackerReluType.ZeroRelu]
-                if in_fmt.is_integer()
-                else all_relu_types
-            )
+            [PackerReluType.NoRelu, PackerReluType.ZeroRelu]
+            if in_fmt.is_integer()
+            else all_relu_types
         )
         for dest_acc in get_dest_acc_modes(in_fmt):
             if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
@@ -141,19 +138,23 @@ def generate_qsr_pack_combinations(
                     tile_dims = MX_SUPPORTED_TILE_SIZES[0]
                     if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
                         continue
-                    input_dimensions = [32, 32]  # [rows, columns]
+                    tile_shape = construct_tile_shape(tile_dims)
                     for dest_sync in dest_sync_modes:
+                        perf_dimensions = generate_perf_input_dimensions(
+                            dest_acc, dest_sync, tile_shape
+                        )
                         for relu_type in relu_types:
-                            combinations.append(
-                                (
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    runtime(input_dimensions),
-                                    runtime(relu_type),
-                                    runtime(tile_dims),
+                            for input_dimensions in perf_dimensions:
+                                combinations.append(
+                                    (
+                                        fmt,
+                                        dest_acc,
+                                        dest_sync,
+                                        runtime(input_dimensions),
+                                        runtime(relu_type),
+                                        runtime(tile_dims),
+                                    )
                                 )
-                            )
                     continue
                 for dest_sync in dest_sync_modes:
                     for tile_dims in SUPPORTED_TILE_SIZES:
@@ -176,7 +177,7 @@ def generate_qsr_pack_combinations(
                                         fmt,
                                         dest_acc,
                                         dest_sync,
-                                        runtime(dimensions),
+                                        dimensions,
                                         runtime(relu_type),
                                         runtime(tile_dims),
                                     )

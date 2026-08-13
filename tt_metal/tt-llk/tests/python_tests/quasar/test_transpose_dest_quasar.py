@@ -27,7 +27,7 @@ from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
-    runtime,
+    select_perf_input_dimensions,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -136,11 +136,7 @@ def generate_qsr_transpose_dest_combinations(
     }
 
     dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
-    transpose_faces_modes = (
-        (Transpose.No,) if is_perf else (Transpose.No, Transpose.Yes)
-    )
-    perf_dimensions = [32, 32]
-
+    transpose_faces_modes = (Transpose.No, Transpose.Yes)
     combinations = []
     for fmt in formats_list:
         in_fmt, out_fmt = fmt.input_format, fmt.output_format
@@ -153,15 +149,20 @@ def generate_qsr_transpose_dest_combinations(
                 for dest_sync in dest_sync_modes:
                     for math_transpose_faces in transpose_faces_modes:
                         if is_perf:
-                            combinations.append(
-                                (
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    math_transpose_faces,
-                                    runtime(perf_dimensions),
-                                )
+                            perf_dimensions = select_perf_input_dimensions(
+                                dimensions_by_mode[(dest_acc, dest_sync)],
+                                use_largest_fallback=False,
                             )
+                            for dimensions in perf_dimensions:
+                                combinations.append(
+                                    (
+                                        fmt,
+                                        dest_acc,
+                                        dest_sync,
+                                        math_transpose_faces,
+                                        dimensions,
+                                    )
+                                )
                             continue
                         for dimensions in dimensions_by_mode[(dest_acc, dest_sync)]:
                             combinations.append(
@@ -170,7 +171,7 @@ def generate_qsr_transpose_dest_combinations(
                                     dest_acc,
                                     dest_sync,
                                     math_transpose_faces,
-                                    runtime(dimensions),
+                                    dimensions,
                                 )
                             )
 

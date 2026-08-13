@@ -5,10 +5,10 @@ import pytest
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
-    BroadcastType,
 )
 from helpers.param_config import parametrize, runtime
 from quasar.test_unary_broadcast_quasar import (
+    BROADCAST_TYPES,
     INPUT_DIMENSIONS,
     UNARY_BROADCAST_FORMATS,
     get_valid_dest_acc_unary_broadcast,
@@ -27,7 +27,7 @@ from quasar.test_unary_broadcast_quasar import (
 @parametrize(
     formats=UNARY_BROADCAST_FORMATS,
     dest_acc=get_valid_dest_acc_unary_broadcast,
-    broadcast_type=[BroadcastType.Scalar],
+    broadcast_type=BROADCAST_TYPES,
     implied_math_format=lambda formats: unary_broadcast_implied_math_formats(
         formats, is_perf=True
     ),

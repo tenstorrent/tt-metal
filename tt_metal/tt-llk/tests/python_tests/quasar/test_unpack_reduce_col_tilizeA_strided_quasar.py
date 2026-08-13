@@ -33,6 +33,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
     runtime,
+    select_perf_input_dimensions,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -140,13 +141,15 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
                     if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dimensions):
                         continue
                     tile_shape = construct_tile_shape(tile_dimensions)
+                    functional_dimensions = generate_corner_case_input_dimensions(
+                        dest_sync, acc, tile_shape
+                    )
                     dimensions_list = (
-                        # Perf only measures the single tile case.
-                        [[tile_shape.total_row_dim(), tile_shape.total_col_dim()]]
-                        if is_perf
-                        else generate_corner_case_input_dimensions(
-                            dest_sync, acc, tile_shape
+                        select_perf_input_dimensions(
+                            functional_dimensions, use_largest_fallback=True
                         )
+                        if is_perf
+                        else functional_dimensions
                     )
                     for dimensions in dimensions_list:
                         for pool_type in (
@@ -161,7 +164,7 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
                                     fmt,
                                     acc,
                                     dest_sync,
-                                    runtime(dimensions),
+                                    dimensions,
                                     pool_type,
                                     runtime(tile_dimensions),
                                 )

@@ -86,14 +86,6 @@ def eltwise_binary_math_fidelities(mathop, formats, *, is_perf=False):
     ]
 
 
-def eltwise_binary_input_dimensions(dest_sync_dest_acc, *, is_perf=False):
-    if is_perf:
-        # Nested list: parametrize treats a flat list as multiple values, so
-        # [32, 32] would become input_dimensions=32 (int) and break generate_stimuli.
-        return [[32, 32]]
-    return generate_unary_input_dimensions(dest_sync_dest_acc[1], dest_sync_dest_acc[0])
-
-
 # For acc_to_dest setting, accumulate two result tiles into dest. Can be extended.
 def get_num_tiles_per_accumulation(acc_to_dest: bool) -> int:
     return 2 if acc_to_dest else 1
@@ -150,8 +142,8 @@ ELTWISE_FORMATS = input_output_formats(
         formats, is_perf=False
     ),
     input_dimensions=runtime(
-        lambda dest_sync_dest_acc: eltwise_binary_input_dimensions(
-            dest_sync_dest_acc, is_perf=False
+        lambda dest_sync_dest_acc: generate_unary_input_dimensions(
+            dest_sync_dest_acc[1], dest_sync_dest_acc[0]
         )
     ),
     acc_to_dest=valid_acc_to_dest,

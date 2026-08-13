@@ -6,15 +6,14 @@ from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
-    BroadcastType,
     MathOperation,
 )
-from helpers.param_config import parametrize
+from helpers.param_config import generate_perf_input_dimensions, parametrize
 from quasar.test_eltwise_binary_broadcast_quasar import (
     BINARY_BROADCAST_FORMATS,
+    BROADCAST_TYPES,
     binary_broadcast_dest_sync_modes,
     binary_broadcast_implied_math_formats,
-    binary_broadcast_input_dimensions,
     binary_broadcast_math_fidelities,
 )
 from quasar.test_eltwise_binary_broadcast_quasar import (
@@ -28,7 +27,7 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
     formats=BINARY_BROADCAST_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,
     mathop=[MathOperation.Elwadd],
-    broadcast_type=[BroadcastType.Scalar],
+    broadcast_type=BROADCAST_TYPES,
     math_fidelity=lambda formats, mathop: binary_broadcast_math_fidelities(
         formats, mathop, is_perf=True
     ),
@@ -36,8 +35,8 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
         formats, is_perf=True
     ),
     dest_sync_mode=lambda: binary_broadcast_dest_sync_modes(is_perf=True),
-    input_dimensions=lambda dest_acc, dest_sync_mode: binary_broadcast_input_dimensions(
-        dest_acc, dest_sync_mode, is_perf=True
+    input_dimensions=lambda dest_acc, dest_sync_mode: generate_perf_input_dimensions(
+        dest_acc, dest_sync_mode, use_largest_fallback=True
     ),
     run_types=PERF_RUN_TYPES_QUASAR,
     loop_factor=[PERF_LOOP_FACTOR_QUASAR],

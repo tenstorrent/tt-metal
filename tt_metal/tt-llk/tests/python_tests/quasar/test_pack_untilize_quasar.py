@@ -15,6 +15,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    generate_perf_input_dimensions,
     generate_unary_input_dimensions,
     input_output_formats,
     parametrize,
@@ -53,8 +54,10 @@ def pack_untilize_dest_sync_modes(*, is_perf=False):
     return [DestSync.Half] if is_perf else [DestSync.Half, DestSync.Full]
 
 
-def pack_untilize_perf_input_dimensions():
-    return [32, 32]
+def pack_untilize_perf_input_dimensions(dest_acc, dest_sync, tile_shape):
+    return generate_perf_input_dimensions(
+        dest_acc, dest_sync, tile_shape, use_largest_fallback=True
+    )
 
 
 def generate_pack_untilize_combinations(
@@ -92,7 +95,6 @@ def generate_pack_untilize_combinations(
         return (DestAccumulation.No, DestAccumulation.Yes)
 
     dest_sync_modes = pack_untilize_dest_sync_modes(is_perf=is_perf)
-    perf_dimensions = pack_untilize_perf_input_dimensions()
     combinations = []
     for fmt in formats_list:
         in_fmt, out_fmt = fmt.input_format, fmt.output_format
@@ -118,7 +120,9 @@ def generate_pack_untilize_combinations(
                         continue
                     tile_shape = construct_tile_shape(tile_dims)
                     dimensions_list = (
-                        [perf_dimensions]
+                        pack_untilize_perf_input_dimensions(
+                            dest_acc, dest_sync, tile_shape
+                        )
                         if is_perf
                         else generate_unary_input_dimensions(
                             dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
@@ -130,7 +134,7 @@ def generate_pack_untilize_combinations(
                                 fmt,
                                 dest_acc,
                                 dest_sync,
-                                runtime(dimensions),
+                                dimensions,
                                 runtime(tile_dims),
                             )
                         )

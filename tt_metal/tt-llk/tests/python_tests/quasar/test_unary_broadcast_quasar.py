@@ -95,6 +95,12 @@ UNARY_BROADCAST_FORMATS = input_output_formats(
     same=True,  # input_fmt != output_fmt not tested, ISSUE: #47560
 )
 
+BROADCAST_TYPES = [
+    BroadcastType.Scalar,
+    BroadcastType.Column,
+    BroadcastType.Row,
+]
+
 
 def get_valid_dest_acc_unary_broadcast(formats):
     """Valid dest accumulation modes for unary broadcast."""
@@ -109,11 +115,7 @@ def get_valid_dest_acc_unary_broadcast(formats):
 @parametrize(
     formats=UNARY_BROADCAST_FORMATS,
     dest_acc=lambda formats: get_valid_dest_acc_unary_broadcast(formats),
-    broadcast_type=[
-        BroadcastType.Scalar,
-        BroadcastType.Column,
-        BroadcastType.Row,
-    ],
+    broadcast_type=BROADCAST_TYPES,
     implied_math_format=lambda formats: unary_broadcast_implied_math_formats(formats),
     dest_sync_mode=lambda: unary_broadcast_dest_sync_modes(is_perf=False),
     input_dimensions=runtime(INPUT_DIMENSIONS),
