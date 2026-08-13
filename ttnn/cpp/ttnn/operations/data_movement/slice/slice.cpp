@@ -248,28 +248,52 @@ ttnn::Tensor slice(
     // (ends are padded downstream, so only begin alignment matters).
     rm_only = (input_tensor.layout() != Layout::TILE) || (!no_step || one_dimensional || !handled_tile_alignment);
 
-    // Implicit inheritance from a sharded input: rescale the shard spec to the sliced shape so the
-    // output doesn't reuse the input's (oversized) spec. Covers HEIGHT/WIDTH/BLOCK. (Issue #38016)
+    // Implicit inheritance from a sharded input: rescale the shard metadata to the sliced shape so the
+    // output doesn't reuse the input's oversized spec. Covers legacy shard_spec and ND shard provenance.
     if (!memory_config_arg.has_value() && !optional_output_tensor.has_value() && input_tensor.is_sharded() &&
         input_rank >= 2) {
         const auto& mem_layout = output_memory_config.memory_layout();
+
+        // Compute output dimensions once for all implicit sharded-output adjustments.
+        ttnn::SmallVector<uint32_t> output_dims(input_rank);
+        for (size_t i = 0; i < input_rank; i++) {
+            output_dims[i] = output_dim_i(i, modified_ends);
+        }
+        if (!rm_only) {
+            output_dims[input_rank - 2] =
+                std::max(tt::round_up(output_dims[input_rank - 2], tile_shape[0]), tile_shape[0]);
+            output_dims[input_rank - 1] =
+                std::max(tt::round_up(output_dims[input_rank - 1], tile_shape[1]), tile_shape[1]);
+        }
+
+        if (output_memory_config.created_with_nd_shard_spec()) {
+            const auto& input_nd_shard_spec = output_memory_config.nd_shard_spec().value();
+            auto output_nd_shard_shape = input_nd_shard_spec.shard_shape;
+            const auto input_nd_rank = output_nd_shard_shape.rank();
+            TT_FATAL(
+                input_nd_rank <= input_rank,
+                "NdShardSpec rank {} cannot exceed slice input rank {}",
+                input_nd_rank,
+                input_rank);
+
+            for (size_t i = 0; i < input_nd_rank; ++i) {
+                const auto output_dim_index = input_rank - input_nd_rank + i;
+                output_nd_shard_shape[i] = std::min(output_nd_shard_shape[i], output_dims[output_dim_index]);
+            }
+
+            if (output_nd_shard_shape != input_nd_shard_spec.shard_shape) {
+                output_memory_config = MemoryConfig::create_with_prepopulated_shard_specs(
+                    output_memory_config.memory_layout(),
+                    output_memory_config.buffer_type(),
+                    output_memory_config.shard_spec(),
+                    input_nd_shard_spec.with_shard_shape(output_nd_shard_shape),
+                    output_memory_config.created_with_nd_shard_spec());
+            }
+        }
         if (mem_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
             mem_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED ||
             mem_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED) {
             const auto& shard_spec_val = output_memory_config.shard_spec().value();
-
-            // Compute output dimensions, tile-aligned if using TILE path
-            ttsl::SmallVector<uint32_t> output_dims(input_rank);
-            for (size_t i = 0; i < input_rank; i++) {
-                output_dims[i] = output_dim_i(i, modified_ends);
-            }
-            if (!rm_only) {
-                output_dims[input_rank - 2] =
-                    std::max(tt::round_up(output_dims[input_rank - 2], tile_shape[0]), tile_shape[0]);
-                output_dims[input_rank - 1] =
-                    std::max(tt::round_up(output_dims[input_rank - 1], tile_shape[1]), tile_shape[1]);
-            }
-
             // Flatten to 2D: height = product of all dims except last, width = last dim
             uint32_t output_height = 1;
             for (size_t i = 0; i + 1 < input_rank; i++) {
@@ -315,8 +339,17 @@ ttnn::Tensor slice(
             if (new_shard_shape != shard_spec_val.shape) {
                 auto new_shard_spec =
                     tt::tt_metal::ShardSpec(shard_spec_val.grid, new_shard_shape, shard_spec_val.orientation);
-                output_memory_config = MemoryConfig(
-                    output_memory_config.memory_layout(), output_memory_config.buffer_type(), new_shard_spec);
+                if (output_memory_config.created_with_nd_shard_spec()) {
+                    output_memory_config = MemoryConfig::create_with_prepopulated_shard_specs(
+                        output_memory_config.memory_layout(),
+                        output_memory_config.buffer_type(),
+                        new_shard_spec,
+                        output_memory_config.nd_shard_spec(),
+                        output_memory_config.created_with_nd_shard_spec());
+                } else {
+                    output_memory_config = MemoryConfig(
+                        output_memory_config.memory_layout(), output_memory_config.buffer_type(), new_shard_spec);
+                }
             }
         }
     }
