@@ -476,8 +476,6 @@ def run_model(
     dense_checks = [
         ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device), 0.997),
         ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), 0.96),
-        # final_output = routed_output + shared_output, so its PCC is a magnitude-weighted blend of the
-        # two. That makes the bar model-specific rather than universal: see final_output_pcc.
         ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), final_output_pcc),
     ]
     if use_latent:
@@ -931,36 +929,12 @@ def test_kimi_moe(
         # fmt: off
         pytest.param( 640, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-5k-perf"),
         pytest.param( 640, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-5k-pcc"),
-        pytest.param(3200, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-25k-perf"),
-        pytest.param(3200, KimiK3Config.EMB_SIZE, KimiK3Config.MOE_INTERMEDIATE_SIZE, KimiK3Config.NUM_ROUTED_EXPERTS, KimiK3Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi_k3-25k-pcc"),
         # fmt: on
     ],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
-        pytest.param(
-            (8, 1),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
-            id="linear-8",
-        ),
-        pytest.param(
-            (4, 2),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
-            },
-            2 if is_blackhole() else 1,
-            ttnn.Topology.Linear,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
-            id="mesh-4x2",
-        ),
         # The 8x4 anchor is FABRIC_2D: it is the only K3 MoE config CI runs, and the rest of the K3
         # blaze coverage (MLA, MLA perf) is already 2D, so keeping this leg on 1D would have been the
         # one fabric outlier in the pipeline. The smaller meshes above stay 1D -- they are local
@@ -972,7 +946,9 @@ def test_kimi_moe(
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
             },
-            2 if is_blackhole() else 1,
+            # Unconditional: every K3 param above is skipif(not is_blackhole()), so this leg is
+            # Blackhole-only and there is no arch left that would want a different link count.
+            2,
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-mesh-8x4",

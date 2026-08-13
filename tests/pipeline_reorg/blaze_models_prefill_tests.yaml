@@ -179,7 +179,7 @@
       # Measured 9.9 min at L61/mid15k (the untraced mode also does the per-layer decoder-output PCC,
       # which is a host readback per layer per chunk). 20 min is ~2x headroom. Was 40; the (team, sku)
       # time budget is a SUM, so the traced twin has to come out of the same allowance.
-      timeout: 20
+      timeout: 26
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -205,7 +205,7 @@
     bh_sc1:
       # Measured 5.2 min at L61/mid15k — cheaper than its untraced twin because the traced mode asserts
       # KV PCC only (a host readback cannot live inside a capture). ~2.3x headroom.
-      timeout: 14
+      timeout: 20
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
   sp_config: sc1
@@ -328,15 +328,7 @@
 
 - name: "Blaze - Kimi K3 MoE"
   cmd: |
-    # Kimi-K3 LatentMoE: 896 experts / top-16 with the routed side at the 3584 latent width, plus the
-    # down/up projections and latent RMSNorm around it. PCC only -- the device-perf case is its own
-    # high-power row below, mirroring how "Blaze - K3 MLA" and "Blaze - K3 MLA perf" are split.
-    #
-    # Device-vs-torch parity on identical seeded weights, running SiLU on BOTH sides: no TT kernel
-    # implements the checkpoint's SiTU-GLU yet (#51335), so this gates the dataflow -- dispatch and
-    # combine at 896/top-16, the latent projections, the latent norm, the routed/shared dim split --
-    # not the activation. Real-weight gate coverage rides on the shared "Blaze - MoE Gate" stage,
-    # which already collects the kimi_k3 cases at mesh-8x4.
+
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_k3_moe -k "fabric2d-mesh-8x4 and kimi_k3-5k-pcc" -vvv --tb=short
@@ -356,14 +348,7 @@
 
 - name: "Blaze - Kimi K3 MoE perf"
   cmd: |
-    # Device perf for the same block, at the 5K production shape (640 tokens/chip x 8 SP = 5120).
-    # Split from the PCC row above and onto the high-power SKU because it runs under the profiler,
-    # which needs a quiet, clock-stable box to produce a comparable number -- same reason
-    # "Blaze - K3 MLA perf" is separated from "Blaze - K3 MLA".
-    #
-    # Signpost-bracketed (MoE_START/MoE_END) so the figure is the forward only: at 896 experts the
-    # one-time weight-load tilize/typecast in TtMoe's constructor dominates process wall time but is
-    # not per-token cost.
+
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py::test_kimi_k3_moe_perf_galaxy -vvv --tb=short

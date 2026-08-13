@@ -53,8 +53,6 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBO
 GATE_MODELS = {
     "deepseek_v3": DeepSeekV3Config,
     "kimi": KimiK26Config,
-    # Kimi-K3: 896 experts / top-16, still a single expert group so it takes the plain top-k path.
-    # Its gating_dim is hidden_size (7168) like K2.6 -- the 3584 latent is downstream of the router.
     "kimi_k3": KimiK3Config,
     "glm_5_1": GLM51Config,
     "minimax_m2_7": MiniMaxM27Config,
