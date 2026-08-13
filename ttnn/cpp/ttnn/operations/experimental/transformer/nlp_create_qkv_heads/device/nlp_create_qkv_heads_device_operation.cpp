@@ -33,6 +33,25 @@ void NlpCreateHeadsDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(input_shape[2] % TILE_HEIGHT == 0, "Unsupported input height {} is not tile aligned", input_shape[2]);
     TT_FATAL(input_shape[1] == 1, "Unsupported input sequence length {} is not equal to 1", input_shape[1]);
+
+    if (operation_attributes.kv_tied) {
+        // V is read by rewinding the reader to K's pages, which only the interleaved reader does.
+        // The sharded reader walks per-core head offsets and the transpose path routes K through a
+        // compute kernel; neither rewinds, so they would silently read the wrong columns as V.
+        TT_FATAL(
+            !tensor_args.input_tensor_kv.has_value(),
+            "kv_tied reads V from K's columns of the fused input, so a separate KV tensor is invalid");
+        TT_FATAL(!input_tensor.is_sharded(), "kv_tied is implemented for the interleaved input path only");
+        TT_FATAL(!operation_attributes.transpose_k_heads, "kv_tied does not support transpose_k_heads");
+        TT_FATAL(
+            input_shape[3] ==
+                (operation_attributes.num_q_heads + operation_attributes.num_kv_heads) * operation_attributes.head_dim,
+            "kv_tied input width ({}) must be (num_q_heads {} + num_kv_heads {}) * head_dim {}",
+            input_shape[3],
+            operation_attributes.num_q_heads,
+            operation_attributes.num_kv_heads,
+            operation_attributes.head_dim);
+    }
     if (input_tensor.is_sharded()) {
         TT_FATAL(
             input_tensor.shard_spec().value().shape[0] ==
@@ -265,7 +284,8 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
     uint32_t head_dim,
     bool transpose_k_heads,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors) {
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors,
+    bool kv_tied) {
     using OperationType = ttnn::operations::experimental::transformer::NlpCreateHeadsDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -273,7 +293,8 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
         .num_kv_heads = num_kv_heads.value_or(num_q_heads),
         .head_dim = head_dim,
         .transpose_k_heads = transpose_k_heads,
-        .output_mem_config = memory_config.value_or(input_tensor_q.memory_config())};
+        .output_mem_config = memory_config.value_or(input_tensor_q.memory_config()),
+        .kv_tied = kv_tied};
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor_q = input_tensor_q,
         .input_tensor_kv = input_tensor_kv,
