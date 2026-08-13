@@ -40,16 +40,23 @@ from loguru import logger
 from qwen_vl_utils import process_vision_info
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
+from models.common.utility_functions import run_for_wormhole_b0_or_blackhole
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.tt_transformers.tt.generator import Generator
 
 # Multi-device (TP) is selected via MESH_DEVICE (e.g. P150x4). On a single device the mesh is
 # (1,1) and the model runs its validated single-device path; on a multi-device mesh it needs
 # FABRIC_1D for the TP collectives. The vision splice buffers are allocated on whichever mesh.
-_MESH_SHAPE = {"N150": (1, 1), "N300": (1, 2), "P150x4": (1, 4), "N150x4": (1, 4), "T3K": (1, 8)}.get(
-    os.environ.get("MESH_DEVICE"), (1, 1)
-)
+# Wormhole meshes listed explicitly, mirroring text_demo.py. The 27B needs T3K (1,8); the 9B
+# fits an N300 (1,2). Anything unlisted falls back to single device.
+_MESH_SHAPE = {
+    "P150": (1, 1),
+    "P150x4": (1, 4),
+    "N150": (1, 1),
+    "N300": (1, 2),
+    "N150x4": (1, 4),
+    "T3K": (1, 8),
+}.get(os.environ.get("MESH_DEVICE"), (1, 1))
 _MULTI = _MESH_SHAPE != (1, 1)
 
 # Both single-device and TP traced paths capture a prefill chunk trace AND a paged decode trace,
@@ -335,7 +342,7 @@ def _blocks_for(seqlen, max_generated_tokens, max_seq_len):
     return min(max_seq_len // BLOCK_SIZE, blocks)
 
 
-@run_for_blackhole()
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)

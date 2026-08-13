@@ -82,8 +82,9 @@ class PatchMerger(LightweightModule):
             args.get_state_dict_prefix(self.__class__.__name__) if state_dict_prefix is None else state_dict_prefix
         )
 
-        # Norm: gather fractured input back to replicated hidden_size and run
-        # local LayerNorm. Mirrors the LLM's DistributedNorm just before LMHead.
+        # Norm: gather fractured input back to replicated hidden_size and run local LayerNorm.
+        # Mirrors the LLM's DistributedNorm just before LMHead. With replicated tower activations
+        # there is nothing to gather and this runs as a plain local LayerNorm.
         self.norm = DistributedLayerNorm(
             device=mesh_device,
             dim=self.hidden_size,
@@ -94,6 +95,7 @@ class PatchMerger(LightweightModule):
             weight_dtype=ttnn.bfloat16,
             eps=1e-6,  # Qwen3_VLPatchMerger hard-codes this
             ccl_topology=args.ccl_topology(),
+            replicated_input=getattr(args, "vision_replicated_acts", False),
         )
 
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
