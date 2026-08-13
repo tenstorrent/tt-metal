@@ -1,0 +1,67 @@
+{
+  "devices": 4,
+  "mesh": "1x4",
+  "board": "p300 x2 (ClusterType.P300_X2), Blackhole",
+  "topology": "Ring, 2 ethernet links per hop, FABRIC_1D_RING",
+  "scope": "one decoder layer (layer 0), batch 1",
+  "baseline": "tt/optimized_decoder.py on a 1x1 mesh, same harness, same tree",
+  "sources": {
+    "single_chip_prefill": "perf_baseline_1x1_prefill.csv",
+    "single_chip_decode": "perf_baseline_1x1_decode.csv",
+    "multichip_prefill": "perf_prefill.csv",
+    "multichip_decode": "perf_decode.csv"
+  },
+  "prefill": [
+    {
+      "seq_len": 128,
+      "single_chip_us_per_token": 71.96,
+      "multichip_us_per_token": 24.57,
+      "speedup": 2.929,
+      "efficiency": 0.732
+    },
+    {
+      "seq_len": 512,
+      "single_chip_us_per_token": 68.93,
+      "multichip_us_per_token": 19.51,
+      "speedup": 3.533,
+      "efficiency": 0.883
+    },
+    {
+      "seq_len": 1024,
+      "single_chip_us_per_token": 68.82,
+      "multichip_us_per_token": 18.38,
+      "speedup": 3.744,
+      "efficiency": 0.936
+    },
+    {
+      "seq_len": 2048,
+      "single_chip_us_per_token": 69.34,
+      "multichip_us_per_token": 18.26,
+      "speedup": 3.797,
+      "efficiency": 0.949
+    }
+  ],
+  "decode": [
+    {
+      "context_len": 128,
+      "single_chip_ms": 0.5634,
+      "multichip_ms": 0.4767,
+      "speedup": 1.182,
+      "efficiency": 0.295
+    },
+    {
+      "context_len": 1024,
+      "single_chip_ms": 0.6619,
+      "multichip_ms": 0.5722,
+      "speedup": 1.157,
+      "efficiency": 0.289
+    },
+    {
+      "context_len": 4096,
+      "single_chip_ms": 0.9917,
+      "multichip_ms": 0.9124,
+      "speedup": 1.087,
+      "efficiency": 0.272
+    }
+  ]
+}

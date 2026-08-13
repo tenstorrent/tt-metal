@@ -4,13 +4,15 @@
   "current_supported_context": 262144,
   "capability_reduction": false,
   "limiting_reason": null,
-  "stage": "optimized_decoder",
-  "scope": "single decoder layer (layer 0) on one Blackhole p300c die, batch 1",
+  "stage": "multichip_decoder",
+  "scope": "single decoder layer (layer 0) on the full 4-die P300_X2 mesh (1x4), batch 1; the single-die stage-02 numbers below are retained unchanged",
   "device": {
     "arch": "blackhole",
-    "board": "p300c",
-    "mesh": "1x1",
-    "dram_per_die_gb": 32
+    "board": "p300 x2 (ClusterType.P300_X2), 4 dies",
+    "mesh": "1x4",
+    "dram_per_die_gb": 34.18,
+    "dram_per_die_note": "34.18 GB is what the TTNN allocator reports as total DRAM per die on this host (doc/multichip_decoder/footprint_probe.log, first line). Stages 01 and 02 recorded the nominal board figure of 32 GB; nothing they concluded changes.",
+    "topology": "ring, 2 ethernet links per hop, FABRIC_1D_RING"
   },
   "measured": {
     "decode_context_tokens": 262144,
@@ -47,12 +49,49 @@
   },
   "pcc_validated_context_tokens": 512,
   "pcc_validation_note": "PCC against the HuggingFace reference is verified up to 512 tokens; longer lengths are capacity/liveness probes only, because a full-length torch reference for 262144 tokens does not fit in host RAM. This is a limit of the reference, not of the TTNN decoder.",
-  "forward_looking_note": "Not a current limitation. At full context one layer holds 512 MiB of KV; the full 48-layer model would need ~24 GiB on a 32 GiB die, so the full-model stage (05) will have to weigh KV dtype, paging across dice, or a served-context cap. The functional decoder itself imposes no reduction.",
+  "forward_looking_note": "DISCHARGED by stage 03. The stage-01 note read: 'the full 48-layer model would need ~24 GiB on a 32 GiB die, so the full-model stage will have to weigh KV dtype, paging across dice, or a served-context cap.' None of those trade-offs is needed. TP=4 across the four dies puts the whole 48-layer model plus a full 262144-token paged KV cache in 11.829 GB per die with 22.350 GB free -- measured by allocating it, not by arithmetic. KV dtype is unchanged (bfloat16), paging is unchanged (block_size 32), and the served context is unchanged. The note is kept rather than deleted because it is the question this stage answers.",
   "evidence": [
     "doc/functional_decoder/work_log.md (context probe section)",
-    "scratchpad logs: context_probe.log, prefill_sweep.log"
+    "doc/multichip_decoder/README.md and work_log.md",
+    "doc/multichip_decoder/footprint_probe.log (the allocation this file quotes)",
+    "doc/multichip_decoder/probes/footprint_probe.py",
+    "doc/multichip_decoder/pcc_log.txt"
   ],
   "expert_weight_dtype": "bfloat4_b",
   "optimized_note": "Stage 02 changed expert weight dtype to bfloat4_b, attention projection dtype to bfloat8_b, the expert matmul block widths, expert math fidelity to LoFi, and the decode attention projections to a DRAM-sharded program config. None of these touches the KV cache layout, dtype, or paging, so the measured context limits carry over unchanged. Per-layer weight DRAM: expert weights shrink ~3.6x (bf16 to bfloat4_b, which is 0.5625 B/elem once each 16-element block's exponent byte is counted). Decode additionally needs a second, DRAM-width-sharded copy of wqkv/wo; at bfloat8_b (1.0625 B/elem) each copy is 20.05 MB, so the pair is 40.11 MB against the single bf16 copy stage 01 held at 37.75 MB -- a 2.36 MB increase, not a wash, and an earlier revision of this file called it one by rounding bfloat8_b to 1 B/elem. Against 24 GB of usable DRAM it changes nothing: no capability reduction.",
-  "attention_weight_dtype": "bfloat8_b"
+  "attention_weight_dtype": "bfloat8_b",
+  "parallelism": {
+    "attention": "TP=4 (8 Q heads, 1 K head, 1 V head per die)",
+    "experts": "EP=4 (32 of 128 experts per die)",
+    "router": "replicated",
+    "norms": "replicated",
+    "residual": "replicated [1,1,B,2048]",
+    "collectives_per_layer": "2 all-reduces, each reduce-scatter then all-gather on dim 3",
+    "padding": "none -- 2048/4, 32/4, 4/4, 128/4 and 151936/4 are all exact"
+  },
+  "multichip_measured": {
+    "method": "doc/multichip_decoder/probes/footprint_probe.py -- allocates the real per-die shapes rather than computing their size. Output archived verbatim at doc/multichip_decoder/footprint_probe.log.",
+    "decoder_weights_48_layers_gb_per_die": 4.596,
+    "plus_embed_and_lm_head_gb_per_die": 5.374,
+    "embed_lm_head_note": "embed_tokens replicated (bf16), lm_head column-parallel, per-die N = 37984 = 151936/4.",
+    "kv_bytes_per_token_per_layer_per_die": 512,
+    "kv_formula": "1 local kv head * head_dim(128) * 2 bytes * 2 tensors (K and V); one quarter of the single-die 2048",
+    "total_at_full_context_batch1_gb_per_die": 11.829,
+    "total_note": "MEASURED: 48 layers of sharded weights + embed + lm_head + 48 paged KV caches at 262144 tokens, all allocated simultaneously on the mesh. 22.350 GB/die free afterwards. The arithmetic prediction in mesh_plan.md section 8 was 11.80 GB; the allocator says 11.829.",
+    "headroom_gb_per_die": 22.35,
+    "single_die_equivalent_gb": 45.28,
+    "single_die_note": "One die would need 19.52 GB of weights plus 25.77 GB of KV at the advertised context. That does not fit in 34.18 GB, so the mesh is a capability requirement here and not only a speed one. This is what discharges the stage-01 forward_looking_note.",
+    "single_die_convention": "Recomputed from the probe's own per-die tensor list (footprint_probe.log, GB = 1e9 as the probe reports it). Convention: tensors that are sharded across the mesh are counted 4x -- the two expert tensors, both wqkv copies, both wo copies, and lm_head -- and tensors that are replicated are counted ONCE, since a single die would hold exactly one of each: the router (2048x128 bf16), the two RMSNorm vectors, and embed_tokens. That gives 48 * (4 * 94.962 MB sharded + 0.786 MB replicated) = 18.270 GB of decoder weights, + 0.622 GB embed + 4 * 0.156 GB lm_head = 19.515 GB, i.e. 19.52. Counting the replicated router/norms 4x as well would read 19.63; the difference is 0.11 GB and changes nothing. The 19.50 this field previously carried came from mesh_plan.md section 8, whose per-layer table omits the two tile-padded RMSNorm vectors (0.26 MB/layer, 0.013 GB over 48 layers) and rounds each row; recomputing from the probe's tensor list closes that. KV is 4 kv heads * 128 * 2 B * 2 tensors = 2048 B/token/layer * 48 layers * 262144 tokens = 25.770 GB. Total 45.28 GB against 34.18 GB of DRAM -- the conclusion is unaffected by which convention is used."
+  },
+  "multichip_largest_feasible": {
+    "context_at_batch1": 262144,
+    "context_at_batch1_basis": "the HF-advertised context, allocated and held on the mesh; not a limit reached here",
+    "batch_at_full_context": 4,
+    "batch_at_full_context_basis": "floor((34.18 - 5.374 weights - ~2 GB trace/activation) / 6.442 GB of KV per user) = floor(26.806 / 6.442) = floor(4.16) = 4. KV per user is 48 layers * 512 B/token/layer/die * 262144 tokens = 6.442 GB, from the measured per-die per-token figure above. Arithmetic on the measured per-user KV, not allocated; an earlier revision of this file recorded 3, which its own formula does not give.",
+    "batch_ceiling_from_ops": 32,
+    "batch_ceiling_basis": "nlp_create_qkv_heads_decode_device_operation.cpp:51 asserts num_users <= 32. A TTNN op limit, unchanged by TP, and reached long before DRAM is.",
+    "context_at_batch32": 28788,
+    "context_at_batch32_basis": "~22.6 GB usable / (32 users * 48 layers * 512 B/token); arithmetic"
+  },
+  "multichip_pcc_note": "Multichip PCC is validated against the single-chip TTNN optimized decoder run replicated on the same mesh, 0.99962-0.99997 across prefill S = 32/33/100/128/257/512 and decode in both cache modes, and against HF at 0.9990 (prefill) and 0.9988-0.9993 (decode). See doc/multichip_decoder/pcc_log.txt. The 512-token PCC validation ceiling of the stage-01/02 entry above is unchanged and has the same cause: a full-length torch reference does not fit in host RAM."
 }

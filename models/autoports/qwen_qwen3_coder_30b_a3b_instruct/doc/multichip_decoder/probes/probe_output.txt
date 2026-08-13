@@ -1,0 +1,125 @@
+Raw probe output captured during the stage-03 design phase.
+Host: 2x p300 board (ClusterType.P300_X2), 4 Blackhole dies, branch raahem/qwen3-coder-30b-a3b @ 0ba65b321c1.
+Every line below is verbatim stdout from the script named in its section header.
+
+================================================================================
+mesh / DRAM  (inline probe)
+================================================================================
+NUMDEV 4 4
+SHAPE MeshShape([1, 4])
+ids [3, 2, 1, 0] n 4
+grid 11-10 dram_grid 8-1 arch Arch.BLACKHOLE
+core_grid ttnn.CoreGrid(x=11, y=10)
+cluster type ClusterType.P300_X2
+alloc ok 8
+alloc ok 16
+alloc ok 20
+alloc ok 22
+alloc ok 24
+alloc ok 26
+alloc ok 28
+alloc ok 30      <- single interleaved DRAM tensor, per device, on the 1x4 mesh
+
+================================================================================
+ccl_probe2.py linear      (trace-slope, us per op)
+================================================================================
+P|topology linear
+P|AG b32_h2048   links=1 per_dev_in=32768B    per_op=16.65us  r1=57.4  r17=323.8
+P|RS b32_h2048   links=1 per_dev_in=131072B   per_op=16.62us  r1=57.5  r17=323.5
+P|AG b32_h2048   links=2 per_dev_in=32768B    per_op=14.29us  r1=57.8  r17=286.4
+P|RS b32_h2048   links=2 per_dev_in=131072B   per_op=14.19us  r1=57.5  r17=284.5
+P|AG s128_h2048  links=1 per_dev_in=131072B   per_op=33.71us  r1=58.1  r17=597.5
+P|RS s128_h2048  links=1 per_dev_in=524288B   per_op=31.43us  r1=57.8  r17=560.7
+P|AG s128_h2048  links=2 per_dev_in=131072B   per_op=24.05us  r1=58.5  r17=443.3
+P|RS s128_h2048  links=2 per_dev_in=524288B   per_op=22.20us  r1=58.6  r17=413.8
+P|AG s512_h2048  links=1 per_dev_in=524288B   per_op=90.51us  r1=111.4 r17=1559.6
+P|RS s512_h2048  links=1 per_dev_in=2097152B  per_op=90.20us  r1=108.8 r17=1552.1
+P|AG s512_h2048  links=2 per_dev_in=524288B   per_op=53.08us  r1=78.3  r17=927.6
+P|RS s512_h2048  links=2 per_dev_in=2097152B  per_op=53.99us  r1=79.0  r17=942.9
+P|AG s2048_h2048 links=1 per_dev_in=2097152B  per_op=323.86us r1=343.1 r17=5525.0
+P|RS s2048_h2048 links=1 per_dev_in=8388608B  per_op=313.62us r1=337.2 r17=5355.0
+P|AG s2048_h2048 links=2 per_dev_in=2097152B  per_op=168.73us r1=193.1 r17=2892.8
+P|RS s2048_h2048 links=2 per_dev_in=8388608B  per_op=170.81us r1=197.6 r17=2930.5
+
+================================================================================
+ccl_probe2.py ring        (trace-slope, us per op)
+================================================================================
+P|topology ring
+P|AG b32_h2048   links=1 per_dev_in=32768B    per_op=12.20us  r1=57.5  r17=252.7
+P|RS b32_h2048   links=1 per_dev_in=131072B   per_op=11.98us  r1=57.7  r17=249.4
+P|AG b32_h2048   links=2 per_dev_in=32768B    per_op=11.76us  r1=57.4  r17=245.6
+P|RS b32_h2048   links=2 per_dev_in=131072B   per_op=10.83us  r1=57.4  r17=230.7
+P|AG s128_h2048  links=1 per_dev_in=131072B   per_op=22.55us  r1=57.6  r17=418.5
+P|RS s128_h2048  links=1 per_dev_in=524288B   per_op=22.01us  r1=57.7  r17=409.8
+P|AG s128_h2048  links=2 per_dev_in=131072B   per_op=16.84us  r1=58.4  r17=327.9
+P|RS s128_h2048  links=2 per_dev_in=524288B   per_op=15.46us  r1=58.3  r17=305.7
+P|AG s512_h2048  links=1 per_dev_in=524288B   per_op=53.70us  r1=73.4  r17=932.6
+P|RS s512_h2048  links=1 per_dev_in=2097152B  per_op=66.56us  r1=83.3  r17=1148.3
+P|AG s512_h2048  links=2 per_dev_in=524288B   per_op=34.63us  r1=60.0  r17=614.1
+P|RS s512_h2048  links=2 per_dev_in=2097152B  per_op=42.68us  r1=68.0  r17=750.9
+P|AG s2048_h2048 links=1 per_dev_in=2097152B  per_op=173.54us r1=193.9 r17=2970.6
+P|RS s2048_h2048 links=1 per_dev_in=8388608B  per_op=154.16us r1=174.0 r17=2640.5
+P|AG s2048_h2048 links=2 per_dev_in=2097152B  per_op=94.42us  r1=120.1 r17=1630.8
+P|RS s2048_h2048 links=2 per_dev_in=8388608B  per_op=104.90us r1=131.4 r17=1809.9
+
+================================================================================
+ar_probe.py               (Ring, num_links=2, trace-slope, us per op)
+================================================================================
+P|decode b<=32  RS+AG (composed all-reduce) = 23.69us
+P|decode b<=32  AG(dim0)+local sum          = 19.96us
+P|decode b<=32  all_reduce_async ERR        (raised on every argument spelling tried; NOT measured)
+P|prefill s512  RS+AG (composed all-reduce) = 76.85us
+P|prefill s512  AG(dim0)+local sum          = 121.72us
+P|prefill s512  all_reduce_async ERR
+
+================================================================================
+shape_probe.py            (single die, trace-slope, us per op, random weights)
+================================================================================
+P|=== expert sparse_matmul scaling (batch=1, M=1, bfloat4_b, LoFi, DRAM outputs) ===
+P|baseline single-die E=128 nnz=8            gate_up=139.45us down=125.20us
+P|EP4 E=32 nnz=2 (mean load)                 gate_up=35.39us  down=32.83us
+P|EP4 E=32 nnz=4 (tail load)                 gate_up=51.26us  down=40.99us
+P|EP4 E=32 nnz=8 (worst case)                gate_up=82.72us  down=58.21us
+P|EP4 E=32 nnz=None (dynamic)                gate_up=60.67us  down=63.29us
+P|E=128 nnz=None (dynamic)                   gate_up=243.08us down=249.03us
+P|TP4 expert-intermediate E=128 I=192        gate_up=72.21us  down=102.74us
+P|=== TP=4 attention shape legality ===
+P|single-die qkv K=2048 N=5120 DRAM-sharded OK t=27.24us
+P|single-die nlp_create_qkv_heads_decode nh=32 nkv=4 -> q[1, 32, 32, 128] k[1, 32, 4, 128] v[1, 32, 4, 128]
+P|single-die wo K=4096 N=2048 DRAM-sharded OK t=21.55us
+P|TP4 per-die qkv K=2048 N=1280 DRAM-sharded OK t=9.48us
+P|TP4 per-die nlp_create_qkv_heads_decode nh=8 nkv=1 -> q[1, 32, 8, 128] k[1, 32, 1, 128] v[1, 32, 1, 128]
+P|TP4 per-die wo K=1024 N=2048 DRAM-sharded OK t=8.79us
+
+Note: the probe's E=128 baseline (264.65us for the pair) is much larger than the
+92.07us the same two ops take in ops_perf_optimized_decode.csv, because the probe
+writes DRAM outputs with random weights while the shipped batch-1 decode path
+keeps the intermediates in L1. Only the RATIOS between rows of that table are
+used in mesh_plan.md.
+
+================================================================================
+probe3a.py                (1-KV-head legality, single die)
+================================================================================
+P|single-die 32Q/4KV paged SDPA decode OK out=[1, 1, 32, 128]
+P|single-die 32Q/4KV ERR TT_FATAL @ .../paged_update_cache_device_operation.cpp:255: input_tensor.is_sharded()
+P|TP4 8Q/1KV paged SDPA decode OK out=[1, 1, 8, 128]
+P|TP4 8Q/1KV ERR TT_FATAL @ .../paged_update_cache_device_operation.cpp:255: input_tensor.is_sharded()
+P|single-die prefill nlp_create_qkv_heads OK q[1, 32, 512, 128] k[1, 4, 512, 128]
+P|single-die prefill SDPA OK out=[1, 32, 512, 128]
+P|TP4 prefill nlp_create_qkv_heads OK q[1, 8, 512, 128] k[1, 1, 512, 128]
+P|TP4 prefill SDPA OK out=[1, 8, 512, 128]
+
+The paged_update_cache line fails IDENTICALLY in both legs: the probe hands the
+op an interleaved update tensor and the op requires a sharded one. It is a probe
+artifact, not a TP=4 finding -- attention_decode_optimized already restores
+kv_sharded_mem before that call.
+
+================================================================================
+probe3.py                 (as above PLUS a 1x2 submesh collective)
+================================================================================
+DID NOT COMPLETE. Killed by `timeout 1200` (exit 143) with no output flushed.
+The hang is in part 2: mesh.create_submesh(MeshShape(1,2)) on a FABRIC_1D_RING
+1x4 mesh followed by all_gather_async on the submesh. Boards required `tt-smi -r`
+afterwards. probe3a.py is part 1 alone and completes in ~1 minute.
+mesh_plan.md section 9 records the 2-device collective cost as inferred, not
+measured, and section 6 row 4 (the 2x2 rejection) notes this.

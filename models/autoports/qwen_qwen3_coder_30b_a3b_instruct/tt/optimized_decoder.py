@@ -560,8 +560,17 @@ def attention_decode_optimized(
     kv_cache: KVCache,
     current_pos: ttnn.Tensor,
     token_index: int,
+    sdpa_program_config=None,
 ) -> ttnn.Tensor:
     """``attention_decode`` with the two projections run DRAM-sharded.
+
+    ``sdpa_program_config`` is passed straight through to the SDPA-decode op and
+    defaults to ``None``, which is what every single-chip caller uses and what
+    every number in this file was measured at. It exists for the multichip path:
+    at one KV head the op's default core assignment tries to put all 110 worker
+    cores on the single head and its tree reduction refuses past 64
+    (``sdpa_decode_program_factory.cpp:245``). See
+    ``multichip_decoder._sdpa_program_config``.
 
     At decode M=1 both projections are pure weight reads, so what limits them is
     how well the read spreads over the DRAM banks. The interleaved layout gave
@@ -646,6 +655,7 @@ def attention_decode_optimized(
             cur_pos_tensor=current_pos,
             scale=config.head_dim**-0.5,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=sdpa_program_config,
         )
     else:
         attn = ttnn.transformer.scaled_dot_product_attention_decode(
@@ -655,6 +665,7 @@ def attention_decode_optimized(
             cur_pos_tensor=current_pos,
             scale=config.head_dim**-0.5,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            program_config=sdpa_program_config,
         )
     ttnn.deallocate(q)
 
