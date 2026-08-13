@@ -854,6 +854,37 @@ if _flag:
         )
 
 # --------------------------------------------------------------------------------------------
+# The agent job runs in-cluster now, and CIv2 sends loopback through the restricted proxy. gh-aw polls
+# its own mcp-scripts server over `localhost:3000` to decide it is ready, so without the exemption the
+# job dies before the agent exists -- and the error it dies with blames the server, which was fine.
+
+if not str(_frontmatter["runs-on"]).startswith("ubuntu-latest"):
+    _exempt = next(
+        (s for s in _frontmatter["pre-steps"] if "no_proxy" in str(s.get("run", ""))),
+        None,
+    )
+    check(
+        "an in-cluster agent job exempts loopback from the cluster proxy",
+        _exempt is not None,
+        f"runs-on is {_frontmatter['runs-on']!r} and nothing sets no_proxy",
+    )
+    if _exempt:
+        check(
+            "and sets both spellings, because curl and node read different ones",
+            "no_proxy=" in _exempt["run"] and "NO_PROXY=" in _exempt["run"],
+        )
+        check(
+            "and appends rather than replacing the cluster services already there",
+            "$no_proxy" in _exempt["run"],
+            "dropping them breaks the image cache",
+        )
+        check(
+            "and runs before gh-aw starts its own servers",
+            _frontmatter["pre-steps"].index(_exempt) == 0,
+            "a later step is too late for anything before it",
+        )
+
+# --------------------------------------------------------------------------------------------
 # Bounded chaining. Run 3 spent eleven verifies and a whole job ceiling re-running a tree that could
 # not improve, so every one of these is a loop that actually happened or one line away from it.
 

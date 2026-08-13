@@ -7,9 +7,10 @@ description: |
   clock. Porting it means transliterating the generator's builder into a cached DeviceOperation and
   wiring the native/codegen routing, then proving on silicon that the win survives.
 
-  Two runners, because no single one can do both halves. This job holds the agent and runs on a
-  GitHub-hosted runner, the only place `api.githubcopilot.com` is reachable. It has no compiler
-  worth using and no card, so every build and every measurement is dispatched into CIv2 as a
+  Two runners, still, though no longer because one of them cannot reach the model API -- the
+  restricted proxy's allowlist gained `.githubcopilot.com` and this job now runs in-cluster on the
+  N150 pool. What keeps the split is the build: `build-artifact.yaml` is a reusable workflow, which
+  a step cannot call, so every build and every measurement is dispatched into CIv2 as a
   `port-measure.yaml` run and waited on. The agent writes C++ and calls two tools -- `build` and
   `verify` -- which are launchers over that dispatch, then opens a draft PR carrying the verdict it
   reached. It never picks the cases, the thresholds, or the measurement method, and `verify`
@@ -132,16 +133,45 @@ concurrency:
 # batching instruction in the prompt is defending.
 timeout-minutes: 350
 
-# Not CIv2, though every build and measurement lands there. CIv2 has no direct egress; it leaves
-# through `proxy.restricted-proxy.svc.cluster.local`, whose allowlist does not carry
-# `api.githubcopilot.com`, so the agent process starts in-cluster and then fails every model request
-# with a 403 from squid. A hosted runner is outside the cluster and reaches the API natively. It
-# cannot build tt-metal -- 4 cores, and a probe watched the rate collapse from 145 targets a minute
-# to 10-15 as it crossed into the ttnn unity builds, which is exactly the part an edit to an op
-# touches -- so it builds nothing at all. See `port-measure.yaml`, which does.
-runs-on: ubuntu-latest
+# In-cluster, which stopped being impossible on 2026-08-13. CIv2 has no direct egress and leaves
+# through `proxy.restricted-proxy.svc.cluster.local`, whose allowlist did not carry
+# `api.githubcopilot.com`: the agent process started here and then failed every model request with a
+# 403 from squid, which is why this ran on a hosted runner for weeks. tt-flux#748 added the domain, and
+# run 31737747751 put a whole agent on this pool and watched it reach the API and reason.
+#
+# Be clear about what this does and does not buy, because right now it is the smaller half. Build and
+# measurement are still dispatched into `port-measure.yaml` and waited on, so this job spends most of
+# its life holding a card-bearing runner while doing no card work. That cost is deliberate and
+# temporary: it is what makes the agent local to the hardware, which is the precondition for replacing
+# the dispatch round trip with a local incremental build. Until that lands, the honest accounting is
+# that this occupies an N150 to save nothing.
+runs-on: tt-ubuntu-2204-N150-viommu-stable
 
 pre-steps:
+  # Without this the job dies before the agent exists, and the error names the wrong thing. gh-aw
+  # starts its mcp-scripts handler server on `localhost:3000` and then polls it over HTTP to decide it
+  # is ready. CIv2 exports `http_proxy`/`https_proxy` to every step and its `no_proxy` names three
+  # cluster services and not `localhost`, so that poll is offered to the restricted proxy, which will
+  # not tunnel to loopback. The first in-cluster attempt failed ten readiness checks in a row while the
+  # server's own log read `Server is ready to accept requests`.
+  #
+  # A pre-step rather than a workflow-level `env:` block, which cannot express it: Actions treats env
+  # keys case-insensitively, so declaring both spellings is a duplicate-key parse error, and declaring
+  # one leaves the runner's own value for the other in place. Both are needed -- curl reads the
+  # lowercase one, node's proxy agents read the uppercase one, and this is curl talking to node.
+  #
+  # First, because everything after it either talks to the proxy or talks to itself.
+  - name: Exempt loopback from the cluster proxy
+    run: |
+      # Appended, not replaced: the three cluster services already listed are how this runner reaches
+      # its image cache and its artifact store.
+      loopback="localhost,127.0.0.1,::1"
+      {
+        echo "no_proxy=${loopback}${no_proxy:+,$no_proxy}"
+        echo "NO_PROXY=${loopback}${NO_PROXY:+,$NO_PROXY}"
+      } >> "$GITHUB_ENV"
+      echo "no_proxy will be ${loopback}${no_proxy:+,$no_proxy}"
+
   # The credential the launcher pushes and dispatches with, placed where the agent cannot read it.
   #
   # The obvious way to do this is wrong, and nothing warns you at runtime. A `${{ secrets.X }}`
@@ -308,7 +338,13 @@ steps:
   # no container, no build, no card. Only `--emit-test-only` needs a real ttnn, and that is why it
   # moved to the baseline dispatch.
   - name: Install what the scaffold pass needs
-    run: python3 -m pip install --quiet pyyaml
+    run: |
+      # Tolerant of a failing pip, intolerant of a missing import. This ran on a hosted image for
+      # weeks, where pip is always present and PyYAML never is; the CIv2 host is the other way round
+      # often enough that failing on the install rather than on the import would be failing on the
+      # wrong thing. The check afterwards is what actually matters.
+      python3 -m pip install --quiet pyyaml || echo "pip could not install pyyaml; checking for it anyway"
+      python3 -c "import yaml; print('pyyaml', yaml.__version__)"
 
   # Scaffolding before the first build is what makes every later build incremental: the codegen
   # sources are registered in CMake once, here, so a rebuild is a compile rather than a reconfigure.
