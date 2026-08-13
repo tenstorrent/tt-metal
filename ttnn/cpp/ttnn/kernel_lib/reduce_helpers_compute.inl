@@ -199,12 +199,7 @@ ALWI constexpr uint32_t get_dst_index(const AccumulateT& accumulate) {
     }
 }
 
-template <
-    PoolType reduce_type,
-    ReduceDim reduce_dim,
-    DataFormat reduce_format,
-    typename AccumulateT,
-    bool is_sfpu = false>
+template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool is_sfpu = false>
 ALWI void reload_accumulator_if_needed(
     DataflowBuffer& accum_dfb, uint32_t input_dfb_id, uint32_t scaler_dfb_id, const AccumulateT& accumulate) {
     if constexpr (is_accumulate_v<AccumulateT>) {
@@ -237,7 +232,9 @@ ALWI void reload_accumulator_if_needed(
             // Use short version since packer config is still valid from initial init
             // Pass accumulator DFB as old_dfb_id to reconfigure data format from accumulator to input DFB
             if constexpr (is_sfpu) {
-                detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
+                // Point SrcA back at the input for the next fold; the caller does the fold init.
+                reconfig_data_format_srca(accumulate.config.cb_accumulator, input_dfb_id);
+                copy_tile_to_dst_init_short(input_dfb_id);
             } else {
                 reduce_init_short_with_dt<reduce_type, reduce_dim>(
                     accumulate.config.cb_accumulator, input_dfb_id, scaler_dfb_id);
@@ -423,7 +420,7 @@ ALWI void reduce(
             tile_regs_acquire();
 
             // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-            reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
+            reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
                 accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
 
             const uint32_t dst_idx = get_dst_index(accumulate);
@@ -509,10 +506,11 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
-                    if (Wt > 1) {
+                    // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
+                    if (Wt > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
                         detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
                     }
                 }
@@ -639,10 +637,11 @@ ALWI void reduce(
                 tile_regs_acquire();
 
                 // Reload accumulator if needed (zero overhead when AccumulateT is NoAccumulation)
-                reload_accumulator_if_needed<reduce_type, reduce_dim, reduce_format, AccumulateT, is_sfpu>(
+                reload_accumulator_if_needed<reduce_type, reduce_dim, AccumulateT, is_sfpu>(
                     accum_dfb, input_dfb_id, scaler_dfb_id, accumulate);
                 if constexpr (is_sfpu) {
-                    if (Ht > 1) {
+                    // Fold needed if the axis has >1 tile, or Accumulate reloaded a result into DST.
+                    if (Ht > 1 || !detail::sfpu_is_first_tile(0, accumulate)) {
                         detail::sfpu_reduce_fold_init<reduce_type, reduce_format>();
                     }
                 }
