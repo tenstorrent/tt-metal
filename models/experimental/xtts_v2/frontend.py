@@ -4,11 +4,11 @@
 
 """Coqui-free CPU front-end for XTTS-v2: tokenizer, mel/STFT front-ends, prompt assembly.
 
-Replaces phase A (`pipeline/phase_coqui_pre.py`, which needs the coqui `TTS` package in a
-separate venv) with an in-process implementation that runs in tt-metal's python_env. Everything
-here is a *transcription* of coqui-tts 0.27.5 behavior with parameters pinned from source —
-not a redesign. Coqui source references are given per function; validate any change against
-captured phase-A tensors (see `pipeline/validate_frontend.py`).
+Runs in tt-metal's python_env with no dependency on the coqui `TTS` package (whose
+dependencies cannot coexist with tt-metal's environment). Everything here is a
+*transcription* of coqui-tts 0.27.5 behavior with parameters pinned from source — not a
+redesign. Coqui source references are given per function; validate any change against
+tensors captured from a real coqui run.
 
 The front-end jobs, and what consumes them:
 
@@ -118,7 +118,7 @@ def mel_spectrogram(wav, n_fft, hop_length, win_length, window, fb):
 
 
 # ---------------------------------------------------------------------------------------
-# Reference-clip loading (shared by demo.py / demo_server.py / pipeline/validate_frontend.py)
+# Reference-clip loading (shared by demo.py / demo_server.py)
 # ---------------------------------------------------------------------------------------
 
 
@@ -405,7 +405,7 @@ def assemble_prompt(token_ids, cond_latents, tables: PromptTables):
     Transcribes GPT.compute_embeddings: pad text with start/stop tokens, embed, add learned
     positions (row i of the pos table for sequence position i), prepend the conditioning
     latents. The START_AUDIO embedding is NOT part of the prefix — the decode driver feeds it
-    as the first step (see phase_tt.py / TTNNGPTTracedDecoder)."""
+    as the first step (see TTNNGPTTracedDecoder)."""
     ids = torch.as_tensor(token_ids, dtype=torch.long).reshape(1, -1)
     assert ids.shape[1] < MAX_TEXT_TOKENS, f"text too long: {ids.shape[1]} tokens (max {MAX_TEXT_TOKENS})"
     ids = F.pad(ids, (0, 1), value=STOP_TEXT_TOKEN)

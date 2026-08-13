@@ -16,10 +16,9 @@ never-committed) golden/**/*.pt fixtures, computed in-process from the checkpoin
 The results are lru_cached so a pytest session builds each reference once (the checkpoint
 state dict itself is cached inside reference.xtts_gpt_ref.load_full_state).
 
-Cross-check mode: set XTTS_GOLDEN_DIR to a golden/ root captured from a real coqui run
-(pipeline/capture_goldens.py + reference/xtts_gpt_ref.py --ckpt ...) and every helper
-returns those coqui-validated fixtures instead, with identical keys/shapes. The default
-path never touches golden files.
+Cross-check mode: set XTTS_GOLDEN_DIR to a golden/ root holding fixtures captured from a
+real coqui run, and every helper returns those coqui-validated fixtures instead, with
+identical keys/shapes. The default path never touches golden files.
 """
 
 import functools
