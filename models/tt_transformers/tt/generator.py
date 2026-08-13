@@ -429,6 +429,11 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
 
         The model has to be in decode mode for the compile pass to pick the right configs.
         """
+        # Gate lives here rather than only in _prepare_decode_trace_once because this function has a
+        # second caller that bypasses that wrapper. Returning None leaves _pending_decode_trace unset,
+        # which is exactly the "nothing hoisted" state the original path expects.
+        if self._uses_prefetcher():
+            return None
         if page_table is None:
             # Nothing here pins down the decode batch size, and guessing wrong would leave the trace inputs
             # the wrong shape for the first decode step. Fall back to setting it up lazily, as before.
