@@ -35,7 +35,14 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import EPS, attn_res, attn_res_stack
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
-from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import BLOCK_SIZE, attn_res_stack_split
+from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import (
+    BLOCK_SIZE,
+    TtAttnResState,
+    attn_res_segment,
+    attn_res_stack_split,
+    finalize_attn_res,
+)
+from models.demos.deepseek_v3_d_p.tt.attn_res.weights import KimiK3AttnResHostQueries, KimiK3AttnResQueryCache
 
 PCC_GATE = 0.9999
 REL_ERR_GATE = 2e-2
@@ -224,13 +231,14 @@ def _make_stack(op, seed=0):
 
 
 @on_placements
-def test_walk_matches_reference(mesh_device, device_params):
-    """All 93 layers driven by `attn_res_stack_split`, against the reference walk.
+def test_walk_matches_reference(mesh_device, device_params, tmp_path):
+    """Full-stack and segmented 93-layer walks against the reference.
 
     A driver that batches the wrong sites, or seals on the wrong layer, is wrong in a way
     the reads above cannot see: they issue one `inter_block` and index its sites by hand,
-    so they never exercise the seal cadence or the site bookkeeping across a stack. This
-    is the only thing in the repo that does.
+    so they never exercise the seal cadence or site bookkeeping across a stack. This row
+    gates both the original full-stack driver and K3's natural 31/31/31 handoff, including
+    cache-only query placement, transferred state, and the final output read.
 
     It clears the same PCC gate one read does. 186 rounds of bf16 accumulation cost about
     as much accuracy as a single read, because every read renormalizes the stream against
@@ -249,6 +257,28 @@ def test_walk_matches_reference(mesh_device, device_params):
     tt_pre, tt_post = [op.to_query(q) for q in q_pre], [op.to_query(q) for q in q_post]
     tt_out = op.to_query(q_out)
 
+    # Cache the exact same folded queries and reload them for the segmented path.
+    # This is production's weight-only path: a serving rank must not retain the
+    # full checkpoint merely to place its static AttnRes queries.
+    host_queries = KimiK3AttnResHostQueries(tuple(range(LAYERS)), tuple(q_pre), tuple(q_post), q_out)
+    cache_id = "synthetic-attn-res-seed-0"
+    KimiK3AttnResQueryCache.build(op, tmp_path, host_queries, cache_id=cache_id)
+    assert KimiK3AttnResQueryCache.check_cache_complete(
+        op,
+        tmp_path,
+        range(LAYERS),
+        cache_id=cache_id,
+        include_output=True,
+    )
+    cached_queries = KimiK3AttnResQueryCache.load(
+        op,
+        tmp_path,
+        range(LAYERS),
+        cache_id=cache_id,
+        include_output=True,
+    )
+    assert cached_queries.output is not None
+
     # The walk takes ownership of the stream it is handed and frees it, so the embeddings
     # go in as a clone and stay available for the deallocation sweep below.
     device_walk = attn_res_stack_split(
@@ -263,6 +293,34 @@ def test_walk_matches_reference(mesh_device, device_params):
     )
     got = ttnn.to_torch(device_walk, mesh_composer=op.stream_composer).reshape(-1, HIDDEN_SIZE)
     ttnn.deallocate(device_walk)
+
+    # The production runner cannot keep all 93 K3 MoE layers resident on one rank.
+    # Re-run the same unchanged row through three contiguous pipeline segments and
+    # transfer both the live stream and sealed snapshots between them. This promotes
+    # the prior stack-only check to cover the production handoff without adding a
+    # test/configuration or weakening the direct full-stack comparison above.
+    state = TtAttnResState(prefix_sum=ttnn.clone(embeddings), block_residual=None)
+    # Three ranks get the runner's default even split for 93 layers. The starts
+    # at 31 and 62 deliberately fall inside AttnRes blocks, exercising the short
+    # leading/trailing batches around a pipeline handoff.
+    for start, stop in ((0, 31), (31, 62), (62, LAYERS)):
+        state = attn_res_segment(
+            op,
+            state,
+            range(start, stop),
+            cached_queries.pre[start:stop],
+            cached_queries.post[start:stop],
+            [_module_stub] * (stop - start),
+            [_module_stub] * (stop - start),
+            block_size=BLOCK_SIZE,
+        )
+    segmented_walk = finalize_attn_res(
+        op,
+        state,
+        cached_queries.output,
+    )
+    segmented = ttnn.to_torch(segmented_walk, mesh_composer=op.stream_composer).reshape(-1, HIDDEN_SIZE)
+    ttnn.deallocate(segmented_walk)
 
     torch_stub = lambda h: h * MODULE_SCALE
     want = attn_res_stack(
@@ -279,6 +337,27 @@ def test_walk_matches_reference(mesh_device, device_params):
     pcc = _pcc(got, want)
     logger.info(f"device vs reference over {LAYERS} layers, {READS} reads: PCC {pcc:.7f}")
     assert pcc >= PCC_GATE, f"device walk disagrees with the reference: PCC {pcc:.7f} < {PCC_GATE}"
+    segmented_pcc = _pcc(segmented, want)
+    full_vs_segmented = _pcc(segmented, got)
+    logger.info(
+        f"three transferred segments vs reference: PCC {segmented_pcc:.7f}; "
+        f"segmented vs full-stack: PCC {full_vs_segmented:.7f}"
+    )
+    assert (
+        segmented_pcc >= PCC_GATE
+    ), f"segmented device walk disagrees with the reference: PCC {segmented_pcc:.7f} < {PCC_GATE}"
+    assert (
+        full_vs_segmented >= PCC_GATE
+    ), f"segmented device walk disagrees with the full-stack path: PCC {full_vs_segmented:.7f} < {PCC_GATE}"
 
-    for tensor in (embeddings, tt_out, *tt_pre, *tt_post):
-        ttnn.deallocate(tensor)
+    ttnn.deallocate(embeddings)
+    for query in (
+        tt_out,
+        *tt_pre,
+        *tt_post,
+        cached_queries.output,
+        *cached_queries.pre,
+        *cached_queries.post,
+    ):
+        op.release_query(query)
+    assert not op._column_by_query_id and not op._stack_by_query_ids, "query teardown left prepared operands alive"

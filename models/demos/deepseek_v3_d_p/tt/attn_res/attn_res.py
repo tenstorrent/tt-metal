@@ -29,6 +29,8 @@ leaves it, the sequence axis communicates nothing, and each read all-reduces
 a rank boundary.
 """
 
+from pathlib import Path
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.common.prefill.topology import per_axis_topology
@@ -225,8 +227,59 @@ class TtAttnRes(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             mesh_mapper=self.vector_mapper,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        return self.prepare_query(row)
+
+    def prepare_query(self, row):
+        """Materialize the transposed operand held for a placed query."""
         self._query_column(row)
+        return row
+
+    def release_query(self, row):
+        """Release a placed query and any prepared operands that retain it."""
+        query_id = id(row)
+        for key in [key for key in self._stack_by_query_ids if query_id in key]:
+            _, stack = self._stack_by_query_ids.pop(key)
+            column_entry = self._column_by_query_id.get(query_id)
+            if column_entry is None or stack is not column_entry[1]:
+                ttnn.deallocate(stack)
+        entry = self._column_by_query_id.pop(query_id, None)
+        if entry is not None:
+            ttnn.deallocate(entry[1])
+        ttnn.deallocate(row)
+
+    def cache_query(self, torch_query, cache_file_name):
+        """Serialize one folded query without placing it on a device.
+
+        ``DumpTensorMode.LOCAL`` preserves this host's mesh shards. In a
+        multi-host run, every process must therefore pass a path in its own
+        host-local cache directory.
+        """
+        assert (
+            torch_query.numel() == self.hidden_size
+        ), f"query has {torch_query.numel()} elements, expected {self.hidden_size}"
+        row = ttnn.from_torch(
+            torch_query.reshape(1, 1, 1, self.hidden_size),
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=self.vector_mapper,
+        )
+        ttnn.dump_tensor(cache_file_name, row, mode=ttnn.DumpTensorMode.LOCAL)
+
+    def load_query(self, cache_file_name):
+        """Load one host-local serialized query and validate its rank-local shard width."""
+        serialized = Path(cache_file_name)
+        if not serialized.is_file():
+            raise FileNotFoundError(f"AttnRes query cache does not exist: {serialized}")
+        row = ttnn.load_tensor(serialized, device=self.mesh_device)
+        if row.shape[-1] != self.shard_width:
+            actual_width = row.shape[-1]
+            ttnn.deallocate(row)
+            raise ValueError(
+                f"cached AttnRes query shard width is {actual_width}, expected {self.shard_width} "
+                f"for hidden_size {self.hidden_size} over TP factor {self.tp_factor}: {serialized}"
+            )
         return row
 
     def _assert_shard_width(self, stream):

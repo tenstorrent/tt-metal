@@ -20,6 +20,9 @@ form is retained permanently as the only independent check on that split's
 online-softmax algebra.
 """
 
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+
 import torch
 
 HIDDEN_SIZE = 7168
@@ -42,6 +45,66 @@ def _at_least_fp32(t):
 def fold_query(norm_weight, proj_weight):
     """Collapse `res_norm.weight` and `res_proj.weight` into one `[d]` query."""
     return _at_least_fp32(norm_weight.reshape(-1)) * _at_least_fp32(proj_weight.reshape(-1))
+
+
+@dataclass(frozen=True)
+class KimiK3AttnResHostQueries:
+    """Folded host queries in model-layer order."""
+
+    layer_indices: tuple[int, ...]
+    pre: tuple[torch.Tensor, ...]
+    post: tuple[torch.Tensor, ...]
+    output: torch.Tensor | None = None
+
+
+def extract_kimi_k3_attn_res_queries(
+    state_dict: Mapping[str, torch.Tensor],
+    layer_indices: Sequence[int],
+    *,
+    model_prefix: str = "model",
+    include_output: bool = False,
+) -> KimiK3AttnResHostQueries:
+    """Extract and fold AttnRes weights from Moonshot's K3 state-dict layout.
+
+    The names are anchored to ``modeling_kimi_linear.py`` at sha256
+    ``9e3564c70ac21854ce5a090cc946c5dc76b70d1050ef50840449181a20fff44a``:
+    layer attributes are constructed at lines 909-917 and output attributes at
+    lines 1103-1108. PyTorch appends ``.weight`` to those module attributes.
+    ``model_prefix`` is explicit so a multimodal wrapper cannot be selected by
+    an ambiguous suffix match.
+    """
+    layer_indices = tuple(layer_indices)
+
+    def required(key: str) -> torch.Tensor:
+        try:
+            return state_dict[key]
+        except KeyError as error:
+            raise ValueError(f"missing Kimi K3 AttnRes weight {key!r}") from error
+
+    pre = []
+    post = []
+    for layer_idx in layer_indices:
+        prefix = f"{model_prefix}.layers.{layer_idx}."
+        pre.append(
+            fold_query(
+                required(prefix + "self_attention_res_norm.weight"),
+                required(prefix + "self_attention_res_proj.weight"),
+            )
+        )
+        post.append(
+            fold_query(
+                required(prefix + "mlp_res_norm.weight"),
+                required(prefix + "mlp_res_proj.weight"),
+            )
+        )
+
+    output = None
+    if include_output:
+        output = fold_query(
+            required(f"{model_prefix}.output_attn_res_norm.weight"),
+            required(f"{model_prefix}.output_attn_res_proj.weight"),
+        )
+    return KimiK3AttnResHostQueries(layer_indices, tuple(pre), tuple(post), output)
 
 
 def attn_res_scores(v, q, eps=EPS):

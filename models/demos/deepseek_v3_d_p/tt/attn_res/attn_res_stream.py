@@ -12,9 +12,24 @@ is per-backend, because only this one owns tensors; the harness's per-layer PCC
 curve is what gates that half.
 """
 
+from dataclasses import dataclass
+
 import ttnn
 
 BLOCK_SIZE = 12
+
+
+@dataclass(frozen=True)
+class TtAttnResState:
+    """Owned live and sealed tensors transferred between pipeline segments."""
+
+    prefix_sum: ttnn.Tensor
+    block_residual: ttnn.Tensor | None
+
+    def deallocate(self):
+        ttnn.deallocate(self.prefix_sum)
+        if self.block_residual is not None:
+            ttnn.deallocate(self.block_residual)
 
 
 class TtAttnResStream(object):
@@ -34,13 +49,14 @@ class TtAttnResStream(object):
         op: a `TtAttnRes`.
         hidden_states: `[1, 1, N, d]` token embeddings, the first live stream.
         block_size: layers per block; seals fire at `layer_idx % block_size == 0`.
+        block_residual: optional sealed snapshots transferred from the preceding segment.
     """
 
-    def __init__(self, op, hidden_states, block_size=BLOCK_SIZE):
+    def __init__(self, op, hidden_states, block_size=BLOCK_SIZE, block_residual=None):
         self.op = op
         self._prefix_sum = hidden_states
         self._pending = None
-        self.block_residual = None
+        self.block_residual = block_residual
         self.block_size = block_size
 
     @property
@@ -114,6 +130,201 @@ class TtAttnResStream(object):
                 ttnn.deallocate(tensor)
         self._prefix_sum, self._pending = None, None
         self.block_residual = None
+
+    def take_state(self):
+        """Settle deferred accumulation and transfer the stream tensors to the caller."""
+        self._flush()
+        assert self._prefix_sum is not None, "cannot hand off a stream between seal and accumulate"
+        state = TtAttnResState(prefix_sum=self._prefix_sum, block_residual=self.block_residual)
+        self._prefix_sum = None
+        self.block_residual = None
+        return state
+
+
+def attn_res_segment(
+    op,
+    state,
+    layer_indices,
+    q_pre,
+    q_post,
+    attn_fns,
+    mlp_fns,
+    block_size=BLOCK_SIZE,
+):
+    """Walk a contiguous model-layer segment and return its transferable residual state.
+
+    Unlike :func:`attn_res_stack_split`, this entry point accepts and returns an owned
+    :class:`TtAttnResState`. That is what a pipeline rank must hand to its successor.
+    This stage validates K3's natural 31/31/31 split at layers 31 and 62. Complete
+    per-segment groups are batched normally; an empirical workaround pads only a
+    successor segment's leading group to 24 query columns (see issue #53029).
+
+    Ownership of ``state`` transfers into this function after argument validation;
+    ownership of the returned state transfers back to the caller. Module callables borrow
+    their input and transfer ownership of their output, matching ``attn_res_stack_split``.
+    A device synchronization at the return boundary lands the writes before another process
+    or rank transports the state.
+    """
+    layer_indices = tuple(layer_indices)
+    if not layer_indices:
+        raise ValueError("an AttnRes segment must contain at least one layer")
+    if layer_indices != tuple(range(layer_indices[0], layer_indices[0] + len(layer_indices))):
+        raise ValueError(f"AttnRes segment layers must be contiguous, got {layer_indices}")
+    if not isinstance(state, TtAttnResState):
+        raise TypeError(f"state must be TtAttnResState, got {type(state).__name__}")
+    if layer_indices[0] == 0 and state.block_residual is not None:
+        raise ValueError("AttnRes segment starting at layer 0 must not have sealed input state")
+    if layer_indices[0] != 0 and state.block_residual is None:
+        raise ValueError(f"AttnRes segment starting at layer {layer_indices[0]} requires sealed input state")
+    lengths = {len(layer_indices), len(q_pre), len(q_post), len(attn_fns), len(mlp_fns)}
+    if len(lengths) != 1:
+        raise ValueError(
+            "segment layers, queries, and module lists must have equal lengths: "
+            f"layers={len(layer_indices)}, q_pre={len(q_pre)}, q_post={len(q_post)}, "
+            f"attn={len(attn_fns)}, mlp={len(mlp_fns)}"
+        )
+
+    # Group the known read schedule by sealed-set epoch. The pre-attention read
+    # on a seal layer belongs to the outgoing epoch; its post-attention read is
+    # the first site over the newly grown sealed set.
+    query_groups = []
+    current_group = []
+    has_sealed = state.block_residual is not None
+    for local_idx, layer_idx in enumerate(layer_indices):
+        if has_sealed:
+            current_group.append(q_pre[local_idx])
+        if layer_idx % block_size == 0:
+            if current_group:
+                query_groups.append(tuple(current_group))
+            current_group = []
+            has_sealed = True
+        current_group.append(q_post[local_idx])
+    if current_group:
+        query_groups.append(tuple(current_group))
+    # The natural 31/31/31 K3 split silently produced wrong aggregate output when
+    # successor leading fragments used their natural batch widths. The root cause is
+    # not isolated: short trailing batches in the same walk are correct. Pad only the
+    # successor's leading fragment to the ordinary epoch width and consume its real
+    # sites. This keeps one inter_block collective per handoff. Track and remove this
+    # empirical workaround under https://github.com/tenstorrent/tt-metal/issues/53029.
+    grouped_queries = [(queries, len(queries)) for queries in query_groups]
+    if state.block_residual is not None:
+        leading, active_sites = grouped_queries[0]
+        epoch_sites = 2 * block_size
+        if len(leading) < epoch_sites:
+            grouped_queries[0] = (leading + (leading[-1],) * (epoch_sites - len(leading)), active_sites)
+
+    groups = iter(grouped_queries)
+    pending = iter(())
+    partials = shifts = masses = None
+    stream = TtAttnResStream(
+        op,
+        state.prefix_sum,
+        block_size=block_size,
+        block_residual=state.block_residual,
+    )
+
+    def free_batch():
+        nonlocal partials, shifts, masses
+        if partials is None:
+            return
+        ttnn.deallocate(partials)
+        ttnn.deallocate(shifts)
+        ttnn.deallocate(masses)
+        partials = shifts = masses = None
+
+    def begin_group():
+        nonlocal pending, partials, shifts, masses
+        free_batch()
+        try:
+            queries, active_sites = next(groups)
+        except StopIteration as error:
+            raise AssertionError("AttnRes segment consumed more query groups than scheduled") from error
+        partials, shifts, masses = op.inter_block(stream.block_residual, queries)
+        pending = enumerate(queries[:active_sites])
+
+    def read():
+        try:
+            site, query = next(pending)
+        except StopIteration as error:
+            raise AssertionError("AttnRes segment consumed its query group before the next seal") from error
+        return stream.merge(partials, shifts, masses, query, site)
+
+    next_state = None
+    transient_h = None
+    transient_out = None
+    try:
+        if stream.block_residual is not None:
+            begin_group()
+
+        for local_idx, layer_idx in enumerate(layer_indices):
+            borrowed = stream.num_sealed == 0
+            h = stream.prefix_sum if borrowed else read()
+            transient_h = None if borrowed else h
+
+            if layer_idx % block_size == 0:
+                stream.seal()
+                begin_group()
+
+            transient_out = attn_fns[local_idx](h)
+            if transient_h is not None:
+                ttnn.deallocate(transient_h)
+                transient_h = None
+            stream.accumulate(transient_out)
+            transient_out = None
+
+            h = read()
+            transient_h = h
+            transient_out = mlp_fns[local_idx](h)
+            ttnn.deallocate(transient_h)
+            transient_h = None
+            stream.accumulate(transient_out)
+            transient_out = None
+
+        # Settle the final deferred write before the state leaves this segment.
+        next_state = stream.take_state()
+        free_batch()
+        try:
+            next(pending)
+        except StopIteration:
+            pass
+        else:
+            raise AssertionError("unconsumed AttnRes segment query site")
+        try:
+            next(groups)
+        except StopIteration:
+            pass
+        else:
+            raise AssertionError("unconsumed AttnRes segment query group")
+        ttnn.synchronize_device(op.mesh_device)
+        return next_state
+    except Exception:
+        if transient_h is not None:
+            ttnn.deallocate(transient_h)
+        if transient_out is not None:
+            ttnn.deallocate(transient_out)
+        free_batch()
+        if next_state is None:
+            stream.deallocate()
+        else:
+            next_state.deallocate()
+        raise
+
+
+def finalize_attn_res(op, state, q_out):
+    """Apply the model-level AttnRes read and consume ``state``."""
+    if state.block_residual is None:
+        raise ValueError("output AttnRes requires at least one sealed snapshot")
+    partials = shifts = masses = None
+    try:
+        partials, shifts, masses = op.inter_block(state.block_residual, [q_out])
+        return op.merge(partials, shifts, masses, state.prefix_sum, q_out, 0)
+    finally:
+        if partials is not None:
+            ttnn.deallocate(partials)
+            ttnn.deallocate(shifts)
+            ttnn.deallocate(masses)
+        state.deallocate()
 
 
 def _block_sites(layers, q_pre, q_post, q_out, block_size):

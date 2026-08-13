@@ -37,6 +37,7 @@ from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import (
     attn_res_inter_block,
     attn_res_merge,
     attn_res_stack,
+    extract_kimi_k3_attn_res_queries,
     fold_query,
 )
 from models.demos.deepseek_v3_d_p.reference.attn_res.hf_attn_res import hf_attn_res
@@ -176,14 +177,33 @@ def test_stack_matches_naive():
     """
     hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns = _stack_case()
 
+    # Exercise the production checkpoint names in this existing stack row. The
+    # upstream state dict stores each query as separate norm/projection tensors;
+    # the device cache stores only their folded product.
+    state_dict = {}
+    for layer_idx, (pre, post) in enumerate(zip(q_pre, q_post)):
+        prefix = f"model.layers.{layer_idx}."
+        state_dict[prefix + "self_attention_res_norm.weight"] = pre[0]
+        state_dict[prefix + "self_attention_res_proj.weight"] = pre[1]
+        state_dict[prefix + "mlp_res_norm.weight"] = post[0]
+        state_dict[prefix + "mlp_res_proj.weight"] = post[1]
+    state_dict["model.output_attn_res_norm.weight"] = q_out[0]
+    state_dict["model.output_attn_res_proj.weight"] = q_out[1]
+    extracted = extract_kimi_k3_attn_res_queries(
+        state_dict,
+        range(NUM_LAYERS),
+        include_output=True,
+    )
+    assert extracted.output is not None
+
     want = ref.stack(
         hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns, block_size=BLOCK_SIZE, eps=EPS, dtype=DTYPE
     )
     got = attn_res_stack(
         hidden_states,
-        [fold_query(*q) for q in q_pre],
-        [fold_query(*q) for q in q_post],
-        fold_query(*q_out),
+        extracted.pre,
+        extracted.post,
+        extracted.output,
         attn_fns,
         mlp_fns,
         block_size=BLOCK_SIZE,
