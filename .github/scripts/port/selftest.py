@@ -685,6 +685,135 @@ for _step in yaml.safe_load(WORKFLOW.read_text())["jobs"]["measure"]["steps"]:
             f"lands in {_into}, which is the checkout at {_checkout}",
         )
 
+# ------------------------------------------------------- the correctness bar is prototype parity
+#
+# The port is graded against what tt-dm-codegen itself achieves, so an in-scope failure has to be
+# attributed before it can block: the port's own defect, a gap the generator shares, or a divergence
+# where the port is somehow better. Getting the attribution backwards is worse than having no
+# attribution at all -- excusing a real defect makes the whole band meaningless -- so each of the
+# three, and the fallbacks, are asserted here rather than discovered on a card.
+import gate  # noqa: E402
+
+_results = [
+    {"case_id": "c[0]", "scope": "in", "equal": True, "error": None},
+    {"case_id": "c[1]", "scope": "in", "equal": False, "error": None},  # port fails, prototype passes
+    {"case_id": "c[2]", "scope": "in", "equal": False, "error": "RuntimeError: x"},  # both fail
+    {"case_id": "c[3]", "scope": "in", "equal": True, "error": None},  # port passes, prototype fails
+    {"case_id": "c[4]", "scope": "out", "equal": True, "error": None, "routing_ok": True},
+]
+_proto = {"status": "ok", "pass_ids": {"c[0]", "c[1]"}}
+
+_graded = gate.grade_correctness(_results, _proto)
+check("a case the prototype passes and the port fails blocks", _graded["failure_count"] == 1)
+check("and it is named", [f["case_id"] for f in _graded["failures"]] == ["c[1]"], str(_graded["failures"]))
+check("a case both fail is excused", _graded["prototype_gaps"] == ["c[2]"], str(_graded["prototype_gaps"]))
+check("a case only the port passes is flagged, not failed", _graded["diverges_from_prototype"] == ["c[3]"])
+check("must_pass counts only what the prototype serves", _graded["must_pass"] == 2, str(_graded["must_pass"]))
+check("an unattributed in-scope failure fails the band", _graded["passes"] is False)
+
+# The load-bearing one: a gap must not keep the band from passing, or the port is blamed for the
+# generator's bugs and the bar becomes unreachable.
+_no_defect = gate.grade_correctness([r for r in _results if r["case_id"] != "c[1]"], _proto)
+check("a prototype gap alone still passes the band", _no_defect["passes"] is True, json.dumps(_no_defect))
+check("and the gap is still reported", _no_defect["prototype_gap_count"] == 1)
+
+# No usable pass set grades strictly. Every path that cannot produce one must land here, because the
+# only safe way to be wrong about the bar is to be too harsh.
+_strict = gate.grade_correctness(_results, None)
+check("no pass set holds every in-scope case", _strict["failure_count"] == 2, str(_strict["failure_count"]))
+check("and excuses nothing", _strict["prototype_gaps"] == [] and _strict["diverges_from_prototype"] == [])
+check("and says the bar was not narrowed", _strict["must_pass"] is None)
+
+# Out-of-scope routing is a separate question and the prototype has no bearing on it.
+_routing = gate.grade_correctness(
+    _results[:1] + [{"case_id": "c[9]", "scope": "out", "equal": True, "error": None, "routing_ok": False}],
+    _proto,
+)
+check("a routing violation still fails, prototype or not", _routing["passes"] is False)
+check("and is not counted as a correctness failure", _routing["failure_count"] == 0)
+
+# A pass set measured against a different manifest or ledger is refused rather than trusted. Silently
+# reusing one would grade this port against another op's sweep.
+import tempfile as _tempfile  # noqa: E402
+
+with _tempfile.TemporaryDirectory() as _tmp:
+    _tmp = Path(_tmp)
+    _manifest = _tmp / "untilize.yaml"
+    _manifest.write_text("op: untilize\n")
+    _cases = [{"case_id": "c[0]", "scope": "in"}, {"case_id": "c[1]", "scope": "in"}, {"case_id": "c[4]", "scope": "out"}]
+    _in_scope = [c for c in _cases if c["scope"] == "in"]
+
+    # measure.py writes the key; gate.py recomputes the two fields it can know on its own. They have
+    # to agree, and nothing else in the system would notice if they stopped: a changed digest here
+    # reads as a permanently stale pass set, which silently reverts the bar to the strict one.
+    torch_stub = types.ModuleType("torch")
+    for _name in ("bfloat16", "float32", "int32", "uint32", "uint16", "float16"):
+        setattr(torch_stub, _name, f"torch.{_name}")
+    sys.modules.setdefault("torch", torch_stub)
+    for _name in ("float32", "int32", "uint32", "uint16", "bfloat4_b"):
+        setattr(ttnn, _name, DataType(_name.upper()))
+    ttnn.ROW_MAJOR_LAYOUT = "Layout.ROW_MAJOR"
+    import measure  # noqa: E402
+
+    _written = measure.prototype_key(str(_manifest), _in_scope)
+    _expected = gate.expected_prototype_key(str(_manifest), _cases)
+    check(
+        "measure.py and gate.py agree on the pass-set key",
+        all(_written[k] == v for k, v in _expected.items()),
+        f"{_written} vs {_expected}",
+    )
+    check("the key does not depend on out-of-scope cases", "c[4]" not in json.dumps(_written))
+
+    _good = _tmp / "prototype.json"
+    _good.write_text(json.dumps({"available": True, "key": _written, "results": [
+        {"case_id": "c[0]", "equal": True, "error": None},
+        {"case_id": "c[1]", "equal": False, "error": None},
+    ]}))
+    _loaded = gate.load_prototype(str(_good), str(_manifest), _cases)
+    check("a matching pass set is used", _loaded["status"] == "ok" and _loaded["pass_ids"] == {"c[0]"}, str(_loaded))
+
+    _manifest.write_text("op: untilize\nchanged: yes\n")
+    _stale = gate.load_prototype(str(_good), str(_manifest), _cases)
+    check("a pass set for another manifest is refused", _stale["pass_ids"] is None and _stale["status"] == "stale")
+
+    _unavailable = _tmp / "unavailable.json"
+    _unavailable.write_text(json.dumps({"available": False, "unavailable_reason": "no generic", "results": []}))
+    check(
+        "an unavailable prototype excuses nothing",
+        gate.load_prototype(str(_unavailable), str(_manifest), _cases)["pass_ids"] is None,
+    )
+    check("a missing file excuses nothing", gate.load_prototype(str(_tmp / "nope.json"), str(_manifest), _cases)["pass_ids"] is None)
+    check("no path at all excuses nothing", gate.load_prototype("", str(_manifest), _cases)["pass_ids"] is None)
+
+# The bar has to be measured somewhere the port cannot write, or shrinking it is the cheapest way to
+# turn a failing port into a passing one. `--prototype` must therefore name a path outside the
+# checkout, and the band that produces it must run in the same job that grades.
+import re as _re  # noqa: E402
+
+_steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["measure"]["steps"]
+_verify = next(s for s in _steps if s.get("name") == "Verify the port")
+_flag = _re.search(r"--prototype\s+(\S+)", _verify["run"])
+check("verify grades against a prototype pass set", _flag is not None, "no --prototype in the verify step")
+if _flag:
+    check(
+        "the pass set comes from outside the checkout",
+        not _flag.group(1).startswith(("/work", ".", "$GITHUB_WORKSPACE")),
+        f"{_flag.group(1)} is somewhere the agent's tree could reach",
+    )
+    _producer = next((s for s in _steps if "--band prototype" in str(s.get("run", ""))), None)
+    check("and is produced in the same job that grades", _producer is not None)
+    if _producer:
+        check(
+            "the producer writes where the grader reads",
+            _flag.group(1) in _producer["run"],
+            f"grader reads {_flag.group(1)}",
+        )
+        check(
+            "and runs for verify, not only for the baseline",
+            "baseline" not in str(_producer.get("if", "")),
+            f"gated on {_producer.get('if')!r}",
+        )
+
 print()
 print(f"{len(failures)} failure(s)" + (": " + ", ".join(failures) if failures else ""))
 sys.exit(1 if failures else 0)

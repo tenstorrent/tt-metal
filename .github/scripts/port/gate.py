@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import csv
 import glob
+import hashlib
 import json
 import os
 import re
@@ -628,16 +629,126 @@ def grade(wall: dict, device_samples: dict, cases: list[dict], selection: dict |
     }
 
 
-def grade_correctness(results: list[dict]) -> dict:
-    failures = [r for r in results if not r.get("equal") or r.get("error")]
+def expected_prototype_key(manifest_path: str, cases: list[dict]) -> dict:
+    """The two fields of a prototype pass set's key that the grader can verify on its own.
+
+    The counterpart of `measure.py::prototype_key`, and it must hash the same things the same way.
+    `selftest.py` asserts the two agree, because a silent digest change here would not fail -- it
+    would look like a permanently stale pass set, and grading would quietly fall back to the strict
+    bar on every run. `codegen_sha` is deliberately absent: only the process that imported the
+    generator can name the checkout it actually measured.
+    """
+    ids = "\n".join(c["case_id"] for c in cases if c.get("scope") == "in")
+    return {
+        "manifest_sha256": hashlib.sha256(Path(manifest_path).read_bytes()).hexdigest()[:16],
+        "ledger_sig": hashlib.sha256(ids.encode()).hexdigest()[:16],
+    }
+
+
+def load_prototype(path: str | None, manifest_path: str, cases: list[dict]) -> dict:
+    """The set of in-scope cases the generator itself gets right, or an honest refusal to claim one.
+
+    Read from a file the agent cannot write. The measure job downloads it into `port-inputs/`, outside
+    the checkout, for the same reason the build artifact goes there: anything inside the worktree is
+    something the port under test could have authored, and a pass set the port supplies is a bar the
+    port sets for itself.
+
+    Every failure to produce a usable set falls back to `pass_ids = None`, which grades every in-scope
+    case strictly -- the bar the harness used before this existed. That direction is deliberate. A
+    missing or stale pass set must never excuse a failing case, and the only safe way to be wrong here
+    is to be too harsh.
+    """
+    if not path:
+        return {"status": "not-provided", "pass_ids": None}
+    file = Path(path)
+    if not file.is_file():
+        return {"status": "missing", "pass_ids": None, "note": f"no prototype pass set at {path}"}
+    try:
+        data = json.loads(file.read_text())
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "unreadable", "pass_ids": None, "note": f"{type(exc).__name__}: {exc}"}
+
+    if not data.get("available", False):
+        return {
+            "status": "unavailable",
+            "pass_ids": None,
+            "note": data.get("unavailable_reason", "the prototype leg did not run"),
+        }
+
+    expected = expected_prototype_key(manifest_path, cases)
+    recorded = data.get("key") or {}
+    stale = {k: (recorded.get(k), v) for k, v in expected.items() if recorded.get(k) != v}
+    if stale:
+        return {
+            "status": "stale",
+            "pass_ids": None,
+            "note": "measured against a different manifest or ledger: "
+            + ", ".join(f"{k} was {was} not {now}" for k, (was, now) in stale.items()),
+        }
+
+    return {
+        "status": "ok",
+        "pass_ids": {r["case_id"] for r in data["results"] if r.get("equal") and not r.get("error")},
+        "measured": len(data["results"]),
+        "codegen_sha": recorded.get("codegen_sha"),
+        "golden": data.get("golden"),
+    }
+
+
+def grade_correctness(results: list[dict], prototype: dict | None = None) -> dict:
+    """Grade the port against what the generator it transliterates actually achieves.
+
+    In-scope failures split three ways, and only the first blocks:
+
+      failing                  the prototype gets this case right and the port does not. This is the
+                               port's own defect and the whole bar: "passes every sweep the
+                               tt-dm-codegen implementation passes".
+      prototype_gaps           neither gets it right. The generator cannot serve the case, so the
+                               transliteration was never going to either. Reported in full and
+                               excused, because the alternative is sending the agent to fix a bug that
+                               is not in the code it may touch -- which is what every earlier run did.
+      diverges_from_prototype  the port gets it right and the prototype does not. Not a failure, but
+                               not a triumph either: a faithful transliteration has no business being
+                               more correct than its source, so this is where to look when the port
+                               has quietly stopped being a transliteration.
+
+    Out-of-scope cases are untouched by any of this. They are a routing question, not a numeric one,
+    and the prototype has no bearing on whether `auto` fell back to native.
+    """
+    prototype = prototype or {"status": "not-provided", "pass_ids": None}
+    in_scope = [r for r in results if r.get("scope") == "in"]
     out_of_scope = [r for r in results if r.get("scope") == "out"]
+
+    def wrong(record: dict) -> bool:
+        return not record.get("equal") or bool(record.get("error"))
+
     routing = [r for r in out_of_scope if r.get("routing_ok") is False]
     # `routing_ok` is None when the build could not answer the program-cache query. Counted, because
     # the routing check reading as a pass while it verified nothing is the bug just fixed in
     # measure.py and the one worth being loud about.
     unverified = [r["case_id"] for r in out_of_scope if r.get("routing_ok") is None]
+    out_of_scope_wrong = [r for r in out_of_scope if wrong(r)]
+
+    served_by_prototype = prototype.get("pass_ids")
+    if served_by_prototype is None:
+        # No usable pass set: every in-scope case must pass, which is the pre-parity bar.
+        failing = [r for r in in_scope if wrong(r)]
+        gaps: list[str] = []
+        diverges: list[str] = []
+    else:
+        failing = [r for r in in_scope if wrong(r) and r["case_id"] in served_by_prototype]
+        gaps = [r["case_id"] for r in in_scope if wrong(r) and r["case_id"] not in served_by_prototype]
+        diverges = [r["case_id"] for r in in_scope if not wrong(r) and r["case_id"] not in served_by_prototype]
+
+    blocking = failing + out_of_scope_wrong
     return {
         "total": len(results),
+        "in_scope_total": len(in_scope),
+        # How many in-scope cases the port is actually being held to. `None` when no pass set was
+        # usable, in which case it is every in-scope case.
+        "must_pass": len(served_by_prototype & {r["case_id"] for r in in_scope})
+        if served_by_prototype is not None
+        else None,
         "failures": [
             {
                 "case_id": r["case_id"],
@@ -645,13 +756,18 @@ def grade_correctness(results: list[dict]) -> dict:
                 "error": r.get("error"),
                 "max_abs_diff": r.get("max_abs_diff"),
             }
-            for r in failures[:25]
+            for r in blocking[:25]
         ],
-        "failure_count": len(failures),
+        "failure_count": len(blocking),
+        "prototype_gaps": gaps[:25],
+        "prototype_gap_count": len(gaps),
+        "diverges_from_prototype": diverges[:25],
+        "diverges_from_prototype_count": len(diverges),
+        "prototype": {k: v for k, v in prototype.items() if k != "pass_ids"},
         "routing_violations": [r["case_id"] for r in routing],
         "routing_unverified": unverified[:25],
         "routing_unverified_count": len(unverified),
-        "passes": not failures and not routing and not unverified,
+        "passes": not blocking and not routing and not unverified,
     }
 
 
@@ -667,6 +783,13 @@ def main() -> int:
     ap.add_argument("--category", default="data_movement")
     ap.add_argument("--base-sha", default=os.environ.get("PORT_BASE_SHA", ""))
     ap.add_argument("--work", default="/tmp/port-gate")
+    ap.add_argument(
+        "--prototype",
+        default=os.environ.get("PORT_PROTOTYPE_PASSES", ""),
+        help="prototype pass set from `measure.py --band prototype`, measured in the baseline. Must be a "
+        "path outside the checkout: a pass set the port could have written is a bar the port sets for "
+        "itself. Absent, every in-scope case must pass.",
+    )
     ap.add_argument("--limit", type=int, default=24, help="cases per perf band")
     ap.add_argument("--reps", type=int, default=10)
     ap.add_argument("--iters", type=int, default=30)
@@ -726,7 +849,8 @@ def main() -> int:
         if args.band in ("correctness", "both"):
             out = work / f"{args.op}_correctness.json"
             data = run_measure(args.op, args.manifest, "correctness", out, repo, [])
-            report["correctness"] = grade_correctness(data["results"])
+            prototype = load_prototype(args.prototype, args.manifest, ledger["cases"])
+            report["correctness"] = grade_correctness(data["results"], prototype)
             report["correctness"]["golden"] = data.get("golden")
 
         if args.band in ("performance", "both"):

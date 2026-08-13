@@ -338,6 +338,55 @@ jobs:
           print("golden OK -- {} agrees with native on all {} sampled in-scope cases".format(source, len(results)))
           PY
 
+      # Which in-scope cases the tt-dm-codegen prototype itself passes -- the bar the port is graded
+      # against, since the port transliterates that prototype and cannot be expected to outdo it.
+      #
+      # Measured in the same job that grades, and written to /tmp rather than anywhere under /work.
+      # Both halves matter. Outside /work it is outside the git worktree, so it is not something the
+      # port under test could have authored: a pass set the agent can write is a bar the agent sets
+      # for itself, and shrinking it would be the cheapest way to turn a failing port into a passing
+      # one. Produced here rather than carried from the baseline run because a file that never travels
+      # cannot be substituted in transit, and because the two runs are different machines.
+      #
+      # The prototype leg reads none of the port's files -- it dispatches the generator's own kernels
+      # through GenericOpDeviceOperation -- so this measures a property of the generator and the
+      # ledger, and the same tree yields the same answer whatever the agent wrote.
+      #
+      # Never fatal. A prototype that cannot run leaves gate.py with no usable pass set, and gate.py
+      # then holds the port to every in-scope case, which is the stricter bar it used before this
+      # existed. The only safe way to be wrong here is to be too harsh.
+      - name: Measure what the prototype itself passes
+        timeout-minutes: 45
+        env:
+          PORT_OP: ${{ needs.resolve.outputs.op }}
+        run: |
+          mkdir -p /tmp/port-prototype
+          python3 .github/scripts/port/measure.py \
+            --op "$PORT_OP" --band prototype \
+            --manifest "/codegen/agentic_port/manifests/$PORT_OP.yaml" \
+            --out /tmp/port-prototype/prototype.json || true
+
+          # Into the results artifact as well, so the agent is handed the must-pass and excused lists
+          # up front. This copy is a report, not the graded one: gate.py reads /tmp/port-prototype.
+          if [ -f /tmp/port-prototype/prototype.json ]; then
+            cp /tmp/port-prototype/prototype.json /tmp/port-results/prototype.json
+            python3 - /tmp/port-prototype/prototype.json <<'PY'
+          import json, sys
+          data = json.load(open(sys.argv[1]))
+          results = data.get("results") or []
+          if not data.get("available"):
+              print("::warning::the prototype leg did not run ({}); every in-scope case must pass"
+                    .format(data.get("unavailable_reason", "unknown")))
+              raise SystemExit(0)
+          passing = [r for r in results if r.get("equal") and not r.get("error")]
+          print("prototype passes {} of {} in-scope cases".format(len(passing), len(results)))
+          for entry in [r for r in results if not (r.get("equal") and not r.get("error"))][:10]:
+              print("  excused {}: {}".format(entry["case_id"], entry.get("error") or "wrong output"))
+          PY
+          else
+            echo "::warning::the prototype band produced no file; every in-scope case must pass"
+          fi
+
       # Proves the harness and the card work before the agent spends a single credit. The ported leg
       # is still an empty stub, so gate.py reports a failing verdict and exits non-zero -- that is
       # expected and is not what this grades. What it grades is whether the harness ran at all: a
@@ -393,6 +442,7 @@ jobs:
             --category "$PORT_CATEGORY" --band "$PORT_BAND" --repo /work \
             --base-sha "$PORT_BASE_SHA" --work /tmp/port-gate \
             --limit "$PORT_LIMIT" \
+            --prototype /tmp/port-prototype/prototype.json \
             > /tmp/port-results/gate.json || true
           cat /tmp/port-results/gate.json
 

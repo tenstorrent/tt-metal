@@ -20,6 +20,10 @@ prototype: a port that wins on device but loses on wall has not delivered anythi
 Bands:
   correctness  bit-exact vs a torch golden for in-scope cases; routing + flat program cache for
                out-of-scope cases, which must fall back to native under `auto`
+  prototype    the same bit-exact check, run against the generic_op prototype instead of the port,
+               over every in-scope case -- which case the *generator* gets right is what the port's
+               correctness bar is set to, and it is a property of the generator and the ledger rather
+               than of any port, so it is measured once in the baseline and reused by every verify
   wall         min-of-N host wall clock with device sync, native vs ported
   device       run under `python3 -m tracy -p -r`; emits a dispatch-order sidecar that gate.py
                joins against the profiler CSV
@@ -35,9 +39,11 @@ This script never decides pass or fail. It reports numbers; gate.py applies the 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -269,6 +275,84 @@ def run_correctness(op: str, cases: list[dict], device, golden_fn, golden_source
     return results
 
 
+def run_prototype(op: str, cases: list[dict], device, generic, golden_fn, golden_source: str) -> list[dict]:
+    """Which in-scope cases the tt-dm-codegen prototype itself gets right.
+
+    This is the bar the port is actually held to. The port transliterates the generator; it ships the
+    generator's kernels verbatim and reproduces its host-side decisions. So a case the *generator*
+    cannot serve correctly is not a defect the transliteration introduced, and counting it against
+    the port sends the agent to hunt a bug that is not in the code it is allowed to touch. Every
+    earlier run graded in-scope correctness against native alone and could not tell the two apart.
+
+    Compared against the same reference `run_correctness` uses -- the resolved golden when there is
+    one, native output when there is not -- so the two results are commensurable. That matters more
+    than which oracle is stronger: if the port and the prototype are checked against different
+    answers, a disagreement between them says nothing about either.
+
+    A raising case is a result, not an error. "The prototype cannot do this one" is precisely the
+    fact this band exists to record.
+    """
+    results = []
+    for case in cases:
+        record = {"case_id": case["case_id"], "scope": case["scope"]}
+        try:
+            torch_input, tt_input = make_input(case, device)
+            kwargs = case["kwargs"]
+            got = ttnn.to_torch(call_generic(generic, op, tt_input, kwargs))
+            if golden_fn is not None:
+                want = golden_fn(torch_input, **kwargs)
+                source = golden_source
+            else:
+                want = ttnn.to_torch(call_ttnn(op, tt_input, kwargs, "native"))
+                source = "native"
+            record.update(
+                golden=source,
+                equal=bool(torch.equal(want.to(got.dtype), got)),
+                max_abs_diff=float((want.to(torch.float32) - got.to(torch.float32)).abs().max()),
+                error=None,
+            )
+        except Exception as exc:  # noqa: BLE001 - a prototype that cannot serve a case is the point
+            record.update(equal=False, error=f"{type(exc).__name__}: {exc}")
+        results.append(record)
+    return results
+
+
+def prototype_key(manifest_path: str | None, cases: list[dict]) -> dict:
+    """What a prototype pass is a measurement *of*, so a stale one cannot pass for a fresh one.
+
+    Measuring once and reusing the answer is only sound while the three things it depends on are
+    unchanged: the generator's code, the manifest that defines scope, and the ledger the manifest
+    expands to. gate.py compares this against the pass set it is handed and recomputes on a mismatch,
+    which is the whole reason the key travels with the data instead of being assumed.
+
+    Deliberately not keyed on the port. The prototype leg never touches it, and keying on it would
+    throw the result away on every edit -- turning a once-per-baseline cost into a per-verify one.
+    """
+
+    def _sha(data: bytes) -> str:
+        return hashlib.sha256(data).hexdigest()[:16]
+
+    key = {
+        "manifest_sha256": _sha(Path(manifest_path).read_bytes()) if manifest_path else None,
+        "ledger_sig": _sha("\n".join(c["case_id"] for c in cases).encode()),
+        "codegen_sha": None,
+    }
+    try:
+        # The generator's checkout, located through the module the prototype leg imports rather than
+        # from a path this script would have to be told, so it cannot name a different checkout than
+        # the one that was actually measured.
+        root = Path(sys.modules["ops"].__file__).resolve().parent.parent
+        key["codegen_sha"] = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except Exception:  # noqa: BLE001 - an unpinned checkout measures fine, it just cannot say which one
+        pass
+    return key
+
+
 def run_golden_check(op: str, cases: list[dict], device, golden_fn, golden_source: str) -> list[dict]:
     """Check the resolved golden against native, before there is a port to blame.
 
@@ -386,7 +470,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--op", required=True)
     ap.add_argument("--ledger", default=None, help="JSON from ledger.py; only used without --manifest")
-    ap.add_argument("--band", required=True, choices=["correctness", "wall", "device", "golden"])
+    ap.add_argument("--band", required=True, choices=["correctness", "prototype", "wall", "device", "golden"])
     ap.add_argument(
         "--manifest",
         default=None,
@@ -435,6 +519,12 @@ def main() -> int:
         # Never capped. Correctness is cheap per case and the routing check only means something
         # over the whole out-of-scope set, so there is no budget to spend here.
         selected = [c for c in cases if c["scope"] in ("in", "out")]
+    elif args.band == "prototype":
+        # Every in-scope case and no out-of-scope ones. Uncapped for the same reason correctness is,
+        # and it has to be exactly the set correctness grades: a partial pass set would leave gate.py
+        # unable to say whether an unmeasured failing case is the port's fault or the generator's,
+        # which is the single distinction this band exists to make.
+        selected = [c for c in cases if c["scope"] == "in"]
     elif args.band == "golden":
         # Stratified like the perf bands, and for the same reason: a golden that is right for one
         # dtype and wrong for another is exactly the failure this band exists to catch, so a flat
@@ -458,13 +548,13 @@ def main() -> int:
     device = ttnn.open_device(device_id=0)
     generic = None
     try:
-        if not args.no_generic and args.band in ("wall", "device"):
+        if not args.no_generic and args.band in ("prototype", "wall", "device"):
             try:
                 generic = resolve_generic(args.op, device)
             except Exception as exc:  # noqa: BLE001 - the prototype leg is informative, not required
                 print(f"measure: generic_op leg unavailable: {exc}", file=sys.stderr)
 
-        if args.band in ("correctness", "golden"):
+        if args.band in ("correctness", "prototype", "golden"):
             golden_fn, golden_source = resolve_golden(args.op, manifest)
 
         if args.band == "correctness":
@@ -473,6 +563,25 @@ def main() -> int:
                 "golden": golden_source,
                 "results": run_correctness(args.op, selected, device, golden_fn, golden_source),
             }
+        elif args.band == "prototype":
+            # An unavailable prototype is reported, never inferred. gate.py must be able to tell "the
+            # generator fails these cases" from "nobody asked the generator", because the first
+            # excuses a port and the second would silently excuse everything.
+            payload = {
+                "band": "prototype",
+                "golden": golden_source,
+                "available": generic is not None,
+                "key": prototype_key(args.manifest, selected),
+                "results": run_prototype(args.op, selected, device, generic, golden_fn, golden_source)
+                if generic is not None
+                else [],
+            }
+            if generic is None:
+                payload["unavailable_reason"] = (
+                    "--no-generic was passed"
+                    if args.no_generic
+                    else f"no ops.{args.op} class ending in 'Codegen' could be instantiated"
+                )
         elif args.band == "golden":
             if golden_fn is None:
                 # Nothing to check. The correctness band will compare against native, which is a
