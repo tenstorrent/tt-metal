@@ -28,9 +28,8 @@
 #include "api/compute/reg_api.h"
 #include "api/compute/tile_move_copy.h"
 
-constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
+constexpr uint32_t num_tiles = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);
-constexpr uint32_t Wt = get_compile_time_arg_val(2);
 
 constexpr auto cb_logits = tt::CBIndex::c_0;
 constexpr auto cb_mask = tt::CBIndex::c_1;
@@ -85,15 +84,19 @@ void kernel_main() {
         rand_tile_init(seed, rand_stream_id);
     }
 
-    for (uint32_t row = 0U; row < num_rows_per_core; ++row) {
-        // block_size always divides Wt (see get_block_size), so no tail handling is needed.
-        for (uint32_t col = 0U; col < Wt;) {
-            cb_wait_front(cb_logits, block_size);
+    // Work unit is one TILE, so a core's run is arbitrary in length and the last block may be
+    // partial. Reader, compute and writer all derive `current` identically and stay in lockstep.
+    for (uint32_t t = 0U; t < num_tiles; t += block_size) {
+        const uint32_t remaining = num_tiles - t;
+        const uint32_t current = (remaining < block_size) ? remaining : block_size;
+
+        {
+            cb_wait_front(cb_logits, current);
             if constexpr (do_logits_mask) {
-                cb_wait_front(cb_mask, block_size);
+                cb_wait_front(cb_mask, current);
             }
 
-            for (uint32_t block_idx = 0U; block_idx < block_size; ++block_idx, ++col) {
+            for (uint32_t block_idx = 0U; block_idx < current; ++block_idx) {
                 cb_reserve_back(cb_scores, onetile);
                 tile_regs_acquire();
 
@@ -150,9 +153,9 @@ void kernel_main() {
                 cb_push_back(cb_scores, onetile);
             }
 
-            cb_pop_front(cb_logits, block_size);
+            cb_pop_front(cb_logits, current);
             if constexpr (do_logits_mask) {
-                cb_pop_front(cb_mask, block_size);
+                cb_pop_front(cb_mask, current);
             }
         }
     }

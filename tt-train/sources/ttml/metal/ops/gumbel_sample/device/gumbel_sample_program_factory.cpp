@@ -40,6 +40,13 @@ constexpr auto kLogitsCbIndex = tt::CBIndex::c_0;
 constexpr auto kMaskCbIndex = tt::CBIndex::c_1;
 constexpr auto kScoresCbIndex = tt::CBIndex::c_2;
 constexpr auto kOutputStagingCbIndex = tt::CBIndex::c_3;
+constexpr auto kRecordsCbIndex = tt::CBIndex::c_4;
+
+// Boundary-row partials exchanged between cores: [valid, row, 32 maxima, 32 indices]
+// padded to 288 bytes, two per core (a core's first and last row). Bounded by core
+// count, never by shape -- see writer_gumbel_sample.cpp.
+constexpr uint32_t kRecordBytes = 72U * sizeof(uint32_t);
+constexpr uint32_t kRecordsPerCore = 2U;
 
 const std::string kDoLogitsMaskDefineKey = "DO_LOGITS_MASK";
 const std::string kDoGumbelNoiseDefineKey = "DO_GUMBEL_NOISE";
@@ -114,8 +121,9 @@ struct GumbelSampleLayout {
     tt::tt_metal::CoreRangeSet all_cores;
     tt::tt_metal::CoreRangeSet core_group_1;
     tt::tt_metal::CoreRangeSet core_group_2;
-    uint32_t rows_per_core_group_1{};
-    uint32_t rows_per_core_group_2{};
+    uint32_t total_tiles{};  // total_rows * Wt -- the unit work is actually split over
+    uint32_t tiles_per_core_group_1{};
+    uint32_t tiles_per_core_group_2{};
 };
 
 GumbelSampleLayout compute_layout(const ttnn::Tensor& logits) {
@@ -137,14 +145,20 @@ GumbelSampleLayout compute_layout(const ttnn::Tensor& logits) {
     const auto grid = device->compute_with_storage_grid_size();
     layout.num_cores_y = grid.y;
 
-    auto [num_cores, all_cores, group_1, group_2, rows_1, rows_2] =
-        tt::tt_metal::split_work_to_cores(grid, layout.total_rows);
+    // Split over TILES, not tile rows. A row-based split yields only NC*Ht units, and in decode
+    // (tokens == 1 => Ht == 1) that is just the local batch: a few dozen units on an ~80 core grid,
+    // leaving most of it idle while each active core carried a whole vocabulary. Every ttnn op this
+    // kernel replaces splits by tile, which is why six of them beat one of this.
+    layout.total_tiles = layout.total_rows * layout.Wt;
+
+    auto [num_cores, all_cores, group_1, group_2, tiles_1, tiles_2] =
+        tt::tt_metal::split_work_to_cores(grid, layout.total_tiles);
     layout.num_cores = num_cores;
     layout.all_cores = all_cores;
     layout.core_group_1 = group_1;
     layout.core_group_2 = group_2;
-    layout.rows_per_core_group_1 = rows_1;
-    layout.rows_per_core_group_2 = rows_2;
+    layout.tiles_per_core_group_1 = tiles_1;
+    layout.tiles_per_core_group_2 = tiles_2;
 
     return layout;
 }
@@ -153,26 +167,26 @@ GumbelSampleLayout compute_layout(const ttnn::Tensor& logits) {
 // identical (core, rows, start_row) triples -- and therefore identical RNG streams.
 struct CoreWork {
     tt::tt_metal::CoreCoord core;
-    uint32_t num_rows{};
-    uint32_t start_row{};
+    uint32_t num_tiles{};
+    uint32_t start_tile{};
 };
 
 std::vector<CoreWork> core_layout(const GumbelSampleLayout& layout) {
     std::vector<CoreWork> work;
     work.reserve(layout.num_cores);
-    uint32_t rows_written = 0U;
+    uint32_t tiles_assigned = 0U;
     for (uint32_t i = 0; i < layout.num_cores; ++i) {
         const tt::tt_metal::CoreCoord core{i / layout.num_cores_y, i % layout.num_cores_y};
-        uint32_t rows = 0U;
+        uint32_t tiles = 0U;
         if (layout.core_group_1.contains(core)) {
-            rows = layout.rows_per_core_group_1;
+            tiles = layout.tiles_per_core_group_1;
         } else if (layout.core_group_2.contains(core)) {
-            rows = layout.rows_per_core_group_2;
+            tiles = layout.tiles_per_core_group_2;
         } else {
             TT_FATAL(false, "GumbelSample: core ({}, {}) is not in either core group", core.x, core.y);
         }
-        work.push_back({core, rows, rows_written});
-        rows_written += rows;
+        work.push_back({core, tiles, tiles_assigned});
+        tiles_assigned += tiles;
     }
     return work;
 }
@@ -180,8 +194,8 @@ std::vector<CoreWork> core_layout(const GumbelSampleLayout& layout) {
 // Domain-separate the RNG per (device, core). rand_tile_init folds stream_id into the seed, so
 // distinct stream ids give disjoint deterministic streams; devices that share a stream id (replicas
 // on a non-seeded axis) intentionally draw identical noise.
-uint32_t rand_stream_id(const GumbelSampleLayout& layout, uint32_t device_index, uint32_t start_row) {
-    return device_index * layout.total_rows + start_row;
+uint32_t rand_stream_id(const GumbelSampleLayout& layout, uint32_t device_index, uint32_t start_tile) {
+    return device_index * layout.total_tiles + start_tile;
 }
 
 tt::tt_metal::Program build_program(
@@ -225,6 +239,15 @@ tt::tt_metal::Program build_program(
         tt::DataFormat::UInt32,
         tt::constants::TILE_HEIGHT * kOutputSlotBytes);
 
+    // Boundary-row partials. Every core reserves the FULL table so the origin can receive each
+    // core's records at that core's own offset -- a fixed 2 records per core, independent of shape.
+    create_circular_buffer_bytes(
+        program,
+        layout.all_cores,
+        kRecordsCbIndex,
+        tt::DataFormat::UInt32,
+        layout.num_cores * kRecordsPerCore * kRecordBytes);
+
     // -------------------------------------------------------------------------
     // Kernels
     // -------------------------------------------------------------------------
@@ -254,17 +277,30 @@ tt::tt_metal::Program build_program(
     shared_vars.reader_kernel_id =
         create_reader_kernel(program, layout.all_cores, reader_ct_args, defines, kReaderKernelPath);
 
-    std::vector<uint32_t> writer_ct_args{layout.Wt, layout.logical_vocab, layout.logical_tokens, layout.Ht};
+    // Origin core (index 0) merges the boundary rows; the others signal it once each.
+    const uint32_t reduction_sem_id = tt::tt_metal::CreateSemaphore(program, layout.all_cores, 0);
+    const auto origin_logical = tt::tt_metal::CoreCoord{0, 0};
+    const auto origin_phys = logits.device()->worker_core_from_logical_core(origin_logical);
+
+    std::vector<uint32_t> writer_ct_args{
+        layout.Wt,
+        layout.logical_vocab,
+        layout.logical_tokens,
+        layout.Ht,
+        layout.num_cores,
+        reduction_sem_id,
+        static_cast<uint32_t>(origin_phys.x),
+        static_cast<uint32_t>(origin_phys.y)};
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_ct_args);
     shared_vars.writer_kernel_id =
         create_writer_kernel(program, layout.all_cores, writer_ct_args, defines, kWriterKernelPath);
 
-    const std::vector<uint32_t> compute_ct_args_g1{layout.rows_per_core_group_1, layout.block_size, layout.Wt};
+    const std::vector<uint32_t> compute_ct_args_g1{layout.tiles_per_core_group_1, layout.block_size};
     shared_vars.compute_kernel_group_1_id = create_compute_kernel(
         program, layout.core_group_1, compute_ct_args_g1, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
 
     if (!layout.core_group_2.ranges().empty()) {
-        const std::vector<uint32_t> compute_ct_args_g2{layout.rows_per_core_group_2, layout.block_size, layout.Wt};
+        const std::vector<uint32_t> compute_ct_args_g2{layout.tiles_per_core_group_2, layout.block_size};
         shared_vars.compute_kernel_group_2_id = create_compute_kernel(
             program, layout.core_group_2, compute_ct_args_g2, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
     }
@@ -278,14 +314,16 @@ tt::tt_metal::Program build_program(
     // but an inf sitting in a runtime arg is a trap for anyone who later makes it read it.
     const uint32_t inv_temperature_bits = do_gumbel_noise ? std::bit_cast<uint32_t>(1.0F / args.temperature) : 0U;
 
-    for (const auto& [core, num_rows, start_row] : core_layout(layout)) {
+    uint32_t core_index = 0U;
+    for (const auto& [core, num_tiles, start_tile] : core_layout(layout)) {
         SetRuntimeArgs(
             program,
             shared_vars.reader_kernel_id,
             core,
-            {logits_buffer->address(), has_mask ? mask_buffer->address() : 0U, num_rows, start_row});
+            {logits_buffer->address(), has_mask ? mask_buffer->address() : 0U, num_tiles, start_tile});
 
-        SetRuntimeArgs(program, shared_vars.writer_kernel_id, core, {output_buffer->address(), num_rows, start_row});
+        SetRuntimeArgs(
+            program, shared_vars.writer_kernel_id, core, {output_buffer->address(), num_tiles, start_tile, core_index});
 
         const auto compute_kernel = layout.core_group_1.contains(core) ? shared_vars.compute_kernel_group_1_id
                                                                        : shared_vars.compute_kernel_group_2_id;
@@ -297,7 +335,8 @@ tt::tt_metal::Program build_program(
              rand_from_bits,
              rand_scale_bits,
              inv_temperature_bits,
-             rand_stream_id(layout, device_index, start_row)});
+             rand_stream_id(layout, device_index, start_tile)});
+        ++core_index;
     }
 
     shared_vars.core_group_1 = layout.core_group_1;
@@ -376,7 +415,9 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
                                     ? compute_g1_args
                                     : GetRuntimeArgs(program, vars.compute_kernel_group_2_id);
 
-        for (const auto& [core, num_rows, start_row] : work) {
+        // core_index is not re-patched here: it is a property of the work split, which is identical
+        // on every dispatch. Only the buffer addresses and the seed change.
+        for (const auto& [core, num_tiles, start_tile] : work) {
             {
                 auto& core_args = reader_args[core.x][core.y];
                 core_args[kReaderLogitsBufferIdx] = logits_address;
@@ -393,7 +434,7 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
                 core_args[kComputeRandFromIdx] = rand_from_bits;
                 core_args[kComputeRandScaleIdx] = rand_scale_bits;
                 core_args[kComputeInvTemperatureIdx] = inv_temperature_bits;
-                core_args[kComputeRandStreamIdx] = rand_stream_id(layout, vars.device_seed_offset, start_row);
+                core_args[kComputeRandStreamIdx] = rand_stream_id(layout, vars.device_seed_offset, start_tile);
             }
         }
     }

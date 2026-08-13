@@ -2,8 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Streams logits (and, when present, the additive padding mask) one block of vocab tiles at a time.
-// Nothing is buffered for a whole row, so L1 use is independent of V.
+// Streams logits (and, when present, the padding mask) for a contiguous run of TILES.
+//
+// The work unit is one tile, not one 32-token tile row. That distinction is the whole performance
+// story of this op: with a row-based split, decode (tokens == 1 => Ht == 1) yields only B_local work
+// units, so a handful of cores carried the entire vocabulary while the rest of the grid idled, and
+// the fused kernel measured ~2.9x SLOWER than the six separate ttnn ops it replaces -- each of which
+// splits by tile across the full grid. Splitting by tile puts this op on the same footing.
 
 #include <cstdint>
 
@@ -14,8 +19,8 @@ void kernel_main() {
     uint32_t rt_idx = 0U;
     const uint32_t logits_address = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t mask_address = get_arg_val<uint32_t>(rt_idx++);
-    const uint32_t num_rows_to_process = get_arg_val<uint32_t>(rt_idx++);
-    const uint32_t start_row = get_arg_val<uint32_t>(rt_idx++);
+    const uint32_t num_tiles = get_arg_val<uint32_t>(rt_idx++);
+    const uint32_t start_tile = get_arg_val<uint32_t>(rt_idx++);
 
     constexpr uint32_t cb_logits_idx = tt::CBIndex::c_0;
     constexpr uint32_t cb_mask_idx = tt::CBIndex::c_1;
@@ -36,21 +41,26 @@ void kernel_main() {
 
     const uint32_t logits_tile_bytes = get_tile_size(cb_logits_idx);
 
-    for (uint32_t i = 0U; i < num_rows_to_process; ++i) {
-        // Tile index of the first vocab tile of this 32-token tile row.
-        const uint32_t row_start_idx = (start_row + i) * Wt;
+    // A core's tile run is arbitrary in length, so the last block may be partial. All three kernels
+    // derive `current` the same way from (num_tiles, block_size) and stay in lockstep.
+    for (uint32_t t = 0U; t < num_tiles; t += block_size) {
+        const uint32_t remaining = num_tiles - t;
+        const uint32_t current = (remaining < block_size) ? remaining : block_size;
 
-        // block_size divides Wt, so every block is full.
-        for (uint32_t j = 0U; j < Wt; j += block_size) {
-            read_tiles_by_row(
-                cb_logits_idx, logits_address_generator, row_start_idx + j, block_size, logits_tile_bytes, block_size);
+        read_tiles_by_row(cb_logits_idx, logits_address_generator, start_tile + t, current, logits_tile_bytes, current);
 
-            if constexpr (do_logits_mask) {
-                // The mask is [1, 1, 1, V]: a single tile row that every token row reuses, so its
-                // tile ids are just the column index and must NOT advance with the logits' row
-                // offset. The compute kernel then broadcasts row 0 down the tile.
-                read_tiles_by_row(cb_mask_idx, mask_address_generator, j, block_size, logits_tile_bytes, block_size);
+        if constexpr (do_logits_mask) {
+            // The mask is [1, 1, 1, V]: one tile row shared by every token row and every batch
+            // entry, so a global tile's mask is selected by its COLUMN position alone.
+            cb_reserve_back(cb_mask_idx, current);
+            uint32_t l1_addr = get_write_ptr(cb_mask_idx);
+            for (uint32_t k = 0U; k < current; ++k) {
+                const uint32_t mask_tile = (start_tile + t + k) % Wt;
+                noc_async_read_page(mask_tile, mask_address_generator, l1_addr);
+                l1_addr += logits_tile_bytes;
             }
+            noc_async_read_barrier();
+            cb_push_back(cb_mask_idx, current);
         }
     }
 }
