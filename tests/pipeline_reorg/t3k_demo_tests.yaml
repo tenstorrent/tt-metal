@@ -9,33 +9,6 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-- name: t3k_resnet50_tests
-  cmd: run_t3000_resnet50_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 10
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  model-name: resnet50
-
-- name: t3k_sentence_bert_tests
-  cmd: run_t3000_sentence_bert_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 5
-  owner_id: U0491KT8MNY # Mohamed Bahnas (Aniruddha Tupe)
-  team: models
-  model-name: sentence_bert
-
-- name: t3k_sd35_large_tests
-  cmd: run_t3000_sd35large_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 10
-  owner_id: U06UEFWB4P9 # Colman Glagovich
-  team: models
-  model-name: sd35_large
-
 - name: t3k_motif_tests
   cmd: run_t3000_motif_tests
   skus:
