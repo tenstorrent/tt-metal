@@ -24,33 +24,50 @@ namespace ttnn::core {
 Config CONFIG{};
 
 void Config::apply_json_overrides(const std::string& json_text, bool strict) {
-    auto json = nlohmann::json::parse(json_text);
+    nlohmann::json json;
+    try {
+        json = nlohmann::json::parse(json_text);
+    } catch (const nlohmann::json::exception& e) {
+        // Reached from a static initializer, so name the source instead of surfacing a bare parser error.
+        TT_THROW("TTNN config overrides are not valid JSON: {} (input: {})", e.what(), json_text);
+    }
     TT_FATAL(json.is_object(), "TTNN config overrides must be a JSON object, got: {}", json_text);
-    reflect::for_each(
-        [&](auto I) {
-            auto name = reflect::member_name<I>(this->attributes);
-            auto it = json.find(std::string(name));
-            if (it == json.end()) {
-                return;
+
+    // Restore on any failure: a rejected override must not leave process-wide settings half applied.
+    attributes_t previous = this->attributes;
+    try {
+        reflect::for_each(
+            [&](auto I) {
+                auto name = reflect::member_name<I>(this->attributes);
+                auto it = json.find(std::string(name));
+                if (it == json.end()) {
+                    return;
+                }
+                auto& member = reflect::get<I>(this->attributes);
+                using T = std::decay_t<decltype(member)>;
+                if constexpr (std::is_same_v<T, bool> || std::is_same_v<T, float>) {
+                    member = it->template get<T>();
+                } else if constexpr (std::is_same_v<T, std::optional<std::filesystem::path>>) {
+                    member = it->is_null() ? T{} : T{it->template get<std::string>()};
+                } else {
+                    member = std::filesystem::path(it->template get<std::string>());
+                }
+                this->validate(name);
+                json.erase(it);
+            },
+            this->attributes);
+        for (const auto& [key, value] : json.items()) {
+            if (strict) {
+                TT_THROW("Unknown configuration key: {}", key);
             }
-            auto& member = reflect::get<I>(this->attributes);
-            using T = std::decay_t<decltype(member)>;
-            if constexpr (std::is_same_v<T, bool> || std::is_same_v<T, float>) {
-                member = it->template get<T>();
-            } else if constexpr (std::is_same_v<T, std::optional<std::filesystem::path>>) {
-                member = it->is_null() ? T{} : T{it->template get<std::string>()};
-            } else {
-                member = std::filesystem::path(it->template get<std::string>());
-            }
-            this->validate(name);
-            json.erase(it);
-        },
-        this->attributes);
-    for (const auto& [key, value] : json.items()) {
-        if (strict) {
-            TT_THROW("Unknown configuration key: {}", key);
+            log_warning(tt::LogAlways, "Unknown configuration key: {}", key);
         }
-        log_warning(tt::LogAlways, "Unknown configuration key: {}", key);
+    } catch (const nlohmann::json::exception& e) {
+        this->attributes = std::move(previous);
+        TT_THROW("TTNN config override has a bad value: {} (input: {})", e.what(), json_text);
+    } catch (...) {
+        this->attributes = std::move(previous);
+        throw;
     }
 }
 
