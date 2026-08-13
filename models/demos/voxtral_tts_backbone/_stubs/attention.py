@@ -96,8 +96,11 @@ class TtAttention:
         self.n_heads, self.n_kv_heads, self.head_dim = dims
         self.scaling = scaling
         self.kv_write_memory_config = _kv_write_memory_config(self.n_kv_heads, self.head_dim)
-        # K and V share a shape, so one plan serves both.
-        self.kv_plan = build_plan(device, int(self.wk.shape[-2]), int(self.wk.shape[-1]))
+        # K and V share a shape, so one plan serves both. 16 cores, not the 32
+        # the "largest even split" default picks: the same k-reduction-shape
+        # effect measured on down_proj applies here. Per call at bf8_b:
+        # default 0.0528 / 32c 0.0379 / 16c 0.0251 / 8c 0.0314 / 4c 0.0535 ms.
+        self.kv_plan = build_plan(device, int(self.wk.shape[-2]), int(self.wk.shape[-1]), max_cores=16)
         self.o_plan = build_plan(device, int(self.wo.shape[-2]), int(self.wo.shape[-1]))
         self.q_plan = build_plan(device, int(self.wq.shape[-2]), int(self.wq.shape[-1]))
         # HiFi4 + fp32 accumulate: the projections and the SDPA feed a 0.99 PCC
@@ -233,19 +236,19 @@ class TtAttention:
 
         mm = {"compute_kernel_config": self.compute_kernel_config} if self.compute_kernel_config else {}
 
-        # Q, K and V all read the SAME activation. Their plans resolve to the
-        # same core grid, so the shard is opened ONCE and reused rather than
-        # converting the same tensor interleaved->sharded three times.
-        if (
-            self.q_plan is not None
-            and self.q_plan.matches(hidden_states)
-            and self.q_plan.shares_input_with(self.kv_plan)
-        ):
-            shared = self.q_plan.shard_input(hidden_states)
+        # Q, K and V all read the SAME activation, so each DISTINCT shard among
+        # their plans is opened once and reused. Q wants 32 cores and K/V want
+        # 16 (each measured separately), so that is two conversions rather than
+        # three -- and one if a future retune brings them back onto one grid.
+        if self.q_plan is not None and self.q_plan.matches(hidden_states) and self.kv_plan is not None:
             ckc = self.compute_kernel_config
-            query = self._split_heads(self.q_plan.run_presharded(shared, self.wq, ckc), self.n_heads)
-            key = self._split_heads(self.kv_plan.run_presharded(shared, self.wk, ckc), self.n_kv_heads)
-            value = self._split_heads(self.kv_plan.run_presharded(shared, self.wv, ckc), self.n_kv_heads)
+            q_shard = self.q_plan.shard_input(hidden_states)
+            kv_shard = q_shard if self.q_plan.shares_input_with(self.kv_plan) else self.kv_plan.shard_input(
+                hidden_states
+            )
+            query = self._split_heads(self.q_plan.run_presharded(q_shard, self.wq, ckc), self.n_heads)
+            key = self._split_heads(self.kv_plan.run_presharded(kv_shard, self.wk, ckc), self.n_kv_heads)
+            value = self._split_heads(self.kv_plan.run_presharded(kv_shard, self.wv, ckc), self.n_kv_heads)
         else:
             query = self._split_heads(self._q_proj(hidden_states, mm), self.n_heads)
             key = self._split_heads(self._kv_proj(hidden_states, self.wk, mm), self.n_kv_heads)
