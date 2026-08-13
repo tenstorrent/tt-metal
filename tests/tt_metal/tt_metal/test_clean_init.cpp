@@ -28,6 +28,8 @@
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 /*
  * Similar to loopback programming example, except run on al devices and skip device teardown to check if we can
  * recover from a "bad" state.
@@ -134,7 +136,7 @@ int main(int argc, char** /*argv*/) {
                 result_vec.resize(
                     shard->page_size() * shard->num_pages() /
                     sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-                cq.enqueue_read_shards(
+                distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
                     {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
                     output_dram_buffer,
                     true);

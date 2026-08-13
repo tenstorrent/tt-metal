@@ -8,7 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
-#include <distributed/mesh_io.hpp>
+#include "tt_metal/distributed/mesh_io.hpp"
 #include <memory>
 #include <vector>
 
@@ -24,6 +24,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal {
 
@@ -85,7 +86,7 @@ TEST_F(UnitMeshCQEventFixture, TestEventsDataMovementWrittenToCompletionQueueInO
                     page.resize(
                         shard->page_size() * shard->num_pages() /
                         sizeof(typename std::decay_t<decltype(page)>::value_type));
-                    cq.enqueue_read_shards(
+                    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
                         {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(page.data())},
                         buffers.back(),
                         true);

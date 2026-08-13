@@ -10,6 +10,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include "tt_metal/distributed/mesh_io.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -98,7 +99,7 @@ int main() {
     std::shared_ptr<distributed::MeshBuffer> src_buffer =
         distributed::MeshBuffer::create(buffer_config, input_dram_config, mesh_device.get());
     const uint32_t src_addr = src_buffer->address();
-    cq.enqueue_write_mesh_buffer(src_buffer, src_vec.data(), false);
+    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, false);
 
     // configure and create circular buffers with the same address on each of the designated cores
     // Create a circular buffer on each core to hold its shard of data

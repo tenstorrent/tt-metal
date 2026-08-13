@@ -33,6 +33,7 @@
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -494,7 +495,7 @@ static bool reader_datacopy_writer(
         auto* shard = output_dram_buffer->get_device_buffer(zero_coord);
         output_data.resize(
             shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(output_data)>::value_type));
-        cq.enqueue_read_shards(
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{zero_coord}.host_data(output_data.data())}, output_dram_buffer, true);
     };
 

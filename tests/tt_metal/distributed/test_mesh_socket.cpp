@@ -24,6 +24,8 @@
 #include <cstring>
 #include <tt-metalium/tt_align.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -264,8 +266,9 @@ void test_single_connection_single_device_socket(
         recv_data_readback.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(recv_data_readback)>::value_type));
-        md0->mesh_command_queue().enqueue_read_shards(
-            {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(recv_data_readback.data())}, recv_data_buffer, true);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(md0->mesh_command_queue())
+            .enqueue_read_shards(
+                {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(recv_data_readback.data())}, recv_data_buffer, true);
     };
     EXPECT_EQ(src_vec, recv_data_readback);
 }
@@ -581,10 +584,11 @@ void test_single_device_socket_with_workers(
             output_data_readback.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(output_data_readback)>::value_type));
-            md0->mesh_command_queue().enqueue_read_shards(
-                {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(output_data_readback.data())},
-                local_output_buffer,
-                true);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(md0->mesh_command_queue())
+                .enqueue_read_shards(
+                    {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(output_data_readback.data())},
+                    local_output_buffer,
+                    true);
         };
 
         EXPECT_EQ(std::memcmp(src_ptr, output_data_readback.data(), local_buffer_config.size), 0);
@@ -763,8 +767,9 @@ void test_single_connection_multi_device_socket(
         recv_data_readback.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(recv_data_readback)>::value_type));
-        md1->mesh_command_queue().enqueue_read_shards(
-            {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(recv_data_readback.data())}, recv_data_buffer, true);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(md1->mesh_command_queue())
+            .enqueue_read_shards(
+                {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(recv_data_readback.data())}, recv_data_buffer, true);
     };
     EXPECT_EQ(src_vec, recv_data_readback);
 }
@@ -942,8 +947,9 @@ void test_single_connection_multi_device_socket_with_workers(
         recv_data_readback.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(recv_data_readback)>::value_type));
-        md1->mesh_command_queue().enqueue_read_shards(
-            {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(recv_data_readback.data())}, output_buffer, true);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(md1->mesh_command_queue())
+            .enqueue_read_shards(
+                {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(recv_data_readback.data())}, output_buffer, true);
     };
     EXPECT_EQ(src_vec, recv_data_readback);
 }
@@ -1487,10 +1493,11 @@ void test_multi_sender_single_recv(
                 output_data_readback.resize(
                     shard->page_size() * shard->num_pages() /
                     sizeof(typename std::decay_t<decltype(output_data_readback)>::value_type));
-                reducer->mesh_command_queue().enqueue_read_shards(
-                    {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(output_data_readback.data())},
-                    reduce_data_buffer,
-                    true);
+                tt::tt_metal::distributed::as_mesh_command_queue_base(reducer->mesh_command_queue())
+                    .enqueue_read_shards(
+                        {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(output_data_readback.data())},
+                        reduce_data_buffer,
+                        true);
             };
             for (size_t i = 0; i < src_vec.size(); ++i) {
                 EXPECT_EQ(2 * src_vec[i], output_data_readback[i]);
@@ -1502,10 +1509,11 @@ void test_multi_sender_single_recv(
             output_data_readback.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(output_data_readback)>::value_type));
-            receiver->mesh_command_queue().enqueue_read_shards(
-                {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(output_data_readback.data())},
-                output_data_buffer,
-                true);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(receiver->mesh_command_queue())
+                .enqueue_read_shards(
+                    {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(output_data_readback.data())},
+                    output_data_buffer,
+                    true);
         };
         for (size_t i = 0; i < src_vec.size(); ++i) {
             EXPECT_EQ(2 * src_vec[i], output_data_readback[i]);
@@ -1605,10 +1613,11 @@ void test_multi_connection_multi_device_data_copy(
             output_data_readback.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(output_data_readback)>::value_type));
-            recv_mesh->mesh_command_queue().enqueue_read_shards(
-                {ShardDataTransfer{MeshCoordinate(0, x)}.host_data(output_data_readback.data())},
-                recv_data_buffer,
-                true);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(recv_mesh->mesh_command_queue())
+                .enqueue_read_shards(
+                    {ShardDataTransfer{MeshCoordinate(0, x)}.host_data(output_data_readback.data())},
+                    recv_data_buffer,
+                    true);
         };
         EXPECT_EQ(output_data_readback, src_vec);
     }
@@ -1789,20 +1798,22 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
         sender_config_bytes.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(sender_config_bytes)>::value_type));
-        md0->mesh_command_queue().enqueue_read_shards(
-            {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(sender_config_bytes.data())},
-            send_socket.get_config_buffer(),
-            true);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(md0->mesh_command_queue())
+            .enqueue_read_shards(
+                {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(sender_config_bytes.data())},
+                send_socket.get_config_buffer(),
+                true);
     };
     {
         auto* shard = recv_socket.get_config_buffer()->get_device_buffer(MeshCoordinate(0, 0));
         recv_config_readback.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(recv_config_readback)>::value_type));
-        md0->mesh_command_queue().enqueue_read_shards(
-            {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(recv_config_readback.data())},
-            recv_socket.get_config_buffer(),
-            true);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(md0->mesh_command_queue())
+            .enqueue_read_shards(
+                {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(recv_config_readback.data())},
+                recv_socket.get_config_buffer(),
+                true);
     };
 
     const uint32_t sender_page_size = send_socket.get_config_buffer()->page_size();
@@ -1873,20 +1884,22 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
         sender_config_bytes.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(sender_config_bytes)>::value_type));
-        md0->mesh_command_queue().enqueue_read_shards(
-            {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(sender_config_bytes.data())},
-            send_socket.get_config_buffer(),
-            true);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(md0->mesh_command_queue())
+            .enqueue_read_shards(
+                {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(sender_config_bytes.data())},
+                send_socket.get_config_buffer(),
+                true);
     };
     {
         auto* shard = recv_socket.get_config_buffer()->get_device_buffer(MeshCoordinate(0, 0));
         recv_configs.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(recv_configs)>::value_type));
-        md0->mesh_command_queue().enqueue_read_shards(
-            {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(recv_configs.data())},
-            recv_socket.get_config_buffer(),
-            true);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(md0->mesh_command_queue())
+            .enqueue_read_shards(
+                {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(recv_configs.data())},
+                recv_socket.get_config_buffer(),
+                true);
     };
 
     const uint32_t sender_page_size = send_socket.get_config_buffer()->page_size();
@@ -2002,20 +2015,22 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
             sender_bytes.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(sender_bytes)>::value_type));
-            md0->mesh_command_queue().enqueue_read_shards(
-                {ShardDataTransfer{device_coord}.host_data(sender_bytes.data())},
-                send_socket_l1.get_config_buffer(),
-                true);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(md0->mesh_command_queue())
+                .enqueue_read_shards(
+                    {ShardDataTransfer{device_coord}.host_data(sender_bytes.data())},
+                    send_socket_l1.get_config_buffer(),
+                    true);
         };
         {
             auto* shard = recv_socket_l1.get_config_buffer()->get_device_buffer(device_coord);
             recv_configs.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(recv_configs)>::value_type));
-            md1->mesh_command_queue().enqueue_read_shards(
-                {ShardDataTransfer{device_coord}.host_data(recv_configs.data())},
-                recv_socket_l1.get_config_buffer(),
-                true);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(md1->mesh_command_queue())
+                .enqueue_read_shards(
+                    {ShardDataTransfer{device_coord}.host_data(recv_configs.data())},
+                    recv_socket_l1.get_config_buffer(),
+                    true);
         };
 
         sender_bytes_per_dev_coord[device_coord] = std::move(sender_bytes);

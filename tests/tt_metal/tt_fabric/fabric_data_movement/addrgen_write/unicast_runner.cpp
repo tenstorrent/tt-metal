@@ -25,6 +25,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <distributed/mesh_device_view_impl.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_fabric::test {
 
@@ -361,7 +362,8 @@ Notes:
     {
         auto* shard = dst_buf->get_device_buffer(dst_coord);
         rx.resize(shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(rx)>::value_type));
-        mcq.enqueue_read_shards({Dist::ShardDataTransfer{dst_coord}.host_data(rx.data())}, dst_buf, /*blocking=*/true);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(mcq).enqueue_read_shards(
+            {Dist::ShardDataTransfer{dst_coord}.host_data(rx.data())}, dst_buf, /*blocking=*/true);
     };
     verify_payload_words(rx, tx);
 }

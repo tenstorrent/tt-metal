@@ -13,6 +13,7 @@
 #include "dm_common.hpp"
 #include <distributed/mesh_device_impl.hpp>
 #include <chrono>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal {
 
@@ -204,7 +205,8 @@ TEST_F(GenericMeshDeviceFixture, PCIeHostReadBandwidthSweep) {
             auto* shard = buffer->get_device_buffer(device_coord);
             dst.resize(
                 shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
-            cq.enqueue_read_shards({distributed::ShardDataTransfer{device_coord}.host_data(dst.data())}, buffer, true);
+            distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+                {distributed::ShardDataTransfer{device_coord}.host_data(dst.data())}, buffer, true);
         };
 
         // Timed
@@ -214,7 +216,7 @@ TEST_F(GenericMeshDeviceFixture, PCIeHostReadBandwidthSweep) {
                 auto* shard = buffer->get_device_buffer(device_coord);
                 dst.resize(
                     shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
-                cq.enqueue_read_shards(
+                distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
                     {distributed::ShardDataTransfer{device_coord}.host_data(dst.data())}, buffer, true);
             };
         }

@@ -29,6 +29,8 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal {
 
@@ -113,8 +115,9 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
         auto* shard = buffer_1->get_device_buffer(zero_coord_);
         output_1.resize(
             shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(output_1)>::value_type));
-        mesh_device->mesh_command_queue().enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero_coord_}.host_data(output_1.data())}, buffer_1, true);
+        distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+            .enqueue_read_shards(
+                {distributed::ShardDataTransfer{zero_coord_}.host_data(output_1.data())}, buffer_1, true);
     };
     EXPECT_EQ(input_1, output_1);
     auto input_1_it = input_1.begin();
@@ -144,8 +147,9 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
         auto* shard = buffer_3->get_device_buffer(zero_coord_);
         output_2.resize(
             shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(output_2)>::value_type));
-        mesh_device->mesh_command_queue().enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero_coord_}.host_data(output_2.data())}, buffer_3, true);
+        distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+            .enqueue_read_shards(
+                {distributed::ShardDataTransfer{zero_coord_}.host_data(output_2.data())}, buffer_3, true);
     };
     EXPECT_EQ(input_2, output_2);
     auto input_2_it = input_2.begin();

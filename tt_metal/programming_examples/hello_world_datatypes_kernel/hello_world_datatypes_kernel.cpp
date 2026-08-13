@@ -5,6 +5,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/mesh_io.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -62,7 +63,7 @@ int main() {
 
     // Initialize Float data on host and upload to the DRAM buffer (non-blocking upload)
     std::vector<float> init_data(buffer_size / sizeof(float), 1.23);
-    cq.enqueue_write_mesh_buffer(dram_buffer, init_data.data(), false);
+    distributed::EnqueueWriteMeshBuffer(cq, dram_buffer, init_data, false);
 
     // Set runtime args, add program to mesh workload, and enqueue (non-blocking)
     SetRuntimeArgs(program, data_reader_kernel_id, core, {dram_buffer->address()});

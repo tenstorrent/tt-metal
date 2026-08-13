@@ -51,6 +51,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "common/tt_backend_api_types.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -652,10 +653,12 @@ bool RunWriteBWTest(
             readback_data_vec.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(readback_data_vec)>::value_type));
-            output_buffer->device()->mesh_command_queue().enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(readback_data_vec.data())},
-                output_buffer,
-                true);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(output_buffer->device()->mesh_command_queue())
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(
+                        readback_data_vec.data())},
+                    output_buffer,
+                    true);
         };
         log_info(tt::LogTest, "Checking outputs");
         if (readback_data_vec.size() != inputs.size()) {

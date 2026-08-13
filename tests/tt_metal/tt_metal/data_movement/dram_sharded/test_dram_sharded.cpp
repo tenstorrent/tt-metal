@@ -18,6 +18,7 @@
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal {
 

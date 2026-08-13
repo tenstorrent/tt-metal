@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
+#include "tt_metal/distributed/mesh_io.hpp"
 #include <cstddef>
 #include <memory>
 #include <numeric>
@@ -28,6 +28,7 @@
 #include "tests/tt_metal/distributed/utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -68,8 +69,8 @@ TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
                 readback_vecs.back().resize(
                     shard->page_size() * shard->num_pages() /
                     sizeof(typename std::decay_t<decltype(readback_vecs.back())>::value_type));
-                mesh_device_->mesh_command_queue(1).enqueue_read_shards(
-                    {ShardDataTransfer{coord}.host_data(readback_vecs.back().data())}, buf, true);
+                tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue(1))
+                    .enqueue_read_shards({ShardDataTransfer{coord}.host_data(readback_vecs.back().data())}, buf, true);
             };
         }
 
@@ -201,10 +202,11 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
                         dst_vec.resize(
                             shard->page_size() * shard->num_pages() /
                             sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
-                        mesh_device_->mesh_command_queue(1).enqueue_read_shards(
-                            {ShardDataTransfer{device_coord}.host_data(dst_vec.data())},
-                            output_bufs[(col_idx * worker_grid_size.y) + row_idx],
-                            true);
+                        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue(1))
+                            .enqueue_read_shards(
+                                {ShardDataTransfer{device_coord}.host_data(dst_vec.data())},
+                                output_bufs[(col_idx * worker_grid_size.y) + row_idx],
+                                true);
                     };
                     if (device_coord[0] <= (num_rows_in_workload - 1)) {
                         for (auto val : dst_vec) {
@@ -246,7 +248,8 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
 
         std::vector<std::vector<uint32_t>> readback_vecs = {};
 
-        mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_0, false);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue(1))
+            .enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_0, false);
         auto event0 = mesh_device_->mesh_command_queue(1).enqueue_record_event({}, devices_0);
         mesh_device_->mesh_command_queue(0).enqueue_wait_for_event(event0);
 
@@ -257,12 +260,13 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
                 readback_vecs.back().resize(
                     shard->page_size() * shard->num_pages() /
                     sizeof(typename std::decay_t<decltype(readback_vecs.back())>::value_type));
-                mesh_device_->mesh_command_queue(0).enqueue_read_shards(
-                    {ShardDataTransfer{coord}.host_data(readback_vecs.back().data())}, buf, true);
+                tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue(0))
+                    .enqueue_read_shards({ShardDataTransfer{coord}.host_data(readback_vecs.back().data())}, buf, true);
             };
         }
 
-        mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_1, false);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue(1))
+            .enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_1, false);
         auto event1 = mesh_device_->mesh_command_queue(1).enqueue_record_event_to_host({}, devices_1);
         EventSynchronize(event1);
 
@@ -273,8 +277,8 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
                 readback_vecs.back().resize(
                     shard->page_size() * shard->num_pages() /
                     sizeof(typename std::decay_t<decltype(readback_vecs.back())>::value_type));
-                mesh_device_->mesh_command_queue(0).enqueue_read_shards(
-                    {ShardDataTransfer{coord}.host_data(readback_vecs.back().data())}, buf, true);
+                tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue(0))
+                    .enqueue_read_shards({ShardDataTransfer{coord}.host_data(readback_vecs.back().data())}, buf, true);
             };
         }
         for (auto& vec : readback_vecs) {
@@ -338,7 +342,8 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
         write_events.push_back(write_cq.enqueue_record_event_to_host());
         // Wait for write to complete before reading
         read_cq.enqueue_wait_for_event(write_events.back());
-        read_cq.enqueue_read_shards(read_shards[i], buffer, false);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(read_cq).enqueue_read_shards(
+            read_shards[i], buffer, false);
         read_events.push_back(read_cq.enqueue_record_event_to_host());
     }
 

@@ -21,6 +21,7 @@
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal {
 

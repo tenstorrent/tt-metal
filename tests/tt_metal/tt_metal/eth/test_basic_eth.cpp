@@ -36,6 +36,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 #include "eth_test_common.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -324,7 +325,7 @@ bool noc_reader_and_writer_kernels(
         dram_readback_vec.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(dram_readback_vec)>::value_type));
-        cq.enqueue_read_shards(
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{zero_coord}.host_data(dram_readback_vec.data())}, writer_dram_buffer, true);
     };
     pass &= (dram_readback_vec == writer_inputs);

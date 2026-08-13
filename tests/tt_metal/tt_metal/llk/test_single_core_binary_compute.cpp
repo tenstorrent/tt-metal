@@ -39,6 +39,7 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 namespace tt::tt_metal {
 class IDevice;
 }  // namespace tt::tt_metal
@@ -226,7 +227,7 @@ static bool read_and_validate_binary_result(
         dest_buffer_data.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
-        cq.enqueue_read_shards(
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, output_dram_buffer, false);
     };
 

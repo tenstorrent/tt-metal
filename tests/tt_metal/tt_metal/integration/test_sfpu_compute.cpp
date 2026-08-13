@@ -38,6 +38,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 namespace tt::tt_metal {
 
 using std::map;
@@ -257,7 +258,7 @@ bool run_sfpu_all_same_buffer(distributed::MeshCommandQueue& cq, const SfpuConfi
         dest_buffer_data.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
-        cq.enqueue_read_shards(
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{local_coord}.host_data(dest_buffer_data.data())}, output_dram_buffer, true);
     };
 

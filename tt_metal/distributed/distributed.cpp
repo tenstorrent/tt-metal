@@ -6,6 +6,7 @@
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "mesh_io.hpp"
+#include "mesh_command_queue_base.hpp"
 #include <utility>
 
 #include "device.hpp"
@@ -138,6 +139,16 @@ void EventSynchronize(const MeshEvent& event) {
             ;
         }
     }
+}
+
+void detail_enqueue_write_mesh_buffer(
+    MeshCommandQueue& mesh_cq, const std::shared_ptr<MeshBuffer>& mesh_buffer, const void* src, bool blocking) {
+    as_mesh_command_queue_base(mesh_cq).enqueue_write_mesh_buffer(mesh_buffer, src, blocking);
+}
+
+void detail_enqueue_read_mesh_buffer(
+    MeshCommandQueue& mesh_cq, void* dst, const std::shared_ptr<MeshBuffer>& mesh_buffer, bool blocking) {
+    as_mesh_command_queue_base(mesh_cq).enqueue_read_mesh_buffer(dst, mesh_buffer, blocking);
 }
 
 bool EventQuery(const MeshEvent& event) {

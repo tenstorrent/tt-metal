@@ -41,6 +41,7 @@
 #include "math.hpp"
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
+#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal {
 

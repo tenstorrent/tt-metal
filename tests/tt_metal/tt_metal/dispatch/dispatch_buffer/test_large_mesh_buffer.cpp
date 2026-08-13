@@ -30,6 +30,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/api/tt-metalium/math.hpp"
 #include <enchantum/enchantum.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -208,7 +209,8 @@ TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     }
 
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, input_shards, false);
-    mesh_device_->mesh_command_queue().enqueue_read_shards(output_shards, mesh_buffer, true);
+    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+        .enqueue_read_shards(output_shards, mesh_buffer, true);
 
     for (auto& dst : dst_vec) {
         std::string context =
@@ -443,7 +445,8 @@ TEST_P(ShardedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     }
 
     mesh_device_->mesh_command_queue().enqueue_write_shards(mesh_buffer, input_shards, false);
-    mesh_device_->mesh_command_queue().enqueue_read_shards(output_shards, mesh_buffer, true);
+    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+        .enqueue_read_shards(output_shards, mesh_buffer, true);
 
     for (auto& dst : dst_vec) {
         std::string context =

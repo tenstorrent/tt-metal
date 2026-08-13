@@ -31,6 +31,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal {
 
@@ -154,7 +155,8 @@ bool vecadd_multi_core(
         auto* shard = c->get_device_buffer(zero_coord);
         c_data.resize(
             shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(c_data)>::value_type));
-        cq.enqueue_read_shards({distributed::ShardDataTransfer{zero_coord}.host_data(c_data.data())}, c, true);
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+            {distributed::ShardDataTransfer{zero_coord}.host_data(c_data.data())}, c, true);
     };
 
     size_t data_per_core = tile_size * tiles_per_core;

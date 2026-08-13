@@ -46,6 +46,8 @@
 #include <tt-metalium/distributed.hpp>
 // Access to internal API: ProgramImpl::validate_circular_buffer_region
 #include "tt_metal/impl/program/program_impl.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal {
 
@@ -167,8 +169,9 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
         auto* shard = buffer_1->get_device_buffer(zero_coord);
         output_1.resize(
             shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(output_1)>::value_type));
-        device->mesh_command_queue().enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero_coord}.host_data(output_1.data())}, buffer_1, true);
+        distributed::as_mesh_command_queue_base(device->mesh_command_queue())
+            .enqueue_read_shards(
+                {distributed::ShardDataTransfer{zero_coord}.host_data(output_1.data())}, buffer_1, true);
     };
     EXPECT_EQ(input_1, output_1);
     auto input_1_it = input_1.begin();

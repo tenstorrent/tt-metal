@@ -29,6 +29,8 @@
 #include "context/metal_context.hpp"
 #include "mesh_coord.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -361,8 +363,9 @@ static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& 
             host_buffer.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(host_buffer)>::value_type));
-            mesh_device->mesh_command_queue().enqueue_read_shards(
-                {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(host_buffer.data())}, device_buffer, true);
+            as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                .enqueue_read_shards(
+                    {ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(host_buffer.data())}, device_buffer, true);
         };
     }
 
@@ -410,7 +413,8 @@ static void BM_read_pinned_memory(benchmark::State& state, const std::shared_ptr
     experimental::ShardDataTransferSetPinnedMemory(read_transfer, pinned_mem);
 
     for ([[maybe_unused]] auto _ : state) {
-        mesh_device->mesh_command_queue().enqueue_read_shards({read_transfer}, device_buffer, /*blocking=*/true);
+        as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+            .enqueue_read_shards({read_transfer}, device_buffer, /*blocking=*/true);
     }
 
     state.SetBytesProcessed(transfer_size * state.iterations());

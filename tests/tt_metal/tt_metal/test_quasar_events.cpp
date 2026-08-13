@@ -7,7 +7,7 @@
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <distributed/mesh_io.hpp>
+#include "tt_metal/distributed/mesh_io.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_event.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>

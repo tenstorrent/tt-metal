@@ -48,6 +48,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal {
 

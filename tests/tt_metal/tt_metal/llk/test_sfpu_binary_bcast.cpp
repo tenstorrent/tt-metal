@@ -32,6 +32,7 @@
 
 #include "device_fixture.hpp"
 #include "test_golden_impls.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal {
 
@@ -301,7 +302,7 @@ bool run_sfpu_binary_bcast(const std::shared_ptr<distributed::MeshDevice>& mesh_
         device_tiled.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(device_tiled)>::value_type));
-        cq.enqueue_read_shards(
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{zero_coord}.host_data(device_tiled.data())}, dst_buffer, true);
     };
 

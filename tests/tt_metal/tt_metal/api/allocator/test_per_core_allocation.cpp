@@ -20,6 +20,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal {
 
@@ -251,10 +252,12 @@ TEST_F(PerCoreAllocationTest, PerCoreSocketConfigMetadataUsesPerCoreAddress) {
         recv_config_readback.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(recv_config_readback)>::value_type));
-        md->mesh_command_queue().enqueue_read_shards(
-            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(recv_config_readback.data())},
-            recv_socket.get_config_buffer(),
-            true);
+        distributed::as_mesh_command_queue_base(md->mesh_command_queue())
+            .enqueue_read_shards(
+                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(
+                    recv_config_readback.data())},
+                recv_socket.get_config_buffer(),
+                true);
     };
     ASSERT_EQ(recv_config_readback.size(), 1u);
     EXPECT_EQ(recv_config_readback[0].fifo_addr, pc_addr);
@@ -268,10 +271,12 @@ TEST_F(PerCoreAllocationTest, PerCoreSocketConfigMetadataUsesPerCoreAddress) {
         sender_config_bytes.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(sender_config_bytes)>::value_type));
-        md->mesh_command_queue().enqueue_read_shards(
-            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(sender_config_bytes.data())},
-            send_socket.get_config_buffer(),
-            true);
+        distributed::as_mesh_command_queue_base(md->mesh_command_queue())
+            .enqueue_read_shards(
+                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(
+                    sender_config_bytes.data())},
+                send_socket.get_config_buffer(),
+                true);
     };
     ASSERT_GE(sender_config_bytes.size(), sizeof(sender_socket_md));
     sender_socket_md sender_md{};

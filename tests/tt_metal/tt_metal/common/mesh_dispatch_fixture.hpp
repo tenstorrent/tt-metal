@@ -21,6 +21,7 @@
 #include "llrt.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal {
 
@@ -66,10 +67,11 @@ public:
             auto* shard = out_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
             dst_vec.resize(
                 shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
-            mesh_device->mesh_command_queue().enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dst_vec.data())},
-                out_buffer,
-                true);
+            distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dst_vec.data())},
+                    out_buffer,
+                    true);
         };
     }
     int NumDevices() { return this->devices_.size(); }

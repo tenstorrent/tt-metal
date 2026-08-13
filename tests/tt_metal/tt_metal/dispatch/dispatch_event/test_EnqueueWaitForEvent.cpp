@@ -27,6 +27,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include <umd/device/types/arch.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal {
 
@@ -84,8 +85,9 @@ bool RunCrossCqReadWriteWithWaitForEvent(
                 result.resize(
                     shard->page_size() * shard->num_pages() /
                     sizeof(typename std::decay_t<decltype(result)>::value_type));
-                cq_read.get().enqueue_read_shards(
-                    {distributed::ShardDataTransfer{zero_coord}.host_data(result.data())}, buffers[i], true);
+                distributed::as_mesh_command_queue_base(cq_read.get())
+                    .enqueue_read_shards(
+                        {distributed::ShardDataTransfer{zero_coord}.host_data(result.data())}, buffers[i], true);
             };
             pass &= (srcs[i] == result);
         }
@@ -132,8 +134,9 @@ bool RunBurstWritesThenSingleCrossCqEvent(
             auto* shard = buffers[buf_idx]->get_device_buffer(zero_coord);
             result.resize(
                 shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result)>::value_type));
-            cq_read.get().enqueue_read_shards(
-                {distributed::ShardDataTransfer{zero_coord}.host_data(result.data())}, buffers[buf_idx], true);
+            distributed::as_mesh_command_queue_base(cq_read.get())
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{zero_coord}.host_data(result.data())}, buffers[buf_idx], true);
         };
         pass &= (srcs[buf_idx] == result);
     }
@@ -172,8 +175,9 @@ bool RunDeviceOnlyEventChainWithPerIterationValidation(
             auto* shard = buffer->get_device_buffer(zero_coord);
             result.resize(
                 shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result)>::value_type));
-            cq_read.get().enqueue_read_shards(
-                {distributed::ShardDataTransfer{zero_coord}.host_data(result.data())}, buffer, true);
+            distributed::as_mesh_command_queue_base(cq_read.get())
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{zero_coord}.host_data(result.data())}, buffer, true);
         };
         bool iter_pass = (src == result);
         if (!iter_pass) {
@@ -230,8 +234,9 @@ bool RunHeavyBurstWritesThenDeviceOnlyEvent(
             auto* shard = buffers[buf_idx]->get_device_buffer(zero_coord);
             result.resize(
                 shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result)>::value_type));
-            cq_read.get().enqueue_read_shards(
-                {distributed::ShardDataTransfer{zero_coord}.host_data(result.data())}, buffers[buf_idx], true);
+            distributed::as_mesh_command_queue_base(cq_read.get())
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{zero_coord}.host_data(result.data())}, buffers[buf_idx], true);
         };
         bool buf_pass = (srcs[buf_idx] == result);
         if (!buf_pass) {
@@ -453,8 +458,9 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                     result.resize(
                         shard->page_size() * shard->num_pages() /
                         sizeof(typename std::decay_t<decltype(result)>::value_type));
-                    cqs[i].get().enqueue_read_shards(
-                        {distributed::ShardDataTransfer{zero_coord_}.host_data(result.data())}, buffers[i], true);
+                    distributed::as_mesh_command_queue_base(cqs[i].get())
+                        .enqueue_read_shards(
+                            {distributed::ShardDataTransfer{zero_coord_}.host_data(result.data())}, buffers[i], true);
                 };  // Blocking.
                 bool local_pass = (srcs[i] == result);
                 log_debug(
@@ -637,10 +643,11 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                         read_results.back().resize(
                             shard->page_size() * shard->num_pages() /
                             sizeof(typename std::decay_t<decltype(read_results.back())>::value_type));
-                        cq_read.get().enqueue_read_shards(
-                            {distributed::ShardDataTransfer{zero_coord_}.host_data(read_results.back().data())},
-                            buffers.back(),
-                            false);
+                        distributed::as_mesh_command_queue_base(cq_read.get())
+                            .enqueue_read_shards(
+                                {distributed::ShardDataTransfer{zero_coord_}.host_data(read_results.back().data())},
+                                buffers.back(),
+                                false);
                     };
                     log_debug(
                         tt::LogTest,

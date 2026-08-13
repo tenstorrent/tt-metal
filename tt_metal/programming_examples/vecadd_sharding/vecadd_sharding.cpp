@@ -24,6 +24,7 @@
 #include <random>
 #include <string_view>
 #include <vector>
+#include "tt_metal/distributed/mesh_io.hpp"
 
 using namespace tt::tt_metal;
 
@@ -221,8 +222,8 @@ int main(int argc, char** argv) {
 
     // copy data from host to L1 directly
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    cq.enqueue_write_mesh_buffer(a, a_data.data(), false);
-    cq.enqueue_write_mesh_buffer(b, b_data.data(), false);
+    distributed::EnqueueWriteMeshBuffer(cq, a, a_data, false);
+    distributed::EnqueueWriteMeshBuffer(cq, b, b_data, false);
 
     // Setup arguments and run the program.
     SetRuntimeArgs(program, compute, cores, {num_tiles_per_core});
@@ -234,7 +235,7 @@ int main(int argc, char** argv) {
     // Read the output buffer.
     std::vector<bfloat16> c_data;
     c_data.resize(c->size() / sizeof(bfloat16));
-    cq.enqueue_read_mesh_buffer(c_data.data(), c, true);
+    distributed::EnqueueReadMeshBuffer(cq, c_data, c, true);
 
     // Print partial results so we can see the output is correct (plus or minus
     // some error due to BFP16 precision)

@@ -8,6 +8,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/mesh_io.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -188,11 +189,11 @@ int main() {
     printf("\n");
 
     // Upload inputs (non-blocking), enqueue mesh workload (non-blocking), read back result, then wait for completion
-    cq.enqueue_write_mesh_buffer(src_buffer, src_vec.data(), false);
-    cq.enqueue_write_mesh_buffer(pad_buffer, pad_vec.data(), false);
+    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec, false);
+    distributed::EnqueueWriteMeshBuffer(cq, pad_buffer, pad_vec, false);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    cq.enqueue_read_mesh_buffer(dst_vec.data(), dst_buffer, true);
+    distributed::EnqueueReadMeshBuffer(cq, dst_vec, dst_buffer, true);
     distributed::Finish(cq);
 
     printf("Padded tensor with shape (%d, %d):\n", dst_M, dst_N);

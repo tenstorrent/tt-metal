@@ -25,6 +25,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -127,7 +128,7 @@ int main(int argc, char** argv) {
                     result_vec.resize(
                         shard->page_size() * shard->num_pages() /
                         sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-                    cq.enqueue_read_shards(
+                    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
                         {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(
                             result_vec.data())},
                         buffer,

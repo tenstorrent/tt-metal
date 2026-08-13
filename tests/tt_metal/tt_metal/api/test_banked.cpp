@@ -32,6 +32,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -195,7 +196,7 @@ bool reader_cb_writer(
         reread_input_packed.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(reread_input_packed)>::value_type));
-        cq.enqueue_read_shards(
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{zero_coord}.host_data(reread_input_packed.data())}, input_buffer, false);
     };
 
@@ -205,7 +206,7 @@ bool reader_cb_writer(
         output_packed.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(output_packed)>::value_type));
-        cq.enqueue_read_shards(
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{zero_coord}.host_data(output_packed.data())}, output_buffer, false);
     };
 
@@ -329,7 +330,7 @@ bool reader_datacopy_writer(const std::shared_ptr<distributed::MeshDevice>& mesh
         dest_buffer_data.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
-        cq.enqueue_read_shards(
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, output_buffer, false);
     };
     pass &= input_packed == dest_buffer_data;

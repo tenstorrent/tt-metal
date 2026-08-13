@@ -68,6 +68,7 @@
 #include "ttnn/tensor/types.hpp"
 
 #include "stream_service_test_utils.hpp"  // replicate_all
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace ttnn::distributed::test {
 namespace {
@@ -287,8 +288,9 @@ void verify_transfer(
                 readback.resize(
                     shard->page_size() * shard->num_pages() /
                     sizeof(typename std::decay_t<decltype(readback)>::value_type));
-                receiver_mesh->mesh_command_queue().enqueue_read_shards(
-                    {ShardDataTransfer{coord}.host_data(readback.data())}, receiver_mesh_buffer, true);
+                tt::tt_metal::distributed::as_mesh_command_queue_base(receiver_mesh->mesh_command_queue())
+                    .enqueue_read_shards(
+                        {ShardDataTransfer{coord}.host_data(readback.data())}, receiver_mesh_buffer, true);
             };
             if (readback != iota) {
                 all_match = false;
@@ -471,8 +473,8 @@ void expect_receiver_backing_iota(
             readback.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(readback)>::value_type));
-            mesh->mesh_command_queue().enqueue_read_shards(
-                {ShardDataTransfer{coord}.host_data(readback.data())}, mesh_buffer, true);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh->mesh_command_queue())
+                .enqueue_read_shards({ShardDataTransfer{coord}.host_data(readback.data())}, mesh_buffer, true);
         };
         EXPECT_EQ(readback, expected) << "receiver backing mismatch at " << coord << " (iota base " << base << ")";
     }
@@ -831,8 +833,8 @@ void expect_output_tensor_iota(
             readback.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(readback)>::value_type));
-            mesh->mesh_command_queue().enqueue_read_shards(
-                {ShardDataTransfer{coord}.host_data(readback.data())}, mesh_buffer, true);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh->mesh_command_queue())
+                .enqueue_read_shards({ShardDataTransfer{coord}.host_data(readback.data())}, mesh_buffer, true);
         };
         EXPECT_EQ(readback, expected) << "output tensor mismatch at " << coord << " (iota base " << base << ")";
     }

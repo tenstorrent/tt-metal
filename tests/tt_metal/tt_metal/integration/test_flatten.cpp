@@ -31,6 +31,8 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal {
 
@@ -302,7 +304,7 @@ bool flatten_stress(
             result_vec.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-            cq.enqueue_read_shards(
+            distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
                 {distributed::ShardDataTransfer{zero_coord}.host_data(result_vec.data())}, dst_dram_buffer, true);
         };
 

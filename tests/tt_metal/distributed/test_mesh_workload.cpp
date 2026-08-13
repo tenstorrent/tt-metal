@@ -54,6 +54,8 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -598,10 +600,11 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
                     dst_vec.resize(
                         shard->page_size() * shard->num_pages() /
                         sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
-                    mesh_device_->mesh_command_queue().enqueue_read_shards(
-                        {ShardDataTransfer{device_coord}.host_data(dst_vec.data())},
-                        output_bufs[(col_idx * worker_grid_size.y) + row_idx],
-                        true);
+                    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+                        .enqueue_read_shards(
+                            {ShardDataTransfer{device_coord}.host_data(dst_vec.data())},
+                            output_bufs[(col_idx * worker_grid_size.y) + row_idx],
+                            true);
                 };
                 if (device_coord[0] <= num_rows_in_mesh_workload - 1) {
                     for (auto val : dst_vec) {
@@ -716,10 +719,11 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
                         dst_vec.resize(
                             shard->page_size() * shard->num_pages() /
                             sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
-                        mesh_device_->mesh_command_queue().enqueue_read_shards(
-                            {ShardDataTransfer{device_coord}.host_data(dst_vec.data())},
-                            output_buffers[(col_idx * worker_grid_size.y) + row_idx],
-                            true);
+                        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+                            .enqueue_read_shards(
+                                {ShardDataTransfer{device_coord}.host_data(dst_vec.data())},
+                                output_buffers[(col_idx * worker_grid_size.y) + row_idx],
+                                true);
                     };
                     for (int i = 0; i < dst_vec.size(); i++) {
                         float ref_val = std::pow(2, (iter % 2) + 1);

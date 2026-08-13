@@ -17,6 +17,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal {
 

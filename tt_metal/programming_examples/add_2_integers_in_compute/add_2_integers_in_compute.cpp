@@ -8,6 +8,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/distributed.hpp>
+#include "tt_metal/distributed/mesh_io.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -133,8 +134,8 @@ int main() {
     // is not released before the operation is complete.
     // In this case, we will wait for the program to finish eventually in the same scope, so we can set it
     // to false safely.
-    cq.enqueue_write_mesh_buffer(src0_dram_buffer, src0_vec.data(), false);
-    cq.enqueue_write_mesh_buffer(src1_dram_buffer, src1_vec.data(), false);
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, false);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, false);
 
     // Setup arguments for the kernels in the program.
     // Unlike OpenCL/CUDA, every kernel can have its own set of arguments.
@@ -154,7 +155,7 @@ int main() {
     // Read the destination MeshBuffer back to host (blocking).
     std::vector<bfloat16> result_vec;
     result_vec.resize(dst_dram_buffer->size() / sizeof(bfloat16));
-    cq.enqueue_read_mesh_buffer(result_vec.data(), dst_dram_buffer, true);
+    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
 
     // compare the results with the expected values.
     bool success = true;

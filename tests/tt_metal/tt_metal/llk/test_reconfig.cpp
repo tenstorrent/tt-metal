@@ -40,6 +40,7 @@
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -632,7 +633,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
         dest_buffer_data.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
-        cq.enqueue_read_shards(
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{zero_coord}.host_data(dest_buffer_data.data())}, out_dram, false);
     };
 
@@ -995,21 +996,21 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
         auto* shard = out0_dram->get_device_buffer(zero_coord);
         out0_data.resize(
             shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(out0_data)>::value_type));
-        cq.enqueue_read_shards(
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{zero_coord}.host_data(out0_data.data())}, out0_dram, false);
     };
     {
         auto* shard = out1_dram->get_device_buffer(zero_coord);
         out1_data.resize(
             shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(out1_data)>::value_type));
-        cq.enqueue_read_shards(
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{zero_coord}.host_data(out1_data.data())}, out1_dram, false);
     };
     {
         auto* shard = out2_dram->get_device_buffer(zero_coord);
         out2_data.resize(
             shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(out2_data)>::value_type));
-        cq.enqueue_read_shards(
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{zero_coord}.host_data(out2_data.data())}, out2_dram, false);
     };
 

@@ -13,6 +13,7 @@
 #include <bmm_op.hpp>
 #include <fmt/core.h>
 #include <iostream>
+#include "tt_metal/distributed/mesh_io.hpp"
 
 using namespace tt::constants;
 using namespace std;
@@ -332,12 +333,12 @@ void matmul_multicore_reuse(
     /* Launch program & read back results */
 
     // Non-blocking uploads allow overlapping host setup with device transfers
-    cq.enqueue_write_mesh_buffer(src0_dram_buffer, a.data(), false);
-    cq.enqueue_write_mesh_buffer(src1_dram_buffer, b.data(), false);
+    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
+    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     // Blocking read waits for completion and populates 'output'
-    cq.enqueue_read_mesh_buffer(output.data(), dst_dram_buffer, true);
+    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
 }
 
 ///////////////////////////////////////

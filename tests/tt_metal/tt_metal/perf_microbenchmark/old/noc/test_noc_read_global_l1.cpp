@@ -39,6 +39,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -247,11 +248,13 @@ int main(int argc, char** argv) {
                     result_vec.resize(
                         shard->page_size() * shard->num_pages() /
                         sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-                    device->mesh_command_queue(0).enqueue_read_shards(
-                        {tt::tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}
-                             .host_data(result_vec.data())},
-                        l1_buffers[(r * num_cores_c) + c],
-                        true);
+                    tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue(0))
+                        .enqueue_read_shards(
+                            {tt::tt_metal::distributed::ShardDataTransfer{
+                                tt::tt_metal::distributed::MeshCoordinate(0, 0)}
+                                 .host_data(result_vec.data())},
+                            l1_buffers[(r * num_cores_c) + c],
+                            true);
                 };
                 auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
 

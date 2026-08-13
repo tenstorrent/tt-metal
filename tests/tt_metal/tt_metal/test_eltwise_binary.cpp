@@ -19,6 +19,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_gold_impls.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 
 using std::vector;
 using namespace tt;
@@ -154,7 +156,7 @@ void run_eltwise_binary_test(
         auto* shard = dst_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
         result_vec.resize(
             shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-        cq.enqueue_read_shards(
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_vec.data())},
             dst_dram_buffer,
             true);

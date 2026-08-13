@@ -102,6 +102,7 @@
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 #include "test_common.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

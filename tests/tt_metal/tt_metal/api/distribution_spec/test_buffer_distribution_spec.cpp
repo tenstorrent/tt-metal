@@ -14,6 +14,8 @@
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace distribution_spec_tests {
 using tt::tt_metal::BufferDistributionSpec;  // NOLINT(misc-unused-using-decls)
@@ -394,11 +396,12 @@ TEST_P(MeshBufferReadWriteTests, WriteReadLoopback) {
             auto* shard = mesh_buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate{0, 0});
             dst.resize(
                 shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
-            mesh_device_->mesh_command_queue().enqueue_read_shards(
-                {tt::tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate{0, 0}}
-                     .host_data(dst.data())},
-                mesh_buffer,
-                /*blocking=*/false);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+                .enqueue_read_shards(
+                    {tt::tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate{0, 0}}
+                         .host_data(dst.data())},
+                    mesh_buffer,
+                    /*blocking=*/false);
         };
         Finish(mesh_device_->mesh_command_queue());
     } else {

@@ -14,6 +14,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include <tt_align.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -3114,7 +3115,9 @@ uint32_t program_base_addr_on_core(
         sub_device_ids.size() == 1, "get_sem_base_addr currently only supports programs spanning a single sub-device");
     auto sub_device_index = **sub_device_ids.begin();
     auto* cq = mesh_workload.get_last_used_command_queue();
-    return cq ? (cq->get_config_buffer_mgr(sub_device_index).get_last_slot_addr(programmable_core_type))
+    return cq ? (distributed::as_mesh_command_queue_base(*cq)
+                     .get_config_buffer_mgr(sub_device_index)
+                     .get_last_slot_addr(programmable_core_type))
               : MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
 

@@ -32,6 +32,8 @@
 #include "llrt/llrt.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "mesh_dispatch_fixture.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal::distributed::test {
 
@@ -264,8 +266,8 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
                 auto* shard = fd_buf->get_device_buffer(coord);
                 dst.resize(
                     shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
-                mesh_device->mesh_command_queue().enqueue_read_shards(
-                    {ShardDataTransfer{coord}.host_data(dst.data())}, fd_buf, true);
+                tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                    .enqueue_read_shards({ShardDataTransfer{coord}.host_data(dst.data())}, fd_buf, true);
             };
             EXPECT_EQ(dst, fd_src_vec) << "Cycle " << cycle << ": sharded L1 readback failed in FD mode at " << coord;
         }

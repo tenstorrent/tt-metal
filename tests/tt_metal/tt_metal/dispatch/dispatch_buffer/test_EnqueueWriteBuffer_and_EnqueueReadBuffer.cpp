@@ -51,6 +51,8 @@
 
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal {
 
@@ -285,7 +287,7 @@ void EnqueueReadMeshSubBuffer(
     auto shard_data_transfer =
         distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dst.data()).region(region);
 
-    cq.enqueue_read_shards({shard_data_transfer}, buffer, blocking);
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards({shard_data_transfer}, buffer, blocking);
 }
 
 template <bool cq_dispatch_only = false>
@@ -382,7 +384,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
                     result.resize(
                         shard->page_size() * shard->num_pages() /
                         sizeof(typename std::decay_t<decltype(result)>::value_type));
-                    cq.enqueue_read_shards(
+                    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
                         {distributed::ShardDataTransfer{device_coord}.host_data(result.data())}, bufa, true);
                 };
             } else {
@@ -450,7 +452,8 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
                 auto* shard = buf->get_device_buffer(coord);
                 dst.resize(
                     shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
-                cq.enqueue_read_shards({distributed::ShardDataTransfer{coord}.host_data(dst.data())}, buf, true);
+                distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+                    {distributed::ShardDataTransfer{coord}.host_data(dst.data())}, buf, true);
             };
             EXPECT_EQ(src, dst);
         } else {
@@ -462,7 +465,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
                 dsts[dsts.size() - 1].resize(
                     shard->page_size() * shard->num_pages() /
                     sizeof(typename std::decay_t<decltype(dsts[dsts.size() - 1])>::value_type));
-                cq.enqueue_read_shards(
+                distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
                     {distributed::ShardDataTransfer{coord}.host_data(dsts[dsts.size() - 1].data())},
                     buffers[buffers.size() - 1],
                     true);
@@ -547,7 +550,7 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                         res.resize(
                             shard->page_size() * shard->num_pages() /
                             sizeof(typename std::decay_t<decltype(res)>::value_type));
-                        cq.enqueue_read_shards(
+                        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
                             {distributed::ShardDataTransfer{device_coord}.host_data(res.data())}, buf, true);
                     };
                 } else {
@@ -589,7 +592,7 @@ void test_EnqueueWrap_on_EnqueueReadBuffer(
     {
         auto* shard = buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
         dst.resize(shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
-        cq.enqueue_read_shards(
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dst.data())}, buffer, true);
     };
 
@@ -642,7 +645,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
             auto* shard = buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
             dst.resize(
                 shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
-            cq.enqueue_read_shards(
+            distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
                 {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(dst.data())},
                 buffer,
                 true);
@@ -688,10 +691,12 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(
                     result.resize(
                         shard->page_size() * shard->num_pages() /
                         sizeof(typename std::decay_t<decltype(result)>::value_type));
-                    cqs[i].get().enqueue_read_shards(
-                        {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result.data())},
-                        buffers[i],
-                        true);
+                    distributed::as_mesh_command_queue_base(cqs[i].get())
+                        .enqueue_read_shards(
+                            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(
+                                result.data())},
+                            buffers[i],
+                            true);
                 };
             } else {
                 {
@@ -699,10 +704,12 @@ bool test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(
                     result.resize(
                         shard->page_size() * shard->num_pages() /
                         sizeof(typename std::decay_t<decltype(result)>::value_type));
-                    cqs[i].get().enqueue_read_shards(
-                        {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result.data())},
-                        buffers[i],
-                        true);
+                    distributed::as_mesh_command_queue_base(cqs[i].get())
+                        .enqueue_read_shards(
+                            {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(
+                                result.data())},
+                            buffers[i],
+                            true);
                 };
             }
             bool local_pass = (srcs[i] == result);
@@ -1232,10 +1239,11 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapCompletionQOnInsufficien
             result_1.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(result_1)>::value_type));
-            mesh_device->mesh_command_queue().enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_1.data())},
-                buff_1,
-                true);
+            distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_1.data())},
+                    buff_1,
+                    true);
         };
         EXPECT_EQ(src_1, result_1);
 
@@ -1254,10 +1262,11 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapCompletionQOnInsufficien
             result_2.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(result_2)>::value_type));
-            mesh_device->mesh_command_queue().enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_2.data())},
-                buff_2,
-                true);
+            distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_2.data())},
+                    buff_2,
+                    true);
         };
         EXPECT_EQ(src_2, result_2);
 
@@ -1276,10 +1285,11 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapCompletionQOnInsufficien
             result_3.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(result_3)>::value_type));
-            mesh_device->mesh_command_queue().enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_3.data())},
-                buff_3,
-                true);
+            distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_3.data())},
+                    buff_3,
+                    true);
         };
         EXPECT_EQ(src_3, result_3);
     }
@@ -1399,10 +1409,12 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestReadBufferWriteSubBuffer) {
             read_buf_result.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(read_buf_result)>::value_type));
-            mesh_device->mesh_command_queue().enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(read_buf_result.data())},
-                buffer,
-                true);
+            distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(
+                        read_buf_result.data())},
+                    buffer,
+                    true);
         };
         vector<uint32_t> result;
         for (uint32_t i = buffer_region_offset / sizeof(uint32_t);
@@ -1512,10 +1524,11 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapCompletionQOnInsufficien
             result_1.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(result_1)>::value_type));
-            mesh_device->mesh_command_queue().enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_1.data())},
-                buff_1,
-                true);
+            distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_1.data())},
+                    buff_1,
+                    true);
         };
         EXPECT_EQ(src_1, result_1);
 
@@ -1535,10 +1548,11 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestWrapCompletionQOnInsufficien
             result_2.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(result_2)>::value_type));
-            mesh_device->mesh_command_queue().enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_2.data())},
-                wrap_buff,
-                true);
+            distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_2.data())},
+                    wrap_buff,
+                    true);
         };
         EXPECT_EQ(src_2, result_2);
     }
@@ -1988,10 +2002,11 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestMultipleNonOverlappingWrites
             auto* shard = buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));
             result.resize(
                 shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result)>::value_type));
-            mesh_device->mesh_command_queue().enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result.data())},
-                buffer,
-                true);
+            distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result.data())},
+                    buffer,
+                    true);
         };
 
         EXPECT_EQ(expected, result);
@@ -2331,10 +2346,11 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestBackToBackNon32BAlignedPageS
             result_a.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(result_a)>::value_type));
-            mesh_device->mesh_command_queue().enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_a.data())},
-                bufa,
-                true);
+            distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_a.data())},
+                    bufa,
+                    true);
         };
 
         vector<uint32_t> result_b(bufb->size() / sizeof(uint32_t));
@@ -2343,10 +2359,11 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestBackToBackNon32BAlignedPageS
             result_b.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(result_b)>::value_type));
-            mesh_device->mesh_command_queue().enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_b.data())},
-                bufb,
-                true);
+            distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_b.data())},
+                    bufb,
+                    true);
         };
 
         EXPECT_EQ(src_a, result_a);
@@ -2508,10 +2525,11 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestNonblockingReads) {
             result_a.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(result_a)>::value_type));
-            mesh_device->mesh_command_queue().enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_a.data())},
-                bufa,
-                true);
+            distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_a.data())},
+                    bufa,
+                    true);
         };
 
         vector<uint32_t> result_b(bufb->size() / sizeof(uint32_t));
@@ -2520,10 +2538,11 @@ TEST_F(UnitMeshCQSingleCardSharedBufferFixture, TestNonblockingReads) {
             result_b.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(result_b)>::value_type));
-            mesh_device->mesh_command_queue().enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_b.data())},
-                bufb,
-                true);
+            distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}.host_data(result_b.data())},
+                    bufb,
+                    true);
         };
         distributed::Finish(mesh_device->mesh_command_queue());
 

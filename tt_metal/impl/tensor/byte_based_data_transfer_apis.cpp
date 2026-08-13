@@ -5,6 +5,7 @@
 #include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
 
 #include "mesh_tensor_impl.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal {
 
@@ -19,7 +20,8 @@ void enqueue_read_tensor(
         distributed::ShardDataTransfer{*distributed::MeshCoordinateRange(queue.device()->shape()).begin()}
             .host_data(dst)
             .region(region)};
-    queue.enqueue_read_shards(shard_data_transfers, device_tensor.impl().raw_mesh_buffer(), blocking);
+    distributed::as_mesh_command_queue_base(queue).enqueue_read_shards(
+        shard_data_transfers, device_tensor.impl().raw_mesh_buffer(), blocking);
 }
 
 void enqueue_write_tensor(

@@ -57,6 +57,8 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/arch.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 
 using std::vector;
 using namespace tt;
@@ -1491,8 +1493,9 @@ bool validation_single_core(
         auto* shard = out_buffer->get_device_buffer({0, 0});
         result.resize(
             shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result)>::value_type));
-        device->mesh_command_queue().enqueue_read_shards(
-            {tt_metal::distributed::ShardDataTransfer{{0, 0}}.host_data(result.data())}, out_buffer, true);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue())
+            .enqueue_read_shards(
+                {tt_metal::distributed::ShardDataTransfer{{0, 0}}.host_data(result.data())}, out_buffer, true);
     };
 
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
@@ -1546,8 +1549,9 @@ bool validation_single_core_fp8(
         auto* shard = out_buffer->get_device_buffer({0, 0});
         result.resize(
             shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result)>::value_type));
-        device->mesh_command_queue().enqueue_read_shards(
-            {tt_metal::distributed::ShardDataTransfer{{0, 0}}.host_data(result.data())}, out_buffer, true);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue())
+            .enqueue_read_shards(
+                {tt_metal::distributed::ShardDataTransfer{{0, 0}}.host_data(result.data())}, out_buffer, true);
     };
 
     auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);

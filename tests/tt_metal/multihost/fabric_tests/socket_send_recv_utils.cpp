@@ -20,6 +20,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests::multihost::multihost_utils {
 
@@ -260,11 +261,12 @@ bool test_socket_send_recv(
                         recv_data_readback.resize(
                             shard->page_size() * shard->num_pages() /
                             sizeof(typename std::decay_t<decltype(recv_data_readback)>::value_type));
-                        mesh_device_->mesh_command_queue().enqueue_read_shards(
-                            {ShardDataTransfer{connection.receiver_core.device_coord}.host_data(
-                                recv_data_readback.data())},
-                            recv_data_buffer,
-                            true);
+                        as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+                            .enqueue_read_shards(
+                                {ShardDataTransfer{connection.receiver_core.device_coord}.host_data(
+                                    recv_data_readback.data())},
+                                recv_data_buffer,
+                                true);
                     };
                     uint32_t idx = core_to_core_id.at(connection.receiver_core.core_coord);
                     std::vector<uint32_t> recv_data_readback_per_core(

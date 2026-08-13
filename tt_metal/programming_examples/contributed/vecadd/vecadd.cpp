@@ -14,6 +14,7 @@
 #include <random>
 #include <string_view>
 #include <vector>
+#include "tt_metal/distributed/mesh_io.hpp"
 
 using namespace tt::tt_metal;
 using CoreSpec = std::variant<CoreCoord, CoreRange, CoreRangeSet>;
@@ -204,7 +205,7 @@ int main(int argc, char** argv) {
     // We're reading from a shard allocated on Device Coordinate 0, 0, since this is a 1x1
     //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
     c_data.resize(c->size() / sizeof(uint32_t));
-    cq.enqueue_read_mesh_buffer(c_data.data(), c, true);
+    distributed::EnqueueReadMeshBuffer(cq, c_data, c, true);
 
     // Print partial results so we can see the output is correct (plus or minus some error due to BFP16 precision)
     std::cout << "Partial results: (note we are running under BFP16. It's going to be less accurate)\n";

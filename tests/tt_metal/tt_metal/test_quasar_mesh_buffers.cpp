@@ -16,6 +16,7 @@
 #include <memory>
 #include <numeric>
 #include <vector>
+#include "tt_metal/distributed/mesh_io.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

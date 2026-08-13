@@ -18,6 +18,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
@@ -70,7 +71,8 @@ HostTensor distributed::MeshCommandQueue::enqueue_read_tensor(const MeshTensor& 
         },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
-    enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
+    distributed::as_mesh_command_queue_base(*this).enqueue_read(
+        mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
     return host_tensor_from_buffer_with_topology(
         std::move(distributed_host_buffer), device_tensor.tensor_spec(), get_tensor_topology(device_tensor));
@@ -145,7 +147,8 @@ void distributed::MeshCommandQueue::enqueue_read_tensor(
         });
     }
 
-    enqueue_read(mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
+    distributed::as_mesh_command_queue_base(*this).enqueue_read(
+        mesh_buffer, dst_distributed_host_buffer, /*shards=*/std::nullopt, blocking);
     update_tensor_topology(host_tensor, get_tensor_topology(device_tensor));
 }
 
@@ -212,10 +215,12 @@ void distributed::MeshCommandQueue::enqueue_write_tensor(const HostTensor& host_
         if (any_pinned) {
             enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);
         } else {
-            enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+            distributed::as_mesh_command_queue_base(*this).enqueue_write(
+                mesh_buffer, distributed_host_buffer, /*blocking=*/false);
         }
     } else {
-        enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+        distributed::as_mesh_command_queue_base(*this).enqueue_write(
+            mesh_buffer, distributed_host_buffer, /*blocking=*/false);
     }
 
     device_tensor = mesh_tensor_from_buffer_with_topology(

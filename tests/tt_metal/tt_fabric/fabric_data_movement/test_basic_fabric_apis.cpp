@@ -44,6 +44,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "test_host_kernel_common.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -150,11 +151,12 @@ void RunGetNextHopRouterDirectionTest(BaseFabricFixture* fixture, bool is_multi_
             result_data.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(result_data)>::value_type));
-            src_device->mesh_command_queue().enqueue_read_shards(
-                {tt::tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate({0, 0})}
-                     .host_data(result_data.data())},
-                result_buffers[src_idx],
-                true);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(src_device->mesh_command_queue())
+                .enqueue_read_shards(
+                    {tt::tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate({0, 0})}
+                         .host_data(result_data.data())},
+                    result_buffers[src_idx],
+                    true);
         };
         for (size_t dst_idx = 0; dst_idx < NUM_DEVICES; dst_idx++) {
             auto dst_fabric_node_id =

@@ -34,6 +34,7 @@
 #include "tt_fabric_test_common_types.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
@@ -541,10 +542,11 @@ public:
             auto* shard = mesh_buffer->get_device_buffer(device_coord);
             data.resize(
                 shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(data)>::value_type));
-            mesh_device_->mesh_command_queue().enqueue_read_shards(
-                {tt::tt_metal::distributed::ShardDataTransfer{device_coord}.host_data(data.data())},
-                mesh_buffer,
-                /*blocking=*/false);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+                .enqueue_read_shards(
+                    {tt::tt_metal::distributed::ShardDataTransfer{device_coord}.host_data(data.data())},
+                    mesh_buffer,
+                    /*blocking=*/false);
         }
 
         return {mesh_buffer, buffer_page_mapping, std::move(data), size_bytes};

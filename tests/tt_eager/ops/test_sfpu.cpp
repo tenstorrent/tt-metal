@@ -43,6 +43,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "impl/data_format/bfloat16_utils.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -228,11 +229,12 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
             result_vec.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-            device->mesh_command_queue(0).enqueue_read_shards(
-                {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}.host_data(
-                    result_vec.data())},
-                dst_dram_buffer,
-                true);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue(0))
+                .enqueue_read_shards(
+                    {tt_metal::distributed::ShardDataTransfer{tt::tt_metal::distributed::MeshCoordinate(0, 0)}
+                         .host_data(result_vec.data())},
+                    dst_dram_buffer,
+                    true);
         };
         ////////////////////////////////////////////////////////////////////////////
         //                      Validation & Teardown

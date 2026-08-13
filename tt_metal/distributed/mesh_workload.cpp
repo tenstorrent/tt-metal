@@ -44,6 +44,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include "mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal {
 class IDevice;
@@ -174,7 +175,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
                     mesh_device,
                     kernel_bin_buf_->address());
 
-                mesh_cq.enqueue_write_shard_to_sub_grid(
+                tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_cq).enqueue_write_shard_to_sub_grid(
                     *kernel_bin_buf_view,
                     program.impl().get_program_transfer_info().binary_data.data(),
                     device_range,

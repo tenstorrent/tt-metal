@@ -17,6 +17,7 @@
 #include "host_api.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal {
 

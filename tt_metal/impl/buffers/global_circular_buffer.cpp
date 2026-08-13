@@ -40,6 +40,7 @@
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <umd/device/types/xy_pair.hpp>
+#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal::experimental {
 

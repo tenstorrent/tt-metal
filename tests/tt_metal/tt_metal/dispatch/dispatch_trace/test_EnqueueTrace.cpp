@@ -42,6 +42,8 @@
 
 // Access to internal API: ProgramImpl::get_id
 #include "impl/program/program_impl.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal {
 
@@ -132,10 +134,11 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTrace) {
         eager_output_data.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(eager_output_data)>::value_type));
-        data_movement_queue.enqueue_read_shards(
-            {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(eager_output_data.data())},
-            output,
-            true);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_queue)
+            .enqueue_read_shards(
+                {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(eager_output_data.data())},
+                output,
+                true);
     };
     // distributed::EnqueueReadMeshBuffer(data_movement_queue, eager_output_data, output, true);
 
@@ -155,10 +158,11 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTrace) {
         trace_output_data.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(trace_output_data)>::value_type));
-        data_movement_queue.enqueue_read_shards(
-            {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(trace_output_data.data())},
-            output,
-            true);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_queue)
+            .enqueue_read_shards(
+                {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(trace_output_data.data())},
+                output,
+                true);
     };
     // distributed::EnqueueReadMeshBuffer(data_movement_queue, trace_output_data, output, true);
     EXPECT_TRUE(eager_output_data == trace_output_data);
@@ -221,10 +225,12 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoop
             trace_outputs[i].resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(trace_outputs[i])>::value_type));
-            data_movement_queue.enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(trace_outputs[i].data())},
-                output,
-                true);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_queue)
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(
+                        trace_outputs[i].data())},
+                    output,
+                    true);
         };
 
         // Expect same output across all loops
@@ -286,10 +292,12 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
         expected_output_data.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(expected_output_data)>::value_type));
-        mesh_command_queue.enqueue_read_shards(
-            {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(expected_output_data.data())},
-            output,
-            kBlocking);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
+            .enqueue_read_shards(
+                {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(
+                    expected_output_data.data())},
+                output,
+                kBlocking);
     };
     distributed::Finish(mesh_command_queue);
 
@@ -304,11 +312,12 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
                 eager_output_data.resize(
                     shard->page_size() * shard->num_pages() /
                     sizeof(typename std::decay_t<decltype(eager_output_data)>::value_type));
-                mesh_command_queue.enqueue_read_shards(
-                    {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(
-                        eager_output_data.data())},
-                    output,
-                    blocking);
+                tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
+                    .enqueue_read_shards(
+                        {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(
+                            eager_output_data.data())},
+                        output,
+                        blocking);
             };
         }
         if (not blocking) {
@@ -333,10 +342,12 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
             trace_outputs[i].resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(trace_outputs[i])>::value_type));
-            mesh_command_queue.enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(trace_outputs[i].data())},
-                output,
-                kNonBlocking);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(
+                        trace_outputs[i].data())},
+                    output,
+                    kNonBlocking);
         };
     }
     distributed::Finish(mesh_command_queue);
@@ -388,10 +399,11 @@ TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
         auto* shard = trace_inst->mesh_buffer->get_device_buffer(distributed::MeshCoordinate{0, 0});
         data_fd.resize(
             shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(data_fd)>::value_type));
-        mesh_command_queue.enqueue_read_shards(
-            {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(data_fd.data())},
-            trace_inst->mesh_buffer,
-            kBlocking);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
+            .enqueue_read_shards(
+                {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(data_fd.data())},
+                trace_inst->mesh_buffer,
+                kBlocking);
     };
     EXPECT_EQ(data_fd, data_bd);
 
@@ -432,10 +444,11 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
         eager_output_data.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(eager_output_data)>::value_type));
-        mesh_command_queue.enqueue_read_shards(
-            {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(eager_output_data.data())},
-            output,
-            true);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
+            .enqueue_read_shards(
+                {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(eager_output_data.data())},
+                output,
+                true);
     };
 
     distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, true);
@@ -461,10 +474,11 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
         trace_output_data.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(trace_output_data)>::value_type));
-        mesh_command_queue.enqueue_read_shards(
-            {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(trace_output_data.data())},
-            output,
-            true);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
+            .enqueue_read_shards(
+                {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(trace_output_data.data())},
+                output,
+                true);
     };
     EXPECT_TRUE(eager_output_data == trace_output_data);
 
@@ -509,10 +523,12 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramDeviceCapture) {
             eager_output_data.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(eager_output_data)>::value_type));
-            mesh_command_queue.enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(eager_output_data.data())},
-                output,
-                true);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(
+                        eager_output_data.data())},
+                    output,
+                    true);
         };
     }
 
@@ -536,10 +552,12 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramDeviceCapture) {
             trace_output_data.resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(trace_output_data)>::value_type));
-            mesh_command_queue.enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(trace_output_data.data())},
-                output,
-                true);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(
+                        trace_output_data.data())},
+                    output,
+                    true);
         };
         if (has_eager) {
             EXPECT_TRUE(eager_output_data == trace_output_data);
@@ -603,10 +621,12 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
         expected_output_data.resize(
             shard->page_size() * shard->num_pages() /
             sizeof(typename std::decay_t<decltype(expected_output_data)>::value_type));
-        mesh_command_queue.enqueue_read_shards(
-            {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(expected_output_data.data())},
-            output,
-            kBlocking);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
+            .enqueue_read_shards(
+                {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(
+                    expected_output_data.data())},
+                output,
+                kBlocking);
     };
     distributed::Finish(mesh_command_queue);
 
@@ -622,11 +642,12 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
                 eager_output_data.resize(
                     shard->page_size() * shard->num_pages() /
                     sizeof(typename std::decay_t<decltype(eager_output_data)>::value_type));
-                mesh_command_queue.enqueue_read_shards(
-                    {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(
-                        eager_output_data.data())},
-                    output,
-                    blocking);
+                tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
+                    .enqueue_read_shards(
+                        {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(
+                            eager_output_data.data())},
+                        output,
+                        blocking);
             };
         }
         if (not blocking) {
@@ -652,10 +673,12 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
             trace_outputs[i].resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(trace_outputs[i])>::value_type));
-            mesh_command_queue.enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(trace_outputs[i].data())},
-                output,
-                kNonBlocking);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(
+                        trace_outputs[i].data())},
+                    output,
+                    kNonBlocking);
         };
     }
     distributed::Finish(mesh_command_queue);
@@ -733,11 +756,12 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
                 eager_output_data.resize(
                     shard->page_size() * shard->num_pages() /
                     sizeof(typename std::decay_t<decltype(eager_output_data)>::value_type));
-                mesh_command_queue.enqueue_read_shards(
-                    {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(
-                        eager_output_data.data())},
-                    output,
-                    blocking);
+                tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
+                    .enqueue_read_shards(
+                        {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(
+                            eager_output_data.data())},
+                        output,
+                        blocking);
             };
         }
         if (not blocking) {
@@ -763,10 +787,12 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
             trace_outputs[i].resize(
                 shard->page_size() * shard->num_pages() /
                 sizeof(typename std::decay_t<decltype(trace_outputs[i])>::value_type));
-            mesh_command_queue.enqueue_read_shards(
-                {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(trace_outputs[i].data())},
-                output,
-                kNonBlocking);
+            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
+                .enqueue_read_shards(
+                    {distributed::ShardDataTransfer{distributed::MeshCoordinate{0, 0}}.host_data(
+                        trace_outputs[i].data())},
+                    output,
+                    kNonBlocking);
         };
     }
     distributed::Finish(mesh_command_queue);

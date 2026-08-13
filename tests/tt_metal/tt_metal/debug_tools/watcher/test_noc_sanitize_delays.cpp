@@ -32,6 +32,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
@@ -154,7 +155,7 @@ void RunDelayTestOnCore(
         auto* shard = dst_dram_buffer->get_device_buffer(zero_coord);
         result_vec.resize(
             shard->page_size() * shard->num_pages() / sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
-        cq.enqueue_read_shards(
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
             {distributed::ShardDataTransfer{zero_coord}.host_data(result_vec.data())}, dst_dram_buffer, true);
     };
 

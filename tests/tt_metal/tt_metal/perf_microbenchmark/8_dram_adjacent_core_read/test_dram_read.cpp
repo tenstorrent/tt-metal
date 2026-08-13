@@ -45,6 +45,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 
 using namespace tt;
 using std::chrono::duration_cast;
