@@ -47,8 +47,6 @@ template <
     bool fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void compressed_custom_mm_block_init(
     const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id, const std::uint32_t out_cb_id) {
-    // Outside UNPACK/MATH/PACK so every TRISC thread updates its own copy.
-    LLK_ASSERT_SET_DEST_ACC_MODE(fp32_dest_acc_en);
     // Intentionally swap in0 and in1 as operation specific hw_configures are deprecated
     UNPACK((llk_unpack_hw_configure<fp32_dest_acc_en>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_compressed_custom_mm_init<transpose>(in0_cb_id, in1_cb_id)));

@@ -8,8 +8,8 @@
 // Exists only when ENABLE_LLK_ASSERT is set; production builds never name the
 // symbol. Call sites read via LLK_ASSERT_DEST_ACC_MODE() so the variable is not
 // referenced outside assert builds. Writers update via LLK_ASSERT_SET_DEST_ACC_MODE
-// at shared APIs (enable/disable_fp32_dest_acc, compute_kernel_hw_startup), outside
-// UNPACK/MATH/PACK so every TRISC thread updates its own copy.
+// at shared APIs (enable/disable_fp32_dest_acc, and WH/BH llk_*_hw_configure)
+// so each TRISC thread updates its own copy when it configures.
 #ifdef ENABLE_LLK_ASSERT
 // C++17 inline variable: emitted only in TUs that ODR-use it, weak/merged at
 // link; per-thread storage since each TRISC thread is a separate build.

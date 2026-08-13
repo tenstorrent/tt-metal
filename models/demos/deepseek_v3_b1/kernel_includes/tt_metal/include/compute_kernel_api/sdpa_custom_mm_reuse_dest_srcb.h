@@ -47,8 +47,6 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
     const uint32_t transpose = 0,
     uint32_t kt_dim = 1,
     uint32_t nt_dim = 1) {
-    // Outside UNPACK/MATH/PACK so every TRISC thread updates its own copy.
-    LLK_ASSERT_SET_DEST_ACC_MODE(DST_ACCUM_MODE);
     // Intentionally swap in0 and in1 as operation specific hw_configures are deprecated
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(in0_cb_id, in1_cb_id, transpose, nt_dim)));

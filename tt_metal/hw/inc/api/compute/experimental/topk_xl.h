@@ -142,8 +142,6 @@ ALWI void topk_xl_copy_tile_init(uint32_t cbid, uint32_t call_line = __builtin_L
     // the TopK XL copy LLKs. This TTNN op enters through the standard compute
     // API, so it must also configure SRCA unpack/math state for the input CB.
     state_configure<Operand::SRCA>(cbid, call_line);
-    // Outside UNPACK/MATH/PACK so every TRISC thread updates its own copy.
-    LLK_ASSERT_SET_DEST_ACC_MODE(is_fp32_dest_acc_en);
     UNPACK((llk_unpack_hw_configure<is_fp32_dest_acc_en>(cbid)));
     MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(cbid, cbid)));
     UNPACK((llk_unpack_topk_xl_copy_init(cbid)));

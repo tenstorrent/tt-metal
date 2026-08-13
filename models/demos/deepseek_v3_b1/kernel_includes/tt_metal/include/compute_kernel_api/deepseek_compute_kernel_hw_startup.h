@@ -29,9 +29,6 @@ ALWI void deepseek_compute_kernel_init() {
  */
 template <bool fp32_dest_acc_en = false>
 ALWI void deepseek_compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
-    // Outside UNPACK/MATH/PACK so every TRISC thread updates its own copy.
-    LLK_ASSERT_SET_DEST_ACC_MODE(fp32_dest_acc_en);
-
     UNPACK((llk_unpack_hw_configure<fp32_dest_acc_en>(icb0, icb1)));
 
     MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));

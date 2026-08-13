@@ -13,6 +13,7 @@
 #include "llk_io.h"
 #include "llk_operands.h"
 #include "llk_param_structs.h"
+#include "llk_assert.h"
 #include "llk_unpack_common.h"
 #include "api/debug/waypoint.h"
 
@@ -35,6 +36,7 @@
  */
 template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
+    LLK_ASSERT_SET_DEST_ACC_MODE(is_fp32_dest_acc_en);
     // In0 -> unpA
     // In1 -> unpB
     const uint32_t unpA_operand_id = get_operand_id(unpA_operand);

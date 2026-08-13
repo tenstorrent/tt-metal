@@ -84,11 +84,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 #include "llk_math_eltwise_unary_datacopy.h"
 
-// Needed so the defaulted is_fp32_dest_acc_en template arg on
-// calculate_binop_with_scalar can resolve when the header is parsed.
-// Call sites pass is_fp32_dest_acc_en explicitly for the RSUB correction path.
-static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
-
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 
@@ -103,7 +98,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_math_pack_sync_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
 
-        SFPU_UNARY_INIT(unused);
+        ckernel::llk_math_eltwise_unary_sfpu_init<ckernel::SfpuType::unused, is_fp32_dest_acc_en>();
         PROFILER_SYNC();
     }
     {

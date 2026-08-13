@@ -30,7 +30,7 @@ namespace sfpu
 constexpr std::uint32_t SFPCONFIG_TARGET_LREG11  = 11;
 constexpr std::uint32_t SFPCONFIG_MOD_SET_LREG11 = 8;
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <bool is_fp32_dest_acc_en>
 inline void _init_softmax_k_()
 {
     sfpu::exp_init<false, 0x3F800000, true, is_fp32_dest_acc_en>();
@@ -67,7 +67,7 @@ inline void _zero_paired_odd_tail_lane_()
     }
 }
 
-template <int k, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <int k, bool is_fp32_dest_acc_en>
 inline void _softmax_k_()
 {
     // LREG0 = x - max(x)

@@ -29,22 +29,20 @@ namespace ckernel {
 * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
 */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void hardsigmoid_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        false,
         calculate_activation,
         (APPROX, ckernel::ActivationType::Hardsigmoid, 8 /* ITERATIONS */),
         idst,
         VectorMode::RC));
 }
 
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void hardsigmoid_tile_pack(uint32_t idst) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        false,
         calculate_activation,
         (APPROX, ckernel::ActivationType::Hardsigmoid, 8 /* ITERATIONS */),
         idst,
@@ -71,10 +69,9 @@ ALWI void hardsigmoid_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(hardsigmoid, sf
 * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
 */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softsign_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_softsign, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
+        DST_SYNC_MODE, false, calculate_softsign, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
 }
 
 /**
@@ -101,7 +98,7 @@ template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        false,
         calculate_celu,
         (APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
         idst,
@@ -129,11 +126,10 @@ ALWI void celu_tile_init() { MATH(SFPU_UNARY_INIT(celu)); }
  * | param0          | The λ value for the Softshrink formulation                                 | uint32   |                                                       | True     |
  */
  // clang-format on
- template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void softshrink_tile(uint32_t idst, uint32_t param0) {
      MATH(SFPU_UNARY_CALL(
          DST_SYNC_MODE,
-         is_fp32_dest_acc_en,
+         false,
          calculate_softshrink,
          (APPROX, 8 /* ITERATIONS */),
          idst,
@@ -163,11 +159,10 @@ ALWI void softshrink_tile_init() { MATH(SFPU_UNARY_INIT(softshrink)); }
 * | param0          | The λ value for the Hardshrink formulation                                 | uint32_t |                                                       | True     |
 */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void hardshrink_tile(uint32_t idst, uint32_t param0) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        is_fp32_dest_acc_en,
+        false,
         calculate_hardshrink,
         (APPROX, 8 /* ITERATIONS */),
         idst,

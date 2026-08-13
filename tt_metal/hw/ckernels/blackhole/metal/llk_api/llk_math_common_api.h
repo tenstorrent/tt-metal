@@ -9,6 +9,7 @@
 #include "ckernel_template.h"
 #include "cmath_common.h"
 #include "api/debug/waypoint.h"
+#include "llk_assert.h"
 #include "llk_defs.h"
 #include "llk_math_common.h"
 #include "llk_operands.h"
@@ -21,6 +22,7 @@
  *************************************************************************/
 template <bool is_fp32_dest_acc_en>
 inline void llk_math_hw_configure(const std::uint32_t srca_operand, const std::uint32_t srcb_operand) {
+    LLK_ASSERT_SET_DEST_ACC_MODE(is_fp32_dest_acc_en);
     std::uint32_t srca_operand_id = get_operand_id(srca_operand);
     std::uint32_t srcb_operand_id = get_operand_id(srcb_operand);
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(

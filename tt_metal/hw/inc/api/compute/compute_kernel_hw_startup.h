@@ -61,10 +61,6 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t icb1, uint32_t ocb) 
     constexpr bool reverse = (src_order == SrcOrder::Reverse);
     const uint32_t src_a_cb = reverse ? icb1 : icb0;
     const uint32_t src_b_cb = reverse ? icb0 : icb1;
-    // Baseline for assert-only dest-capacity checks; stale across kernel calls on a
-    // core until this write (same class as cfg_state_id persistence).
-    // Outside UNPACK/MATH/PACK so every TRISC thread updates its own copy.
-    LLK_ASSERT_SET_DEST_ACC_MODE(DST_ACCUM_MODE);
 #ifndef ARCH_QUASAR
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(src_a_cb, src_b_cb)));
 

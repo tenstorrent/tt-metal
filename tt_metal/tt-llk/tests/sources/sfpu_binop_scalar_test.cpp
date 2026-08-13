@@ -60,10 +60,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 using namespace ckernel;
 
-// Needed so the defaulted is_fp32_dest_acc_en template arg on
-// calculate_binop_with_scalar can resolve when the header is parsed.
-static constexpr bool DST_ACCUM_MODE = is_fp32_dest_acc_en;
-
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 
@@ -87,7 +83,7 @@ void run_kernel(RUNTIME_PARAMETERS)
     // Scalar binop: out(tile 0) = binop(dst, scalar). VectorMode::RC drives 4
     // faces (8 rows each), so ITERATIONS is 8 per call, matching the production
     // add_unary_tile / sub_unary_tile / ... APIs.
-    SFPU_UNARY_INIT(unused);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
     SFPU_UNARY_CALL(
         DstSync::SyncHalf,
         is_fp32_dest_acc_en,
