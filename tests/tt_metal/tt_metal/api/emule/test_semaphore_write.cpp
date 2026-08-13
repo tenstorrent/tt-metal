@@ -224,6 +224,7 @@ TEST_F(MeshDeviceFixture, Semaphore_SemDerivedOutsideRegion_StillChecked) {
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {sem_id}});
 
     EXPECT_DEATH(detail::LaunchProgram(device, program), ".*Out-of-Bounds Write.*");
+    ::unsetenv("TT_METAL_EMULE_ASAN");
 }
 
 }  // namespace tt::tt_metal
