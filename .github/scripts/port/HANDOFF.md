@@ -11,6 +11,20 @@ the experiment, the sharp edges of operating it, and what is not yet known.
 
 ## State
 
+> **Blocked as of 2026-08-13: the generator token needs SAML SSO re-authorization.** Every mode --
+> baseline, build and verify -- checks out `tenstorrent/tt-dm-codegen`, and that checkout now fails:
+>
+>     remote: The 'tenstorrent' organization has enabled or enforced SAML SSO.
+>     fatal: unable to access 'https://github.com/tenstorrent/tt-dm-codegen/': HTTP 403
+>
+> Nothing in the harness can route around it and no run of any kind will get past it. `CODEGEN_REPO_TOKEN`
+> has to be authorized for the `tenstorrent` organization at the SSO URL GitHub prints in that error, or
+> reissued and authorized. It is not a scope problem and not a rotation the pipeline can detect in
+> advance. First seen in run
+> [31736836951](https://github.com/tenstorrent/tt-metal/actions/runs/31736836951), which was verifying
+> two hand-fixed translation defects in `untilize` and would otherwise have been the first graded
+> verdict on real translation work.
+
 The harness has produced one real result: a draft PR porting `ttnn.pad`'s codegen builder, from the
 `ebanerjee/port-op-dryrun` branch. Everything after that PR was hardening, driven by what was wrong
 with it -- a sample that could not contain the failures it was supposed to catch, a routing check that
@@ -397,9 +411,46 @@ Two things do not follow from this and must not be assumed. AWF's own allowlist 
 the agent may reach; the cluster proxy was only ever the second gate in series. And the agent still
 runs inside AWF's container, whose mount set is `RUNNER_TEMP/gh-aw`, the workspace, the tool cache
 and `/tmp/gh-aw` -- nothing there passes `--device /dev/tenstorrent`, so being in-cluster does not by
-itself put a card in the agent's hands. Whether an `mcp-scripts` handler executes on the runner host,
-where the card and docker are, or inside that container, where neither is, decides what the collapsed
-job can actually do. Probe it before rebuilding the topology around an assumption.
+itself put a card in the agent's hands.
+
+### What a full in-cluster agent run established
+
+Run [31737747751](https://github.com/tenstorrent/tt-metal/actions/runs/31737747751) put a whole gh-aw
+agent on `tt-ubuntu-2204-N150-viommu-stable` and it worked: the agent started, reached the model API,
+reasoned, and produced output. That is the collapse's central premise, no longer inferred from a
+`curl`.
+
+The runner host is a good host. It is **not containerized**, runs as `ubuntu` with `HOME=/home/ubuntu`,
+`/dev/tenstorrent/0` is present and mode `crw-rw-rw-`, and docker 29.7.2 answers. So a step on that
+host can build in a container and talk to the card.
+
+**Where an `mcp-scripts` handler executes is settled, and not by the probe.** gh-aw starts the handler
+server as an ordinary step on the runner host -- its log says
+`Working directory: /opt/runner/_work/_temp/gh-aw/mcp-scripts` -- and handlers are child processes of
+it, so they run on the host, outside AWF's container. The existing pipeline already depends on this and
+has for every successful run: `dispatch.py` reads its push token from `$HOME/.port-dispatch/token` on
+every tool call, and `$HOME` is in none of AWF's mounts. A handler that ran inside the sandbox could
+never have read it. That is also what makes `$HOME/.port-harness` a safe place to keep the launcher
+away from the agent.
+
+Two things this cost, both worth not repeating:
+
+- **CIv2 proxies loopback, and that breaks gh-aw's readiness check.** The first attempt died with
+  `MCP Scripts server failed to start after 10 seconds` while the server's own log said
+  `Server is ready to accept requests`. CIv2 exports `http_proxy`/`https_proxy` to every step, and its
+  `no_proxy` names three cluster services and not `localhost`, so the readiness poll to
+  `localhost:3000` was sent to the restricted proxy, which will not tunnel to loopback. Any workflow
+  moved onto this pool that talks to itself over HTTP hits this. Fix it in a pre-step, not a
+  workflow-level `env:` block: Actions env keys are case-insensitive, so declaring both `no_proxy` and
+  `NO_PROXY` is a duplicate-key parse error, and declaring one leaves the runner's value for the other
+  spelling in place -- and both are needed, because curl reads the lowercase one and node's proxy
+  agents read the uppercase one.
+- **Do not ask an agent to probe its own sandbox boundary.** The probe's prompt asked it to read a
+  marker in `$HOME`, compare `hostname` and `pwd` against a handler's, and report device and docker
+  reachability. It refused, correctly and at some length, as reconnaissance toward sandbox escape and
+  credential access -- gh-aw's own system prompt forbids exactly that, and a friendly framing does not
+  and should not change the answer. Facts about the boundary have to come from ordinary workflow steps,
+  which is where all of the ones above came from.
 
 The diagnosis below is kept as the record of what was wrong, because it took three misleading layers
 to reach and the reasoning is worth not repeating.

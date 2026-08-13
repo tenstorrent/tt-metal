@@ -79,6 +79,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 WORKFLOW_FILE = "port-measure.yaml"
+# The workflow a chained attempt starts: this one's own, with an agent, not the measurement job. It is
+# the compiled lock rather than the markdown, because gh-aw's lock file is what Actions runs.
+PORT_OP_WORKFLOW = "port-op.lock.yml"
 SCRATCH_PREFIX = "port-op-scratch"
 
 # The workflow's own name for what it produced, minus the run id it appends.
@@ -136,10 +139,13 @@ class Api:
         self.repo = repo
         self.base = base_url.rstrip("/")
 
-    def _request(self, method: str, url: str, redirect: bool = True):
+    def _request(self, method: str, url: str, redirect: bool = True, body: dict | None = None):
         if url.startswith("/"):
             url = f"{self.base}{url}"
-        request = urllib.request.Request(url, method=method)
+        payload = None if body is None else json.dumps(body).encode()
+        request = urllib.request.Request(url, method=method, data=payload)
+        if payload is not None:
+            request.add_header("Content-Type", "application/json")
         request.add_header("Authorization", f"Bearer {self._token}")
         request.add_header("Accept", "application/vnd.github+json")
         request.add_header("X-GitHub-Api-Version", "2022-11-28")
@@ -162,6 +168,10 @@ class Api:
     def post(self, url: str) -> None:
         """Fire and forget. Only used to cancel a run, whose reply carries nothing worth reading."""
         self._request("POST", url)
+
+    def post_json(self, url: str, body: dict) -> None:
+        """POST with a body, for `workflow_dispatch`, whose 204 carries nothing either."""
+        self._request("POST", url, body=body)
 
     def token_scopes(self) -> str | None:
         """What the credential is allowed to do, straight from GitHub, or None if it will not say.
@@ -552,6 +562,18 @@ def report_baseline(run: dict, api: Api, results: Path | None, repo: Path) -> in
     summary = results / "baseline.json"
     if summary.is_file():
         print(f"\n{summary.read_text()}")
+
+    # On a resumed branch, what the port already there currently fails. This is the work list, and it
+    # is printed into the baseline step's log rather than left in an artifact because the agent reads
+    # the log: a run that has to be told where to start should be told before it starts guessing.
+    incoming = results / "incoming.json"
+    if incoming.is_file():
+        print(
+            "\nThis branch already carries a port. Measured on the card just now, before you were "
+            "started, here is what it currently fails -- this is your work list, and the cases under "
+            "`prototype_gaps` are ones the generator itself cannot serve, so they are excused and not "
+            f"yours to fix:\n\n{incoming.read_text()}"
+        )
     return 0
 
 
@@ -693,6 +715,149 @@ def cleanup_ref(work: Path, repo: Path, remote: str, token_file: Path, branch: s
             log(f"  could not delete {branch}; the post-run sweep will get it")
 
 
+TRAILER_PREFIX = "Port-"
+
+
+def read_verdict(work: Path) -> dict:
+    """The last verdict this run reached, from the report the launcher already brought home.
+
+    Read off disk rather than passed in, because publish is a post-step: the agent has ended, and
+    whatever it claimed in its own summary is not evidence. Every `--wait` unpacks the results
+    artifact into `results-<handle>/` beside the credential, so the newest `gate.json` there is the
+    last thing `gate.py` actually decided on a card. Missing is a real answer too -- a run that never
+    got a verdict publishes `none`, which is exactly what the next attempt should see.
+    """
+    candidates = [p for p in work.glob("results-*/gate.json") if p.is_file() and p.stat().st_size]
+    if not candidates:
+        return {}
+    newest = max(candidates, key=lambda p: p.stat().st_mtime)
+    try:
+        return json.loads(newest.read_text())
+    except json.JSONDecodeError:
+        return {}
+
+
+def publish(api: Api, repo: Path, work: Path, remote: str, token_file: Path, args) -> int:
+    """Commit whatever the agent left and fast-forward the branch it was working on.
+
+    A post-step rather than a tool, which is the whole design. Run 31406186048 produced a correct
+    port -- 184 of 184 cases bit-exact -- and threw it away, because the verdict never reached `win`,
+    the agent correctly declined to open a PR, and the C++ existed nowhere but that workspace. So the
+    push does not depend on the verdict, or on the agent choosing to do it, or on the agent having a
+    token: it happens because the job is ending.
+
+    The commit message is the entire chain state. A resumed run reads these trailers off the branch
+    tip and needs nothing else -- no run id, no report artifact, no attempt count from a human. That
+    is what makes a branch self-describing, and what makes a branch someone wrote by hand resumable on
+    exactly the same terms as one this pipeline wrote.
+    """
+    if not args.branch:
+        log("publish: no branch to publish to; nothing to do")
+        return 0
+
+    report_data = read_verdict(work)
+    verdict = report_data.get("verdict") or "none"
+    correctness = report_data.get("correctness") or {}
+    failing = correctness.get("failure_count")
+
+    subject = f"{args.op}: port to codegen, attempt {args.attempt} ({verdict})"
+    trailers = [
+        f"{TRAILER_PREFIX}verdict: {verdict}",
+        f"{TRAILER_PREFIX}attempt: {args.attempt}",
+        f"{TRAILER_PREFIX}failing: {failing if failing is not None else -1}",
+        f"{TRAILER_PREFIX}generator: {args.codegen_ref}",
+    ]
+    body = (
+        "Written by the port-op workflow, not by hand. The trailers below are the chain state a "
+        "resumed run reads off this branch; `Port-failing: -1` means no correctness band was graded.\n\n"
+        + "\n".join(trailers)
+    )
+    commit, base = commit_worktree(repo, work, f"{subject}\n\n{body}")
+
+    if commit == base or git("rev-parse", f"{commit}^{{tree}}", cwd=repo) == git(
+        "rev-parse", f"{base}^{{tree}}", cwd=repo
+    ):
+        # Nothing was written. Publishing an empty commit would defeat the no-progress stop, which
+        # asks precisely whether the tree moved.
+        log("publish: the worktree is identical to the base commit; nothing to publish")
+        print(json.dumps({"published": False, "reason": "no changes", "verdict": verdict}))
+        return 0
+
+    # The same guard the dispatch path uses, for the same reason and then one more: this commit lands
+    # on a long-lived branch that a person will open a pull request from, so an edit to the pipeline
+    # here would be a proposal to change the pipeline, wearing the port's clothes.
+    refuse_pipeline_edits(repo, base, commit)
+
+    with credentialed(work, token_file) as git_env:
+        # Not forced. A fast-forward failure means something else moved the branch, and overwriting
+        # it would be destroying work this run never saw.
+        push_ref(repo, remote, f"{commit}:refs/heads/{args.branch}", git_env)
+
+    log(f"publish: {commit[:12]} -> {args.branch} ({verdict}, failing={failing})")
+    again, why = should_chain(verdict, failing, args)
+    log(f"publish: {'chaining' if again else 'stopping'} -- {why}")
+    if again:
+        # Re-dispatched by workflow_dispatch rather than by pushing a trigger branch, because the run
+        # this starts is a full port-op run with its own agent, and it must read the branch that was
+        # just published rather than a scratch ref.
+        try:
+            api.post_json(
+                f"/repos/{api.repo}/actions/workflows/{PORT_OP_WORKFLOW}/dispatches",
+                {"ref": args.branch, "inputs": {"op": args.op, "branch": args.branch}},
+            )
+            log(f"publish: dispatched attempt {args.attempt + 1} on {args.branch}")
+        except DispatchError as exc:
+            # Never fatal. The work is pushed, which was the point; a chain that fails to start is a
+            # run someone can start by hand, and losing the commit would not be.
+            log(f"publish: could not start the next attempt ({exc}); the branch is pushed regardless")
+            again, why = False, f"re-dispatch failed: {exc}"
+    print(
+        json.dumps(
+            {
+                "published": True,
+                "commit": commit,
+                "branch": args.branch,
+                "verdict": verdict,
+                "failing": failing,
+                "attempt": args.attempt,
+                "chain": again,
+                "chain_reason": why,
+            }
+        )
+    )
+    return 0
+
+
+def should_chain(verdict: str, failing: int | None, args) -> tuple[bool, str]:
+    """Whether to spend another run on this branch.
+
+    Run 3 of this workflow looped: eleven verifies, every one `blocked` by a harness defect the agent
+    could not see or fix, until the job hit its ceiling. Both guards below exist because of it, and
+    they answer different questions -- the cap bounds the cost of any loop at all, and the
+    no-progress stop catches the loop that is cheap per attempt and still getting nowhere.
+
+    Progress is the failing count falling. Not the verdict improving, which can happen for reasons
+    that have nothing to do with the port, and not the tree changing, which an agent can do all day.
+    A count that is equal or higher than the previous attempt's means the last run of the machinery
+    bought nothing, and the next one has no more information than it did.
+    """
+    if verdict == VERDICT_WIN:
+        return False, "the port won; there is nothing left to chain for"
+    if args.attempt >= args.max_attempts:
+        return False, f"attempt {args.attempt} of a {args.max_attempts}-attempt cap"
+    if verdict == "blocked":
+        # Blocked is never the port's fault -- it means the gate refused to measure, which is a
+        # harness or tree problem no further attempt will resolve by trying harder.
+        return False, "the gate refused to measure this tree; another attempt would refuse identically"
+    if failing is None or failing < 0:
+        # No correctness band was graded, so there is no progress signal at all. One more attempt is
+        # allowed rather than none, because this is what the first attempt on a branch looks like.
+        return args.prev_failing < 0, "no graded correctness band to compare against"
+    if args.prev_failing >= 0 and failing >= args.prev_failing:
+        return False, f"no progress: {args.prev_failing} failing before, {failing} now"
+    return True, f"failing fell from {args.prev_failing if args.prev_failing >= 0 else 'unmeasured'} to {failing}"
+
+
 def report(mode: str, run: dict, api: Api, results: Path | None, repo: Path) -> int:
     if mode == "build":
         return report_build(run, api)
@@ -719,7 +884,7 @@ def delivered(code: int, as_tool: bool) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Dispatch a build or a measurement onto CIv2 and wait for it.")
-    ap.add_argument("--mode", choices=["baseline", "build", "verify"])
+    ap.add_argument("--mode", choices=["baseline", "build", "verify", "publish"])
     ap.add_argument(
         "--start",
         action="store_true",
@@ -737,6 +902,37 @@ def main() -> int:
     ap.add_argument("--category", default=os.environ.get("PORT_CATEGORY", "data_movement"))
     ap.add_argument("--codegen-ref", default=os.environ.get("PORT_CODEGEN_REF", "codegen_agentic_port"))
     ap.add_argument("--perf-limit", default=os.environ.get("PORT_LIMIT", "24"))
+    ap.add_argument(
+        "--branch",
+        default=os.environ.get("PORT_BRANCH", ""),
+        help="the long-lived branch a run continues and publishes back to. Empty means a one-shot run "
+        "whose work is not chained, and `--mode publish` then does nothing.",
+    )
+    ap.add_argument(
+        "--attempt",
+        type=int,
+        default=int(os.environ.get("PORT_ATTEMPT", "1")),
+        help="which attempt on this branch, resolved from the tip's commit trailer by the workflow",
+    )
+    ap.add_argument(
+        "--prev-failing",
+        type=int,
+        default=int(os.environ.get("PORT_PREV_FAILING", "-1")),
+        help="failing count the previous attempt recorded, -1 when there was none",
+    )
+    ap.add_argument(
+        "--max-attempts",
+        type=int,
+        default=int(os.environ.get("PORT_MAX_ATTEMPTS", "6")),
+        help="hard cap on chained attempts, counting this one",
+    )
+    ap.add_argument(
+        "--resume",
+        action="store_true",
+        default=os.environ.get("PORT_RESUME") == "1",
+        help="the tree already carries a port, so the baseline measures what it currently fails. The "
+        "workflow's resolve step sets PORT_RESUME by looking for a tracked codegen directory.",
+    )
     ap.add_argument(
         "--runner-label",
         default=os.environ.get("PORT_RUNNER_LABEL", '["tt-ubuntu-2204-N150-viommu-stable"]'),
@@ -771,6 +967,9 @@ def main() -> int:
         return resume(api, args, work, repo, remote_url, token_file)
     if not args.mode:
         raise DispatchError("say what to run with --mode, or which dispatch to resume with --wait")
+    if args.mode == "publish":
+        # Nothing is dispatched and nothing is waited on: this pushes what is already here.
+        return publish(api, repo, work, remote_url, token_file, args)
 
     nonce = f"{os.environ.get('GITHUB_RUN_ID', 'local')}-{uuid.uuid4().hex[:8]}"
     branch = f"{SCRATCH_PREFIX}/{args.op}-{args.mode}-{nonce}"
@@ -789,6 +988,10 @@ def main() -> int:
         "perf-limit": str(args.perf_limit),
         "base-sha": base,
         "runner-label": args.runner_label,
+        # Only the baseline reads this, and only to decide whether there is a port here worth
+        # measuring. A fresh run's tree holds nothing but stubs, and a correctness band over stubs is
+        # 112 failures that say nothing.
+        "resume": "1" if args.resume else "0",
         "nonce": nonce,
     }
 

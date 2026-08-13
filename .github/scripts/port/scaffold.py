@@ -91,7 +91,7 @@ def stamp_spdx(path: Path) -> None:
     path.write_text(f"{spdx_header()}\n{text}")
 
 
-def copy_kernels(manifest: dict, codegen_root: Path, op_dir: Path) -> list[Path]:
+def copy_kernels(manifest: dict, codegen_root: Path, op_dir: Path, resume: bool = False) -> list[Path]:
     """Copy the manifest's kernel templates into `<op>/codegen/kernels/`.
 
     A native kernel sharing a basename would leave two indistinguishable files in the op's working
@@ -124,9 +124,28 @@ def copy_kernels(manifest: dict, codegen_root: Path, op_dir: Path) -> list[Path]
 
     kernels_dir = op_dir / "codegen" / "kernels"
     kernels_dir.mkdir(parents=True, exist_ok=True)
+    # Two lists, because they answer different questions. `expected` is every kernel the manifest says
+    # must be here, and it is what `verify()` checks -- a resume that kept ten files and copied one
+    # still has to prove all eleven exist. `copied` is only the files this pass wrote, and it is what
+    # the include rewrite below may touch, because rewriting a kernel the agent edited would be the
+    # overwrite this is avoiding.
+    expected = []
     copied = []
     for source in sources:
         dest = kernels_dir / renames.get(source.name, source.name)
+        expected.append(dest)
+        # Under `--resume` the kernels on the branch are the previous attempt's, and a kernel is one of
+        # the few files a port is *allowed* to have edited -- the SPDX stamp and the include rewrite
+        # below both mean a faithful copy is not byte-identical to its template either. Overwriting
+        # would silently discard the fix that a run just spent forty minutes verifying.
+        #
+        # Absent files are still copied, which is the point of running this pass at all on a resume: a
+        # manifest that gained a header between attempts is how the previous port lost every in-scope
+        # case at runtime, with a green build.
+        if resume and dest.exists():
+            if dest.read_bytes() != source.read_bytes():
+                print(f"scaffold: keeping edited {dest.relative_to(op_dir)} (differs from its template)")
+            continue
         shutil.copy2(source, dest)
         stamp_spdx(dest)
         copied.append(dest)
@@ -138,7 +157,7 @@ def copy_kernels(manifest: dict, codegen_root: Path, op_dir: Path) -> list[Path]
             rewritten = rewritten.replace(f'#include "{old}"', f'#include "{new}"')
         if rewritten != text:
             path.write_text(rewritten)
-    return copied
+    return expected
 
 
 def write_stubs(op_dir: Path, op: str) -> list[Path]:
@@ -448,6 +467,12 @@ def main() -> int:
     ap.add_argument("--manifest", default=None, help="defaults to <codegen-root>/agentic_port/manifests/<op>.yaml")
     ap.add_argument("--category", default=None, help="operations/<category>/<op>, when the name is ambiguous")
     ap.add_argument(
+        "--resume",
+        action="store_true",
+        help="an existing port is on this branch: add what the manifest gained, keep what is already "
+        "there. Without it, kernels are copied over unconditionally, which discards hand-written fixes.",
+    )
+    ap.add_argument(
         "--emit-test-only",
         action="store_true",
         help="emit just the routing test; needs a built tree, so it runs after the build",
@@ -476,7 +501,7 @@ def main() -> int:
         print(json.dumps({"op": args.op, "category": category, **emitted}, indent=2))
         return 0
 
-    kernels = copy_kernels(manifest, codegen_root, op_dir)
+    kernels = copy_kernels(manifest, codegen_root, op_dir, resume=args.resume)
     stubs = write_stubs(op_dir, args.op)
     sources_added = register_sources(op_dir.parent, args.op)
     globs_added = register_kernel_globs(op_dir.parent, args.op, op_dir / "codegen" / "kernels")

@@ -59,6 +59,7 @@ jobs:
       category: ${{ steps.params.outputs.category }}
       codegen-ref: ${{ steps.params.outputs.codegen-ref }}
       perf-limit: ${{ steps.params.outputs.perf-limit }}
+      resume: ${{ steps.params.outputs.resume }}
       base-sha: ${{ steps.params.outputs.base-sha }}
       runner-label: ${{ steps.params.outputs.runner-label }}
     steps:
@@ -107,6 +108,14 @@ jobs:
           if not limit.isdigit() or not 1 <= int(limit) <= 1000:
               errors.append(f"perf-limit={limit!r} must be a positive integer under 1000")
           out["perf-limit"] = limit
+
+          # Whether the tree arriving here already carries a port. Only the baseline uses it, to decide
+          # whether a correctness pass over the incoming code would measure anything.
+          resume = str(params.get("resume", "0"))
+          if resume not in ("0", "1"):
+              errors.append(f"resume={resume!r} must be 0 or 1")
+              resume = "0"
+          out["resume"] = resume
 
           base = str(params.get("base-sha", ""))
           if base and not re.fullmatch(r"[0-9a-f]{7,40}", base):
@@ -423,6 +432,54 @@ jobs:
           if codes is None or "native=" not in codes:
               sys.exit("no device attribution for the native leg; " + "; ".join(report.get("notes", [])))
           print(f"baseline harness OK -- {codes}, verdict {verdict!r} (a failing verdict is expected here)")
+          PY
+
+      # What the port already on this branch currently fails -- the work list for a resumed run, and
+      # the reason a resumed run needs no arguments beyond the op and the branch.
+      #
+      # Measured rather than recovered. The tempting alternative was to read the previous run's report,
+      # and it fails twice: it needs an artifact from a run that may have expired, and it is simply
+      # unavailable for a branch a person wrote by hand, which is the case that matters most. A
+      # correctness pass over the incoming tree is ground truth, works identically either way, and
+      # costs one pass on hardware that is already booked.
+      #
+      # Correctness only. Performance on a port that does not pass yet is a number nobody should act
+      # on, and the perf bands are the expensive half.
+      - name: Measure what the incoming port still fails
+        if: needs.resolve.outputs.mode == 'baseline' && needs.resolve.outputs.resume == '1'
+        timeout-minutes: 60
+        env:
+          PORT_OP: ${{ needs.resolve.outputs.op }}
+          PORT_CATEGORY: ${{ needs.resolve.outputs.category }}
+          PORT_LIMIT: ${{ needs.resolve.outputs.perf-limit }}
+        run: |
+          # `--skip-write-check`: the incoming tree is the previous attempt's committed work, so every
+          # file in the port differs from this run's base and the guard would refuse the whole thing.
+          # It is the right check for grading a run's own edits and the wrong one for reading a branch.
+          python3 .github/scripts/port/gate.py \
+            --op "$PORT_OP" --manifest "/codegen/agentic_port/manifests/$PORT_OP.yaml" \
+            --category "$PORT_CATEGORY" --band correctness --repo /work \
+            --work /tmp/port-incoming --limit "$PORT_LIMIT" --skip-write-check \
+            --prototype /tmp/port-prototype/prototype.json \
+            > /tmp/port-results/incoming.json || true
+
+          python3 - /tmp/port-results/incoming.json <<'PY'
+          import json, sys
+          try:
+              report = json.loads(open(sys.argv[1]).read() or "{}")
+          except json.JSONDecodeError:
+              print("::warning::the incoming port produced no parseable correctness report")
+              raise SystemExit(0)
+          band = report.get("correctness") or {}
+          # `failures` is truncated for readability; the counts beside it are not.
+          must = band.get("must_pass")
+          print("incoming port: {} failing of {} must-pass, {} excused as prototype gaps".format(
+              band.get("failure_count", "?"),
+              must if must is not None else "every in-scope case",
+              band.get("prototype_gap_count", 0)))
+          for case in band.get("failures") or []:
+              print("  still failing: {} -- {}".format(
+                  case.get("case_id"), case.get("error") or "wrong output"))
           PY
 
       # The verdict the agent reads. Its exit status is deliberately not the step's: a failing grade

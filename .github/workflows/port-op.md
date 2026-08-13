@@ -30,32 +30,23 @@ on:
   push:
     branches: [ebanerjee/port-op-dryrun]
   workflow_dispatch:
+    # Two inputs, and deliberately only two. Everything a run needs beyond the op and where to
+    # continue from is either derivable from the branch or a property of the harness, and asking for
+    # it would mean a person resuming a half-finished port has to know what the last run was told --
+    # or that there was a last run at all. `category` is globbed from the op directory below,
+    # `perf-limit` and `runner-label` are harness tuning rather than user intent and live in the
+    # `env:` block, and the generator ref is a constant there for the same reason.
     inputs:
       op:
         description: "Op to port; must have a manifest at agentic_port/manifests/<op>.yaml"
         required: true
         type: string
         default: untilize
-      category:
-        description: "ttnn/cpp/ttnn/operations/<category>/<op>"
+      branch:
+        description: "Existing branch to continue a half-finished port on; blank starts a fresh port"
         required: false
         type: string
-        default: data_movement
-      codegen-ref:
-        description: "tt-dm-codegen ref to port from"
-        required: false
-        type: string
-        default: codegen_agentic_port
-      perf-limit:
-        description: "Number of in-scope cases to measure per performance band"
-        required: false
-        type: string
-        default: "24"
-      runner-label:
-        description: "CIv2 pool the dispatched build and measurement land on"
-        required: false
-        type: string
-        default: '["tt-ubuntu-2204-N150-viommu-stable"]'
+        default: ""
 
 # Unchanged, and that is the point. The launcher has to push a scratch ref -- the working tree
 # cannot travel inline, since the `pad` port alone was 118 KB -- but that authority does not come
@@ -104,6 +95,29 @@ models:
     output: 15.0
 
 network: defaults
+
+# Every parameter of a run, resolved once. There were seventeen copies of these defaults before this
+# block existed -- twelve of `op` alone -- because a `push` event carries no inputs, so each use site
+# had to carry its own `|| 'untilize'`. Changing the op meant changing all of them, and the run that
+# missed one would scaffold a different op than it ported.
+#
+# The names are the ones `dispatch.py`, `gate.py` and `measure.py` already read out of the environment,
+# so setting them here also removes the per-step `env:` blocks that used to forward them by hand.
+# Workflow-level `env` may read `inputs`, which is what makes the fallback expressible in one place.
+#
+# `PORT_CATEGORY` is conspicuously absent: it is derived by globbing the operations tree, so it is set
+# from `$GITHUB_ENV` in the resolve step below rather than declared here.
+env:
+  PORT_OP: ${{ inputs.op || 'untilize' }}
+  PORT_BRANCH: ${{ inputs.branch || '' }}
+
+  # Harness constants, not user intent. These were inputs, and every one of them was a way for a run
+  # to be configured into disagreeing with the runs it is compared against -- a different pool is a
+  # different clock, and a different case count is a different measurement. They are values the
+  # harness owns, so they are set where the harness is edited.
+  PORT_CODEGEN_REF: codegen_agentic_port
+  PORT_LIMIT: "24"
+  PORT_RUNNER_LABEL: '["tt-ubuntu-2204-N150-viommu-stable"]'
 
 # One port at a time per branch: two concurrent runs would fight over the same card and produce
 # timings that are noise rather than measurement. Keyed on the ref rather than the op because
@@ -169,8 +183,13 @@ steps:
   - name: Checkout tt-metal
     uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
     with:
+      # The branch to continue a half-finished port on, or empty for a fresh one, in which case
+      # `actions/checkout` takes the ref that triggered the run. This is the entire mechanism behind
+      # resuming: the previous run's work is simply what is checked out.
+      ref: ${{ env.PORT_BRANCH }}
       # Shallow: the only history this run needs is the base commit the write-path guard diffs
-      # against, and that is HEAD.
+      # against, and that is HEAD. Depth 1 still carries the tip's commit message, which is where a
+      # resumed branch keeps its chain state.
       fetch-depth: 1
       # No submodules. Nothing is built here, and the launcher pushes a commit whose parent is the
       # checked-out HEAD, so the submodule gitlinks come along unchanged from the parent commit --
@@ -181,6 +200,36 @@ steps:
       # it authenticates from the file the pre-step wrote, outside the sandbox.
       persist-credentials: false
 
+  # The launcher, kept where the agent cannot rewrite it -- and the reason it must be is a chain, not
+  # a single file.
+  #
+  # `dispatch.py` refuses to push a snapshot that touches `.github/`, which is what guarantees the
+  # `port-measure.yaml` and `gate.py` that run on CIv2 are the reviewed ones rather than the agent's.
+  # But that guard lives inside `dispatch.py`, and the tools used to invoke it out of
+  # `${GITHUB_WORKSPACE}/.github/scripts/port/` -- a path in the workspace, which is mounted
+  # read-write into the agent's sandbox. Deleting three lines of its own launcher would have bought
+  # the agent an edited gate on the far side, and the write-path check that would have caught it runs
+  # inside that same gate.
+  #
+  # `$HOME` is in none of awf's mounts, which is already load-bearing for the credential above and is
+  # established by the same evidence: `dispatch.py` reads the token out of `$HOME/.port-dispatch`
+  # every time a tool runs, so a handler can reach `$HOME`, and nothing in the sandbox can.
+  #
+  # Copied rather than symlinked, and read-only, so that a `python3 -c` that follows a path back into
+  # the workspace has nothing to follow.
+  - name: Place the launcher outside the sandbox
+    run: |
+      install -d -m 755 "$HOME/.port-harness"
+      cp .github/scripts/port/*.py "$HOME/.port-harness/"
+      chmod 444 "$HOME/.port-harness"/*.py
+      echo "launcher placed: $(ls -1 "$HOME/.port-harness" | tr '\n' ' ')"
+      # A stale copy grading a newer port is worse than no copy, so prove the two agree now, while
+      # they still should. Nothing later in the run compares them.
+      for f in .github/scripts/port/*.py; do
+        cmp -s "$f" "$HOME/.port-harness/$(basename "$f")" \
+          || { echo "::error::$(basename "$f") did not copy faithfully"; exit 1; }
+      done
+
   # Read-only, credentials not persisted: the agent must never be able to push to the generator
   # repo, and the port only ever reads from it. `actions/checkout` cannot place a repo outside the
   # workspace, so it lands in a dotted directory that is then excluded from tt-metal's index --
@@ -190,26 +239,69 @@ steps:
     uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
     with:
       repository: tenstorrent/tt-dm-codegen
-      ref: ${{ inputs['codegen-ref'] || 'codegen_agentic_port' }}
+      ref: ${{ env.PORT_CODEGEN_REF }}
       token: ${{ secrets.CODEGEN_REPO_TOKEN }}
       persist-credentials: false
       path: .codegen
 
-  - name: Record the base commit
+  # Everything about this run that is a fact rather than a setting: where the op lives, whether there
+  # is already a port here to continue, and what the last attempt on this branch achieved. All of it
+  # was once something a person had to type, and every one of those was a chance to describe the run
+  # wrongly.
+  - name: Resolve the op, the category and any prior work
     run: |
       # The generator tree is a checkout inside the workspace, so without this every one of its
       # files reads as an untracked file: the launcher's `git add -A` would sweep the whole thing
       # into the scratch commit, and gate.py's write-path guard, which counts untracked files,
       # would refuse to measure anything.
       echo ".codegen/" >> .git/info/exclude
-      {
-        echo "PORT_BASE_SHA=$(git rev-parse HEAD)"
-        echo "PORT_OP=${{ inputs.op || 'untilize' }}"
-        echo "PORT_CATEGORY=${{ inputs.category || 'data_movement' }}"
-        echo "PORT_CODEGEN_REF=${{ inputs['codegen-ref'] || 'codegen_agentic_port' }}"
-        echo "PORT_LIMIT=${{ inputs['perf-limit'] || '24' }}"
-        echo "PORT_RUNNER_LABEL=${{ inputs['runner-label'] || '["tt-ubuntu-2204-N150-viommu-stable"]' }}"
-      } >> $GITHUB_ENV
+
+      # The base the write-path guard diffs against. On a resumed branch this is the branch's own
+      # HEAD, which is what makes the guard judge only the work this run adds rather than everything
+      # the previous run committed.
+      echo "PORT_BASE_SHA=$(git rev-parse HEAD)" >> $GITHUB_ENV
+
+      # `category` was an input with a default of `data_movement`, which is right for one op. It is
+      # not a choice -- the op's directory is already somewhere in the tree and there is exactly one
+      # of it. Depth 3 so that a nested category like `eltwise/binary` resolves too; `scaffold.py`
+      # joins it with a slash either way. Pruning `codegen` keeps the port's own subdirectory from
+      # matching when an op is named after its parent.
+      matches=$(find ttnn/cpp/ttnn/operations -mindepth 2 -maxdepth 3 -type d -name "$PORT_OP" \
+        -not -path '*/codegen/*' | sed 's|^ttnn/cpp/ttnn/operations/||; s|/'"$PORT_OP"'$||' | sort -u)
+      count=$(printf '%s\n' "$matches" | grep -c . || true)
+      if [ "$count" -ne 1 ]; then
+        echo "::error::expected exactly one ttnn/cpp/ttnn/operations/*/$PORT_OP, found $count: $matches"
+        exit 1
+      fi
+      echo "PORT_CATEGORY=$matches" >> $GITHUB_ENV
+      echo "category resolved to $matches"
+
+      # Resume is detected, not declared, so the same workflow serves a fresh port and a half-finished
+      # one and there is no mode flag to get wrong. The signal is a *tracked* codegen directory: a
+      # fresh run has no such directory at all until the scaffold step below creates it untracked, so
+      # anything git already knows about came from a previous run or from someone's laptop.
+      #
+      # A branch carrying nothing but committed scaffold stubs reads as a resume, which is harmless:
+      # `scaffold.py --resume` skips files that are already there, and they are the same bytes it
+      # would have written.
+      if [ -n "$(git ls-files "ttnn/cpp/ttnn/operations/$matches/$PORT_OP/codegen")" ]; then
+        echo "PORT_RESUME=1" >> $GITHUB_ENV
+        echo "resuming the port already on this branch"
+      else
+        echo "PORT_RESUME=0" >> $GITHUB_ENV
+        echo "no port here yet; starting from the scaffold"
+      fi
+
+      # The chain state, and the whole of it: the previous run wrote these into its own commit
+      # message, so the branch describes itself and a resumed run needs no arguments beyond the op and
+      # the branch. Absent -- a hand-written branch, or a first attempt -- they default to zero, which
+      # is exactly what "nothing to compare against" should mean to the no-progress stop.
+      trailers=$(git log -1 --format='%(trailers:only=true,unfold=true)' 2>/dev/null || true)
+      prev_attempt=$(printf '%s\n' "$trailers" | sed -n 's/^Port-attempt:[[:space:]]*//p' | head -1)
+      prev_failing=$(printf '%s\n' "$trailers" | sed -n 's/^Port-failing:[[:space:]]*//p' | head -1)
+      echo "PORT_ATTEMPT=$(( ${prev_attempt:-0} + 1 ))" >> $GITHUB_ENV
+      echo "PORT_PREV_FAILING=${prev_failing:--1}" >> $GITHUB_ENV
+      echo "attempt $(( ${prev_attempt:-0} + 1 )), previous failing count ${prev_failing:-none}"
 
   # `scaffold.py` imports `yaml` and `ttnn_names`, whose own `import ttnn` sits inside a function
   # that the scaffold pass never calls. So the whole pass runs here with PyYAML and nothing else --
@@ -225,8 +317,14 @@ steps:
   # forbids the agent from touching.
   - name: Scaffold the port
     run: |
+      # `--resume` on a branch that already carries a port, so the pass adds what is missing without
+      # overwriting what is there. It is not a no-op even then: a manifest that gained a kernel header
+      # between attempts is exactly how the last port lost all 112 of its in-scope cases, and this is
+      # the pass that copies it in.
+      resume=""
+      [ "$PORT_RESUME" = "1" ] && resume="--resume"
       python3 .github/scripts/port/scaffold.py \
-        --op "$PORT_OP" --category "$PORT_CATEGORY" \
+        --op "$PORT_OP" --category "$PORT_CATEGORY" $resume \
         --ttmetal-home . --codegen-root .codegen
 
       dir="ttnn/cpp/ttnn/operations/${PORT_CATEGORY}/${PORT_OP}/codegen"
@@ -248,9 +346,25 @@ steps:
   # No `timeout-minutes` here even though it wants one: gh-aw drops the field from custom steps. The
   # launcher's own ceiling is what bounds this.
   - name: Measure the native baseline on CIv2
-    run: python3 .github/scripts/port/dispatch.py --mode baseline
+    run: python3 "$HOME/.port-harness/dispatch.py" --mode baseline
 
 post-steps:
+  # Push what the agent wrote back onto the branch it was given, whatever the verdict, and decide
+  # whether another attempt is worth starting.
+  #
+  # A post-step, not a tool, and the difference is the whole point. The agent never holds the push
+  # token and never gets a say: the work is published because the job is ending, not because the run
+  # went well or because the agent remembered to ask. Run 31406186048 is why -- it produced a port
+  # that passed 184 of 184 cases and left it nowhere but a workspace that was about to be destroyed,
+  # because the verdict was short of `win` and it correctly declined to open a pull request.
+  #
+  # First among the post-steps because it is the one that must not be skipped, and because the last
+  # of them shreds the credential it needs. The archive below is the fallback for a run with no branch
+  # to publish to.
+  - name: Publish the port to its branch
+    if: always()
+    run: python3 "$HOME/.port-harness/dispatch.py" --mode publish
+
   # Run 31406186048 wrote a correct port -- 184/184 cases bit-exact -- and threw it away. The
   # performance verdict never reached `win`, the agent correctly declined to open a PR, and the C++
   # existed nowhere but this workspace. The `agent` artifact holds only the transcript, and the
@@ -342,7 +456,7 @@ mcp-scripts:
       `wait` with the handle. Batch every edit you intend to make before calling this.
     timeout: 540
     run: |
-      python3 "${GITHUB_WORKSPACE}/.github/scripts/port/dispatch.py" --mode build --start --as-tool
+      python3 "$HOME/.port-harness/dispatch.py" --mode build --start --as-tool
   verify:
     description: >-
       Start grading the port on real hardware and return a handle immediately; collect the verdict
@@ -365,7 +479,7 @@ mcp-scripts:
         correctness|performance|both) BAND="$INPUT_BAND" ;;
         *) echo "verify: band must be correctness, performance, or both (got: $INPUT_BAND)" >&2; exit 2 ;;
       esac
-      python3 "${GITHUB_WORKSPACE}/.github/scripts/port/dispatch.py" --mode verify --band "$BAND" --start --as-tool
+      python3 "$HOME/.port-harness/dispatch.py" --mode verify --band "$BAND" --start --as-tool
   wait:
     description: >-
       Collect a build or verify started earlier, given its handle. Blocks for up to seven minutes and
@@ -384,7 +498,7 @@ mcp-scripts:
       case "$INPUT_HANDLE" in
         *[!a-zA-Z0-9-]*|"") echo "wait: '$INPUT_HANDLE' is not a handle; pass the one build or verify printed" >&2; exit 2 ;;
       esac
-      python3 "${GITHUB_WORKSPACE}/.github/scripts/port/dispatch.py" --wait "$INPUT_HANDLE" --as-tool
+      python3 "$HOME/.port-harness/dispatch.py" --wait "$INPUT_HANDLE" --as-tool
 
 safe-outputs:
   mentions: false
@@ -401,7 +515,7 @@ safe-outputs:
 
 # Port a codegen op to a C++ program factory
 
-You are porting the tt-dm-codegen generic_op **`${{ inputs.op || 'untilize' }}`** into tt-metal as a native C++
+You are porting the tt-dm-codegen generic_op **`${{ env.PORT_OP }}`** into tt-metal as a native C++
 `DeviceOperation`, and proving on silicon that it beats the existing implementation.
 
 The tree is already scaffolded. The kernels are copied, the three `codegen/` source files exist as
@@ -469,10 +583,10 @@ All paths below are relative to your working directory.
 | What | Where you edit it |
 | --- | --- |
 | tt-metal checkout (your working tree) | the workspace root |
-| The op you are porting | `ttnn/cpp/ttnn/operations/${{ inputs.category || 'data_movement' }}/${{ inputs.op || 'untilize' }}/` |
-| Your stubs to fill in | `.../${{ inputs.op || 'untilize' }}/codegen/` |
+| The op you are porting | `ttnn/cpp/ttnn/operations/${{ env.PORT_CATEGORY }}/${{ env.PORT_OP }}/` |
+| Your stubs to fill in | `.../${{ env.PORT_OP }}/codegen/` |
 | tt-dm-codegen (read-only) | `.codegen/` |
-| The manifest — source of truth | `.codegen/agentic_port/manifests/${{ inputs.op || 'untilize' }}.yaml` |
+| The manifest — source of truth | `.codegen/agentic_port/manifests/${{ env.PORT_OP }}.yaml` |
 | The porting guide — read this first | `.codegen/agentic_port/knowledge/porting-guide.md` |
 | The generator you are transliterating | the manifest's `codegen_builder` path, under `.codegen/` |
 | **A finished, merged port to imitate** | `ttnn/cpp/ttnn/operations/data_movement/repeat/codegen/` |
@@ -484,7 +598,7 @@ deliverable you are producing, including its routing in `repeat/repeat.cpp`. Fol
 ## What to write
 
 **A. Program factory.** Transliterate the manifest's `codegen_builder` into a declarative
-`create_descriptor` in `codegen/${{ inputs.op || 'untilize' }}_codegen_program_factory.cpp`, per the porting
+`create_descriptor` in `codegen/${{ env.PORT_OP }}_codegen_program_factory.cpp`, per the porting
 guide's factory-translation section. Wire real circular-buffer and kernel args from the manifest's
 `cache_key_fields`, not placeholders.
 
@@ -494,7 +608,7 @@ merely happens to make one case pass is a defect even when the case passes.
 
 **B. Routing.** All four pieces, in the shared files, not in new ones:
 
-1. `supported_by_codegen()` in `codegen/${{ inputs.op || 'untilize' }}_codegen_supported.{hpp,cpp}`, transcribed
+1. `supported_by_codegen()` in `codegen/${{ env.PORT_OP }}_codegen_supported.{hpp,cpp}`, transcribed
    from the generator sweep's `invalidate_vector` plus any op guards. This predicate is about
    **correctness and device-resource feasibility, never performance**. Two things it must get
    right, both of which the sweep cannot tell you:
@@ -539,8 +653,8 @@ merely happens to make one case pass is a defect even when the case passes.
    `routing.demoted_but_faster` is the opposite mistake: a case you routed away that measured faster
    under forced codegen. Those demotions cost performance for nothing; remove them.
 
-3. The host free function `ttnn::${{ inputs.op || 'untilize' }}(..., implementation=)` in the shared
-   `${{ inputs.op || 'untilize' }}.cpp`:
+3. The host free function `ttnn::${{ env.PORT_OP }}(..., implementation=)` in the shared
+   `${{ env.PORT_OP }}.cpp`:
    - `"auto"` (the default) → codegen iff `supported_by_codegen(attrs) && !is_demoted(attrs)`,
      else the native prim.
    - `"native"` → always the native prim, unconditionally.
@@ -555,8 +669,8 @@ merely happens to make one case pass is a defect even when the case passes.
      control lands work on cores the caller deliberately reserved. Put this in its own predicate,
      shared by both branches, and keep it out of `supported_by_codegen()`.
 
-4. `prim::${{ inputs.op || 'untilize' }}_codegen` validate, in
-   `codegen/${{ inputs.op || 'untilize' }}_codegen_device_operation.cpp`: a second `TT_FATAL(supported_by_codegen(...))`
+4. `prim::${{ env.PORT_OP }}_codegen` validate, in
+   `codegen/${{ env.PORT_OP }}_codegen_device_operation.cpp`: a second `TT_FATAL(supported_by_codegen(...))`
    on cache miss, plus **the native op's own structural `TT_FATAL`s** — device storage, non-null
    buffer, rank and alignment invariants. `supported_by_codegen()` only asks about layout, dtype and
    memory config, all of which answer perfectly well for a host-side or deallocated tensor, so a
@@ -564,7 +678,7 @@ merely happens to make one case pass is a defect even when the case passes.
    where native gave a clear error.
 
 5. The Python binding: expose the `implementation` kwarg on the **existing** binding in
-   `${{ inputs.op || 'untilize' }}_nanobind.cpp`, defaulting to `"auto"`.
+   `${{ env.PORT_OP }}_nanobind.cpp`, defaulting to `"auto"`.
 
 **C. Remaining hooks.** Fill in `compute_output_specs`, `create_output_tensors`, and any other
 DeviceOp hooks per the porting guide's checklist for this op's tier.
@@ -608,11 +722,20 @@ needs changing, not that the measurement was unlucky. Read `failing`,
 
 ## Rules
 
-**Do not go looking for a prior implementation of this op.** No `git log`, `git show`, or `git
-branch` spelunking, no diffing against other branches, no reading a port from another checkout.
-Anything you find that way is stale scratch work, not a reference, and using it invalidates this
-run. Build the port from the manifest, the generator source, the porting guide, the merged `repeat`
-port, and nothing else.
+**Do not go looking for a prior implementation of this op outside this branch.** No `git branch`
+spelunking, no diffing against other branches, no reading a port from another checkout. Anything you
+find that way is stale scratch work, not a reference, and using it invalidates this run. Build the
+port from the manifest, the generator source, the porting guide, the merged `repeat` port, the code
+already in your own worktree, and nothing else.
+
+The distinction matters because **the port already in your worktree, if there is one, is the starting
+point rather than something to be suspicious of.** A run may be continuing a branch a previous
+attempt or a person left half-finished. You can tell which: the baseline printed in your first tool
+output says so, and if it did, it also handed you a measured list of the cases that port currently
+fails. That list is the job. Read the existing code, fix what the list names, and leave the rest
+alone -- a rewrite throws away work that was already verified on hardware and costs a whole run to
+get back to where you started. Do not delete and re-transliterate a file because you would have
+written it differently.
 
 **Do not write tests, and do not edit the generated one.** No new `test_*.py`, no ad-hoc device
 scripts, no edits to any existing test, harness, or gate script. Correctness and performance are
