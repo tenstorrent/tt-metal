@@ -25,6 +25,13 @@ constexpr uint16_t REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID = 0;
 // Program ID FIFO size
 constexpr uint32_t PROGRAM_ID_FIFO_SIZE = 32;
 
+FORCE_INLINE
+void read_realtime_wall_clock(uint32_t* time_hi, uint32_t* time_lo) {
+    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    *time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
+    *time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
+}
+
 #ifndef ARCH_QUASAR
 // Append a program ID to the circular buffer embedded in realtime_profiler_msg_t.
 // Returns true if successful, false if the buffer is full.
@@ -66,10 +73,9 @@ bool program_id_fifo_pop(volatile tt_l1_ptr realtime_profiler_msg_t* msg, uint32
 // is_start: true for kernel start timestamp, false for kernel end timestamp
 FORCE_INLINE
 void record_realtime_timestamp(volatile tt_l1_ptr realtime_profiler_msg_t* msg, bool is_start) {
-    // Read wall clock - LOW first to latch HIGH
-    volatile tt_reg_ptr uint32_t* p_reg = reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    uint32_t time_lo = p_reg[WALL_CLOCK_LOW_INDEX];
-    uint32_t time_hi = p_reg[WALL_CLOCK_HIGH_INDEX];
+    uint32_t time_hi = 0;
+    uint32_t time_lo = 0;
+    read_realtime_wall_clock(&time_hi, &time_lo);
 
     // Determine buffer from profiler state: write to buffer NOT being pushed
     // PUSH_B means real-time profiler is pushing B, so write to A

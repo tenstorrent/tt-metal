@@ -122,7 +122,8 @@ public:
         uint8_t multicast_go_offset,
         uint8_t num_unicast_txns,
         uint8_t noc_data_start_index,
-        DispatcherSelect dispatcher_type);
+        DispatcherSelect dispatcher_type,
+        uint16_t profiler_program_id = 0);
 
     void add_notify_dispatch_s_go_signal_cmd(uint8_t wait, uint16_t index_bitmask);
 

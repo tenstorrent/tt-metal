@@ -525,7 +525,8 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
     uint8_t multicast_go_offset,
     uint8_t num_unicast_txns,
     uint8_t noc_data_start_index,
-    DispatcherSelect dispatcher_type) {
+    DispatcherSelect dispatcher_type,
+    uint16_t profiler_program_id) {
     TT_ASSERT(
         num_unicast_txns <= std::numeric_limits<uint8_t>::max(),
         "Number of unicast destinations {} exceeds maximum {}",
@@ -544,6 +545,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_go_signal_mcast(
         mcast_cmd->mcast.multicast_go_offset = multicast_go_offset;
         mcast_cmd->mcast.num_unicast_txns = num_unicast_txns;
         mcast_cmd->mcast.noc_data_start_index = noc_data_start_index;
+        mcast_cmd->mcast.profiler_program_id = profiler_program_id;
         mcast_cmd->mcast.wait_stream = wait_stream;
     };
     CQDispatchCmd* mcast_cmd_dst = this->reserve_space<CQDispatchCmd*>(sizeof(CQDispatchCmd));

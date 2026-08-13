@@ -401,8 +401,9 @@ struct CQDispatchGoSignalMcastCmd {
                                   // multicast gos.
     uint8_t num_unicast_txns;
     uint8_t noc_data_start_index;
+    uint16_t profiler_program_id;
     uint32_t wait_count;
-    uint32_t wait_stream;  // Index of the stream to wait on
+    uint16_t wait_stream;  // Index of the stream to wait on
 } __attribute__((packed));
 
 struct CQDispatchNotifySubordinateGoSignalCmd {

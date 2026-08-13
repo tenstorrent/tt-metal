@@ -73,6 +73,12 @@ void zero_dispatch_s_realtime_profiler_msg_fields(
     write_u32(
         base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
                    realtime_profiler_msgs::realtime_profiler_msg_t::Field::program_id_fifo_end));
+    write_u32(
+        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::record_write_index));
+    write_u32(
+        base + factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+                   realtime_profiler_msgs::realtime_profiler_msg_t::Field::record_read_index));
 
     const uint32_t ksa = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
         realtime_profiler_msgs::realtime_profiler_msg_t::Field::kernel_start_a);
@@ -86,6 +92,18 @@ void zero_dispatch_s_realtime_profiler_msg_fields(
     write_u32(base + kea + ts_id_byte_off);
     write_u32(base + ksb + ts_id_byte_off);
     write_u32(base + keb + ts_id_byte_off);
+
+    const uint32_t stream_end_time_hi = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+        realtime_profiler_msgs::realtime_profiler_msg_t::Field::stream_end_time_hi);
+    const uint32_t stream_end_time_lo = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+        realtime_profiler_msgs::realtime_profiler_msg_t::Field::stream_end_time_lo);
+    const uint32_t stream_completion_count = factory.offset_of<realtime_profiler_msgs::realtime_profiler_msg_t>(
+        realtime_profiler_msgs::realtime_profiler_msg_t::Field::stream_completion_count);
+    for (uint32_t i = 0; i < 8; ++i) {
+        write_u32(base + stream_end_time_hi + i * sizeof(uint32_t));
+        write_u32(base + stream_end_time_lo + i * sizeof(uint32_t));
+        write_u32(base + stream_completion_count + i * sizeof(uint32_t));
+    }
 }
 
 }  // namespace

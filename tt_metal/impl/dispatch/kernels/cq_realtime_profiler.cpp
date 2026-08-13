@@ -24,6 +24,7 @@ constexpr uint32_t realtime_profiler_timestamp_size = 2 * sizeof(realtime_profil
 // DISPATCH_CORE_NOC_Y  - NOC Y coordinate of dispatch_s core
 // DISPATCH_DATA_ADDR_A - Address of kernel_start_a in dispatch_s's L1 mailbox
 // DISPATCH_DATA_ADDR_B - Address of kernel_start_b in dispatch_s's L1 mailbox
+// DISPATCH_PROFILER_STATE_ADDR - dispatch_s state word acknowledged after each read
 // RING_BUFFER_ADDR     - L1 address of the shared ring buffer
 
 // L1 region carved by DispatchMemMap (CommandQueueDeviceAddrType::REALTIME_PROFILER_MSG) on this
@@ -57,6 +58,15 @@ __attribute__((noinline)) void realtime_profiler_read_and_enqueue(bool buffer_a)
     if (id != REALTIME_PROFILER_UNPROFILED_PROGRAM_HOST_ID) {
         ring_buffer->write_index++;
     }
+
+    rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
+    const uint64_t dispatch_state_noc_addr =
+        get_noc_addr(DISPATCH_CORE_NOC_X, DISPATCH_CORE_NOC_Y, DISPATCH_PROFILER_STATE_ADDR);
+    noc_async_write_one_packet(
+        reinterpret_cast<uint32_t>(&rt_profiler_msg->realtime_profiler_state),
+        dispatch_state_noc_addr,
+        sizeof(uint32_t));
+    noc_async_write_barrier();
 }
 
 // Handle sync requests from host: capture device timestamp and enqueue
@@ -127,15 +137,9 @@ void kernel_main() {
                 }
                 continue;
 
-            case REALTIME_PROFILER_STATE_PUSH_A:
-                realtime_profiler_read_and_enqueue(true);
-                rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
-                break;
+            case REALTIME_PROFILER_STATE_PUSH_A: realtime_profiler_read_and_enqueue(true); break;
 
-            case REALTIME_PROFILER_STATE_PUSH_B:
-                realtime_profiler_read_and_enqueue(false);
-                rt_profiler_msg->realtime_profiler_state = REALTIME_PROFILER_STATE_IDLE;
-                break;
+            case REALTIME_PROFILER_STATE_PUSH_B: realtime_profiler_read_and_enqueue(false); break;
 
             case REALTIME_PROFILER_STATE_TERMINATE: ring_buffer->terminate = 1; return;
         }

@@ -54,7 +54,8 @@ FORCE_INLINE void dispatch_subordinate_realtime_profiler() {
         uint32_t stream_id = first_stream_index + i;
         volatile uint32_t* stream_reg =
             (volatile uint32_t*)STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
-        last_counts[i] = *stream_reg;
+        last_counts[i] = *stream_reg & ((1u << MEM_WORD_ADDR_WIDTH) - 1);
+        rt_profiler_msg->stream_completion_count[i] = last_counts[i];
     }
 
     while (rt_profiler_msg->realtime_profiler_state != REALTIME_PROFILER_STATE_TERMINATE) {
@@ -63,11 +64,16 @@ FORCE_INLINE void dispatch_subordinate_realtime_profiler() {
             volatile uint32_t* stream_reg =
                 (volatile uint32_t*)STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
 
-            uint32_t current_count = *stream_reg;
+            uint32_t current_count = *stream_reg & ((1u << MEM_WORD_ADDR_WIDTH) - 1);
             if (current_count != last_counts[i]) {
                 DeviceZoneScopedN("TRISC0-record-end-ts");
                 last_counts[i] = current_count;
-                record_realtime_timestamp(rt_profiler_msg, false);
+                uint32_t time_hi = 0;
+                uint32_t time_lo = 0;
+                read_realtime_wall_clock(&time_hi, &time_lo);
+                rt_profiler_msg->stream_end_time_hi[i] = time_hi;
+                rt_profiler_msg->stream_end_time_lo[i] = time_lo;
+                rt_profiler_msg->stream_completion_count[i] = current_count;
             }
         }
     }

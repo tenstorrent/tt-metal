@@ -19,6 +19,13 @@ enum RealtimeProfilerState : uint32_t {
     REALTIME_PROFILER_STATE_TERMINATE = 3,  // Signal to terminate the kernel
 };
 
+// Dispatch-s writes completed program intervals into this SPSC queue and the reserved
+// realtime-profiler tensix drains them over NOC. The queue decouples dispatch from the
+// profiler transport and, unlike the former A/B notification slot, cannot overwrite a
+// record when independent subdevices complete close together.
+constexpr uint32_t REALTIME_PROFILER_RECORD_QUEUE_CAPACITY = 128;
+constexpr uint32_t REALTIME_PROFILER_RECORD_WORDS = 8;
+
 struct realtime_profiler_timestamp_t {
     uint32_t time_hi;
     uint32_t time_lo;
@@ -40,4 +47,10 @@ struct realtime_profiler_msg_t {
     volatile uint32_t program_id_fifo[32];
     volatile uint32_t program_id_fifo_start;
     volatile uint32_t program_id_fifo_end;
+    volatile uint32_t record_write_index;
+    volatile uint32_t record_read_index;
+    volatile uint32_t record_words[1024];
+    volatile uint32_t stream_end_time_hi[8];
+    volatile uint32_t stream_end_time_lo[8];
+    volatile uint32_t stream_completion_count[8];
 };

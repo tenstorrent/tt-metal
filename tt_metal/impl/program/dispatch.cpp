@@ -2662,6 +2662,7 @@ void update_program_dispatch_commands(
         MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(*sub_device_id) +
             MetalContext::instance().dispatch_mem_map().get_completion_counter_offset(cq_id));
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
+    cached_program_command_sequence.mcast_go_signal_cmd_ptr->profiler_program_id = runtime_id;
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
     // where the number of active eth cores is heterogeneous across devices.
@@ -2868,6 +2869,7 @@ void update_traced_program_dispatch_commands(
         MetalContext::instance().dispatch_mem_map().get_dispatch_message_update_offset(*sub_device_id) +
             MetalContext::instance().dispatch_mem_map().get_completion_counter_offset(cq_id));
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
+    cached_program_command_sequence.mcast_go_signal_cmd_ptr->profiler_program_id = runtime_id;
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
     // where the number of active eth cores is heterogeneous across devices.
