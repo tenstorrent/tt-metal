@@ -779,22 +779,22 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
 
 
 inline void run_a1_blocked_pipeline(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     m2::DFBAccessPattern cap_in,
     uint32_t P,
     uint32_t block_size,
     uint32_t num_entries,
     bool implicit = false) {
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
     }
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device.get_devices()[0];
     constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
     const m2::NodeCoord node{0, 0};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
 
     const m2::DFBSpecName DFB_IN{"dfb_in"};
     const m2::DFBSpecName DFB_OUT{"dfb_out"};
@@ -883,7 +883,7 @@ inline void run_a1_blocked_pipeline(
             },
         .work_units = {wu},
     };
-    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
 
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -903,7 +903,7 @@ inline void run_a1_blocked_pipeline(
     const uint32_t total_bytes = entry_size * num_entries;
     auto input = create_random_vector_of_bfloat16(total_bytes, 2.0f, 0xA1B1);
     detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input);
-    m2_writeshard_barrier_uint32(device, in_tensor, input);
+    m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
 
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 
@@ -971,21 +971,21 @@ inline void run_a1_blocked_pipeline(
 }
 
 inline void run_a1_fanout_blocked_pipeline(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t C,
     uint32_t block_size,
     uint32_t num_entries,
     bool implicit = false) {
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
     }
-    IDevice* device = mesh_device->get_devices()[0];
+    IDevice* device = mesh_device.get_devices()[0];
     constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
     const m2::NodeCoord node{0, 0};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(entry_size, num_entries, DataType::BFLOAT16);
-    auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
-    auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    auto in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+    auto out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
 
     const m2::DFBSpecName DFB_IN{"dfb_in"};
     const m2::DFBSpecName DFB_OUT{"dfb_out"};
@@ -1064,7 +1064,7 @@ inline void run_a1_fanout_blocked_pipeline(
              {.unique_id = OUT_TENSOR, .spec = out_tensor.tensor_spec()}},
         .work_units = {wu},
     };
-    Program program = m2::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = m2::MakeProgramFromSpec(mesh_device, spec);
 
     m2::ProgramRunArgs params;
     params.kernel_run_args = {
@@ -1082,7 +1082,7 @@ inline void run_a1_fanout_blocked_pipeline(
     const uint32_t total_bytes = entry_size * num_entries;
     auto input = create_random_vector_of_bfloat16(total_bytes, 2.0f, 0xA1C1);
     detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), input);
-    m2_writeshard_barrier_uint32(device, in_tensor, input);
+    m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
 
     detail::LaunchProgram(device, program, /*wait_until_cores_done=*/true);
 

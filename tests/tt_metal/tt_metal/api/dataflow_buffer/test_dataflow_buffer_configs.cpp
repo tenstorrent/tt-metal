@@ -2361,8 +2361,8 @@ TEST_F(UnitMeshFixture, DFBDeviceSlotLimitIsPerCoreNotPerProgram) {
 // finalize_single_dfb_config rejects the combination, turning a device hang into a host error.
 // Use an explicit DM consumer, or a DM producer if the consumer must be implicit.
 static void expect_tensix_blocked_implicit_consumer_rejected(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, uint32_t num_threads, uint32_t num_entries) {
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+    distributed::MeshDevice& mesh_device, uint32_t num_threads, uint32_t num_entries) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
     }
     M2SingleDFBParams params{
@@ -2378,11 +2378,11 @@ static void expect_tensix_blocked_implicit_consumer_rejected(
     };
     EXPECT_ANY_THROW(run_single_dfb_program_2_0(mesh_device, params));
 }
-TEST_F(MeshDeviceFixture, TensixDMTest1xDFB2Bx2B_blk4_impl_rejected_2_0) {
-    expect_tensix_blocked_implicit_consumer_rejected(this->devices_.at(0), /*num_threads=*/2, /*num_entries=*/16);
+TEST_F(UnitMeshFixture, TensixDMTest1xDFB2Bx2B_blk4_impl_rejected_2_0) {
+    expect_tensix_blocked_implicit_consumer_rejected(this->device(), /*num_threads=*/2, /*num_entries=*/16);
 }
-TEST_F(MeshDeviceFixture, TensixDMTest1xDFB4Bx4B_blk4_impl_rejected_2_0) {
-    expect_tensix_blocked_implicit_consumer_rejected(this->devices_.at(0), /*num_threads=*/4, /*num_entries=*/32);
+TEST_F(UnitMeshFixture, TensixDMTest1xDFB4Bx4B_blk4_impl_rejected_2_0) {
+    expect_tensix_blocked_implicit_consumer_rejected(this->device(), /*num_threads=*/4, /*num_entries=*/32);
 }
 
 // --- REJECTED CONFIG: implicit BLOCKED whose txn window doesn't cover every tile counter ---
@@ -2390,9 +2390,9 @@ TEST_F(MeshDeviceFixture, TensixDMTest1xDFB4Bx4B_blk4_impl_rejected_2_0) {
 // advances its counter only every block_size entries. At P=1, C=4, block_size=4 and 16 entries the txn
 // window fills 2 of the 4 sub-rings while all 4 counters are credited, so consumers 2 and 3 would read
 // entries nobody wrote. compute_txn_descriptor rejects it; the explicit twin is unaffected.
-TEST_F(MeshDeviceFixture, DMTest1xDFB1Bx4B_blk4_impl_rejected_2_0) {
-    auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, DMTest1xDFB1Bx4B_blk4_impl_rejected_2_0) {
+    auto& mesh_device = this->device();
+    if (mesh_device.arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only";
     }
     M2SingleDFBParams params{
@@ -2411,9 +2411,9 @@ TEST_F(MeshDeviceFixture, DMTest1xDFB1Bx4B_blk4_impl_rejected_2_0) {
 
 // B10 — a BLOCKED binding needs block_size > 0 (check_block_size_validity in program_spec.cpp).
 // This config leaves it unset on a BLOCKED consumer, so it must throw.
-TEST_F(MeshDeviceFixture, B10_Blocked_Rejected_2_0) {
-    auto& mesh_device = this->devices_.at(0);
-    if (mesh_device->get_devices()[0]->arch() != ARCH::QUASAR) {
+TEST_F(UnitMeshFixture, B10_Blocked_Rejected_2_0) {
+    auto& mesh_device = this->device();
+    if (mesh_device.arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "DFB validation tested on Quasar";
     }
     using namespace m2_config_test_helpers;
