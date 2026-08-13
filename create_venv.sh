@@ -23,6 +23,9 @@ OPTIONS:
                           using symlinks. This makes the venv fully self-contained
                           and portable, at the cost of increased disk space.
     --skip-compat-check   Skip the package compatibility check (uv pip check).
+    --disable-warnings-as-errors
+                          Pass -DCMAKE_COMPILE_WARNING_AS_ERROR=OFF when building
+                          packages from source (tt-umd, tt-exalens).
     --help, -h            Show this help message and exit
 
 ENVIRONMENT VARIABLES:
@@ -63,6 +66,7 @@ ARG_ENV_DIR=""
 FORCE_OVERWRITE="false"
 BUNDLE_PYTHON="false"
 SKIP_COMPAT_CHECK="false"
+DISABLE_WARNINGS_AS_ERRORS="false"
 
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
@@ -97,6 +101,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-compat-check)
             SKIP_COMPAT_CHECK="true"
+            shift
+            ;;
+        --disable-warnings-as-errors)
+            DISABLE_WARNINGS_AS_ERRORS="true"
             shift
             ;;
         --help|-h)
@@ -234,6 +242,14 @@ elif [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "24.04" ]; then
     VENV_PYTHON_VERSION="3.12"
 elif [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
     VENV_PYTHON_VERSION="3.10"
+elif [ "$OS_ID" = "gentoo" ]; then
+    # Gentoo: use the system's active Python version to match the built extensions
+    # Try to detect the active Python version
+    if command -v python3 &>/dev/null; then
+        VENV_PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "3.12")
+    else
+        VENV_PYTHON_VERSION="3.12"
+    fi
 else
     VENV_PYTHON_VERSION="3.10"
 fi
@@ -340,7 +356,7 @@ if [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
         setuptools==80 wheel==0.45.1
 else
     echo "$OS_ID $OS_VERSION detected: updating wheel and setuptools to latest"
-    uv pip install --upgrade wheel setuptools==80
+    uv pip install --upgrade wheel setuptools==80 meson-python cython
 fi
 
 echo "Installing dev dependencies"
@@ -350,6 +366,20 @@ uv pip install --extra-index-url "$PYTORCH_INDEX" \
     --index-strategy unsafe-best-match \
     --no-build-isolation \
     -r "$(pwd)/tt_metal/python_env/requirements-dev.txt"
+
+if [[ "$DISABLE_WARNINGS_AS_ERRORS" == "true" ]]; then
+    export CMAKE_ARGS="-DCMAKE_COMPILE_WARNING_AS_ERROR=OFF"
+fi
+
+echo "Installing tt-umd from local submodule"
+uv pip install "$(pwd)/tt_metal/third_party/umd"
+
+if [[ "$(uname -m)" == "x86_64" ]]; then
+    echo "Installing tt-exalens from source"
+    uv pip install "tt-exalens @ git+https://github.com/tenstorrent/tt-exalens.git"
+else
+    echo "Skipping tt-exalens: downloads x86_64 SFPI GDB binary, cannot strip on $(uname -m)"
+fi
 
 echo "Installing tt-triage dependencies"
 uv pip install --index-strategy unsafe-best-match -r "$(pwd)/tools/triage/requirements.txt"
