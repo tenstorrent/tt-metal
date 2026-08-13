@@ -340,8 +340,8 @@ shipped norm does **not** take. What ships is the norm half; the residual half i
 the norm reads while the statistics gather it adds is fixed and latency-bound, so
 below that the trade inverts. The `frac_norm_ungated` candidate removes the gate
 from committed code and measures it (`logs/ab_frac_norm_gate.log`): at 128 rows
-ungated prefill is **1.34 / 1.18 ms** against the gated **1.09 / 1.08**, i.e.
-**+22.9 % / +9.3 %**. Gated, the 128-row device window reads −0.22 % / −0.10 %,
+ungated prefill is **1.34 / 1.18 ms** against the gated **1.09 / 1.11 / 1.08 / 1.07**, i.e.
+**+21.8 % / +9.8 %** mean-to-mean. Gated, the 128-row device window reads −0.22 % / −0.10 %,
 i.e. untouched. The threshold is exactly where the inherited full-width norm stops
 being a cheap L1-sharded kernel and becomes a DRAM-interleaved one — which is the
 thing this replaces.

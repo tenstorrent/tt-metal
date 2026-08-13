@@ -10,11 +10,20 @@ The first version of this file asked the wrong question -- "does this artifact's
 value appear *somewhere* in either document" -- which a review showed is nearly
 vacuous, because the two documents duplicate figures and either one can rot
 alone.  This version goes the other way: it **parses each claim where it is
-written**, anchored to its own table row, and re-derives that specific number
-from the artifact the claim cites.  Corrupting one cell in one document fails it.
+written** and re-derives it.
 
-It also checks the derived columns (percentage deltas, op counts), because those
-are what a reader acts on and they were wrong once.
+Two kinds of check, and they are not equally strong:
+
+* **anchored** -- a named table row, whose cells (including the percentage-delta
+  and op-count columns) are re-derived from the artifact the row cites.
+  Corrupting one such cell in one document fails the gate.  These are worth
+  trusting.
+* **swept** -- every remaining figure must appear in a committed artifact at its
+  own stated precision, or be a declared derivation.  This catches a figure with
+  no evidence behind it; it does **not** catch a figure swapped for another real
+  measurement.  A mutation sweep over every figure in the five checked files
+  catches about 37 % of single-cell corruptions overall, and ~100 % inside the
+  anchored tables.  Read "swept" as provenance, not as verification.
 
     python .../bench/check_reported_figures.py
 """
@@ -93,6 +102,19 @@ def ab_rows(path: pathlib.Path) -> dict[tuple[str, str], dict]:
     return out
 
 
+def find_rows(text: str, label: str) -> list[list[str]]:
+    """Every row labelled ``label``.  The Result and speedup tables share labels."""
+    out = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if cells and cells[0].replace("**", "") == label:
+            out.append(cells)
+    return out
+
+
 def find_row(text: str, label: str) -> list[str] | None:
     """The cells of the row labelled ``label``, or ``None``.  Records nothing."""
     for line in text.splitlines():
@@ -125,14 +147,21 @@ STRUCTURAL = {
     # shapes and counts
     6656, 4608, 4096, 1664, 1280, 1024, 5120, 19968, 4992, 2304, 10240, 131072, 130073,
     32, 64, 128, 208, 256, 512, 2048, 2049, 4097, 8192, 8193, 12345, 16, 8, 4, 2, 1, 0,
-    40, 52, 26, 13, 10, 5, 3, 6, 7, 12, 14, 20, 22, 24, 30, 33, 34, 35, 36, 38, 45, 46, 48,
+    52, 26, 13, 10, 5, 3, 6, 7, 12, 14, 20, 22, 24, 30, 33, 34, 35, 36, 38, 45, 46, 48,
     100, 104, 108, 110, 112, 160, 200, 300, 400, 1e-6,
+    # NOT 40: "40 KB" was a wrong decode payload size (it is 416 KB), and listing
+    # 40 here defeated the unit-carrying-integer rule that exists to catch it.
     # bars, thresholds and tolerances
     0.999, 0.995, 0.99, 0.96, 0.9998, 0.9999, 0.9,
     # byte sizes and addresses quoted from runtime messages
     1792, 2560, 1536, 6144, 3072, 4352, 7168, 7296, 8192, 32768, 425984, 1461376, 1572864,
-    1592192, 1137536, 1139584, 1039872, 1052160, 896256, 1109248, 1136640, 1434048,
-    1460992, 1454080, 316544, 213, 27, 24132, 24136, 24140, 25295, 27625, 30265, 21, 22,
+    1592192, 1137536, 1139584, 1039872,
+    # Byte budgets: products of shapes and bytes-per-element (e.g. 6656 x 1280 x
+    # 1.0625 for a BFLOAT8_B weight).  Arithmetic over structural constants, and
+    # each is written next to its formula in the contract.
+    81043456, 314802176, 324173824, 967835648, 57933824, 425984, 16777216, 4194304,
+    81788928, 71303168, 35651584, 134217728, 224280576, 90521600, 19169280, 9052160,
+    7241728, 67108864, 1434048, 316544, 1137536,
     # source line numbers, issue ids, versions
     16667, 45943, 45958, 45052, 45969, 1305, 2222, 197, 240, 269, 41, 45, 56, 72, 95, 123,
 }
@@ -167,13 +196,10 @@ DERIVED: tuple[tuple[str, str, tuple[float, ...]], ...] = (
     # prefill device time in milliseconds, from the microsecond window
     ("16.62", "scale", (16620.3, 0.001)),
     ("17.61", "scale", (17.61, 1.0)),
-    # attn_gate DRAM bandwidth, mean over the eight replays of the cited capture
-    ("349.9", "mean", (349.9,)),
-    ("388.8", "mean", (388.8,)),
-    ("320.1", "mean", (320.1,)),
-    ("75.9", "mean", (75.9,)),
-    ("68.3", "mean", (68.3,)),
-    ("62.5", "mean", (62.5,)),
+    # The DRAM-bandwidth and percent-of-peak figures are means over the eight
+    # replays of the cited capture, so they are checked by CAPTURE_MEANS below
+    # rather than declared here -- a DERIVED row whose input is its own literal
+    # cannot fail, and six of them used to be written that way.
 )
 
 #: Byte-per-element constants of the block float formats, and the ratios this
@@ -203,6 +229,36 @@ def check_derived() -> None:
 
 
 DERIVED_VALUES = {float(literal) for literal, _, _ in DERIVED}
+
+#: ``(literal, column, shape)`` -- a mean over the per-replay rows of
+#: ``tracy/sliding/decode_2048_perf_report.csv`` for one matmul shape.  These are
+#: the OPT-013 dtype-policy table's bandwidth and percent-of-peak columns.
+CAPTURE_MEANS = (
+    ("388.8", "DRAM", "32 x 6656 x 1280"), ("75.9", "DRAM %", "32 x 6656 x 1280"),
+    ("349.9", "DRAM", "32 x 6656 x 1024"), ("68.3", "DRAM %", "32 x 6656 x 1024"),
+    ("320.1", "DRAM", "32 x 1024 x 6656"), ("62.5", "DRAM %", "32 x 1024 x 6656"),
+)
+
+
+def check_capture_means() -> None:
+    """Re-derive the dtype-policy table's per-shape means from the capture."""
+    rows = list(csv.DictReader((DOC / "tracy" / "sliding" / "decode_2048_perf_report.csv").open()))
+    code = next(k for k in rows[0] if "OP CODE" in k.upper() or k.strip() == "Op Code")
+    for literal, column, shape in CAPTURE_MEANS:
+        key = next((k for k in rows[0] if k.strip().upper() == column.upper()), None)
+        if key is None:
+            expect(False, f"capture mean {literal}", f"no {column!r} column in the capture")
+            continue
+        values = [float(r[key]) for r in rows if shape in r[code] and r[key].strip()]
+        expect(bool(values), f"capture mean {literal}", f"no rows for {shape}")
+        if values:
+            got = sum(values) / len(values)
+            places = len(literal.split(".")[1])
+            expect(abs(got - float(literal)) <= 0.5 * 10.0 ** (-places) * 2,
+                   f"capture mean {literal} ({column}, {shape})", f"the capture's {len(values)} rows mean {got:.3f}")
+
+
+CAPTURE_MEAN_VALUES = {float(literal) for literal, _, _ in CAPTURE_MEANS}
 
 def artifact_corpus():
     """Every number a committed artifact contains, and the aggregates over them.
@@ -273,11 +329,16 @@ def quoted_figures(text: str):
     which is how "40 KB" and "107 MB", both wrong by an order of magnitude, sat in
     the hand-off contract through five rounds of review.
     """
-    unit = r"(?:\s*(?:MB|KB|GB|B|%|us|μs|ms|GB/s))"
+    unit = r"(?:\s*(?:MB|KB|GB|B|%|us|μs|ms|GB/s|lines|dumps))"
     for line_no, line in enumerate(text.splitlines(), 1):
-        for literal in re.findall(r"(?<![\w.])\d+\.\d+(?![\w])", line):
+        # House style writes byte counts and line counts comma-grouped, so those
+        # have to be un-grouped before anything else: reading them digit-group by
+        # digit-group turns "1,792 B" into the meaningless fragments 792 and 144,
+        # which is how a wrong watcher line count survived two runs.
+        plain = re.sub(r"(?<=\d),(?=\d\d\d(?!\d))", "", line)
+        for literal in re.findall(r"(?<![\w.])\d+\.\d+(?![\w])", plain):
             yield literal, line_no
-        for literal in re.findall(rf"(?<![\w.])(\d+){unit}(?![\w])", line):
+        for literal in re.findall(rf"(?<![\w.])(\d+){unit}(?![\w])", plain):
             yield literal, line_no
 
 
@@ -294,7 +355,7 @@ def has_provenance(literal: str, corpus: set[float], aggregates: list[float], ro
     thousand, not a tolerance.
     """
     value = float(literal)
-    if value in STRUCTURAL or value in STRUCTURAL_RATIOS or value in DERIVED_VALUES:
+    if value in STRUCTURAL or value in STRUCTURAL_RATIOS or value in DERIVED_VALUES or value in CAPTURE_MEAN_VALUES:
         return True
     places = len(literal.split(".")[1]) if "." in literal else 0
     for scaled, extra in ((value, 0), (value * 1000.0, 0), (value / 1000.0, 3)):
@@ -500,6 +561,43 @@ def main() -> int:
         for quoted in re.findall(r"(?<![\w.])0\.4[0-9]{3}(?![\w])", text):
             expect(quoted in logs, f"{source.name} quotes {quoted}", "no committed log contains it")
 
+    # ---------------------------------------- the speedup and attribution tables
+    # Four README tables were unanchored, and a review showed single-cell
+    # corruptions in them passing: the 1-chip baselines, the speedups, the
+    # win attribution and the prefill rows of the Result table.
+    for label, kind, field in (
+        ("traced decode, sliding @2048", "sliding", "decode_ms"),
+        ("traced decode, full @2048", "full", "decode_ms"),
+        ("prefill 8192, sliding", "sliding", "prefill_ms"),
+        ("prefill 8192, full", "full", "prefill_ms"),
+    ):
+        rows = find_rows(readme, label)
+        # The Result table (4 cells: before / after / delta) and the speedup table
+        # (5 cells: 1 chip / 4 chips / speedup / was) share row labels.
+        result_row = next((c for c in rows if len(c) == 4), None)
+        speedup_row = next((c for c in rows if len(c) == 5), None)
+        expect(result_row is not None and speedup_row is not None, f"README.md '{label}'",
+               f"expected a 4-cell Result row and a 5-cell speedup row, found {[len(c) for c in rows]}")
+        shipped = [ab[(n, kind)][field] for n in ("tp4", "tp4b", "tp4c") if (n, kind) in ab]
+        before = [ab[(n, kind)][field] for n in ("before", "beforeb") if (n, kind) in ab]
+        mean = sum(shipped) / len(shipped)
+        if result_row:
+            for cell, want, what in ((result_row[1], before, "before"), (result_row[2], shipped, "after")):
+                got = numbers(cell)
+                expect(sorted(round(v, 4) for v in got) == sorted(round(v, 4) for v in want),
+                       f"README.md '{label}' Result {what}", f"says {sorted(got)}, log gives {sorted(want)}")
+            pct = 100.0 * (mean - sum(before) / len(before)) / (sum(before) / len(before))
+            got = numbers(result_row[3])
+            expect(bool(got) and near(got[0], pct, 0.06), f"README.md '{label}' Result delta",
+                   f"says {got[:1]}, log gives {pct:+.2f} %")
+        if speedup_row and ("single", kind) in single:
+            base = single[("single", kind)][field]
+            for idx, want, what, tol in ((1, base, "1-chip", 5e-4), (2, mean, "4-chip", 6e-3),
+                                         (3, base / mean, "speedup", 0.006)):
+                got = numbers(speedup_row[idx])
+                expect(bool(got) and near(got[0], want, tol), f"README.md '{label}' {what}",
+                       f"says {got[:1]}, log gives {want:.4f}")
+
     # ------------------------------------------------------------- provenance
     # The anchored checks above cover about ten table families.  Five rounds of
     # review showed that is not where the defects live: they live in prose and in
@@ -513,6 +611,7 @@ def main() -> int:
     corpus, aggregates = artifact_corpus()
     rounded: dict[int, set] = {}
     check_derived()
+    check_capture_means()
     anchored = checks
     for name, text in (("README.md", readme), ("work_log.md", work_log),
                        ("context_contract.json", (DOC.parent / "context_contract.json").read_text()),

@@ -1630,8 +1630,8 @@ def test_collective_implementation_is_split_by_payload(multichip_mesh, decoder_c
 
     The split is a measurement.  With the barrier semaphore both primitives ship
     with, the async pair is **15.2 %** faster than ``ttnn.all_reduce`` at the
-    107 MB prefill payload (1348.0 against 1588.7 us) and **0.2 % slower** than
-    the wrappers at the 40 KB decode payload (0.4554 / 0.4246 against 0.4545 /
+    57.9 MB prefill payload (1348.0 against 1588.7 us) and **0.2 % slower** than
+    the wrappers at the 416 KB decode payload (0.4554 / 0.4246 against 0.4545 /
     0.4236 ms/token), where the collective is pure fixed cost and one more
     synchronization round outweighs the async op's tuning surface.
 
@@ -1816,6 +1816,16 @@ def test_decode_boundary_layout_is_a_fixed_point(multichip_mesh, decoder_cache, 
     assert ttnn.is_tensor_storage_on_device(sharded_in), "the layer must not free a tensor its caller owns"
     # Same computation either way: the boundary layout changes conversions, not math.
     assert torch.equal(first_device(from_dram), first_device(from_sharded))
+
+    # ...and a sharded input that is *not* the contract is refused rather than
+    # taken as the residual.  A stack that hands in the wrong shard spec has to
+    # fail loudly; silently normalising someone else's layout is the failure mode
+    # this contract exists to prevent.
+    wrong = ttnn.interleaved_to_sharded(interleaved, decoder.boundary_memcfg(TILE_SIZE, decoder.config.hidden_size))
+    wrong = ttnn.reshard(wrong, decoder._sharded_memcfg(TILE_SIZE, decoder.config.hidden_size, 8))
+    with pytest.raises(ValueError, match="boundary memory config"):
+        decoder.decode_forward(wrong, current_pos=current_pos, page_table=page_table, rope_pos_ids=rope_pos_ids)
+    ttnn.deallocate(wrong)
 
     for tensor in (interleaved, sharded_in, from_dram, from_sharded, page_table, current_pos, rope_pos_ids):
         ttnn.deallocate(tensor)

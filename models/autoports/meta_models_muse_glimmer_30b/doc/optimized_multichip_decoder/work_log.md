@@ -453,8 +453,8 @@ distributed norm rather than from anything structural.
 
 **Gated at 256 rows.** The saving scales with the rows the norm reads while the
 statistics gather is fixed and latency-bound, so at small row counts the trade
-inverts. Ungated it costs the 128-row window **+22.9 % / +9.3 %** of warmed prefill --
-1.34 / 1.18 ms against 1.09 / 1.08 (`logs/ab_frac_norm_gate.log`, the
+inverts. Ungated it costs the 128-row window **+21.8 % / +9.8 %** of warmed prefill --
+1.34 / 1.18 ms against the gated 1.09 / 1.11 and 1.08 / 1.07 (`logs/ab_frac_norm_gate.log`, the
 `frac_norm_ungated` candidate, which removes the gate from committed code).  That
 regression is the reason the gate exists, and
 `PREFILL_FRACTURED_NORM_MIN_ROWS` is set to `PREFILL_NORM_SHARD_MAX_ROWS` because
@@ -691,7 +691,7 @@ Three items on the decode window, all addressed:
 
 ## 11. Rejected, deferred and remaining
 
-The full rejection table is in the README; it has 20 rows and every one is a
+The full rejection table is in the README; it has 19 rows and every one is a
 candidate run on this mesh in this stage.  What is *not* done, and why:
 
 ### 11.1 The fractured prefill residual — the half that is still open

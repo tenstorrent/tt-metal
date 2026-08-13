@@ -337,7 +337,7 @@ MULTICHIP_DECODE_SDPA = (None, None, 0, 0, 32)
 #: Prefill moves ``2 x 1.5 x seq x 6656 x sizeof(dtype)`` bytes per layer, which
 #: at 8192 rows is 327 MB of BF16 against ~9.4 ms of per-device compute -- the
 #: collective is 20 % of the prefill layer, so halving the payload is worth 11 %
-#: of the whole thing.  Decode moves 40 KB and gains 1.6 %.  Both are measured on
+#: of the whole thing.  Decode moves 416 KB and gains 1.6 %.  Both are measured on
 #: the **released checkpoint** (``logs/layer_ab_real_ccl.log``,
 #: ``logs/layer_ab_geometry_final.log``):
 #:
@@ -417,7 +417,7 @@ DEFAULT_DECODE_CCL_MODE = "rs_ag"
 #: ``num_workers_per_link`` for ``ttnn.reduce_scatter``.
 #:
 #: The single largest non-matmul win in this stage, and it is one integer.  At the
-#: decode payload (40 KB) the reduce-scatter is pure fixed cost -- 2.7 GB/s against
+#: decode payload (416 KB) the reduce-scatter is pure fixed cost -- 2.7 GB/s against
 #: the **120.6 GB/s** the same fabric reaches on the 8192-row BF16 all-gather at
 #: the shipped packet size (``logs/fabric_packet_probe.log``, 678.41 us for
 #: 81,788,928 B) -- and the op's default worker
@@ -449,8 +449,8 @@ DEFAULT_DECODE_CCL_MODE = "rs_ag"
 #: view: on a ``2x2`` view every collective is demoted to Linear
 #: (``ccl_common.cpp:98-110``), which is 19 % slower here.
 
-#: ``num_workers_per_link`` is swept **per payload**, not once.  At the 40 KB
-#: decode payload one worker wins by 39 % (above); at the 107 MB prefill payload
+#: ``num_workers_per_link`` is swept **per payload**, not once.  At the 416 KB
+#: decode payload one worker wins by 39 % (above); at the 57.9 MB prefill payload
 #: the same op is bandwidth-bound and wants four -- 1814.9 us at one worker
 #: against **759.9** at four, on the shipped BFP8 payload
 #: (``logs/fabric_packet_probe.log``).  That is also why the prefill reducer is
@@ -599,10 +599,10 @@ DEFAULT_L1_SMALL_SIZE = 6144
 #: ``num_workers_per_link``, ``chunks_per_sync``, ``num_buffers_per_channel`` and
 #: ``use_optimal_ccl_for_llama``.
 #:
-#: **Split by payload.**  At the 107 MB prefill payload the async pair is
+#: **Split by payload.**  At the 57.9 MB prefill payload the async pair is
 #: **15.2 %** faster than ``ttnn.all_reduce`` -- 1348.0 against 1588.7 us, at the
 #: shipped BFP8 payload and packet size
-#: (``doc/optimized_multichip_decoder/logs/prefill_ccl_probe.log``).  At the 40 KB
+#: (``doc/optimized_multichip_decoder/logs/prefill_ccl_probe.log``).  At the 416 KB
 #: decode payload it is **0.2 % slower** than the composite wrappers -- 0.4554 /
 #: 0.4246 against 0.4545 / 0.4236 ms/token, three non-overlapping rounds each
 #: (``doc/optimized_multichip_decoder/logs/final_layer_ab.log``) -- because there
@@ -1324,8 +1324,8 @@ class MultichipDecoder(OptimizedDecoder):
         Which of the two forms is used is per mode, because they do not agree.  A
         ring all-reduce *is* a reduce-scatter plus an all-gather, so both forms
         move the same bytes and the only question is one fused dispatch against
-        two.  At the 40 KB decode payload the collective is latency-bound and the
-        pair wins by 1.10 / 1.21 %; at the 107 MB prefill payload, with each payload's own
+        two.  At the 416 KB decode payload the collective is latency-bound and the
+        pair wins by 1.10 / 1.21 %; at the 57.9 MB prefill payload, with each payload's own
         ``num_workers_per_link``, the two are within 0.24 % and prefill keeps the
         single dispatch (``logs/layer_ab_reducer_final.log``,
         ``logs/fabric_packet_probe.log``).  See
