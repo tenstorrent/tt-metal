@@ -17,9 +17,9 @@ Ties the validated blocks into one persistent, multi-request object (mirroring t
 
 Front-end (tokenizer, mel/STFT, prompt assembly) is the coqui-free `frontend.py` — pure
 torch on host, validated bit-exact against coqui captures. Sampling (mel_head + repetition
-penalty + top-k/top-p/multinomial) is on host with the VECTORIZED repetition penalty from
-`pipeline/phase_tt_mesh.RequestState.sample` — the loop version is a known quadratic perf
-bug (grows linearly with `seen` per step; ~240x slower by step 586).
+penalty + top-k/top-p/multinomial) is on host with a VECTORIZED repetition penalty — a
+per-token Python loop over the `seen` set is a known quadratic perf trap (grows linearly
+with `seen` per step; measured ~240x slower by step 586).
 
 Device layout notes carried over from the block bringups:
   * `l1_small_size=65536` is REQUIRED: the fp32 HiFi-GAN convs' halo config OOMs in the
@@ -28,8 +28,8 @@ Device layout notes carried over from the block bringups:
   * Blocks 1 (cond+perceiver) and 4 (vocoder) run fp32 activations (PCC); Blocks 2/3 bf16.
 
 Trace lifecycle — WHY the trace is captured once (option (a)):
-  `phase_tt.py` captured the decode trace after one request's prefill, for one request.
-  For serving, consecutive `generate()` calls must all replay a valid trace. The known
+  Capturing the decode trace after a single request's prefill serves that one request; for
+  serving, consecutive `generate()` calls must all replay a valid trace. The known
   hazard is that device buffers allocated AFTER capture can land on the trace's baked
   intermediate-buffer addresses; anything that must PERSIST across an `execute_trace`
   would then be scribbled over. This class therefore allocates every persistent device
@@ -39,7 +39,7 @@ Trace lifecycle — WHY the trace is captured once (option (a)):
   trace replay reads or writes anything. `warmup()` captures ONE trace at the model-cap
   max_seq (32 cond + 404 text + 1 START + 605 audio = 1042, rounded up internally per
   BUG-1), and each request then just does reset_caches + prefill + traced steps.
-  Verified empirically (see the bringup report / `demo_xtts.py`): two consecutive
+  Verified empirically during bringup: two consecutive
   generates produce sane audio, and a teacher-forced golden replay through the SAME
   captured trace AFTER those generates still matches `golden/gpt/latents.pt` at
   PCC > 0.999 — i.e. prefill/vocoder allocations and post-capture program compiles did
@@ -104,7 +104,7 @@ OUTPUT_SR = OSR
 # the lifetime of their program-cache entry, so every DISTINCT input length permanently
 # consumes L1_SMALL — with per-utterance lengths the second generate() OOMs
 # ("Not enough space to allocate ... L1_SMALL buffer"). One fixed length = one compiled
-# shape set, reused by every request (same trick as phase_tt_mesh's pad-to-Lmax batching;
+# shape set, reused by every request (pad to the fixed length, trim the waveform back;
 # the trimmed tail only ever sees zero context beyond its own end).
 VOC_L = (GPT_MAX_AUDIO * AR_COMP // HOP) * OSR // ISR  # 2634
 
@@ -121,11 +121,10 @@ def _sample_token(latent, seen, gen, mh_w, mh_b, penalty=REPETITION_PENALTY):
     """coqui's decode strategy on one latent [1,1,1024]: mel_head -> repetition penalty ->
     temperature -> top-k -> top-p -> multinomial draw with the request's own RNG.
 
-    The repetition penalty is VECTORIZED (one gather/scatter over the `seen` set) — ported
-    from `pipeline/phase_tt_mesh.RequestState.sample`. The per-token Python loop version
-    (phase_tt.py) is O(len(seen)) per step and quadratic per utterance: measured 90.6 ms/step
-    mean at 586 steps vs 8.9 ms/step for the device alone. Indexing once is bit-identical
-    (each index is touched exactly once)."""
+    The repetition penalty is VECTORIZED (one gather/scatter over the `seen` set). A
+    per-token Python loop is O(len(seen)) per step and quadratic per utterance: measured
+    90.6 ms/step mean at 586 steps vs 8.9 ms/step for the device alone. Indexing once is
+    bit-identical (each index is touched exactly once)."""
     logits = (latent @ mh_w.t() + mh_b)[0, 0].clone().float()  # [1026]
     if seen:
         idx = torch.tensor(sorted(seen))
@@ -204,10 +203,10 @@ class XttsV2:
         )
         # Everything above has copied what it needs out of the lru_cached checkpoint dict,
         # and the request path (warmup/compute_voice/generate) never reloads it — so drop
-        # the ~1.9 GB pin now (single-instance serving path). The mesh-replicas flavor
-        # (pipeline/phase_tt_mesh.py) re-reads per chip and legitimately wants the cache
-        # DURING its build loop; it is unaffected because clearing happens per-XttsV2
-        # instance, after that instance's own build.
+        # the ~1.9 GB pin now (single-instance serving path). A multi-instance
+        # data-parallel build that calls the preprocess_* functions once per chip
+        # legitimately wants the cache DURING its build loop; it is unaffected because
+        # clearing happens per-XttsV2 instance, after that instance's own build.
         load_full_state.cache_clear()
         self._warm = False
         self.last_timings = {}

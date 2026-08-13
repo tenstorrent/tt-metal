@@ -82,9 +82,9 @@ class HifiganReference:
         return x
 
     def __call__(self, z, g, return_intermediates=False):  # z [1,1024,L], g [1,512,1] -> [1,1,L*256]
-        """return_intermediates=True also returns {conv_pre, ups0..3}: the per-stage
-        oracles at the same points capture_goldens.py records (conv_pre output and each
-        transpose-conv output, both PRE d-vector conditioning / MRF)."""
+        """return_intermediates=True also returns {conv_pre, ups0..3}: per-stage oracles
+        (conv_pre output and each transpose-conv output, both PRE d-vector
+        conditioning / MRF) for localizing PCC regressions stage by stage."""
         w = self.w
         inter = {}
         with torch.no_grad():
