@@ -161,14 +161,14 @@ The second hard prerequisite is the op's **TTNN-side shape**: is it on a factory
 | `Runtime-args update (get_dynamic_runtime_args)` == `yes`, or a **smuggled RTA pointer** | The op is *broken*, not merely unported (it reads as such in `Op Classification`). Neither ports as-is. | **TTNN**, who fix the op first |
 | Any entry in **`Known op issues`** | A free-text column reserved for problems that must be cleared before a port. Usually an ops-team fix; occasionally a Metal 2.0 feature. | Read the cell and route to whoever it names |
 | **`TensorParameter relaxation`** != `none` | The op needs a relaxation of the strict `TensorSpec` match, which this recipe does not handle yet. | **Ops team** (see [TensorParameter relaxations](#tensorparameter-relaxations)) |
-| **`Pybind descriptor`** == `yes` | Hand-ported, outside this recipe's automated scope. | **TTNN / PD-migration team** |
 | `Concept` == `legacy device-op` | Not on the `ProgramDescriptor` API yet — the **expected** outcome for a legacy op, not an alarm. | **TTNN / PD-migration team**; unblocks when that op's PD migration lands |
 | `Concept` == `WorkloadDescriptor` and **not** secretly SPMD | Genuine multi-program; the single-program adapter can't express it. | Framework work, tracked separately |
 
-**Two columns you will check that do *not* block.** Both are worth recording, and neither is a reason to RED an op:
+**Three columns you will check that do *not* block.** All are worth recording, and none is a reason to RED an op:
 
 - **`Custom hash`** — not a portability question. The port leaves a custom `compute_program_hash` (and a backdoor `attribute_values` / `to_hash`) exactly as it is; see [the cache key](../shared/ttnn_factory.md#the-cache-key-leave-the-custom-hash-alone). Ops whose hash genuinely needs analysis are held by the **relaxation** signal instead, which is where that risk actually lives.
 - **`Override runtime args method?`** — not a gate; it **selects the target concept**. See [TTNN porting shape](#ttnn-porting-shape).
+- **`Pybind descriptor`** — not a gate. The port **deletes** the pybound `create_descriptor` binding, with the ops team's agreement; a replacement is expected later. Record the site so the porter can carry it into the port report as the user-visible change it is.
 
 **The two runtime-args columns do different jobs.** TTNN's runtime-arg-update mechanism churned and the sheet carries *two* columns for it. Only one of them blocks:
 
@@ -180,10 +180,10 @@ The two are enforced mutually exclusive at the device-op level (a device-op defi
 **Lightweight cross-check (trust, but verify).** The sheet is a shortcut to work you'd otherwise do by hand, so confirm it cheaply before relying on it. Verify the **cheaply-checkable factual columns** against the op's code (the factory-definition and device-op files are named in the sheet's last two columns):
 
 - `Concept` — legible from the factory's methods: `create_descriptor()` returning a `ProgramDescriptor` (descriptor), a mesh-workload return (`WorkloadDescriptor`), `create()` + `override_runtime_arguments()` (legacy), or an already-`MetalV2` factory.
-- `Custom hash` — grep the device-op for a `compute_program_hash` override. Verified because the porter is told it is there and must leave it alone. (One case muddies this: a **Pybound-`create_descriptor`** op may *rename* the hook so the framework uses the default hash and reach the custom hash only through the pybind name — see the `Pybind descriptor` note below. Those ops are hand-ported, so don't chase a grep-vs-sheet mismatch on them.)
+- `Custom hash` — grep the device-op for a `compute_program_hash` override. Verified because the porter is told it is there and must leave it alone. (One case muddies this: a **Pybound-`create_descriptor`** op may *rename* the hook so the framework uses the default hash and reach the custom hash only through the pybind name — see the `Pybind descriptor` note below. So on a pybound op a grep-vs-sheet mismatch here is explainable by the rename, and is not by itself evidence the sheet is stale.)
 - `Runtime-args update (get_dynamic_runtime_args)` — grep the **device-op** for a `get_dynamic_runtime_args` hook (`static std::vector<DynamicRuntimeArg> get_dynamic_runtime_args(...)`). It lives on the DeviceOperation, **not** the factory, and is often **active for only some of that device-op's factories** — its body returns real args for one and `{}` for the rest. Attribute **per-factory**: the gate taints only the factory row(s) the hook actually fires for; sibling factories on the same device-op stay clean. (This is why one device-op's rows can legitimately differ in `Is able to port?`.)
 - `Override runtime args method?` — grep for an `override_runtime_arguments` method. Not a gate, but verify it anyway: it decides the **target concept**, so a wrong value sends the porter down the wrong path. **Mind the name-collision with the `Concept` check above:** on a *legacy* device-op, `create()` + `override_runtime_arguments()` is the legacy-concept signature, which gates via `Concept` and routes to the PD-migration team; on a *`descriptor`/PD* op the same method is this column's target-concept signal. Same method name, two different meanings — decide which by the surrounding concept.
-- `Pybind descriptor` — grep the op's `*_nanobind.cpp` for a `create_descriptor` binding. **These ops are hand-ported (out of this recipe's automated audit/port scope)** and carry bespoke complexity the audit does not untangle — notably a renamed custom hash: `MatmulDeviceOperation`, for one, renames `compute_program_hash` → `compute_descriptor_program_hash` and exposes it only via the pybind name, so the framework silently falls back to the default hash (which is why a naive `Custom hash` grep can disagree with the sheet's `yes` here). Flag the gate and route it; do not reverse-engineer the descriptor internals.
+- `Pybind descriptor` — grep the op's `*_nanobind.cpp` for a `create_descriptor` binding. **Not a gate:** the ops team has green-lit deleting the binding as part of the port, and the port recipe already does so (they intend to add a replacement later). Record the `file:line` — the porter needs it, because removing it is a user-visible API change that gets its own entry in the port report. Do not reverse-engineer the descriptor internals.
 - `Secretly SPMD Workload?` (only when `Concept == WorkloadDescriptor`) — `create_descriptor` returns a `WorkloadDescriptor`; a **single entry** in its `programs` vector (each a `PerCoordProgram` = `MeshCoordinateRange` + `ProgramDescriptor`) ⇒ SPMD.
 - **Factory-set match** (a cheap, high-signal staleness check the per-column checks miss) — confirm the sheet's rows for this op correspond one-to-one with the code's factories: every sheet factory row maps to a factory that still exists, and every factory in the code has a row. A **phantom row** (a factory since renamed or deleted) or a **missing row** (a factory the sheet never caught up to) means the sheet is stale for this op → treat it as spreadsheet-broken (routing below).
 
@@ -549,7 +549,7 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 | *TTNN Readiness* — Custom hash | No / Yes (not a gate; port leaves it intact): `<site>` |
 | *TTNN Readiness* — `get_dynamic_runtime_args` | No / Yes (gate → TTNN; deprecated hook): `<device-op site; factories it fires for>` |
 | *TTNN Readiness* — `override_runtime_arguments` | No / Yes (not a gate; selects CustomProgramSpecFactoryConcept): `<factory + site>` |
-| *TTNN Readiness* — Pybind `create_descriptor` | No / Yes (gate): `<nanobind site>` |
+| *TTNN Readiness* — Pybind `create_descriptor` | No / Yes (not a gate; port deletes the binding): `<nanobind site>` |
 | *TTNN Readiness* — Op-owned tensors | No / Yes: `<factory + site>` |
 | *TTNN Readiness* — Target concept | `ProgramSpecFactoryConcept` / `CustomProgramSpecFactoryConcept` (+ op-owned tensors, if any) |
 | *Port work* — Offset base pointer | none / **GATE** → ops team (Type 1 raw · Type 2 accessor-fed, flag early) |
@@ -566,7 +566,7 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 
 ## Gate detail
 
-- **TTNN factory concept (`Is able to port?`):** <GREEN — the sheet's `Is able to port?` == `yes`, cross-check clean — or — RED: name the failing conjunct and route it. A **shape** failure (`Concept` non-`descriptor` / `get_dynamic_runtime_args` / `Pybind`) → the TTNN / ProgramDescriptor-migration team (the gate lifts when support lands; for a `legacy device-op` concept, add the "separate ongoing effort; expected outcome for legacy ops; unblocks when the `ProgramDescriptor` migration lands" framing). A **relaxation** failure (the column is not `none`) → the ops team, quoting the cell verbatim. A **spreadsheet-broken / missing-op** conflict → the readiness-sheet owner to reconcile.>
+- **TTNN factory concept (`Is able to port?`):** <GREEN — the sheet's `Is able to port?` == `yes`, cross-check clean — or — RED: name the failing conjunct and route it. A **shape** failure (`Concept` non-`descriptor` / `get_dynamic_runtime_args`) → the TTNN / ProgramDescriptor-migration team (the gate lifts when support lands; for a `legacy device-op` concept, add the "separate ongoing effort; expected outcome for legacy ops; unblocks when the `ProgramDescriptor` migration lands" framing). A **relaxation** failure (the column is not `none`) → the ops team, quoting the cell verbatim. A **spreadsheet-broken / missing-op** conflict → the readiness-sheet owner to reconcile.>
 - **Device 2.0 (every kernel used):** <GREEN — or — RED with exact violations @ `file:line`, routed to the Device 2.0 team (note whether the incompleteness is isolated CB-index holdovers — 1-line mechanical, idioms intact — or broad Device 1.0 requiring a full migration, so the team can size it; table below). Name the kernel file and, for a borrowed/donor kernel, its owning family.>
 
   | File | Line | Call | Wrapper in scope |
@@ -603,7 +603,7 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 
 - **Out-of-directory coupling & donor shape:** the full by-shape inventory (op-level roll-up, summary table, per-call detail, borrowed kernel files).
 - **Relaxation candidates** (noticed in a custom hash while auditing): **FALLIBLE — candidates to verify**, default strict; the ops team owns the real analysis.
-- **TTNN factory analysis:** the sheet-derived facts, with `file:line` evidence — op-owned tensors, MeshWorkload need (genuine vs. op-owned-tensor artifact), pybind `create_descriptor`, other risky pybind, custom hash, `get_dynamic_runtime_args`, `override_runtime_arguments`. Several are **gate conjuncts** (a non-`none` relaxation, pybind `create_descriptor`, `get_dynamic_runtime_args`, genuine multi-program) recorded in the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite); op-owned tensors, the custom hash, the `override_runtime_arguments`, and the target concept are the non-gating facts that inform the port's TTNN ProgramFactory wiring.
+- **TTNN factory analysis:** the sheet-derived facts, with `file:line` evidence — op-owned tensors, MeshWorkload need (genuine vs. op-owned-tensor artifact), pybind `create_descriptor`, other risky pybind, custom hash, `get_dynamic_runtime_args`, `override_runtime_arguments`. Several are **gate conjuncts** (a non-`none` relaxation, `get_dynamic_runtime_args`, genuine multi-program) recorded in the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite); op-owned tensors, the custom hash, the `override_runtime_arguments`, the pybound `create_descriptor`, and the target concept are the non-gating facts that inform the port's TTNN ProgramFactory wiring.
 
 ## Misc anomalies  *(omit if none; team-only, non-gating)*
 
@@ -642,7 +642,7 @@ These facts feed the port's TTNN ProgramFactory wiring (→ `ttnn_factory.md`); 
 - **Current concept:** <`descriptor` | `WorkloadDescriptor` (secretly SPMD — collapses to single-program)>
 - **Op-owned tensors:** <none | `<factory + site>` — carried natively by the target concept>
 - **Target concept:** `ProgramSpecFactoryConcept`<, with op-owned tensors, if any>
-- **Gate-cleared, confirmed absent** (each would have blocked the brief): a non-`none` `TensorParameter relaxation` · `get_dynamic_runtime_args` (deprecated hook) · pybind `create_descriptor` — all gate conjuncts — plus **other migration-risky pybind**, which surfaces as a `safe` warning that also fails the gate. A custom hash and an `override_runtime_arguments` are **not** in this list: neither gates, and either may be present on a cleared op.
+- **Gate-cleared, confirmed absent** (each would have blocked the brief): a non-`none` `TensorParameter relaxation` · `get_dynamic_runtime_args` (deprecated hook). A custom hash, an `override_runtime_arguments`, and a pybound `create_descriptor` are **not** in this list: none of them gate, and any may be present on a cleared op.
 
 ## Construct — to do
 
