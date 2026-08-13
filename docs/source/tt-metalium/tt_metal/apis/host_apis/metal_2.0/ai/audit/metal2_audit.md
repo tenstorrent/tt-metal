@@ -150,52 +150,49 @@ The second hard prerequisite is the op's **TTNN-side shape**: is it on a factory
 
 **Fetch and locate.** Pull a fresh copy of the sheet every run and find your op's row(s) per [`ttnn_op_porting_readiness.md`](../../analyses/ttnn_op_porting_readiness.md) — that doc owns the fetch procedure, the column meanings, and the standing rule to **reference every column by header name, never by position** (the sheet owner adds and reorders columns; existing names are stable and no column is deleted). The sheet has **one row per (op, DeviceOperation, ProgramFactory variant)** — an op with several factories has several rows. Read them all; the gate is per-factory, so carry each factory's verdict through to the report.
 
-**The gate verdict: the `Is able to port?` column.** For each factory row, that cell *is* the gate — `yes` clears it, `no` blocks. It already composes everything below, but you must *understand* its derivation, both to route a `no` correctly and to know what to cross-check:
+**The gate verdict: the `Is able to port?` column.** For each factory row, that cell is **this subject's** gate, and the asymmetry matters: **`no` blocks the port; `yes` clears this prerequisite and nothing else.** The sheet reasons about TTNN-side considerations only, while this audit checks several things it never sees — Device 2.0, feature compatibility, offset base pointers, and the rest. A green audit requires every gate-bearing subject to clear; a green cell here is one of them, not a verdict on the op.
 
-```
-Is able to port?  =
-      Is safe to port?          == "yes"
-  AND Custom hash               == "no"
-  AND get_dynamic_runtime_args  == "no"     (col "Runtime-args update")
-  AND override_runtime_args     == "no"     (col "Override runtime args method?")
-  AND Pybind descriptor         == "no"
-  AND ( Concept == "descriptor"
-        OR (Concept == "WorkloadDescriptor" AND Secretly SPMD Workload? == "yes") )
-```
+**Do not reproduce or recompute its derivation.** The sheet composes that verdict from columns that are themselves derived, and it is reshaped as support lands; a copy of the formula here would be stale within weeks and would invite you to argue with the cell. Your two jobs are narrower: **cross-check the primary columns against the op's code** (below), and **when the cell says `no`, attribute the block to a column and route it**. The derivation lives in the sheet, where it is maintained.
 
-Two axes are folded into that one verdict, and which one fails decides where a `no` routes:
+**What can block, and who clears it.** Enough to attribute a `no` and name a path forward — not a formula:
 
-- **`Is safe to port?` — the correctness axis (the readiness-sheet owner's).** Whether the op's prior `ProgramDescriptor` migration introduced a bug — most often a *smuggled pointer* (in `ProgramDescriptor`, every pointer must ride a CRTA/RTA, and the factory concept only works if each is explicitly marked; a missed one silently mis-patches on cache hits) or a pybound `create_descriptor` whose dependent experimental infra a port would break (surfaced as `warning`). We gate on it only because we won't port a known-buggy op. **This is the readiness-sheet owner's expert judgment — trust it. Do not try to re-derive "did the migration introduce a subtle bug."**
-- **The shape criteria — the portability axis (ours).** `Concept`, `Custom hash`, the **two runtime-args columns** (see below), `Pybind descriptor`: whether the factory shape is one the Metal 2.0 recipe + TTNN infra support today. `descriptor` is the vanilla single-program PD concept; a `WorkloadDescriptor` op clears only if it is *secretly SPMD* — morally single-program (one program across the mesh, on the multi-program path only as an artifact). The rest must be absent. **These gates are current-state, not structural** — each lifts as support lands (the custom-hash gate goes once the recipe interprets custom-hash + relaxation; the two runtime-args gates lift as described just below; the pybound-`create_descriptor` gate goes once its TTNN infra ships).
+| Signal | What it means | Routed to |
+|---|---|---|
+| `Runtime-args update (get_dynamic_runtime_args)` == `yes`, or a **smuggled RTA pointer** | The op is *broken*, not merely unported (it reads as such in `Op Classification`). Neither ports as-is. | **TTNN**, who fix the op first |
+| Any entry in **`Known op issues`** | A free-text column reserved for problems that must be cleared before a port. Usually an ops-team fix; occasionally a Metal 2.0 feature. | Read the cell and route to whoever it names |
+| **`TensorParameter relaxation`** != `none` | The op needs a relaxation of the strict `TensorSpec` match, which this recipe does not handle yet. | **Ops team** (see [TensorParameter relaxations](#tensorparameter-relaxations)) |
+| **`Pybind descriptor`** == `yes` | Hand-ported, outside this recipe's automated scope. | **TTNN / PD-migration team** |
+| `Concept` == `legacy device-op` | Not on the `ProgramDescriptor` API yet — the **expected** outcome for a legacy op, not an alarm. | **TTNN / PD-migration team**; unblocks when that op's PD migration lands |
+| `Concept` == `WorkloadDescriptor` and **not** secretly SPMD | Genuine multi-program; the single-program adapter can't express it. | Framework work, tracked separately |
 
-**The two runtime-args columns are distinct gates — different signals, different owners.** TTNN's runtime-arg-update mechanism has churned, and the sheet now carries *two* columns for it. Each is an independent conjunct with its own reason and its own path forward:
+**Two columns you will check that do *not* block.** Both are worth recording, and neither is a reason to RED an op:
 
-- **`Runtime-args update (get_dynamic_runtime_args)` == `yes`** → GATE, routed to **TTNN / the ProgramDescriptor-migration team**. `get_dynamic_runtime_args` is a *deprecated* TTNN workaround, mid-removal — a "TTNN broke it, this is going away" case. It lifts when TTNN finishes retiring the hook.
-- **`Override runtime args method? (PD and legacy)` == `yes`** (on a `descriptor`/PD op) → GATE, routed to the **Metal 2.0 side** — *not* TTNN. `override_runtime_arguments` is the *replacement* TTNN moved to, but the Metal 2.0 `FactoryConcept` and this recipe don't support it **yet**; it is a recipe + framework TODO, and lifts when that support lands.
+- **`Custom hash`** — not a portability question. The port leaves a custom `compute_program_hash` (and a backdoor `attribute_values` / `to_hash`) exactly as it is; see [the cache key](../shared/ttnn_factory.md#the-cache-key-leave-the-custom-hash-alone). Ops whose hash genuinely needs analysis are held by the **relaxation** signal instead, which is where that risk actually lives.
+- **`Override runtime args method?`** — not a gate; it **selects the target concept**. See [TTNN porting shape](#ttnn-porting-shape).
 
-The two are enforced mutually exclusive at the device-op level (a device-op that defines `get_dynamic_runtime_args` must not also define an `override_runtime_arguments` — an adapter `static_assert`s it), so a given factory trips at most one — but read both columns and attribute the gate to whichever fired.
+**The two runtime-args columns do different jobs.** TTNN's runtime-arg-update mechanism churned and the sheet carries *two* columns for it. Only one of them blocks:
+
+- **`Runtime-args update (get_dynamic_runtime_args)` == `yes`** → blocks, routed to **TTNN**. A *deprecated* workaround, mid-removal. You should rarely meet one: the migration off it is nearly complete, and the ops that still carry it are blocked on the sheet.
+- **`Override runtime args method?` == `yes`** → **does not block.** It is the signal that this port targets **`CustomProgramSpecFactoryConcept`** instead of the base concept. Record it as the target ([TTNN porting shape](#ttnn-porting-shape)); the porter *translates* the method rather than deleting it.
+
+The two are enforced mutually exclusive at the device-op level (a device-op defining `get_dynamic_runtime_args` must not also define an `override_runtime_arguments` — an adapter `static_assert`s it), so no factory carries both.
 
 **Lightweight cross-check (trust, but verify).** The sheet is a shortcut to work you'd otherwise do by hand, so confirm it cheaply before relying on it. Verify the **cheaply-checkable factual columns** against the op's code (the factory-definition and device-op files are named in the sheet's last two columns):
 
 - `Concept` — legible from the factory's methods: `create_descriptor()` returning a `ProgramDescriptor` (descriptor), a mesh-workload return (`WorkloadDescriptor`), `create()` + `override_runtime_arguments()` (legacy), or an already-`MetalV2` factory.
-- `Custom hash` — grep the device-op for a `compute_program_hash` override. (One case muddies this: a **Pybound-`create_descriptor`** op may *rename* the hook so the framework uses the default hash and reach the custom hash only through the pybind name — see the `Pybind descriptor` note below. Those ops are hand-ported, so don't chase a grep-vs-sheet mismatch on them.)
+- `Custom hash` — grep the device-op for a `compute_program_hash` override. Verified because the porter is told it is there and must leave it alone. (One case muddies this: a **Pybound-`create_descriptor`** op may *rename* the hook so the framework uses the default hash and reach the custom hash only through the pybind name — see the `Pybind descriptor` note below. Those ops are hand-ported, so don't chase a grep-vs-sheet mismatch on them.)
 - `Runtime-args update (get_dynamic_runtime_args)` — grep the **device-op** for a `get_dynamic_runtime_args` hook (`static std::vector<DynamicRuntimeArg> get_dynamic_runtime_args(...)`). It lives on the DeviceOperation, **not** the factory, and is often **active for only some of that device-op's factories** — its body returns real args for one and `{}` for the rest. Attribute **per-factory**: the gate taints only the factory row(s) the hook actually fires for; sibling factories on the same device-op stay clean. (This is why one device-op's rows can legitimately differ in `Is able to port?`.)
-- `Override runtime args method? (PD and legacy)` — grep for an `override_runtime_arguments` method. **Mind the name-collision with the `Concept` check above:** on a *legacy* device-op, `create()` + `override_runtime_arguments()` is the legacy-concept signature (gates via `Concept`, routed to the PD-migration team); on a *`descriptor`/PD* op, an `override_runtime_arguments` is *this* column's gate (routed to the Metal 2.0 side). Same method name, two different gates — decide which by the surrounding concept.
+- `Override runtime args method?` — grep for an `override_runtime_arguments` method. Not a gate, but verify it anyway: it decides the **target concept**, so a wrong value sends the porter down the wrong path. **Mind the name-collision with the `Concept` check above:** on a *legacy* device-op, `create()` + `override_runtime_arguments()` is the legacy-concept signature, which gates via `Concept` and routes to the PD-migration team; on a *`descriptor`/PD* op the same method is this column's target-concept signal. Same method name, two different meanings — decide which by the surrounding concept.
 - `Pybind descriptor` — grep the op's `*_nanobind.cpp` for a `create_descriptor` binding. **These ops are hand-ported (out of this recipe's automated audit/port scope)** and carry bespoke complexity the audit does not untangle — notably a renamed custom hash: `MatmulDeviceOperation`, for one, renames `compute_program_hash` → `compute_descriptor_program_hash` and exposes it only via the pybind name, so the framework silently falls back to the default hash (which is why a naive `Custom hash` grep can disagree with the sheet's `yes` here). Flag the gate and route it; do not reverse-engineer the descriptor internals.
 - `Secretly SPMD Workload?` (only when `Concept == WorkloadDescriptor`) — `create_descriptor` returns a `WorkloadDescriptor`; a **single entry** in its `programs` vector (each a `PerCoordProgram` = `MeshCoordinateRange` + `ProgramDescriptor`) ⇒ SPMD.
 - **Factory-set match** (a cheap, high-signal staleness check the per-column checks miss) — confirm the sheet's rows for this op correspond one-to-one with the code's factories: every sheet factory row maps to a factory that still exists, and every factory in the code has a row. A **phantom row** (a factory since renamed or deleted) or a **missing row** (a factory the sheet never caught up to) means the sheet is stale for this op → treat it as spreadsheet-broken (routing below).
 
-Also check **cross-column invariants** — a violated one means the sheet is internally inconsistent: e.g. `Runtime-args update (get_dynamic_runtime_args) == "yes"` is only possible on `descriptor` / `WorkloadDescriptor` concepts, never `legacy device-op`; and `Op-owned tensors? == "yes"` is only possible on `WorkloadDescriptor` (the `descriptor` concept can't carry op-owned tensors, so a `descriptor` row with op-owned tensors is a broken sheet). **Do not verify** `Is safe to port?` (or the smuggled-pointer signal it subsumes) — that is the expert-judgment axis. **Do not fetch or cross-check in a subagent** — the Drive connector authorizes only in the main session, and the cross-check needs the op's code in hand.
+Also check **cross-column invariants** — a violated one means the sheet is internally inconsistent: e.g. `Runtime-args update (get_dynamic_runtime_args) == "yes"` is only possible on `descriptor` / `WorkloadDescriptor` concepts, never `legacy device-op`; and `Op-owned tensors? == "yes"` is only possible on `WorkloadDescriptor` (the `descriptor` concept can't carry op-owned tensors, so a `descriptor` row with op-owned tensors is a broken sheet). **Do not verify** `Is safe to port?` — that is the expert-judgment axis. **Do not fetch or cross-check in a subagent** — the Drive connector authorizes only in the main session, and the cross-check needs the op's code in hand.
 
 **Routing.**
 
 - **`Is able to port?` == `yes`** → TTNN gate cleared; carry the factory forward (its target concept is recorded in [TTNN porting shape](#ttnn-porting-shape)).
-- **`no`** → GATE. Read the derivation to attribute the cause and route it — note the **runtime-args conjuncts route to different owners**:
-  - `Concept` / `Custom hash` / `get_dynamic_runtime_args` / `Pybind` → the **TTNN / ProgramDescriptor-migration team** (the gate lifts when the relevant support lands, or when the deprecated hook is retired).
-  - `override_runtime_arguments` → the **Metal 2.0 side** (`FactoryConcept` + recipe TODO), *not* TTNN.
-  - `Is safe to port?` → the **readiness-sheet owner** (the correctness call is theirs; the buggy PD migration must be reconciled before the port).
-
-  Name which conjunct failed.
+- **`no`** → GATE. Attribute it with the [blocking table above](#ttnn-factory-concept-prerequisite) and route it to that owner. **Name the column that blocked**, quote its value verbatim, and give the path forward the table names. If more than one column would block, report them all — the reader is planning work, not just reading a verdict.
 - **Cross-check conflicts with the sheet, or the op has no row** → **"spreadsheet is broken"** → GATE, routed to the **readiness-sheet owner** to reconcile. The sheet *is* the analysis we're relying on; if it is wrong or silent for this op, stop rather than proceed on data we can't trust. (Ignore the sheet's trailing summary block — those non-op rows are category totals, not a missing-op signal.)
 - **`Concept == MetalV2`** → the factory is *already* ported; report it as done, not blocked.
 
@@ -214,21 +211,28 @@ Both descriptor forms live under the *same* umbrella concept, `ProgramDescriptor
 
 Code basis for `Op-owned tensors?`: a non-empty `buffers` vector on the returned `WorkloadDescriptor` (the field is named `buffers`, not `tensors` — a historical quirk).
 
+**Then the override column picks between the two Metal 2.0 concepts.** The rows above say the op *can* land on the spec path; which of the two concepts it lands on is decided by one column:
+
+- **`Override runtime args method?` == `no`** → **`ProgramSpecFactoryConcept`**. The framework refreshes the tensor bindings on a cache hit and the factory writes one method.
+- **`Override runtime args method?` == `yes`** → **`CustomProgramSpecFactoryConcept`**. The op's `override_runtime_arguments` owns the entire cache-hit refresh; the porter translates it into one returning a `ProgramRunArgs` (see the port recipe's [translation step](../port/metal2_port.md#translating-override_runtime_arguments-custom-concept-only)). Name the method's `file:line` in the brief.
+
+A custom `compute_program_hash` does **not** enter this choice — the two are independent, and an op can carry a custom hash on either concept.
+
 The supported target set is narrow today and will grow; the plain `ProgramSpecFactoryConcept` (no op-owned tensors) is the common target. If a cleared op maps to none of the above, treat it as a spreadsheet/recipe gap and flag it (per the prerequisite subject's spreadsheet-broken routing) rather than guessing.
 
 **Finding role: FYI-P** — surface the target concept in the porter brief; it feeds the port's TTNN ProgramFactory wiring (see [`ttnn_factory.md`](../shared/ttnn_factory.md)).
 
 ### TensorParameter relaxations
 
-The sheet's `TensorParameter relaxation` column proposes, per factory, a relaxation the port should apply so the ported op accepts the same range of tensor shapes the legacy op did — `dynamic_tensor_shape`, `match_padded_shape_only`, `none`, or a descriptive `OTHER(...)`. This is **PORT WORK** (the porter applies the relaxation on the affected `TensorParameter`), not a gate.
+The sheet's `TensorParameter relaxation` column records, per factory, whether the op needs a relaxation of the strict `TensorSpec` match. Today it is a **gate conjunct**: only **`none`** clears, and the port never applies a relaxation.
 
-**Not yet active — but coming very soon.** A relaxation-bearing op has a **custom hash** (the relaxation *is* the hash excluding the relaxed property from the cache key), and the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite) currently gates custom-hash ops — so today a real relaxation value co-occurs with a gate and this subject rarely fires. It activates when that gate lifts (the recipe learning to interpret custom-hash + relaxation).
+That is a deliberate scope choice, not an oversight. Ops needing a real relaxation — and ops whose custom hash *looks* like a relaxation but is simply wrong — are being analysed, and where necessary fixed, by the **ops team before any port**. The porter is therefore never asked to decide whether a relaxation is needed, nor to reconcile one against a custom hash.
 
-**The check when it fires (involved, not a passthrough).** Applying a relaxation must not change behavior — the port promises no semantic difference. So confirm the **existing custom hash's logic matches the listed relaxation**: the properties the hash excludes from the key must be exactly the ones the relaxation says may vary. A mismatch would let the cache reuse a program for an input the legacy op would have rebuilt for — a silent semantic change. On mismatch, **do not apply the relaxation**; flag it (`file:line` for the hash, the sheet's proposed relaxation, and the discrepancy) for the ops team.
+**Read the cell; do not re-derive it.** Any value other than `none` blocks the port and routes to the **ops team**. Report the value verbatim — the vocabulary distinguishes work that is queued from work that is already scheduled, and reproducing it exactly is what lets the reader tell those apart. Do not attempt to judge whether the op "really" needs the relaxation: that analysis is the reason the column exists.
 
 **Relaxation candidates (FYI-U).** Even while custom-hash ops are gated, a custom hash sometimes reveals which tensor properties the op *actually* depends on — a candidate for a future relaxation. Record any such candidate for the team's relaxation roadmap; it is **fallible** (many custom hashes are themselves wrong) and never reaches the porter brief.
 
-**Finding role: PORT WORK** (with a mismatch flagged to the ops team); the relaxation-candidate note is **FYI-U**.
+**Finding role: GATE** (routed to the ops team); the relaxation-candidate note is **FYI-U**.
 
 ### Offset base pointers
 
@@ -504,7 +508,7 @@ If the command prints nothing, the docs aren't from a tracked doc-branch checkou
 
 **In chat, surface only the Result line plus the file path(s)** so the user can open the files when ready. Do not paste a full report inline — an audit of any non-trivial op runs to dozens or hundreds of lines, and chat-scrollback isn't the right home for it. Markdown formatting in the files is required, not optional: the headers, tables, and inline-`code` spans are what make a sizeable report skim-friendly.
 
-**Reassuring framing for the human reader.** A RED gates *this specific port attempt* but is rarely a permanent blocker — every gate has a path forward, and surfacing it is part of the report. A RED traces to one of a few sources, each routed to whoever clears it: an **op-readiness prerequisite** (Device 2.0 migration, an offset-base-pointer refactor, a 3rd-arg page-size fix — the ops / Device-2.0 teams); **missing TTNN infrastructure** (the factory-concept gate — lifts when the op's `ProgramDescriptor` migration lands, when the TTNN infra for custom-hash ships, or when the deprecated `get_dynamic_runtime_args` hook is retired); a **porting-recipe TODO** (a case the recipe doesn't yet handle mechanically); or, least often, a **missing Metal 2.0 feature** — the small, enumerated set in Appendix A (**Metal 2.0 is nearly feature-complete; most ops touch none of these**). Most such entries land when implemented; `address_offset` alone needs a redesign + runtime-team consult. Surface the future path explicitly for every RED, so a colleague reads the path forward, not just the gate. In particular, a **TTNN-factory-concept RED is the expected outcome** for any op still on the legacy imperative API (its concept isn't `descriptor`) — not an alarm — and the port unblocks once that op's `ProgramDescriptor` migration lands.
+**Reassuring framing for the human reader.** A RED gates *this specific port attempt* but is rarely a permanent blocker — every gate has a path forward, and surfacing it is part of the report. A RED traces to one of a few sources, each routed to whoever clears it: an **op-readiness prerequisite** (Device 2.0 migration, an offset-base-pointer refactor, a 3rd-arg page-size fix — the ops / Device-2.0 teams); **missing TTNN infrastructure** (the factory-concept gate — lifts when the op's `ProgramDescriptor` migration lands, or when the deprecated `get_dynamic_runtime_args` hook is retired); an **ops-team relaxation analysis** still in flight (the relaxation column); a **porting-recipe TODO** (a case the recipe doesn't yet handle mechanically); or, least often, a **missing Metal 2.0 feature** — the small, enumerated set in Appendix A (**Metal 2.0 is nearly feature-complete; most ops touch none of these**). Most such entries land when implemented; `address_offset` alone needs a redesign + runtime-team consult. Surface the future path explicitly for every RED, so a colleague reads the path forward, not just the gate. In particular, a **TTNN-factory-concept RED is the expected outcome** for any op still on the legacy imperative API (its concept isn't `descriptor`) — not an alarm — and the port unblocks once that op's `ProgramDescriptor` migration lands.
 
 **Code-path scope.** Blockers are often confined to specific code paths (e.g. a single factory's `if (use_width_sharding)` branch). When so, identify clean vs. blocked paths explicitly and offer a scoped-subset port — "interleaved-only paths, omitting the sharded path." A partial port that delivers value now may beat waiting for the full gate to clear; reflect it in the Result (`RED at op level; subset <X> is clear`). **If no clean path exists — the blocking shape is unconditional/structural, not one branch among siblings — say so explicitly (`RED at op level; no portable subset`) rather than leaving it to be inferred from silence.**
 
@@ -542,16 +546,15 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 | *TTNN Readiness* — `Is able to port?` (the gate) | Yes / No: `<failing conjunct>` |
 | *TTNN Readiness* — Concept (current) | `descriptor` / `WorkloadDescriptor` / `legacy device-op` / `MetalV2` (already ported) |
 | *TTNN Readiness* — Secretly SPMD (WorkloadDescriptor only) | N/A / Yes / No (genuine multi-program → gate) |
-| *TTNN Readiness* — Is safe to port? | Yes / warning: `<site>` / No (→ readiness-sheet owner) |
-| *TTNN Readiness* — Custom hash | No / Yes (gate) |
+| *TTNN Readiness* — Custom hash | No / Yes (not a gate; port leaves it intact): `<site>` |
 | *TTNN Readiness* — `get_dynamic_runtime_args` | No / Yes (gate → TTNN; deprecated hook): `<device-op site; factories it fires for>` |
-| *TTNN Readiness* — `override_runtime_arguments` | No / Yes (gate → Metal 2.0 side; not yet supported): `<factory + site>` |
+| *TTNN Readiness* — `override_runtime_arguments` | No / Yes (not a gate; selects CustomProgramSpecFactoryConcept): `<factory + site>` |
 | *TTNN Readiness* — Pybind `create_descriptor` | No / Yes (gate): `<nanobind site>` |
 | *TTNN Readiness* — Op-owned tensors | No / Yes: `<factory + site>` |
-| *TTNN Readiness* — Target concept | `ProgramSpecFactoryConcept` (+ op-owned tensors, if any) |
+| *TTNN Readiness* — Target concept | `ProgramSpecFactoryConcept` / `CustomProgramSpecFactoryConcept` (+ op-owned tensors, if any) |
 | *Port work* — Offset base pointer | none / **GATE** → ops team (Type 1 raw · Type 2 accessor-fed, flag early) |
 | *Port work* — Tensor bindings (per binding) | clean / Case 1 / Case 2 |
-| *Port work* — TensorParameter relaxation | none / `<relaxation>` |
+| *TTNN Readiness* — TensorParameter relaxation | `none` (clears) / `<value>` → **GATE** → ops team |
 | *Port work* — TensorAccessor 3rd arg | drop (Class 1/2) / **flag → GATE** (Class 3/4/Special) |
 | *Port work* — CB endpoints | legal / self-loop / 1P+1C / multi-binding flag / dead-CB drop |
 
@@ -563,7 +566,7 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 
 ## Gate detail
 
-- **TTNN factory concept (`Is able to port?`):** <GREEN — the sheet's `Is able to port?` == `yes`, cross-check clean — or — RED: name the failing conjunct and route it. A **shape** failure (`Concept` non-`descriptor` / `Custom hash` / `get_dynamic_runtime_args` / `Pybind`) → the TTNN / ProgramDescriptor-migration team (the gate lifts when support lands; for a `legacy device-op` concept, add the "separate ongoing effort; expected outcome for legacy ops; unblocks when the `ProgramDescriptor` migration lands" framing). An **`override_runtime_arguments`** failure → the Metal 2.0 side (`FactoryConcept` + recipe TODO). A **`safe`** failure → the readiness-sheet owner. A **spreadsheet-broken / missing-op** conflict → the readiness-sheet owner to reconcile.>
+- **TTNN factory concept (`Is able to port?`):** <GREEN — the sheet's `Is able to port?` == `yes`, cross-check clean — or — RED: name the failing conjunct and route it. A **shape** failure (`Concept` non-`descriptor` / `get_dynamic_runtime_args` / `Pybind`) → the TTNN / ProgramDescriptor-migration team (the gate lifts when support lands; for a `legacy device-op` concept, add the "separate ongoing effort; expected outcome for legacy ops; unblocks when the `ProgramDescriptor` migration lands" framing). A **relaxation** failure (the column is not `none`) → the ops team, quoting the cell verbatim. A **spreadsheet-broken / missing-op** conflict → the readiness-sheet owner to reconcile.>
 - **Device 2.0 (every kernel used):** <GREEN — or — RED with exact violations @ `file:line`, routed to the Device 2.0 team (note whether the incompleteness is isolated CB-index holdovers — 1-line mechanical, idioms intact — or broad Device 1.0 requiring a full migration, so the team can size it; table below). Name the kernel file and, for a borrowed/donor kernel, its owning family.>
 
   | File | Line | Call | Wrapper in scope |
@@ -599,8 +602,8 @@ Opens with a **status summary** grouped Prereqs / Feature Support / TTNN Readine
 ## Team-only
 
 - **Out-of-directory coupling & donor shape:** the full by-shape inventory (op-level roll-up, summary table, per-call detail, borrowed kernel files).
-- **Relaxation candidates** (mined from a custom hash on a gated op): **FALLIBLE — candidates to verify**, default strict.
-- **TTNN factory analysis:** the sheet-derived facts, with `file:line` evidence — op-owned tensors, MeshWorkload need (genuine vs. op-owned-tensor artifact), pybind `create_descriptor`, other risky pybind, custom hash, `get_dynamic_runtime_args`, `override_runtime_arguments`. Several are **gate conjuncts** (custom hash, pybind `create_descriptor`, `get_dynamic_runtime_args`, `override_runtime_arguments`, genuine multi-program) recorded in the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite); op-owned tensors and the target concept are the non-gating facts that inform the port's TTNN ProgramFactory wiring.
+- **Relaxation candidates** (noticed in a custom hash while auditing): **FALLIBLE — candidates to verify**, default strict; the ops team owns the real analysis.
+- **TTNN factory analysis:** the sheet-derived facts, with `file:line` evidence — op-owned tensors, MeshWorkload need (genuine vs. op-owned-tensor artifact), pybind `create_descriptor`, other risky pybind, custom hash, `get_dynamic_runtime_args`, `override_runtime_arguments`. Several are **gate conjuncts** (a non-`none` relaxation, pybind `create_descriptor`, `get_dynamic_runtime_args`, genuine multi-program) recorded in the [TTNN factory concept prerequisite](#ttnn-factory-concept-prerequisite); op-owned tensors, the custom hash, the `override_runtime_arguments`, and the target concept are the non-gating facts that inform the port's TTNN ProgramFactory wiring.
 
 ## Misc anomalies  *(omit if none; team-only, non-gating)*
 
@@ -639,7 +642,7 @@ These facts feed the port's TTNN ProgramFactory wiring (→ `ttnn_factory.md`); 
 - **Current concept:** <`descriptor` | `WorkloadDescriptor` (secretly SPMD — collapses to single-program)>
 - **Op-owned tensors:** <none | `<factory + site>` — carried natively by the target concept>
 - **Target concept:** `ProgramSpecFactoryConcept`<, with op-owned tensors, if any>
-- **Gate-cleared, confirmed absent** (each would have blocked the brief): custom hash · `get_dynamic_runtime_args` (deprecated hook) · `override_runtime_arguments` (not-yet-supported replacement) · pybind `create_descriptor` — all gate conjuncts — plus **other migration-risky pybind**, which surfaces as a `safe` warning that also fails the gate. All `no` on a cleared op.
+- **Gate-cleared, confirmed absent** (each would have blocked the brief): a non-`none` `TensorParameter relaxation` · `get_dynamic_runtime_args` (deprecated hook) · pybind `create_descriptor` — all gate conjuncts — plus **other migration-risky pybind**, which surfaces as a `safe` warning that also fails the gate. A custom hash and an `override_runtime_arguments` are **not** in this list: neither gates, and either may be present on a cleared op.
 
 ## Construct — to do
 
@@ -648,7 +651,7 @@ These facts feed the port's TTNN ProgramFactory wiring (→ `ttnn_factory.md`); 
 - `<name>` — **Case 1** (via `TensorAccessor`) → express as `TensorParameter` / `TensorBinding`; kernel uses `TensorAccessor(tensor::name)`.
 - `<name>` — **Case 2** (raw pointer) → bind the tensor, pull the base via `get_bank_base_address`, raw walk unchanged.
 
-**TensorParameter relaxation:** <`<relaxation>` on `<binding>` — confirm the custom hash excludes exactly the relaxed property | none>
+**TensorParameter relaxation:** <none — the only value that reaches a brief>
 
 **TensorAccessor 3rd arg:** <drop the redundant page-size arg @ `<sites>`; Class 1 sites also set `dynamic_tensor_shape` | none>
 
