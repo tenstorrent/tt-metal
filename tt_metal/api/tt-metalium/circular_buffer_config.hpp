@@ -4,20 +4,27 @@
 
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <map>
-#include <memory>
+#include <optional>
+#include <utility>
+#include <unordered_set>
 
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/face_geometry.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace tt {
 enum class DataFormat : uint8_t;
 namespace tt_metal {
 class Buffer;
 class MeshTensor;
-class CircularBufferConfigImpl;
+enum class DataType;
 }  // namespace tt_metal
 }  // namespace tt
 
@@ -29,24 +36,43 @@ class CircularBufferConfig {
 public:
     // Static circular buffer spec
     CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec);
+    CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, DataType>& data_type_spec);
 
     // User is expected to use the builder here.
     CircularBufferConfig(uint32_t total_size);
 
-    // Internal constructor (internal use only)
-    explicit CircularBufferConfig(CircularBufferConfigImpl impl);
+    // Dynamic circular buffer spec
+    CircularBufferConfig(
+        uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec, const Buffer& buffer);
 
-    CircularBufferConfig(const CircularBufferConfig& other);
-    CircularBufferConfig& operator=(const CircularBufferConfig& other);
-    CircularBufferConfig(CircularBufferConfig&& other) noexcept;
-    CircularBufferConfig& operator=(CircularBufferConfig&& other) noexcept;
-    ~CircularBufferConfig();
+    // For flatbuffer deserialization, set all private members.
+    CircularBufferConfig(
+        uint32_t total_size,
+        std::optional<uint32_t> globally_allocated_address,
+        const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& data_formats,
+        const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& page_sizes,
+        const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles,
+        const std::array<std::optional<FaceGeometry>, NUM_CIRCULAR_BUFFERS>& unpack_face_geometry,
+        const std::unordered_set<uint8_t>& buffer_indices,
+        const std::unordered_set<uint8_t>& local_buffer_indices,
+        const std::unordered_set<uint8_t>& remote_buffer_indices,
+        bool dynamic_cb,
+        uint32_t max_size,
+        uint32_t buffer_size);
+
+    CircularBufferConfig(const CBDescriptor& descriptor);
 
     CircularBufferConfig& set_page_size(uint8_t buffer_index, uint32_t page_size);
+
+    CircularBufferConfig& set_total_size(uint32_t total_size);
 
     CircularBufferConfig& set_globally_allocated_address(const Buffer& buffer);
 
     CircularBufferConfig& set_globally_allocated_address(const MeshTensor& tensor);
+
+    CircularBufferConfig& set_globally_allocated_address_and_total_size(const Buffer& buffer, uint32_t total_size);
+
+    CircularBufferConfig& set_globally_allocated_address_and_total_size(const MeshTensor& tensor, uint32_t total_size);
 
     CircularBufferConfig& set_tile_dims(uint8_t buffer_index, const Tile& tile);
 
@@ -56,22 +82,47 @@ public:
     /// Use when operand geometry differs from \ref Tile (e.g. pool tilize on compact pages with 2 logical faces).
     CircularBufferConfig& set_unpack_face_geometry(uint8_t buffer_index, uint32_t face_r_dim, uint32_t num_faces);
 
+    const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& tiles() const;
+
+    const std::array<std::optional<FaceGeometry>, NUM_CIRCULAR_BUFFERS>& unpack_face_geometry() const;
+
+    uint32_t total_size() const;
+
+    std::optional<uint32_t> globally_allocated_address() const;
+
+    const std::unordered_set<uint8_t>& buffer_indices() const;
+    const std::unordered_set<uint8_t>& local_buffer_indices() const;
+    const std::unordered_set<uint8_t>& remote_buffer_indices() const;
+
+    const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& data_formats() const;
+
+    const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& page_sizes() const;
+
+    // These 3 getters are not typically used, but needed for flatbuffer serialization
+    bool dynamic_cb() const;
+    uint32_t max_size() const;
+    uint32_t buffer_size() const;
+
+    uint32_t address_offset() const;
+
+    void set_address_offset(uint32_t offset);
+
+    const Buffer* shadow_global_buffer{nullptr};
+
     class Builder {
     public:
+        static Builder LocalBuilder(CircularBufferConfig& parent, uint8_t buffer_index);
+        static Builder RemoteBuilder(CircularBufferConfig& parent, uint8_t buffer_index);
+
         const Builder& set_data_format(tt::DataFormat data_format) const;
+
+        const Builder& set_total_size(uint32_t total_size) const;
 
         const Builder& set_page_size(uint32_t page_size) const;
 
         const Builder& set_tile_dims(const Tile& tile) const;
 
     private:
-        friend class CircularBufferConfig;
-
-        static Builder LocalBuilder(CircularBufferConfig& parent, uint8_t buffer_index);
-        static Builder RemoteBuilder(CircularBufferConfig& parent, uint8_t buffer_index);
-
-        const Builder& set_total_size(uint32_t total_size) const;
-
         Builder(CircularBufferConfig& parent, uint8_t buffer_index);
 
         CircularBufferConfig& parent_;
@@ -81,14 +132,29 @@ public:
     Builder index(uint8_t buffer_index);
     Builder remote_index(uint8_t buffer_index);
 
-    CircularBufferConfigImpl& impl();
-    const CircularBufferConfigImpl& impl() const;
-
     friend bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);
     friend bool operator!=(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);
 
 private:
-    std::unique_ptr<CircularBufferConfigImpl> impl_;
+    void set_config(const std::map<uint8_t, tt::DataFormat>& data_format_spec);
+    void validate_total_size(uint32_t total_size);
+
+    uint32_t total_size_ = 0;
+    std::optional<uint32_t> globally_allocated_address_ = std::nullopt;
+    std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS> data_formats_;
+    std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS> page_sizes_;
+    std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS> tiles_;
+    std::array<std::optional<FaceGeometry>, NUM_CIRCULAR_BUFFERS> unpack_face_geometry_;
+    std::unordered_set<uint8_t> buffer_indices_;
+    std::unordered_set<uint8_t> local_buffer_indices_;
+    std::unordered_set<uint8_t> remote_buffer_indices_;
+    bool dynamic_cb_ = false;
+    // `max_size_` is used to ensure that total size does not grow beyond associated buffer size
+    // `buffer_size_` is tracked to enforce the old size assertions.
+    // Will be removed once tests are updated to respect the correct `max_size_` constraint
+    uint32_t max_size_ = 0;
+    uint32_t buffer_size_ = 0;
+    uint32_t address_offset_ = 0;
 };
 
 bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs);

@@ -1714,7 +1714,7 @@ void UpdateCircularBufferTotalSize(Program& program, CBHandle cb_handle, uint32_
     if (not circular_buffer->globally_allocated()) {
         program.impl().invalidate_circular_buffer_allocation();
     }
-    circular_buffer->config().impl().set_total_size(total_size);
+    circular_buffer->config().set_total_size(total_size);
 }
 
 void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t buffer_index, uint32_t page_size) {
@@ -1732,7 +1732,7 @@ void UpdateDynamicCircularBufferAddress(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t address_offset) {
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     TT_FATAL(!circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
-    circular_buffer->config().impl().set_address_offset(address_offset);
+    circular_buffer->config().set_address_offset(address_offset);
     circular_buffer->config().set_globally_allocated_address(buffer);
     circular_buffer->assign_global_address();
 }
@@ -1747,14 +1747,14 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size) {
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    circular_buffer->config().impl().set_globally_allocated_address_and_total_size(buffer, total_size);
+    circular_buffer->config().set_globally_allocated_address_and_total_size(buffer, total_size);
     circular_buffer->assign_global_address();
 }
 
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size) {
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
-    circular_buffer->config().impl().set_globally_allocated_address_and_total_size(tensor, total_size);
+    circular_buffer->config().set_globally_allocated_address_and_total_size(tensor, total_size);
     circular_buffer->assign_global_address();
 }
 

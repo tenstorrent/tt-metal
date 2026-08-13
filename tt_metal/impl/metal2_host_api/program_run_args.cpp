@@ -458,7 +458,7 @@ void AttachBorrowedDFBBuffers(
         const tt::tt_metal::Buffer* buffer = tensor.mesh_buffer().get_reference_buffer();
 
         // Attach-time legality checks (analogous to dynamic CB's
-        // CircularBufferConfigImpl::set_globally_allocated_address_and_total_size validations).
+        // CircularBufferConfig::set_globally_allocated_address_and_total_size validations).
         //   - L1-residency: only L1 buffers may back a DFB.
         //   - Sizing: the DFB's total bytes must fit in the buffer's per-bank allocation.
         // ProgramSpec-time validation already enforced the TensorSpec-level analogs; these
