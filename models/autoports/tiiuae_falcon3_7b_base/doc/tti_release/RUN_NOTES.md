@@ -281,6 +281,13 @@ Final copied artifacts:
 - `release_run_ci_nightly.log`
 - `release_target_benchmark_ci_nightly.json`
 - `hf_paired_ci_references.json`
+
+Runner-verification remediation checkpoint:
+
+- Repository/branch: `tt-metal`, `mvasiljevic/fmf/tiiuae-falcon3-7b-base`
+- Local commit: `43a7ddeac170937975b01d6952a3f6643b35ba24`
+  (`falcon3-7b-base tti-release: fix handoff discovery`); not pushed.
+- Independent rereview: `clean-pass`; final Stage 11 runner check exited 0.
 - `server_autoport_provenance.log`
 
 No raw eval JSONL, generated text, secret, model weight, cache, Docker layer,
