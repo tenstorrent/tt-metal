@@ -217,19 +217,59 @@ def check_bfp2_b(operand: list) -> list:
 
 
 def convert_nan_to_inf(operand):
-    """Replace every NaN with +inf, preserving the input type.
+    """Replace every NaN with an infinity *of the same sign*, preserving the input type.
 
     Accepts a torch.Tensor or a plain list of floats and returns the same
     type so that downstream code (e.g. `result.to(...)`) does not break
     when the caller passes a tensor.
+
+    The sign is not decoration. This substitution models the pack path, which does not
+    synthesise a value: it leaves the sign bit alone and rewrites the exponent/mantissa, so
+    a NaN with its sign set packs to -inf. Returning +inf for every NaN made the golden
+    disagree with the hardware on the ops that produce a negative NaN -- Neg(NaN) -> -inf
+    being the case that measured it.
+
+    Reading a sign here is only sound because two things upstream make it mean something:
+    cast_to_dest_dtype keeps a NaN's sign across the Dest write, which torch's bfloat16 cast
+    would otherwise force to 1, and UnarySFPUGolden canonicalises the sign of a *generated*
+    NaN, which IEEE leaves unspecified and torch picks arbitrarily. Without both, this
+    reports a sign that came from the cast or from the host libm rather than from the datum.
     """
     if isinstance(operand, torch.Tensor):
         return torch.where(
             torch.isnan(operand),
-            torch.full_like(operand, float("inf")),
+            torch.copysign(torch.full_like(operand, float("inf")), operand),
             operand,
         )
-    return [math.inf if math.isnan(x) else x for x in operand]
+    return [math.copysign(math.inf, x) if math.isnan(x) else x for x in operand]
+
+
+def cast_to_dest_dtype(values: torch.Tensor, dtype) -> torch.Tensor:
+    """Cast fp32 *values* to a Dest *dtype*, keeping the sign of any NaN.
+
+    torch's fp32 -> bfloat16 cast canonicalises every NaN to 0xFFFF, sign bit set, so a
+    positive NaN comes back negative. Hardware does no such thing: a 16-bit Dest holds the
+    top half of the fp32 pattern, so the sign bit survives verbatim, and the pack path's
+    NaN -> inf substitution then reads it (see convert_nan_to_inf). Without this repair the
+    golden reports -inf for *every* NaN reaching a Float16_b Dest -- right for Neg(NaN) and
+    wrong for the four other ops in the tranche, all by the same accident.
+
+    Only bfloat16 is affected; torch's fp16 cast already carries the sign through. The
+    repair has to happen here rather than in convert_nan_to_inf because untilize_block
+    reorders lanes in between, so by then no fp32 sign source is lane-aligned any more.
+    """
+    out = values.to(dtype)
+    if dtype is not torch.bfloat16:
+        return out
+    nan = torch.isnan(values)
+    if not bool(nan.any()):
+        return out
+    # Repair the NaN lanes by the bit pattern rather than by value: torch offers no way to
+    # build a negative bfloat16 NaN from a float, because .to(), full_like() and neg() all
+    # normalise the sign. Taking the top 16 bits of the fp32 pattern is what a 16-bit Dest
+    # does anyway, and it carries the sign and the NaN-ness across together.
+    top_half = (values.view(torch.int32) >> 16).to(torch.int16)
+    return torch.where(nan, top_half, out.view(torch.int16)).view(torch.bfloat16)
 
 
 def convert_inf_to_value(operand, inf_value: float):
@@ -2157,6 +2197,25 @@ class PackGolden:
 
 @register_golden
 class UnarySFPUGolden:
+    # Ops whose NaN result carries a *real* sign, because the kernel moves the sign bit
+    # rather than generating a NaN: Neg flips it, Abs clears it, Identity passes it through.
+    #
+    # For every other op a NaN result is an invalid-operation default, and IEEE 754 leaves
+    # the sign of that NaN unspecified. The SFPU emits a positive one; torch inherits the
+    # host libm and picks either, inconsistently -- cos(inf), acosh(0.5), rsqrt(-1) and
+    # acos(2) all give 0xFFC00000 while sqrt(-1) and log(-1) give 0x7FC00000. That choice is
+    # invisible until a NaN crosses a 16-bit Dest, where the pack path substitutes a
+    # *signed* infinity for it (see convert_nan_to_inf) and turns an arbitrary sign bit into
+    # a visible +inf/-inf disagreement. Canonicalise, so the golden asserts the sign only
+    # where the sign means something.
+    _NAN_SIGN_TRANSPARENT_OPS = frozenset(
+        {
+            MathOperation.Neg,
+            MathOperation.Abs,
+            MathOperation.Identity,
+        }
+    )
+
     def __init__(self):
         self.ops = {
             MathOperation.Abs: self._abs,
@@ -2363,7 +2422,15 @@ class UnarySFPUGolden:
                 # truncate to float16_b
                 operand1 = (operand1.view(torch.int32) & 0xFFFF0000).view(torch.float32)
 
-        tensor = to_tensor(operand1, dst_format)
+        # Not to_tensor(): its plain .to() canonicalises every NaN to a *negative* bfloat16
+        # one, which would hand the op a sign the input never had -- and then the sign the
+        # pack path reads back out would be an artefact of the cast rather than of the
+        # datum. See cast_to_dest_dtype.
+        tensor = (
+            cast_to_dest_dtype(operand1, format_dict[dst_format])
+            if operand1.dtype == torch.float32
+            else to_tensor(operand1, dst_format)
+        )
 
         if iterations is None or iterations * TILE_SIZE > tensor.numel():
             iterations = tensor.numel() // TILE_SIZE
@@ -2422,6 +2489,10 @@ class UnarySFPUGolden:
             else format_dict[dst_format]
         )
         op_tensor = torch.tensor(op_res, dtype=torch.float32)
+        if operation not in self._NAN_SIGN_TRANSPARENT_OPS:
+            # abs() clears the sign bit without disturbing the NaN payload, which is exactly
+            # the canonicalisation wanted here. See _NAN_SIGN_TRANSPARENT_OPS.
+            op_tensor = torch.where(torch.isnan(op_tensor), op_tensor.abs(), op_tensor)
         if dst_format == DataFormat.Float16:
             # SFPU arithmetic flushes A-exponent results below the FP16 minimum
             # normal before storing them to Dest/SrcS. Apply this before the
@@ -2431,10 +2502,17 @@ class UnarySFPUGolden:
                 torch.zeros_like(op_tensor),
                 op_tensor,
             )
+        # Two casts, and both have to preserve a NaN's sign. The first is the Dest write's
+        # own rounding; the second is the store into `result`, whose dtype follows
+        # input_format through tilize_block and so is not always the Dest dtype. Leaving the
+        # second one to plain assignment would redo it with torch's canonicalising cast and
+        # undo the first's work -- silently, and only on the pipelines where the two dtypes
+        # differ.
+        op_rounded = cast_to_dest_dtype(op_tensor, op_dtype).float()
         result[
             ELEMENTS_PER_TILE * dest_idx : ELEMENTS_PER_TILE * dest_idx
             + TILE_SIZE * iterations
-        ] = op_tensor.to(op_dtype)
+        ] = cast_to_dest_dtype(op_rounded, result.dtype)
 
         if not skip_tilize:
             result = untilize_block(result, input_format, dimensions).flatten()

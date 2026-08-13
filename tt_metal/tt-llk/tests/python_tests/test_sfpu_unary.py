@@ -33,6 +33,7 @@ from helpers.sfpu_domains import (
     edge_spec,
     exclude_undefined,
     for_op_pipeline,
+    negative_zero_delivered,
     op_edge_points,
     sfpu_unary_ops,
     specials_safe,
@@ -591,6 +592,40 @@ _EDGE_KNOWN_DIVERGENCES = {
     ),
 }
 
+
+# The cat-B divergences, derived rather than listed. Each of these three ops diverges on
+# exactly the combinations that *deliver* the probe it diverges on, so writing the rule beats
+# writing its current answer: the sets stay right when the format axis grows or when a
+# delivery measurement is revised, and there is no second copy to forget.
+#
+#   Reciprocal  every combination carrying specials at all -- 1/NaN is the probe.
+#   Sqrt, Rsqrt every combination that also delivers a real -0.0, which is the strictly
+#               smaller unpack-to-dest set. At dest_acc=No the kernel is handed +0.0 and
+#               agrees with the golden, so those combinations pass rather than xfail.
+#
+# Measured on a Blackhole p300a: Reciprocal on all 3 reachable combinations, Sqrt and Rsqrt
+# on both of theirs. The rest of each set is Wormhole-only (_skip_bh_unless_fp32 takes
+# dest_acc=No down to Float32->Float32 there) and follows from the same kernel path. The
+# xfails are non-strict, so a Wormhole run that disagrees reports XPASS -- which this suite
+# reads as a signal worth more than most deliberate work, rather than as noise.
+def _cat_b_divergences(delivers):
+    return tuple(
+        (fmt.input_format, fmt.output_format, dest_acc)
+        for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
+        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+        if specials_safe(fmt.input_format, fmt.output_format, dest_acc)
+        and delivers(fmt.input_format, dest_acc)
+    )
+
+
+_EDGE_KNOWN_DIVERGENCES.update(
+    {
+        MathOperation.Reciprocal: _cat_b_divergences(lambda _fmt, _dest_acc: True),
+        MathOperation.Sqrt: _cat_b_divergences(negative_zero_delivered),
+        MathOperation.Rsqrt: _cat_b_divergences(negative_zero_delivered),
+    }
+)
+
 _EDGE_DIVERGENCE_REASON = {
     MathOperation.Signbit: "The -0.0 probe is not delivered on this pipeline: "
     "unpack_to_dest is False here, so the datum passes through SrcA and the datacopy and "
@@ -609,6 +644,17 @@ _EDGE_DIVERGENCE_REASON = {
     "of inf, while plain Rsqrt does not diverge at the same pole. Not prescribed by the "
     "ISA either way.",
     MathOperation.Erfinv: "erfinv(±1) saturates instead of returning ±inf.",
+    MathOperation.Reciprocal: "1/NaN returns +0: the kernel does not propagate NaN, where "
+    "IEEE, torch and the golden all give NaN. Every other special agrees (1/±inf = ±0, "
+    "1/±0 = ±inf), so this is the NaN probe alone and it diverges on every combination that "
+    "delivers one. Not prescribed by the ISA, which says only that NaN inputs follow 'the "
+    "usual IEEE754 rules'.",
+    MathOperation.Sqrt: "sqrt(-0) returns NaN; IEEE and the golden give -0. Scoped to the "
+    "unpack-to-dest combinations, the only ones where a real -0.0 reaches the LREG — at "
+    "dest_acc=No the kernel is handed +0.0 and agrees, so the probe is not sent there.",
+    MathOperation.Rsqrt: "rsqrt(-0) returns NaN; IEEE and the golden give -inf. Same cause "
+    "and same unpack-to-dest scoping as Sqrt. Distinct from the RsqrtCompat entry above, "
+    "which is about the +0 pole saturating rather than about -0.",
 }
 
 

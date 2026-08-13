@@ -1662,11 +1662,17 @@ INT32_MIN = -(2**31)
 INT32_MAX = 2**31 - 1
 UINT32_MAX = 2**32 - 1
 
+
 # +0.0 and -0.0 are listed separately and both matter: signbit, sign, heaviside,
 # reciprocal and the comparison-to-zero ops all distinguish them, and reciprocal is the
 # op where they disagree most visibly (1/+0 = +inf against 1/-0 = -inf, and the SFPU
 # returns +inf for both — that sign disagreement is what forced Bfp4_b's tighter
 # reciprocal domain).
+def _is_negative_zero(value: float) -> bool:
+    """True only for -0.0. `value == -0.0` is also true for +0.0, so read the sign bit."""
+    return value == 0.0 and math.copysign(1.0, value) < 0.0
+
+
 FLOAT_SPECIALS: Tuple[float, ...] = (
     float("inf"),
     float("-inf"),
@@ -1941,44 +1947,60 @@ SPECIALS_READY_OPS: Dict[MathOperation, str] = {
     "on Blackhole.",
     MathOperation.Cos: "cos(+/-inf) = NaN, cos(NaN) = NaN, cos(+/-0) = 1. Golden moved off "
     "math.cos for the same reason as Sin. Green on Blackhole.",
+    MathOperation.Neg: "neg(+/-inf) = -/+inf, neg(NaN) = NaN, neg(+/-0) = -/+0. Enrolled "
+    "once the golden stopped mangling a NaN's sign through a 16-bit Dest (see "
+    "cast_to_dest_dtype): Neg is the one op here that produces a *negative* NaN, so it was "
+    "the op that measured the defect. Green on Blackhole.",
+    MathOperation.Reciprocal: "IEEE: 1/+/-inf = +/-0, 1/+/-0 = +/-inf, 1/NaN = NaN. The "
+    "kernel does not propagate NaN (returns +0), which is a genuine kernel divergence and "
+    "is xfailed per combination rather than papered over in the golden.",
+    MathOperation.Sqrt: "IEEE: sqrt(+inf) = +inf, sqrt(-inf) = NaN, sqrt(NaN) = NaN, "
+    "sqrt(+/-0) = +/-0. The kernel returns NaN for sqrt(-0) where IEEE gives -0, but only "
+    "where a -0 is actually delivered (unpack-to-dest); xfailed there.",
+    MathOperation.Rsqrt: "IEEE: rsqrt(+inf) = +0, rsqrt(-inf) = NaN, rsqrt(NaN) = NaN, "
+    "rsqrt(+/-0) = +/-inf. Same -0 divergence as Sqrt and the same unpack-to-dest scoping.",
 }
 
-# The next tranche, measured on Blackhole and deliberately NOT enrolled yet.
+# What is left of the tranche that Neg/Reciprocal/Sqrt/Rsqrt came from.
 #
-# Driving specials through these five found real divergences -- but a majority of them are
-# *golden* defects, and enrolling an op whose golden is wrong would record a kernel xfail for
-# a test-side bug. Each needs its golden settled first, which is exactly the per-op work cat
-# B was always going to be. Measured per probe (Float32 input, the only specials-carrying
-# input format on Blackhole):
+# Four of the five are now enrolled above. Of the divergences that held them back, the ones
+# blamed on the golden really were the golden's, and one fix accounted for all of them: torch's
+# fp32 -> bfloat16 cast canonicalises every NaN to 0xFFFF, sign bit set, so a NaN crossing a
+# 16-bit Dest came back negative whatever its true sign was. That is why the defect showed up
+# only at dest_acc=No, and why it read as "Neg(NaN) mangled" -- Neg is simply the one op whose
+# NaN is genuinely negative, so it was the one the artefact disagreed with. cast_to_dest_dtype
+# models the Dest write as the truncation it is; the substitution then reads a real sign.
 #
-#   Neg        NaN -> golden +inf, hw -inf   (dest_acc=No: the *golden* mangles NaN)
-#              +0  -> golden +0,   hw -0     (dest_acc=Yes: the HARDWARE is IEEE-correct
-#                                             here and the golden is not)
-#   Reciprocal NaN -> golden +inf/NaN, hw +0 (NaN is not propagated by the kernel)
-#              -inf -> golden +0,  hw -0     (hardware IEEE-correct, golden is not)
-#   Sqrt       -0  -> golden +0,   hw NaN    (dest_acc=Yes)
-#   Rsqrt      -0  -> golden -inf, hw NaN    (dest_acc=Yes)
+# It also silently fixed Signbit(NaN), which reported 1.0 at dest_acc=No for the same reason:
+# the golden was reading a sign the cast had invented. Signbit is not enrolled for specials,
+# so nothing was failing -- it was waiting to.
+#
+# The signed-zero rows on that list were never blocking, and the reason is worth keeping: a
+# zero's sign is invisible to this suite's comparator. passed_test() judges by torch.isclose
+# plus a both-NaN clause plus PCC, and -0.0 == +0.0 under every one of them. So Neg(+0) -> -0
+# and Reciprocal(-inf) -> -0 cannot fail a test, cannot XPASS, and need no golden change and no
+# exclusion. If a future probe needs to *assert* a zero's sign it needs a bitwise comparator
+# first, and that is a suite-wide change rather than a per-op one.
+#
+# Left, and still not enrolled:
+#
 #   Log        +inf -> golden +inf, hw 88.5  (~ln(FLT_MAX): the kernel clamps a non-finite
 #              -inf -> golden NaN,  hw 84.3   input to the format maximum and takes the log
 #              NaN  -> golden NaN,  hw 89.1   of that, so no non-finite input survives)
 #
-# Two conclusions worth keeping separate from the op list:
+# Log stays out because that is a *kernel* behaviour with no ISA ruling, so there is no way to
+# know whether the right outcome is a pass, an xfail or a bug report until an owner says. It is
+# the single largest cat-B finding so far -- worth raising alongside RsqrtCompat(0).
 #
-#  1. **Log saturates its input.** Every non-finite input comes back as a finite number near
-#     ln(FLT_MAX). That is a kernel behaviour, not a golden one, and it is the single largest
-#     cat-B finding so far -- worth raising with kernel owners alongside RsqrtCompat(0).
-#  2. **-0.0 delivery is now answered.** At dest_acc=No, Reciprocal, Rsqrt and Sqrt all treat
-#     -0 *exactly* as +0 (1/-0 -> +inf, rsqrt(-0) -> +inf, sqrt(-0) -> +0). At dest_acc=Yes
-#     with a 32-bit input they do not (sqrt(-0) -> NaN, rsqrt(-0) -> NaN). That is the
-#     unpack_to_dest split, measured independently of the signbit/sign/heaviside partition it
-#     was inferred from -- see the coverage audit. The probe genuinely is not delivered on the
-#     datacopy path.
+# One measurement from the tranche that outlived it: **-0.0 delivery**. At dest_acc=No,
+# Reciprocal, Rsqrt and Sqrt all treat -0 *exactly* as +0 (1/-0 -> +inf, rsqrt(-0) -> +inf,
+# sqrt(-0) -> +0). At dest_acc=Yes with a 32-bit input they do not (sqrt(-0) -> NaN,
+# rsqrt(-0) -> NaN). That is the unpack_to_dest split, measured independently of the
+# signbit/sign/heaviside partition it was inferred from -- see the coverage audit. The probe
+# genuinely is not delivered on the datacopy path, and it is what scopes Sqrt's and Rsqrt's
+# xfails to the unpack-to-dest combinations.
 _SPECIALS_NEXT_TRANCHE: FrozenSet[MathOperation] = frozenset(
     {
-        MathOperation.Neg,
-        MathOperation.Reciprocal,
-        MathOperation.Sqrt,
-        MathOperation.Rsqrt,
         MathOperation.Log,
     }
 )
@@ -2040,6 +2062,32 @@ def specials_safe(
         return False
 
     return True
+
+
+def negative_zero_delivered(
+    input_format: DataFormat, dest_acc: Optional[Union[bool, Enum]]
+) -> bool:
+    """Does a -0.0 written to L1 still have its sign when the SFPU reads it?
+
+    Only on the unpack-to-dest path -- a 32-bit input at dest_acc=Yes. Everywhere else the
+    datum goes through SrcA and the datacopy, and the LREG holds +0.0. That is measured
+    three independent ways: the signbit/sign/heaviside divergence partition, and then
+    Reciprocal, Rsqrt and Sqrt driven over the same probe (1/-0 -> +inf, rsqrt(-0) -> +inf,
+    sqrt(-0) -> +0 at dest_acc=No; NaN for the latter two at dest_acc=Yes, a distinct answer
+    that says a real -0 arrived). See the coverage audit's signed-zero section.
+
+    This gates whether the probe is worth *sending*, which is a different question from
+    specials_safe(): that one asks whether a pipeline preserves non-finites at all, and it
+    accepts several triples that flatten -0.0 to +0.0 while carrying +/-inf and NaN intact.
+    Sending it anyway costs an xfail per variant that blames the kernel for a datum it never
+    received -- the mistake Signbit's six entries exist to document.
+
+    dest_acc=None means the caller does not know the pipeline, so keep the probe rather than
+    silently narrowing what it asked for.
+    """
+    if dest_acc is None:
+        return True
+    return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
 
 
 def specials_safe_formats(
@@ -2120,7 +2168,15 @@ def edge_values(
     if specials:
         # Specials are an exponent-range property, so they key off range_fmt: it is what
         # decides integer extremes vs IEEE non-finites, and what clip_to_format honours.
-        vals += list(format_specials(range_fmt))
+        injected = list(format_specials(range_fmt))
+        if not range_fmt.is_integer() and not negative_zero_delivered(
+            input_format, dest_acc
+        ):
+            # Drop -0.0 where the datacopy path would hand the kernel +0.0 instead. The
+            # probe keys off input_format, not range_fmt: delivery is a property of how the
+            # datum reaches the LREG, not of the magnitudes the pipeline can represent.
+            injected = [v for v in injected if not _is_negative_zero(v)]
+        vals += injected
     return _dedup_representable(clip_to_format(vals, range_fmt), range_fmt)
 
 
