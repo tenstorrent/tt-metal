@@ -98,6 +98,52 @@ inline uint64_t get_noc_addr(uint32_t x, uint32_t y, uint32_t addr) {
     T2("get_noc_addr(" + n(x) + "," + n(y) + ")");
     return addr;
 }
+// --- semaphores / coordinates -----------------------------------------------
+enum class ProgrammableCoreType { TENSIX };
+enum class NocOptions : uint32_t { DEFAULT = 0, MCAST_INCL_SRC = 1 };
+inline uint32_t noc_index = 0;
+inline uint32_t my_x[2] = {1, 1};
+inline uint32_t my_y[2] = {2, 2};
+inline uint32_t worker_logical_row_to_virtual_row[8] = {2, 3, 4, 5, 6, 7, 8, 9};
+inline uint32_t worker_logical_col_to_virtual_col[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+inline uint32_t get_relative_logical_x() { return 0; }
+inline uint32_t get_relative_logical_y() { return 0; }
+inline uint64_t get_noc_multicast_addr(uint32_t xs, uint32_t ys, uint32_t xe, uint32_t ye, uint32_t addr) {
+    T2("get_noc_multicast_addr(" + n(xs) + "," + n(ys) + ".." + n(xe) + "," + n(ye) + ")");
+    return addr;
+}
+inline void noc_async_write_multicast(uint32_t, uint64_t, uint32_t, uint32_t num_dests) {
+    T2("noc_async_write_multicast(dests=" + n(num_dests) + ")");
+}
+template <ProgrammableCoreType = ProgrammableCoreType::TENSIX>
+inline uintptr_t get_semaphore(uint32_t id) {
+    return 0x9000 + id * 16;
+}
+class Noc {
+public:
+    Noc() = default;
+    uint8_t get_noc_id() const { return 0; }
+};
+template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX>
+class Semaphore {
+public:
+    explicit Semaphore(uint32_t id) : id_(id) {}
+    void wait(uint32_t v) { T2("sem" + n(id_) + ".wait(" + n(v) + ")"); }
+    void wait_min(uint32_t v) { T2("sem" + n(id_) + ".wait_min(" + n(v) + ")"); }
+    void set(uint32_t v) { T2("sem" + n(id_) + ".set(" + n(v) + ")"); }
+    void up(const Noc&, uint32_t, uint32_t, uint32_t v, uint8_t = 0) { T2("sem" + n(id_) + ".up(" + n(v) + ")"); }
+    template <NocOptions = NocOptions::DEFAULT>
+    void set_multicast(const Noc&, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t d, bool = false) {
+        T2("sem" + n(id_) + ".set_multicast(dests=" + n(d) + ")");
+    }
+    void inc_multicast(const Noc&, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t v, uint32_t d) {
+        T2("sem" + n(id_) + ".inc_multicast(" + n(v) + ",dests=" + n(d) + ")");
+    }
+
+private:
+    uint32_t id_;
+};
+
 inline void noc_async_read_barrier() { T2("noc_async_read_barrier()"); }
 inline void noc_async_writes_flushed() { T2("noc_async_writes_flushed()"); }
 inline void noc_async_write_barrier() { T2("noc_async_write_barrier()"); }
@@ -191,7 +237,7 @@ void example_unary() {
 void example_peer_hop() {
     auto t0 = TensorAccessor(FakeArgs{0}, 0);
     auto t2 = TensorAccessor(FakeArgs{2}, 0);
-    Coord peer{0, 0};
+    LogicalCoord peer{0, 0};
     Storage in_storage(0, 2);
     Storage hop_storage(1, 2);
     Storage out_storage(3, 2);
