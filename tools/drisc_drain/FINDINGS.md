@@ -4426,6 +4426,72 @@ thread parked in `futex_wait` -- the signature of a host poll for a consumer tha
 observation, and `DRISC_PROFILER=1` is the documented way to suppress the legacy RT manager and DRAM profiler
 (§647), so someone will reach for it. Worth a two-arm env bisect.
 
+### The MOVER had no controller at all, and its traffic was almost entirely empty polling
+
+Discovered from the footprint table above: a mover moved ~380 MB in ~1.6 M transactions -- about **240 B per
+transaction** -- while the frames it ships are 10,560 B each. That gap is 4 B head polls on an empty ring. A
+mover swept every ~1.27 us whether or not its DRAM ring held anything, because `gap` stayed at 0: movers are
+excluded from the FILL-ratio controller (correctly -- they have no worker grid, so span fill is permanently 0
+and that controller would creep them to the 148 us ceiling and pace the consumer instead of the producer).
+
+Added a mover-side controller with a **different criterion and a different ceiling**:
+
+- **Criterion is FRAMES AVAILABLE**, not span fill: collapse to 0 the instant a sweep moved anything, back off
+  only when the ring was empty. It therefore cannot delay a real drain, only suppress polling an empty ring.
+  Reuses the existing `frames != frames_at_sweep_start` busy signal, so there is no second definition of
+  did-this-sweep-do-anything to drift from.
+- **Ceiling 10 us (13,500 cycles)**, ~15x tighter than a filler's 148 us. Pacing a CONSUMER is only safe while
+  it is provably idle and while one missed observation cannot materially extend the drain tail.
+- Room to add device code at all: **each role compiles its own ELF**, and the mover binary is ~6,788 B against
+  the 11,264 B code region (~4.4 KB spare) where a filler has ~36 B. This is the only place new DRISC code fits.
+
+Measured on ResNet-50 trace+2cq, 3 reps:
+
+| | before | after |
+|---|---|---|
+| mover NoC transactions | 1,509,408-1,672,852 | **182,959-186,255** (~8x fewer) |
+| mover bytes | 378-382 MB | 271-290 MB (~25% less) |
+| mover total sweeps | 1.93-2.13 M | ~200,000 (~10x fewer) |
+| mover self-zone cost | 13.2-15.2% of egress | **3.7-4.1%** |
+| mover plot sample interval | 1.27 us | **11.47 us** |
+| settled gap | 0 | 13,500 cyc (the ceiling) |
+| producer stalls | 0 | **0** (3/3 reps) |
+| staged == moved | exact | exact on all four rings, 3/3 |
+| inference time | 0.0016146-0.0016195 s | 0.0016121-0.0016185 s (indistinguishable) |
+
+The ~8x transaction cut confirms the diagnosis rather than merely being consistent with it: if the traffic had
+been payload, pacing an EMPTY ring could not have removed it. Note the self-zone cost fell to under 4% as a
+CONSEQUENCE of fewer sweeps, with no change to the sampling rule -- the instrument got cheaper because there was
+less pointless activity to describe.
+
+**Drain tail measured, not inferred**, because `staged == moved` proves the rings emptied by teardown and not
+WHEN: the last DRISC zone lands **+1.294 ms** after the last worker zone on an 839.6 ms workload (0.15%). Knee
+unaffected: delay 15 = 0/0/0, delay 20 = 0/3/0.
+
+### Where a DRISC lane's DARK REGIONS come from -- emission, not loss
+
+Worth stating because it reads like dropped data and is not. A dark region is an **emission decision on the
+device**, before any marker exists: the `self_on` gate means that sweep writes no markers, so there is no
+packet, no frame and no bytes to lose downstream. That is why the instrument costs ~1.5% of a filler's egress --
+it declines to generate rather than generating and discarding.
+
+Three causes, distinguishable by the SHAPE of the darkness:
+
+| what you see | cause | stage |
+|---|---|---|
+| gaps scattered mid-run | work-armed window closed (no work-bearing sweep for `ZONE_HOLD_US`, default 500 us) | device, emission |
+| dark from a point to the END, never returns | self-frame budget spent -- permanent, nothing re-arms it | device, emission |
+| dark at the FRONT, contiguous after | host record ring overwrote the OLDEST unread records | host, transport -- the only real drop |
+
+The payload path is lossless by construction from producer to host ring: the L1 marker ring BLOCKS a producer,
+the DRAM frame ring makes the filler wait for room, and the socket FIFO makes the mover wait for credit. Only
+the `BroadcastRing` discards, and because it overwrites the oldest unread it eats the BEGINNING of a run and
+leaves the tail contiguous -- which is why the 50k-zone synthetic capture was 31-46% complete yet not a sieve.
+
+**A dark region is therefore not evidence the drainer was idle.** It swept and paced through there and found
+nothing worth describing for at least 500 us. On this model a filler traced 16,367 sweeps of 212,690 with only
+~2,400 doing work, so even with the window forced open the lane is ~97% idle polling.
+
 ### Captures
 
 `tracy_captures/resnet50_default500us.tracy` is canonical (stock defaults, nothing capped).
