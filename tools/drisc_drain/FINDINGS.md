@@ -4098,3 +4098,94 @@ credit wait that sets the knee is absent while every count still looks healthy. 
   still shipping. Reversing that order is silent frame corruption.
 - **Self-profiling and the egress ablation are mutually exclusive** (`static_assert`): the ablation re-ships
   pre-staged slots forever and never runs the sweep body.
+
+## §N+42 — The profiler's NoC footprint, measured by the hardware instead of derived (bh-26, 2026-08-13)
+
+`TT_METAL_PERF_DEBUG_NOC_FOOTPRINT=1`: each of the six drainers samples its OWN `NIU_MST_*` counters once per
+sweep -- 8 local `NOC_STATUS_READ_REG` loads on both NoCs, 32-bit subtract-then-widen into 64-bit accumulators
+(they wrap at ~873,000 sweeps, so an end-to-end difference would be wrong on a long run). Local register loads,
+so **collecting the data costs no NoC traffic**, which is why the instrument is free: 0 producer stalls, exactly
+6,001,200 records, 0 dropped, 0 regressions, identical to OFF.
+
+Reference config: bh-26, 120 cores, slow dispatch, `--iters 500`, delay 15.
+
+### Measured, per drainer
+
+| DRISC | role | window bytes | window txns | lifetime bytes | lifetime txns | sweeps |
+|---|---|---|---|---|---|---|
+| 0 | filler | 51.90 MB | 6,424 | **6,573 MB** | 657,934 | 21,831 |
+| 1 | filler | 51.79 MB | 6,404 | 6,692 MB | 669,824 | 22,228 |
+| 2 | filler | 52.17 MB | 6,467 | 6,180 MB | 618,617 | 20,519 |
+| 3 | filler | 51.87 MB | 6,415 | 6,066 MB | 607,225 | 20,141 |
+| 4 | mover | 70.89 MB | 6,858 | **88.69 MB** | 298,560 | 146,166 |
+| 5 | mover | 70.09 MB | 6,945 | 88.85 MB | 314,341 | 154,083 |
+| **total** | | **348.7 MB** | **39,513** | **25.1 GB** | 3.17 M | |
+
+**The NoC split is confirmed exactly as designed**: a filler reads on NoC 1 (34.23 MB, zero writes there) and
+writes on NoC 0 (17.67 MB, zero reads). No cross-traffic in either direction.
+
+### The model was ~11% high, NOT 4.8x -- and the 4.8x was an artefact of the comparison
+
+The §N+42 predecessor analysis derived 386 MB in-window / 8.04x payload. Measured aggregate is **348.7 MB**, so
+the byte model was **11% high** -- good agreement. The "4.8x discrepancy" first reported was **a per-filler
+measurement compared against an aggregate derivation**: derived 163.94 MB / 15,600 txn is the sum over four
+fillers, and it was placed next to filler 0's individual 34.23 MB / 3,420 txn. Aggregate against aggregate:
+
+| in-window span read | derived | measured | ratio |
+|---|---|---|---|
+| transactions | 15,600 | 13,680 (4 x 3,420) | 1.14x |
+| bytes | 163.94 MB | 136.9 MB (4 x 34.23) | 1.20x |
+
+and the residual 1.14x is **entirely the assumed sweep count**: the derivation assumed 130 sweeps per filler,
+the hardware measured **114** (`3,420 txn / 30 cores = 114.0` exactly). Same single variable explains the
+lifetime gap: 200,000 sweeps assumed against **21,831** measured is 9.16x, and 62.5 GB/filler derived against
+6.57 GB measured is 9.53x. **The byte-per-sweep model was right all along; only the sweep count was invented.**
+The predecessor analysis had itself written "the exact sweep count is config-dependent and must be read from
+`res[4]`, never assumed" -- and the headline was then built on an assumed one anyway.
+
+**Two traps, one on each side of the handoff, and both are the SAME trap:** a statistic quoted over the wrong
+population. Aggregate vs per-filler on the reporting side; assumed vs measured sweeps on the deriving side.
+This file has now recorded that error four times (means over a bimodal distribution, coverage over all sweeps
+rather than in-window ones, and both halves of this one). **Always state the population in the same breath as
+the number.**
+
+### The finding: polling dominates, and it is entirely the FILLERS' over-read
+
+Lifetime 25.1 GB against 348.7 MB in-window = **~74x more NoC traffic outside the workload than inside it**
+(the earlier ~3,400x claim was the assumed-sweep-count error; direction survives, magnitude does not). But the
+split between roles is the useful part:
+
+| | lifetime bytes | sweeps | bytes per sweep |
+|---|---|---|---|
+| filler | ~6.4 GB | ~21,000 | **~307 kB** |
+| mover | ~88 MB | ~150,000 | **~0.6 kB** |
+
+**A mover runs 7x MORE sweeps than a filler and moves 74x FEWER bytes**, because a mover's idle sweep reads a
+4 B head word per peer while a filler's idle sweep reads 30 full 10,496 B spans unconditionally. So the
+profiler's resident NoC cost is *almost entirely* the filler's unconditional full-span read on sweeps that find
+nothing. Nothing else in the system is within two orders of magnitude of it.
+
+That makes the two-phase read (256 B control vector first, then only the live ring bytes) the only lever that
+matters for mesh traffic: it targets the ~6.4 GB/filler directly. The 592-word short frame does not touch it.
+
+### Instrument cost
+
+247 cycles/sweep on both roles (5,392,503 cyc over 21,831 sweeps on filler 0; 36,103,246 over 146,166 on mover
+4 -- identical per sweep, as expected for 8 fixed register loads). Against a ~13 us sweep that is **~1.4%**, and
+it measurably does not perturb: 0 stalls at SD delay 15, where §N+41 showed a mere +4% on idle-sweep cost
+crosses the knee.
+
+### What this does NOT measure -- and why no percentage is printed
+
+These are **master** counters on the drainer: traffic the drainer *initiated*, i.e. offered load. They say
+nothing about
+- **the victim side** -- what actually arrived at each worker's L1 (`NIU_SLV_*` on the worker, unread),
+- **the workload's own traffic** -- so there is no denominator and the report **refuses to print a
+  workload-relative percentage**, naming what would supply it instead,
+- **contention** -- two streams sharing an unsaturated link do not interfere, and a master counter cannot tell
+  you whether anything was delayed.
+
+The report also refuses to print at all when `credit_timeouts`, `dropped_frames` or `egress_dead` are non-zero,
+because `pages`/`pushes` are success counters that simply stop: a footprint computed from them after an egress
+failure would read plausibly LOW. Same class as the §N+41 tail flush that could never fire.
+
