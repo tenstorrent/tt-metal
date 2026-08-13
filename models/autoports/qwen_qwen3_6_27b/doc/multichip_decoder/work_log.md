@@ -134,3 +134,9 @@ Both final logs show watcher attach/check/detach without watcher error and corre
 ### Static tests
 
 `python_env/bin/pytest -q models/autoports/qwen_qwen3_6_27b/tests/test_multichip_decoder.py` → 9 passed. Runtime source is fallback-clean, uses the optimized decoder baseline, and contains no full-model or vLLM work.
+
+## Local checkpoints
+
+- Implementation, tests, and evidence: `fefee63979f` (`Add Qwen3.6-27B TP4 multichip decoder`).
+- Final independent stage-review verdict: `clean-pass` after official-weight precision correction, recurrent-geometry AutoFix, measured capacity remediation, and final-BF16 evidence reruns.
+- No push was performed.
