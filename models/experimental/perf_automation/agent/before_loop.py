@@ -856,6 +856,7 @@ def before_loop(
                 full_hint=_bl_full,
                 full_blocks=_bl_blocks,
                 knob=_bl_knob,
+                stage_depths=(_bl_facts or {}).get("per_stage"),
             )
             if _bl_depth:
                 os.environ["PERF_MCP_PROFILE_ENV"] = json.dumps(_bl_depth)

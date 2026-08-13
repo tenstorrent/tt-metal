@@ -1276,21 +1276,72 @@ def generate_perf_test(
     # the single TT_PERF_LAYERS instruction with per-stack variables so the LLM wires each
     # stack's depth cap separately.
     if stacks and len(stacks) > 1:
-        _stack_lines = "\n".join(f"  PERF_STACK{i}_LAYERS -> {s.path} ({s.count} layers)" for i, s in enumerate(stacks))
-        _stack_var_examples = "\n".join(
-            f'_pl{i} = (os.environ.get("TT_PERF_STACK{i}_LAYERS") or "").strip()\n'
-            f"PERF_STACK{i}_LAYERS = int(_pl{i}) if (_pl{i}.isdigit() and int(_pl{i}) > 0) else None"
-            f"  # {s.path}: {s.count} total"
-            for i, s in enumerate(stacks)
-        )
-        prompt += (
-            f"\n\nMULTI-STACK DEPTH OVERRIDE: this model has {len(stacks)} repeating block stacks. "
-            "REPLACE the single `_pl` / `PERF_LAYERS` lines from the skeleton with these per-stack "
-            "variables (one env var per stack, same None-means-all-layers contract):\n"
-            f"{_stack_var_examples}\n"
-            f"Pass each depth cap to the builder:\n{_stack_lines}\n"
-            "None means all layers for that stack. Do NOT emit `PERF_LAYERS` for a multi-stack model.\n"
-        )
+        # NAMES COME FROM THE MODEL, NOT FROM A LOOP COUNTER.
+        #
+        # This used to hand the generator a positional id and a stack path -- "PERF_STACK0_LAYERS ->
+        # audio_tower.layers (32 layers)" -- and let it choose builder argument names from that. It
+        # chose `audio_layers` and `text_layers`, while the knob repair (which reads PIPELINE_STAGES
+        # and writes `<stage>_layers`) created encode_layers / prefill_layers / decode_layers. The
+        # test then passed kwargs the factory does not accept, they vanished into **kwargs, and the
+        # model built every layer: measured 18729 -> 18729 dispatched ops, a cap that capped nothing.
+        #
+        # PIPELINE_STAGES is declared in the model's own source, needs no build and no device, and is
+        # already what the repair names its parameters after. Deriving from it makes the two ends
+        # agree by construction instead of by luck. Falls back to the positional form only when the
+        # model declares no stages, which is the case that has no shared vocabulary to use.
+        # Guarded because this module is also loaded BY PATH (tests do it, and so does any caller
+        # without the package on sys.path): a bare relative import raises "attempted relative import
+        # with no known parent package" and would take generation down with it.
+        try:
+            from .stack_knob_repair import stage_names as _stage_names
+        except ImportError:  # loaded as a standalone module
+            import importlib.util as _ilu
+
+            _spec = _ilu.spec_from_file_location(
+                "_stack_knob_repair", str(Path(__file__).resolve().parent / "stack_knob_repair.py")
+            )
+            _skr = _ilu.module_from_spec(_spec)
+            _spec.loader.exec_module(_skr)
+            _stage_names = _skr.stage_names
+
+        _stages = [st for st in (_stage_names(root) or []) if str(st).isidentifier()]
+        if _stages:
+            _stack_lines = "\n".join(f"  TT_PERF_{st.upper()}_LAYERS -> build argument `{st}_layers`" for st in _stages)
+            _stack_var_examples = "\n".join(
+                f'_pl_{st} = (os.environ.get("TT_PERF_{st.upper()}_LAYERS") or "").strip()\n'
+                f"PERF_{st.upper()}_LAYERS = int(_pl_{st}) if (_pl_{st}.isdigit() and int(_pl_{st}) > 0) else None"
+                for st in _stages
+            )
+            prompt += (
+                f"\n\nPER-STAGE DEPTH OVERRIDE: this model runs {len(stacks)} repeating block stacks "
+                f"across the stages it declares in PIPELINE_STAGES ({', '.join(_stages)}). REPLACE the "
+                "single `_pl` / `PERF_LAYERS` lines from the skeleton with one variable per STAGE "
+                "(same None-means-all-layers contract):\n"
+                f"{_stack_var_examples}\n"
+                "Pass each one to the builder using EXACTLY these argument names -- they are the names "
+                "the tool adds to build_pipeline, and any other spelling is silently swallowed by "
+                f"**kwargs and caps nothing:\n{_stack_lines}\n"
+                "Also keep passing `layers=PERF_LAYERS` when the builder accepts it: it is the default "
+                "depth for any stack a per-stage argument does not name.\n"
+            )
+        else:
+            _stack_lines = "\n".join(
+                f"  PERF_STACK{i}_LAYERS -> {s.path} ({s.count} layers)" for i, s in enumerate(stacks)
+            )
+            _stack_var_examples = "\n".join(
+                f'_pl{i} = (os.environ.get("TT_PERF_STACK{i}_LAYERS") or "").strip()\n'
+                f"PERF_STACK{i}_LAYERS = int(_pl{i}) if (_pl{i}.isdigit() and int(_pl{i}) > 0) else None"
+                f"  # {s.path}: {s.count} total"
+                for i, s in enumerate(stacks)
+            )
+            prompt += (
+                f"\n\nMULTI-STACK DEPTH OVERRIDE: this model has {len(stacks)} repeating block stacks. "
+                "REPLACE the single `_pl` / `PERF_LAYERS` lines from the skeleton with these per-stack "
+                "variables (one env var per stack, same None-means-all-layers contract):\n"
+                f"{_stack_var_examples}\n"
+                f"Pass each depth cap to the builder:\n{_stack_lines}\n"
+                "None means all layers for that stack. Do NOT emit `PERF_LAYERS` for a multi-stack model.\n"
+            )
     inproc_ctx = _inline_inprocess_sources(demo_src, root)
     if inproc_ctx:
         prompt += (

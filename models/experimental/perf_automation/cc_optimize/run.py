@@ -1318,6 +1318,7 @@ def _bridge_depth_env(
     full_hint: int = 0,
     full_blocks: int = 0,
     knob=None,
+    stage_depths=None,
 ) -> dict:
     """Verify that the depth cap(s) actually reduce work, and return the env vars to enforce them.
 
@@ -1355,8 +1356,20 @@ def _bridge_depth_env(
     _numkey = next((k for k, v in env.items() if str(v).isdigit()), None)
     if _numkey:
         _set_depth(env, _cov_int, key=_numkey)  # see _knob_at: never write the cap without clearing FORCE_ALL
-    # Multi-stack: also apply per-stack env vars to the probe env so the combined cap is tested.
-    if isinstance(cov, dict) and len(cov) > 1:
+    # PER-STAGE FIRST, BY THE NAME THE MODEL DECLARES. The generated perf test reads
+    # TT_PERF_<STAGE>_LAYERS and forwards it as the builder's `<stage>_layers`, and the knob repair
+    # creates exactly those parameters -- all three derived from PIPELINE_STAGES, which the model
+    # states in its own source. Setting a variable nothing reads is how a cap silently caps nothing:
+    # measured 18729 -> 18729 when this set TT_PERF_STACK{i}_LAYERS while the test read names an LLM
+    # had invented from stack paths.
+    #
+    # The positional form stays for models that declare no stages, where there is no shared
+    # vocabulary to derive from -- it is no worse than what those models had.
+    _per_stage = dict(stage_depths or {})
+    if _per_stage:
+        for _stage, _depth in sorted(_per_stage.items()):
+            env["TT_PERF_%s_LAYERS" % str(_stage).upper()] = str(_depth)
+    elif isinstance(cov, dict) and len(cov) > 1:
         for _i, (_sid, _depth) in enumerate(sorted(cov.items())):
             _stack_key = f"TT_PERF_STACK{_i}_LAYERS"
             env[_stack_key] = str(_depth)
@@ -2225,6 +2238,10 @@ def _coverage_layers(
                 # decoder's graduated stubs sit at 28..31 and drag the maximum to the full model.
                 # Deciding what to fix required a number nobody could see.
                 _per_stage = depth_per_stage(_per_stack_cov, seq)
+                # PUBLISHED, NOT JUST PRINTED. This is the mapping that lets the bridge set the
+                # variables the generated test actually reads (TT_PERF_<STAGE>_LAYERS) and the repair
+                # actually creates (`<stage>_layers`). It used to reach the log and nothing else.
+                facts["per_stage"] = dict(_per_stage)
                 print(
                     "  [optimize/cc] coverage per stack: %s%s"
                     % (
