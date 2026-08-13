@@ -684,7 +684,17 @@ void kernel_main() {
     uint32_t sweeps = 0;
     uint32_t max_occ = 0;
     uint32_t sweep_max_run = 0;   // per-sweep peak occupancy, the controller's safety input
-    uint32_t gap = kGapCycles;    // runtime, driven by the pacing controller below
+    // Starts at 0 (kGapCycles default) = sweep immediately. REJECTED ALTERNATIVE, measured: seeding this at
+    // kGapMaxCycles to avoid the ramp cost moved the knee badly -- delay 15 went 0/0/0/0 -> 35/100/107/75 and
+    // delay 10 roughly doubled, with ring-room waits still 0, i.e. the L1 MARKER rings filled because the
+    // drainer waited up to 148 us before its first sweep. The premise ("start where it settles") was false:
+    // on the synthetic workload the controller settles at 8k-34k cycles, not the ceiling -- it only pins at
+    // the ceiling on a sparse real model (ResNet-50 trace, rings nearly empty). See FINDINGS §N+44.
+    //
+    // The ramp waste on a sparse workload is real (a filler burned ~475k-564k sweeps there against 15.4k when
+    // seeded high) but must be fixed WITHOUT delaying the first sweep -- e.g. a faster ramp, or a low-fill
+    // floor -- not by seeding the gap.
+    uint32_t gap = kGapCycles;
     uint32_t overflows = 0;
     uint32_t hb_slot = 0;
 
@@ -1823,12 +1833,37 @@ void kernel_main() {
                 if (frames_now != 0) {
                     const uint32_t mean_fill = static_cast<uint32_t>((total_words - words_at_sweep_start) / frames_now);
                     if (mean_fill < kFillTarget) {
-                        // Under-full: wait longer. MULTIPLICATIVE with an additive floor -- the old
-                        // `1 + (err>>3)` crept up ~1 cycle per sweep and could not reach the thousands of
-                        // cycles a slow producer needs within a run.
-                        uint32_t inc = gap >> 2;
-                        if (inc < 64u) {
-                            inc = 64u;
+                        // Under-full: wait longer, and how MUCH longer scales with how far under we are.
+                        //
+                        // Two regimes, because "slightly under target" and "the rings are empty" want very
+                        // different responses. Near target, creep (x1.25) so the loop can settle. Below a
+                        // QUARTER of target -- i.e. there is barely any activity -- climb x5 per sweep and
+                        // reach the ceiling in ~6 sweeps instead of ~35-40, so a sparse workload stops paying
+                        // for unconditional 30 x 10,496 B span reads almost immediately.
+                        //
+                        // This is the replacement for seeding the gap high, which was measured and REJECTED:
+                        // it delayed the first sweep by up to 148 us and moved the knee (delay 15 went
+                        // 0/0/0/0 -> 35/100/107/75). Ramping fast costs nothing at the knee because the first
+                        // sweep still happens immediately and a busy workload never enters the sparse regime.
+                        // Under-full: wait longer. STEEPER THAN IT LOOKS, and deliberately tuned by constants
+                        // rather than by adding a branch -- `gap >> 1` is the same instruction as `gap >> 2`
+                        // with a different immediate, and the floor is a literal, so this costs ZERO bytes of
+                        // DRISC code. That matters: the instrumented build (self-zones + NoC footprint) has
+                        // ~36 B of headroom in an 11,264 B code region, and a two-regime version of this ramp
+                        // overflowed it -- the drainer then FAILED TO LOAD and the run silently produced no
+                        // device zones at all.
+                        //
+                        // WHY STEEPER. The controller is asymmetric: up x1.5 here, down x0.875 on over-target,
+                        // and a kPaceCritical collapse throws the gap to 0 outright. On a sparse real model
+                        // (ResNet-50 trace: 96 work windows per filler, rings nearly empty) collapses fire
+                        // constantly, so at x1.25 with a floor of 64 the gap needed ~35-40 sweeps to climb back
+                        // and effectively never arrived -- the PACE distribution came out bimodal with 24-32%
+                        // of samples under 1 us. At x1.5 with a floor of 512 it is ~13 sweeps, roughly 3x
+                        // faster, without delaying the FIRST sweep (which is what moved the knee when the gap
+                        // was seeded high instead). See FINDINGS §N+44.
+                        uint32_t inc = gap >> 1;
+                        if (inc < 512u) {
+                            inc = 512u;
                         }
                         gap = (gap + inc > kGapMaxCycles) ? kGapMaxCycles : gap + inc;
                     } else if (mean_fill > kFillTarget) {

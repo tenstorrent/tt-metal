@@ -1463,9 +1463,18 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
         // does not grow, the OFF build is untouched, and the only behavioural cost is that a MOVER's largest
         // batch drops from 7 frames to 6 (a filler's batch is bounded by kGenSlots = 3 either way, so it is
         // unaffected). That cost is real and is measured in FINDINGS rather than waved off.
-        const uint32_t self_frames_cap = drisc_zones() ? drisc_zone_frames() : 0u;
-        const uint32_t nstage_drain = (self_frames_cap != 0 && nstage >= 3) ? nstage - 1u : nstage;
-        if (self_frames_cap != 0 && nstage < 3) {
+        // ROLE-AWARE self-frame budget. One shared cap starved the movers: they sample every ~1.3 us against a
+        // filler's ~157 us, so on ResNet-50 the 256-frame default stopped both movers ~20% into an 844 ms run
+        // and they NEVER came back -- the cap is permanent, not periodic, so nothing re-arms them. Measured
+        // need for full coverage of that run: filler 107 frames, mover 1,813-1,936 (~18x).
+        //
+        // Cost is NOT symmetric either, and the log line states it per drainer: full mover coverage was
+        // 13.0-14.9% of that mover's egress against 1.5% for a filler. So this buys completeness with real
+        // bytes; if that is too dear the cheaper lever is decimating the MOVER's sample interval (1.3 us
+        // resolution over 844 ms is far finer than any question needs), not shrinking the cap back.
+        const uint32_t self_frames_base = drisc_zones() ? drisc_zone_frames() : 0u;
+        const uint32_t nstage_drain = (self_frames_base != 0 && nstage >= 3) ? nstage - 1u : nstage;
+        if (self_frames_base != 0 && nstage < 3) {
             log_warning(
                 tt::LogMetal,
                 "[perf-debug profiler] Device {}: only {} staging slots fit, too few to spare one for DRISC "
@@ -1487,7 +1496,7 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
         // hand-copied 256 here would have silently overlapped the handshake.
         ctx.hs_addr[d] = ctx.results_addr[d] + kernel_profiler::SPSC_DRAIN_RESULT_WORDS * sizeof(uint32_t);
         TT_FATAL(
-            self_frames_cap == 0 || self_slot < nstage,
+            self_frames_base == 0 || self_slot < nstage,
             "perf-debug: DRISC self-profiling wants staging slot {} but only {} slots are mapped",
             self_slot,
             nstage);
@@ -1855,11 +1864,16 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 // the SAME coordinate space the worker cores stamp (virtual), because the host resolves a frame
                 // to a lane through one map keyed on exactly that. A DRISC guessing its own coordinates would
                 // be a second, silent way to get it wrong.
-                self_frames_cap != 0 ? 1u : 0u,
+                self_frames_base != 0 ? 1u : 0u,
                 drisc_zone_hold_cycles(),
                 (static_cast<uint32_t>(ctx.drisc_virtual[d].x) & 0xFFFFu) |
                     ((static_cast<uint32_t>(ctx.drisc_virtual[d].y) & 0xFFFFu) << 16),
-                self_frames_cap,
+                // A MOVER gets 16x the budget: it samples every ~1.3 us against a filler's ~157 us, so one
+                // shared cap covers a filler's whole run and cuts a mover off at ~20% of it. Measured need on
+                // ResNet-50 trace+2cq: 107 frames for a filler, 1,813-1,936 for a mover, so 256 -> 4,096 keeps
+                // comparable headroom at both ends. An explicit TT_METAL_PERF_DEBUG_DRISC_ZONE_FRAMES scales
+                // both roles together.
+                is_mover ? self_frames_base * 16u : self_frames_base,
                 drisc_zone_detail(),
                 noc_footprint()};
             const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
