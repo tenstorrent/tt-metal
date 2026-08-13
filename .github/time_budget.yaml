@@ -1,3 +1,14 @@
+# This file defines the maximum allowed timeout (in minutes) for tests
+# belonging to a given team and workflow.
+# These budgets are enforced during the load-test-matrix step in pipelines.
+
+# This is part of an effort to reorganize the pipelines for clearer resource allocation and ownership.
+
+# Entries are grouped by team -> pipeline -> sku (machine type in CI) : time_budget (in minutes)
+
+# Team names are currently assigned to tests by best guess.
+#   Please message #tt-metal-infra if there are any concerns.
+
 metal_infra:
   pr_gate:
     wh_n150_civ2: 0
