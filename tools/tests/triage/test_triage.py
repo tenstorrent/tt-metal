@@ -626,15 +626,13 @@ class TestTriage:
         return result
 
 
-MESH_SOCKET_FIFO_SIZE = 8192  # must match FIFO_SIZE in mesh_socket_hang.py
-
 
 @pytest.mark.parametrize(
     "cause_hang_with_app",
     [
         (
             HANG_APP_MESH_SOCKET,
-            [],
+            [str(8192)],
             {"min_devices": 2, "expect_running": True},
             15,  # measured launch-to-wedged: ~3.5s on a warm kernel cache, ~10s cold
         ),
@@ -664,18 +662,19 @@ class TestMeshSocketTriage:
         senders = [row for row in rows if row.role == "sender"]
         receivers = [row for row in rows if row.role == "receiver"]
 
-        # One socket pair each way, so one endpoint of each role per device.
-        assert len(senders) == 2, f"Expected 2 sender rows, got {[r.role for r in rows]}"
-        assert len(receivers) == 2, f"Expected 2 receiver rows, got {[r.role for r in rows]}"
-        assert len({device_of[id(r)] for r in senders}) == 2, "Expected the senders on different devices"
-        assert len({device_of[id(r)] for r in receivers}) == 2, "Expected the receivers on different devices"
+        # One 1:1 socket pair each way, plus a fan-out sender feeding two receiver cores. The fan-out
+        # sender is a single endpoint, so it contributes one row per downstream.
+        pair_senders = [row for row in senders if row.num_downstreams == 1]
+        fanout_senders = [row for row in senders if row.num_downstreams == 2]
+        assert len(pair_senders) == 2, f"Expected 2 paired sender rows, got {len(pair_senders)}"
+        assert len(fanout_senders) == 2, f"Expected 2 fan-out sender rows, got {len(fanout_senders)}"
+        assert len(receivers) == 4, f"Expected 4 receiver rows, got {len(receivers)}"
+        assert len({device_of[id(r)] for r in pair_senders}) == 2, "Expected the paired senders on different devices"
 
         for row in rows:
             # A row only carries the columns that live in its own config buffer.
             if row.role == "sender":
                 assert (row.sent_at_receiver, row.acked_at_receiver, row.read_ptr) == (None, None, None)
-                assert row.num_downstreams == 1
-                assert row.downstream == 0
             else:
                 assert (row.sent_at_sender, row.acked_at_sender, row.write_ptr) == (None, None, None)
                 assert (row.downstream_config_addr, row.downstream, row.num_downstreams) == (None, None, None)
@@ -685,17 +684,26 @@ class TestMeshSocketTriage:
             # Node is the endpoint's own fabric node, so it agrees with the device the row came from.
             assert row.node == f"chip{device_of[id(row)]}/mesh0"
 
-        # Downstream Addr is the documented join key: it names the peer receiver's config buffer.
-        by_config_addr = {row.config_addr: row for row in receivers}
-        assert len(by_config_addr) == 2, "Expected the two receivers to have distinct config buffers"
-        paired = {}
-        for snd in senders:
-            rcv = by_config_addr.get(snd.downstream_config_addr)
-            assert rcv is not None, f"Sender at {snd.config_addr:#x} points at no receiver row"
-            assert device_of[id(rcv)] != device_of[id(snd)], "Each socket should cross to the other device"
-            paired[id(snd)] = rcv
-        assert len({id(r) for r in paired.values()}) == 2, "Each sender must join a different receiver"
+        # The fan-out rows come from one endpoint, so they share its core and config buffer and differ
+        # only in which downstream they describe.
+        assert len({r.config_addr for r in fanout_senders}) == 1, "Fan-out rows should share one config buffer"
+        assert len({str(r.location) for r in fanout_senders}) == 1, "Fan-out rows should share one core"
+        assert sorted(r.downstream for r in fanout_senders) == [0, 1]
+        assert len({r.peer for r in fanout_senders}) == 2, "Each downstream should name its own receiver core"
 
-        # One socket wedged with a full fifo, one that never saw a byte.
-        sent = sorted(rcv.sent_at_receiver for rcv in paired.values())
+        # Downstream Addr is the documented join key: it names the peer receiver's config buffer. The
+        # fan-out receivers are pages of one buffer, so they share an address and both match.
+        receivers_by_config_addr: dict[int, list] = {}
+        for row in receivers:
+            receivers_by_config_addr.setdefault(row.config_addr, []).append(row)
+        for snd in senders:
+            matched = receivers_by_config_addr.get(snd.downstream_config_addr)
+            assert matched, f"Sender at {snd.config_addr:#x} points at no receiver row"
+            for rcv in matched:
+                assert device_of[id(rcv)] != device_of[id(snd)], "Each socket should cross to the other device"
+        assert len(receivers_by_config_addr[fanout_senders[0].downstream_config_addr]) == 2
+
+        # Of the two 1:1 sockets, one is wedged with a full fifo and one never saw a byte.
+        paired_receivers = [rcv for snd in pair_senders for rcv in receivers_by_config_addr[snd.downstream_config_addr]]
+        sent = sorted(rcv.sent_at_receiver for rcv in paired_receivers)
         assert sent == [0, MESH_SOCKET_FIFO_SIZE], f"Expected a starved and a backpressured receiver, got {sent}"
