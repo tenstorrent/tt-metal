@@ -1026,13 +1026,15 @@ each segment's `arrive`/`release` pair, then allocates one build-time
 `FusionSemaphoreBank`. Consecutive `uint32_t` words in that bank are assigned
 to the configs in deterministic insertion order.
 
-For the example tree, the cache ends up with three entries:
+For the example tree, the cache ends up with three entries. Word `i` lives at
+`base_address + 4 * i`. The five local flags occupy words 0-4; segment
+`arrive`/`release` pairs follow in insertion order. With base `0x1000`:
 
 | Cache Key | Scope | Bank words |
 |-----------|-------|------------|
-| `(release=16 cores, arrive=16 cores)` | All cores | arrive=0x1000, release=0x1004 |
-| `(release=8-left, arrive=8-left)` | Left branch | arrive=0x2000, release=0x2004 |
-| `(release=8-right, arrive=8-right)` | Right branch | arrive=0x3000, release=0x3004 |
+| `(release=16 cores, arrive=16 cores)` | All cores | arrive=0x1014, release=0x1018 |
+| `(release=8-left, arrive=8-left)` | Left branch | arrive=0x101C, release=0x1020 |
+| `(release=8-right, arrive=8-right)` | Right branch | arrive=0x1024, release=0x1028 |
 
 When `_build_group_barriers()` runs for each group, it looks up the cache.
 Both groups' seg_0 resolves to the
@@ -3080,7 +3082,10 @@ fall into category 3.  Python builtins and any type with a content-based
 | `models/experimental/ops/descriptors/fusion/codegen/args.py` | RT/CT/named arg merging + define handling + fp32 validation |
 | `models/experimental/ops/descriptors/fusion/codegen/builder.py` | Validation, barrier config, build orchestration |
 | `models/experimental/ops/descriptors/op_descriptor.py` | `OpDescriptor`, `_DeferredOutput`, `@OpDescriptor.create` decorator, `update()`, `LazyOutputList` |
+| `ttnn/cpp/ttnn/operations/experimental/fusion/device/fusion_semaphore_bank.hpp` | Command-lifetime lockstep-sharded L1 bank for fusion barrier words |
 | `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py` | Device tests (require hardware) |
 | `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_fusion_cache.py` | Build cache, program key cache, LRU eviction, generation counter, update API, deferred descriptor, named kwargs tests |
-| `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential_infra.py` | Standalone infrastructure tests (no hardware) |
+| `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential_infra.py` | Standalone infrastructure tests, including semaphore-bank coverage |
 | `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential_global_cb.py` | GlobalCircularBuffer fusion tests (require hardware) |
+| `tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py` | Fusion demo correctness tests |
+| `tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/fused_demo.md` | Demo suite writeup with inline/persistent performance numbers |

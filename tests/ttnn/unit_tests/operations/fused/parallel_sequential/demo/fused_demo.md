@@ -4,29 +4,13 @@ Eight demos showcasing different fusion capabilities on Tenstorrent Wormhole har
 
 **Test file:** `tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py`
 
-Normal pytest runs exercise correctness only (`perf_mode="none"`). The current
-E2E and device-profiler benchmarks for Demos 1-4 and the barrier microbenchmark
-are separate manual tests gated by `TT_METAL_RUN_FUSION_SLIDE_PERF=1`:
+Normal pytest runs exercise correctness only (`perf_mode="none"`). The tables
+below report E2E and device-profiler measurements taken on Wormhole n150
+(single chip).
 
 ```bash
-# Run correctness tests:
 python -m pytest tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py -xvs
-
-# Run one steady-state slide benchmark mode:
-TT_METAL_RUN_FUSION_SLIDE_PERF=1 python -m pytest \
-  tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py \
-  -k "slide_parallel_chains_e2e and persistent" -q -s
-
-# Capture one mode-specific device profile:
-TT_METAL_RUN_FUSION_SLIDE_PERF=1 \
-TT_METAL_DEVICE_PROFILER=1 \
-TT_METAL_PROFILER_CPP_POST_PROCESS=1 \
-python -m pytest \
-  'tests/ttnn/unit_tests/operations/fused/parallel_sequential/demo/test_fused_demo.py::TestPerfDemos::test_slide_parallel_chains_fused_device_fw[mode=inline]' \
-  -q
 ```
-
-All timing measured on Wormhole n300 (single chip), BF16.
 
 ## Perf Modes
 
@@ -42,9 +26,9 @@ FW attribution spans an idle gap between unfused dispatches.
 
 ### `e2e` — What does the user see in steady state?
 
-Measured by the slide benchmark tests: 5 warmup iterations (discarded), then the median of seven 100-iteration trials, all caches warm. This captures steady-state pipelined throughput, including host descriptor/container work, dispatch overhead, `fusion_dispatch_op` argument patching, and device execution. It is not single-request latency.
+Measured with 5 warmup iterations (discarded), then the median of seven 100-iteration trials, all caches warm. This captures steady-state pipelined throughput, including host descriptor/container work, dispatch overhead, `fusion_dispatch_op` argument patching, and device execution. It is not single-request latency.
 
-The August 2026 refresh reports both current fusion usage modes:
+Results are reported for both fusion usage modes:
 
 - **Inline:** recreate the descriptors and container each iteration, then use the warm fusion build cache.
 - **Persistent:** create descriptors and the container once, call `update()` for the activation, and reuse the container's hot dispatch path.
@@ -207,10 +191,9 @@ out_a, out_b = Parallel(
 
 **Program configs:** LN/RMS on 1x8 grids, matmul `MatmulMultiCoreReuseProgramConfig`. `fp32=True`, `math_approx=False`, `HiFi4`.
 
-**August 11, 2026 refresh.** Unfused median-position breakdown: LN
-FW=42.114 us + matmul FW=17.935 us + RMS FW=26.980 us + matmul
-FW=17.893 us; median total FW=104.952 us. Unfused runs four sequential
-dispatches on a single `(0,0)`-based grid.
+Unfused median-position breakdown: LN FW=42.114 us + matmul FW=17.935 us +
+RMS FW=26.980 us + matmul FW=17.893 us; median total FW=104.952 us. Unfused
+runs four sequential dispatches on a single `(0,0)`-based grid.
 
 | Metric | Fused Inline | Fused Persistent | Unfused | Inline speedup | Persistent speedup |
 |--------|-------------:|-----------------:|--------:|---------------:|-------------------:|
@@ -218,9 +201,9 @@ dispatches on a single `(0,0)`-based grid.
 | Device kernel | 67.289 us | 67.140 us | 102.387 us | **1.522x** | **1.525x** |
 | E2E | 0.694 ms | 0.180 ms | 0.280 ms | 0.403x | **1.552x** |
 
-Inline and Persistent were captured in independent repeated-dispatch profiler
-runs. Their median FW durations differ by 0.172 us (0.25%) and kernel durations
-by 0.149 us (0.22%), confirming equivalent device execution within run noise.
+Inline and Persistent median FW durations differ by 0.172 us (0.25%) and
+kernel durations by 0.149 us (0.22%), confirming equivalent device execution
+within run noise.
 
 The **1.54x device speedup** demonstrates the intended parallelism: both chains
 overlap on disjoint core columns. Persistent E2E throughput realizes that benefit
@@ -271,10 +254,9 @@ ll, lr, rl, rr = Sequential(
 
 **Program configs:** LN sharded, matmul `MatmulMultiCoreReuseProgramConfig`, slice tile-path with named CT args. `fp32=True`, `math_approx=False`, `HiFi4`.
 
-**August 11, 2026 refresh.** Unfused median-position breakdown (13 dispatches):
-stem LN FW=39.817 us + two slices FW=11.876 us + two matmuls FW=35.688 us +
-four leaf slices FW=11.640 us + four leaf LNs FW=97.562 us; median total
-FW=196.600 us.
+Unfused median-position breakdown (13 dispatches): stem LN FW=39.817 us +
+two slices FW=11.876 us + two matmuls FW=35.688 us + four leaf slices
+FW=11.640 us + four leaf LNs FW=97.562 us; median total FW=196.600 us.
 
 | Metric | Fused Inline | Fused Persistent | Unfused | Inline speedup | Persistent speedup |
 |--------|-------------:|-----------------:|--------:|---------------:|-------------------:|
@@ -282,9 +264,9 @@ FW=196.600 us.
 | Device kernel | 117.990 us | 116.994 us | 186.433 us | **1.580x** | **1.594x** |
 | E2E | 1.672 ms | 0.264 ms | 0.978 ms | 0.585x | **3.701x** |
 
-Inline and Persistent were captured independently here as well. Their median FW
-durations differ by 1.027 us (0.86%) and kernel durations by 0.996 us (0.84%),
-consistent with the same generated program under run-to-run memory/system noise.
+Inline and Persistent median FW durations differ by 1.027 us (0.86%) and
+kernel durations by 0.996 us (0.84%), consistent with the same generated
+program under run-to-run memory/system noise.
 
 The **1.64-1.66x device speedup** comes from branch parallelism across disjoint
 core subsets. Persistent mode also collapses 13 host submissions into one and
@@ -331,11 +313,8 @@ left_out, right_out = Sequential(
 
 **Program configs:** LN/RMS `LayerNormShardedMultiCoreProgramConfig`, slice tile-path. `fp32=True`, `math_approx=False`, `HiFi4`.
 
-**Current status:** this fused case is skipped on current main because its
-generated kernel configuration is 75,520 bytes, exceeding the 70,656-byte
-kernel-config buffer. The old performance table has been removed rather than
-mixing stale fused data with current unfused measurements. Restore the
-comparison only after the fused case builds and passes correctness again.
+This fused case is skipped: its generated kernel configuration is 75,520 bytes,
+exceeding the 70,656-byte kernel-config buffer.
 
 ---
 

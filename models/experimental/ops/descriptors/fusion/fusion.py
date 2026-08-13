@@ -65,6 +65,7 @@ from models.experimental.ops.descriptors.op_descriptor import (
 )
 from models.experimental.ops.descriptors.fusion.common import (
     _SemaphoreSpec,
+    _allocate_fusion_semaphore_bank,
     _get_risc_type,
 )
 
@@ -565,17 +566,6 @@ def _cleanup_persistent_ops(ops) -> None:
             updated.clear()
             if op.output_tensors:
                 op.output_tensors = []
-
-
-def _allocate_fusion_semaphore_bank(device, sem_specs):
-    """Allocate one command-lifetime L1 bank for all fusion barrier words."""
-    if not sem_specs:
-        return None
-    return ttnn._ttnn.operations.experimental.FusionSemaphoreBank(
-        device,
-        [spec.core_ranges for spec in sem_specs],
-        [spec.initial_value for spec in sem_specs],
-    )
 
 
 def _container_run(container: Any, results, device=None, kernel_dir: Optional[str] = None):

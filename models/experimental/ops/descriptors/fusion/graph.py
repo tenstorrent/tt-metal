@@ -34,6 +34,7 @@ from models.experimental.ops.descriptors.fusion.common import (
     _BuildResult,
     _NOOP_OP,
     _SemaphoreSpec,
+    _allocate_fusion_semaphore_bank,
     _core_range_set_to_coords,
     _core_ranges_key,
     _coords_to_core_range_set,
@@ -425,11 +426,7 @@ class OpGraphBuilder:
         # Use one temporary lockstep-sharded L1 tensor to assign real, distinct
         # build-time addresses. Dispatches always allocate and patch their own
         # command-lifetime bank.
-        semaphore_bank = ttnn._ttnn.operations.experimental.FusionSemaphoreBank(
-            device,
-            [spec.core_ranges for spec in sem_specs],
-            [spec.initial_value for spec in sem_specs],
-        )
+        semaphore_bank = _allocate_fusion_semaphore_bank(device, sem_specs)
         sem_addrs = list(semaphore_bank.addresses)
 
         compute_done_addr, writer_done_addr, reset_done_addr, pack_drained_addr, math_drained_addr = sem_addrs[:5]

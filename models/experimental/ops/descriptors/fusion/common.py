@@ -91,6 +91,17 @@ class _SemaphoreSpec:
     initial_value: int = 0
 
 
+def _allocate_fusion_semaphore_bank(device, sem_specs):
+    """Allocate one command-lifetime L1 bank for all fusion barrier words."""
+    if not sem_specs:
+        return None
+    return ttnn._ttnn.operations.experimental.FusionSemaphoreBank(
+        device,
+        [spec.core_ranges for spec in sem_specs],
+        [spec.initial_value for spec in sem_specs],
+    )
+
+
 class _BuildResult:
     """Internal intermediate result from building a fused descriptor.
 
@@ -277,6 +288,7 @@ __all__ = [
     "_BuildResult",
     "_NOOP_OP",
     "_SemaphoreSpec",
+    "_allocate_fusion_semaphore_bank",
     "_core_range_set_to_coords",
     "_core_ranges_key",
     "_coords_to_core_range_set",
