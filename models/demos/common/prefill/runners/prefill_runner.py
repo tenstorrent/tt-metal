@@ -39,7 +39,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
-from models.demos.common.prefill.runners.migration import serialize_device_map
+from models.demos.common.prefill.runners.migration import migration_file_export_enabled, serialize_device_map
 from models.demos.common.prefill.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
@@ -703,6 +703,7 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "max_seq_len": MAX_SEQ_LEN,
         "num_users": NUM_USERS,
         "mesh_shape": GLOBAL_MESH_SHAPE,
+        "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
     }
     fingerprint = "|".join(f"{k}={v}" for k, v in fields.items())
     digest = zlib.crc32(fingerprint.encode()) & 0x7FFFFFFF
@@ -899,7 +900,6 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     _mock_migration = os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1"
     _migration_enabled = os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1" or _selftest
     _interleaved = os.environ.get("PREFILL_MIGRATION_INTERLEAVED", "0") == "1"
-    from models.demos.common.prefill.runners.migration import migration_file_export_enabled
 
     _file_export = migration_file_export_enabled()
     # The selftest/interleaved paths drive migrate()/wait_complete() through the MigrationLayerClient,
