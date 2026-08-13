@@ -36,59 +36,45 @@ namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
 namespace {
 
-// ---------------------------------------------------------------------------------------------
-// L1 layout — identical on every tensix core of every device in the mesh.
-//
-// Uniformity is load-bearing: a producer on chip A addresses the drain sink of the peer worker on chip B
-// without knowing anything about B's harvesting or eth positions. All offsets are relative to the L1
-// unreserved base (uniform for a given arch/config).
-// ---------------------------------------------------------------------------------------------
-constexpr uint32_t PKT_HDR_DRAIN_OFF = 0x0000;  // scratch header for the drain's filler packets
-// Target of the drain's value-0 atomic increments. A remote atomic inc needs a real L1 address on the
-// far chip; nothing ever reads this word, which is exactly the point.
+// L1 layout, identical on every tensix core of every device in the mesh. Uniformity is load-bearing: a
+// producer on chip A addresses the drain sink of the peer worker on chip B without knowing anything about
+// B's harvesting or eth positions. Offsets are relative to the L1 unreserved base.
+constexpr uint32_t PKT_HDR_DRAIN_OFF = 0x0000;
+// Target of the drain's value-0 atomic increments: a remote atomic inc needs a real L1 address on the far
+// chip, and nothing ever reads this word.
 constexpr uint32_t DRAIN_SINK_OFF = 0x0400;
-// 1 kB of per-worker telemetry, in the gap before the source ring, so it costs the payload nothing.
-// Sized for expansion; the current record is 22 words.
-constexpr uint32_t TELEMETRY_OFF = 0x0800;
-constexpr uint32_t TELEMETRY_SIZE = 0x0400;
-constexpr uint32_t PROD_BUF_OFF = 0x1000;  // the reader -> producer token ring
-constexpr uint32_t L1_SLACK = 0x1000;      // keep clear of whatever sits at the very top of L1
-// Every ring slot carries the token plus a fixed metadata tail the reader fills in for the producer.
-// 64 rather than the 32 currently used keeps the slot stride DRAM-aligned (14336 + 64 = 64 * 225), which
-// is what lets phase 9 point a fabric write straight at a (token_size + 64)-byte forwarding-buffer page.
-// Tail layout, all uint64_t so the producer can consume it without sub-word loads:
-//   [ 0.. 7] final destination DRAM address on the FINAL destination chip
+constexpr uint32_t PROD_BUF_OFF = 0x1000;
+constexpr uint32_t L1_SLACK = 0x1000;
+// Ring slot = token + metadata tail. 64 rather than the 32 in use keeps the slot stride DRAM-aligned
+// (14336 + 64 = 64 * 225), which lets a fabric write target a (token_size + 64)-byte forwarding page
+// directly. Tail layout, all uint64_t so the producer needs no sub-word loads:
+//   [ 0.. 7] final destination DRAM address, on the final destination chip
 //   [ 8..15] final destination chip id
-//   [16..23] command word: 1 = write to the address at [24..31], 2 = forward (phase 9)
+//   [16..23] command: 1 = write to the address at [24..31], 2 = forward
 //   [24..31] the address this hop writes to
 //   [32..63] reserved
 constexpr uint32_t CMBF2D_SLOT_TAIL_BYTES = 64;
-// Forwarded tokens between semaphore bumps to the downstream reader. A bump always follows a sentinel
-// regardless, so this only sets how finely the downstream reader can pipeline within a chunk. Hardcoded
-// for P9.2 correctness; P9.3 promotes it to an op parameter and sweeps it.
-constexpr uint32_t CMBF2D_FWD_BUMP_EVERY = 8;
+// Depth of the reader -> producer L1 ring, in tokens. Slots move in half-ring batches so one half can be
+// refilled while the other drains.
+constexpr uint32_t CMBF2D_NUM_L1_SLOTS = 8;
+constexpr uint32_t CMBF2D_BATCH = CMBF2D_NUM_L1_SLOTS / 2;
 static_assert(PKT_HDR_DRAIN_OFF < DRAIN_SINK_OFF, "drain sink overlaps the drain packet header");
-static_assert(DRAIN_SINK_OFF < TELEMETRY_OFF, "telemetry region overlaps the drain sink");
-static_assert(TELEMETRY_OFF + TELEMETRY_SIZE <= PROD_BUF_OFF, "telemetry region overlaps the token ring");
+static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring");
 
-// ---------------------------------------------------------------------------------------------
-// Forwarding buffer (phase 9): DRAM staging for tokens passing THROUGH this chip.
+// Forwarding buffer: DRAM staging for tokens passing THROUGH this chip. The op forwards multi-hop traffic
+// itself rather than asking the fabric to, so a packet only ever travels one hop; anything bound further
+// lands in the next chip's forwarding buffer and is re-sent from there.
 //
-// Phase 9 stops the fabric forwarding multi-hop packets and does it in the op instead. A producer's
-// packets then only ever travel one hop, so anything bound further lands in the NEXT chip's forwarding
-// buffer and is re-sent from there.
+// The buffer is quartered by (routing plane, send direction), the pair that uniquely identifies the
+// upstream producer from the downstream chip's point of view. Each quarter holds fwd_chunks_per_quarter
+// chunks of fwd_pages_per_chunk pages, and a chunk's last used page is a sentinel marking its end, so a
+// chunk need not be filled to capacity.
 //
-// Geometry. The buffer is quartered by (routing plane, send direction) — the pair that uniquely identifies
-// the upstream producer from the downstream chip's point of view — and each quarter holds
-// `fwd_chunks_per_quarter` chunks of `fwd_pages_per_chunk` pages. The last page a chunk actually uses is a
-// sentinel marking its end, so a chunk need not be filled to capacity.
-//
-// Chunk count per quarter: a chunk arriving at C in one direction is one (source, destination) pair whose
-// path passes through C and continues. Summing over upstream distance k >= 1 of the movements from that
-// source whose distance exceeds k gives sum_{k=1..H-1} (H-k) = H(H-1)/2, where H = extent/2. That is 6 for
-// an 8-ring, matching the plan. It is the worst case of the two directions: the direction that does NOT
-// carry the diametrically-opposite chip needs only (H-1)(H-2)/2, but both quarters are sized alike.
-// ---------------------------------------------------------------------------------------------
+// Chunks per quarter: a chunk arriving at C in one direction is one (source, destination) pair whose path
+// passes through C and continues. Summing over upstream distance k >= 1 the movements from that source
+// whose distance exceeds k gives sum_{k=1..H-1} (H-k) = H(H-1)/2 for H = extent/2. That is the worse of the
+// two directions — the one not carrying the diametrically-opposite chip needs only (H-1)(H-2)/2 — and both
+// quarters are sized alike.
 uint32_t fwd_chunks_per_quarter(uint32_t extent) {
     const uint32_t half = extent / 2;
     return half * (half - 1) / 2;
@@ -106,23 +92,19 @@ uint32_t fwd_total_chunks(uint32_t extent, uint32_t num_links) {
 constexpr uint32_t CMBF2D_META_PREFETCH = 64;
 constexpr uint32_t CMBF2D_META_PAD_STRIDE = 64;
 
-// Pages a chunk can hold. Phase 10 makes chunk lengths DATA-DEPENDENT: a chunk is one producer's share of
-// one (origin chip -> this chip) run merged over the experts it serves, and how many tokens that is depends
-// on where the router happened to send things. Only the expectation is known here:
+// Pages a chunk can hold. Chunk lengths are data-dependent — a chunk is one producer's share of one
+// (origin chip -> this chip) run merged over the experts it serves — so only the expectation is known here:
 //
 //     avg tokens per chunk = seq_len_per_chip * num_experts_per_tok
 //                            / (num_dispatch_groups * dispatch_group_size * num_links)
 //
-// (each token picks num_experts_per_tok experts; each expert lives in one dispatch group and on one chip of
-// it, so a (origin, destination) pair carries 1/(NDG * dgs) of the traffic, split again across the planes).
-// For the 8x4 prefill shape that is 640*2/(4*8*2) = 20 tokens, and it scales linearly with seq.
+// each token picks num_experts_per_tok experts, each expert lives on one chip of one dispatch group, so an
+// (origin, destination) pair carries 1/(NDG * dgs) of the traffic, split again across the planes.
 //
-// We provision 4x the mean plus the sentinel. That is a HEURISTIC, good for the roughly-balanced traffic
-// random routing produces: the measured spread of tokens per (origin, destination) pair is max/mean 1.43 at
-// seq 640 and tighter as seq grows, and the binomial tail concentrates further. It is NOT a bound. Sizing
-// the buffer properly — and handling the case where a chunk does not fit — is a later stage; until then an
-// overflow would silently scribble on the next chunk, which is why the reader carries a development-only
-// overflow counter.
+// WARNING: provisioning 4x the mean is a heuristic, NOT a bound. It suits the roughly balanced traffic
+// random routing produces (measured spread of tokens per (origin, destination) pair is max/mean 1.43 at seq
+// 640, tighter as seq grows), but a chunk that does not fit would silently overwrite the next one. Nothing
+// detects that yet.
 uint32_t fwd_pages_per_chunk(
     uint32_t seq_len_per_chip,
     uint32_t num_experts_per_tok,
@@ -133,45 +115,6 @@ uint32_t fwd_pages_per_chunk(
     const uint32_t mean = (seq_len_per_chip * num_experts_per_tok + denom - 1) / denom;
     return 4 * mean + 1;
 }
-
-// Telemetry record word layout, shared with the producer kernel. Kept explicit (rather than a struct)
-// because the kernel writes it by index and the host reads it by index.
-enum TelemetryWord : uint32_t {
-    TELEM_MAGIC = 0,  // written LAST by the kernel; zeroed at kernel entry
-    TELEM_TOKENS_SENT = 1,
-    TELEM_TOKEN_SIZE = 2,
-    TELEM_NUM_L1_SLOTS = 3,
-    TELEM_T_START_LO = 4,  // written by the READER at its first DRAM read: the effective-BW window opens
-    TELEM_T_START_HI = 5,
-    TELEM_T_FIRST_SEND_LO = 6,
-    TELEM_T_FIRST_SEND_HI = 7,
-    TELEM_T_LAST_SEND_LO = 8,
-    TELEM_T_LAST_SEND_HI = 9,
-    TELEM_T_DRAINED_LO = 10,  // when the EDM drain proved every packet reached the far chip
-    TELEM_T_DRAINED_HI = 11,
-    TELEM_EDM_SLOTS = 12,      // EDM sender-channel buffer slots (the send pipeline's depth)
-    TELEM_DRAIN_PACKETS = 13,  // header-only fillers the drain pushed (= edm_slots - 1)
-    TELEM_OUT_BASE_PAGE = 14,  // first page written in the PEER chip's output region
-    TELEM_BATCH = 15,          // ring slots claimed/released per trip
-    // Stall attribution: where the producer's cycles actually go. Three disjoint buckets on the same wall
-    // clock as the timestamps above, so they are directly comparable to the send window.
-    TELEM_WAIT_SLOT_CY_LO = 16,  // blocked in wait_for_empty_write_slot => the eth side is the limiter
-    TELEM_WAIT_SLOT_CY_HI = 17,
-    TELEM_ISSUE_CY_LO = 18,  // issuing the payload: header stamp + 2 NoC writes
-    TELEM_ISSUE_CY_HI = 19,
-    TELEM_RING_WAIT_CY_LO = 20,  // blocked on the reader => the DRAM read side is the limiter
-    TELEM_RING_WAIT_CY_HI = 21,
-    // Whole-kernel span: producer entry (before the fabric connection open) to exit (after teardown).
-    // The send loop alone is t_last_send - t_first_send; this is the number total-time work reduces.
-    TELEM_T_KERNEL_START_LO = 22,
-    TELEM_T_KERNEL_START_HI = 23,
-    TELEM_T_KERNEL_END_LO = 24,
-    TELEM_T_KERNEL_END_HI = 25,
-    TELEM_NUM_WORDS = 26,
-};
-// Bumped whenever the record layout changes, so a stale record from an older kernel reads as invalid
-// instead of being misparsed.
-constexpr uint32_t TELEMETRY_MAGIC = 0xCF2D0006u;
 
 // ---------------------------------------------------------------------------------------------
 // Physical-column geometry
@@ -392,22 +335,14 @@ private:
 struct L1Layout {
     uint32_t pkt_hdr_drain;
     uint32_t drain_sink;
-    uint32_t telemetry;
     uint32_t ring;          // num_l1_slots tokens, filled by the reader and drained by the producer
     uint32_t pkt_hdr_ring;  // one prebuilt payload header per ring slot
-    // Phase 10: the reader's copy of the control tensors, read once at startup and then indexed from L1.
+    // The reader's copy of the control tensors, read once at startup and then indexed from L1.
     // Laid out as [expert_offsets: dispatch_group_size x num_routed_experts][counts: num_routed_experts]
     // [region_offsets: num_routed_experts], all uint32. Unlike everything above it, nothing on another chip
     // addresses this, so it can sit at the end — but it is still computed identically everywhere.
     uint32_t control;
 };
-
-// The telemetry address depends only on the L1 base, so the readback path can resolve it without any of
-// the run's sizing.
-uint32_t telemetry_addr(ttnn::MeshDevice* mesh) {
-    return static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1)) +
-           TELEMETRY_OFF;
-}
 
 L1Layout compute_l1_layout(
     ttnn::MeshDevice* mesh,
@@ -420,7 +355,6 @@ L1Layout compute_l1_layout(
     L1Layout l;
     l.pkt_hdr_drain = base + PKT_HDR_DRAIN_OFF;
     l.drain_sink = base + DRAIN_SINK_OFF;
-    l.telemetry = base + TELEMETRY_OFF;
     l.ring = base + PROD_BUF_OFF;
     // One prebuilt header per ring slot, past the ring itself. A slot is the token plus its metadata tail.
     l.pkt_hdr_ring = l.ring + num_l1_slots * (token_size_bytes + CMBF2D_SLOT_TAIL_BYTES);
@@ -468,13 +402,9 @@ uint32_t ring_offset(const ttnn::MeshCoordinate& from, const ttnn::MeshCoordinat
     return (to[static_cast<int32_t>(axis)] + extent - from[static_cast<int32_t>(axis)]) % extent;
 }
 
-// Split this device's destinations across its producers.
-//
-// Since P9.2 the op does its own forwarding: every packet travels exactly ONE hop, to the chip across the
-// sending producer's own cable, and the next hop is decided by the downstream reader. So the DIRECTION a
-// destination is served from is ours to choose — it is simply which producer we hand it to. (In P8 it was
-// not: `fabric_set_unicast_route` stamped a precomputed per-destination path, and injecting on a cable that
-// was not that path's first hop landed the packet on the wrong chip.)
+// Split this device's destinations across its producers. Because every packet travels exactly one hop and
+// the next hop is the downstream reader's decision, the direction a destination is served from is ours to
+// choose: it is simply which producer we hand it to.
 //
 // With R chips on the ring and H = R/2:
 //   * the producer whose cable steps +1 takes ring offsets +1 .. +(H-1);
@@ -483,17 +413,15 @@ uint32_t ring_offset(const ttnn::MeshCoordinate& from, const ttnn::MeshCoordinat
 //     2*num_links producers — a quarter of every run each.
 // Within one ring offset the `num_links` planes split each run between them.
 //
-// That balances the link load at H^2/2 tokens per direction instead of H(H+1)/2 and H(H-1)/2 — 8x instead
-// of 10x and 6x on an 8-ring, a 20% cut in the bottleneck. Every producer serves m = H destinations, so the
-// forwarding geometry (incoming = m(m-1)/2 chunks per quarter, own forwarding m-1, re-forwarded
-// (m-1)(m-2)/2) is uniform too.
+// That balances the link load at H^2/2 tokens per direction rather than H(H+1)/2 and H(H-1)/2 — 8x instead
+// of 10x and 6x on an 8-ring, a 20% cut in the bottleneck — and makes the forwarding geometry uniform, m = H
+// destinations per producer.
 //
-// The same-chip destination (ring offset 0) is deliberately absent: it needs no cable, so it is not a
-// producer's work. Each core does its quarter of it directly, after the fabric work — see the local phase
-// in the reader.
+// Ring offset 0 is deliberately absent: the same-chip destination needs no cable, so each core does its
+// quarter of it directly after the fabric work (see the local phase in the reader).
 //
-// Phase 10: nothing here reads the control tensors. The split is pure ring geometry plus a fraction, which
-// is what lets it stay a host-side decision even though the token counts are only known on device.
+// The split is pure ring geometry plus a fraction, which is what keeps it a host-side decision even though
+// token counts are only known on device.
 std::map<CoreCoord, std::vector<ProducerAssignment>> assign_destinations_to_producers(
     const CombineFabric2dParams& args,
     const ttnn::MeshCoordinate& coord,
@@ -533,7 +461,7 @@ std::map<CoreCoord, std::vector<ProducerAssignment>> assign_destinations_to_prod
                 .split_count = split_count});
         };
 
-        // Nearest destination first. The work schedule below reorders this if assignment_order asks, which
+        // Nearest destination first; the work schedule below reorders this, which
         // is why the order is not baked into the kernel.
         for (uint32_t k = 1; k < half; k++) {
             claim(forward ? k : extent - k, wp.link_idx, args.num_links);
@@ -562,7 +490,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     PlacementCache& placements,
     const std::map<uint32_t, ttnn::MeshCoordinate>& chip_to_coord,
     const L1Layout& l1,
-    uint32_t batch,
     uint32_t ring_filled_addr,
     uint32_t ring_freed_addr,
     uint32_t fwd_arrived_addr,
@@ -582,8 +509,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     const auto self_node = mesh->get_fabric_node_id(coord);
     const uint32_t dram_out_addr = static_cast<uint32_t>(dram_out_buf->address());
     const uint32_t dram_in_addr = static_cast<uint32_t>(dram_in_buf->address());
-    // Op-internal forwarding staging. Passed to both kernels from P9.1 so the plumbing is in place and
-    // verified; P9.2 is what starts writing to it.
     const uint32_t dram_fwd_addr = static_cast<uint32_t>(dram_fwd_buf->address());
     const uint32_t dram_meta_addr = static_cast<uint32_t>(dram_meta_buf->address());
     const uint32_t dram_counts_addr = static_cast<uint32_t>(dram_counts_buf->address());
@@ -732,7 +657,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         }
     }
 
-    std::string summary;
     for (const auto& [eth_logical, wp] : self_placement.by_eth_logical) {
         const ttnn::MeshCoordinate& far_coord = far_coord_by_eth.at(eth_logical);
         const CoreCoord peer_virtual = peer_virtual_by_eth.at(eth_logical);
@@ -765,30 +689,20 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         // the upstream writer fills a quarter's chunks in order and we read them the same way.
         std::vector<uint32_t> schedule;
         constexpr uint32_t SCHED_FWD = 0x80000000u;
-        if (args.assignment_order == 0) {
-            // Nearest destination first, then every forwarding chunk.
-            for (uint32_t i = 0; i < m; i++) {
-                schedule.push_back(i);
-            }
-            for (uint32_t c = 0; c < num_incoming_chunks; c++) {
-                schedule.push_back(SCHED_FWD | c);
-            }
-        } else {
-            // Furthest first with forwarding interleaved, so downstream cores get work as early as possible.
-            // After the j-th own assignment (1-based) the cumulative number of forwarding chunks emitted is
-            // the triangular number T(j-2) = (j-2)(j-1)/2 — which for m=4 reproduces exactly
-            //   own3, own2, fwd0, own1, fwd1, fwd2, own0, fwd3, fwd4, fwd5.
-            uint32_t emitted_fwd = 0;
-            for (uint32_t j = 1; j <= m; j++) {
-                schedule.push_back(m - j);  // own assignments furthest -> nearest
-                const uint32_t want = (j >= 2) ? (j - 2) * (j - 1) / 2 : 0;
-                for (; emitted_fwd < want && emitted_fwd < num_incoming_chunks; emitted_fwd++) {
-                    schedule.push_back(SCHED_FWD | emitted_fwd);
-                }
-            }
-            for (; emitted_fwd < num_incoming_chunks; emitted_fwd++) {
+        // Furthest destination first with forwarding interleaved, so downstream cores get work as early as
+        // possible. After the j-th own assignment (1-based) the cumulative number of forwarding chunks
+        // emitted is the triangular number T(j-2) = (j-2)(j-1)/2, which for m=4 gives
+        //   own3, own2, fwd0, own1, fwd1, fwd2, own0, fwd3, fwd4, fwd5.
+        uint32_t emitted_fwd = 0;
+        for (uint32_t j = 1; j <= m; j++) {
+            schedule.push_back(m - j);
+            const uint32_t want = (j >= 2) ? (j - 2) * (j - 1) / 2 : 0;
+            for (; emitted_fwd < want && emitted_fwd < num_incoming_chunks; emitted_fwd++) {
                 schedule.push_back(SCHED_FWD | emitted_fwd);
             }
+        }
+        for (; emitted_fwd < num_incoming_chunks; emitted_fwd++) {
+            schedule.push_back(SCHED_FWD | emitted_fwd);
         }
         TT_FATAL(
             schedule.size() == m + num_incoming_chunks,
@@ -806,7 +720,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         prod.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         prod.core_ranges = CoreRangeSet(CoreRange(wp.worker_logical));
         prod.compile_time_args = {
-            args.num_l1_slots,
+            CMBF2D_NUM_L1_SLOTS,
             token_size_bytes,
             CMBF2D_SLOT_TAIL_BYTES,
             static_cast<uint32_t>(wp.peer_node.chip_id),
@@ -817,10 +731,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             l1.pkt_hdr_ring,
             l1.pkt_hdr_drain,
             l1.drain_sink,
-            l1.telemetry,
-            args.stall_telemetry,
             dram_out_addr,
-            batch,
+            CMBF2D_BATCH,
             ring_filled_addr,
             ring_freed_addr,
             static_cast<uint32_t>(wp.worker_virtual.x),
@@ -830,11 +742,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             static_cast<uint32_t>(fwd_worker.x),
             static_cast<uint32_t>(fwd_worker.y),
             fwd_arrived_addr,
-            args.fwd_bump_every,
         };
-        // The producer no longer needs the assignment table: every send is one hop to its own cable's peer,
-        // and both the command and the destination address arrive per token in the slot's metadata tail.
-        // TensorAccessorArgs for the interleaved output buffer (compile-time config).
         tt::tt_metal::TensorAccessorArgs(dram_out_buf).append_to(prod.compile_time_args);
         prod.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -853,16 +761,15 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         rdr.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         rdr.core_ranges = CoreRangeSet(CoreRange(wp.worker_logical));
         rdr.compile_time_args = {
-            args.num_l1_slots,
+            CMBF2D_NUM_L1_SLOTS,
             token_size_bytes,
             CMBF2D_SLOT_TAIL_BYTES,
-            batch,
+            CMBF2D_BATCH,
             l1.ring,
             ring_filled_addr,
             ring_freed_addr,
             static_cast<uint32_t>(wp.worker_virtual.x),
             static_cast<uint32_t>(wp.worker_virtual.y),
-            l1.telemetry,
             dram_in_addr,
             dram_out_addr,
             dram_fwd_addr,
@@ -874,7 +781,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             static_cast<uint32_t>(wp.peer_node.chip_id),  // the chip one hop away, across our own cable
             static_cast<uint32_t>(my_assignments.size()),
             static_cast<uint32_t>(schedule.size()),
-            // ---- Phase 10: what to move is in the control tensors, so the reader needs their addresses and
+            // ---- What to move is in the control tensors, so the reader needs their addresses and
             // the shape constants to index them with.
             dram_meta_addr,
             dram_counts_addr,
@@ -936,127 +843,12 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             rt.append(rt_raw);
             desc.kernels[prod_id].emplace_runtime_args(wp.worker_logical, rt);
         }
-
-        std::string alist;
-        for (const auto& a : my_assignments) {
-            alist += fmt::format(
-                "{}off{} row{} chip{} slice {}/{}",
-                alist.empty() ? "" : ",",
-                a.ring_offset,
-                a.dst_row,
-                a.dst_chip_id,
-                a.split_idx,
-                a.split_count);
-        }
-        summary += fmt::format(
-            "{}[eth({},{}) phys_x {} link {} -> worker logical ({},{}) phys ({},{}){} nbr {} virt ({},{}) | {}]",
-            summary.empty() ? "" : " ",
-            eth_logical.x,
-            eth_logical.y,
-            wp.eth_phys_x,
-            wp.link_idx,
-            wp.worker_logical.x,
-            wp.worker_logical.y,
-            wp.worker_physical.x,
-            wp.worker_physical.y,
-            wp.in_eth_column ? "" : " RELOCATED",
-            far_coord,
-            peer_virtual.x,
-            peer_virtual.y,
-            alist);
     }
 
-    log_info(
-        tt::LogOp,
-        "combine_fabric2d {} {}: {} reader+producer pair(s): {}",
-        coord,
-        self_node,
-        self_placement.by_eth_logical.size(),
-        summary);
     return desc;
 }
 
 }  // namespace
-
-CombineFabric2dTelemetry read_telemetry(ttnn::MeshDevice* mesh_device, uint32_t num_links, uint32_t axis) {
-    TT_FATAL(mesh_device != nullptr, "combine_fabric2d read_telemetry: mesh_device is null");
-    const auto mesh_shape = mesh_device->shape();
-    TT_FATAL(axis < mesh_shape.dims(), "combine_fabric2d: axis {} out of range for mesh shape {}", axis, mesh_shape);
-
-    const auto grid = mesh_device->compute_with_storage_grid_size();
-    const uint32_t addr = telemetry_addr(mesh_device);
-
-    CombineFabric2dTelemetry out;
-    out.clock_mhz = static_cast<uint32_t>(mesh_device->get_devices().front()->get_clock_rate_mhz());
-
-    // Physical chip id -> mesh coordinate, so a worker's record can name the chip its tokens landed on in
-    // the same coordinate space the caller uses to index per-device tensor shards.
-    std::map<uint32_t, ttnn::MeshCoordinate> chip_to_coord;
-    for (const auto& c : ttnn::MeshCoordinateRange(mesh_shape)) {
-        chip_to_coord.emplace(static_cast<uint32_t>(mesh_device->get_device(c)->id()), c);
-    }
-
-    for (const auto& coord : ttnn::MeshCoordinateRange(mesh_shape)) {
-        auto* dev = mesh_device->get_device(coord);
-        // Placement is a pure function of (device, axis, num_links), so recomputing it here reproduces
-        // exactly the cores the op programmed — no state has to survive from the run.
-        const auto placement = decide_placement(mesh_device, coord, axis, num_links, grid);
-        for (const auto& [eth_logical, wp] : placement.by_eth_logical) {
-            CombineFabric2dWorkerTelemetry w;
-            w.device_id = static_cast<uint32_t>(dev->id());
-            w.mesh_coord.assign(coord.coords().begin(), coord.coords().end());
-            w.worker_logical = wp.worker_logical;
-            w.worker_physical = wp.worker_physical;
-            w.eth_logical = eth_logical;
-            w.eth_phys_x = wp.eth_phys_x;
-            w.link_idx = wp.link_idx;
-            w.relocated = !wp.in_eth_column;
-            w.peer_mesh_id = *wp.peer_node.mesh_id;
-            w.peer_chip_id = static_cast<uint32_t>(wp.peer_node.chip_id);
-            // The chip this worker's tokens actually land on is the far end of ITS cable — the same
-            // resolution the program factory used to pick the destination page range.
-            const auto far = dev->get_connected_ethernet_core(eth_logical);
-            const auto fit = chip_to_coord.find(static_cast<uint32_t>(std::get<0>(far)));
-            if (fit != chip_to_coord.end()) {
-                w.peer_coord.assign(fit->second.coords().begin(), fit->second.coords().end());
-            }
-
-            std::vector<uint32_t> words;
-            const bool ok = tt::tt_metal::detail::ReadFromDeviceL1(
-                dev, wp.worker_logical, addr, TELEM_NUM_WORDS * sizeof(uint32_t), words);
-            if (ok && words.size() >= TELEM_NUM_WORDS && words[TELEM_MAGIC] == TELEMETRY_MAGIC) {
-                w.valid = true;
-                w.tokens_sent = words[TELEM_TOKENS_SENT];
-                w.token_size_bytes = words[TELEM_TOKEN_SIZE];
-                w.num_l1_slots = words[TELEM_NUM_L1_SLOTS];
-                w.batch = words[TELEM_BATCH];
-                w.t_start = static_cast<uint64_t>(words[TELEM_T_START_LO]) |
-                            (static_cast<uint64_t>(words[TELEM_T_START_HI]) << 32);
-                w.t_first_send = static_cast<uint64_t>(words[TELEM_T_FIRST_SEND_LO]) |
-                                 (static_cast<uint64_t>(words[TELEM_T_FIRST_SEND_HI]) << 32);
-                w.t_last_send = static_cast<uint64_t>(words[TELEM_T_LAST_SEND_LO]) |
-                                (static_cast<uint64_t>(words[TELEM_T_LAST_SEND_HI]) << 32);
-                w.t_drained = static_cast<uint64_t>(words[TELEM_T_DRAINED_LO]) |
-                              (static_cast<uint64_t>(words[TELEM_T_DRAINED_HI]) << 32);
-                w.edm_slots = words[TELEM_EDM_SLOTS];
-                w.drain_packets = words[TELEM_DRAIN_PACKETS];
-                w.out_base_page = words[TELEM_OUT_BASE_PAGE];
-                w.wait_slot_cycles = static_cast<uint64_t>(words[TELEM_WAIT_SLOT_CY_LO]) |
-                                     (static_cast<uint64_t>(words[TELEM_WAIT_SLOT_CY_HI]) << 32);
-                w.issue_cycles = static_cast<uint64_t>(words[TELEM_ISSUE_CY_LO]) |
-                                 (static_cast<uint64_t>(words[TELEM_ISSUE_CY_HI]) << 32);
-                w.ring_wait_cycles = static_cast<uint64_t>(words[TELEM_RING_WAIT_CY_LO]) |
-                                     (static_cast<uint64_t>(words[TELEM_RING_WAIT_CY_HI]) << 32);
-                w.t_kernel_start = static_cast<uint64_t>(words[TELEM_T_KERNEL_START_LO]) |
-                                   (static_cast<uint64_t>(words[TELEM_T_KERNEL_START_HI]) << 32);
-                w.t_kernel_end = static_cast<uint64_t>(words[TELEM_T_KERNEL_END_LO]) |
-                                 (static_cast<uint64_t>(words[TELEM_T_KERNEL_END_HI]) << 32);
-            }
-            out.workers.push_back(std::move(w));
-        }
-    }
-    return out;
-}
 
 tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_descriptor(
     const CombineFabric2dParams& operation_attributes,
@@ -1092,7 +884,7 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
         token_size_bytes);
 
     const uint32_t fabric_max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    // From phase 9 a forwarded packet carries the token PLUS its routing tail, so the payload the fabric
+    // A forwarded packet carries the token PLUS its routing tail, so the payload the fabric
     // must accept is token + tail, not just token.
     TT_FATAL(
         token_size_bytes + CMBF2D_SLOT_TAIL_BYTES <= fabric_max_payload,
@@ -1135,22 +927,10 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
                                        (operation_attributes.dispatch_group_size + 2);
     const auto l1 = compute_l1_layout(
         mesh_device,
-        operation_attributes.num_l1_slots,
+        CMBF2D_NUM_L1_SLOTS,
         token_size_bytes,
         control_bytes,
         std::min(std::min(ring_filled_addr, ring_freed_addr), fwd_arrived_addr));
-    // Slots move between the reader and the producer in half-ring batches, so one half can be refilled
-    // while the other drains. This is the knob that amortises the ring bookkeeping over several packets.
-    const uint32_t batch = std::max(1u, operation_attributes.num_l1_slots / 2);
-    log_info(
-        tt::LogOp,
-        "combine_fabric2d L1: ring 0x{:x} ({} slots x {} B, batch {}) hdr_ring 0x{:x} drain_sink 0x{:x}",
-        l1.ring,
-        operation_attributes.num_l1_slots,
-        token_size_bytes,
-        batch,
-        l1.pkt_hdr_ring,
-        l1.drain_sink);
 
     // Physical chip id -> mesh coordinate, to turn a cable's far chip into a placement lookup.
     std::map<uint32_t, ttnn::MeshCoordinate> chip_to_coord;
@@ -1206,7 +986,7 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     workload_descriptor.semaphores.push_back(fwd_arrived_sem);
 
     // ---- Op-internal forwarding buffer. Never initialised and never read back: it is pure staging for
-    // tokens passing through a chip on their way somewhere else (phase 9). One page per token, and the page
+    // tokens passing through a chip on their way somewhere else. One page per token, and the page
     // is token + tail so a single fabric write lands both. Fused into ONE page rather than split across a
     // payload and a metadata region precisely because nothing outside the op reads it — so the "one page =
     // one token" property that the caller's regions must keep does not apply here, and we save a DRAM
@@ -1248,17 +1028,6 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
         fwd_page_bytes,
         CMBF2D_SLOT_TAIL_BYTES);
     workload_descriptor.buffers.push_back({fwd_owner, dram_fwd_buf});
-    log_info(
-        tt::LogOp,
-        "combine_fabric2d forwarding buffer: {} chunks ({} per quarter x {} planes x 2 directions) x {} pages "
-        "(4x the mean chunk + sentinel) x {} B = {:.1f} MB per device at 0x{:x}",
-        fwd_chunks,
-        fwd_chunks_per_quarter(extent),
-        operation_attributes.num_links,
-        pages_per_chunk,
-        fwd_page_bytes,
-        static_cast<double>(fwd_pages) * fwd_page_bytes / 1e6,
-        dram_fwd_buf->address());
 
     for (const auto& coord : tensor_coords.coords()) {
         auto desc = build_program_for_coord(
@@ -1267,7 +1036,6 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
             placements,
             chip_to_coord,
             l1,
-            batch,
             ring_filled_addr,
             ring_freed_addr,
             fwd_arrived_addr,
