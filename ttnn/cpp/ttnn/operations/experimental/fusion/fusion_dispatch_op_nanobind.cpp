@@ -165,8 +165,9 @@ void bind_fusion_dispatch_op(nb::module_& mod) {
     nb::class_<FusionSemaphoreBank>(mod, "FusionSemaphoreBank", R"doc(
         Command-lifetime storage for a set of fusion barrier semaphores.
 
-        Logical semaphores are adjacent uint32 words in one lockstep-sharded
-        L1 tensor.  The object owns the tensor; dropping the object releases
+        Logical semaphores are 16-byte-aligned uint32 slots in one
+        lockstep-sharded L1 tensor (same stride as CreateSemaphore / L1
+        alignment). The object owns the tensor; dropping the object releases
         the allocation after queued users complete.
     )doc")
         .def(

@@ -1323,11 +1323,16 @@ class TestFusionSemaphoreBank:
 
         base_address = bank.tensor.buffer_address()
         assert not bank.tensor.is_per_core_allocated()
-        assert list(bank.addresses) == [base_address + 4 * index for index in range(len(initial_values))]
+        stride = 16
+        assert list(bank.addresses) == [base_address + stride * index for index in range(len(initial_values))]
 
-        values = ttnn.to_torch(ttnn.from_device(bank.tensor)).reshape(-1, len(initial_values))
-        expected = torch.tensor(initial_values, dtype=torch.uint32).repeat(values.shape[0], 1)
-        assert torch.equal(values, expected)
+        words_per_slot = stride // 4
+        values = ttnn.to_torch(ttnn.from_device(bank.tensor)).reshape(-1, len(initial_values), words_per_slot)
+        live = values[:, :, 0]
+        padding = values[:, :, 1:]
+        expected = torch.tensor(initial_values, dtype=torch.uint32).repeat(live.shape[0], 1)
+        assert torch.equal(live, expected)
+        assert torch.all(padding == 0)
 
     def test_releases_l1(self, device):
         core_ranges = [_semaphore_core(0, 0), _semaphore_core(1, 0)]
@@ -1361,7 +1366,7 @@ class TestFusionSemaphoreBank:
 
         assert not bank.tensor.is_per_core_allocated()
         assert len(bank.tensor.device_coords()) == mesh_device.get_num_devices()
-        assert list(bank.addresses) == [bank.tensor.buffer_address(), bank.tensor.buffer_address() + 4]
+        assert list(bank.addresses) == [bank.tensor.buffer_address(), bank.tensor.buffer_address() + 16]
 
     def test_persistent_dispatch_releases_l1(self, device):
         from models.experimental.ops.descriptors.fusion import Sequential

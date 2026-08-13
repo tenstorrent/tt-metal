@@ -18,6 +18,14 @@
 
 namespace ttnn::operations::experimental::fusion::detail {
 
+// noc_semaphore_inc encodes IND_32 from addr[3:2]; ttsim only implements the
+// 16-byte-aligned case (0x107C). Metal CreateSemaphore uses the same stride
+// (hal L1 alignment). Each logical bank word owns one 16B slot.
+inline constexpr std::uint32_t kFusionSemaphoreStrideBytes = 16;
+inline constexpr std::uint32_t kFusionSemaphoreWordsPerSlot =
+    kFusionSemaphoreStrideBytes / static_cast<std::uint32_t>(sizeof(std::uint32_t));
+static_assert(kFusionSemaphoreStrideBytes % sizeof(std::uint32_t) == 0);
+
 struct FusionSemaphoreBankConfig {
     tt::tt_metal::TensorSpec tensor_spec;
     std::vector<std::uint32_t> initial_values;
@@ -49,19 +57,22 @@ inline std::optional<FusionSemaphoreBankConfig> make_fusion_semaphore_bank_confi
             num_semaphores <= std::numeric_limits<std::uint32_t>::max(),
         "Fusion semaphore bank dimensions exceed uint32 limits");
     TT_FATAL(
-        num_semaphores <= std::numeric_limits<std::uint32_t>::max() / sizeof(std::uint32_t),
+        num_semaphores <= std::numeric_limits<std::uint32_t>::max() / kFusionSemaphoreWordsPerSlot,
+        "Fusion semaphore bank shard width exceeds uint32 limits");
+    TT_FATAL(
+        num_semaphores <= std::numeric_limits<std::uint32_t>::max() / kFusionSemaphoreStrideBytes,
         "Fusion semaphore bank address offsets exceed uint32 limits");
 
     const auto num_cores_u32 = static_cast<std::uint32_t>(num_cores);
-    const auto num_semaphores_u32 = static_cast<std::uint32_t>(num_semaphores);
+    const auto shard_width = static_cast<std::uint32_t>(num_semaphores) * kFusionSemaphoreWordsPerSlot;
     const auto shard_spec =
-        tt::tt_metal::ShardSpec{union_ranges, {1, num_semaphores_u32}, tt::tt_metal::ShardOrientation::ROW_MAJOR};
+        tt::tt_metal::ShardSpec{union_ranges, {1, shard_width}, tt::tt_metal::ShardOrientation::ROW_MAJOR};
     const auto memory_config = tt::tt_metal::MemoryConfig{
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1, shard_spec};
 
     return FusionSemaphoreBankConfig{
         .tensor_spec = tt::tt_metal::TensorSpec(
-            Shape({1, 1, num_cores_u32, num_semaphores_u32}),
+            Shape({1, 1, num_cores_u32, shard_width}),
             tt::tt_metal::TensorLayout(DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), memory_config)),
         .initial_values = initial_values,
     };
@@ -92,18 +103,22 @@ public:
 
         const auto num_semaphores = config.initial_values.size();
         TT_FATAL(num_semaphores > 0, "Fusion semaphore bank requires at least one semaphore");
+        const auto words_per_core = num_semaphores * kFusionSemaphoreWordsPerSlot;
         const auto volume = config.tensor_spec.logical_shape().volume();
         TT_FATAL(
-            volume % num_semaphores == 0,
-            "Fusion semaphore bank tensor volume ({}) is not divisible by semaphore count ({})",
+            volume % words_per_core == 0,
+            "Fusion semaphore bank tensor volume ({}) is not divisible by padded semaphore words ({})",
             volume,
-            num_semaphores);
+            words_per_core);
 
         std::vector<std::uint32_t> host_values;
         host_values.reserve(volume);
-        const auto num_cores = volume / num_semaphores;
+        const auto num_cores = volume / words_per_core;
         for (std::size_t core_index = 0; core_index < num_cores; ++core_index) {
-            host_values.insert(host_values.end(), config.initial_values.begin(), config.initial_values.end());
+            for (auto initial_value : config.initial_values) {
+                host_values.push_back(initial_value);
+                host_values.insert(host_values.end(), kFusionSemaphoreWordsPerSlot - 1, 0u);
+            }
         }
 
         Tensor host_tensor(
@@ -115,11 +130,11 @@ public:
 
         TT_FATAL(
             base_address <= std::numeric_limits<std::uint32_t>::max() -
-                                static_cast<std::uint32_t>((num_semaphores - 1) * sizeof(std::uint32_t)),
+                                static_cast<std::uint32_t>((num_semaphores - 1) * kFusionSemaphoreStrideBytes),
             "Fusion semaphore bank address range overflows uint32");
         addresses_.reserve(num_semaphores);
         for (std::uint32_t index = 0; index < num_semaphores; ++index) {
-            addresses_.push_back(base_address + index * sizeof(std::uint32_t));
+            addresses_.push_back(base_address + index * kFusionSemaphoreStrideBytes);
         }
     }
 

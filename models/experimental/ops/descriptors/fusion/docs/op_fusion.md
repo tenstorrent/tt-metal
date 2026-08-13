@@ -954,8 +954,8 @@ For **Group A** (barrier scopes = `[16-core, 8-left]`):
 ```python
 MultiBarrierSpec(
     segments=[
-        BarrierSegment(config=cfg_16, arrive_addr=0x1000, release_addr=0x1004),
-        BarrierSegment(config=cfg_8L, arrive_addr=0x2000, release_addr=0x2004),
+        BarrierSegment(config=cfg_16, arrive_addr=0x1000, release_addr=0x1010),
+        BarrierSegment(config=cfg_8L, arrive_addr=0x2000, release_addr=0x2010),
     ],
     transition_map={0: (0, 0), 1: (1, 0)},
     ...
@@ -976,8 +976,8 @@ namespace barrier {
         }
     }
     namespace group {
-        namespace seg_0 { /* 16 cores, arrive=0x1000, release=0x1004 */ }
-        namespace seg_1 { /* 8 left cores, arrive=0x2000, release=0x2004 */ }
+        namespace seg_0 { /* 16 cores, arrive=0x1000, release=0x1010 */ }
+        namespace seg_1 { /* 8 left cores, arrive=0x2000, release=0x2010 */ }
         void sync() {
             if (done == 1) { seg_0::sync(); resync_cbs(phase_0_cbs); }  // LN→GeLU
             if (done == 2) { seg_1::sync(); resync_cbs(phase_1_cbs); }  // GeLU→RMS
@@ -1023,18 +1023,19 @@ for group in groups:
 coordinates for NOC unicast release. After every unique segment is known,
 `OpGraphBuilder` creates `_SemaphoreSpec` entries for the five local flags and
 each segment's `arrive`/`release` pair, then allocates one build-time
-`FusionSemaphoreBank`. Consecutive `uint32_t` words in that bank are assigned
+`FusionSemaphoreBank`. Each logical word occupies a 16-byte-aligned slot
+(same stride as `CreateSemaphore` / L1 alignment) and is assigned
 to the configs in deterministic insertion order.
 
 For the example tree, the cache ends up with three entries. Word `i` lives at
-`base_address + 4 * i`. The five local flags occupy words 0-4; segment
+`base_address + 16 * i`. The five local flags occupy slots 0-4; segment
 `arrive`/`release` pairs follow in insertion order. With base `0x1000`:
 
 | Cache Key | Scope | Bank words |
 |-----------|-------|------------|
-| `(release=16 cores, arrive=16 cores)` | All cores | arrive=0x1014, release=0x1018 |
-| `(release=8-left, arrive=8-left)` | Left branch | arrive=0x101C, release=0x1020 |
-| `(release=8-right, arrive=8-right)` | Right branch | arrive=0x1024, release=0x1028 |
+| `(release=16 cores, arrive=16 cores)` | All cores | arrive=0x1050, release=0x1060 |
+| `(release=8-left, arrive=8-left)` | Left branch | arrive=0x1070, release=0x1080 |
+| `(release=8-right, arrive=8-right)` | Right branch | arrive=0x1090, release=0x10a0 |
 
 When `_build_group_barriers()` runs for each group, it looks up the cache.
 Both groups' seg_0 resolves to the
@@ -1048,11 +1049,12 @@ Fusion does not allocate one `GlobalSemaphore` object per logical flag.
 Instead, all logical barrier words for a build are packed into one
 lockstep-sharded L1 tensor:
 
-- Tensor shape: `[1, 1, num_union_cores, num_semaphores]`
-- Per-core shard shape: `[1, num_semaphores]`
-- Word `i` address: `base_address + 4 * i`
+- Tensor shape: `[1, 1, num_union_cores, num_semaphores * 4]`
+- Per-core shard shape: `[1, num_semaphores * 4]` (four `uint32_t`s per slot)
+- Word `i` address: `base_address + 16 * i`
 - Initial contents: one caller-supplied `uint32_t` value per logical
-  semaphore, repeated on every participating core
+  semaphore at the start of its 16-byte slot (remaining words zero),
+  repeated on every participating core
 
 `MeshBuffer` lockstep allocation gives every core and physical mesh device the
 same local base address. `FusionSemaphoreBank` verifies full-mesh storage and

@@ -34,9 +34,9 @@ Results are reported for both fusion usage modes:
 - **Persistent:** create descriptors and the container once, call `update()` for the activation, and reuse the container's hot dispatch path.
 
 Both modes use the production command-lifetime semaphore bank. All logical
-barrier words are packed into one lockstep-sharded L1 tensor, initialized by
-one queued write, and released after dispatch submission. No semaphore tensor
-is retained in the fusion cache or between forward passes.
+barrier words occupy 16-byte-aligned slots in one lockstep-sharded L1 tensor,
+initialized by one queued write, and released after dispatch submission. No
+semaphore tensor is retained in the fusion cache or between forward passes.
 
 Each mode is benchmarked in an isolated pytest invocation so persistent
 intermediate allocations from one mode cannot affect another mode's available
@@ -74,32 +74,32 @@ Basic sequential chaining of heterogeneous ops (norm + matmul + norm) into a sin
 
 ### H=128 (dispatch-dominated)
 
-Unfused median-position breakdown: RMS #1 FW=7.926 us + matmul FW=8.240 us + RMS #2 FW=7.882 us; median total FW=24.042 us.
+Unfused median-position breakdown: RMS #1 FW=7.917 us + matmul FW=8.868 us + RMS #2 FW=7.822 us; median total FW=24.607 us.
 
 | Metric | Fused Inline | Fused Persistent | Unfused | Inline speedup | Persistent speedup |
 |--------|-------------:|-----------------:|--------:|---------------:|-------------------:|
-| Device FW interval sum | 28.073 us | 27.942 us | 24.042 us (3 ops) | 0.856x | 0.860x |
-| Device kernel | 27.350 us | 27.223 us | 21.929 us | 0.802x | 0.806x |
-| E2E | 0.418 ms | 0.117 ms | 0.130 ms | 0.310x | **1.105x** |
+| Device FW interval sum | 27.994 us | 27.978 us | 24.607 us (3 ops) | 0.879x | 0.879x |
+| Device kernel | 27.335 us | 27.287 us | 22.608 us | 0.827x | 0.829x |
+| E2E | 0.421 ms | 0.118 ms | 0.135 ms | 0.321x | **1.144x** |
 
 The three short kernels are faster unfused on device because the fused chain adds
-two phase transitions. Persistent mode still wins E2E by 1.105x by replacing
+two phase transitions. Persistent mode still wins E2E by 1.144x by replacing
 three host submissions with one; Inline descriptor/container construction
 dominates and is not competitive.
 
 ### H=1536 (compute-dominated)
 
-Unfused median-position breakdown: RMS #1 FW/kernel=27.841/27.145 us,
-matmul=972.357/971.659 us, RMS #2=962.480/27.900 us. The final RMS FW
-interval consistently spans an idle attribution gap, so the raw 1962.845 us
-total FW is not an execution-time speedup; the 1026.874 us kernel total is the
+Unfused median-position breakdown: RMS #1 FW/kernel=27.781/27.141 us,
+matmul=964.576/963.874 us, RMS #2=954.730/27.840 us. The final RMS FW
+interval consistently spans an idle attribution gap, so the raw 1947.087 us
+total FW is not an execution-time speedup; the 1018.855 us kernel total is the
 meaningful device comparison.
 
 | Metric | Fused Inline | Fused Persistent | Unfused | Inline speedup | Persistent speedup |
 |--------|-------------:|-----------------:|--------:|---------------:|-------------------:|
-| Device FW interval sum | 941.023 us | 989.878 us | 1962.845 us (3 ops, attribution artifact) | 2.086x* | 1.983x* |
-| Device kernel | 940.328 us | 989.156 us | 1026.874 us | **1.092x** | **1.038x** |
-| E2E | 1.004 ms | 1.002 ms | 1.013 ms | **1.010x** | **1.012x** |
+| Device FW interval sum | 998.410 us | 988.899 us | 1947.087 us (3 ops, attribution artifact) | 1.950x* | 1.969x* |
+| Device kernel | 997.742 us | 988.221 us | 1018.855 us | **1.021x** | **1.031x** |
+| E2E | 0.998 ms | 0.998 ms | 1.009 ms | **1.011x** | **1.011x** |
 
 At H=1536, the matmul dominates and all three paths are effectively device
 bound. Fusion provides only a small kernel/E2E advantage. `*` The FW ratios are
@@ -134,29 +134,29 @@ Fusion with block-sharded memory layout. The CB allocator detects pinned buffer 
 
 ### H=128 (dispatch-dominated)
 
-Unfused median-position breakdown: RMS FW=9.200 us + LN FW=13.480 us = 22.680 us.
+Unfused median-position breakdown: RMS FW=9.188 us + LN FW=13.506 us = 22.694 us.
 
 | Metric | Fused Inline | Fused Persistent | Unfused | Inline speedup | Persistent speedup |
 |--------|-------------:|-----------------:|--------:|---------------:|-------------------:|
-| Device FW interval sum | 24.044 us | 24.020 us | 22.680 us (2 ops) | 0.943x | 0.944x |
-| Device kernel | 23.058 us | 23.039 us | 20.758 us | 0.900x | 0.901x |
-| E2E | 0.447 ms | 0.166 ms | 0.121 ms | 0.272x | 0.731x |
+| Device FW interval sum | 23.910 us | 23.882 us | 22.685 us (2 ops) | 0.949x | 0.950x |
+| Device kernel | 23.093 us | 23.094 us | 20.912 us | 0.906x | 0.906x |
+| E2E | 0.449 ms | 0.164 ms | 0.129 ms | 0.287x | 0.787x |
 
 This short sequential workload does not amortize the fused phase transition and
 command-lifetime bank setup. Persistent is much faster than Inline, but the
-mature two-op unfused path remains 1.37x faster E2E.
+mature two-op unfused path remains 1.27x faster E2E.
 
 ### H=1536 (compute-dominated)
 
-Unfused median-position breakdown: RMS FW=38.505 us + LN FW=58.131 us; median total FW=96.605 us.
+Unfused median-position breakdown: RMS FW=38.513 us + LN FW=58.094 us; median total FW=96.623 us.
 
 | Metric | Fused Inline | Fused Persistent | Unfused | Inline speedup | Persistent speedup |
 |--------|-------------:|-----------------:|--------:|---------------:|-------------------:|
-| Device FW interval sum | 102.595 us | 102.519 us | 96.605 us (2 ops) | 0.942x | 0.942x |
-| Device kernel | 101.598 us | 101.530 us | 94.658 us | 0.932x | 0.932x |
-| E2E | 0.443 ms | 0.169 ms | 0.116 ms | 0.262x | 0.688x |
+| Device FW interval sum | 101.807 us | 101.774 us | 96.623 us (2 ops) | 0.949x | 0.949x |
+| Device kernel | 100.990 us | 100.968 us | 94.855 us | 0.939x | 0.939x |
+| E2E | 0.443 ms | 0.168 ms | 0.122 ms | 0.275x | 0.726x |
 
-The fused kernel is ~7 us slower than the unfused kernel sum due to the phase
+The fused kernel is ~6 us slower than the unfused kernel sum due to the phase
 transition. That device cost plus per-forward bank setup leaves Persistent
 slower than unfused; Inline is again dominated by Python construction.
 
