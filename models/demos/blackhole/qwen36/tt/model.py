@@ -586,15 +586,7 @@ class Qwen36Model:
             x = layer.forward(x, cos=cos, sin=sin, mode="prefill", chunk_size=128, valid_len=valid_len)
 
         # Last real position via one-hot matmul (not slice): bare slice breaks at long T (~49k+).
-        sel = torch.zeros(1, 1, 1, T, dtype=torch.float32)
-        sel[0, 0, 0, valid_len - 1] = 1.0
-        sel_tt = ttnn.from_torch(
-            sel,
-            dtype=x.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
+        sel_tt = self._row_selector(T, valid_len - 1, (1, 1, 1, T), x.dtype)
         x_last = ttnn.matmul(sel_tt, x)  # [1,1,1,dim_frac]
         ttnn.deallocate(sel_tt)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
@@ -2143,9 +2135,7 @@ class Qwen36Model:
             return self._masked_bucket_logits_tp(hidden, actual_len, bucket)
 
         # One-hot matmul for last row (fixed program per bucket; slice would recompile per length).
-        sel = torch.zeros(1, 1, bucket, dtype=torch.float32)
-        sel[0, 0, actual_len - 1] = 1.0
-        sel_tt = ttnn.from_torch(sel, dtype=hidden.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+        sel_tt = self._row_selector(bucket, actual_len - 1, (1, 1, bucket), hidden.dtype)
         x_last = ttnn.matmul(sel_tt, hidden)
         ttnn.deallocate(sel_tt)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
@@ -2155,15 +2145,7 @@ class Qwen36Model:
 
     def _masked_bucket_logits_tp(self, hidden, actual_len, bucket):
         """TP: one-hot select row actual_len-1, norm, lm_head. Returns replicated [1,1,vocab]."""
-        sel = torch.zeros(1, 1, 1, bucket, dtype=torch.float32)
-        sel[0, 0, 0, actual_len - 1] = 1.0
-        sel_tt = ttnn.from_torch(
-            sel,
-            dtype=hidden.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
-        )
+        sel_tt = self._row_selector(bucket, actual_len - 1, (1, 1, 1, bucket), hidden.dtype)
         x_last = ttnn.matmul(sel_tt, hidden)  # [1, 1, 1, dim]
         ttnn.deallocate(sel_tt)
         x_last = ttnn.to_memory_config(x_last, ttnn.DRAM_MEMORY_CONFIG)
@@ -3176,6 +3158,66 @@ class Qwen36Model:
 
     # Generator contract — decode
 
+    def _row_selector(self, length, index, shape, dtype):
+        """One-hot row selector, built on device as ``arange(length) == index``.
+
+        Replaces a host ``torch.zeros(..., length)`` with a single 1.0 written into it and then
+        uploaded — at long prefill lengths that host buffer is hundreds of KB per call, all of it
+        zeros. Values are identical: the comparison on exact integers yields exactly 1.0/0.0.
+
+        ``shape`` is the rank the caller's matmul expects ((1, 1, length) or (1, 1, 1, length)).
+        """
+        idx = ttnn.arange(0, length, 1, dtype=ttnn.float32, device=self.device)
+        idx = ttnn.reshape(ttnn.to_layout(idx, ttnn.TILE_LAYOUT), shape)
+        sel = ttnn.eq(idx, float(index))
+        ttnn.deallocate(idx)
+        return ttnn.typecast(sel, dtype)
+
+    def _device_decode_rope(self):
+        """Gather decode cos/sin from device-resident tables instead of computing them on host.
+
+        QWEN36_HOST_DECODE_ROPE=1 restores the host path (per-token trig + tilize + upload of the
+        packed [2, B, 1, rope_dim] cos/sin).
+        """
+        return os.environ.get("QWEN36_HOST_DECODE_ROPE", "0") != "1"
+
+    def _rope_gather_tables(self):
+        """Device-resident 2D cos/sin tables [max_seq_len, rope_head_dim] for ttnn.embedding.
+
+        The rope module already holds these on host (``cos_cpu``/``sin_cpu``) and a 3D device copy
+        used for single-position slicing; ttnn.embedding needs a 2D table, so keep one here. Built
+        once, replicated (RoPE is not sharded).
+        """
+        if getattr(self, "_rope_tbl", None) is None:
+            rep = ttnn.ReplicateTensorToMesh(self.device)
+            self._rope_tbl = tuple(
+                ttnn.from_torch(
+                    t.contiguous(),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=rep,
+                )
+                for t in (self.rope.cos_cpu, self.rope.sin_cpu)
+            )
+        return self._rope_tbl
+
+    def _gather_decode_rope(self, rope_pos_tt):
+        """cos/sin for the per-user decode positions in ``rope_pos_tt`` ([1, B] uint32, device).
+
+        Returns the same shapes the host pack produced, so downstream is untouched:
+        ``[1, B, 1, rope_dim]`` under TP, ``[1, 1, rope_dim]`` on a single device (B == 1).
+        """
+        cos_tbl, sin_tbl = self._rope_gather_tables()
+        rd = self.args.rope_head_dim
+        B = int(rope_pos_tt.shape[-1])
+        out = []
+        for tbl in (cos_tbl, sin_tbl):
+            g = ttnn.embedding(rope_pos_tt, tbl, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)  # [1, B, rd]
+            out.append(ttnn.reshape(g, (1, B, 1, rd) if self.num_devices > 1 else (1, B, rd)))
+        return out[0], out[1]
+
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
         """Build HOST decode inputs: (tokens_tt, cur_pos_tt, rope_packed, page_table_tt)."""
         from models.demos.blackhole.qwen36.tt.generator_interface import pack_rope_host
@@ -3193,7 +3235,21 @@ class Qwen36Model:
         # space; post-image text has t==h==w so 1D RoPE at rope_pos is correct). cur_pos_tt below
         # stays the true KV position. rope_delta is 0 for text, so this is a no-op there.
         rope_pos_vec = pos_vec + self.rope.rope_delta
-        if self.num_devices > 1:
+        if self._device_decode_rope():
+            # Device path: ship only the [1, B] int32 rope POSITIONS; ttnn_decode_forward gathers
+            # cos/sin out of the device-resident tables. Replaces per-token host trig plus the
+            # tilize+upload of a [2, B, 1, rope_dim] bf16 pack with a ~B*4 byte upload, and the
+            # gather is captured into the decode trace (fixed shapes).
+            #
+            # Force the tables to exist HERE rather than on first use inside ttnn_decode_forward:
+            # building them is a host upload, which is illegal under trace, and the capture path
+            # could otherwise be the first caller. This function only ever runs on host, before
+            # the forward, so it is always a safe place to allocate them.
+            self._rope_gather_tables()
+            rope_packed = ttnn.from_torch(
+                rope_pos_vec.reshape(1, B).to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+            )
+        elif self.num_devices > 1:
             # TP: rope_tp cos/sin [1,B,1,rope_dim] packed on host.
             rd = self.args.rope_head_dim
             inv_freq = 1.0 / (self.args.rope_theta ** (torch.arange(0, rd, 2).float() / rd))
@@ -3237,7 +3293,11 @@ class Qwen36Model:
         """
         from models.demos.blackhole.qwen36.tt.generator_interface import unpack_rope
 
-        cos, sin = unpack_rope(rot_mat_idxs)
+        # Under the device path rot_mat_idxs carries the [1, B] rope POSITIONS, not packed cos/sin.
+        if self._device_decode_rope():
+            cos, sin = self._gather_decode_rope(rot_mat_idxs)
+        else:
+            cos, sin = unpack_rope(rot_mat_idxs)
         if on_device_logits:
             assert self.sampling is not None, "on_device_logits=True but self.sampling is None"
             logits = self._forward_decode(tokens, cos, sin, current_pos, page_table, sharded_lm_head=True)

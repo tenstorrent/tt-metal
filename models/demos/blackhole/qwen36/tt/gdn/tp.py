@@ -216,25 +216,16 @@ class TPGatedDeltaNet:
         self._pending = []  # per-user (rec, conv) states collected during batched per-user prefill
 
     def reset_state(self):
-        def z(shape):
-            return ttnn.from_torch(
-                torch.zeros(*shape, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-            )
+        # Allocated directly on device. These are pure zeros, so the host torch.zeros + PCIe upload
+        # they replace bought nothing — and the recurrent state is the model's largest such buffer
+        # ([B, Nv, Dk, Dv] fp32 is tens of MB at B=32), re-materialized on every sequence reset.
+        def z(shape, dtype=ttnn.bfloat16):
+            return ttnn.zeros(ttnn.Shape(list(shape)), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh)
 
         self.conv_states = [z((1, self.B, self.qkv_dim_tp)) for _ in range(self.K)]
         # fp32 recurrent state by default (QWEN35_GDN_STATE_BF16=1 reverts)
         if os.environ.get("QWEN35_GDN_STATE_BF16") != "1":
-            self.rec_state = ttnn.from_torch(
-                torch.zeros(self.B, self.Nv, self.Dk, self.Dv, dtype=torch.float32),
-                dtype=ttnn.float32,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-            )
+            self.rec_state = z((self.B, self.Nv, self.Dk, self.Dv), dtype=ttnn.float32)
         else:
             self.rec_state = z((self.B, self.Nv, self.Dk, self.Dv))
         # Cross-chunk conv carry + persistent zero sources (created before any trace)
@@ -581,12 +572,10 @@ class TPGatedDeltaNet:
                 if self._zero_conv0 is not None:
                     ttnn.copy(self._zero_conv0, self.conv_states[0])
                 else:
-                    zero = ttnn.from_torch(
-                        torch.zeros(1, B, D, dtype=torch.bfloat16),
-                        dtype=ttnn.bfloat16,
-                        layout=ttnn.TILE_LAYOUT,
-                        device=self.mesh,
-                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+                    # Allocated on device: a host zeros() + upload buys nothing for a buffer whose
+                    # every element is 0, and this runs per prefill chunk.
+                    zero = ttnn.zeros(
+                        ttnn.Shape([1, B, D]), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh
                     )
                     ttnn.copy(zero, self.conv_states[0])
                     ttnn.deallocate(zero)
@@ -676,13 +665,7 @@ class TPGatedDeltaNet:
         D = self.qkv_dim_tp
         rec_batched = ttnn.concat(rec_list, dim=0)  # [B, Nv, Dk, Dv]
         conv_states = [
-            ttnn.from_torch(
-                torch.zeros(1, self.B, D, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-            )
+            ttnn.zeros(ttnn.Shape([1, self.B, D]), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh)
         ]
         for m in range(1, self.K):  # conv_states[m] row u = conv_new_list[u][:, m-1]
             rows = [
@@ -848,12 +831,8 @@ class TPGatedDeltaNet:
         # decode conv window). Chunk-outer carry: left-context = previous chunk's last K-1 inputs.
         if carry and getattr(self, "_batched_conv_carry", None) is None:
             # First chunk of a chunk-outer prefill: zeroed left-context (== from scratch).
-            self._batched_conv_carry = ttnn.from_torch(
-                torch.zeros(B, self.K - 1, D, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            self._batched_conv_carry = ttnn.zeros(
+                ttnn.Shape([B, self.K - 1, D]), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh
             )
         conv_carry_in = self._batched_conv_carry if carry else None
         conv, conv_new_state = _causal_conv1d_fir(
@@ -923,13 +902,7 @@ class TPGatedDeltaNet:
         else:
             self.rec_state = final_state  # [B, Nv, Dk, Dv]
         # conv_states[0] = shifted-out zero; conv_states[m] row u = conv_new_state[u, m-1].
-        zero0 = ttnn.from_torch(
-            torch.zeros(1, B, D, dtype=torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-        )
+        zero0 = ttnn.zeros(ttnn.Shape([1, B, D]), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.mesh)
         new_conv = [zero0]
         for m in range(1, self.K):
             cs = ttnn.reshape(ttnn.slice(conv_new_state, (0, m - 1, 0), (B, m, D)), (1, B, D))  # [1,B,D]

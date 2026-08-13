@@ -129,3 +129,63 @@ def test_partial_rope_decode(mesh_device, reset_seeds, ensure_gc, request):
     pk, pcck = comp_pcc(k_ref, k_out, thr)
     logger.info(f"partial-RoPE decode PCC  q={pccq}  k={pcck}")
     assert pq and pk, f"partial-RoPE decode PCC too low: q={pccq} k={pcck}"
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+def test_decode_rope_device_gather(mesh_device, reset_seeds, ensure_gc, request):
+    """Device-gathered decode cos/sin == the host-computed pack it replaces.
+
+    ``Qwen36Model._gather_decode_rope`` indexes device-resident cos/sin tables with the per-user
+    rope positions instead of running the trig on host every token. This checks both halves of
+    that substitution: the numerics against ``rot_mats_decode`` (the host path), and the output
+    RANK, which differs between TP ([1, B, 1, rope_dim]) and single device ([1, B, rope_dim]) and
+    is what the downstream apply_partial_rope_decode expects.
+    """
+    from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+    from models.demos.blackhole.qwen36.tt.rope import compute_rope_freqs
+
+    B = 8
+    max_seq = 256
+    args, _, rope_dim, theta, _, _ = _rope_params(mesh_device, B=B)
+    positions = torch.arange(B, dtype=torch.int32) * 7 + 3
+
+    cos_cpu, sin_cpu = compute_rope_freqs(head_dim=rope_dim, max_seq_len=max_seq, theta=theta)
+
+    # Minimal stand-in carrying only what _gather_decode_rope reads, so the method under test runs
+    # without materializing the 27B weights.
+    class _Shim:
+        pass
+
+    shim = _Shim()
+    shim.device = mesh_device
+    shim.num_devices = mesh_device.get_num_devices()
+    shim.args = args
+    shim.rope = _Shim()
+    shim.rope.cos_cpu, shim.rope.sin_cpu = cos_cpu, sin_cpu
+    shim._rope_tbl = None
+    # _gather_decode_rope calls this on self; bind the real implementation so the table build is
+    # exercised too.
+    shim._rope_gather_tables = lambda: Qwen36Model._rope_gather_tables(shim)
+
+    pos_tt = ttnn.from_torch(
+        positions.reshape(1, B).to(torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    cos_dev, sin_dev = Qwen36Model._gather_decode_rope(shim, pos_tt)
+
+    expected_rank = 4 if shim.num_devices > 1 else 3
+    assert len(cos_dev.shape) == expected_rank, f"rank {len(cos_dev.shape)} != {expected_rank}"
+
+    cos_ref_tt, sin_ref_tt = rot_mats_decode(mesh_device, rope_dim, max_seq, theta, positions)
+    cos_ref, sin_ref = _read0(mesh_device, cos_ref_tt), _read0(mesh_device, sin_ref_tt)
+    cos_out, sin_out = _read0(mesh_device, cos_dev), _read0(mesh_device, sin_dev)
+
+    thr = get_pcc_threshold(request)
+    pc, pccc = comp_pcc(cos_ref.reshape(B, rope_dim), cos_out.reshape(B, rope_dim), thr)
+    ps, pccs = comp_pcc(sin_ref.reshape(B, rope_dim), sin_out.reshape(B, rope_dim), thr)
+    logger.info(f"device-gathered decode rope PCC  cos={pccc}  sin={pccs}")
+    assert pc and ps, f"device rope gather PCC too low: cos={pccc} sin={pccs}"
