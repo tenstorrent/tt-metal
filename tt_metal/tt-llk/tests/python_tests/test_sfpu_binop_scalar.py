@@ -14,6 +14,7 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
+from helpers.sfpu_domains import SPECIALS_READY_OPS, edge_spec, specials_safe
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -91,7 +92,9 @@ def _run_sfpu_binop_scalar(
     )
 
     generate_golden = get_golden_generator(ScalarBinopGolden)
-    golden = generate_golden(mathop, src_A, scalar_bits, formats.output_format)
+    golden = generate_golden(
+        mathop, src_A, scalar_bits, formats.output_format, dest_acc
+    )
 
     configuration = TestConfig(
         "sources/sfpu_binop_scalar_test.cpp",
@@ -185,31 +188,53 @@ def test_sfpu_binop_scalar_values(formats, dest_acc, mathop, scalar):
     _run_sfpu_binop_scalar(formats, dest_acc, mathop, scalar=scalar)
 
 
-# Not swept here yet: edge values on the *tensor* operand. All five ops are
-# x (+|-|*|/) c for a compile-time c, which is smooth in x -- no pole, no knee -- so cat A
-# and cat D contribute nothing and edge_spec() returns None for every one of them. What is
-# left is cat B, gated per op on SPECIALS_READY_OPS, which is empty until the goldens
-# define a result for non-finite inputs.
+# Edge values on the *tensor* operand. All five ops are x (+|-|*|/) c for a compile-time c,
+# which is smooth in x -- no pole, no knee -- so cat A and cat D contribute nothing and
+# edge_spec() returns None for every one of them unless specials are on. Cat B is therefore
+# their entire edge story, and this test was a comment until the scalar ops were enrolled in
+# SPECIALS_READY_OPS, because before that it would have collected 20 variants and skipped all
+# 20: nightly runtime and a test name that reads like protection, with nothing behind it.
 #
-# A wrapper written now would therefore skip every variant it collected: nightly runtime
-# and a test name that reads like protection, with no executable assertion behind it. What
-# it needed to exist was the spec_A hook on _run_sfpu_binop_scalar, and that is in place —
-# so add the wrapper in the commit that makes the first scalar golden specials-ready,
-# where its skips turn into runs:
+# Two of the eight (format, dest_acc) pairs survive both gates, and they are complementary
+# rather than redundant -- between them they cover both sides of the delivery split:
 #
-#     @pytest.mark.nightly
-#     @parametrize(formats=_SCALAR_FORMATS, dest_acc=[...], mathop=_SCALAR_OPS)
-#     def test_sfpu_binop_scalar_edges(formats, dest_acc, mathop):
-#         _skip_unsupported(formats, dest_acc, mathop, _PRESUBMIT_SCALAR)
-#         specials = mathop in SPECIALS_READY_OPS and specials_safe(
-#             formats.input_format, formats.output_format, dest_acc
-#         )
-#         spec_A = edge_spec(mathop, formats.input_format, formats.output_format,
-#                            specials=specials, dest_acc=dest_acc)
-#         ...
-#         _run_sfpu_binop_scalar(formats, dest_acc, mathop,
-#                                scalar=_PRESUBMIT_SCALAR, spec_A=spec_A)
+#   Float32->Float32   dest_acc=Yes  unpack-to-dest, so a real -0.0 arrives
+#   Float16_b->Float16_b dest_acc=No datacopy, so -0.0 arrives as +0.0 and is not sent
 #
-# Also deliberately out of scope there: |scalar| > 8 and the +/-tiny, +/-large tensor
-# values. Both need a per-op tolerance first -- the default bf16 tolerance is only
-# meaningful while the result stays in range -- which is its own piece of work.
+# The other six are excluded by _skip_unsupported (Float32 needs a 32-bit dest, Float16_b
+# cannot use one) or by specials_safe.
+#
+# Still out of scope, and both need a per-op tolerance first -- the default bf16 tolerance is
+# only meaningful while the result stays in range: |scalar| > 8, and +/-tiny / +/-large on the
+# tensor operand. That is the pattern BINARY_CUSTOM_TOLERANCES uses for pow and xlogy.
+@pytest.mark.nightly
+@parametrize(
+    formats=_SCALAR_FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    mathop=_SCALAR_OPS,
+)
+def test_sfpu_binop_scalar_edges(formats, dest_acc, mathop):
+    """Drive IEEE specials through the tensor operand of each scalar binop."""
+    _skip_unsupported(formats, dest_acc, mathop, _PRESUBMIT_SCALAR)
+
+    # Both gates, as everywhere else: SPECIALS_READY_OPS says the *golden* defines a result
+    # for a non-finite input, specials_safe() says the *pipeline* delivers one intact.
+    specials = mathop in SPECIALS_READY_OPS and specials_safe(
+        formats.input_format, formats.output_format, dest_acc
+    )
+    spec_A = edge_spec(
+        mathop,
+        formats.input_format,
+        formats.output_format,
+        specials=specials,
+        dest_acc=dest_acc,
+    )
+    if spec_A is None:
+        pytest.skip(
+            reason=f"{mathop.name} has no edge values for this pipeline "
+            "(smooth in x, and specials not preserved here)"
+        )
+
+    _run_sfpu_binop_scalar(
+        formats, dest_acc, mathop, scalar=_PRESUBMIT_SCALAR, spec_A=spec_A
+    )

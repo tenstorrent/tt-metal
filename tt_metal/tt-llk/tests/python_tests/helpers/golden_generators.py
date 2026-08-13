@@ -5006,6 +5006,7 @@ class ScalarBinopGolden:
         operand_a,
         value_bits: int,
         data_format: DataFormat,
+        dest_acc: DestAccumulation,
     ):
         # Decode the scalar the same way the kernel does (Converter::as_float).
         value = struct.unpack("<f", struct.pack("<I", value_bits & 0xFFFFFFFF))[0]
@@ -5023,7 +5024,22 @@ class ScalarBinopGolden:
         else:
             raise ValueError(f"Unsupported scalar binop operation: {operation}")
 
-        return result.to(format_dict[data_format]).flatten()
+        # Dest, then the pack path -- the same two steps UnarySFPUGolden models, and they only
+        # become observable once cat B drives a NaN through here.
+        #
+        # dest_acc decides the Dest width: Yes gives a 32-bit Dest that holds a NaN, No gives a
+        # 16-bit one that does not, and the packer substitutes an infinity of the NaN's own sign
+        # on the way out. This suite reaches exactly two combinations -- Float32 at dest_acc=Yes
+        # and Float16_b at dest_acc=No, the rest being excluded by _skip_unsupported -- so the
+        # width follows dest_acc alone here. A third combination would need the dst_format
+        # derivation UnarySFPUGolden.__call__ does.
+        #
+        # cast_to_dest_dtype rather than .to(): torch's bfloat16 cast forces every NaN's sign
+        # bit to 1, which would then decide the substituted infinity's sign by accident.
+        result = cast_to_dest_dtype(result, format_dict[data_format]).flatten()
+        if dest_acc == DestAccumulation.No:
+            result = convert_nan_to_inf(result)
+        return result
 
 
 def truncate_to_bfloat16(values: torch.Tensor) -> torch.Tensor:

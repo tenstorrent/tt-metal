@@ -2069,6 +2069,28 @@ SPECIALS_READY_OPS.update(
     }
 )
 
+# The five scalar binops. They are not in sfpu_unary_ops() -- they have their own suite and
+# their own golden (ScalarBinopGolden) -- so none of the unary tranches reached them, and cat B
+# is their *entire* edge story: each is `x (+|-|*|/) c` for a compile-time c, so it is smooth in
+# x, has no pole and no knee, and edge_spec() returns None for it unless specials are on.
+#
+# Their goldens are plain torch arithmetic in fp32, which is IEEE-correct at every special, so
+# there was never a golden to fix here -- only the enrolment that turns the wrapper in
+# test_sfpu_binop_scalar.py from 20 skips into runs.
+SPECIALS_READY_OPS.update(
+    {
+        MathOperation.ScalarAdd: "x + c: +/-inf and NaN pass through the add, +/-0 + c = c. "
+        "Golden is plain fp32 arithmetic.",
+        MathOperation.ScalarSub: "x - c: as ScalarAdd with the sign of c.",
+        MathOperation.ScalarMul: "x * c: +/-inf * c keeps the sign for a finite non-zero c, "
+        "NaN propagates, and +/-0 * c keeps the zero's sign.",
+        MathOperation.ScalarDiv: "x / d, which the host turns into x * (1/d) at compile time, "
+        "so it is ScalarMul at the kernel and d never reaches the device. A divide-by-zero is "
+        "therefore unreachable through this op.",
+        MathOperation.ScalarRsub: "c - x: +inf and -inf swap, NaN propagates, c - (+/-0) = c.",
+    }
+)
+
 # Fill is enrolled, but read its entry narrowly: the kernel writes a compile-time constant and
 # its golden ignores the input, so driving specials through it asserts that a non-finite *input*
 # does not corrupt a constant fill -- and nothing at all about how Fill handles a NaN, because it
