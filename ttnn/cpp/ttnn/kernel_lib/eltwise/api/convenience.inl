@@ -29,6 +29,23 @@ ALWI void square(TypedIterationShape<Kind> shape) {
         shape, BinaryFpu<BinaryFpuOp::Mul, Input, Input, Dst::D0, Output.dest_accumulation>{}, PackTile<Output>{});
 }
 
+constexpr RowOutputSpec row_output(uint32_t cb_id, DataFormatReconfig reconfig, PackRelu relu) noexcept {
+    return {cb_id, reconfig, relu};
+}
+
+template <InputSpec Input, RowOutputSpec RowOutput>
+ALWI void sum_of_squares(TypedIterationShape<IterationShapeKind::Grid> shape) {
+    constexpr auto output_spec = output(
+        RowOutput.cb_id,
+        ReservePolicy::PerOuter,
+        PushPolicy::PerOuter,
+        RowOutput.reconfig,
+        RowOutput.relu,
+        L1Accumulation::Disabled,
+        DestAccumulation::PerRow);
+    square<Input, output_spec>(shape);
+}
+
 template <class SfpuOp, InputSpec Input, OutputSpec Output, IterationShapeKind Kind>
 ALWI void unary(TypedIterationShape<Kind> shape) {
     static_assert(is_dest_only_op_v<SfpuOp>, "unary<SfpuOp, ...>: SfpuOp must be a DEST-only SFPU element");
