@@ -1,11 +1,13 @@
-# M0 4x4 RING/RING connected to M1 4x28 RING/LINE = 16 + 112 = 128 ASICs, i.e. a full SC4 quad
-# galaxy viewed as a 4x32 row of four 4x8 galaxies. M0 takes the first 4 columns, M1 the remaining
-# 28, joined by a 16-channel intermesh link.
+# Sandwich MGD on a full SC4 (128 ASICs): M0 4x4 RING/RING sandwiched between two 4x2 RING/LINE
+# instances (mesh_id 1 and 2, both of the shared M_4x2 descriptor); together 16 + 8 + 8 = 32 = one
+# galaxy. M3 4x24 RING/LINE is the remaining 3 galaxies, mapped via the new 4x24_Mesh PGD grouping.
+# Ring: M3 - M_4x2(1) - M0 - M_4x2(2) - M3.
 #
-# NOTE: this does NOT currently map on the SC4 quad mock. The 4x28 mesh is not galaxy-aligned --
-# the 128-ASIC system exposes 4x32 / 8x16 groupings, so a 4x28 cannot be carved out to leave a
-# disjoint 4x4 (topology mapper: M1=1 placement, M0=8 placements, none mutually disjoint,
-# success=false). Kept as a shape/coverage test case.
+# NOTE: does NOT currently map on the SC4 quad mock. The new 4x24_Mesh grouping works (M3 commits
+# 4x24_Mesh_flat_torus_x) and each 4x2 commits 4x2_Mesh_horizontal, but M0 4x4 RING/RING is forced
+# onto 4x4_SplitHost_flat_torus_xy, whose torus placement cannot coexist disjointly with M3's
+# 3-galaxy block and the sandwich (0 mesh-level combinations, success=false). Making M0 RING/LINE
+# instead lets the sandwich galaxy tile and the whole thing maps. Kept as a shape/coverage case.
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
@@ -14,21 +16,45 @@ mesh_descriptors {
   channels { count: 2 policy: RELAXED }
 }
 mesh_descriptors {
-  name: "M1"
+  name: "M_4x2"
   arch: BLACKHOLE
-  device_topology { dims: [ 4, 28 ] dim_types: [ RING, LINE ] }
-  host_topology   { dims: [ 1, 4 ] }
+  device_topology { dims: [ 4, 2 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+mesh_descriptors {
+  name: "M3"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 24 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 3 ] }
   channels { count: 2 policy: RELAXED }
 }
 graph_descriptors {
   name: "G0"
   type: "FABRIC"
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M0"    mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M_4x2" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M_4x2" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "M3"    mesh_id: 3 } }
   connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
-    channels { count: 16 policy: RELAXED }
+    nodes { mesh { mesh_descriptor: "M_4x2" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M0"    mesh_id: 0 } }
+    channels { count: 2 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0"    mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M_4x2" mesh_id: 2 } }
+    channels { count: 2 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M_4x2" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M3"    mesh_id: 3 } }
+    channels { count: 2 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M_4x2" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M3"    mesh_id: 3 } }
+    channels { count: 2 policy: RELAXED }
   }
 }
 top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
