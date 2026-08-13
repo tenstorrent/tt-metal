@@ -7,7 +7,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "tt_metal/distributed/mesh_io.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -248,10 +248,14 @@ int main() {
     // =========== Step 7: Write inputs on MeshCQ1 ===========
     // IO is done through MeshCQ1 and Workload dispatch is done through MeshCQ0. Use MeshEvents to synchronize the
     // independent MeshCQs.
-    EnqueueWriteMeshBuffer(data_movement_cq, add_src0_buf, add_src0_vec, false);
-    EnqueueWriteMeshBuffer(data_movement_cq, add_src1_buf, add_src1_vec, false);
-    EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src0_buf, mul_sub_src0_vec, false);
-    EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src1_buf, mul_sub_src1_vec, false);
+    tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
+        .enqueue_write_mesh_buffer(add_src0_buf, add_src0_vec.data(), false);
+    tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
+        .enqueue_write_mesh_buffer(add_src1_buf, add_src1_vec.data(), false);
+    tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
+        .enqueue_write_mesh_buffer(mul_sub_src0_buf, mul_sub_src0_vec.data(), false);
+    tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
+        .enqueue_write_mesh_buffer(mul_sub_src1_buf, mul_sub_src1_vec.data(), false);
     // Synchronize
     MeshEvent write_event = data_movement_cq.enqueue_record_event();
     workload_cq.enqueue_wait_for_event(write_event);
@@ -264,9 +268,30 @@ int main() {
     std::vector<bfloat16> add_dst_vec = {};
     std::vector<bfloat16> mul_sub_dst_vec = {};
     add_dst_vec.resize(add_output_buf->size() / sizeof(bfloat16));
-    EnqueueReadMeshBuffer(data_movement_cq, add_dst_vec, add_output_buf, true);
+    if ((add_output_buf)->global_layout() == MeshBufferLayout::SHARDED) {
+        (add_dst_vec)
+            .resize(
+                (add_output_buf)->global_shard_spec().global_size /
+                sizeof(typename std::decay_t<decltype(add_dst_vec)>::value_type));
+    } else {
+        (add_dst_vec)
+            .resize((add_output_buf)->size() / sizeof(typename std::decay_t<decltype(add_dst_vec)>::value_type));
+    }
+    tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
+        .enqueue_read_mesh_buffer((add_dst_vec).data(), add_output_buf, true);
     mul_sub_dst_vec.resize(mul_sub_output_buf->size() / sizeof(bfloat16));
-    EnqueueReadMeshBuffer(data_movement_cq, mul_sub_dst_vec, mul_sub_output_buf, true);
+    if ((mul_sub_output_buf)->global_layout() == MeshBufferLayout::SHARDED) {
+        (mul_sub_dst_vec)
+            .resize(
+                (mul_sub_output_buf)->global_shard_spec().global_size /
+                sizeof(typename std::decay_t<decltype(mul_sub_dst_vec)>::value_type));
+    } else {
+        (mul_sub_dst_vec)
+            .resize(
+                (mul_sub_output_buf)->size() / sizeof(typename std::decay_t<decltype(mul_sub_dst_vec)>::value_type));
+    }
+    tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
+        .enqueue_read_mesh_buffer((mul_sub_dst_vec).data(), mul_sub_output_buf, true);
 
     // =========== Step 10: Verify Outputs ===========
     bool pass = true;

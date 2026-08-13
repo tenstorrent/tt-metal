@@ -23,7 +23,6 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
-#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal {
 
@@ -177,7 +176,8 @@ StochasticRoundingResult run_stochastic_rounding(
 
     mesh_workload.add_program(distributed::MeshCoordinateRange(cq.device()->shape()), std::move(program));
 
-    distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, packed_input, false);
+    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(
+        input_dram_buffer, packed_input.data(), false);
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     distributed::Finish(cq);
 

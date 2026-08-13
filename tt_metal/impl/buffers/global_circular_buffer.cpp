@@ -40,7 +40,7 @@
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <umd/device/types/xy_pair.hpp>
-#include "tt_metal/distributed/mesh_io.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -248,7 +248,7 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
 
     // Host writes to a DRAM core's L1 go over NOC and need the DRAM-L1 NOC offset
     // added on top of the local L1 address. (Worker L1 has local==NOC space so the
-    // EnqueueWriteMeshBuffer path used for the receiver-side config buffer doesn't
+    // enqueue_write_mesh_buffer path used for the receiver-side config buffer doesn't
     // need this; DRAM-core L1 sits at a high NOC offset on Blackhole.)
     auto& metal_ctx = MetalContext::instance(context_id);
     const uint64_t dram_l1_noc_offset = metal_ctx.hal().get_l1_noc_offset(HalProgrammableCoreType::DRAM);
@@ -407,8 +407,8 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         }
     }
     auto mesh_buffer = cb_config_buffer_.get_mesh_buffer();
-    distributed::EnqueueWriteMeshBuffer(
-        mesh_buffer->device()->mesh_command_queue(), mesh_buffer, cb_config_host_buffer, false);
+    distributed::as_mesh_command_queue_base(mesh_buffer->device()->mesh_command_queue())
+        .enqueue_write_mesh_buffer(mesh_buffer, cb_config_host_buffer.data(), false);
 }
 
 const Buffer& GlobalCircularBuffer::cb_buffer() const { return *cb_buffer_.get_buffer(); }

@@ -4,7 +4,7 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include "tt_metal/distributed/mesh_io.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 // Stand-alone example demonstrating usage of native multi-device TT-Metalium APIs
 // for issuing Read and Write commands to a distributed memory buffer spanning
@@ -44,12 +44,23 @@ int main() {
     // Enqueue a write to the distributed buffer (L1 banks across devices) with random data.
     std::vector<uint32_t> src_data = create_random_vector_of_bfloat16(
         distributed_buffer_size_bytes, 1, std::chrono::system_clock::now().time_since_epoch().count());
-    EnqueueWriteMeshBuffer(cq, mesh_buffer, src_data, false);
+    tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(
+        mesh_buffer, src_data.data(), false);
 
     // Enqueue a read from the distributed buffer (L1 banks across devices) to a local buffer.
     std::vector<uint32_t> read_back_data{};
     read_back_data.resize(mesh_buffer->size() / sizeof(uint32_t));
-    EnqueueReadMeshBuffer(cq, read_back_data, mesh_buffer, true);
+    if ((mesh_buffer)->global_layout() == MeshBufferLayout::SHARDED) {
+        (read_back_data)
+            .resize(
+                (mesh_buffer)->global_shard_spec().global_size /
+                sizeof(typename std::decay_t<decltype(read_back_data)>::value_type));
+    } else {
+        (read_back_data)
+            .resize((mesh_buffer)->size() / sizeof(typename std::decay_t<decltype(read_back_data)>::value_type));
+    }
+    tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer(
+        (read_back_data).data(), mesh_buffer, true);
 
     // Data read back across all devices in the mesh should match the original data.
     assert(src_data == read_back_data);

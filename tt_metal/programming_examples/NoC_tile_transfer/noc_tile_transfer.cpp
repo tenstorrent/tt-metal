@@ -8,7 +8,7 @@
 
 #include <cstdint>
 #include <vector>
-#include "tt_metal/distributed/mesh_io.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -60,7 +60,7 @@ int main() {
     // Source data preparation and DRAM transfer
     const uint16_t input_data = 14;  // Example input data
     std::vector<uint16_t> src_vec(buffer_config.size / sizeof(uint16_t), input_data);
-    distributed::EnqueueWriteMeshBuffer(cq, src_dram_buffer, src_vec, false);
+    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src_dram_buffer, src_vec.data(), false);
 
     // L1 circular buffer setup
     constexpr uint32_t src0_cb_index = CBIndex::c_0;
@@ -118,7 +118,16 @@ int main() {
     // Data transfer back to host machine
     std::vector<uint16_t> result_vec;
     result_vec.resize(dst_dram_buffer->size() / sizeof(uint16_t));
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+    if ((dst_dram_buffer)->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED) {
+        (result_vec)
+            .resize(
+                (dst_dram_buffer)->global_shard_spec().global_size /
+                sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+    } else {
+        (result_vec)
+            .resize((dst_dram_buffer)->size() / sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+    }
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((result_vec).data(), dst_dram_buffer, true);
 
     fmt::print("Result = {} : Expected = {}\n", result_vec[0], input_data);
 

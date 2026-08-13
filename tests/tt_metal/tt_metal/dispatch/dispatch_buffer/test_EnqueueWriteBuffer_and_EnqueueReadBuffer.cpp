@@ -52,7 +52,6 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
-#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal {
 
@@ -2571,10 +2570,17 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, EnqueueBufferVariousDims) {
             auto buf = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
             auto src = local_test_functions::generate_arange_vector(buf->size());
 
-            EXPECT_NO_THROW(distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), buf, src, false));
+            EXPECT_NO_THROW(distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                                .enqueue_write_mesh_buffer(buf, src.data(), false));
 
             std::vector<uint32_t> dst;
-            EXPECT_NO_THROW(distributed::EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), dst, buf, true));
+            if (buf->global_layout() == distributed::MeshBufferLayout::SHARDED) {
+                dst.resize(buf->global_shard_spec().global_size / sizeof(uint32_t));
+            } else {
+                dst.resize(buf->size() / sizeof(uint32_t));
+            }
+            EXPECT_NO_THROW(distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+                                .enqueue_read_mesh_buffer(dst.data(), buf, true));
 
             EXPECT_EQ(src, dst);
         }

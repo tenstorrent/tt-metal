@@ -47,7 +47,6 @@
 // Access to internal API: ProgramImpl::validate_circular_buffer_region
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
-#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal {
 
@@ -156,7 +155,8 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
     distributed::Synchronize(device, std::nullopt);
 
     // Test blocking write buffer doesn't stall
-    distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), buffer_1, input_1, true);
+    distributed::as_mesh_command_queue_base(device->mesh_command_queue())
+        .enqueue_write_mesh_buffer(buffer_1, input_1.data(), true);
 
     // Test record event won't cause a stall
 

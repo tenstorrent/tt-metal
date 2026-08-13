@@ -12,15 +12,18 @@
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/vector_aligned.hpp>
 
-#include "llrt/tt_target_device.hpp"
-
 #include <tt_stl/assert.hpp>
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
+
+namespace tt {
+enum class TargetDevice : std::uint8_t;
+}  // namespace tt
 
 namespace tt::tt_metal {
 class IDevice;

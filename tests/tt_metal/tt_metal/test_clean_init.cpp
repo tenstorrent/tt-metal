@@ -29,7 +29,6 @@
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
-#include "tt_metal/distributed/mesh_io.hpp"
 /*
  * Similar to loopback programming example, except run on al devices and skip device teardown to check if we can
  * recover from a "bad" state.
@@ -112,7 +111,8 @@ int main(int argc, char** /*argv*/) {
              */
             std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
                 dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-            distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, false);
+            distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(
+                input_dram_buffer, input_vec.data(), false);
 
             const std::array<uint32_t, 4> runtime_args = {
                 l1_buffer->address(),

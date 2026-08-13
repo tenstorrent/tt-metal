@@ -40,7 +40,6 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
-#include "tt_metal/distributed/mesh_io.hpp"
 namespace tt::tt_metal {
 
 using std::map;
@@ -246,7 +245,7 @@ void create_and_run_row_pipeline(
         create_random_vector_of_bfloat16(buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
 
     log_info(LogTest, "Writing to device buffer->..");
-    distributed::EnqueueWriteMeshBuffer(cq, src_buffer, src_vec);
+    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src_buffer, src_vec.data(), false);
     log_info(LogTest, "Writing to device buffer Done.");
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     distributed::Finish(cq);

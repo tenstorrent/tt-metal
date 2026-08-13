@@ -29,7 +29,6 @@
 #include "tests/tt_metal/distributed/utils.hpp"
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
-#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal::distributed::test {
 
@@ -223,7 +222,8 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         auto fd_buf = MeshBuffer::create(fd_l1_global, fd_l1_config, mesh_device_.get());
         std::vector<uint32_t> fd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
         std::iota(fd_src_vec.begin(), fd_src_vec.end(), base + 100);
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), fd_buf, fd_src_vec);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+            .enqueue_write_mesh_buffer(fd_buf, fd_src_vec.data(), false);
         Finish(mesh_device_->mesh_command_queue());
 
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
@@ -256,11 +256,12 @@ TEST_F(DispatchContextFixture, RepeatedFdSdTransitionStress) {
         }
 
         // Write and verify interleaved L1 buffer in SD mode. Validated shard-by-shard because
-        // EnqueueReadMeshBuffer is only defined for sharded global layouts on multi-device meshes.
+        // enqueue_read_mesh_buffer is only defined for sharded global layouts on multi-device meshes.
         auto sd_buf = MeshBuffer::create(sd_l1_global, sd_l1_config, mesh_device_.get());
         std::vector<uint32_t> sd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
         std::iota(sd_src_vec.begin(), sd_src_vec.end(), base + 200);
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), sd_buf, sd_src_vec);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
+            .enqueue_write_mesh_buffer(sd_buf, sd_src_vec.data(), false);
         Finish(mesh_device_->mesh_command_queue());
 
         for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {

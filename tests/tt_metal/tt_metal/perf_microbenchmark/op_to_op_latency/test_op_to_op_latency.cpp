@@ -102,7 +102,7 @@
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 #include "test_common.hpp"
-#include "tt_metal/distributed/mesh_io.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -1050,7 +1050,8 @@ int main(int argc, char** argv) {
             create_random_vector_of_bfloat16(buffer_size_bytes, /*rand_max_float=*/100, seed);
 
         auto& cq = mesh_device->mesh_command_queue();
-        distributed::EnqueueWriteMeshBuffer(cq, input_buffer, input_data, /*blocking=*/false);
+        distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(
+            input_buffer, input_data.data(), /*blocking=*/false);
         // Drain the input upload before trace capture: host writes are not allowed while
         // a trace is being recorded (see FDMeshCommandQueue "Writes are not supported
         // during trace capture"). Warmup's Finish used to hide this; --no-warmup needs
@@ -1187,7 +1188,17 @@ int main(int argc, char** argv) {
 
         if (!cfg.read_only && !cfg.skip_output_validation) {
             std::vector<uint32_t> output_data;
-            distributed::EnqueueReadMeshBuffer(cq, output_data, output_buffer, /*blocking=*/true);
+            if ((output_buffer)->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED) {
+                (output_data)
+                    .resize(
+                        (output_buffer)->global_shard_spec().global_size /
+                        sizeof(typename std::decay_t<decltype(output_data)>::value_type));
+            } else {
+                (output_data)
+                    .resize((output_buffer)->size() / sizeof(typename std::decay_t<decltype(output_data)>::value_type));
+            }
+            distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer(
+                (output_data).data(), output_buffer, /*blocking=*/true);
 
             if (output_data.size() != input_data.size()) {
                 log_error(

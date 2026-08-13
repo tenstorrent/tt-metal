@@ -17,7 +17,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
-#include "tt_metal/distributed/mesh_io.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal {
 
@@ -106,7 +106,8 @@ void run_single_host_loopback_pipeline(
         mesh_device.get());
     // Write 0 to latency measurement buffer (initializes credit/barrier to 0)
     std::vector<uint32_t> latency_init_data(latency_measurement_buffer_size / sizeof(uint32_t), 0);
-    EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), latency_measurement_buffer, latency_init_data, true);
+    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+        .enqueue_write_mesh_buffer(latency_measurement_buffer, latency_init_data.data(), true);
     const uint32_t latency_measurement_address = latency_measurement_buffer->address();
     log_info(tt::LogTest, "Latency measurement buffer address: {}", latency_measurement_address);
 
@@ -129,7 +130,8 @@ void run_single_host_loopback_pipeline(
     }
 
     // Write data to device buffer
-    EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), input_mesh_buffer, host_data, true);
+    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+        .enqueue_write_mesh_buffer(input_mesh_buffer, host_data.data(), true);
 
     // Extract buffer pointer for metal-level operations
     Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
@@ -252,7 +254,8 @@ void run_single_host_rate_pipeline(
     for (uint32_t j = 0; j < num_elems; j++) {
         host_data[j] = j;
     }
-    EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), input_mesh_buffer, host_data, true);
+    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+        .enqueue_write_mesh_buffer(input_mesh_buffer, host_data.data(), true);
     Buffer* input_buffer = input_mesh_buffer->get_reference_buffer();
 
     // Warmup: run the full pipeline with a small iteration count to trigger kernel compilation

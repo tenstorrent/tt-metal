@@ -20,7 +20,6 @@
 #include <tt-logger/tt-logger.hpp>
 #include "test_gold_impls.hpp"
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
-#include "tt_metal/distributed/mesh_io.hpp"
 
 using std::vector;
 using namespace tt;
@@ -140,7 +139,7 @@ void run_eltwise_binary_test(
     // Execute
     std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
         dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, false);
+    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src0_dram_buffer, src0_vec.data(), false);
 
     std::vector<uint32_t> src1_vec;
     if (eltwise_op == static_cast<int>(EltwiseOp::MUL)) {
@@ -148,7 +147,7 @@ void run_eltwise_binary_test(
     } else {
         src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 0.0f);
     }
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, false);
+    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src1_dram_buffer, src1_vec.data(), false);
 
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     std::vector<uint32_t> result_vec;

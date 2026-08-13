@@ -7,7 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include "tt_metal/distributed/mesh_io.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -80,8 +80,8 @@ int main() {
     // write operation should block until the data is written to the device. In this case, we set it to false for
     // asynchronous writes, allowing the program to continue executing while the data is being written. This is
     // recommended for most writes to device in applications to improve performance.
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, false);
+    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src0_dram_buffer, src0_vec.data(), false);
+    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src1_dram_buffer, src1_vec.data(), false);
 
     // Create the kernel (code that runs on the Tensix core) that will perform the addition of the 2 integers.
     // The Data Movement cores are the only cores that can read/write data from/to DRAM. Thus we use them for
@@ -119,7 +119,16 @@ int main() {
     // NOTE: Everything on the command queue executes in order; a read will not run before the prior kernel finishes.
     std::vector<uint32_t> result_vec;
     result_vec.resize(dst_dram_buffer->size() / sizeof(uint32_t));
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+    if ((dst_dram_buffer)->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED) {
+        (result_vec)
+            .resize(
+                (dst_dram_buffer)->global_shard_spec().global_size /
+                sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+    } else {
+        (result_vec)
+            .resize((dst_dram_buffer)->size() / sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+    }
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((result_vec).data(), dst_dram_buffer, true);
     if (result_vec.size() != 1) {
         std::cout << "Error: Expected result vector size of 1, got " << result_vec.size() << std::endl;
         mesh_device->close();

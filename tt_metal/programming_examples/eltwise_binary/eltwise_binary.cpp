@@ -15,7 +15,7 @@
 #include <string_view>
 #include <vector>
 #include "tt-metalium/base_types.hpp"
-#include "tt_metal/distributed/mesh_io.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -78,8 +78,8 @@ int main(int /*argc*/, char** /*argv*/) {
         std::vector<bfloat16> b_data(elements_per_tile * n_tiles, bfloat16(val_to_add));
 
         // Upload host vectors into the mesh buffers.
-        distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a_data, false);
-        distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b_data, false);
+        distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src0_dram_buffer, a_data.data(), false);
+        distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src1_dram_buffer, b_data.data(), false);
 
         // Create 3 circular buffers. Think them like pipes moving data from one core to another. cb_src0 and cb_src1 are used to
         // move data from the reader kernel to the compute kernel. cb_dst is used to move data from the compute kernel to the writer
@@ -160,7 +160,7 @@ int main(int /*argc*/, char** /*argv*/) {
         // Read the output buffer (from shard at mesh coordinate {0,0} on a unit mesh) and validate.
         std::vector<bfloat16> result_vec;
         result_vec.resize(dst_dram_buffer->size() / sizeof(bfloat16));
-        distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((result_vec).data(), dst_dram_buffer, true);
 
         constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16
         TT_FATAL(result_vec.size() == a_data.size(), "Result vector size mismatch");

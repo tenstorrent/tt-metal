@@ -7,7 +7,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "tt_metal/distributed/mesh_io.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -130,8 +130,8 @@ int main() {
 
     // Write data to distributed buffers
     auto& cq = mesh_device->mesh_command_queue();
-    EnqueueWriteMeshBuffer(cq, a, a_data, false);
-    EnqueueWriteMeshBuffer(cq, b, b_data, false);
+    tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(a, a_data.data(), false);
+    tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(b, b_data.data(), false);
 
     // Create program for distributed computation
     auto program = CreateEltwiseAddProgram(a, b, c, tile_size_bytes, num_tiles);
@@ -145,7 +145,15 @@ int main() {
 
     // Read back results
     std::vector<uint32_t> result_data(a_data.size(), 0);
-    EnqueueReadMeshBuffer(cq, result_data, c, true);
+    if ((c)->global_layout() == MeshBufferLayout::SHARDED) {
+        (result_data)
+            .resize(
+                (c)->global_shard_spec().global_size /
+                sizeof(typename std::decay_t<decltype(result_data)>::value_type));
+    } else {
+        (result_data).resize((c)->size() / sizeof(typename std::decay_t<decltype(result_data)>::value_type));
+    }
+    tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((result_data).data(), c, true);
 
     // Verify results
     auto transform_to_golden = [](const bfloat16& a) { return bfloat16(static_cast<float>(a) + val_to_add); };

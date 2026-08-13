@@ -30,7 +30,6 @@
 #include "mesh_coord.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
-#include "tt_metal/distributed/mesh_io.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -38,7 +37,7 @@ using namespace tt::tt_metal::distributed;
 
 ////////////////////////////////////////////////////////////////////////////////
 // This test measures the bandwidth of host-to-device data transfer and
-// device-to-host data transfer. It uses EnqueueWriteMeshBuffer and
+// device-to-host data transfer. It uses enqueue_write_mesh_buffer and
 // ReadShard APIs to transfer the data. The device memory object
 // (mesh buffer) will be in DRAM.
 //
@@ -99,7 +98,8 @@ static void BM_write(
         mesh_device.get());
 
     for ([[maybe_unused]] auto _ : state) {
-        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), device_buffer, host_buffer, true);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+            .enqueue_write_mesh_buffer(device_buffer, host_buffer.data(), true);
     }
 
     state.SetBytesProcessed(transfer_size * state.iterations());
@@ -357,7 +357,7 @@ static void BM_read(benchmark::State& state, const std::shared_ptr<MeshDevice>& 
     std::vector<ElementType> host_buffer(transfer_size / ElementSize);
 
     for ([[maybe_unused]] auto _ : state) {
-        // EnqueueReadMeshBuffer cannot read from a replicated buffer yet, have to use ReadShard
+        // enqueue_read_mesh_buffer cannot read from a replicated buffer yet, have to use ReadShard
         {
             auto* shard = device_buffer->get_device_buffer(MeshCoordinate(0, 0));
             host_buffer.resize(

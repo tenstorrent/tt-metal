@@ -164,7 +164,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
             };
             kernel_bin_buf_ =
                 MeshBuffer::create(global_kernel_bin_buf_config, device_local_kernel_bin_buf_config, mesh_device);
-            // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs an individual program
+            // Iterate over the sub-grids and write to each sub-grid that runs an individual program
             for (auto& [device_range, program] : this->programs_) {
                 std::size_t kernel_bin_size =
                     program.impl().get_program_transfer_info().binary_data.size() * sizeof(uint32_t);

@@ -33,7 +33,6 @@
 #include "llrt/tt_cluster.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
-#include "tt_metal/distributed/mesh_io.hpp"
 
 namespace tt::tt_metal::distributed::test {
 
@@ -257,7 +256,8 @@ TEST_F(ServiceCoreSdFixture, PersistentServiceMultiCycle) {
         auto fd_buf = MeshBuffer::create(fd_l1_global, fd_l1_config, mesh_device.get());
         std::vector<uint32_t> fd_src_vec(num_tiles * single_tile_size / sizeof(uint32_t));
         std::iota(fd_src_vec.begin(), fd_src_vec.end(), 100);
-        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), fd_buf, fd_src_vec);
+        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
+            .enqueue_write_mesh_buffer(fd_buf, fd_src_vec.data(), false);
         Finish(mesh_device->mesh_command_queue());
 
         for (const auto& coord : MeshCoordinateRange(mesh_device->shape())) {

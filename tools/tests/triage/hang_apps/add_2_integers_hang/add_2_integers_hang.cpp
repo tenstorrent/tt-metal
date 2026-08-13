@@ -9,7 +9,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "tt_metal/distributed/mesh_io.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -133,8 +133,10 @@ int main() {
     // is not released before the operation is complete.
     // In this case, we will wait for the program to finish eventually in the same scope, so we can set it
     // to false safely.
-    EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, false);
-    EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, false);
+    tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(
+        src0_dram_buffer, src0_vec.data(), false);
+    tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(
+        src1_dram_buffer, src1_vec.data(), false);
 
     // Setup arguments for the kernels in the program.
     // Unlike OpenCL/CUDA, every kernel can have its own set of arguments.
@@ -165,7 +167,16 @@ int main() {
     // specific shard of a MeshBuffer. The shard is specified by the MeshCoordinate. The last argument indicates if the
     // operation is blocking or not.
     std::vector<bfloat16> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+    if ((dst_dram_buffer)->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED) {
+        (result_vec)
+            .resize(
+                (dst_dram_buffer)->global_shard_spec().global_size /
+                sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+    } else {
+        (result_vec)
+            .resize((dst_dram_buffer)->size() / sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+    }
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((result_vec).data(), dst_dram_buffer, true);
 
     // compare the results with the expected values.
     bool success = true;

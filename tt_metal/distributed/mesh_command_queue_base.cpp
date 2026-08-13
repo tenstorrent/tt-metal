@@ -19,6 +19,7 @@
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/threading/thread_pool.hpp"
 #include "tt_cluster.hpp"
+#include "tt_target_device.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 

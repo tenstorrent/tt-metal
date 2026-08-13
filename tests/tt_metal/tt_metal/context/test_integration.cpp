@@ -48,7 +48,7 @@
 #include <limits>
 #include <optional>
 #include <string>
-#include "tt_metal/distributed/mesh_io.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal {
 
@@ -89,10 +89,17 @@ void PerformDeviceWork(
     std::iota(write_data.begin(), write_data.end(), data_pattern);
 
     auto& mesh_cq = mesh_device->mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(mesh_cq, mesh_buffer, write_data, false);
+    distributed::as_mesh_command_queue_base(mesh_cq).enqueue_write_mesh_buffer(mesh_buffer, write_data.data(), false);
 
     std::vector<uint32_t> read_data;
-    distributed::EnqueueReadMeshBuffer(mesh_cq, read_data, mesh_buffer, true);
+    if ((mesh_buffer)->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED) {
+        (read_data).resize(
+            (mesh_buffer)->global_shard_spec().global_size /
+            sizeof(typename std::decay_t<decltype(read_data)>::value_type));
+    } else {
+        (read_data).resize((mesh_buffer)->size() / sizeof(typename std::decay_t<decltype(read_data)>::value_type));
+    }
+    distributed::as_mesh_command_queue_base(mesh_cq).enqueue_read_mesh_buffer((read_data).data(), mesh_buffer, true);
 
     if (read_data != write_data) {
         throw std::runtime_error("Buffer read/write verification failed");
@@ -453,17 +460,24 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         ASSERT_FALSE(buffer->is_allocated());
 
         // Test command queue operations. Source vector is sized to fill the entire buffer so
-        // EnqueueWriteMeshBuffer's precondition (src bytes >= mesh buffer bytes, added in #43429)
+        // enqueue_write_mesh_buffer's precondition (src bytes >= mesh buffer bytes, added in #43429)
         // is satisfied; the prior 16-element vector was a pre-#43429 leftover.
         auto& cq = mock_device->mesh_command_queue();
         constexpr size_t num_elements = buffer_size / sizeof(uint32_t);
         std::vector<uint32_t> write_data(num_elements);
         std::iota(write_data.begin(), write_data.end(), 0xDEADBEEFu);
 
-        distributed::EnqueueWriteMeshBuffer(cq, buffer, write_data, true);
+        distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(buffer, write_data.data(), true);
 
         std::vector<uint32_t> read_data;
-        distributed::EnqueueReadMeshBuffer(cq, read_data, buffer, true);
+        if ((buffer)->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED) {
+            (read_data).resize(
+                (buffer)->global_shard_spec().global_size /
+                sizeof(typename std::decay_t<decltype(read_data)>::value_type));
+        } else {
+            (read_data).resize((buffer)->size() / sizeof(typename std::decay_t<decltype(read_data)>::value_type));
+        }
+        distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((read_data).data(), buffer, true);
 
         auto program = CreateProgram();
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mock_device->shape());

@@ -18,7 +18,7 @@
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include <distributed/mesh_device_impl.hpp>
-#include "tt_metal/distributed/mesh_io.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 namespace tt::tt_metal {
 
@@ -160,7 +160,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const DramSh
     vector<uint32_t> packed_output;
 
     auto& cq = mesh_device->mesh_command_queue();
-    distributed::EnqueueWriteMeshBuffer(cq, mesh_buffer, packed_input);
+    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(mesh_buffer, packed_input.data(), false);
 
     auto mesh_workload = distributed::MeshWorkload();
     vector<uint32_t> coord_data = {0, 0};

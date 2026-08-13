@@ -13,7 +13,7 @@
 #include <bmm_op.hpp>
 #include <algorithm>
 #include "tt-metalium/core_coord.hpp"
-#include "tt_metal/distributed/mesh_io.hpp"
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 
 using namespace tt::constants;
 using namespace std;
@@ -441,11 +441,18 @@ void matmul_multicore_reuse_mcast(
 
     /* Launch program & read in output buffer result into the host vector */
 
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src0_dram_buffer, a.data(), false);
+    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src1_dram_buffer, b.data(), false);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
+    if ((dst_dram_buffer)->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED) {
+        (output).resize(
+            (dst_dram_buffer)->global_shard_spec().global_size /
+            sizeof(typename std::decay_t<decltype(output)>::value_type));
+    } else {
+        (output).resize((dst_dram_buffer)->size() / sizeof(typename std::decay_t<decltype(output)>::value_type));
+    }
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((output).data(), dst_dram_buffer, true);
 }
 
 ///////////////////////////////////////
