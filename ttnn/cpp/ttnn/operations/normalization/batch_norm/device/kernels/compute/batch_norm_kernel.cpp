@@ -15,40 +15,50 @@
 namespace ckl = compute_kernel_lib;
 
 // out = ((input - batch_mean) / sqrt(batch_var + eps)) * optional(weight) + optional(bias).
-template <bool WeightHas, bool BiasHas>
+template <
+    bool WeightHas,
+    bool BiasHas,
+    uint32_t InputDfb,
+    uint32_t BatchMeanDfb,
+    uint32_t BatchVarDfb,
+    uint32_t EpsDfb,
+    uint32_t DenDfb,
+    uint32_t WeightDfb,
+    uint32_t BiasDfb,
+    uint32_t OutDfb>
 ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     ckl::eltwise_chain(
         ckl::IterationShape::one_tile(),
         ckl::BinaryFpu<
             ckl::BinaryFpuOp::Add,
-            ckl::input(dfb::batch_var, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
-            ckl::input(dfb::eps, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
+            ckl::input(BatchVarDfb, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::input(EpsDfb, ckl::WaitPolicy::None, ckl::PopPolicy::None)>{},
         ckl::Rsqrt<>{},
-        ckl::PackTile<ckl::output(dfb::den)>{});
+        ckl::PackTile<ckl::output(DenDfb)>{});
 
     const uint32_t inner_count = freq - tile_start;
 
     constexpr auto sub_op = ckl::BinaryFpu<
         ckl::BinaryFpuOp::Sub,
-        ckl::input(dfb::input),
-        ckl::input(dfb::batch_mean, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{};
+        ckl::input(InputDfb),
+        ckl::input(BatchMeanDfb, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd)>{};
     constexpr auto mul_den = ckl::DestReuseBinary<
-        ckl::input(dfb::den, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+        ckl::input(DenDfb, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
         ckl::BinaryFpuOp::Mul,
         ckl::DestReuseType::DEST_TO_SRCA>{};
     constexpr auto mul_weight = ckl::Optional<
         WeightHas,
         ckl::DestReuseBinary<
-            ckl::input(dfb::weight, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::input(WeightDfb, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::BinaryFpuOp::Mul,
             ckl::DestReuseType::DEST_TO_SRCA>>{};
     constexpr auto add_bias = ckl::Optional<
         BiasHas,
         ckl::DestReuseBinary<
-            ckl::input(dfb::bias, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
+            ckl::input(BiasDfb, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd),
             ckl::BinaryFpuOp::Add,
             ckl::DestReuseType::DEST_TO_SRCA>>{};
-    constexpr auto pack_out = ckl::PackTile<ckl::output(dfb::out)>{};
+    constexpr auto pack_out = ckl::PackTile<ckl::output(OutDfb)>{};
 
     ckl::eltwise_chain(ckl::IterationShape::tiles(inner_count), sub_op, mul_den, mul_weight, add_bias, pack_out);
 }
@@ -72,10 +82,30 @@ void kernel_main() {
     DataflowBuffer(dfb::eps).wait_front(1);
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
-        batchnorm_bcast_tiles<weight_has_value, bias_has_value>(tile_freq, tile_start);
+        batchnorm_bcast_tiles<
+            weight_has_value,
+            bias_has_value,
+            dfb::input,
+            dfb::batch_mean,
+            dfb::batch_var,
+            dfb::eps,
+            dfb::den,
+            dfb::weight,
+            dfb::bias,
+            dfb::out>(tile_freq, tile_start);
     }
     if (remaining_iterations > 0) {
-        batchnorm_bcast_tiles<weight_has_value, bias_has_value>(remaining_iterations, tile_start);
+        batchnorm_bcast_tiles<
+            weight_has_value,
+            bias_has_value,
+            dfb::input,
+            dfb::batch_mean,
+            dfb::batch_var,
+            dfb::eps,
+            dfb::den,
+            dfb::weight,
+            dfb::bias,
+            dfb::out>(remaining_iterations, tile_start);
     }
 
     DataflowBuffer(dfb::eps).pop_front(1);
