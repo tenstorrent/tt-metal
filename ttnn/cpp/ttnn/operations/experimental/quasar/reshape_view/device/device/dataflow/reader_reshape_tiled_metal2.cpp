@@ -49,7 +49,11 @@ void kernel_main() {
         uint32_t map_l1_addr;
         {
             // Hold the write lock across the NOC fill of this entry. Taken right after reserve_back, so
-            // get_ptr() is the pre-push write pointer. The lock also handles caching for the parse below.
+            // get_ptr() is the pre-push write pointer. The lock is what makes the NOC write into this DFB
+            // legal -- every NOC write into a DFB region must be fully covered by a lock the writing
+            // processor holds. It does NOT cover the parse below: that runs after the release (and after
+            // push_back), and is coherent only because map_l1_addr is the uncached L1 alias on Quasar DM,
+            // so the loads re-fetch from TL1.
             const auto map_lock = mapping_cb.scoped_write_lock(One_Tile_Reserve);
             const auto map_mem = map_lock.get_ptr();  // CoreLocalMem: the NOC dst, no rewrap needed
             map_l1_addr = static_cast<uint32_t>(map_mem.get_address());

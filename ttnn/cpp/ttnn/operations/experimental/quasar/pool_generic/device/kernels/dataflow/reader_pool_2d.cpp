@@ -517,16 +517,23 @@ void kernel_main() {
                 // read under multi-core load silently drops/duplicates sticks (the zero-write + adjacent-dup
                 // artifacts). A straight L1 copy is race-free and HW-faithful.
                 //
-                // COHERENCY: the compute packer wrote this stick's reduced row directly to Tensix L1 (TL1),
-                // bypassing this DM core's private L1 D$ / shared L2. The two locks handle caching for both
-                // sides of the copy -- the scratch reads see the freshly packed data (the scratch CB is
-                // single-buffered, so its address repeats every stick) and the output stores are visible to
-                // the host read-back.
+                // COHERENCY, read side: the compute packer wrote this stick's reduced row directly to
+                // Tensix L1 (TL1), bypassing this DM core's private L1 D$ / shared L2. scratch_lock covers
+                // exactly the entries it reads (scratch_row0_addr IS the lock's address), so its
+                // invalidate-on-acquire drops the stale line -- needed because the scratch CB is
+                // single-buffered and its address repeats every stick.
+                //
+                // COHERENCY, write side: out_lock must cover the stick we are about to store, so it locks
+                // EVERY entry, not one. A scoped lock always starts at wr_ptr, and this borrowed view is
+                // never reserved/pushed, so wr_ptr stays pinned at the shard base -- a 1-entry lock would
+                // invalidate/flush stick 0 while we write stick `global_stick`. Locking the whole ring is
+                // the only form that covers the target for every stick, and its flush-on-release
+                // publishes the stick to TL1.
 #ifndef ARCH_QUASAR
                 invalidate_l1_cache();
 #endif
                 const auto scratch_lock = scratch_cb.scoped_read_lock(scratch_npages);
-                const auto out_lock = out_shard_cb.scoped_write_lock(1);
+                const auto out_lock = out_shard_cb.scoped_write_lock(out_shard_cb.get_total_num_entries());
                 const uint32_t scratch_row0_addr =
                     static_cast<uint32_t>(scratch_lock.get_ptr().get_address());  // untilized row 0 = the result
                 const uint32_t out_dst_addr =
