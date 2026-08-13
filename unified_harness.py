@@ -125,7 +125,17 @@ def unified_program(
     all_semaphores = user_semaphores + [
         make_semaphore(mcast_sem_base + i, core_ranges, initial_value=0) for i in range(MCAST_SEMAPHORES)
     ]
-    defines = list(defines or []) + [("TT_UNIFIED_MCAST_SEM_BASE", str(mcast_sem_base))]
+    # The core grid, so synchronize_cores() can default to the whole program.
+    # Bounding box, not num_cores: a barrier addresses a rectangle.
+    bbox = core_ranges.bounding_box()
+    grid_h = bbox.end.y - bbox.start.y + 1
+    grid_w = bbox.end.x - bbox.start.x + 1
+
+    defines = list(defines or []) + [
+        ("TT_UNIFIED_MCAST_SEM_BASE", str(mcast_sem_base)),
+        ("TT_UNIFIED_CORE_GRID_H", str(grid_h)),
+        ("TT_UNIFIED_CORE_GRID_W", str(grid_w)),
+    ]
 
     shared = dict(
         kernel_source=kernel_source,
