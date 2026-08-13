@@ -221,6 +221,15 @@ CPMAddPackage(
 # nanobind : https://github.com/wjakob/nanobind
 ############################################################################################################################
 
+# GTest's own CMake (googletest/cmake/internal_utils.cmake) already calls
+# find_package(Python COMPONENTS Interpreter), which defines a Python::Interpreter target but no
+# Python::Module target. nanobind >= 2.13 only self-detects Python when *both* Python::Interpreter
+# and Python::Module are missing (previously: *either*), so with a partial Python::Interpreter
+# target already in scope, nanobind skips its own find_package(Python) call and fails when
+# nanobind-config.cmake asserts that Python::Module also exists. Find both components explicitly
+# here so nanobind sees a complete target set.
+find_package(Python 3.9 REQUIRED COMPONENTS Interpreter Development.Module OPTIONAL_COMPONENTS Development.SABIModule)
+
 CPMAddPackage(
     NAME nanobind
     GITHUB_REPOSITORY wjakob/nanobind
