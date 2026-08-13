@@ -46,11 +46,31 @@ def _preprocess_golden_function_inputs(args, kwargs):
     return (input_tensor, padding, value), {}
 
 
-def _golden_function(input_tensor: ttnn.Tensor, padding, value, **_):
+def _golden_function(input_tensor, padding, *args, value=0, **_):
     import torch
 
+    # Global comparison path passes raw ttnn.pad args; support both overloads:
+    # (padding_pairs, value) and (output_padded_shape, input_tensor_start, value).
+    if len(padding) > 0 and isinstance(padding[0], (list, tuple)):
+        pad_pairs = list(padding)
+        if args:
+            value = args[0]
+    else:
+        input_tensor_start = args[0]
+        if len(args) > 1:
+            value = args[1]
+        input_shape = list(input_tensor.shape)
+        pad_pairs = [
+            (input_tensor_start[i], padding[i] - input_shape[i] - input_tensor_start[i])
+            for i in range(len(input_shape))
+        ]
+
+    rank = len(input_tensor.shape)
+    if len(pad_pairs) < rank:
+        pad_pairs = [(0, 0)] * (rank - len(pad_pairs)) + list(pad_pairs)
+
     torch_padding = []
-    for dimension in reversed(padding):
+    for dimension in reversed(pad_pairs):
         torch_padding.append(dimension[0])
         torch_padding.append(dimension[1])
     return torch.nn.functional.pad(input_tensor, pad=torch_padding, mode="constant", value=value)
