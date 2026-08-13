@@ -51,7 +51,16 @@ void kernel_main() {
     constexpr uint32_t SRC_LOWER = REP_DIM_PAGES * LOWER_PAGES;
     constexpr uint32_t DST_LOWER = NUM_REPEATS * SRC_LOWER;
 
-    uint32_t out_page = out_start_page;
+    // out_page advances by one per read, so the formula above is evaluated once here and
+    // then stepped with counters, matching the TILE path's sequencer.
+    uint32_t block = out_start_page / DST_LOWER;
+    uint32_t within = out_start_page % DST_LOWER;
+    uint32_t lo = within % LOWER_PAGES;
+    uint32_t out_rep = within / LOWER_PAGES;
+    uint32_t in_rep = out_rep / NUM_REPEATS;
+    uint32_t src_page = block * SRC_LOWER + in_rep * LOWER_PAGES + lo;
+    uint32_t rep_phase = out_rep - in_rep * NUM_REPEATS;
+
     uint32_t pages_left = num_out_pages;
 
     while (pages_left > 0) {
@@ -60,16 +69,23 @@ void kernel_main() {
         uint32_t l1_offset = 0;
 
         for (uint32_t t = 0; t < batch; t++) {
-            uint32_t block = out_page / DST_LOWER;
-            uint32_t within = out_page % DST_LOWER;
-            uint32_t lo = within % LOWER_PAGES;
-            uint32_t out_rep = within / LOWER_PAGES;
-            uint32_t in_rep = out_rep / NUM_REPEATS;
-            uint32_t src_page = block * SRC_LOWER + in_rep * LOWER_PAGES + lo;
-
             noc.async_read(s, cb_in, stick_size, {.page_id = src_page, .offset_bytes = 0}, {.offset_bytes = l1_offset});
             l1_offset += l1_slot_stride;
-            out_page++;
+
+            if (++lo == LOWER_PAGES) {
+                lo = 0;
+                if (++rep_phase == NUM_REPEATS) {
+                    // in_rep advances, carrying into block when it wraps. SRC_LOWER is
+                    // REP_DIM_PAGES * LOWER_PAGES, so either carry moves the source base up
+                    // by exactly LOWER_PAGES, which cancels against rewinding lo to 0.
+                    rep_phase = 0;
+                    src_page++;
+                } else {
+                    src_page -= LOWER_PAGES - 1;
+                }
+            } else {
+                src_page++;
+            }
         }
         noc.async_read_barrier();
         cb_in.push_back(batch);
