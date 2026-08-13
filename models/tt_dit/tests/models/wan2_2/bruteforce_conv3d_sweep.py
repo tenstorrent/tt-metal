@@ -694,6 +694,77 @@ def test_bruteforce_sweep_h4w8_720p_full_t(
 
 
 # ---------------------------------------------------------------------------
+# BH Galaxy 2x8 submesh -> H sharded 8-way, W 2-way (h_factor=8, w_factor=2,
+# hence the (8, 2, ...) key prefix), cosmos3-i2v 720p/189f, decoder
+# t_chunk_size=1. Shapes are the exact (T, H, W) tuples the decoder call
+# sites pass to get_conv3d_config; T=6 is the per-chunk conv input (1 latent
+# frame + causal context). Tuned results live in conv3d.py _BLOCKINGS —
+# re-run this sweep to regenerate them.
+# ---------------------------------------------------------------------------
+_SWEEP_LAYERS_H8W2_COSMOS3_720P = [
+    # (name, C_in, C_out, kernel, stride, padding, T, H, W, h, w)
+    # Most-to-least estimated total decode contribution (FLOPs x call frequency)
+    ("c3_hi_res", 256, 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 6, 96, 640, 8, 2),
+    ("c3_hi_chg", 512, 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), 6, 96, 640, 8, 2),
+    ("c3_hi_spatial", 512, 512, (1, 3, 3), (1, 1, 1), (0, 0, 0), 4, 96, 640, 8, 2),
+    ("c3_mid_res", 512, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 6, 48, 320, 8, 2),
+    ("c3_hi_out", 256, 12, (3, 3, 3), (1, 1, 1), (0, 0, 0), 6, 96, 640, 8, 2),
+    ("c3_mid_chg", 1024, 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), 6, 48, 320, 8, 2),
+    ("c3_mid_spatial", 1024, 1024, (1, 3, 3), (1, 1, 1), (0, 0, 0), 4, 48, 320, 8, 2),
+    ("c3_lat_res_t4", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 4, 24, 160, 8, 2),
+    ("c3_lat_res_t3", 1024, 1024, (3, 3, 3), (1, 1, 1), (0, 0, 0), 3, 12, 80, 8, 2),
+    ("c3_lat_spatial", 1024, 1024, (1, 3, 3), (1, 1, 1), (0, 0, 0), 2, 24, 160, 8, 2),
+    ("c3_tconv_mid", 1024, 2048, (3, 1, 1), (1, 1, 1), (0, 0, 0), 4, 24, 160, 8, 2),
+    ("c3_tconv_lat", 1024, 2048, (3, 1, 1), (1, 1, 1), (0, 0, 0), 3, 12, 80, 8, 2),
+]
+
+
+def test_cosmos3_720p_blockings_are_hit():
+    """Host-only guard: every swept cosmos3 decoder shape must resolve to an exact
+    _BLOCKINGS entry — a key typo or (h, w, dims) convention drift degrades decode
+    perf silently (fallback only logs a warning)."""
+    for name, C_in, C_out, kernel, _stride, _pad, T, H, W, h, w in _SWEEP_LAYERS_H8W2_COSMOS3_720P:
+        key = (h, w, C_in, C_out, kernel, T, H, W)
+        assert key in _BLOCKINGS, f"{name}: no exact _BLOCKINGS entry for {key}"
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, device_params",
+    [[(1, 1), (1, 1), {"trace_region_size": TRACE_REGION_SIZE}]],
+    ids=["bh_8x2_cosmos3_720p_1x1"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor",
+    _SWEEP_LAYERS_H8W2_COSMOS3_720P,
+    ids=[l[0] for l in _SWEEP_LAYERS_H8W2_COSMOS3_720P],
+)
+def test_bruteforce_sweep_h8w2_cosmos3_720p(
+    mesh_device, mesh_shape, layer_name, C_in, C_out, kernel, stride, padding, T, H, W, h_factor, w_factor
+):
+    parent_mesh = mesh_device
+    device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+    output = f"sweep_results_h8w2_cosmos3_720p/{layer_name}_{C_in}x{C_out}.json"
+    run_sweep(
+        device,
+        C_in,
+        C_out,
+        kernel,
+        T,
+        H,
+        W,
+        output,
+        stride=stride,
+        padding=padding,
+        h_factor=h_factor,
+        w_factor=w_factor,
+        max_combos=500,
+        max_t_block=6,
+        hw_product=32,
+    )
+
+
+# ---------------------------------------------------------------------------
 # BH Galaxy 4x8, 720p, cached t_chunk_size=16 (vae_t_chunk_size=16)
 # ---------------------------------------------------------------------------
 # Mesh: h_factor=4, w_factor=8.  Per-device spatial (unpadded, same as full-T):

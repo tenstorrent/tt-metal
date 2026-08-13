@@ -232,7 +232,11 @@ void kernel_main() {
                 tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
 
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
-            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+            // Atomic decrement, never a reset: peers already past this barrier (or a
+            // full traced replay ahead) may have credited this cell again, and a write
+            // of 0 would wipe those credits and deadlock their next wait.
+            noc_semaphore_inc(get_noc_addr(barrier_sem), (uint32_t)(-(int32_t)(ring_size - 1)));
+            noc_obj.async_atomic_barrier();
         }
 
         fabric_unicast_noc_unicast_atomic_inc_set_state<
@@ -485,7 +489,12 @@ void kernel_main() {
             noc_obj.async_writes_flushed();
 
             noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
-            noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
+            // Atomic decrement, never a reset: a peer already into the next batch (or
+            // the next traced replay) may have credited this cell again; zeroing would
+            // wipe those credits and deadlock the ring. The barrier keeps the decrement
+            // ordered before this core's next wait on the same cell.
+            noc_semaphore_inc(get_noc_addr(batch_ready_sem), (uint32_t)(-(int32_t)(ring_size - 1)));
+            noc_obj.async_atomic_barrier();
         }
 
         noc_obj.async_write_barrier();

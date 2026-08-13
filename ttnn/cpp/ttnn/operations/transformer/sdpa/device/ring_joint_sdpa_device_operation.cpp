@@ -570,6 +570,14 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         !(args.is_balanced && (N_local_q / 2) % q_chunk_size != 0),
         "q_chunk_size must divide half of local q seq_len in balanced case");
 
+    // Balanced zigzag pairs each front Q-chunk's rix<rid skip with the causal K-halving at
+    // rix>rid; only the skip is balance-gated in the kernels, so a non-causal balanced run
+    // computes wrong results — and desyncs the chain/mcast handshake when cores' skip
+    // patterns diverge (flat non-causal distribution), which deadlocks grouped-KV rows.
+    TT_FATAL(
+        !args.is_balanced || args.is_causal,
+        "is_balanced (zigzag load-balancing) is causal-only. Pass is_balanced=false for non-causal attention.");
+
     TT_FATAL(
         has_input_v == has_gathered_v,
         "input_tensor_v and persistent_output_buffer_v must both be provided for tensor-V mode, or both omitted for "
@@ -757,12 +765,21 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             NQH,
             NKH,
             NVH);
-        TT_FATAL(
-            !has_joint_tensors || !tensor_gqa_grouped_kv,
-            "Ring joint SDPA GQA with joint tensors is unsupported. Got NQH: {}, NKH: {}, NVH: {}",
-            NQH,
-            NKH,
-            NVH);
+        // Joint K/V must carry the (grouped) KV head counts, not NQH-broadcast copies:
+        // the reader indexes joint K/V by kv-head (nk = nq / q_heads_per_k), same as the
+        // ring-gathered portion.
+        if (has_joint_tensors) {
+            TT_FATAL(
+                joint_q_shape[1] == NQH && joint_k_shape[1] == NKH && joint_v_shape[1] == NVH,
+                "Joint tensor head counts must match Q/K/V. Got joint_Q: {} (want {}), joint_K: {} (want {}), "
+                "joint_V: {} (want {})",
+                joint_q_shape[1],
+                NQH,
+                joint_k_shape[1],
+                NKH,
+                joint_v_shape[1],
+                NVH);
+        }
     } else {
         TT_FATAL(
             NKH == NVH || NKH == 1,

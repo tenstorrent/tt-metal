@@ -159,6 +159,14 @@ def get_matmul_core_grid(mesh_device):
     return core_grid
 
 
+# AG+MM on BH Galaxy: power-clamped (10,10) grid minus the collective row = 10x9.
+# Ring topology requires K_block to divide K_tiles_per_device = 20.
+grid_10_9_configs = {
+    (22144, 5120, 6400): (8, 4, 8, (2, 1)),
+    (22144, 5120, 1024): (8, 4, 8, (2, 1)),
+    (22144, 5120, 128): (8, 4, 2, (2, 1)),
+}
+
 grid_12_9_configs = {
     (9472, 5120, 1280): (10, 8, 8, (2, 1)),
     (2368, 5120, 1280): (10, 8, 6, (2, 1)),
@@ -203,6 +211,7 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
         (8, 8): grid_88_configs,
         (8, 9): grid_89_configs,
         (13, 9): grid_13_9_configs,
+        (10, 9): grid_10_9_configs,
         (12, 10): grid_12_10_configs,
         (11, 10): grid_11_10_configs,
         (12, 9): grid_12_9_configs,
@@ -256,13 +265,20 @@ class FusedMMRSConfig(NamedTuple):
     subblock_w: int
     num_buffers_per_channel: int | None
     chunk_width_in_mm_blocks: int
-    # Optional explicit reduce-scatter worker count
+    # Optional explicit reduce-scatter worker count. Positional entries below rely
+    # on this slot's position — new fields go after it.
     num_workers_per_link: int | None = None
+    # The op keeps the matmul output L1-resident per core; at large M the full
+    # shard exceeds the bank and every blocking fails the CB-vs-L1 clash check.
+    # A window bounds the shard to this many M blocks, recycled via the RS->MM
+    # credit handshake. None = fully resident (fine for small M).
+    mm_window_blocks: int | None = None
 
     def get_params(self, core_grid, num_links):
         config_dict = self._asdict()
         num_buffers_per_channel = config_dict.pop("num_buffers_per_channel")
         chunk_width_in_mm_blocks = config_dict.pop("chunk_width_in_mm_blocks")
+        mm_window_blocks = config_dict.pop("mm_window_blocks")
         num_workers_override = config_dict.pop("num_workers_per_link")
 
         if num_workers_override is not None:
@@ -279,6 +295,7 @@ class FusedMMRSConfig(NamedTuple):
             "num_buffers_per_channel": num_buffers_per_channel,
             "chunk_width_in_mm_blocks": chunk_width_in_mm_blocks,
             "num_workers_per_link": num_workers_per_link,
+            "mm_window_blocks": mm_window_blocks,
         }
 
 
@@ -294,7 +311,34 @@ fused_mmrs_configs = {
         # LTX video FFN ff2 (RowParallel): per-device [4864,4096]@[4096,4096]
         (4864, 4096, 4096): FusedMMRSConfig(ttnn.CoreCoord(12, 8), 7, 5, 6, 1, 3, None, 1, 3),
     },
+    # Cosmos3 trunk on BH Galaxy (grid power-clamped to 10x10): mm on rows 0-7,
+    # RS zone rows 8-9 (20 cores). down_proj (M=22144, K=3200) only. Blocking
+    # follows the tuned (9472, 3456, 5120) entry above.
+    # Do NOT add the other trunk RowParallel shapes — both pass the op's unit
+    # test in isolation (including 35-replay trace and two-instance adjacency)
+    # but corrupt the full trunk output:
+    #  - und stream (M=2720): 9-step latent std 7.3 vs 0.7, and at 12% of the
+    #    gen RS payload the fusion win is negligible anyway.
+    #  - gen to_out/to_add_out (22144, 1024, 5120): 35-step visual smear
+    #    (frame std 46 vs 71 gold) isolated by per-shape trunk bisect; the
+    #    mechanism is trunk-context-dependent and unreproduced at unit level.
+    # Repro suite: tests/nightly/tg/ccl/test_mmrs_cosmos3_repro.py.
+    # Cosmos3 down_proj (22144, 3200, 5120) on the 10x10 clamp is deliberately
+    # ABSENT. The windowed op passes its full unit ladder at that shape
+    # (window 2; 35-replay trace, adjacency, batch protocol — see the repro
+    # suite), but in the traced trunk its L1-resident MM window (512 KB/core,
+    # alive across the captured graph) clashes with downstream matmul CBs at
+    # capture. Re-adding it needs DRAM staging or window/CB budget coordination
+    # with every op captured alongside.
+    ttnn.CoreCoord(10, 10): {},
 }
+
+
+def has_fused_mmrs_config(M, K, N, device_core_grid):
+    """True when an exact tuned entry exists — callers use this to keep untuned
+    shapes on the non-fused matmul + reduce_scatter path instead of running the
+    fused op with the default config, which measures no faster."""
+    return (M, K, N) in fused_mmrs_configs.get(device_core_grid, {})
 
 
 def get_fused_mmrs_config(M, K, N, device_core_grid, num_links):

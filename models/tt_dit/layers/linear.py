@@ -3,13 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os as _os_for_fidelity
 
 import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
 
-from ..utils.matmul import get_fabric_agmm_config, get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
+from ..utils.matmul import (
+    get_fabric_agmm_config,
+    get_fused_mmrs_config,
+    get_matmul_config,
+    get_matmul_core_grid,
+    has_fused_mmrs_config,
+)
 from ..utils.tensor import prepare_for_fused_swiglu
 from .module import Module, Parameter
 
@@ -17,8 +24,18 @@ from .module import Module, Parameter
 # look up with .get(dtype, HiFi2). This compute_config is a dead default for any op handed an
 # explicit compute_kernel_config (every LTX matmul is), so the fallback only has to construct.
 MATH_FIDELITY = {
-    ttnn.bfloat16: ttnn.MathFidelity.HiFi2,
+    # TT_DIT_BF16_HIFI4=1 forces bf16 matmuls to HiFi4 (full 8-bit mantissa per multiply).
+    # Cost: ~2x matmul time. Used to probe whether SP-vs-noSP divergence at production
+    # 64-layer depth is precision-bound or structural.
+    ttnn.bfloat16: ttnn.MathFidelity.HiFi4
+    if _os_for_fidelity.environ.get("TT_DIT_BF16_HIFI4") in ("1", "true", "True")
+    else ttnn.MathFidelity.HiFi2,
     ttnn.float32: ttnn.MathFidelity.HiFi4,
+    # bfloat8_b weights are already 1-byte quantized; LoFi math is the
+    # conventional pairing (matches the BFP8 weight precision). HiFi2 is
+    # safe but throws away the perf win — the matmul engine fills cycles
+    # waiting on the 8-bit weight feed.
+    ttnn.bfloat8_b: ttnn.MathFidelity.LoFi,
 }
 
 # Activation strings accepted by Linear / ColParallelLinear `activation_fn`,
@@ -334,7 +351,11 @@ class ColParallelLinear(Module):
 
         if parallel_config is not None and parallel_config.tensor_parallel.factor > 1:
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
-            full_grid = self.mesh_device.compute_with_storage_grid_size()
+            # Respect the BH-Galaxy power clamp: the raw device grid here trips tray PDUs
+            # on multi-chip Blackhole (same hazard get_matmul_core_grid exists to prevent).
+            # The fabric lookup below keys on this grid too — a clamped-grid miss just
+            # falls back to the AG+MM path, which is safe; an unclamped fabric run is not.
+            full_grid = get_matmul_core_grid(self.mesh_device)
 
             # Fabric-bound path: known shapes route to the optimized strided all-gather-matmul op
             fabric_cfg = get_fabric_agmm_config(K, N, (self.chunks or 1), full_grid)
@@ -505,6 +526,79 @@ class RowParallelLinear(Module):
 
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
         core_grid = get_matmul_core_grid(self.mesh_device)
+
+        # Ring: fuse matmul + reduce-scatter into one kernel (RS is fused into the matmul's
+        # strided output write, overlapping tensix compute with fabric). Strided RS is
+        # Ring-only, so this path requires the mesh opened with FABRIC_1D_RING. Supersedes
+        # the hand-rolled M-chunk overlap below.
+        if (
+            self._mesh_axis_size > 1
+            and self.ccl_manager is not None
+            and self.ccl_manager.topology == ttnn.Topology.Ring
+            and _os_for_fidelity.environ.get("TT_COSMOS3_RS_FUSED") in ("1", "true", "True")
+            and has_fused_mmrs_config(M, K, N, core_grid)
+        ):
+            needs_reshape = len(x.shape) <= 3
+            if needs_reshape:
+                x = ttnn.unsqueeze(x, 0)
+            # Fused pool, not the plain-RS pool: the M=64 modulation-stream RowParallels
+            # stay non-fused and draw from get_rs_ping_pong_semaphore; sharing one
+            # 2-cycle pool across both op types collides while CCLs overlap in flight.
+            _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
+                input_tensor=x,
+                weight_tensor=weight,
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore_fused(self.mesh_axis),
+                **get_fused_mmrs_config(M, K, N, core_grid, self.ccl_manager.num_links),
+                bias=self.bias.data if self.bias is not None else None,
+                memory_config_mm=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+                rs_output_mem_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.mesh_axis,
+                compute_kernel_config=compute_kernel_config or self.compute_config,
+                barrier_semaphore=self.ccl_manager.get_barrier_semaphore(self.mesh_axis),
+                dtype=dtype,
+            )
+            if needs_reshape:
+                output = ttnn.squeeze(output, 0)
+            return output
+
+        # Chunk the matmul over M and reduce-scatter each chunk as it lands, so chunk i's
+        # RS (fabric workers) overlaps chunk i+1's matmul (tensix). The RS scatters on the
+        # output-feature dim (3), independent across M rows, so M-chunking is exact. Only
+        # worth it for large M (the gen stream); tiny-M (und) chunks add launch overhead
+        # with no matmul to hide behind. Gated by TT_COSMOS3_RS_OVERLAP.
+        _rs_chunks = int(_os_for_fidelity.environ.get("TT_COSMOS3_RS_OVERLAP", "0"))
+        _rank = len(x.shape)
+        if self._mesh_axis_size > 1 and _rs_chunks > 1 and M >= _rs_chunks * 1024:
+            m_dim = _rank - 2
+            step = ((M // _rs_chunks) + 31) // 32 * 32  # tile-aligned M split
+            outs = []
+            for start in range(0, M, step):
+                end = min(start + step, M)
+                sl_start = [0] * _rank
+                sl_end = list(x.shape)
+                sl_start[m_dim], sl_end[m_dim] = start, end
+                x_chunk = ttnn.slice(x, sl_start, sl_end)
+                oc = ttnn.experimental.minimal_matmul(
+                    input_tensor=x_chunk,
+                    weight_tensor=weight,
+                    bias_tensor=self.bias.data if self.bias is not None else None,
+                    config=get_matmul_config(end - start, K, N, core_grid, default_block_size),
+                    compute_kernel_config=compute_kernel_config or self.compute_config,
+                    dtype=dtype,
+                )
+                oc_needs_reshape = len(oc.shape) <= 3
+                if oc_needs_reshape:
+                    oc = ttnn.unsqueeze(oc, 0)
+                # Non-persistent RS: overlapping chunk RS's would collide on the 2-slot
+                # ping-pong buffer; the barrier-semaphore path is safe for concurrent chunks.
+                oc = self.ccl_manager.reduce_scatter(oc, dim=3, mesh_axis=self.mesh_axis, use_persistent_buffer=False)
+                if oc_needs_reshape:
+                    oc = ttnn.squeeze(oc, 0)
+                outs.append(oc)
+            return ttnn.concat(outs, dim=m_dim)
+
         matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
         output = ttnn.experimental.minimal_matmul(
             input_tensor=x,

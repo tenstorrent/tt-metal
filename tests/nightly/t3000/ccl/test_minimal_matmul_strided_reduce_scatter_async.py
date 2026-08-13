@@ -71,6 +71,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     mm_core_grid,
     num_iters=1,
     enable_trace=False,
+    ops_per_trace=1,
     cluster_axis=1,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
@@ -138,8 +139,16 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         ),
     )
 
-    ccl_semaphore_handles = [create_global_semaphores(mesh_device, all_cores, 0) for _ in range(num_iters)]
-    barrier_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(num_iters)]
+    # ops_per_trace > 1 captures additional back-to-back instances (distinct semaphore
+    # trios and inputs) in the same trace with no sync between them, so a later
+    # instance's matmul cores start while an earlier instance's RS cores are still
+    # draining — the production adjacency a single-op replay loop never has.
+    assert ops_per_trace >= 1
+    assert enable_trace or ops_per_trace == 1, "ops_per_trace > 1 only applies to trace mode"
+    num_input_sets = max(num_iters, ops_per_trace)
+
+    ccl_semaphore_handles = [create_global_semaphores(mesh_device, all_cores, 0) for _ in range(num_input_sets)]
+    barrier_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, all_cores, 0) for _ in range(num_input_sets)]
 
     ##### Input setup #####
     # Input (activations): replicated on all devices (same activations on every device)
@@ -191,7 +200,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-    for i in range(num_iters):
+    for i in range(num_input_sets):
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         torch_weight_global = torch.randn(weight_shape_global, dtype=torch.float32)
 
@@ -357,8 +366,12 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         ttnn.synchronize_device(mesh_device)
         logger.info("Done compiling op")
 
-        # Capture trace
+        # Capture trace. Extra instances go in front so instance 0 (the one the
+        # replay loop verifies every iteration) runs while its predecessors drain.
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        traced_extras = []
+        for k in range(ops_per_trace - 1, 0, -1):
+            traced_extras.append((k, *run_op(k)))
         tt_mm_out, tt_rs_out = run_op(0)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
@@ -391,9 +404,16 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     # Setup concat mesh to use 1D mesh concatenation.
     concat_mesh_shape = list(mesh_device.shape)
     concat_mesh_shape[1 - cluster_axis] = 1  # Set replicated mesh axis to 1 to prevent concatenation
-    for i in range(num_iters):
-        golden_idx = i if not enable_trace else 0
+    # Extra traced instances share the replay's output buffers across replays, so one
+    # post-replay check per instance (against its own input set's golden) suffices.
+    verify_specs = [(i, i if not enable_trace else 0) for i in range(num_iters)]
+    if enable_trace:
+        for k, extra_mm, extra_rs in traced_extras:
+            verify_specs.append((len(tt_mm_out_tensor_list), k))
+            tt_mm_out_tensor_list.append(extra_mm)
+            tt_rs_out_tensor_list.append(extra_rs)
 
+    for i, golden_idx in verify_specs:
         # Check MM output (each device has different output since weights differ)
         # Setup concatenation dimension per axis
         concat_dims = [0, 0]

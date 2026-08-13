@@ -1,0 +1,9 @@
+{
+  "num_inference_steps": 35,
+  "guidance_scale": 6.0,
+  "num_frames": 189,
+  "fps": 24,
+  "height": 720,
+  "width": 1280,
+  "flow_shift": 6.0
+}

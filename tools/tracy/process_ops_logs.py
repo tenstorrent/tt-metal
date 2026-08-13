@@ -680,10 +680,16 @@ def _enrich_ops_from_perf_csv(
                     if cand_op_id == op_id:
                         candidates.extend(rows)
 
-            assert candidates, (
-                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
-                f"for device {device_id} (trace_id={host_trace_id})"
-            )
+            if not candidates:
+                # Zone data for this op was dropped (profiler buffer overflow). Keep the
+                # host row — with no _device_perf_row it simply carries no device metrics —
+                # so host-side op counts stay complete in partial captures.
+                logger.warning(
+                    f"Device zone data missing for op {op_id} (device {device_id}); "
+                    "keeping host op without device metrics"
+                )
+                enriched_ops.append(copy.deepcopy(host_op))
+                continue
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:

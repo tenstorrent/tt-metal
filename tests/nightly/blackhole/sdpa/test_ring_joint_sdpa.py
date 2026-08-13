@@ -179,6 +179,30 @@ def generate_model_configs(mesh_config: MeshConfig) -> Dict[str, ModelConfig]:
         )
     )
 
+    configs.append(
+        ModelConfig(
+            name="cosmos3_gqa_noncausal_smoke",
+            nhq=8,
+            nhk=1,
+            nhv=1,
+            d_q=128,
+            d_k=128,
+            d_v=128,
+            # Cosmos3 per-device head geometry (64Q/8KV on TP-8). Non-causal exercises the
+            # grouped row-wide mcast transport outside the Minimax3 causal-prefill envelope.
+            # is_balanced must be False: balanced zigzag is causal-only (TT_FATAL in
+            # ring_joint_sdpa_device_operation.cpp); balanced+non-causal diverges the
+            # per-core skip pattern and deadlocks grouped-KV rows.
+            is_causal=False,
+            is_balanced=False,
+            q_dtype=ttnn.bfloat16,
+            kv_dtype=ttnn.bfloat16,
+            q_chunk_sizes=[128, 256],
+            k_chunk_sizes=[512],
+            seq_len=2048,
+        )
+    )
+
     # WAN 2.2 — 4×Galaxy deployment (128 chips, 720p split across 4 Galaxies)
     configs.append(
         ModelConfig(
@@ -5135,20 +5159,29 @@ def test_is_supported_ring_joint_head_mode(nhq, nhk, nhv, supported):
 
 
 @pytest.mark.parametrize(
-    "use_attention_sink,include_joint_tensors,is_causal,expected_message",
+    "use_attention_sink,include_joint_tensors,is_causal,is_balanced,nhq,nhk,expected_message",
     [
-        (False, True, False, "GQA with joint tensors"),
-        (True, True, True, "attention_sink does not support joint attention tensors"),
-        (True, False, False, "attention_sink is supported only for causal attention"),
+        # expected_message=None: joint + grouped-KV must RUN and match the torch reference.
+        # Both grouped transports: nhk=1 exercises the row-wide mcast (cosmos3 per-device
+        # 8Q/1KV production shape), nhk=2 the grouped-unicast chain.
+        (False, True, False, False, 8, 1, None),
+        (False, True, False, False, 16, 2, None),
+        (True, True, True, False, 16, 2, "attention_sink does not support joint attention tensors"),
+        (True, False, False, False, 16, 2, "attention_sink is supported only for causal attention"),
+        # Balanced zigzag is causal-only: balanced+non-causal desyncs the per-core skip
+        # pattern and deadlocks grouped-KV rows, so the op must reject it outright.
+        (False, False, False, True, 16, 2, "causal-only. Pass is_balanced=false"),
     ],
-    ids=["gqa_joint", "sink_joint", "sink_noncausal"],
+    ids=["gqa_joint_mcast_pcc", "gqa_joint_chain_pcc", "sink_joint", "sink_noncausal", "balanced_noncausal"],
 )
-def test_ring_joint_attention_gqa_with_joint_tensors_rejected(
-    expect_error, use_attention_sink, include_joint_tensors, is_causal, expected_message
+def test_ring_joint_attention_joint_tensor_validation(
+    expect_error, use_attention_sink, include_joint_tensors, is_causal, is_balanced, nhq, nhk, expected_message
 ):
-    """Validation-only coverage for GQA joints and unsupported attention-sink combinations."""
+    """Validation coverage for attention-sink and balanced-flag combinations, plus PCC-checked
+    joint + grouped-KV runs (both grouped transports) against a torch reference."""
     mesh_config = MESH_CONFIG
-    b, nhq, nhk, nhv, d = 1, 16, 2, 2, 128  # GQA grouped K/V (nhk == nhv < nhq)
+    b, d = 1, 128
+    nhv = nhk
     sq = 512 * mesh_config.sp_size
     joint_l = 32  # tile-aligned joint length
 
@@ -5159,13 +5192,11 @@ def test_ring_joint_attention_gqa_with_joint_tensors_rejected(
         mesh_shape = tuple(mesh_device.shape)
         replicate = ttnn.ReplicateTensorToMesh(mesh_device)
 
-        # Mirror the run helper's sharding so the gathered-buffer shape check (input_seq * ring_size)
-        # passes and validation proceeds to the GQA-with-joint check.
-        def sharded(t, shard_heads):
+        # Heads carry PER-DEVICE counts and are replicated across tp; only seq is
+        # SP-sharded — the exact tensor view the cosmos3 trunk hands the op.
+        def sharded(t):
             dims = [None, None]
             dims[sp_axis] = 2  # shard inputs on the sequence dim
-            if mesh_config.tp_size > 1 and shard_heads:
-                dims[tp_axis] = 1
             return ttnn.from_torch(
                 t,
                 dtype=ttnn.bfloat16,
@@ -5175,15 +5206,9 @@ def test_ring_joint_attention_gqa_with_joint_tensors_rejected(
             )
 
         def persistent(t):
-            dims = [None, None]  # seq NOT sharded: holds the gathered full sequence
-            if mesh_config.tp_size > 1:
-                dims[tp_axis] = 1
+            # seq NOT sharded: holds the gathered full sequence; heads replicated.
             return ttnn.from_torch(
-                t,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims),
+                t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=replicate
             )
 
         def replicated(t):
@@ -5191,26 +5216,23 @@ def test_ring_joint_attention_gqa_with_joint_tensors_rejected(
                 t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=replicate
             )
 
-        tt_q = sharded(fa_rand(b, nhq, sq, d), shard_heads=True)
-        tt_k = sharded(fa_rand(b, nhk, sq, d), shard_heads=True)
-        tt_v = sharded(fa_rand(b, nhv, sq, d), shard_heads=True)
-        # Joint tensors only need to exist with valid shapes to reach the validation checks.
-        joint_q = replicated(fa_rand(b, nhq, joint_l, d)) if include_joint_tensors else None
-        joint_k = replicated(fa_rand(b, nhk, joint_l, d)) if include_joint_tensors else None
-        joint_v = replicated(fa_rand(b, nhv, joint_l, d)) if include_joint_tensors else None
+        torch_q = fa_rand(b, nhq, sq, d)
+        torch_k = fa_rand(b, nhk, sq, d)
+        torch_v = fa_rand(b, nhv, sq, d)
+        torch_jq = fa_rand(b, nhq, joint_l, d) if include_joint_tensors else None
+        torch_jk = fa_rand(b, nhk, joint_l, d) if include_joint_tensors else None
+        torch_jv = fa_rand(b, nhv, joint_l, d) if include_joint_tensors else None
+
+        tt_q = sharded(torch_q)
+        tt_k = sharded(torch_k)
+        tt_v = sharded(torch_v)
+        joint_q = replicated(torch_jq) if include_joint_tensors else None
+        joint_k = replicated(torch_jk) if include_joint_tensors else None
+        joint_v = replicated(torch_jv) if include_joint_tensors else None
         p_buf_k, p_buf_v = persistent(torch.zeros(b, nhk, sq, d)), persistent(torch.zeros(b, nhv, sq, d))
         tt_attention_sink = None
         if use_attention_sink:
-            sink_shard_dims = [None, None]
-            if mesh_config.tp_size > 1:
-                sink_shard_dims[tp_axis] = 1
-            tt_attention_sink = ttnn.from_torch(
-                torch.zeros(1, nhq, 1, 1),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=mesh_device,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=sink_shard_dims),
-            )
+            tt_attention_sink = replicated(torch.zeros(1, nhq, 1, 1))
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=runtime.sdpa_compute_grid,
@@ -5219,8 +5241,8 @@ def test_ring_joint_attention_gqa_with_joint_tensors_rejected(
             exp_approx_mode=False,
         )
 
-        with expect_error(RuntimeError, expected_message):
-            ttnn.transformer.ring_joint_scaled_dot_product_attention(
+        def call_op():
+            return ttnn.transformer.ring_joint_scaled_dot_product_attention(
                 tt_q,
                 tt_k,
                 tt_v,
@@ -5232,7 +5254,7 @@ def test_ring_joint_attention_gqa_with_joint_tensors_rejected(
                 joint_strategy="rear",
                 logical_n=sq,
                 is_causal=is_causal,
-                is_balanced=False,
+                is_balanced=is_balanced,
                 attention_sink=tt_attention_sink,
                 program_config=program_config,
                 compute_kernel_config=runtime.compute_kernel_config,
@@ -5246,6 +5268,38 @@ def test_ring_joint_attention_gqa_with_joint_tensors_rejected(
                 ccl_core_grid_offset=(runtime.ccl_column, 0),
                 use_column_major_ccl=True,
             )
+
+        if expected_message is None:
+            tt_out, tt_joint_out, _ = call_op()
+            ttnn.synchronize_device(mesh_device)
+
+            # Torch reference: GQA-expand K/V, rear-concat joint, one full non-causal SDPA.
+            rep = nhq // nhk
+            k_cat = torch.cat([torch_k, torch_jk], dim=2).repeat_interleave(rep, dim=1)
+            v_cat = torch.cat([torch_v, torch_jv], dim=2).repeat_interleave(rep, dim=1)
+            main_ref = torch.nn.functional.scaled_dot_product_attention(torch_q, k_cat, v_cat)
+            joint_ref = torch.nn.functional.scaled_dot_product_attention(torch_jq, k_cat, v_cat)
+
+            # Compose the SP-sharded main output: walk sp_axis at tp index 0
+            # (heads are replicated, so any tp shard is the full head set).
+            shards = ttnn.get_device_tensors(tt_out)
+            rows, cols = mesh_shape
+            sp_size = mesh_shape[sp_axis]
+            main_parts = []
+            for s in range(sp_size):
+                flat = s * cols if sp_axis == 0 else s
+                main_parts.append(ttnn.to_torch(shards[flat]).to(torch.float32))
+            main_out = torch.cat(main_parts, dim=2)
+            joint_out = ttnn.to_torch(ttnn.get_device_tensors(tt_joint_out)[0]).to(torch.float32)
+
+            for label, ref, out in (("main", main_ref, main_out), ("joint", joint_ref, joint_out)):
+                assert out.shape == ref.shape, f"{label}: shape {out.shape} vs ref {ref.shape}"
+                pcc = torch.corrcoef(torch.stack([ref.flatten(), out.flatten()]))[0, 1].item()
+                logger.info(f"joint+GQA {label} output PCC: {pcc:.6f}")
+                assert pcc >= 0.994, f"{label} output PCC {pcc:.6f} below 0.994"
+        else:
+            with expect_error(RuntimeError, expected_message):
+                call_op()
     finally:
         close_ring_joint_sdpa_runtime(runtime)
 
