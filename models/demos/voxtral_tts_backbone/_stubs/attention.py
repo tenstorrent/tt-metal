@@ -264,7 +264,14 @@ class TtAttention:
             attn = ttnn.permute(attn, (0, 2, 1, 3))
 
         shape = list(attn.shape)
-        attn = ttnn.reshape(attn, (shape[0], shape[1], self.n_heads * self.head_dim))
+        merged = (shape[0], shape[1], self.n_heads * self.head_dim)
+        if self.o_plan is not None and self.o_plan.is_decode_row(attn):
+            # The head-merge reshape is o_proj's only producer, so it emits the
+            # merged tensor ALREADY in o_proj's shard instead of handing over an
+            # interleaved one that then needs converting.
+            merged_attn = ttnn.reshape(attn, merged, memory_config=self.o_plan.input_memory_config)
+            return self.o_plan.run_presharded(merged_attn, self.wo, self.compute_kernel_config)
+        attn = ttnn.reshape(attn, merged)
         if self.o_plan is not None and self.o_plan.matches(attn):
             return self.o_plan(attn, self.wo, self.compute_kernel_config)
         return ttnn.linear(attn, self.wo, **mm)
