@@ -1671,11 +1671,16 @@ def test_reject_legacy_dram_block_sharded(device, expect_error):
     """
     The sweep above builds DRAM block sharding via the ND_SHARDED representation (supported). This
     guards the other side: the *legacy* 2D-grid BLOCK_SHARDED + DRAM config collides on DRAM's 1D
-    banks and is unsupported, so both to_memory_config and reshard must reject it - matching
-    interleaved_to_sharded / untilize / reduce_scatter. See tenstorrent/tt-metal#49224.
+    banks and is unsupported, so to_memory_config must reject it - matching interleaved_to_sharded /
+    untilize / reduce_scatter. See tenstorrent/tt-metal#49224.
 
     Without this, a future removal/bypass of the validation would go undetected (the sweep never
     constructs the legacy config).
+
+    Note: reshard also cannot accept this config, but device_operation::launch allocates the output
+    buffer before validate_inputs, so the rejection surfaces from Buffer allocation (DRAM banks are
+    1D) rather than reshard's "DRAM block sharding" check. That lower-level guard is covered by
+    test_reject_dram_nd_shard_bank_aliasing.
     """
     grid_size = device.compute_with_storage_grid_size()
     if grid_size.x < 4 or grid_size.y < 4:
@@ -1704,12 +1709,6 @@ def test_reject_legacy_dram_block_sharded(device, expect_error):
     # to_memory_config rejects it at the dispatcher (before the ttnn.copy fallback).
     with expect_error(RuntimeError, "DRAM block sharding"):
         ttnn.to_memory_config(tt, legacy_block_dram)
-
-    # reshard's validate_inputs rejects it too (route in via a sharded L1 input).
-    l1_hs = _l1_dram_mem_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, height, width, device)
-    tt_l1_hs = ttnn.to_memory_config(tt, l1_hs)
-    with expect_error(RuntimeError, "DRAM block sharding"):
-        ttnn.reshard(tt_l1_hs, legacy_block_dram)
 
 
 # DRAM -> DRAM sharded reshard (both buffers on DRAM).

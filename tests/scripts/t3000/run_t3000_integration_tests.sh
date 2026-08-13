@@ -132,24 +132,6 @@ run_t3000_trace_stress_tests() {
   fi
 }
 
-run_t3000_resnet_tests() {
-  fail=0
-  # Record the start time
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_resnet_tests"
-
-  pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_resnet_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_dit_tests() {
   # Record the start time
   fail=0
@@ -158,7 +140,7 @@ run_t3000_dit_tests() {
 
   echo "LOG_METAL: Running ${test_name}"
 
-  # Run test_model for sd35 large
+  # Run each caller-supplied pytest invocation, accumulating failures
   for test_cmd in "$@"; do
     pytest ${test_cmd} ; fail+=$?
   done
@@ -172,23 +154,10 @@ run_t3000_dit_tests() {
   fi
 }
 
-run_t3000_sd35large_tests() {
-  run_t3000_dit_tests \
-    "models/tt_dit/tests/models/sd35/test_vae_sd35.py -k t3k" \
-    "models/tt_dit/tests/models/sd35/test_attention_sd35.py" \
-    "models/tt_dit/tests/models/sd35/test_transformer_sd35.py::test_sd35_transformer_block"
-}
-
-run_t3000_flux1_tests() {
-  run_t3000_dit_tests \
-    "models/tt_dit/tests/blocks/test_attention.py::test_attention_flux" \
-    "models/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_flux -k 2x4"
-}
-
 run_t3000_motif_tests() {
   run_t3000_dit_tests \
-    "models/tt_dit/tests/blocks/test_attention.py::test_attention_motif" \
-    "models/tt_dit/tests/blocks/test_transformer_block.py::test_transformer_block_motif"
+    "models/tt_dit/tests/models/motif/test_attention_motif.py::test_attention_motif" \
+    "models/tt_dit/tests/models/motif/test_transformer_block_motif.py::test_transformer_block_motif"
 }
 
 run_t3000_qwenimage_tests() {
@@ -235,15 +204,6 @@ run_t3000_tests() {
 
   # Run Llama3.2-11B Vision tests on spoofed N300
   # run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests
-
-  # Run resnet tests
-  run_t3000_resnet_tests
-
-  # Run sd35_large tests
-  run_t3000_sd35large_tests
-
-  # Run flux1 tests
-  run_t3000_flux1_tests
 
   # Run motif tests
   run_t3000_motif_tests

@@ -69,6 +69,19 @@ public:
         bool is_globally_allocated,
         const tt::tt_metal::IDevice* device) override;
 
+    void track_allocate_dataflow_buffer(
+        const tt::tt_metal::CoreRangeSet& core_range,
+        uint64_t addr,
+        uint64_t size,
+        bool borrows_memory,
+        const tt::tt_metal::IDevice* device) override;
+
+    void track_allocate_scratchpad(
+        const tt::tt_metal::CoreRangeSet& core_range,
+        uint64_t addr,
+        uint64_t size,
+        const tt::tt_metal::IDevice* device) override;
+
     void track_deallocate_cb(const tt::tt_metal::IDevice* device) override;
 
     void track_program(tt::tt_metal::Program* program, const tt::tt_metal::IDevice* device) override;

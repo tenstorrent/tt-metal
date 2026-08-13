@@ -50,6 +50,18 @@ METRIC_NAME_MAP = {
     "decode_t/s/u": ("inference_decode", "tokens/s/user"),
     "top1": ("inference_decode", "top1_token_accuracy"),
     "top5": ("inference_decode", "top5_token_accuracy"),
+    # Vision classifiers. Reported from a plain "inference" step rather than
+    # inference_decode, since there is no decode phase to attribute them to.
+    "fps": ("inference", "fps"),
+}
+
+# Metrics that can be satisfied by more than one (step_name, measurement_name) pair.
+# top1/top5 are the same quantity whether they come from LLM token matching or from a
+# vision classifier, so a single target name accepts either measurement and
+# models/model_targets.yaml stays uniform across model families.
+METRIC_NAME_ALIASES: dict[str, tuple[tuple[str, str], ...]] = {
+    "top1": (("inference_decode", "top1_token_accuracy"), ("inference", "top1_accuracy")),
+    "top5": (("inference_decode", "top5_token_accuracy"), ("inference", "top5_accuracy")),
 }
 
 ALLOWED_TARGET_METRIC_NAMES = {
@@ -63,6 +75,7 @@ ALLOWED_TARGET_METRIC_NAMES = {
     "prefill_time_to_first_token",
     "top1",
     "top5",
+    "fps",
 }
 
 PREFILL_TIME_TO_TOKEN_KEY = "prefill_time_to_token"
@@ -75,6 +88,10 @@ PREFILL_TIME_TO_FIRST_TOKEN_KEY = "prefill_time_to_first_token"
 # forcing artifacts (not real perf), and eval runs do not measure token accuracy.
 ACCURACY_TARGET_METRIC_NAMES = {"top1", "top5"}
 ACCURACY_MEASUREMENT_NAMES = {"top1_token_accuracy", "top5_token_accuracy"}
+# Vision classifiers report accuracy and throughput from the SAME run, unlike LLMs where
+# a token-matching run and an eval run are separate. So these names do not mark a run as
+# accuracy-only -- see _is_accuracy_run.
+VISION_ACCURACY_MEASUREMENT_NAMES = {"top1_accuracy", "top5_accuracy"}
 
 # Reverse lookup from a benchmark (step_name, measurement_name) pair back to a canonical
 # target metric name. Used to report measured values that have no matching target entry so
@@ -83,6 +100,9 @@ ACCURACY_MEASUREMENT_NAMES = {"top1_token_accuracy", "top5_token_accuracy"}
 _MEASUREMENT_TO_METRIC_NAME: dict[tuple[str, str], str] = {}
 for _metric_name, _pair in METRIC_NAME_MAP.items():
     _MEASUREMENT_TO_METRIC_NAME.setdefault(_pair, _metric_name)
+for _metric_name, _pairs in METRIC_NAME_ALIASES.items():
+    for _pair in _pairs:
+        _MEASUREMENT_TO_METRIC_NAME.setdefault(_pair, _metric_name)
 
 
 def _is_number(value: Any) -> bool:
@@ -132,8 +152,20 @@ def _is_accuracy_run(measured_lookup: dict[tuple[str, str], float]) -> bool:
     return any(name in ACCURACY_MEASUREMENT_NAMES for _step, name in measured_lookup)
 
 
+def _is_single_pass_run(measured_lookup: dict[tuple[str, str], float]) -> bool:
+    """True for runs that report accuracy and throughput together.
+
+    Vision classifiers measure both in one pass, so the accuracy/perf split that keeps
+    LLM teacher-forcing numbers away from perf targets must not apply to them.
+    """
+    return any(name in VISION_ACCURACY_MEASUREMENT_NAMES for _step, name in measured_lookup)
+
+
 def _extract_metric_value(metric_name: str, lookup: dict[tuple[str, str], float]) -> float | None:
     """Resolve a metric value, failing on ambiguous unqualified metric names."""
+    for pair in METRIC_NAME_ALIASES.get(metric_name, ()):
+        if pair in lookup:
+            return lookup[pair]
     if metric_name in METRIC_NAME_MAP:
         return lookup.get(METRIC_NAME_MAP[metric_name])
 
@@ -559,6 +591,7 @@ def validate(
 
         measured = _measurement_lookup(run)
         is_accuracy_run = _is_accuracy_run(measured)
+        is_single_pass_run = _is_single_pass_run(measured)
         thresholds: dict[str, Any] = {}
         perf = entry.get("perf", {})
         accuracy = entry.get("accuracy", {})
@@ -589,10 +622,12 @@ def validate(
             # perf metrics only on perf (eval) runs. This prevents teacher-forcing
             # throughput/latency from a token-matching run being checked against perf
             # targets (and vice versa).
-            if (metric_name in ACCURACY_TARGET_METRIC_NAMES) != is_accuracy_run:
+            if not is_single_pass_run and (metric_name in ACCURACY_TARGET_METRIC_NAMES) != is_accuracy_run:
                 continue
             if metric_name in METRIC_NAME_MAP:
                 covered_pairs.add(METRIC_NAME_MAP[metric_name])
+            for _alias_pair in METRIC_NAME_ALIASES.get(metric_name, ()):
+                covered_pairs.add(_alias_pair)
             tolerance = model_targets.resolve_metric_tolerance(
                 metric_name=metric_name,
                 thresholds=thresholds,
@@ -652,7 +687,7 @@ def validate(
             metric_name = _MEASUREMENT_TO_METRIC_NAME.get(pair)
             if metric_name is None:
                 continue
-            if (metric_name in ACCURACY_TARGET_METRIC_NAMES) != is_accuracy_run:
+            if not is_single_pass_run and (metric_name in ACCURACY_TARGET_METRIC_NAMES) != is_accuracy_run:
                 continue
             covered_pairs.add(pair)
             result.reported_metrics.append(
