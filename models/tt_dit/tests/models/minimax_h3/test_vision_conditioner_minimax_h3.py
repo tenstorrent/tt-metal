@@ -662,7 +662,15 @@ def test_fused_conditioner_two_refs_real_weights(
     encoder, _ = build_minimax_h3_text_encoder(
         path,
         mesh_device=submesh,
-        parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis)),
+        # Decoder sequence-parallelism: shard the sequence on the same size-4 axis the tower uses
+        # (is_fsdp=False already frees it -- weights stay TP-only/replicated, so SP shards only the
+        # activations, no extra weight memory). The encoder takes the tower's full (gathered) output
+        # and re-shards internally, so the tower->decoder handoff is unchanged here; Phase 3 would drop
+        # that gather via an all-to-all reshard on this shared axis.
+        parallel_config=EncoderParallelConfig(
+            tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis),  # TP=8 on the size-8 axis
+            sequence_parallel=ParallelFactor(factor=tower_sp_factor, mesh_axis=tower_sp_axis),  # SP=4 on size-4
+        ),
         ccl_manager=CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear),
         is_fsdp=False,
         num_layers=TAP,

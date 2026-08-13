@@ -89,13 +89,18 @@ _L1_SMALL = 32768
 _FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": _L1_SMALL}
 _NO_FABRIC = {"l1_small_size": _L1_SMALL}
 
+# `sp_axis` is the sequence-parallel axis (the non-TP axis of the 32-chip mesh); None = TP-only. The
+# tp8_sp4 configs run FSDP-off decoder SP: the sequence is sharded on the 4-axis and attention rings
+# over it (causal ring SDPA), while TP=8 stays on the 8-axis.
 _MESH = [
-    pytest.param((1, 1), (1, 1), None, 1, _NO_FABRIC, id="single"),
-    pytest.param((4, 8), (4, 8), 1, 2, _FABRIC, id="tp8_axis1"),
-    pytest.param((8, 4), (8, 4), 0, 2, _FABRIC, id="tp8_axis0"),
+    pytest.param((1, 1), (1, 1), None, None, 1, _NO_FABRIC, id="single"),
+    pytest.param((4, 8), (4, 8), 1, None, 2, _FABRIC, id="tp8_axis1"),
+    pytest.param((8, 4), (8, 4), 0, None, 2, _FABRIC, id="tp8_axis0"),
+    pytest.param((4, 8), (4, 8), 1, 0, 2, _FABRIC, id="tp8_sp4_axis1"),
+    pytest.param((8, 4), (8, 4), 0, 1, 2, _FABRIC, id="tp8_sp4_axis0"),
 ]
 _PARAMS = pytest.mark.parametrize(
-    ("mesh_device", "submesh_shape", "tp_axis", "num_links", "device_params"),
+    ("mesh_device", "submesh_shape", "tp_axis", "sp_axis", "num_links", "device_params"),
     _MESH,
     indirect=["mesh_device", "device_params"],
 )
@@ -221,17 +226,47 @@ def golden(seq_len):
     return {"state": layer.state_dict(), **cap}
 
 
-def _ctx(mesh_device, submesh_shape, tp_axis, num_links):
-    """`(submesh, Qwen3VlContext)`. `tp_axis=None` is the replicated single-device case."""
+def _ctx(mesh_device, submesh_shape, tp_axis, sp_axis, num_links):
+    """`(submesh, Qwen3VlContext)`. `tp_axis=None` is the replicated single-device case; `sp_axis`
+    (non-None) shards the sequence on that axis and routes attention through the causal ring."""
     submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     ccl = CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear) if tp_axis is not None else None
     # `fsdp_mesh_axis=None`: matching `test_text_encoder_minimax_h3.py`, which leaves `is_fsdp` at its
     # default because a Blackhole chip holds a TP=8 shard without it. FSDP is a weight-placement knob
-    # and does not change these matmul shapes.
-    return submesh, Qwen3VlContext(device=submesh, tp_axis=tp_axis, ccl_manager=ccl, fsdp_mesh_axis=None)
+    # and does not change these matmul shapes. SP requires it off (they contend for the non-TP axis).
+    return submesh, Qwen3VlContext(
+        device=submesh, tp_axis=tp_axis, ccl_manager=ccl, fsdp_mesh_axis=None, sp_axis=sp_axis
+    )
 
 
-def _rope(submesh, seq_len):
+def _sp_factor(submesh, sp_axis):
+    return tuple(submesh.shape)[sp_axis] if sp_axis is not None else 1
+
+
+def _sp_seq_pad(seq_len, sp):
+    """Sequence length padded up to a multiple of `sp * 32`, so each SP shard is tile-aligned. The
+    two_refs length 9536 is 298 tiles globally but 9536/4 = 74.5 tiles/shard, so SP=4 pads it to 9600."""
+    mult = sp * 32
+    return -(-seq_len // mult) * mult
+
+
+def _shard_seq(x, submesh, sp_axis, seq_dim, seq_pad):
+    """Pad `x`'s sequence (at `seq_dim`) up to `seq_pad` and shard it across the SP axis. The trailing
+    pad rows are harmless under causal attention (real rows never attend forward into them) and are
+    sliced off after the gather."""
+    trailing = x.ndim - 1 - seq_dim
+    x = torch.nn.functional.pad(x, [0, 0] * trailing + [0, seq_pad - x.shape[seq_dim]])
+    return bf16_tensor(x, device=submesh, mesh_axis=sp_axis, shard_dim=seq_dim)
+
+
+def _gather_seq(out, sp_axis, seq_len):
+    """Gather a `[1, seq, hidden]` output sharded on the sequence (dim 1) across `sp_axis`, then drop
+    the SP alignment padding back to `seq_len`."""
+    got = tensor.to_torch(out, mesh_axes=[None, sp_axis, None])
+    return got[:, :seq_len, :]
+
+
+def _rope(submesh, seq_len, sp_axis=None, seq_pad=None):
     # Production (`test_text_encoder_minimax_h3.py`) leaves `interleaved` at False even though this
     # checkpoint declares `mrope_interleaved`: the two layouts coincide exactly while all three MRoPE
     # axes carry the same position, which is the text-only case. Verified equal here to 7.6e-6, i.e.
@@ -254,17 +289,25 @@ def _rope(submesh, seq_len):
     for a, b, which in zip((cos, sin), explicit, ("cos", "sin")):
         assert torch.equal(a, b), f"{which}: omitting position_ids no longer matches the shared token index"
 
+    if sp_axis is not None:
+        # cos/sin are (batch, 1, seq, head_dim): shard the sequence (dim 2) so each device gets the
+        # rotary tables for exactly the sequence rows it holds.
+        return (
+            _shard_seq(cos, submesh, sp_axis, 2, seq_pad),
+            _shard_seq(sin, submesh, sp_axis, 2, seq_pad),
+        )
     return bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)
 
 
 @_PARAMS
-def test_decoder_block_on_device(golden, seq_len, mesh_device, submesh_shape, tp_axis, num_links):
+def test_decoder_block_on_device(golden, seq_len, mesh_device, submesh_shape, tp_axis, sp_axis, num_links):
     """The whole pre-norm layer: RMSNorm + attention + RMSNorm + MLP, both residuals.
 
     This is the profiling entry point -- one iteration of the layer that the 64-layer conditioner
-    repeats, and the four matmuls listed in the header.
+    repeats, and the four matmuls listed in the header. Under `sp_axis` the sequence is sharded on the
+    SP axis (FSDP off), so every matmul/norm runs `1/sp` of the rows and attention rings over the axis.
     """
-    submesh, ctx = _ctx(mesh_device, submesh_shape, tp_axis, num_links)
+    submesh, ctx = _ctx(mesh_device, submesh_shape, tp_axis, sp_axis, num_links)
 
     block = Qwen3VlDecoderLayer(
         hidden_size=HIDDEN_SIZE,
@@ -277,25 +320,40 @@ def test_decoder_block_on_device(golden, seq_len, mesh_device, submesh_shape, tp
         ctx=ctx,
     )
     block.load_torch_state_dict(golden["state"])
+    seq_pad = _sp_seq_pad(seq_len, _sp_factor(submesh, sp_axis))
+
+    def prep():
+        x = (
+            _shard_seq(golden["layer_in"], submesh, sp_axis, 1, seq_pad)
+            if sp_axis is not None
+            else bf16_tensor(golden["layer_in"], device=submesh)
+        )
+        return x, _rope(submesh, seq_len, sp_axis=sp_axis, seq_pad=seq_pad)
 
     out = _timed(
         submesh,
-        f"decoder layer axis={tp_axis} seq={seq_len}",
-        lambda: (bf16_tensor(golden["layer_in"], device=submesh), _rope(submesh, seq_len)),
+        f"decoder layer tp_axis={tp_axis} sp_axis={sp_axis} seq={seq_len}",
+        prep,
         # internal causal path; see the assertion in the `golden` fixture
         lambda inp: block.forward(inp[0], attention_bias=None, pos_embeds=inp[1]),
     )
 
     tp_factor = tuple(submesh.shape)[tp_axis] if tp_axis is not None else 1
-    logger.info(f"qwen3vl decoder layer TP={tp_factor} (axis {tp_axis}):")
-    assert_quality(golden["layer_out"].float(), tensor.to_torch(out, mesh_axes=[None, None, None]), pcc=0.99)
+    logger.info(f"qwen3vl decoder layer TP={tp_factor} (axis {tp_axis}) SP axis={sp_axis}:")
+    got = (
+        _gather_seq(out, sp_axis, seq_len)
+        if sp_axis is not None
+        else tensor.to_torch(out, mesh_axes=[None, None, None])
+    )
+    assert_quality(golden["layer_out"].float(), got, pcc=0.99)
 
 
 @_PARAMS
-def test_decoder_attention_on_device(golden, seq_len, mesh_device, submesh_shape, tp_axis, num_links):
+def test_decoder_attention_on_device(golden, seq_len, mesh_device, submesh_shape, tp_axis, sp_axis, num_links):
     """Attention alone: fused qkv, per-head QK-RMSNorm, RoPE, SDPA, o_proj. Excludes the residual and
-    the input norm, so it attributes the `qkv_proj` / `o_proj` half of the layer's time."""
-    submesh, ctx = _ctx(mesh_device, submesh_shape, tp_axis, num_links)
+    the input norm, so it attributes the `qkv_proj` / `o_proj` half of the layer's time. Under
+    `sp_axis` the SDPA is the causal ring path (`_ring_attention`)."""
+    submesh, ctx = _ctx(mesh_device, submesh_shape, tp_axis, sp_axis, num_links)
 
     attn = Qwen3VlAttention(
         hidden_size=HIDDEN_SIZE,
@@ -308,29 +366,57 @@ def test_decoder_attention_on_device(golden, seq_len, mesh_device, submesh_shape
     # `_prepare_torch_state` fuses q/k/v into `qkv_proj` (and reorders `o_proj`) as part of the load.
     prefix = "self_attn."
     attn.load_torch_state_dict({k[len(prefix) :]: v for k, v in golden["state"].items() if k.startswith(prefix)})
+    seq_pad = _sp_seq_pad(seq_len, _sp_factor(submesh, sp_axis))
+
+    def prep():
+        x = (
+            _shard_seq(golden["attn_in"], submesh, sp_axis, 1, seq_pad)
+            if sp_axis is not None
+            else bf16_tensor(golden["attn_in"], device=submesh)
+        )
+        return x, _rope(submesh, seq_len, sp_axis=sp_axis, seq_pad=seq_pad)
 
     out = _timed(
         submesh,
-        f"decoder attn axis={tp_axis} seq={seq_len}",
-        lambda: (bf16_tensor(golden["attn_in"], device=submesh), _rope(submesh, seq_len)),
+        f"decoder attn tp_axis={tp_axis} sp_axis={sp_axis} seq={seq_len}",
+        prep,
         lambda inp: attn.forward(inp[0], attention_bias=None, pos_embeds=inp[1]),
     )
-    assert_quality(golden["attn_out"].float(), tensor.to_torch(out, mesh_axes=[None, None, None]), pcc=0.99)
+    got = (
+        _gather_seq(out, sp_axis, seq_len)
+        if sp_axis is not None
+        else tensor.to_torch(out, mesh_axes=[None, None, None])
+    )
+    assert_quality(golden["attn_out"].float(), got, pcc=0.99)
 
 
 @_PARAMS
-def test_decoder_mlp_on_device(golden, seq_len, mesh_device, submesh_shape, tp_axis, num_links):
+def test_decoder_mlp_on_device(golden, seq_len, mesh_device, submesh_shape, tp_axis, sp_axis, num_links):
     """MLP alone: SwiGLU over `intermediate_size` 25600. Three of the layer's four matmuls by FLOPs,
-    so this is where the layer's time is expected to sit."""
-    submesh, ctx = _ctx(mesh_device, submesh_shape, tp_axis, num_links)
+    so this is where the layer's time is expected to sit. Purely row-wise, so under `sp_axis` it just
+    runs `1/sp` of the rows -- no ring, no model change, the input shard is the whole story."""
+    submesh, ctx = _ctx(mesh_device, submesh_shape, tp_axis, sp_axis, num_links)
 
     mlp = Qwen3VlMlp(hidden_size=HIDDEN_SIZE, intermediate_size=INTERMEDIATE_SIZE, hidden_act=HIDDEN_ACT, ctx=ctx)
     mlp.load_torch_state_dict({k[len("mlp.") :]: v for k, v in golden["state"].items() if k.startswith("mlp.")})
+    seq_pad = _sp_seq_pad(seq_len, _sp_factor(submesh, sp_axis))
+
+    def prep():
+        return (
+            _shard_seq(golden["mlp_in"], submesh, sp_axis, 1, seq_pad)
+            if sp_axis is not None
+            else bf16_tensor(golden["mlp_in"], device=submesh)
+        )
 
     out = _timed(
         submesh,
-        f"decoder mlp axis={tp_axis} seq={seq_len}",
-        lambda: bf16_tensor(golden["mlp_in"], device=submesh),
+        f"decoder mlp tp_axis={tp_axis} sp_axis={sp_axis} seq={seq_len}",
+        prep,
         lambda inp: mlp.forward(inp),
     )
-    assert_quality(golden["mlp_out"].float(), tensor.to_torch(out, mesh_axes=[None, None, None]), pcc=0.99)
+    got = (
+        _gather_seq(out, sp_axis, seq_len)
+        if sp_axis is not None
+        else tensor.to_torch(out, mesh_axes=[None, None, None])
+    )
+    assert_quality(golden["mlp_out"].float(), got, pcc=0.99)
