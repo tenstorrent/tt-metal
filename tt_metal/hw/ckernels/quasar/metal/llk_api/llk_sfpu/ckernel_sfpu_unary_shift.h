@@ -18,9 +18,11 @@ inline void left_shift_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 // Left shift by an immediate scalar amount. If shift amount is >= 32, the result is 0.
 template <bool APPROXIMATION_MODE, DataFormat DATA_FORMAT = DataFormat::Int32, int ITERATIONS = 8>
 inline void calculate_left_shift(const std::uint32_t shift_amt) {
+    // Quasar has no UInt32 Dest storage format. Unlike Blackhole, UInt32 cannot be listed here; callers that only need
+    // raw 32-bit lane-wise shifts use Quasar's Int32 Dest format.
     static_assert(
-        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
-        "Unsupported data format for shift operation. Supported data formats are: Int32, UInt32, UInt16");
+        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt16,
+        "Unsupported data format for shift operation. Supported data formats are: Int32, UInt16");
     const bool out_of_range = shift_amt >= 32;
     // SFPI overloads both `vInt << unsigned` and `vUInt << unsigned`, so the shift amount's type is
     // independent of the element type being shifted. Cast to a 32-bit `unsigned` so shift is chosen exactly.
@@ -44,9 +46,11 @@ inline void right_shift_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 // A shift amount >= 32 saturates to the sign (non-negative -> 0, negative -> -1).
 template <bool APPROXIMATION_MODE, DataFormat DATA_FORMAT = DataFormat::Int32, int ITERATIONS = 8>
 inline void calculate_right_shift(const std::uint32_t shift_amt) {
+    // Quasar has no UInt32 Dest storage format. Unlike Blackhole, UInt32 cannot be listed here; callers that only need
+    // raw 32-bit lane-wise shifts use Quasar's Int32 Dest format.
     static_assert(
-        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
-        "Unsupported data format for shift operation. Supported data formats are: Int32, UInt32, UInt16");
+        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt16,
+        "Unsupported data format for shift operation. Supported data formats are: Int32, UInt16");
     // SFPI overloads both `vInt << unsigned` and `vUInt << unsigned`, so the shift amount's type is
     // independent of the element type being shifted. Cast to a 32-bit `unsigned` so shift is chosen exactly.
     const unsigned eff = (shift_amt >= 32) ? 31u : static_cast<unsigned>(shift_amt);

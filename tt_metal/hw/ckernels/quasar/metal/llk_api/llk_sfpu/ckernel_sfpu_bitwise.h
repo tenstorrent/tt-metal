@@ -43,9 +43,11 @@ template <
     DataFormat DATA_FORMAT = DataFormat::Int32,
     int ITERATIONS = 8>
 inline void calculate_sfpu_unary_bitwise(const std::uint32_t value) {
+    // Quasar has no UInt32 Dest storage format. Unlike Blackhole, UInt32 cannot be listed here; callers that only need
+    // raw 32-bit lane-wise bit operations use Quasar's Int32 Dest format.
     static_assert(
-        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt32 || DATA_FORMAT == DataFormat::UInt16,
-        "Unsupported data format for bitwise operation. Supported data formats are: Int32, UInt32, UInt16");
+        DATA_FORMAT == DataFormat::Int32 || DATA_FORMAT == DataFormat::UInt16,
+        "Unsupported data format for bitwise operation. Supported data formats are: Int32, UInt16");
     if constexpr (DATA_FORMAT == DataFormat::UInt16) {
         // Bitwise op is per-lane (v & scalar), so `scalar` must be a vector broadcast of `value`
         // whose type matches the loaded `v` (vUInt for the U16 layout).
