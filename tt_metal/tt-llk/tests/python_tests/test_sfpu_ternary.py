@@ -249,7 +249,15 @@ _TERNARY_DIVIDES_BY_C = frozenset(
 # |x| >= 0.5 on both a and b. For addcdiv the numerator is value * b, so b alone decides it;
 # for snake_beta it is sin(b*a)^2, which vanishes only when b*a is an exact multiple of pi,
 # so holding both operands off zero keeps it away from that too (|b*a| <= 1 < pi).
-_TERNARY_NONZERO = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], seed=0)
+#
+# Two specs, differing only in seed, because one spec used for both operands makes them
+# bit-identical: the seed is per-spec, so a and b draw the same stream and every variant runs
+# with a == b. The pole on c is still reached, which is why this passed, but the operands stop
+# being independent -- snake_beta degenerates from sin(b*a) to sin(a^2), and a kernel that
+# read the wrong operand of the two would be invisible. Seeded rather than left to the default
+# so the streams stay reproducible while being different from each other.
+_TERNARY_NONZERO_A = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], seed=0)
+_TERNARY_NONZERO_B = StimuliSpec.uniform(intervals=[(-1.0, -0.5), (0.5, 1.0)], seed=1)
 
 
 @pytest.mark.nightly
@@ -285,8 +293,8 @@ def test_sfpu_ternary_edges(formats, dest_acc, mathop):
         formats,
         dest_acc,
         mathop,
-        spec_A=_TERNARY_NONZERO if nonzero else None,
-        spec_B=_TERNARY_NONZERO if nonzero else None,
+        spec_A=_TERNARY_NONZERO_A if nonzero else None,
+        spec_B=_TERNARY_NONZERO_B if nonzero else None,
         spec_C=spec_C,
     )
 

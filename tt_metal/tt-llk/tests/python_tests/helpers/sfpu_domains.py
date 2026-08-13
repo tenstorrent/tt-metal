@@ -1461,7 +1461,13 @@ def probe_beside(
     fp32's full exponent range, so 2**-23 survives as a visible distance from zero.
     """
     fine = point + direction * ulps * format_ulp(range_fmt, point)
-    if _truncate_mantissa(fine, step_fmt) != point:
+    # Both sides truncated, because the narrow datapath truncates the boundary as well as the
+    # probe -- the question is whether they stay distinct *as the kernel sees them*. Every
+    # point registered today is bfloat16-exact, so truncating it is a no-op and this is
+    # equivalent to comparing against the bare point; it stops being equivalent the moment
+    # someone registers a pole that is not, at which point the bare form would silently
+    # always be true and the widening below would never trigger.
+    if _truncate_mantissa(fine, step_fmt) != _truncate_mantissa(point, step_fmt):
         return fine
     return point + direction * ulps * format_ulp(step_fmt, point)
 

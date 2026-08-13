@@ -897,6 +897,20 @@ def test_eltwise_unary_sfpu_int(
 # differs from the *binary* one, which really does produce 0 for both signs.
 _UNARY_SHIFT_OPS = [MathOperation.LeftShift, MathOperation.RightShift]
 
+# The unary sweep takes the shared amounts but collapses the negatives to one.
+#
+# SFPU_SHIFT_AMOUNT emits the amount with a `u` suffix and both kernels branch on
+# `shift_amt >= 32` as unsigned, so every negative amount arrives as a large unsigned and
+# takes the same out-of-range path as 32, 33, 40, ... -- four amounts, one code path, eight
+# redundant silicon variants. The *binary* shift ops take their amount as a signed operand,
+# where the four are genuinely distinct, which is why the shared list keeps them and only this
+# consumer narrows.
+#
+# One is kept rather than none, because the unsigned wrap is load-bearing and worth pinning: if
+# SHIFT_AMOUNT ever became signed, -1 would compare as in-range and `v << -1` is undefined
+# behaviour rather than a wrong answer.
+_UNARY_SHIFT_AMOUNTS = [n for n in SHIFT_EDGE_AMOUNTS if n >= 0] + [-1]
+
 # A shift is exact, so the stimulus only has to reach the interesting magnitudes rather than
 # straddle a boundary: powers of two around a byte and a half-word, a few odd values to catch
 # a lost low bit, both signs, and zero.
@@ -940,7 +954,7 @@ def _shift_stimulus_values(mathop, shift_amount):
 @pytest.mark.nightly
 @parametrize(
     mathop=_UNARY_SHIFT_OPS,
-    shift_amount=list(SHIFT_EDGE_AMOUNTS),
+    shift_amount=_UNARY_SHIFT_AMOUNTS,
     dest_acc=[DestAccumulation.Yes],
     input_dimensions=[[64, 64]],
 )
