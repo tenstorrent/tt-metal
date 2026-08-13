@@ -85,11 +85,14 @@ it is classified differently on different systems.
 | Gemma-4-26B-A4B | WH LLMBox |
 | Gemma-4-31B | WH LLMBox |
 | Stable Diffusion XL | WH N150, WH N300, BH P150 |
+| ViT | WH N150, WH N300 |
 ## Tier 3 Models
 | Model | Systems |
 |-------|---------|
 | Falcon-7B | WH N150 |
 | Falcon-40B | WH LLMBox |
+| Gemma-2-2B | WH N150, WH N300 |
+| Gemma-2-9B | WH N300 |
 | Llama3.2-1B | WH N150 |
 | Llama3.2-3B | WH N150 |
 | Llama3.2-11B-Vision | WH LLMBox |
@@ -104,6 +107,8 @@ it is classified differently on different systems.
 | Janus-Pro-7B | BH P150 |
 | Panoptic-DeepLab | BH P150 |
 | BEVFormer | BH P150 |
+| Mistral-Small-3.1-24B | WH LLMBox, BH QuietBox 2 |
+| Stable Diffusion 3.5 Large | WH LLMBox |
 
 
 # Pipelines

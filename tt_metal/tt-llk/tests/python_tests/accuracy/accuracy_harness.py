@@ -28,7 +28,7 @@ from helpers.llk_params import (
     Transpose,
     format_dict,
 )
-from helpers.perf import PerfConfig
+from helpers.perf.core import PerfConfig
 from helpers.sfpu_domains import for_op
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (

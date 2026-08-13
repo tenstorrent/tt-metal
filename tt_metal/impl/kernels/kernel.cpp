@@ -620,6 +620,9 @@ uint64_t Kernel::compute_hash() const {
     ////////////////////////////////////////////////////////////
     hasher.update(this->kernel_src_.source_);
     hasher.update(this->compile_time_args_.begin(), this->compile_time_args_.end());
+    // Prefix length baked into kernel_args_generated.h (array size / accessor bounds).
+    // Independent of compile_time_args_ values: same words with a different split must not collide.
+    hasher.update(static_cast<uint64_t>(this->compile_time_vararg_count_));
     hasher.update(this->config_hash());
 
     // Include paths affect compilation: the gcc -I order is significant (left-to-right

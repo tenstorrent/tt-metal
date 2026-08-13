@@ -145,6 +145,12 @@ def load_sku_config(sku_config_path):
     return config["skus"]
 
 
+def strip_cmd_comments(cmd):
+    """Drop whole-line shell comments from a multi-line cmd string."""
+    kept = [line for line in cmd.split("\n") if not line.lstrip().startswith("#")]
+    return "\n".join(kept)
+
+
 def substitute_cmd_placeholders(entry, allow_missing_cmd=False):
     """
     Replace placeholders in entry["cmd"] with values from the same entry.
@@ -166,6 +172,9 @@ def substitute_cmd_placeholders(entry, allow_missing_cmd=False):
         raise ValueError(f"cmd is missing for test '{entry.get('name', 'Unnamed Test')}'")
     if not isinstance(cmd, str):
         raise ValueError(f"cmd is not a string: {cmd}")
+
+    cmd = strip_cmd_comments(cmd)
+    entry["cmd"] = cmd
     if not cmd.strip():
         raise ValueError(f"cmd is present but empty for test '{entry.get('name', 'Unnamed Test')}'")
     for key, value in entry.items():
@@ -277,10 +286,14 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing
             sku_entry = sku_config[concrete_sku]
             if "weights-cache-mode" in sku_entry:
                 entry["weights-cache-mode"] = sku_entry["weights-cache-mode"]
-            # SKUs carrying an `allocation` block are exabox multihost SKUs (runs_on
-            # exabox-multihost-with-nfs) that need the ttop allocation/reset lifecycle rather than
-            # the single-host container path. Mark the leg so consumers can route it accordingly.
-            entry["multihost"] = "allocation" in sku_entry
+            # Exabox multihost SKUs: runs_on contains an exabox-multihost* label
+            # (e.g. exabox-multihost-ci-sc4). The multihost-ci runner hook provisions
+            # workers from container.image. A legacy `allocation` block also marks
+            # multihost if present.
+            runs_on = sku_entry.get("runs_on") or []
+            entry["multihost"] = "allocation" in sku_entry or any(
+                isinstance(label, str) and "exabox-multihost" in label for label in runs_on
+            )
             substitute_cmd_placeholders(entry, allow_missing_cmd=allow_missing_cmd)
             filtered_tests.append(entry)
 

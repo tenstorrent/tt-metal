@@ -31,7 +31,6 @@ on:
           - n300 mesh llama3.2-11b-vision
           - llama3.2-90b-vision
           - llama3.2-90b
-          - mistral
           - mixtral
           - grok
           - unet shallow
@@ -49,18 +48,13 @@ on:
           - llama3_90b_vision
           - llama3_70b
           - resnet50
-          - sentence_bert
-          - sd35_large
-          - flux1-dev
           - motif
-          - mistral
           - mixtral
           - whisper
           - qwen3
           - qwen25
           - qwen25_vl
           - gemma3
-          - wan22
           - mochi
       t3000-perf:
         description: "Perf tests: Select 'all', specific model or 'disabled'"
@@ -70,11 +64,7 @@ on:
           - disabled
           - all
           - resnet50
-          - sentence_bert
-          - stable_diffusion_35_large
           - mochi
-          - wan22
-          - flux1-dev
           - motif
       t3000-integration:
         description: "Integration tests: Select 'all', specific model or 'disabled'"
@@ -87,10 +77,7 @@ on:
           - ethernet
           - trace stress
           - resnet
-          - sd35_large
-          - flux1
           - motif
-          - wan2.2
           - mochi
           - deepseek-modules
       t3000-e2e:

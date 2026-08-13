@@ -48,7 +48,7 @@ void kernel_main() {
 #endif
 
     // Initialize binary unit for B*C path; output packer initialized with dfb_out
-    binary_op_init_common(dfb_eff_b.get_id(), dfb_eff_c.get_id(), dfb_out.get_id());
+    compute_kernel_hw_startup(dfb_eff_b.get_id(), dfb_eff_c.get_id(), dfb_out.get_id());
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
 // 1) Prepare B and C (broadcast if required), then compute mul(B, C) -> DST[0]
@@ -56,7 +56,9 @@ void kernel_main() {
 #if BCAST_B
         dfb_in1.wait_front(num_tiles_per_cycle);
         dfb_llk_b.reserve_back(num_tiles_per_cycle);
-        unary_bcast_init<BroadcastType::ROW>(dfb_in1.get_id(), dfb_llk_b.get_id());
+        reconfig_data_format(dfb_in1.get_id(), dfb_in1.get_id());
+        pack_reconfig_data_format(dfb_llk_b.get_id());
+        unary_bcast_init<BroadcastType::ROW>(dfb_in1.get_id());
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(dfb_in1.get_id(), 0, 0);
         tile_regs_commit();
@@ -71,7 +73,9 @@ void kernel_main() {
 #if BCAST_C
         dfb_in2.wait_front(num_tiles_per_cycle);
         dfb_llk_c.reserve_back(num_tiles_per_cycle);
-        unary_bcast_init<BroadcastType::ROW>(dfb_in2.get_id(), dfb_llk_c.get_id());
+        reconfig_data_format(dfb_in2.get_id(), dfb_in2.get_id());
+        pack_reconfig_data_format(dfb_llk_c.get_id());
+        unary_bcast_init<BroadcastType::ROW>(dfb_in2.get_id());
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(dfb_in2.get_id(), 0, 0);
         tile_regs_commit();
@@ -86,7 +90,9 @@ void kernel_main() {
 #if BCAST_A
         dfb_in0.wait_front(num_tiles_per_cycle);
         dfb_llk_a.reserve_back(num_tiles_per_cycle);
-        unary_bcast_init<BroadcastType::ROW>(dfb_in0.get_id(), dfb_llk_a.get_id());
+        reconfig_data_format(dfb_in0.get_id(), dfb_in0.get_id());
+        pack_reconfig_data_format(dfb_llk_a.get_id());
+        unary_bcast_init<BroadcastType::ROW>(dfb_in0.get_id());
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(dfb_in0.get_id(), 0, 0);
         tile_regs_commit();

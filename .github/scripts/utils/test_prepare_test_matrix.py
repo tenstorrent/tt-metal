@@ -49,13 +49,14 @@ def run_matrix(
     enabled: str,
     *extra: str,
     env: dict | None = None,
+    sku_config: Path | None = None,
 ) -> list:
     cmd = [
         sys.executable,
         str(SCRIPT),
         str(tests_yaml),
         enabled,
-        str(SKU_CONFIG),
+        str(sku_config or SKU_CONFIG),
         *extra,
     ]
     run_env = os.environ.copy()
@@ -305,6 +306,40 @@ def test_all_skus_on_comment_only_yaml_yields_empty_matrix(tmp_path: Path):
     assert matrix == []
 
 
+def test_cmd_strips_indented_comments(tmp_path: Path):
+    """Whole-line '#' comments inside a cmd block are dropped from the matrix cmd.
+
+    Regression for galaxy_stress_tests.yaml: a comment carrying a lone apostrophe
+    and parentheses (e.g. "overrides setup-job's 5s default") otherwise lands in
+    the matrix JSON's cmd and breaks downstream shell single-quoting of the cmd.
+    """
+    path = tmp_path / "comment_cmd.yaml"
+    path.write_text(
+        textwrap.dedent(
+            """\
+            - name: commented test
+              cmd: |
+                # 0 disables the timeout (overrides setup-job's 5s default), which
+                # else false-fails slow subtests (size_4096 unicast ~6.2s).
+                run_the_thing --filter 'name.*_short'
+              skus:
+                wh_n150_civ2:
+                  timeout: 15
+              team: runtime
+              owner_id: U000
+            """
+        )
+    )
+    matrix = run_matrix(path, "wh_n150_civ2")
+    assert len(matrix) == 1
+    cmd = matrix[0]["cmd"]
+    # Comment lines (and their apostrophes/parentheses) are gone; the real
+    # command line — including its own single-quoted arg — survives intact.
+    assert "#" not in cmd
+    assert "setup-job's" not in cmd
+    assert "run_the_thing --filter 'name.*_short'" in cmd
+
+
 def test_models_merge_gate_placeholder_skips(tmp_path: Path):
     """The real (currently empty) models gate list must not fail on merge_group."""
     matrix = run_matrix(
@@ -373,6 +408,100 @@ def test_sku_config_aliases_point_at_grouped_prio_skus():
         alias = cfg[logical]["merge_queue_sku"]
         assert alias in cfg
         assert "runs_on" in cfg[alias]
+
+
+# ---------------------------------------------------------------------------
+# Multihost routing (single-host vs exabox workflow split)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "sku_name,sku_yaml,expected_multihost",
+    [
+        (
+            "legacy_alloc",
+            """\
+              legacy_alloc:
+                runs_on: [exabox-multihost-with-nfs]
+                allocation:
+                  type: Count
+                  count: 4
+            """,
+            True,
+        ),
+        (
+            "exabox_label",
+            """\
+              exabox_label:
+                runs_on: [exabox-multihost-ci-sc4]
+            """,
+            True,
+        ),
+        (
+            "ordinary",
+            """\
+              ordinary:
+                runs_on: [arch-blackhole, in-service]
+            """,
+            False,
+        ),
+    ],
+    ids=["legacy_allocation", "exabox_multihost_label", "ordinary_runner"],
+)
+def test_multihost_flag_from_sku_config(tmp_path: Path, sku_name: str, sku_yaml: str, expected_multihost: bool):
+    """Legs with allocation or an exabox-multihost* runs_on label are multihost."""
+    tests = tmp_path / "tests.yaml"
+    tests.write_text(
+        textwrap.dedent(
+            f"""\
+            - name: routing probe
+              cmd: echo ok
+              skus:
+                {sku_name}:
+                  timeout: 10
+              team: models
+            """
+        )
+    )
+    cfg = tmp_path / "sku_config.yaml"
+    cfg.write_text(textwrap.dedent(f"skus:\n{sku_yaml}"))
+    matrix = run_matrix(tests, "ALL_SKUS_IN_TESTS", sku_config=cfg)
+    assert len(matrix) == 1
+    assert matrix[0]["sku"] == sku_name
+    assert matrix[0]["multihost"] is expected_multihost
+
+
+def test_real_exabox_skus_are_marked_multihost(tmp_path: Path):
+    """Production bh_sc* SKUs route via exabox-multihost-ci-* labels in sku_config."""
+    tests = tmp_path / "tests.yaml"
+    tests.write_text(
+        textwrap.dedent(
+            """\
+            - name: sc1 probe
+              cmd: echo ok
+              skus:
+                bh_sc1:
+                  timeout: 10
+              team: models
+            - name: sc4 probe
+              cmd: echo ok
+              skus:
+                bh_sc4:
+                  timeout: 10
+              team: models
+            - name: single-host probe
+              cmd: echo ok
+              skus:
+                bh_p150:
+                  timeout: 10
+              team: models
+            """
+        )
+    )
+    by_sku = {e["sku"]: e for e in run_matrix(tests, "bh_sc1,bh_sc4,bh_p150")}
+    assert by_sku["bh_sc1"]["multihost"] is True
+    assert by_sku["bh_sc4"]["multihost"] is True
+    assert by_sku["bh_p150"]["multihost"] is False
 
 
 # ---------------------------------------------------------------------------
