@@ -148,15 +148,32 @@ def _device_params():
     The batch-32 decode trace is the largest (~228 MB at capture), so the
     Blackhole trace region is sized above that with margin. ``GEMMA4_TRACE_REGION_SIZE``
     overrides it for configs that need a different budget.
+
+    Fabric is only requested for actual multi-device meshes. A genuine single-chip
+    (1x1) open needs no CCL and thus no fabric — and on a host with multiple physical
+    chips (e.g. this QB2), requesting FABRIC_1D anyway makes the runtime try to bring
+    up the ethernet ring across ALL physical chips before the single logical device is
+    considered ready, which can fail ("Fabric Router Sync: Timeout...") independent of
+    whether the 1x1 workload needs any fabric at all. Confirmed: a bare
+    ttnn.open_mesh_device(mesh_shape=(1,1)) with no fabric_config opens instantly on
+    this box, while the identical open WITH fabric_config="FABRIC_1D" times out.
     """
+    mesh_shape = {
+        "N150": (1, 1),
+        "N300": (1, 2),
+        "P150": (1, 1),
+        "P300": (1, 2),
+        "P150x4": (1, 4),
+        "P300x2": (1, 4),
+        "P300X2": (1, 4),
+        "P150x8": (1, 8),
+        "T3K": (1, 8),
+    }.get(os.environ.get("MESH_DEVICE"), (1, 4))
+    fabric_params = {} if mesh_shape[0] * mesh_shape[1] == 1 else {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
     if is_blackhole():
         trace_region_size = int(os.environ.get("GEMMA4_TRACE_REGION_SIZE", 256_000_000))
-        return {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": trace_region_size,
-            "num_command_queues": 1,
-        }
-    return {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30_000_000, "num_command_queues": 1}
+        return {**fabric_params, "trace_region_size": trace_region_size, "num_command_queues": 1}
+    return {**fabric_params, "trace_region_size": 30_000_000, "num_command_queues": 1}
 
 
 # Parameters mirror the Gemma3 demo layout (subset): a latency config, a long-context
