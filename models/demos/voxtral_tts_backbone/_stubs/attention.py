@@ -93,6 +93,7 @@ class TtAttention:
         self.kv_write_memory_config = _kv_write_memory_config(self.n_kv_heads, self.head_dim)
         # K and V share a shape, so one plan serves both.
         self.kv_plan = build_plan(device, int(self.wk.shape[-2]), int(self.wk.shape[-1]))
+        self.o_plan = build_plan(device, int(self.wo.shape[-2]), int(self.wo.shape[-1]))
         # HiFi4 + fp32 accumulate: the projections and the SDPA feed a 0.99 PCC
         # gate, and bf16 LoFi accumulation is what usually costs those digits.
         try:
@@ -243,6 +244,8 @@ class TtAttention:
 
         shape = list(attn.shape)
         attn = ttnn.reshape(attn, (shape[0], shape[1], self.n_heads * self.head_dim))
+        if self.o_plan is not None and self.o_plan.matches(attn):
+            return self.o_plan(attn, self.wo, self.compute_kernel_config)
         return ttnn.linear(attn, self.wo, **mm)
 
     def _write_cache_row(self, cache, tensor, cache_pos, cache_pos_tensor):

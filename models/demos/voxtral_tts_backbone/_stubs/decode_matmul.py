@@ -18,6 +18,14 @@ WHY
     program config have to agree. A program config alone on a DRAM-interleaved
     activation is inert.
 
+WHERE IT PAYS (measured, per shape)
+    Only where the auto router is STARVED -- by a small N (k/v 3072->1024, 32
+    output tiles: -28.6%) or a long K (down 9216->3072: -27.1%). On a wide-N
+    projection it is a LOSS: gate/up 3072->9216 has 288 output tiles, already
+    routes at 369 GB/s, and lost at all seven core counts swept (best +0.9%),
+    because the two reshard ops this adds cost more than the routing it fixes.
+    So it is applied per shape, not blanket.
+
 WHAT THIS DELIBERATELY DOES NOT DO
     It leaves the WEIGHT interleaved in DRAM. The DRAM-width-sharded variant
     was measured too and is worse here (down_proj -6.4% vs this -27.1%, and
@@ -32,15 +40,17 @@ import ttnn
 TILE = 32
 
 
-def _core_split(device, k_tiles: int, n_tiles: int):
+def _core_split(device, k_tiles: int, n_tiles: int, max_cores: int = 0):
     """Most cores that evenly divide BOTH tile counts and factor into the grid.
 
     Both must divide evenly: `in0_block_w` slices K per core and `per_core_N`
     slices N, and a remainder on either is a mis-sized shard, not just an
-    imbalance.
+    imbalance. More cores is not automatically better -- see the module note --
+    so `max_cores` caps the search for shapes that measured better narrower.
     """
     grid = device.compute_with_storage_grid_size()
-    for cores in range(grid.x * grid.y, 0, -1):
+    ceiling = min(max_cores, grid.x * grid.y) if max_cores else grid.x * grid.y
+    for cores in range(ceiling, 0, -1):
         if k_tiles % cores or n_tiles % cores:
             continue
         for rows in range(1, grid.y + 1):
@@ -52,14 +62,18 @@ def _core_split(device, k_tiles: int, n_tiles: int):
 class DecodeMatmulPlan:
     """Sharded activation/output memory configs + full-grid program config."""
 
-    def __init__(self, device, k: int, n: int):
+    def __init__(self, device, k: int, n: int, max_cores: int = 0):
         self.k, self.n = int(k), int(n)
-        split = _core_split(device, self.k // TILE, self.n // TILE)
+        split = _core_split(device, self.k // TILE, self.n // TILE, max_cores)
         if split is None:
             raise ValueError("no even core split for k=%d n=%d" % (k, n))
         cores, rows, cols = split
         self.cores, self.core_grid = cores, ttnn.CoreGrid(y=rows, x=cols)
         per_core_n = (self.n // TILE) // cores
+        # out_subblock_w must DIVIDE per_core_N (and h*w <= 8 with fp32_dest_acc
+        # off), so take the largest such divisor -- min(4, per_core_N) is wrong
+        # the moment per_core_N is 6.
+        subblock_w = next(s for s in (4, 3, 2, 1) if per_core_n % s == 0)
 
         self.input_memory_config = ttnn.create_sharded_memory_config(
             shape=(1, 1, TILE, self.k), core_grid=self.core_grid, strategy=ttnn.ShardStrategy.WIDTH
@@ -71,7 +85,7 @@ class DecodeMatmulPlan:
             compute_with_storage_grid_size=(cols, rows),
             in0_block_w=(self.k // TILE) // cores,
             out_subblock_h=1,
-            out_subblock_w=min(4, per_core_n),
+            out_subblock_w=subblock_w,
             per_core_M=1,  # the decode row -- one tile
             per_core_N=per_core_n,
             fuse_batch=True,
@@ -111,9 +125,9 @@ class DecodeMatmulPlan:
         return ttnn.sharded_to_interleaved(out)
 
 
-def build_plan(device, k: int, n: int):
+def build_plan(device, k: int, n: int, max_cores: int = 0):
     """A plan, or None if this shape has no even full-grid split."""
     try:
-        return DecodeMatmulPlan(device, k, n)
+        return DecodeMatmulPlan(device, k, n, max_cores)
     except Exception:  # noqa: BLE001 - fall back to plain ttnn.linear
         return None

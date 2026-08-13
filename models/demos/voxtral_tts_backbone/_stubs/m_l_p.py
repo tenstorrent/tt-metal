@@ -37,6 +37,10 @@ class TtMLP:
         # `ttnn.linear` routes worst on its own, so its decode call gets an
         # explicit full-grid plan. The weight layout is untouched.
         self.down_plan = build_plan(device, int(self.w_down.shape[-2]), int(self.w_down.shape[-1]))
+        # gate/up (3072 -> 9216) deliberately keeps the DEFAULT routing: its N is
+        # 288 tiles, so `ttnn.linear` already spreads it well (369 GB/s, the best
+        # of any projection here). Seven core counts were swept for it and every
+        # one lost -- the plan's two reshard ops cost more than they buy.
 
     @classmethod
     def build(cls, device, torch_module, compute_kernel_config=None):
