@@ -1,32 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-
-"""Single source of truth for every XTTS-v2 configuration value.
-
-Everything that is a *number the model is defined by* — checkpoint coordinates,
-GPT-2 backbone dims, sequence limits, token ids, mel/STFT parameters, the
-speaker-encoder and HiFi-GAN topologies, the sampling defaults, and the
-device-side budgets the demo runs against — lives here and nowhere else. The
-reference modules, the TTNN port and the demo all import from this file, so a
-value is changed in exactly one place.
-
-Values fall into three kinds; they are labelled per section:
-
-  * **checkpoint facts** — fixed by ``coqui/XTTS-v2`` ``model.pth`` /
-    ``config.json``. Changing one makes the weights stop loading (or load and
-    produce garbage). Do not "tune" these.
-  * **upstream defaults** — coqui's inference-time choices (sampling
-    temperature, conditioning window lengths). Safe to change; changes what the
-    audio sounds like.
-  * **port budgets** — limits this TTNN port measured on hardware (L1 clashes,
-    code budgets, trace region size). Safe to change, but they were measured;
-    see the comment on each before moving one.
-
-What is deliberately NOT here: per-op TTNN tuning inside ``tt/`` (memory
-configs, math fidelity, shard-strategy flags, program configs). Those are
-properties of a specific kernel implementation rather than of the model, and
-they only make sense next to the code that uses them.
-"""
 
 from dataclasses import dataclass, field, replace
 

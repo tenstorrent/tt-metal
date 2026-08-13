@@ -21,6 +21,8 @@ class TtXttsHifiDecoder(LightweightModule):
     def speaker_embedding(self, ref_wav):
         mel = self.mel_frontend(ref_wav)
         g = self.speaker_encoder(mel)
+        if mel.is_allocated():
+            ttnn.deallocate(mel)
         g = ttnn.reshape(g, [1, 1, COND_CHANNELS])
         return ttnn.to_layout(g, ttnn.ROW_MAJOR_LAYOUT)
 

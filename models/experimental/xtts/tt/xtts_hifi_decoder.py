@@ -47,6 +47,13 @@ class TtLatentUpsampler(LightweightModule):
             )
         return self._matrix_cache[length_in]
 
+    def release_cache(self):
+        """Drop cached interp matrices (L1). Safe after vocoder trace release."""
+        for t in self._matrix_cache.values():
+            if t.is_allocated():
+                ttnn.deallocate(t)
+        self._matrix_cache.clear()
+
     def _matmul_program_config(self, length_out: int, channels: int):
         grid = self.device.compute_with_storage_grid_size()
         max_x, max_y = int(grid.x), int(grid.y)
