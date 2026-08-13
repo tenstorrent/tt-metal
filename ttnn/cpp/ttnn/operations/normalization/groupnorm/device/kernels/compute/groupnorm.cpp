@@ -309,13 +309,11 @@ void kernel_main() {
             // Start Local Reduce
             dfb_input_mask.wait_front(block_w);
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                uint32_t out_block_h_actual, out_block_hw_actual;
+                uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
-                    out_block_hw_actual = out_block_hw_last;
                 } else {
                     out_block_h_actual = out_block_h_normal;
-                    out_block_hw_actual = out_block_hw_normal;
                 }
 #ifdef TILIZE_IN
                 // Append this out-block; no pop, so the whole group stays available.
@@ -403,13 +401,11 @@ void kernel_main() {
             // Start Variance Calc
             // Start Local Reduce
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                uint32_t out_block_h_actual, out_block_hw_actual;
+                uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
-                    out_block_hw_actual = out_block_hw_last;
                 } else {
                     out_block_h_actual = out_block_h_normal;
-                    out_block_hw_actual = out_block_hw_normal;
                 }
 
                 // The resident group is already there; only the tiled path waits on new rows.
@@ -626,13 +622,11 @@ void kernel_main() {
             uint32_t out_block_h_offset = 0;
             // Start Final Val Calc
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                uint32_t out_block_h_actual, out_block_hw_actual;
+                uint32_t out_block_h_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
-                    out_block_hw_actual = out_block_hw_last;
                 } else {
                     out_block_h_actual = out_block_h_normal;
-                    out_block_hw_actual = out_block_hw_normal;
                 }
 
 #ifndef TILIZE_IN
