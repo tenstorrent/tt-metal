@@ -61,8 +61,9 @@ class VisionBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
         )
-        # Block I/O is fractured along dim=3, so the norms all-gather first
-        # (mirrors `DistributedNorm` in the LLM).
+        # Block I/O is fractured along dim=3, so the norms all-gather first (mirrors `DistributedNorm`
+        # in the LLM) — unless the tower keeps activations replicated (args.vision_replicated_acts),
+        # in which case there is no fracture and the norms run locally.
         ln_kwargs = dict(
             device=mesh_device,
             dim=args.dim,
@@ -72,6 +73,7 @@ class VisionBlock(LightweightModule):
             weight_dtype=ttnn.bfloat16,
             tt_ccl=tt_ccl,
             ccl_topology=args.ccl_topology(),
+            replicated_input=getattr(args, "vision_replicated_acts", False),
         )
         self.attention_norm = DistributedLayerNorm(
             state_dict_prefix=args.get_state_dict_prefix("norm1", layer_num),
@@ -89,10 +91,14 @@ class VisionBlock(LightweightModule):
     ) -> ttnn.Tensor:
         """Run the vision block.
 
-        I/O contract: ``x`` is fractured along dim=3 (each device holds dim/TP),
-        output is fractured along dim=3. Norms internally all-gather to a
-        replicated tensor; attention/MLP end with a ``reduce_scatter`` (via
-        ``tt_all_reduce``), restoring the fracture.
+        I/O contract: ``x`` is fractured along dim=3 (each device holds dim/TP) and the output is
+        fractured the same way. Norms internally all-gather to a replicated tensor; attention/MLP end
+        with a ``reduce_scatter`` (via ``tt_all_reduce``), restoring the fracture.
+
+        Under ``args.vision_replicated_acts`` (TP cannot split dim into whole tiles, e.g. dim 1152 on
+        8 devices) both ends are instead REPLICATED at full dim: the norms skip their gather and the
+        out-projections all-reduce rather than reduce-scatter. Weights stay sharded either way, so
+        the block is never computed redundantly. See vision_ccl.
         """
         skip_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
         assert (
