@@ -123,10 +123,12 @@ groupings {
 }
 
 # Half-trays (2x2 quadrants). Rev A/B: HALFTRAY_1 = trays 1 & 2, HALFTRAY_2 = trays 3 & 4.
+# Half-trays split into named per-position sub-groups (Rev A/B: HALFTRAY_1 = trays 1 & 2,
+# HALFTRAY_2 = trays 3 & 4). This lets 4x4_SplitHost_Middle / _Edge select complementary quadrants.
 # HALFTRAY_1: tray 1 quadrants
 groupings {
-  name: "halftray_2x2_group_1"
-  custom_type: "HALFTRAY_1"
+  name: "halftray_2x2_tray_1_top"
+  custom_type: "HALFTRAY_1_TRAY_1_TOP"
   instances: [
     { id: 0 location { asic_location: ASIC_LOCATION_5 tray_id: TRAY_1 } },
     { id: 1 location { asic_location: ASIC_LOCATION_6 tray_id: TRAY_1 } },
@@ -138,8 +140,8 @@ groupings {
   }
 }
 groupings {
-  name: "halftray_2x2_group_1"
-  custom_type: "HALFTRAY_1"
+  name: "halftray_2x2_tray_1_bottom"
+  custom_type: "HALFTRAY_1_TRAY_1_BOTTOM"
   instances: [
     { id: 0 location { asic_location: ASIC_LOCATION_7 tray_id: TRAY_1 } },
     { id: 1 location { asic_location: ASIC_LOCATION_8 tray_id: TRAY_1 } },
@@ -152,8 +154,8 @@ groupings {
 }
 # HALFTRAY_1: tray 2 quadrants
 groupings {
-  name: "halftray_2x2_group_1"
-  custom_type: "HALFTRAY_1"
+  name: "halftray_2x2_tray_2_top"
+  custom_type: "HALFTRAY_1_TRAY_2_TOP"
   instances: [
     { id: 0 location { asic_location: ASIC_LOCATION_8 tray_id: TRAY_2 } },
     { id: 1 location { asic_location: ASIC_LOCATION_7 tray_id: TRAY_2 } },
@@ -165,8 +167,8 @@ groupings {
   }
 }
 groupings {
-  name: "halftray_2x2_group_1"
-  custom_type: "HALFTRAY_1"
+  name: "halftray_2x2_tray_2_bottom"
+  custom_type: "HALFTRAY_1_TRAY_2_BOTTOM"
   instances: [
     { id: 0 location { asic_location: ASIC_LOCATION_6 tray_id: TRAY_2 } },
     { id: 1 location { asic_location: ASIC_LOCATION_5 tray_id: TRAY_2 } },
@@ -180,8 +182,8 @@ groupings {
 
 # HALFTRAY_2: tray 3 quadrants
 groupings {
-  name: "halftray_2x2_group_2"
-  custom_type: "HALFTRAY_2"
+  name: "halftray_2x2_tray_3_top"
+  custom_type: "HALFTRAY_2_TRAY_3_TOP"
   instances: [
     { id: 0 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_3 } },
     { id: 1 location { asic_location: ASIC_LOCATION_2 tray_id: TRAY_3 } },
@@ -193,8 +195,8 @@ groupings {
   }
 }
 groupings {
-  name: "halftray_2x2_group_2"
-  custom_type: "HALFTRAY_2"
+  name: "halftray_2x2_tray_3_bottom"
+  custom_type: "HALFTRAY_2_TRAY_3_BOTTOM"
   instances: [
     { id: 0 location { asic_location: ASIC_LOCATION_3 tray_id: TRAY_3 } },
     { id: 1 location { asic_location: ASIC_LOCATION_4 tray_id: TRAY_3 } },
@@ -207,8 +209,8 @@ groupings {
 }
 # HALFTRAY_2: tray 4 quadrants
 groupings {
-  name: "halftray_2x2_group_2"
-  custom_type: "HALFTRAY_2"
+  name: "halftray_2x2_tray_4_top"
+  custom_type: "HALFTRAY_2_TRAY_4_TOP"
   instances: [
     { id: 0 location { asic_location: ASIC_LOCATION_4 tray_id: TRAY_4 } },
     { id: 1 location { asic_location: ASIC_LOCATION_3 tray_id: TRAY_4 } },
@@ -220,8 +222,8 @@ groupings {
   }
 }
 groupings {
-  name: "halftray_2x2_group_2"
-  custom_type: "HALFTRAY_2"
+  name: "halftray_2x2_tray_4_bottom"
+  custom_type: "HALFTRAY_2_TRAY_4_BOTTOM"
   instances: [
     { id: 0 location { asic_location: ASIC_LOCATION_2 tray_id: TRAY_4 } },
     { id: 1 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_4 } },
@@ -232,6 +234,17 @@ groupings {
     dims: [2, 2]
   }
 }
+
+# Wrapper aliases: HALFTRAY_1 / HALFTRAY_2 each stand in for their per-position sub-groups
+# (so groupings that reference the generic HALFTRAY_1 / HALFTRAY_2 keep working).
+groupings { name: "halftray_2x2_group_1" custom_type: "HALFTRAY_1" instances: [ { id: 0 grouping_ref { custom_type: "HALFTRAY_1_TRAY_1_TOP" } } ] }
+groupings { name: "halftray_2x2_group_1" custom_type: "HALFTRAY_1" instances: [ { id: 0 grouping_ref { custom_type: "HALFTRAY_1_TRAY_1_BOTTOM" } } ] }
+groupings { name: "halftray_2x2_group_1" custom_type: "HALFTRAY_1" instances: [ { id: 0 grouping_ref { custom_type: "HALFTRAY_1_TRAY_2_TOP" } } ] }
+groupings { name: "halftray_2x2_group_1" custom_type: "HALFTRAY_1" instances: [ { id: 0 grouping_ref { custom_type: "HALFTRAY_1_TRAY_2_BOTTOM" } } ] }
+groupings { name: "halftray_2x2_group_2" custom_type: "HALFTRAY_2" instances: [ { id: 0 grouping_ref { custom_type: "HALFTRAY_2_TRAY_3_TOP" } } ] }
+groupings { name: "halftray_2x2_group_2" custom_type: "HALFTRAY_2" instances: [ { id: 0 grouping_ref { custom_type: "HALFTRAY_2_TRAY_3_BOTTOM" } } ] }
+groupings { name: "halftray_2x2_group_2" custom_type: "HALFTRAY_2" instances: [ { id: 0 grouping_ref { custom_type: "HALFTRAY_2_TRAY_4_TOP" } } ] }
+groupings { name: "halftray_2x2_group_2" custom_type: "HALFTRAY_2" instances: [ { id: 0 grouping_ref { custom_type: "HALFTRAY_2_TRAY_4_BOTTOM" } } ] }
 
 groupings {
   name: "2x2 Mesh"
@@ -260,26 +273,40 @@ groupings {
   }
 }
 
+#groupings {
+#  name: "4x4_Mesh"
+#  preset_type: MESH
+#  instances: [
+#    { id: 0 grouping_ref { custom_type: "TRAY" } },
+#    { id: 1 grouping_ref { custom_type: "TRAY" } }
+#  ]
+#  row_major_mesh {
+#    dims: [2, 1]
+#  }
+#}
+
 groupings {
-  name: "4x4_Mesh"
+  name: "4x4_SplitHost_Middle"
   preset_type: MESH
   instances: [
-    { id: 0 grouping_ref { custom_type: "TRAY" } },
-    { id: 1 grouping_ref { custom_type: "TRAY" } }
+    { id: 0 grouping_ref { custom_type: "HALFTRAY_2_TRAY_3_BOTTOM" } },
+    { id: 1 grouping_ref { custom_type: "HALFTRAY_2_TRAY_4_TOP" } },
+    { id: 2 grouping_ref { custom_type: "HALFTRAY_1_TRAY_1_BOTTOM" } },
+    { id: 3 grouping_ref { custom_type: "HALFTRAY_1_TRAY_2_TOP" } }
   ]
   row_major_mesh {
-    dims: [2, 1]
+    dims: [2, 2]
   }
 }
 
 groupings {
-  name: "4x4_SplitHost"
+  name: "4x4_SplitHost_Edge"
   preset_type: MESH
   instances: [
-    { id: 0 grouping_ref { custom_type: "HALFTRAY_2" } },
-    { id: 1 grouping_ref { custom_type: "HALFTRAY_2" } },
-    { id: 2 grouping_ref { custom_type: "HALFTRAY_1" } },
-    { id: 3 grouping_ref { custom_type: "HALFTRAY_1" } }
+    { id: 0 grouping_ref { custom_type: "HALFTRAY_2_TRAY_4_BOTTOM" } },
+    { id: 1 grouping_ref { custom_type: "HALFTRAY_2_TRAY_3_TOP" } },
+    { id: 2 grouping_ref { custom_type: "HALFTRAY_1_TRAY_2_BOTTOM" } },
+    { id: 3 grouping_ref { custom_type: "HALFTRAY_1_TRAY_1_TOP" } }
   ]
   row_major_mesh {
     dims: [2, 2]
