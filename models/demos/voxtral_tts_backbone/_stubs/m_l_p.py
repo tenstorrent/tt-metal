@@ -54,14 +54,15 @@ class TtMLP:
             )
         if compute_kernel_config is None:
             compute_kernel_config = _default_compute_kernel_config(device)
-        # gate/up are the two widest weights in the block -- together 113 MB of
-        # the ~233 MB a layer streams per decoded token -- and decode is bound on
-        # exactly those bytes, so they are STORED as bfloat8_b. down_proj stays
-        # bf16 for now: its 9216-deep reduction is the accuracy-sensitive one.
+        # All three MLP weights are STORED as bfloat8_b: together they are 170 MB
+        # of the ~233 MB a layer streams per decoded token, and decode is bound on
+        # exactly those bytes. down_proj is the accuracy-sensitive one (a
+        # 9216-deep reduction), so it is walked down after gate/up and gated on
+        # full-model PCC rather than assumed safe.
         weights = (
             _stage(torch_module.gate_proj.weight, device, dtype=ttnn.bfloat8_b),
             _stage(torch_module.up_proj.weight, device, dtype=ttnn.bfloat8_b),
-            _stage(torch_module.down_proj.weight, device),
+            _stage(torch_module.down_proj.weight, device, dtype=ttnn.bfloat8_b),
         )
         return cls(device, weights, compute_kernel_config)
 
