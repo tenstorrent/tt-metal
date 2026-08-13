@@ -51,7 +51,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Set dest base for UNPACK thread (SEC0). Mimics bank switching: in a real
     // scenario this would be called per tile-batch with _get_dest_buffer_base_()
     // toggling between banks. Here all tiles fit in bank 0.
-    ckernel::unpack::_set_dst_write_addr_<ckernel::trisc::DstTileShape::Tile32x32>(0);
+    ckernel::trisc::_set_dst_write_addr_<ckernel::trisc::DstTileShape::Tile32x32>(0);
 
     // Program MOP and unpack all tiles of operand B to Dest
     _llk_unpack_unary_operand_init_<p_unpacr::UNP_DEST, false, is_fp32_dest_acc_en>(buf_desc_id_dest, ckernel::DEFAULT_TENSOR_SHAPE, num_tiles);
@@ -145,7 +145,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_hw_configure_<p_pacr::PACK1, false>(td_pack, ckernel::ReluConfig::none());
 
     // Implied math format disable for SrcS and sfpmem mod selection
-    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + ckernel::isolate_sfpu::TRISC_ID] = !IMPLIED_MATH_FORMAT;
+    cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
 
     // -------------------------------------------------------------------------
     // SFPU configuration and execution
@@ -167,7 +167,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         // Set dest_section_base for this tile (SEC3 for ISOLATE_SFPU).
         // Matches the UNPACK thread's dest base so both agree on tile positioning.
-        ckernel::isolate_sfpu::_set_dst_write_addr_<trisc::DstTileShape::Tile32x32>(i);
+        ckernel::trisc::_set_dst_write_addr_<trisc::DstTileShape::Tile32x32>(i);
 
         // Unpack operand A to SrcS (unary: single operand with dvalid)
         _llk_unpack_srcs_<PARAM_SRCS_INSTRN_COUNT>(buf_desc_id_srcs, i * PARAM_SRCS_SLICE_COUNT);
