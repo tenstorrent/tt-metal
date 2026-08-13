@@ -294,9 +294,13 @@ class DemoConfig:
     write_torch_ref: bool = False
 
     ref_seconds: int = GPT_COND_LEN_SEC  # conditioning window (coqui gpt_cond_len)
-    # Speaker-embedding window. Upstream uses the whole reference (up to 30 s); 30 s clashes L1
-    # in the SE-ResNet here. GPT conditioning still uses the full 30 s.
-    spk_seconds: int = 8
+    # Speaker-embedding window. Upstream uses the whole reference (up to 30 s). Co-resident with the
+    # rest of the traced model this one clashes L1 above ~20 s, so it keeps a margin below that.
+    # Longer is better but flattens out: ECAPA2 similarity to the reference measures 0.694 / 0.715 /
+    # 0.731 / 0.736 / 0.743 at 4 / 8 / 12 / 16 / 20 s, for +0.3 ms of setup replay per second of
+    # window. GPT conditioning uses the full 30 s regardless — this window only feeds the speaker
+    # vector, which conditions the HiFi-GAN and leaves the generated codes untouched.
+    spk_seconds: int = 16
 
     generation: GenerationConfig = field(default_factory=GenerationConfig)
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
@@ -327,7 +331,7 @@ class ReferenceDemoConfig:
 
     ref_seconds: int = GPT_COND_LEN_SEC  # conditioning window (gpt_cond_len)
     # Speaker-embedding window. Defaults to the WHOLE reference (coqui max_ref_length) — unlike
-    # the device demo, which is capped at 8 s by L1.
+    # the device demo, which keeps a margin under the L1 ceiling.
     spk_seconds: int = GPT_COND_LEN_SEC
 
     # Sampling mirrors the device demo, but the code cap is the CPU one: STOP genuinely ends the

@@ -51,6 +51,7 @@ from transformers.cache_utils import DynamicCache
 
 from models.experimental.xtts.config import (
     COQUI_CLIP_RE,
+    DEMO,
     REFERENCE_DEMO,
     SENTENCE_FINAL_PUNCT_RE,
     SENTENCE_SPLIT_RE,
@@ -372,7 +373,7 @@ def main():
         type=int,
         default=cfg.spk_seconds,
         help="speaker-embedding window. Defaults to the whole reference (coqui max_ref_length); "
-        "pass 8 to match the on-device demo, which is capped by L1.",
+        f"pass {DEMO.spk_seconds} to match the on-device demo, which keeps a margin under L1.",
     )
     ap.add_argument(
         "--threads",

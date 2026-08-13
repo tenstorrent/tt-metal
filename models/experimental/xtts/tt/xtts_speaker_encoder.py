@@ -21,6 +21,14 @@ TAIL_DTYPE = ttnn.bfloat16
 OUT_DTYPE = ttnn.float32
 TAIL_WEIGHTS_L1 = True
 BODY_FIDELITY = ttnn.MathFidelity.HiFi4
+# Mel frames above which the body convs drop act/weights double buffering. Those CBs scale with the
+# per-core height shard, i.e. linearly with the mel length on a fixed grid, so they eventually run
+# into the L1 buffers: measured clash at 2400 frames for the encoder alone, and at 2000 when it is
+# co-resident with the rest of the model. Single-buffered is numerically identical and reaches the
+# full 30 s (3000 frames), but costs ~4% of the pass at 801 frames and ~7% at 1600, so it is only
+# used above this length. The threshold sits above the demo's 8 s window (801 frames) and below the
+# shortest length seen to clash in the full pipeline (1200).
+SINGLE_BUFFER_FRAMES = 1024
 _MEAN_BATCH_MIN_TILES = 64
 _SE_BROADCAST_MAX_TILES = 192
 RELU = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
@@ -245,6 +253,10 @@ class TtSEBasicBlock(LightweightModule):
             wd, bd = _fold_bn(block.downsample[0].weight.detach(), None, block.downsample[1])
             self.downsample_conv = TtConv2d(device, _time_major(wd), bd, stride=stride, padding=0, **conv_kwargs)
 
+    @property
+    def convs(self):
+        return [c for c in (self.conv1, self.conv2, self.downsample_conv) if c is not None]
+
     def forward(self, x, h, w):
         oh, ow = (h - 1) // self.stride + 1, (w - 1) // self.stride + 1
         mem = _stage_memory_config(self.ncores, oh * ow)
@@ -275,6 +287,7 @@ class TtResNetSpeakerEncoder(LightweightModule):
             [TtSEBasicBlock(device, blk, **body) for blk in layer]
             for layer in (ref.layer1, ref.layer2, ref.layer3, ref.layer4)
         ]
+        self.body_convs = [self.conv1] + [c for layer in self.layers for blk in layer for c in blk.convs]
 
         att = ref.attention
         asp_channels = ref.layer4[-1].conv2.weight.shape[0]
@@ -305,6 +318,8 @@ class TtResNetSpeakerEncoder(LightweightModule):
 
     def forward(self, mel):
         _, freq, time = mel.shape
+        for conv in self.body_convs:
+            conv.set_double_buffer(time < SINGLE_BUFFER_FRAMES)
         x = ttnn.layer_norm(ttnn.add(mel, 1e-6, activations=[LOG], dtype=TAIL_DTYPE), epsilon=INSTANCENORM_EPS)
         x = ttnn.transpose(x, -2, -1)
         x = ttnn.reshape(x, [1, 1, time * freq, 1], memory_config=ttnn.L1_MEMORY_CONFIG)

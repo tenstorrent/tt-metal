@@ -2,7 +2,7 @@
 
 ## 1. Introduction
 
-XTTS-v2 (`coqui/XTTS-v2`) is Coqui's open-weights zero-shot voice-cloning text-to-speech model. It
+XTTS-v2 [(`coqui/XTTS-v2`)](https://huggingface.co/coqui/XTTS-v2) is Coqui's open-weights zero-shot voice-cloning text-to-speech model. It
 speaks input text in a voice cloned from a few seconds of reference audio, and outputs 24 kHz mono
 audio. Upstream advertises 17 languages; this port defaults to English and does not validate the
 rest.
@@ -46,7 +46,7 @@ vocoder — and they are computed from different mel frontends at different samp
 | Max mel stream | **608** positions = 605 `gpt_max_audio_tokens`; upstream generates at most **602** |
 | Vocab | Text 6681 BPE tokens; audio 1026 ids (1024 codes + start/stop sentinels) |
 | Voice conditioning | Up to 30 s (`gpt_cond_len`), split into 4 s windows (`gpt_cond_chunk_len`), style embeddings **averaged** |
-| Speaker embedding | SE-ResNet-34 → 512-d, L2-normalised. This port uses an 8 s window (see [§7](#7-caveats)) |
+| Speaker embedding | SE-ResNet-34 → 512-d, L2-normalised. This port uses a 16 s window (see [§7](#7-caveats)) |
 | Audio output | 24 kHz mono, batch 1 |
 | Frame rate | ≈21.5 codes/s — one code is **46.4 ms** of audio |
 | Speech:text ratio | ≈2.2 audio codes per BPE text token |
@@ -183,7 +183,7 @@ authored reimplementation with no `coqui-tts` dependency, loading the real upstr
 ### 5.1 PCC / correctness tests
 
 ```bash
-# Everything (~9 min warm; auto-downloads weights on first run)
+# Everything (~17 min warm — the three eval tests are 7.5 min of that; auto-downloads weights on first run)
 pytest models/experimental/xtts/tests/pcc/ -v
 
 # By block
@@ -279,8 +279,8 @@ are representative runs.
 | | `es_sample.wav` | 0.992365 | 0.99 |
 | `test_gpt_block` | seq_len 404 | 0.999876 | 0.99 |
 | | seq_len 608 | 0.999875 | 0.99 |
-| `test_gpt_stack` | seq_len 404 | 0.998702 | 0.99 |
-| | seq_len 608 | 0.998713 | 0.99 |
+| `test_gpt_stack` | seq_len 404 | 0.998969 | 0.99 |
+| | seq_len 608 | 0.998963 | 0.99 |
 | `test_gpt_model` | text_head (64) | 0.995700 | 0.99 |
 | | text_head (96) | 0.995905 | 0.99 |
 | | mel_head (96) | 0.993026 | 0.99 |
@@ -313,7 +313,7 @@ the traced production paths. Logged by the tests, not asserted.
 | | Single utterance | Paragraph |
 |---|---|---|
 | Test (`tests/pcc/test_tt_trace.py`) | `test_tt_eval_traced` | `test_tt_eval_traced_long` |
-| Input | 1 sentence, 128 chars | 4 sentences, 463 chars |
+| Input | 1 sentence, 125 chars | 4 sentences, 463 chars |
 | Path | one pass, `inference_fully_traced` | sentence-chunked, one `traced_session` capture |
 | Generated | 164 codes → 7.62 s, self-terminated | 4 chunks, 556 codes → 26.17 s |
 
@@ -361,19 +361,22 @@ Default demo text (96 wrapped tokens, single pass, temp 0.65 / top-k 50 / top-p 
 
 | Quantity | Value |
 |----------|------:|
-| Generated | 200 codes (self-terminated at STOP) → 9.400 s audio |
-| Setup replay (conditioning + speaker + prefill) | 0.042 s (8 conditioning windows) |
-| Decode replay (200 codes) | 1.612 s (≈8.1 ms/code) |
-| Vocoder replay | 0.020 s |
-| **Total replay** | **1.674 s** |
+| Generated | 209 codes (self-terminated at STOP) → 9.816 s audio |
+| Setup replay (conditioning + speaker + prefill) | 0.043 s (8 conditioning windows) |
+| Decode replay (209 codes) | 1.686 s (≈8.1 ms/code) |
+| Vocoder replay | 0.022 s |
+| **Total replay** | **1.751 s** |
 | **RTF** (replay ÷ audio) | **0.178** — ≈5.6× faster than real time |
-| Time-to-first-audio | 1.674 s (non-streaming: first audio = full clip) |
-| Compile / capture (one-time, excluded from RTF) | 44.6 s cold / **4.5 s warm** |
-| End-to-end wall (weight load → WAV) | 56.3 s cold / **16.5 s warm** |
+| Time-to-first-audio | 1.751 s (non-streaming: first audio = full clip) |
+| Compile / capture (one-time, excluded from RTF) | ≈44 s for a code length not yet compiled / **≈4.5 s** once it is |
+| End-to-end wall (weight load → WAV) | ≈63 s / **≈23 s** on the same split |
 
-Cold vs warm wall-clock depends on the JIT kernel cache. RTF and the replay legs are trace replay
-and do not. Setup replay scales with conditioning windows (≈13 ms for 1 window, 42 ms for 8), not
-the prompt.
+Compile and wall-clock depend on the JIT kernel cache, and the axis is the **sampled code count**,
+not a cold/warm boot: the vocoder trace is captured on the trimmed latents, so a length never
+generated before compiles fresh conv shapes (≈44 s) while a repeat length replays cached ones
+(≈4.5 s). Sampling picks a new length most runs. RTF and the replay legs are trace replay and do not
+depend on any of this. Setup replay scales with conditioning windows (≈13 ms for 1 window, 43 ms for
+8), not the prompt.
 
 ### 6.5 ISL sweep
 
@@ -383,14 +386,14 @@ when the text fits, otherwise sentence-chunked with one `traced_session` capture
 
 | ISL | chunks | pad_to | prompt | max_seq | codes | audio (s) | TTFT (ms) | codes/s | ms/code | replay (s) | RTF |
 |----:|-------:|-------:|-------:|--------:|------:|----------:|----------:|--------:|--------:|-----------:|----:|
-| 32 | 1 | 32 | 64 | 288 | 83 | 3.85 | 47.0 | 132.5 | 7.550 | 0.674 | 0.175 |
-| 64 | 1 | 64 | 96 | 320 | 156 | 7.24 | 48.0 | 133.3 | 7.504 | 1.227 | 0.169 |
-| 96 | 2 | 96 | 128 | 352 | 361 | 16.76 | 49.0 | 125.0 | 8.002 | 3.009 | 0.180 |
-| 128 | 2 | 96 | 128 | 352 | 361 | 16.76 | 48.9 | 126.2 | 7.926 | 2.982 | 0.178 |
-| 192 | 3 | 96 | 128 | 352 | 532 | 24.69 | 49.0 | 124.8 | 8.013 | 4.443 | 0.180 |
-| 256 | 4 | 96 | 128 | 352 | 702 | 32.59 | 48.9 | 125.9 | 7.945 | 5.818 | 0.179 |
-| 320 | 5 | 96 | 128 | 352 | 866 | 40.20 | 48.9 | 125.7 | 7.957 | 7.192 | 0.179 |
-| 352 | 5 | 96 | 128 | 352 | 866 | 40.20 | 48.9 | 125.7 | 7.958 | 7.193 | 0.179 |
+| 32 | 1 | 32 | 64 | 288 | 83 | 3.85 | 49.4 | 133.6 | 7.482 | 0.671 | 0.174 |
+| 64 | 1 | 64 | 96 | 320 | 156 | 7.24 | 50.5 | 132.7 | 7.538 | 1.235 | 0.171 |
+| 96 | 2 | 96 | 128 | 352 | 361 | 16.76 | 51.4 | 125.9 | 7.940 | 2.992 | 0.179 |
+| 128 | 2 | 96 | 128 | 352 | 361 | 16.76 | 51.4 | 126.1 | 7.929 | 2.988 | 0.178 |
+| 192 | 3 | 96 | 128 | 352 | 532 | 24.69 | 51.4 | 125.7 | 7.957 | 4.421 | 0.179 |
+| 256 | 4 | 96 | 128 | 352 | 702 | 32.59 | 51.4 | 126.3 | 7.920 | 5.811 | 0.178 |
+| 320 | 5 | 96 | 128 | 352 | 866 | 40.20 | 51.4 | 126.0 | 7.934 | 7.184 | 0.179 |
+| 352 | 5 | 96 | 128 | 352 | 866 | 40.20 | 51.4 | 126.3 | 7.921 | 7.173 | 0.178 |
 
 XTTS is non-streaming. *TTFT* is time to first code (`setup + decode/n`); time to first audio is
 the first chunk's replay. One code = 46.4 ms of audio. `pad_to` is the padded text length actually
@@ -398,8 +401,8 @@ prefilled. ISL 96/128 and 320/352 are the same sentence groups (the sweep grows 
 a time).
 
 From ISL 96 up, chunking pins `max_seq` at 352, so ms/code is flat (~8) and ISL is no longer a cost
-axis — replay grows with chunk count at ≈1.44 s each (0.674 s at ISL 32 → 7.193 s at ISL 352).
-TTFT stays ~48 ms. RTF stays ~0.17–0.18.
+axis — replay grows with chunk count at ≈1.40 s each (0.671 s at ISL 32 → 7.173 s at ISL 352).
+TTFT stays ~51 ms. RTF stays ~0.17–0.18.
 
 A wrapped prompt must end in `[STOP]`. Trimming to a tile-aligned length can drop it; without it
 the sampler drones to the code cap.
@@ -407,7 +410,7 @@ the sampler drones to the code cap.
 ### 6.6 Device profiles
 
 Per-op breakdowns come from Tracy via the two drivers in [§5.2](#52-performance-tests). One
-signposted decode step measures **7.427 ms** of pure device FW time; the remaining ~0.6 ms of the
+signposted decode step measures **7.514 ms** of pure device FW time; the remaining ~0.6 ms of the
 8.1 ms/code is the per-step fence and token readback.
 
 ---
@@ -416,9 +419,30 @@ signposted decode step measures **7.427 ms** of pure device FW time; the remaini
 
 ### Long text is chunked
 
-Text estimated over `max_single_pass_codes` (205) is split at sentence boundaries into groups of
-≤`max_chunk_codes` (165), synthesised independently, and stitched with 120 ms of silence. A
-sentence is never split; a single sentence over ~25 words is warned rather than silently truncated.
+**Upstream splits on characters.** `Xtts.inference()` takes
+`enable_text_splitting` (default `False`); when set, `split_sentence()` packs sentences greedily up
+to a per-language character limit (`tokenizer.char_limits`, 250 for English), hard-wraps a single
+over-long sentence with `textwrap`, and concatenates the pieces with no gap. That threshold stands
+in for the *checkpoint's* budget — the token count must stay under `gpt_max_text_tokens` (402, a
+hard `assert`) and only ~602 codes are generatable — so over-long input degrades softly into
+truncated audio, which is why splitting can stay opt-in.
+
+**This port splits on estimated codes, always.** Text estimated over `max_single_pass_codes` (205)
+is split at sentence boundaries into groups of ≤`max_chunk_codes` (165), synthesised independently,
+and stitched with 120 ms of silence. A sentence is never split; a single sentence over ~25 words is
+warned rather than silently truncated. The binding limit here is L1, not the checkpoint: one pass
+caps at 205 codes ([§6.3](#63-context-length-envelope)), about a third of what the weights support.
+A full 250-char upstream chunk works out to ≈300 codes (1.20 codes/char, measured on the §6.2
+paragraph), so upstream's pieces would not fit a single pass here — hence codes rather than
+characters as the unit, and no opt-out.
+
+| | upstream `coqui-ai/TTS` | this port |
+|---|---|---|
+| Trigger | `enable_text_splitting=True` **and** ≥250 chars (en) | always on, estimated codes > 205 |
+| Unit | characters, per language | estimated audio codes |
+| Group size | ≤250 chars | ≤165 codes |
+| Over-long sentence | hard-wrapped mid-sentence (`textwrap`) | never split; warned past ~25 words |
+| Reason | checkpoint: 402 text tokens / ~602 codes | L1 co-residency of the traced pipeline |
 
 Each chunk is an independent generation off the same speaker latents, so prosody resets at every
 boundary.
@@ -433,8 +457,13 @@ captures repeatedly is not.
 
 ### Functional gaps vs. upstream coqui
 
-- **Speaker-embedding window is 8 s, not 30 s.** Upstream runs the speaker encoder on the whole
-  reference; 30 s clashes L1 in the SE-ResNet here. The GPT conditioning path uses the full 30 s.
+- **Speaker-embedding window is 16 s, not the whole reference.** Upstream runs the speaker encoder
+  on the reference clipped to `max_ref_length` (30 s). The encoder here reaches the full 30 s (above
+  `SINGLE_BUFFER_FRAMES` its convs drop activation double buffering, ~4-7% slower and numerically
+  identical), but co-resident with the rest of the traced model L1 caps it near 20 s, and that
+  boundary drifts with the sampled generation length — so the window keeps a margin at 16 s. Longer
+  helps but flattens out (see `DemoConfig.spk_seconds`). The GPT conditioning path uses the full
+  30 s.
 - **Fixed decode-step budget on the traced path.** A captured trace cannot branch, so
   `inference_fully_traced` replays a fixed number of steps and trims at STOP afterwards.
 - **Sampling is not bit-exact across runs.** The demo does not seed the sampler. Seeded tests can
@@ -464,6 +493,7 @@ XTTS runs as a **tier-3** model on single Blackhole P150 (`bh_p150b_civ2`):
 | [`models_unit_tests.yaml`](../../../tests/pipeline_reorg/models_unit_tests.yaml) | `xtts-v2 unit tests` | `pytest models/experimental/xtts/tests/pcc/ -k "not eval"` | 25 min |
 | [`models_e2e_tests.yaml`](../../../tests/pipeline_reorg/models_e2e_tests.yaml) | `xtts-v2 e2e tests` | `test_e2e_perf.py` then `demo/xtts_demo.py` | 25 min |
 
-The unit entry deselects `test_tt_eval` / `test_tt_eval_traced` so CI does not pull whisper-large-v3
-and ECAPA2. Timeouts cover the first-run download of the ~1.9 GB checkpoint. Warm, the PCC suite is
-~6 min and the e2e entry ~2 min. Both entries are filed under `team: shield`.
+`-k "not eval"` deselects all three eval tests (`test_tt_eval`, `test_tt_eval_traced`,
+`test_tt_eval_traced_long`) so CI does not pull whisper-large-v3, UTMOS or ECAPA2. Timeouts cover the
+first-run download of the ~1.9 GB checkpoint. Warm, the deselected PCC suite is ~9 min and the e2e
+entry ~2 min. Both entries are filed under `team: shield`.

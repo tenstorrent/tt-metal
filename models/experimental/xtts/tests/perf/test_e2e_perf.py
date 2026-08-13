@@ -23,6 +23,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import profiler
+from models.experimental.xtts.config import DEMO
 from models.experimental.xtts.reference.xtts_conditioning import GPT_COND_LEN_SEC, MEL_SR, load_coqui_test_audio
 from models.experimental.xtts.reference.xtts_gpt_block import load_xtts_state_dict
 from models.experimental.xtts.reference.xtts_gpt_generate import STOP_TEXT_TOKEN, wrap_text_ids
@@ -37,7 +38,7 @@ TILE = 32
 # Same reference voice as the demo default: four LJSpeech clips, clipped to 30 s (8 windows).
 REF_CLIPS = ("LJ001-0001.wav", "LJ001-0003.wav", "LJ001-0004.wav", "LJ001-0005.wav")
 COND_SECONDS = GPT_COND_LEN_SEC
-SPK_SECONDS = 8  # demo speaker-embedding window; 30 s clashes L1 in the SE-ResNet
+SPK_SECONDS = DEMO.spk_seconds  # follow the demo's speaker-embedding window
 
 # Same default text (after trailing-punctuation strip) and sampling as the demo.
 DEMO_TEXT = (
@@ -49,7 +50,7 @@ TEMPERATURE, TOP_K, TOP_P, REP_PENALTY = 0.65, 50, 0.85, 5.0
 
 # Baseline on Blackhole P150 (see README.md). 40% margin.
 MARGIN = 0.40
-EXPECTED_SETUP_S = 0.042
+EXPECTED_SETUP_S = 0.044
 EXPECTED_DECODE_MS_PER_CODE = 8.12
 EXPECTED_VOCODER_MS_PER_CODE = 0.116
 EXPECTED_RTF = 0.180
