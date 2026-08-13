@@ -2,7 +2,10 @@
 
 > Copilot's sixth comment: *"The PR body only points to issue #49739 and PR #52416, so it does not
 > explain this PR's own changes."* This is a replacement body. Everything below is measured on a
-> Blackhole p300a unless stated otherwise.
+> Blackhole p300a unless stated otherwise; the Wormhole figures are a Wormhole n300.
+>
+> **Read the blocker before reviewing.** The suites have since run on Wormhole for the first time and this
+> PR's enrolment turns that arch red — 50 variants, one cause, fix outlined below and not in this diff.
 
 ---
 
@@ -79,8 +82,40 @@ recorded rationale replaced it, because none exists.
   pole; 3 have no golden; 1 is skipped on tt-llk#1120.
 - **Cat F** — 11 kernels with no `MathOperation` entry. Each needs a new harness *shape*, not a
   dispatch entry: `quant`'s three entry points each take three Dest indices.
-- **Nothing is verified on Wormhole.** In particular the total order is documented for Blackhole only
-  — Wormhole has no `SFPGT`/`SFPLE` — so those 7 goldens may need arch-keying.
+- **A Wormhole comparator fix** — see the blocker below. The 50 Wormhole failures this PR's enrolment
+  exposes are one shared cause with one shared fix, and it is deliberately a separate change so this
+  PR's diff stays about coverage.
+
+## ⚠ Blocker: this PR turns Wormhole red, and the fix is not in it
+
+The suites have now run on a **Wormhole n300** (previously this section said nothing was verified there).
+Two of the three things it was uncertain about came back clean, and one did not:
+
+- ✅ `specials_safe()`'s 7-cell matrix, re-measured with the original instrument — 250 variants, 85
+  failing, the recorded figures to the variant. It stays un-arch-keyed.
+- ✅ **The total order holds on Wormhole**, all 7 goldens 8/8, so they need **no** arch-keying. The
+  premise for doubting it was also wrong: Wormhole has no `SFPGT`/`SFPLE`, but `WormholeB0/…/SFPSWAP.md`
+  documents the same `SignMagIsSmaller()` total order.
+- ❌ **50 variants fail on Wormhole** — 49 in the unary edge sweep, 1 (`ScalarRsub`) in the scalar suite —
+  across 10 ops (`Cos`, `Fmod`, `GeluAppx`, `Hardmish`, `Mish`, `Rsqrt`, `Silu`, `Sin`, `Softsign`,
+  `Tan`), all one cause: the **sign of a NaN the kernel generates**. `SFPMAD.md` guarantees the canonical
+  `0x7fc00000` on Blackhole and says the sign "might or might not be set" on Wormhole; the conversion
+  that makes it observable is documented too, and the ISA flags it itself ("NaN becomes infinity (this is
+  a potentially surprising behaviour)"). So the kernels are in spec and the **golden** is asserting a sign
+  the ISA declines to promise.
+
+**Why it is this PR's problem.** `SPECIALS_READY_OPS` is empty on `main`, so nothing injects a NaN there
+and Wormhole is green today. This PR's enrolment is what starts sending the probe. Both Wormhole e2e paths
+then see failures and stop at the first one (`-x`): the non-coverage groups (`split_group` 6–10) hit all
+10 ops, and the coverage groups still hit 6 of them, since `Fmod`, `GeluAppx`, `Hardmish`, `Mish`,
+`Softsign` and `Tan` are standard-profile and the broad-profile skip does not reach them.
+
+**The fix, in one sentence:** where a golden `NaN` becomes `±inf` through a Dest write or a pack, accept
+either infinity, keeping the sign assertion only for the ops that *move* the sign bit (`Neg`, `Abs`,
+`Identity` — `SFPABS`'s summary says "-NaN is left as -NaN rather than becoming +NaN"). Do **not**
+arch-key the measured sign: it is explicitly unspecified, so a table of it would be a permanent
+plausible-looking claim with an ISA sentence against it. Full record and both rejected alternatives:
+`WORMHOLE_MEASUREMENT_RESULTS.md` §4.
 
 ## Verification
 
@@ -93,6 +128,25 @@ Blackhole p300a, all four suites green, `0 xpassed`:
 | `test_sfpu_binop_scalar.py` | 68 passed · 72 skipped |
 | `test_sfpu_ternary.py` | 39 passed · 25 skipped |
 | `test_sfpu_domains.py` | 107 passed (host-side) |
+
+Wormhole n300 — the first run of these suites on that arch, same two-phase flow:
+
+| Suite | Result |
+|---|---|
+| `test_sfpu_unary.py` | 6034 passed · 533 skipped · **49 failed** · 30 xfailed · **6 xpassed** |
+| `test_sfpu_binary.py` | 865 passed · 392 skipped · 33 xfailed · **16 xpassed** · 0 failed |
+| `test_sfpu_binop_scalar.py` | 67 passed · 72 skipped · **1 failed** |
+| `test_sfpu_ternary.py` | 39 passed · 25 skipped |
+
+The failures are the blocker above. **The 22 XPASS are not this PR's** — they are two pre-existing
+Wormhole-only arch gates, `_APPROX_EXP_ACCURACY_XFAIL` (6) and `negative_zero_golden` (16), each XPASSing
+its entire content on the arch it was written for, so each currently asserts nothing on either arch.
+Recorded rather than fixed here: `WORMHOLE_MEASUREMENT_RESULTS.md` §6 and the plan's §9. Approximate exp's
+overshoot above `x = 8` measures ~1% mean / 3.5% peak on this board where the gate records 5.7% / 6.75%.
+
+Note the skip counts rather than the pass counts when comparing the two arches: Wormhole skips 533 unary
+variants where Blackhole skips 1601, because `_skip_bh_unless_fp32` collapses the whole `dest_acc=No` row
+there. Wormhole exercises more of the format matrix, which is why it found this.
 
 Every golden change was diffed against a baseline across **all** ops, not just the ones being enrolled
 — that is what caught defect 2 above. Finite behaviour is bit-identical wherever a golden was rewritten
