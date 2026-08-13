@@ -2254,8 +2254,8 @@ void ProgramImpl::finalize_single_dfb_config(
             "(different Neos). Un-scoped Tensix-to-Tensix DFBs are not allowed.");
     }
 
-    // A Tensix producer must post EXPLICIT credits (the implicit-sync ISR poster is DM-only. 
-    //For a BLOCKED DM consumer those per-block posts never reach the
+    // A Tensix producer must post EXPLICIT credits (the implicit-sync ISR poster is DM-only.
+    // For a BLOCKED DM consumer those per-block posts never reach the
     // implicit drain, so the consumer deadlocks. Reject at config time.
     if (producer_is_tensix_only && config.cap == ::dfb::AccessPattern::BLOCKED) {
         TT_FATAL(
