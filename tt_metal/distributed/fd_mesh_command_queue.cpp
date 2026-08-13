@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include "fd_mesh_command_queue.hpp"
 
 #include <tracy/Tracy.hpp>
@@ -761,7 +762,7 @@ bool FDMeshCommandQueue::write_shard_to_device(
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
-    auto shard_view = device_buffer->view(region_value);
+    auto shard_view = device_buffer->impl().view(*device_buffer, region_value);
 
 #if defined(TT_UMD_BUILD_SIMULATION)
     const tt_sim::DirectWriteGuard tt_sim_direct_write_guard{
@@ -807,7 +808,8 @@ void FDMeshCommandQueue::read_shard_from_device(
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
-    auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
+    auto shard_view =
+        device_buffer->impl().view(*device_buffer, region.value_or(BufferRegion(0, device_buffer->size())));
 
     auto* device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);

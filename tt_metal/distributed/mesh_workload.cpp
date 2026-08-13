@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <tt_metal/impl/program/program_command_sequence.hpp>
 #include "distributed/mesh_device_impl.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -180,7 +181,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
                     device_range,
                     false);
 
-                std::shared_ptr<Buffer> buffer_view = Buffer::create(
+                std::shared_ptr<Buffer> buffer_view = BufferImpl::create(
                     mesh_device,
                     kernel_bin_buf_->address(),
                     kernel_bin_size,

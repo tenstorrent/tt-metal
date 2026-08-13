@@ -5,6 +5,7 @@
 // To run (from the tt-metal repo root, after an emule build):
 //   build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Semaphore_*"
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <gtest/gtest.h>
 
 #include <tt-metalium/host_api.hpp>
@@ -61,7 +62,7 @@ TEST_F(MeshDeviceFixture, Semaphore_OutsideRegion_NoViolation) {
 
     // A normal L1 buffer is allocated well away from the reserved semaphore
     // region (which lives in the low system area near EMULE_SEM_BASE).
-    auto buf = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto buf = BufferImpl::create(device, 1024, 1024, BufferType::L1);
     uint32_t addr = static_cast<uint32_t>(buf->address());
 
     std::string kernel_src = R"(

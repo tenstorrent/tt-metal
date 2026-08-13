@@ -12,6 +12,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include "distributed/mesh_buffer_impl.hpp"
 #include <tt-metalium/mesh_coord.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"
@@ -41,7 +42,7 @@ TEST_F(UnitMeshUtils2x4Test, AggregateAndDisaggregate) {
             tt::tt_metal::distributed::DeviceLocalBufferConfig{
                 .page_size = 1024, .buffer_type = tt::tt_metal::BufferType::DRAM},
             mesh_device_.get());
-        EXPECT_TRUE(buffer->is_allocated());
+        EXPECT_TRUE(buffer->impl().is_allocated());
         return buffer->address();
     };
     const auto initial_parent_address = get_parent_allocation_address();

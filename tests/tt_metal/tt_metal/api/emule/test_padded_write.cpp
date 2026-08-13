@@ -5,6 +5,7 @@
 // To run (from the tt-metal repo root, after an emule build):
 //   build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Tensor_Padding_*"
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <vector>
@@ -36,7 +37,7 @@ TEST_F(MeshDeviceFixture, Tensor_Padding_Violation_SanityCheck) {
     // in __emule_local_l1_to_ptr will fire on accesses into that region.
     uint32_t logical_size = 1024;
     uint32_t physical_size = 2048;
-    auto buffer = Buffer::create(device, physical_size, physical_size, BufferType::L1);
+    auto buffer = BufferImpl::create(device, physical_size, physical_size, BufferType::L1);
     tt::tt_metal::emule::register_logical_size(*buffer, logical_size);
 
     // 2. Add an inline kernel that attempts to modify a padded datum at byte

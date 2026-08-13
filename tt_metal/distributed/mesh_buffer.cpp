@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <host_api.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <mesh_buffer.hpp>
 #include <mesh_coord.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -16,6 +17,7 @@
 #include "device.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "mesh_device_impl.hpp"
+#include "mesh_buffer_impl.hpp"
 #include "impl/context/metal_context.hpp"
 
 namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
@@ -99,8 +101,8 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
 
     if (mesh_device->get_view().get_devices().empty()) {
         auto mesh_buffer =
-            std::shared_ptr<MeshBuffer>(new MeshBuffer(mesh_buffer_config, device_local_config, 0, 0, mesh_device));
-        mesh_buffer->initialize_device_buffers();
+            std::make_shared<MeshBuffer>(MeshBufferImpl(mesh_buffer_config, device_local_config, 0, 0, mesh_device));
+        mesh_buffer->impl().initialize_device_buffers(*mesh_buffer);
         return mesh_buffer;
     }
 
@@ -109,16 +111,16 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     // Per-core allocation path: each device allocates independently
     if (per_core_allocation::is_per_core_allocation(device_local_config.sharding_args)) {
         TT_FATAL(!address.has_value(), "Per-core allocation does not support explicit address");
-        mesh_buffer = std::shared_ptr<MeshBuffer>(
-            new MeshBuffer(mesh_buffer_config, device_local_config, /*address=*/0, device_local_size, mesh_device));
+        mesh_buffer = std::make_shared<MeshBuffer>(
+            MeshBufferImpl(mesh_buffer_config, device_local_config, /*address=*/0, device_local_size, mesh_device));
         // Per-core: each device allocates independently. The mesh-level lockstep allocator queries
         // device per-bank ranges at allocation time, so no explicit mirroring is needed.
-        for (auto& [coord, device_buffer] : mesh_buffer->buffers_) {
+        for (auto& [coord, device_buffer] : mesh_buffer->impl().buffers_) {
             if (!mesh_device->impl().is_local(coord)) {
                 continue;
             }
             auto* device = mesh_device->impl().get_device(coord);
-            auto buffer = Buffer::create(
+            auto buffer = BufferImpl::create(
                 device,
                 device_local_size,
                 device_local_config.page_size,
@@ -129,8 +131,6 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             device_buffer = MaybeRemote<std::shared_ptr<Buffer>>::local(std::move(buffer));
         }
     } else if (!address.has_value()) {
-        // In HYBRID mode, set device-level allocators on the mesh allocator so it
-        // can query their per-bank ranges and avoid regions occupied on any device.
         auto* mesh_allocator = mesh_device->allocator_impl().get();
         bool is_hybrid = mesh_allocator->get_config().allocator_mode == AllocatorMode::HYBRID;
         if (is_hybrid) {
@@ -142,9 +142,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             mesh_allocator->set_hybrid_device_allocators(device_allocators);
         }
 
-        // Rely on the MeshDevice allocator to provide the address for the entire mesh buffer.
-        // The address provided to the backing buffer is used as the address for the MeshBuffer object.
-        std::shared_ptr<Buffer> backing_buffer = Buffer::create(
+        std::shared_ptr<Buffer> backing_buffer = BufferImpl::create(
             mesh_device,
             device_local_size,
             device_local_config.page_size,
@@ -157,22 +155,34 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
             mesh_allocator->clear_hybrid_device_allocators();
         }
 
-        mesh_buffer = std::shared_ptr<MeshBuffer>(new MeshBuffer(
+        mesh_buffer = std::make_shared<MeshBuffer>(MeshBufferImpl(
             mesh_buffer_config, device_local_config, device_local_size, mesh_device, std::move(backing_buffer)));
-        mesh_buffer->initialize_device_buffers();
+        mesh_buffer->impl().initialize_device_buffers(*mesh_buffer);
     } else {
-        mesh_buffer = std::shared_ptr<MeshBuffer>(
-            new MeshBuffer(mesh_buffer_config, device_local_config, address.value(), device_local_size, mesh_device));
-        mesh_buffer->initialize_device_buffers();
+        mesh_buffer = std::make_shared<MeshBuffer>(
+            MeshBufferImpl(mesh_buffer_config, device_local_config, address.value(), device_local_size, mesh_device));
+        mesh_buffer->impl().initialize_device_buffers(*mesh_buffer);
     }
 
     return mesh_buffer;
 }
 
-void MeshBuffer::initialize_device_buffers() {
-    auto init_device_buffer_at_address = [this](const MeshCoordinate& coord) {
-        std::shared_ptr<Buffer> buffer = Buffer::create(
-            device()->impl().get_device(coord),
+MeshBuffer::MeshBuffer(MeshBufferImpl impl) : impl_(std::make_unique<MeshBufferImpl>(std::move(impl))) {}
+
+MeshBufferImpl& MeshBuffer::impl() {
+    TT_FATAL(impl_ != nullptr, "MeshBuffer is in a moved-from state.");
+    return *impl_;
+}
+
+const MeshBufferImpl& MeshBuffer::impl() const {
+    TT_FATAL(impl_ != nullptr, "MeshBuffer is in a moved-from state.");
+    return *impl_;
+}
+
+void MeshBufferImpl::initialize_device_buffers(MeshBuffer& self) {
+    auto init_device_buffer_at_address = [&](const MeshCoordinate& coord) {
+        std::shared_ptr<Buffer> buffer = BufferImpl::create(
+            self.device()->impl().get_device(coord),
             address_,
             device_local_size_,
             device_local_config_.page_size,
@@ -180,7 +190,6 @@ void MeshBuffer::initialize_device_buffers() {
             device_local_config_.sharding_args,
             device_local_config_.bottom_up,
             /*sub_device_id=*/std::nullopt);  // TODO: sub_device_id is unsupported
-        // For per-core allocation, propagate per-core addresses from the backing buffer.
         if (per_core_allocation::is_per_core_allocation(*buffer)) {
             TT_FATAL(
                 std::holds_alternative<OwnedBufferState>(state_),
@@ -199,16 +208,11 @@ void MeshBuffer::initialize_device_buffers() {
         }
     }
 
-    // In HYBRID mode, mirror the lockstep L1 allocation into each device's lockstep allocator
-    // so that per-core allocations on individual devices avoid this address range.
-    // Only L1 buffers need mirroring — DRAM buffers use a separate address space.
-    // Note: we check HYBRID via rtoptions rather than mesh_device->allocator_impl() because
-    // allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
     if (auto mesh_device = mesh_device_.lock();
         mesh_device != nullptr && std::holds_alternative<OwnedBufferState>(state_) &&
         device_local_config_.buffer_type == BufferType::L1 &&
         MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid()) {
-        auto* backing = get_backing_buffer();
+        auto* backing = self.get_backing_buffer();
         auto alloc_size = backing->aligned_size_per_bank();
         for (const auto& [coord, device_buffer] : buffers_) {
             if (mesh_device->impl().is_local(coord)) {
@@ -219,7 +223,7 @@ void MeshBuffer::initialize_device_buffers() {
     }
 }
 
-bool MeshBuffer::is_allocated() const {
+bool MeshBufferImpl::is_allocated() const {
     if (std::holds_alternative<DeallocatedState>(state_)) {
         return false;
     }
@@ -229,51 +233,28 @@ bool MeshBuffer::is_allocated() const {
     return true;
 }
 
-MeshBuffer::~MeshBuffer() { deallocate(); }
-
-MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
-    config_(other.config_),
-    device_local_config_(std::move(other.device_local_config_)),
-    mesh_device_(std::move(other.mesh_device_)),
-    address_(other.address_),
-    device_local_size_(other.device_local_size_),
-    buffers_(std::move(other.buffers_)),
-    state_(std::move(other.state_)) {
-    other.state_ = DeallocatedState{};
-    other.address_ = 0;
-    other.device_local_size_ = 0;
+MeshBuffer::~MeshBuffer() {
+    if (impl_) {
+        impl_->deallocate();
+    }
 }
+
+MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept = default;
 
 MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
     if (this != &other) {
-        deallocate();
-        config_ = other.config_;
-        device_local_config_ = std::move(other.device_local_config_);
-        mesh_device_ = std::move(other.mesh_device_);
-        address_ = other.address_;
-        device_local_size_ = other.device_local_size_;
-        buffers_ = std::move(other.buffers_);
-        state_ = std::move(other.state_);
-
-        other.state_ = DeallocatedState{};
-        other.address_ = 0;
-        other.device_local_size_ = 0;
+        if (impl_) {
+            impl_->deallocate();
+        }
+        impl_ = std::move(other.impl_);
     }
     return *this;
 }
 
-void MeshBuffer::deallocate() {
+void MeshBufferImpl::deallocate() {
     auto mesh_device = mesh_device_.lock();
     if (mesh_device) {
-        // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:
-        // 1. allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
-        // 2. During teardown, device state may be partially destroyed, causing segfaults.
         if (MetalContext::instance(mesh_device->impl().get_context_id()).rtoptions().get_allocator_mode_hybrid()) {
-            // Unmirror lockstep L1 allocation from each device's lockstep allocator.
-            // Skip per-device unmirror if the device has been closed (default_allocator_ reset
-            // by Device::close()). This can happen at process teardown when the mesh device is
-            // closed before stray tensors are destroyed by the garbage collector. Mirrors the
-            // device_->is_initialized() guard in Buffer::deallocate_impl().
             if (std::holds_alternative<OwnedBufferState>(state_) &&
                 device_local_config_.buffer_type == BufferType::L1) {
                 for (const auto& [coord, device_buffer] : buffers_) {
@@ -286,7 +267,6 @@ void MeshBuffer::deallocate() {
                 }
             }
 
-            // Per-core buffers are independently owned — drop them to trigger device-level deallocation.
             if (std::holds_alternative<ExternallyOwnedState>(state_) &&
                 per_core_allocation::is_per_core_allocation(device_local_config_.sharding_args)) {
                 for (auto& [coord, device_buffer] : buffers_) {
@@ -299,26 +279,34 @@ void MeshBuffer::deallocate() {
         return;
     }
 
-    // Special handling is required if MeshDevice is already deallocated
     if (std::holds_alternative<OwnedBufferState>(state_)) {
         auto& owned_state = std::get<OwnedBufferState>(state_);
-        owned_state.backing_buffer->mark_as_deallocated();
+        owned_state.backing_buffer->impl().mark_as_deallocated();
     }
     state_ = DeallocatedState{};
 }
 
 MeshDevice* MeshBuffer::device() const {
-    auto device = mesh_device_.lock();
+    auto device = impl_->mesh_device_.lock();
     TT_FATAL(device, "Can't get device from mesh buffer, already deallocated");
     return device.get();
 }
 
+DeviceAddr MeshBuffer::device_local_size() const { return impl_->device_local_size_; }
+DeviceAddr MeshBuffer::address() const { return impl_->address_; }
+const MeshBufferConfig& MeshBuffer::global_config() const { return impl_->config_; }
+const DeviceLocalBufferConfig& MeshBuffer::device_local_config() const { return impl_->device_local_config_; }
+uint32_t MeshBuffer::page_size() const { return impl_->device_local_config_.page_size; }
+uint32_t MeshBuffer::num_pages() const { return page_size() == 0 ? 0 : device_local_size() / page_size(); }
+DeviceAddr MeshBuffer::size() const { return impl_->size(); }
+const ShardedBufferConfig& MeshBuffer::global_shard_spec() const { return impl_->global_shard_spec(); }
+
 Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
-    return buffers_.at(device_coord).value().get();
+    return impl_->buffers_.at(device_coord).value().get();
 }
 
 Buffer* MeshBuffer::get_reference_buffer() const {
-    for (const auto& buffer : buffers_.values()) {
+    for (const auto& buffer : impl_->buffers_.values()) {
         if (buffer.is_local()) {
             return buffer.value().get();
         }
@@ -327,13 +315,13 @@ Buffer* MeshBuffer::get_reference_buffer() const {
 }
 
 Buffer* MeshBuffer::get_backing_buffer() const {
-    if (const auto* owned_state = std::get_if<OwnedBufferState>(&state_)) {
+    if (const auto* owned_state = std::get_if<MeshBufferImpl::OwnedBufferState>(&impl_->state_)) {
         return owned_state->backing_buffer.get();
     }
     return nullptr;
 }
 
-DeviceAddr MeshBuffer::size() const {
+DeviceAddr MeshBufferImpl::size() const {
     return std::visit(
         ttsl::overloaded{
             [&](const ReplicatedBufferConfig& config) { return config.size; },
@@ -341,27 +329,28 @@ DeviceAddr MeshBuffer::size() const {
         config_);
 }
 
-MeshBufferLayout MeshBuffer::global_layout() const {
+MeshBufferLayout MeshBufferImpl::global_layout() const {
     return std::holds_alternative<ReplicatedBufferConfig>(config_) ? MeshBufferLayout::REPLICATED
                                                                    : MeshBufferLayout::SHARDED;
 }
 
-const ShardedBufferConfig& MeshBuffer::global_shard_spec() const {
+MeshBufferLayout MeshBuffer::global_layout() const { return impl_->global_layout(); }
+
+const ShardedBufferConfig& MeshBufferImpl::global_shard_spec() const {
     TT_FATAL(
         (global_layout() == MeshBufferLayout::SHARDED),
         "Can only query the global shard spec for a sharded MeshBuffer");
     return std::get<ShardedBufferConfig>(config_);
 }
 
-uint32_t MeshBuffer::datum_size_bytes() const {
-    // Limitation for now.
+uint32_t MeshBufferImpl::datum_size_bytes() const {
     TT_FATAL(
         this->global_layout() == MeshBufferLayout::SHARDED,
         "Can only query datum size for buffers sharded across the Mesh");
     return this->global_shard_spec().compute_datum_size_bytes();
 }
 
-Shape2D MeshBuffer::physical_shard_shape() const {
+Shape2D MeshBufferImpl::physical_shard_shape() const {
     TT_FATAL(
         this->global_layout() == MeshBufferLayout::SHARDED,
         "Can only query physical shard shape for buffers sharded across the Mesh");
@@ -369,7 +358,7 @@ Shape2D MeshBuffer::physical_shard_shape() const {
     return sharded_config.physical_shard_shape();
 }
 
-std::pair<bool, bool> MeshBuffer::replicated_dims() const {
+std::pair<bool, bool> MeshBufferImpl::replicated_dims() const {
     TT_FATAL(
         this->global_layout() == MeshBufferLayout::SHARDED,
         "Can only query replicated dims for buffers sharded across the Mesh");
@@ -426,7 +415,7 @@ bool AnyBuffer::is_mesh_buffer() const { return get_mesh_buffer() != nullptr; }
 std::shared_ptr<MeshBuffer> AnyBuffer::get_mesh_buffer() const {
     if (const auto* mesh_buffer_ptr = std::get_if<std::shared_ptr<MeshBuffer>>(&holder_)) {
         auto mesh_buffer = *mesh_buffer_ptr;
-        if (mesh_buffer->is_allocated()) {
+        if (mesh_buffer->impl().is_allocated()) {
             return mesh_buffer;
         }
     }

@@ -21,6 +21,7 @@
 #include "tt_cluster.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -33,8 +34,8 @@ tt::TargetDevice MeshCommandQueueBase::get_target_device_type() const {
 void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const void* src) {
     auto global_buffer_shape = buffer.global_shard_spec().global_buffer_shape;
 
-    auto shard_shape = buffer.physical_shard_shape();
-    auto datum_size_bytes = buffer.datum_size_bytes();
+    auto shard_shape = buffer.impl().physical_shard_shape();
+    auto datum_size_bytes = buffer.impl().datum_size_bytes();
 
     auto stride_size_bytes = datum_size_bytes * global_buffer_shape.width();
     auto single_read_size = datum_size_bytes * shard_shape.width();
@@ -49,7 +50,7 @@ void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const 
     uint32_t device_x = 0;
     uint32_t device_y = 0;
     std::vector<uint32_t> shard_data = std::vector<uint32_t>(total_read_size_per_shard / sizeof(uint32_t), 0);
-    const auto& [height_replicated, width_replicated] = buffer.replicated_dims();
+    const auto& [height_replicated, width_replicated] = buffer.impl().replicated_dims();
     for (std::size_t shard_y = 0; shard_y < num_shards_y; shard_y++) {
         for (std::size_t shard_x = 0; shard_x < num_shards_x; shard_x++) {
             auto read_offset = (shard_x * single_read_size) + (shard_y * stride_size_bytes * shard_shape.height());
@@ -115,12 +116,12 @@ void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const 
 }
 
 void MeshCommandQueueBase::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
-    const auto& [height_replicated, width_replicated] = buffer.replicated_dims();
+    const auto& [height_replicated, width_replicated] = buffer.impl().replicated_dims();
     TT_FATAL(
         not(height_replicated or width_replicated), "Cannot read a MeshBuffer that is replicated along any dimension.");
     auto global_buffer_shape = buffer.global_shard_spec().global_buffer_shape;
-    auto shard_shape = buffer.physical_shard_shape();
-    auto datum_size_bytes = buffer.datum_size_bytes();
+    auto shard_shape = buffer.impl().physical_shard_shape();
+    auto datum_size_bytes = buffer.impl().datum_size_bytes();
 
     const auto stride_size_bytes = datum_size_bytes * global_buffer_shape.width();
     const auto single_write_size = datum_size_bytes * shard_shape.width();

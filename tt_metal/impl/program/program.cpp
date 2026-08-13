@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <circular_buffer.hpp>
 #include <circular_buffer_config.hpp>
 #include <device.hpp>
@@ -2242,7 +2243,7 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
     // allocated bottom up
     std::size_t binary_data_size_bytes = this->program_transfer_info.binary_data.size() * sizeof(uint32_t);
     if (!this->kernels_buffer_.contains(device->id()) and binary_data_size_bytes) {
-        std::shared_ptr<Buffer> kernel_bin_buf = Buffer::create(
+        std::shared_ptr<Buffer> kernel_bin_buf = BufferImpl::create(
             device,
             binary_data_size_bytes,
             HostMemDeviceCommand::PROGRAM_PAGE_SIZE,

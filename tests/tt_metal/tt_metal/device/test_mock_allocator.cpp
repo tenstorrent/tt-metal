@@ -6,6 +6,8 @@
 // Drives allocations via MeshBuffer::create — no dependency on the TTNN layer.
 
 #include <gtest/gtest.h>
+#include "impl/buffers/buffer_impl.hpp"
+#include "distributed/mesh_buffer_impl.hpp"
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
@@ -62,9 +64,9 @@ TEST_F(MockAllocatorTest, BufferAllocationOnMockDevice) {
     distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
     auto buffer = distributed::MeshBuffer::create(buffer_config, local_config, mock_device_.get());
     EXPECT_GT(buffer->address(), 0u);
-    EXPECT_TRUE(buffer->is_allocated());
-    buffer->deallocate();
-    EXPECT_FALSE(buffer->is_allocated());
+    EXPECT_TRUE(buffer->impl().is_allocated());
+    buffer->impl().deallocate();
+    EXPECT_FALSE(buffer->impl().is_allocated());
 }
 
 TEST_F(MockAllocatorTest, GetMockAllocatorReturnsNonNull) {

@@ -1,3 +1,4 @@
+#include "impl/buffers/buffer_impl.hpp"
 // SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -70,7 +71,7 @@
 //     for (uint32_t loop_idx = 0; loop_idx < num_loops; loop_idx++) {
 //         log_debug(tt::LogTest, "Running loop: {}", loop_idx);
 
-//         auto buffer = Buffer::create(
+//         auto buffer = BufferImpl::create(
 //             device, test_config.size_bytes, test_config.page_size_bytes, BufferType::L1, test_config.sharding_args);
 
 //         if (loop_idx > 1) {
@@ -281,7 +282,7 @@
 //     const uint32_t num_buffers = 100;
 //     for (uint32_t i = 0; i < num_buffers; i++) {
 //         const size_t size_bytes = 1024 * 256;  // 256 KB
-//         auto buf = Buffer::create(device_, size_bytes, size_bytes, BufferType::L1);
+//         auto buf = BufferImpl::create(device_, size_bytes, size_bytes, BufferType::L1);
 //     }
 // }
 
@@ -291,7 +292,7 @@
 
 //     const uint32_t num_buffers = 5;
 //     for (uint32_t i = 0; i < num_buffers; i++) {
-//         auto buf = Buffer::create(device_, 64, 64, BufferType::DRAM);
+//         auto buf = BufferImpl::create(device_, 64, 64, BufferType::DRAM);
 //         DeallocateBuffer(*buf);
 //     }
 // }
@@ -301,9 +302,9 @@
 //     uint32_t page_size = 32 * 32 * 2;
 
 //     // For extra coverage, use Buffer::create (now support for light metal capture/replay)
-//     auto input = Buffer::create(device, size_bytes, page_size, BufferType::DRAM);
-//     auto output = Buffer::create(device, size_bytes, page_size, BufferType::DRAM);
-//     auto l1_buffer = Buffer::create(device, size_bytes, page_size, BufferType::L1);
+//     auto input = BufferImpl::create(device, size_bytes, page_size, BufferType::DRAM);
+//     auto output = BufferImpl::create(device, size_bytes, page_size, BufferType::DRAM);
+//     auto l1_buffer = BufferImpl::create(device, size_bytes, page_size, BufferType::L1);
 
 //     log_debug(
 //         tt::LogTest,

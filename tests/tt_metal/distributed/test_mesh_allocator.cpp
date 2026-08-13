@@ -10,6 +10,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 namespace tt::tt_metal::distributed::test {
@@ -29,7 +30,7 @@ TEST_F(MeshAllocatorTest, BasicAllocationSanityCheck) {
 
     auto buffer = CreateBuffer(config);
 
-    EXPECT_TRUE(buffer->is_allocated());
+    EXPECT_TRUE(buffer->impl().is_allocated());
     EXPECT_EQ(buffer->size(), allocation_size);
     EXPECT_EQ(buffer->buffer_type(), buffer_type);
 }

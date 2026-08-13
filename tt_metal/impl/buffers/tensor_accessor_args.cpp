@@ -11,6 +11,8 @@
 namespace tt::tt_metal {
 
 namespace {
+constexpr size_t kMaxNumDimensions = 8;
+
 namespace CMAKE_UNIQUE_NAMESPACE {
 void append_sharded_args(
     const Buffer& buffer, tensor_accessor::ArgsConfig args_config, std::vector<uint32_t>& args, bool is_runtime) {
@@ -29,10 +31,7 @@ void append_sharded_args(
 
     size_t rank = tensor_shape.size();
     size_t n_banks = bank_coords.size();
-    TT_FATAL(
-        rank <= TensorAccessorArgs::MAX_NUM_DIMENSIONS,
-        "Rank must be less than or equal to {}",
-        TensorAccessorArgs::MAX_NUM_DIMENSIONS);
+    TT_FATAL(rank <= kMaxNumDimensions, "Rank must be less than or equal to {}", kMaxNumDimensions);
 
     size_t n_args =
         add_rank + add_num_banks + (rank * add_tensor_shape) + (rank * add_shard_shape) + (n_banks * add_bank_coords);

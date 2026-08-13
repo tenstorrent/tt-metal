@@ -32,6 +32,7 @@
 #include <ttnn/distributed/distributed_tensor.hpp>
 
 #include <tt-metalium/buffer.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <tt-metalium/experimental/core_subset_write/tensor.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/tensor/tensor_apis.hpp>
@@ -172,7 +173,7 @@ TEST_F(MeshTensorTest, Lifecycle) {
         auto* buffer = input_tensor.mesh_buffer().get_device_buffer(coordinate);
 
         ASSERT_NE(buffer, nullptr);
-        EXPECT_TRUE(buffer->is_allocated());
+        EXPECT_TRUE(buffer->impl().is_allocated());
         EXPECT_EQ(buffer->address(), buffer_address);
     }
 

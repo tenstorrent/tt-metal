@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
 #include <tt_stl/assert.hpp>
@@ -1744,17 +1745,17 @@ GlobalSemaphore CreateGlobalSemaphore(
 }
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
-    return Buffer::create(config.device, config.size, config.page_size, config.buffer_type);
+    return BufferImpl::create(config.device, config.size, config.page_size, config.buffer_type);
 }
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, DeviceAddr address) {
-    return Buffer::create(config.device, address, config.size, config.page_size, config.buffer_type);
+    return BufferImpl::create(config.device, address, config.size, config.page_size, config.buffer_type);
 }
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, SubDeviceId sub_device_id) {
-    return Buffer::create(
+    return BufferImpl::create(
         config.device, config.size, config.page_size, config.buffer_type, std::nullopt, std::nullopt, sub_device_id);
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config) {
-    return Buffer::create(
+    return BufferImpl::create(
         config.device,
         config.size,
         config.page_size,
@@ -1762,7 +1763,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config) {
         BufferShardingArgs(config.shard_parameters, config.buffer_layout));
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAddr address) {
-    return Buffer::create(
+    return BufferImpl::create(
         config.device,
         address,
         config.size,
@@ -1771,7 +1772,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAd
         BufferShardingArgs(config.shard_parameters, config.buffer_layout));
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDeviceId sub_device_id) {
-    return Buffer::create(
+    return BufferImpl::create(
         config.device,
         config.size,
         config.page_size,
@@ -1781,7 +1782,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
         sub_device_id);
 }
 
-void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
+void DeallocateBuffer(Buffer& buffer) { buffer.impl().deallocate(buffer); }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
     detail::DispatchStateCheck(MetalContext::instance().rtoptions().get_fast_dispatch());

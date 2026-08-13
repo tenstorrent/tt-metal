@@ -5,6 +5,7 @@
 // To run (from the tt-metal repo root, after an emule build):
 //   build_emule/test/tt_metal/unit_tests_api --gtest_filter="MeshDeviceFixture.Host_UAF_*"
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <vector>
@@ -32,7 +33,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_WriteToBuffer_SanityCheck) {
 
     auto* device = this->devices_.at(0)->get_devices()[0];
 
-    auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto buffer = BufferImpl::create(device, 1024, 1024, BufferType::L1);
     DeallocateBuffer(*buffer);
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
@@ -44,7 +45,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_ReadFromBuffer_SanityCheck) {
 
     auto* device = this->devices_.at(0)->get_devices()[0];
 
-    auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto buffer = BufferImpl::create(device, 1024, 1024, BufferType::L1);
     DeallocateBuffer(*buffer);
 
     std::vector<uint32_t> out;
@@ -56,7 +57,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_ReadShard_SanityCheck) {
 
     // ReadShard's sanitizer check runs before its is_sharded() assertion, so a
     // plain interleaved buffer still drives the UAF path under test here.
-    auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto buffer = BufferImpl::create(device, 1024, 1024, BufferType::L1);
     DeallocateBuffer(*buffer);
 
     std::vector<uint8_t> out(1024);
@@ -68,7 +69,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_CoreSubsetWriteToBuffer_SanityCheck) {
 
     auto* device = this->devices_.at(0)->get_devices()[0];
 
-    auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto buffer = BufferImpl::create(device, 1024, 1024, BufferType::L1);
     DeallocateBuffer(*buffer);
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
@@ -90,7 +91,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_WriteToBuffer_SharedPtrOverload_SanityCheck) 
 
     auto* device = this->devices_.at(0)->get_devices()[0];
 
-    auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);
+    auto buffer = BufferImpl::create(device, 1024, 1024, BufferType::L1);
     DeallocateBuffer(*buffer);
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
@@ -105,7 +106,7 @@ TEST_F(MeshDeviceFixture, Host_UAF_Allocated_NoViolation) {
 
     auto* device = this->devices_.at(0)->get_devices()[0];
 
-    auto buffer = Buffer::create(device, 1024, 1024, BufferType::L1);  // left allocated
+    auto buffer = BufferImpl::create(device, 1024, 1024, BufferType::L1);  // left allocated
 
     std::vector<uint32_t> data(256, 0xABCDEFu);
     detail::WriteToBuffer(*buffer, data);  // must NOT abort

@@ -8,6 +8,7 @@
 // carries an unresolved panic reference. See SANITIZER_CHECKS.md.
 
 #include "host_sanitizers.hpp"
+#include "impl/buffers/buffer_impl.hpp"
 
 #include <cstddef>
 
@@ -41,7 +42,7 @@ void check_buffer_allocated(const Buffer& buffer, const char* op) {
     if (!emule_asan_enabled()) {
         return;
     }
-    if (!buffer.is_allocated()) {
+    if (!buffer.impl().is_allocated()) {
         __emule_asan_panic(
             "[ASAN ERROR] Use-After-Free: %s called on Buffer (unique_id=%zu, size=%lu, type=%d) "
             "that is not currently allocated (either deallocated or never allocated). "
@@ -123,7 +124,7 @@ void register_logical_size(const Buffer& buffer, DeviceAddr logical_size) {
         "logical_size ({}) must not exceed buffer size ({})",
         logical_size,
         buffer.size());
-    if (!buffer.is_allocated()) {
+    if (!buffer.impl().is_allocated()) {
         return;
     }
     if (buffer.buffer_type() != BufferType::L1 && buffer.buffer_type() != BufferType::L1_SMALL) {

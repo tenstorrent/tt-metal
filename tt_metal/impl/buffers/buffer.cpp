@@ -33,6 +33,8 @@
 #include <tt-metalium/allocator.hpp>
 
 #include "impl/emulation/emule_live_ranges.hpp"
+#include "impl/buffers/buffer_impl.hpp"
+#include "impl/buffers/generate_buffer_page_mapping.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -234,7 +236,7 @@ void validate_sub_device_manager_id(std::optional<SubDeviceManagerId> sub_device
 
 }  // namespace
 
-std::atomic<size_t> Buffer::next_unique_id = 0;
+std::atomic<size_t> BufferImpl::next_unique_id = 0;
 
 std::ostream& operator<<(std::ostream& os, const ShardSpec& spec) {
     os << "ShardSpec{";
@@ -327,7 +329,7 @@ UncompressedBufferPageMapping generate_buffer_page_mapping(const Buffer& buffer)
     return buffer_page_mapping;
 }
 
-Buffer::Buffer(
+BufferImpl::BufferImpl(
     IDevice* device,
     DeviceAddr size,
     DeviceAddr page_size,
@@ -335,13 +337,12 @@ Buffer::Buffer(
     const BufferShardingArgs& sharding_args,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id,
-    const bool owns_data,
-    Private) :
+    const bool owns_data) :
     device_(device),
     size_(size),
     buffer_type_(buffer_type),
     buffer_layout_(sharding_args.buffer_layout()),
-    bottom_up_(bottom_up.value_or(this->is_dram())),
+    bottom_up_(bottom_up.value_or(buffer_type == BufferType::DRAM || buffer_type == BufferType::TRACE)),
     sub_device_id_(sub_device_id),
     owns_data_(owns_data),
     page_size_(page_size),
@@ -360,7 +361,19 @@ Buffer::Buffer(
     unique_id_ = next_unique_id.fetch_add(1);
 }
 
-std::shared_ptr<Buffer> Buffer::create(
+Buffer::Buffer(BufferImpl impl) : impl_(std::make_unique<BufferImpl>(std::move(impl))) {}
+
+BufferImpl& Buffer::impl() {
+    TT_FATAL(impl_ != nullptr, "Buffer is in a moved-from state.");
+    return *impl_;
+}
+
+const BufferImpl& Buffer::impl() const {
+    TT_FATAL(impl_ != nullptr, "Buffer is in a moved-from state.");
+    return *impl_;
+}
+
+std::shared_ptr<Buffer> BufferImpl::create(
     IDevice* device,
     DeviceAddr size,
     DeviceAddr page_size,
@@ -370,15 +383,15 @@ std::shared_ptr<Buffer> Buffer::create(
     const std::optional<SubDeviceId> sub_device_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
 
-    auto buffer = std::make_shared<Buffer>(
-        device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, true /* owns data */, Private());
+    auto buffer = std::make_shared<Buffer>(BufferImpl(
+        device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, true /* owns data */));
 
-    if (buffer->size_ == 0) {
-        buffer->allocation_status_ = AllocationStatus::ALLOCATED;
+    if (buffer->impl().size_ == 0) {
+        buffer->impl().allocation_status_ = BufferImpl::AllocationStatus::ALLOCATED;
         return buffer;
     }
 
-    buffer->allocate_impl();
+    buffer->impl().allocate_impl(*buffer);
 
     LIGHT_METAL_TRACE_FUNCTION_CALL(
         CaptureBufferCreate,
@@ -395,7 +408,7 @@ std::shared_ptr<Buffer> Buffer::create(
     return buffer;
 }
 
-std::shared_ptr<Buffer> Buffer::create(
+std::shared_ptr<Buffer> BufferImpl::create(
     IDevice* device,
     DeviceAddr address,
     DeviceAddr size,
@@ -405,23 +418,15 @@ std::shared_ptr<Buffer> Buffer::create(
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    auto buffer = std::make_shared<Buffer>(
-        device,
-        size,
-        page_size,
-        buffer_type,
-        sharding_args,
-        bottom_up,
-        sub_device_id,
-        false /* owns data */,
-        Private());
+    auto buffer = std::make_shared<Buffer>(BufferImpl(
+        device, size, page_size, buffer_type, sharding_args, bottom_up, sub_device_id, false /* owns data */));
 
-    buffer->address_ = address;
-    buffer->allocation_status_ = AllocationStatus::ALLOCATED;
+    buffer->impl().address_ = address;
+    buffer->impl().allocation_status_ = BufferImpl::AllocationStatus::ALLOCATED;
 
     // Explicit-address (non-owning) L1 buffers skip allocate_impl(), so register their
     // per-core extent here (removed in deallocate()). Rationale: SANITIZER_CHECKS.md §4.
-    if (is_emule_device(device) && buffer->size_ != 0 &&
+    if (is_emule_device(device) && buffer->impl().size_ != 0 &&
         (buffer_type == BufferType::L1 || buffer_type == BufferType::L1_SMALL)) {
         tt::tt_metal::emule::LiveL1Ranges::add(
             device->id(),
@@ -444,18 +449,18 @@ std::shared_ptr<Buffer> Buffer::create(
     return buffer;
 }
 
-std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
-    TT_FATAL(region.offset % page_size() == 0, "Region offset must be a multiple of page size");
-    TT_FATAL(region.size % page_size() == 0, "Region size must be a multiple of page size");
-    TT_FATAL(region.offset + region.size <= size(), "Region must be within buffer");
+std::shared_ptr<Buffer> BufferImpl::view(Buffer& self, const BufferRegion& region) {
+    TT_FATAL(region.offset % self.page_size() == 0, "Region offset must be a multiple of page size");
+    TT_FATAL(region.size % self.page_size() == 0, "Region size must be a multiple of page size");
+    TT_FATAL(region.offset + region.size <= self.size(), "Region must be within buffer");
 
-    if (region.offset == 0 && region.size == size()) {
-        return shared_from_this();
+    if (region.offset == 0 && region.size == self.size()) {
+        return self.shared_from_this();
     }
 
     TT_FATAL(!per_core_allocation_, "Buffer::view() with sub-regions is not supported for per-core allocated buffers");
 
-    auto buffer = Buffer::create(
+    auto buffer = BufferImpl::create(
         device_,
         address_,
         region.size,
@@ -467,27 +472,28 @@ std::shared_ptr<Buffer> Buffer::view(const BufferRegion& region) {
 
     std::shared_ptr<const BufferPageMapping> new_page_mapping;
     if (is_sharded(buffer_layout_)) {
-        new_page_mapping = std::make_shared<const BufferPageMapping>(get_buffer_page_mapping()->filter_by_host_range(
-            region.offset / page_size(), (region.offset + region.size) / page_size()));
+        new_page_mapping =
+            std::make_shared<const BufferPageMapping>(self.get_buffer_page_mapping()->filter_by_host_range(
+                region.offset / self.page_size(), (region.offset + region.size) / self.page_size()));
     }
 
-    buffer->root_buffer_ = root_buffer();
-    buffer->root_buffer_offset_ = root_buffer_offset_ + region.offset;
-    buffer->buffer_page_mapping_ = new_page_mapping;
+    buffer->impl().root_buffer_ = root_buffer(self);
+    buffer->impl().root_buffer_offset_ = root_buffer_offset_ + region.offset;
+    buffer->impl().buffer_page_mapping_ = new_page_mapping;
 
     return buffer;
 }
 
-Allocator* Buffer::allocator() const { return allocator_->view().get(); }
+Allocator* Buffer::allocator() const { return impl_->allocator_->view().get(); }
 
-void Buffer::allocate_impl() {
-    if (GraphTracker::instance().hook_allocate(this)) {
+void BufferImpl::allocate_impl(Buffer& self) {
+    if (GraphTracker::instance().hook_allocate(&self)) {
         address_ = 0;
         hooked_allocation_ = true;
     } else {
         validate_sub_device_manager_id(sub_device_manager_id_, device_);
 
-        address_ = allocator_->allocate_buffer(this);
+        address_ = allocator_->allocate_buffer(&self);
 
         // Assertion here because buffer class returns a u32 when address is queried
         // Requires updating all use cases of buffer address to accept a u64 to remove
@@ -499,7 +505,7 @@ void Buffer::allocate_impl() {
                 tt::tt_metal::emule::LiveL1Ranges::add(
                     device_->id(),
                     static_cast<uint32_t>(address_),
-                    static_cast<uint32_t>(address_ + aligned_size_per_bank()));
+                    static_cast<uint32_t>(address_ + self.aligned_size_per_bank()));
             } else if (buffer_type_ == BufferType::DRAM) {
                 tt::tt_metal::emule::LiveDramRanges::add(
                     device_->id(), static_cast<uint32_t>(address_), static_cast<uint32_t>(address_ + size_));
@@ -519,10 +525,10 @@ void Buffer::allocate_impl() {
     // Important! Graph tracker must called after the allocation status is updated.
     allocation_status_ = AllocationStatus::ALLOCATED;
 
-    GraphTracker::instance().track_allocate(this);
+    GraphTracker::instance().track_allocate(&self);
 }
 
-void Buffer::deallocate() {
+void BufferImpl::deallocate(Buffer& self) {
     if (!owns_data_) {
         // device_ may be dangling here during teardown, so read the latch instead of touching it.
         if (emule_device_seen.load(std::memory_order_relaxed)) {
@@ -536,26 +542,25 @@ void Buffer::deallocate() {
         }
         return;
     }
-    this->deallocate_impl();
+    this->deallocate_impl(self);
 }
 
-void Buffer::mark_as_deallocated() { allocation_status_ = AllocationStatus::DEALLOCATED; }
-
-void Buffer::deallocate_impl() {
+void BufferImpl::deallocate_impl(Buffer& self) {
     if (allocation_status_ != AllocationStatus::ALLOCATED) {
         return;
     }
 
     if (device_->is_initialized() && size_ != 0) {
         // address_ is only modified from this thread, no sync required
-        GraphTracker::instance().track_deallocate(this);
-        if (!GraphTracker::instance().hook_deallocate(this) && !hooked_allocation_) {
+        GraphTracker::instance().track_deallocate(&self);
+        if (!GraphTracker::instance().hook_deallocate(&self) && !hooked_allocation_) {
 #if defined(TRACY_ENABLE)
             if (tt::tt_metal::MetalContext::instance(extract_context_id(device_))
                     .rtoptions()
                     .get_profiler_buffer_usage_enabled()) {
                 TracyFreeN(
-                    reinterpret_cast<const void*>(address()), get_buffer_location_name(buffer_type_, device_->id()));
+                    reinterpret_cast<const void*>(self.address()),
+                    get_buffer_location_name(buffer_type_, device_->id()));
             }
 #endif
             validate_sub_device_manager_id(sub_device_manager_id_, device_);
@@ -567,12 +572,12 @@ void Buffer::deallocate_impl() {
                     tt::tt_metal::emule::LiveDramRanges::remove(device_->id(), static_cast<uint32_t>(address_));
                 }
             }
-            allocator_->deallocate_buffer(this);
+            allocator_->deallocate_buffer(&self);
         }
 
         // Capture deallocates here instead of higher levels.
         LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-        LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDeallocate, *this);
+        LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDeallocate, self);
     }
 
     allocation_status_ = AllocationStatus::DEALLOCATED;
@@ -581,138 +586,125 @@ void Buffer::deallocate_impl() {
 Buffer::~Buffer() {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferDelete, *this);
-    if (this->allocation_status_ != AllocationStatus::DEALLOCATED) {
-        this->deallocate();
+    if (impl_ && impl_->allocation_status_ != BufferImpl::AllocationStatus::DEALLOCATED) {
+        impl_->deallocate(*this);
     }
 }
 
-bool Buffer::is_allocated() const { return allocation_status_ == AllocationStatus::ALLOCATED; }
+IDevice* Buffer::device() const { return impl_->device_; }
+DeviceAddr Buffer::size() const { return impl_->size_; }
+BufferType Buffer::buffer_type() const { return impl_->buffer_type_; }
+TensorMemoryLayout Buffer::buffer_layout() const { return impl_->buffer_layout_; }
+bool Buffer::has_shard_spec() const { return impl_->shard_spec_.has_value(); }
+size_t Buffer::unique_id() const { return impl_->unique_id_; }
 
 uint32_t Buffer::address() const {
     TT_FATAL(
-        allocation_status_ != AllocationStatus::ALLOCATION_REQUESTED,
+        impl_->allocation_status_ != BufferImpl::AllocationStatus::ALLOCATION_REQUESTED,
         "Can only query the address of a buffer that has been allocated");
-    return address_;
+    return impl_->address_;
 }
 
-DeviceAddr Buffer::page_size() const { return page_size_; }
-
-void Buffer::set_page_size(DeviceAddr page_size) {
-    TT_FATAL(page_size == 0 ? size_ == 0 : size_ % page_size == 0, "buffer size must be divisible by new page size");
-    page_size_ = page_size;
-    this->buffer_distribution_spec_ = std::nullopt;
-    this->buffer_page_mapping_ = nullptr;
-}
+DeviceAddr Buffer::page_size() const { return impl_->page_size_; }
 
 uint32_t Buffer::num_pages() const { return page_size() == 0 ? 0 : size() / page_size(); }
 
 uint32_t Buffer::num_dev_pages() const {
-    if (!is_sharded(this->buffer_layout_)) {
+    if (!is_sharded(impl_->buffer_layout_)) {
         return this->num_pages();
     }
-    if (shard_spec_.has_value()) {
-        return shard_spec_->num_pages() * this->num_cores().value();
+    if (impl_->shard_spec_.has_value()) {
+        return impl_->shard_spec_->num_pages() * this->num_cores().value();
     }
-    return buffer_distribution_spec_.value().max_num_dev_pages_per_core() * num_cores().value();
+    return impl_->buffer_distribution_spec_.value().max_num_dev_pages_per_core() * num_cores().value();
 }
 
-HalMemType Buffer::memory_type() const {
-    if (this->is_dram()) {
+HalMemType BufferImpl::memory_type() const {
+    if (buffer_type_ == BufferType::DRAM || buffer_type_ == BufferType::TRACE) {
         return HalMemType::DRAM;
     }
-    if (this->is_l1()) {
+    if (is_l1_impl(buffer_type_)) {
         return HalMemType::L1;
     }
-    TT_THROW("Unknown HAL memory type for {} buffer type", this->buffer_type());
+    TT_THROW("Unknown HAL memory type for {} buffer type", buffer_type_);
 }
 
 CoreType Buffer::core_type() const {
-    switch (this->buffer_type_) {
+    switch (impl_->buffer_type_) {
         case BufferType::DRAM: return CoreType::DRAM;
         case BufferType::L1:
         case BufferType::L1_SMALL: return CoreType::WORKER;
-        default: TT_THROW("Unknown CoreType {} for buffer", this->buffer_type_);
+        default: TT_THROW("Unknown CoreType {} for buffer", impl_->buffer_type_);
     }
 }
 
 bool Buffer::is_l1() const { return is_l1_impl(buffer_type()); }
 bool Buffer::is_dram() const { return buffer_type() == BufferType::DRAM || buffer_type() == BufferType::TRACE; }
-bool Buffer::is_trace() const { return buffer_type() == BufferType::TRACE; }
 
-bool Buffer::is_valid_region(const BufferRegion& region) const { return region.offset + region.size <= this->size(); }
+bool BufferImpl::is_valid_region(const BufferRegion& region) const { return region.offset + region.size <= size_; }
 
-bool Buffer::is_valid_partial_region(const BufferRegion& region) const {
-    return this->is_valid_region(region) && (region.offset > 0 || region.size != this->size());
+bool BufferImpl::is_valid_partial_region(const BufferRegion& region) const {
+    return is_valid_region(region) && (region.offset > 0 || region.size != size_);
 }
 
 DeviceAddr Buffer::page_address(DeviceAddr bank_id, DeviceAddr page_index) const {
-    DeviceAddr num_banks = static_cast<DeviceAddr>(allocator_->get_num_banks(buffer_type_));
+    DeviceAddr num_banks = static_cast<DeviceAddr>(impl_->allocator_->get_num_banks(impl_->buffer_type_));
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     DeviceAddr pages_offset_within_bank = page_index / num_banks;
     auto offset = (round_up(this->page_size(), static_cast<DeviceAddr>(this->alignment())) * pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
 }
 
-uint32_t Buffer::alignment() const { return allocator_->get_alignment(this->buffer_type()); }
+uint32_t Buffer::alignment() const { return impl_->allocator_->get_alignment(this->buffer_type()); }
 
 DeviceAddr Buffer::aligned_page_size() const { return align(page_size(), this->alignment()); }
 DeviceAddr Buffer::aligned_size() const { return this->num_dev_pages() * this->aligned_page_size(); }
 
 DeviceAddr Buffer::aligned_size_per_bank() const {
-    uint32_t num_banks =
-        is_sharded(this->buffer_layout_) ? this->num_cores().value() : allocator_->get_num_banks(this->buffer_type());
+    uint32_t num_banks = is_sharded(impl_->buffer_layout_) ? this->num_cores().value()
+                                                           : impl_->allocator_->get_num_banks(this->buffer_type());
     return tt::tt_metal::detail::calculate_bank_size_spread(
         this->aligned_size(), this->aligned_page_size(), num_banks, this->alignment());
 }
 
-void Buffer::set_per_core_addresses(std::unordered_map<CoreCoord, DeviceAddr> addrs) {
-    per_core_addresses_ = std::move(addrs);
-}
-
 ShardSpecBuffer Buffer::shard_spec() const {
-    TT_FATAL(is_sharded(this->buffer_layout_), "Buffer not sharded");
-    TT_FATAL(shard_spec_.has_value(), "Buffer is sharded, but no shard parameters specified");
-    return this->shard_spec_.value();
-}
-
-void Buffer::set_shard_spec(const ShardSpecBuffer& shard_spec) {
-    this->shard_spec_ = shard_spec;
-    this->buffer_distribution_spec_ = std::nullopt;
-    this->buffer_page_mapping_ = nullptr;
+    TT_FATAL(is_sharded(impl_->buffer_layout_), "Buffer not sharded");
+    TT_FATAL(impl_->shard_spec_.has_value(), "Buffer is sharded, but no shard parameters specified");
+    return impl_->shard_spec_.value();
 }
 
 std::optional<uint32_t> Buffer::num_cores() const {
-    if (!is_sharded(this->buffer_layout_)) {
+    if (!is_sharded(impl_->buffer_layout_)) {
         return std::nullopt;
     }
-    if (buffer_distribution_spec_.has_value()) {
-        return buffer_distribution_spec_.value().num_cores_with_data();
+    if (impl_->buffer_distribution_spec_.has_value()) {
+        return impl_->buffer_distribution_spec_.value().num_cores_with_data();
     }
-    return shard_spec_->tensor_shard_spec.grid.num_cores();
+    return impl_->shard_spec_->tensor_shard_spec.grid.num_cores();
 }
 
 DeviceAddr Buffer::translate_page_address(DeviceAddr offset, uint32_t bank_id) const {
-    DeviceAddr base_page_address = this->address() + allocator_->get_bank_offset(buffer_type_, bank_id);
+    DeviceAddr base_page_address = this->address() + impl_->allocator_->get_bank_offset(impl_->buffer_type_, bank_id);
     return base_page_address + offset;
 }
 
 const std::shared_ptr<const BufferPageMapping>& Buffer::get_buffer_page_mapping() {
-    TT_FATAL(is_sharded(this->buffer_layout_), "Buffer not sharded");
-    if (!this->buffer_page_mapping_) {
-        this->buffer_page_mapping_ = std::make_shared<const BufferPageMapping>(generate_buffer_page_mapping(*this));
+    TT_FATAL(is_sharded(impl_->buffer_layout_), "Buffer not sharded");
+    if (!impl_->buffer_page_mapping_) {
+        impl_->buffer_page_mapping_ = std::make_shared<const BufferPageMapping>(generate_buffer_page_mapping(*this));
     }
-    return this->buffer_page_mapping_;
+    return impl_->buffer_page_mapping_;
 }
 
-std::shared_ptr<Buffer> Buffer::root_buffer() {
+std::shared_ptr<Buffer> BufferImpl::root_buffer(Buffer& self) {
     if (root_buffer_) {
         return root_buffer_;
     }
-    return shared_from_this();
+    return self.shared_from_this();
 }
 
 const std::optional<BufferDistributionSpec>& Buffer::buffer_distribution_spec() const {
-    return this->buffer_distribution_spec_;
+    return impl_->buffer_distribution_spec_;
 }
 
 bool ShardSpec::operator==(const ShardSpec&) const = default;
