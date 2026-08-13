@@ -1,10 +1,11 @@
-# Llama + audio enc/decoder on a single quad (tt-blaze #3089), 7-mesh ring.
-# Ring order from mesh 0:  PASSTHROUGH 4x8 -> M1 -> M1 -> 2x2 -> 2x2 -> MB -> MB -> (back).
-# mesh 0 is a 4x8 RING/LINE (host 1x1); meshes 5,6 are 4x8 RING/LINE (host 4x4). Two 4x2
-# RING/LINE meshes and two 2x2 LINE/LINE audio meshes complete the ring.
-#   3x32 + 2x8 + 2x4 = 120 chips of 128, 8 free.
+# Llama-8b + audio enc/decoder decode pipeline mapped onto a single Blackhole-galaxy quad
+# (128 ASICs). Design tracked in tenstorrent/tt-blaze#3089. 7-mesh ring, order from mesh 0:
+#   PASSTHROUGH 4x8 -> 4x2 -> 4x2 -> PASSTHROUGH 2x2 -> PASSTHROUGH 2x2 -> 1x2 -> 1x2 -> (back).
+# mesh 0 is a 4x8 RING/LINE (host 1x1, validated as a whole 4x8); meshes 5,6 are 4x8 RING/LINE
+# (host 4x4, validated as 1x2 host-slices). Two 4x2 RING/LINE meshes and two 2x2 LINE/LINE audio
+# meshes complete the ring.  3x32 + 2x8 + 2x4 = 120 chips of 128, 8 free.
 # Only the two 2x2 audio meshes are pinned (to tray 4); the rest are unpinned.
-# Inter-mesh links are STRICT: MB<->MB 8, MB<->passthrough 8, M1<->M1 4, M1<->2x2 4, 2x2<->2x2 4, 2x2<->MB 4.
+# Inter-mesh links are STRICT: 4x8<->4x8 8, 4x8<->4x2 8, 4x2<->4x2 4, 4x2<->2x2 4, 2x2<->2x2 4, 2x2<->4x8 4.
 
 mesh_descriptors {
   name: "PASSTHROUGH 4x8"                      # 4x8, host 1x1 (whole galaxy in one rank)
@@ -21,7 +22,7 @@ mesh_descriptors {
   channels { count: 2 policy: RELAXED }
 }
 mesh_descriptors {
-  name: "4x2"                                  # half of the old 4x4
+  name: "4x2"                                  # 4x2 RING/LINE compute mesh (one per ring arm)
   arch: BLACKHOLE
   device_topology { dims: [ 4, 2 ] dim_types: [ RING, LINE ] }
   host_topology   { dims: [ 1, 1 ] }
