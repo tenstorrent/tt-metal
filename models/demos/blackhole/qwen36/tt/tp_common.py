@@ -223,7 +223,8 @@ def create_matmul_1d_decode_progcfg(m, k, n, num_cores, fused_activation=None, f
     Grid is shaped WIDE-first (cols up to `grid_w`, the device worker-grid width — 11 on BH P150, 8 on
     WH): for a fixed core budget a wide-short grid shortens the in0 multicast column and beats a
     tall-narrow one (~2% on this matmul; see test_mlp_matmul_sweep wide1d_* vs forced1d_*). Default
-    grid_w=8 preserves the legacy shaping for callers that don't pass the device width."""
+    grid_w=8 preserves the legacy shaping for callers that don't pass the device width.
+    """
     cols = min(grid_w, num_cores)
     rows = math.ceil(num_cores / cols)
     m_tiles = math.ceil(m / TILE_SIZE)
@@ -363,7 +364,8 @@ def prefill_kpass_width(n, grid_size=None, max_waste=0.20):
     pass unpadded via create_prefill_kpass1_matmul_program_config -- padding to improve the tile count's
     factorization only helps when out_block_w must divide per_core_N into several blocks. Kept because it
     is the right tool for any shape stuck on the multi-pass path (and see the gdn_qkvzab_pad_tiles note
-    in model_config.py for how to restore the pad); tests/perf/test_gdn_inproj_sweep.py still sweeps it."""
+    in model_config.py for how to restore the pad); tests/perf/test_gdn_inproj_sweep.py still sweeps it.
+    """
     if grid_size is None:
         grid_size = prefill_grid_default()
     cols = grid_size[0]
@@ -383,8 +385,52 @@ def prefill_kpass_width(n, grid_size=None, max_waste=0.20):
     return best[2] * TILE_SIZE
 
 
+# Every in0_block_w sweep in tests/perf ran m=2048 on an 8-row grid, i.e. per_core_M=8. The in0 CB
+# scales with per_core_M * in0_block_w, so a taller M with the same width is UNVALIDATED L1 — and
+# measurably does not fit: gate at m=2304 (per_core_M=9) with the swept width 16 asks for 1580224 B
+# against Wormhole's 1499136 B ceiling. Requests above this envelope fall back to the factory default.
+SWEPT_PER_CORE_M = 8
+
+
+def _legal_in0_block_w(requested, k_tiles, grid_x, per_core_M, default):
+    """Snap a requested in0_block_w down to a value that is legal AND fits L1.
+
+    Two independent constraints, both of which the raw swept widths violate:
+
+    1. Legality. The 2D multicast matmul splits K across the grid's columns and requires the
+       per-core K depth to be an exact multiple of in0_block_w — the kernel loops ceil-free over
+       (per_core_k / in0_block_w) blocks, so a width that exceeds or does not divide that depth
+       reads past the in0 CB (silently wrong results) as well as oversizing it. Same snap-to-divisor
+       idiom as find_largest_divisor in tt_transformers/deepseek. This bites because the sweeps ran
+       the FULL (unsharded) k while production TP shards k on the row-parallel matmuls: down's k is
+       6144 in the sweep but 3072 per device (depth 12, not 24) and wo's is 4096 vs 2048 (depth 8).
+       Both requested 16.
+    2. Capacity. The width was only ever measured at per_core_M=8 (see SWEPT_PER_CORE_M). Taller M
+       — e.g. prefill_tp single-passing a whole T=2304 sequence rather than a 2048 chunk — grows the
+       in0 CB past L1 even at a legal width, so the request is dropped rather than guessed at.
+
+    Returns ``default`` when the shape is outside the swept envelope, else the widest legal width.
+    """
+    if per_core_M > SWEPT_PER_CORE_M:
+        return default
+    per_core_k = max(1, k_tiles // max(1, grid_x))
+    bw = max(1, min(requested, per_core_k))
+    while bw > 1 and per_core_k % bw:
+        bw -= 1
+    return bw
+
+
 def create_prefill_matmul_program_config(
-    m, k, n, grid_size=None, fused_activation=None, tuning=None, out_block_w=None, halve_out_block=False, max_subblock_hw=None
+    m,
+    k,
+    n,
+    grid_size=None,
+    fused_activation=None,
+    tuning=None,
+    out_block_w=None,
+    halve_out_block=False,
+    max_subblock_hw=None,
+    in0_block_w=None,
 ):
     """2D prefill matmul progcfg (DRAM-interleaved).
 
@@ -400,7 +446,21 @@ def create_prefill_matmul_program_config(
     max_subblock_hw: out_subblock_h*out_subblock_w ceiling. Defaults to the conservative
     DST_TILES_FP32_ACC (4), which is correct for the fp32-dest-acc COMPUTE_HIFI2 most callers pass.
     Callers using a compute config with fp32_dest_acc_en=False may pass DST_TILES (8) to get the
-    wider output subblock their DST budget actually allows — see _get_out_subblock_w."""
+    wider output subblock their DST budget actually allows — see _get_out_subblock_w.
+    in0_block_w: K-block depth per inner matmul iteration. Defaults to min(4, k_tiles/cols), a cap
+    that was never revisited when callers moved to one-K-pass blocking — MEASURED (device kernel
+    duration, N300, one K pass, DST_TILES=8 subblock; tests/perf/test_matmul_in0_block_shard_sweep.py)
+    that every one of the five production prefill matmuls wants a WIDER block than 4:
+        qkv  2048x4096x5120  bw=4 886.4us -> bw=8  842.7us   -4.9%
+        wo   2048x2048x4096  bw=4 329.1us -> bw=16 290.5us  -11.7%
+        gate 2048x4096x6144  bw=4 860.6us -> bw=16 789.8us   -8.2%
+        up   2048x4096x6144  bw=4 816.4us -> bw=16 760.8us   -6.8%
+        down 2048x6144x4096  bw=4 758.2us -> bw=16 672.1us  -11.4%
+    Larger in0_block_w means fewer inner-loop passes (each currently re-issues the in0 CB fill) at
+    the cost of a bigger in0 CB competing with the full-width output CB one-K-pass already needs;
+    16 is the ceiling before that CB grows too large (bw=32 always overflows; qkv's wider out_block_w
+    already caps it at 8). PCC is unaffected beyond the 5th-6th decimal (pure FP accumulation-order
+    noise, not a precision trade) -- e.g. wo 0.99981->0.99976, gate 0.99015->0.99009."""
     if grid_size is None:
         grid_size = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
@@ -409,17 +469,21 @@ def create_prefill_matmul_program_config(
 
     out_subblock_h = 1
     out_subblock_w = _get_out_subblock_w(
-        per_core_N, out_subblock_h, max_hw=max_subblock_hw if max_subblock_hw is not None else DST_TILES_FP32_ACC
+        per_core_N,
+        out_subblock_h,
+        max_hw=max_subblock_hw if max_subblock_hw is not None else DST_TILES_FP32_ACC,
     )
 
     k_tiles = math.ceil(k / TILE_SIZE)
     cap = tuning["in0_block_w_cap"]
     if tuning["in0_block_w_divisor"]:
-        # in0_block_w only has to divide k_tiles (no K tail in the 2D mcast kernel), so take the
-        # largest legal block rather than scaling with grid width -- see _PREFILL_TUNING.
-        in0_block_w = _find_largest_divisor(k_tiles, cap)
+        _default_bw = _find_largest_divisor(k_tiles, cap)
     else:
-        in0_block_w = min(cap, max(1, k_tiles // grid_size[0]))
+        _default_bw = min(cap, max(1, k_tiles // grid_size[0]))
+    if in0_block_w is None:
+        in0_block_w = _default_bw
+    else:
+        in0_block_w = _legal_in0_block_w(in0_block_w, k_tiles, grid_size[0], per_core_M, _default_bw)
 
     if halve_out_block and out_block_w is None:
         out_block_w = _safe_half_out_block_w(per_core_N, out_subblock_w)
@@ -440,7 +504,7 @@ def create_prefill_matmul_program_config(
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(**kwargs)
 
 
-def create_prefill_kpass1_matmul_program_config(m, k, n, grid_size=None, fused_activation=None):
+def create_prefill_kpass1_matmul_program_config(m, k, n, grid_size=None, fused_activation=None, in0_block_w=None):
     """2D prefill progcfg that walks K exactly ONCE: out_block_w == per_core_N.
 
     A 2D prefill matmul re-traverses K once per N-block (ceil(per_core_N / out_block_w) blocks),
@@ -459,15 +523,27 @@ def create_prefill_kpass1_matmul_program_config(m, k, n, grid_size=None, fused_a
     Unlike create_prefill_matmul_program_config there is no halve_out_block escape hatch: halving the
     block IS the multi-pass behaviour this exists to avoid. Callers whose (m, k, n) does not fit must
     use the general factory instead.
+
+    in0_block_w: see create_prefill_matmul_program_config's docstring for the measurements (this
+    factory shared the same min(4, ...) cap, unrevisited since moving to one K pass). Requested
+    widths are snapped to a legal divisor of the per-core K depth by _legal_in0_block_w, so qkv
+    keeps its 8 while wo (per-core depth 8, k sharded to 2048) lands on 8 rather than the
+    requested 16.
     """
     if grid_size is None:
         grid_size = prefill_grid_default()
     per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
     per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
     k_tiles = math.ceil(k / TILE_SIZE)
+    _default_bw = min(4, max(1, k_tiles // grid_size[0]))
+    in0_block_w = (
+        _default_bw
+        if in0_block_w is None
+        else _legal_in0_block_w(in0_block_w, k_tiles, grid_size[0], per_core_M, _default_bw)
+    )
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
-        in0_block_w=min(4, max(1, k_tiles // grid_size[0])),
+        in0_block_w=in0_block_w,
         out_subblock_h=1,
         out_subblock_w=_get_out_subblock_w(per_core_N, 1, max_hw=DST_TILES),
         per_core_M=per_core_M,
@@ -487,7 +563,8 @@ def prefill_out_memory_config(seq_len, out_width, elem_bytes=2, budget=8 << 20):
     grow with the prefill chunk (16MB+ at seq_len=2048, out_width=4096, bf16). On Wormhole that
     leaves so little L1 free that the very matmul producing them can no longer place its own
     statically-allocated circular buffers, and the op dies with "clash with L1 buffers" — CBs are
-    L1-only, so the output is what has to move. Blackhole keeps the tuned L1 path unchanged."""
+    L1-only, so the output is what has to move. Blackhole keeps the tuned L1 path unchanged.
+    """
     if is_blackhole():
         return ttnn.L1_MEMORY_CONFIG
     return ttnn.DRAM_MEMORY_CONFIG if seq_len * out_width * elem_bytes > budget else ttnn.L1_MEMORY_CONFIG
@@ -516,19 +593,31 @@ def _widest_prefill_cols(n, max_cols, subblock_slack=1):
 
 def _best_prefill_cols(n, max_cols):
     """Grid width (<=max_cols) maximizing the output subblock, tie-broken to more cores — avoids the
-    1x1-subblock stall (e.g. gate/up N=4352 -> 7-wide -> 1x4) the default full width can force."""
+    1x1-subblock stall (e.g. gate/up N=4352 -> 7-wide -> 1x4) the default full width can force.
+    """
     n_tiles = math.ceil(n / TILE_SIZE)
     best_cols, best_key = 1, None
     for cols in range(1, max_cols + 1):
         sw = _get_out_subblock_w(math.ceil(n_tiles / cols), 1)
-        key = (sw, cols)  # prefer wider subblock, then more columns (more compute cores)
+        key = (
+            sw,
+            cols,
+        )  # prefer wider subblock, then more columns (more compute cores)
         if best_key is None or key > best_key:
             best_key, best_cols = key, cols
     return best_cols
 
 
 def create_prefill_mlp_matmul_program_config(
-    m, k, n, fused_activation=None, max_cols=None, tuning=None, halve_out_block=False, max_subblock_hw=None
+    m,
+    k,
+    n,
+    fused_activation=None,
+    max_cols=None,
+    tuning=None,
+    halve_out_block=False,
+    max_subblock_hw=None,
+    in0_block_w=None,
 ):
     """FPU-tuned 2D prefill progcfg for MLP matmuls: picks the grid width that maximizes the output
     subblock (drives prefill FPU) instead of the default full width.
@@ -546,7 +635,10 @@ def create_prefill_mlp_matmul_program_config(
     max_subblock_hw: see create_prefill_matmul_program_config. NOTE this is deliberately NOT fed into
     _best_prefill_cols below: the grid-width choice stays on the conservative cap so raising the
     subblock ceiling cannot silently move the grid too (an unswept axis). It only widens the subblock
-    at the column count production already uses."""
+    at the column count production already uses.
+    in0_block_w: see create_prefill_matmul_program_config's docstring for the measurements. Same
+    reasoning as max_subblock_hw: NOT fed into _best_prefill_cols, so it cannot move the grid.
+    """
     grid = prefill_grid_default()
     tuning = tuning or _PREFILL_TUNING[4]
     limit = max_cols or grid[0]
@@ -566,6 +658,7 @@ def create_prefill_mlp_matmul_program_config(
         tuning=tuning,
         halve_out_block=halve_out_block,
         max_subblock_hw=max_subblock_hw,
+        in0_block_w=in0_block_w,
     )
 
 
@@ -705,11 +798,19 @@ def mlp_gateup_agmm_enabled(num_devices):
 
 
 def all_gather_swiglu_prefill(
-    x, weight, tt_ccl, compute_cfg, topology, grid=(7, 9), cluster_axis=1, out_memory_config=ttnn.DRAM_MEMORY_CONFIG
+    x,
+    weight,
+    tt_ccl,
+    compute_cfg,
+    topology,
+    grid=(7, 9),
+    cluster_axis=1,
+    out_memory_config=ttnn.DRAM_MEMORY_CONFIG,
 ):
     """Fused all-gather + col-parallel gate/up matmul + SwiGLU for prefill (packing gate+up lets ff_norm's AG fuse in).
 
-    x: K-sharded [.,S,K/tp]; weight: tile-pair-interleaved [gate|up] [K, 2N/tp]. Emits silu(gate)*up of width N/tp."""
+    x: K-sharded [.,S,K/tp]; weight: tile-pair-interleaved [gate|up] [K, 2N/tp]. Emits silu(gate)*up of width N/tp.
+    """
     S, K_local = x.shape[-2], x.shape[-1]
     x4 = ttnn.reshape(x, (1, 1, S, K_local))
     num_links = 2
@@ -777,13 +878,22 @@ def build_mmrs_decode_state(mesh_device, M, K_local, N, nd, dtype=ttnn.bfloat16)
 
 
 def matmul_reduce_scatter_decode(
-    x, weight, tt_ccl, interm_buf, out_buf, progcfg, compute_cfg, topology, rs_offset=(0, 6)
+    x,
+    weight,
+    tt_ccl,
+    interm_buf,
+    out_buf,
+    progcfg,
+    compute_cfg,
+    topology,
+    rs_offset=(0, 6),
 ):
     """Fused row-parallel matmul + reduce-scatter(dim=3) for decode (matmul_reduce_scatter_async).
 
     x: K-sharded [.,M,K_local]; weight: [K_local,N] K-sharded. Matmul runs on progcfg's (reduced)
     grid; RS workers land at rs_offset (disjoint rows) to avoid the collision that deadlocks a
-    full-grid fused CCL. Persistent buffers are caller-owned. Returns [.,M,N/nd] (fractured, DRAM)."""
+    full-grid fused CCL. Persistent buffers are caller-owned. Returns [.,M,N/nd] (fractured, DRAM).
+    """
     _, rs_out = ttnn.experimental.matmul_reduce_scatter_async(
         x,
         weight,
@@ -812,7 +922,8 @@ def _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype):
     Prefill M (=chunk seq, e.g. 2048) makes per-layer buffers huge (fp32 [1,1,2048,5120]≈42MB × 64
     layers = infeasible). Prefill runs layers sequentially and each op's output is cloned before the
     next layer reuses the buffer, so ONE shared set per (M,N,nd,dtype) is safe. Allocated during the
-    pre-capture warmup forward (eager), reused inside the trace. Keyed so variable M/dtype coexist."""
+    pre-capture warmup forward (eager), reused inside the trace. Keyed so variable M/dtype coexist.
+    """
     cache = getattr(tt_ccl, "_qwen36_mmrs_prefill_bufs", None)
     if cache is None:
         cache = {}
@@ -855,7 +966,8 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
     the all-gather fusion (see mlp_gateup_agmm_enabled) — the fused-CCL program factories assume a
     taller grid than WH has, and a decode config that works at M=1 does not carry to a prefill M that
     fills the matmul grid. Needs C++ investigation, not a config change. Cost of leaving it off: the
-    two reduce-scatters are ~1,060us + ~995us of an 18,644us single-layer GDN prefill at seq 2048."""
+    two reduce-scatters are ~1,060us + ~995us of an 18,644us single-layer GDN prefill at seq 2048.
+    """
     M, K_local = x.shape[-2], x.shape[-1]
     N = weight.shape[-1]
     interm, out_buf = _mmrs_prefill_shared_bufs(tt_ccl, M, N, nd, dtype)

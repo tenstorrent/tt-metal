@@ -331,12 +331,18 @@ class Qwen36ModelArgs(ModelArgs):
         #
         # None on Blackhole: BH prefill takes the fused all_gather_matmul_prefill path (_fuse_agmm),
         # which pins its own grid and progcfg, so this would never be consulted there.
+        #
+        # in0_block_w=8 (not the factory default min(4,...)): this shape's out_block_w=20 already
+        # spends more L1 on the output CB than wo's, so 8 is the widest legal in0 block (16 CB-
+        # overflows here, unlike wo below). MEASURED (device kernel duration, N300, one K pass;
+        # tests/perf/test_matmul_in0_block_shard_sweep.py): bw=4 886.4us -> bw=8 842.7us (-4.9%),
+        # pcc 0.99985 -> 0.99984 (FP accumulation-order noise, not a precision trade).
         self.attn_qkv_fused_prefill_progcfg = (
             None
             if tpc.is_blackhole()
             else (
                 lambda seq_len, k, n: tpc.create_prefill_kpass1_matmul_program_config(
-                    seq_len, k, n, grid_size=self._prefill_grid
+                    seq_len, k, n, grid_size=self._prefill_grid, in0_block_w=8
                 )
             )
         )
@@ -351,12 +357,20 @@ class Qwen36ModelArgs(ModelArgs):
         # Smaller win than the QKV in-proj (2->1 pass here vs 5->1 there), but same fix, same low risk.
         #
         # None on Blackhole: this progcfg is only consulted by attention/tp.py's _wo_proj when set.
+        #
+        # in0_block_w: request 16, but wo's per-core K depth is only 8 (k is SHARDED to 2048 at TP=2,
+        # so k_tiles=64 over cols=8 — the sweep below ran the unsharded k=4096, which is why it read
+        # 16 as legal). _legal_in0_block_w snaps the request to 8; an unsnapped 16 exceeds the depth,
+        # sizes the in0 CB off 16 and overflows L1 (measured 1547456 B vs the 1499136 B ceiling).
+        # MEASURED (device kernel duration, N300, one K pass; tests/perf/test_matmul_in0_block_shard_sweep.py):
+        # bw=4 329.1us -> bw=16 290.5us (-11.7%), pcc 0.99981 -> 0.99976 — re-sweep at the sharded
+        # shape before trusting that delta, since the snapped width is 8, not 16.
         self.attn_wo_prefill_progcfg = (
             None
             if tpc.is_blackhole()
             else (
                 lambda seq_len, k, n: tpc.create_prefill_kpass1_matmul_program_config(
-                    seq_len, k, n, grid_size=self._prefill_grid
+                    seq_len, k, n, grid_size=self._prefill_grid, in0_block_w=16
                 )
             )
         )

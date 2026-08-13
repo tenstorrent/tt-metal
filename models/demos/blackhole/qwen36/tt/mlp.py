@@ -340,6 +340,17 @@ class Qwen36MLP:
             # PCC is UNCHANGED to 5 decimals on all three (gate 0.99013, up 0.99313, down 0.99983) --
             # this is pure blocking, not an accuracy trade.
             _sub_cap = tpc.DST_TILES if _kpass1 else None
+            # in0_block_w=16 (factory default is min(4,...), never revisited for one K pass): MEASURED
+            # (device kernel duration, N300; tests/perf/test_matmul_in0_block_shard_sweep.py) bw=4 ->
+            # bw=16 is legal here (unlike qkv's narrower L1 headroom) and gives gate 860.6us->789.8us
+            # (-8.2%), up 816.4us->760.8us (-6.8%). in0=L1 CB-overflows at bw=16 for these two, so this
+            # is DRAM-only -- matches production placement (mc = DRAM below) already.
+            # Unlike down/wo, gate/up's k is NOT sharded (column-parallel splits n), so the per-core K
+            # depth is the swept 16 and this width survives _legal_in0_block_w intact -- but only for
+            # per_core_M <= SWEPT_PER_CORE_M. A taller M (prefill_tp single-passing T>2048 rather than
+            # a chunk) falls back to the default there: at per_core_M=9 this CB wants 1580224 B of a
+            # 1499136 B L1.
+            _bw_cap = 16 if _kpass1 else None
             pc_gate = tpc.create_prefill_mlp_matmul_program_config(
                 seq,
                 args.dim,
@@ -349,9 +360,17 @@ class Qwen36MLP:
                 tuning=_pt,
                 halve_out_block=_half,
                 max_subblock_hw=_sub_cap,
+                in0_block_w=_bw_cap,
             )
             pc_up = tpc.create_prefill_mlp_matmul_program_config(
-                seq, args.dim, w.w3.shape[-1], max_cols=_gw, tuning=_pt, halve_out_block=_half, max_subblock_hw=_sub_cap
+                seq,
+                args.dim,
+                w.w3.shape[-1],
+                max_cols=_gw,
+                tuning=_pt,
+                halve_out_block=_half,
+                max_subblock_hw=_sub_cap,
+                in0_block_w=_bw_cap,
             )
             if _kpass1:
                 ckc = _CKC_MLP_KPASS1
@@ -422,13 +441,25 @@ class Qwen36MLP:
             # leaves ckc at self.compute_kernel_config, which has fp32 dest acc ON -> cap stays 4).
             # Testing the object directly means this cannot silently desync if that branch changes.
             # MEASURED down 2048x6144x4096: 1015.0us -> 924.8us (-8.9%), PCC 0.99983 unchanged.
+            #
+            # in0_block_w: request 16, but down's per-core K depth is only 12 (k is SHARDED to 3072 at
+            # TP=2, so k_tiles=96 over cols=8 — the sweep below ran the unsharded k=6144, where the
+            # depth is 24, which is why 16 looked legal). _legal_in0_block_w snaps it to 12; an
+            # unsnapped 16 both overflows L1 at m>2048 AND silently corrupts the result at m=2048
+            # (end-to-end decode logits PCC 0.68 vs the 0.97 gate — not the accumulation-order noise
+            # the sweep's standalone pcc suggested). MEASURED (device kernel duration, N300;
+            # tests/perf/test_matmul_in0_block_shard_sweep.py) bw=4 758.2us -> bw=16 672.1us (-11.4%),
+            # pcc 0.99978 — re-sweep at the sharded shape, since the snapped width is 12. Same `ckc is
+            # _CKC_MLP_KPASS1` key as max_subblock_hw above, for the same desync-proofing reason.
+            _is_kpass1 = ckc is _CKC_MLP_KPASS1
             w2_pc = tpc.create_prefill_mlp_matmul_program_config(
                 hidden.shape[-2],
                 hidden.shape[-1],
                 w.w2.shape[-1],
                 max_cols=getattr(args, "decode_grid_w", 8),
                 tuning=getattr(args, "prefill_tuning", None),
-                max_subblock_hw=tpc.DST_TILES if ckc is _CKC_MLP_KPASS1 else None,
+                max_subblock_hw=tpc.DST_TILES if _is_kpass1 else None,
+                in0_block_w=16 if _is_kpass1 else None,
             )
         # down-proj OUTPUT in L1 for the tuned prefill path (DRAM input `hidden` + L1 output = the
         # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial) — but only while

@@ -6,6 +6,7 @@ Q/K-norm: HF-correct (1+weight) uniformly at prefill and decode.
 Keep Q bf16 into SDPA unless bf8 mode (QWEN_SDPA_BF8=1).
 Weights interleaved per device; x replicated in, output reduce-scattered on dim=3.
 """
+
 import os
 
 import torch
@@ -367,25 +368,20 @@ class TPAttention:
         """
         NH, NKV, HD = self.NH, self.NKV, self.HD
         if vp is None:
-            # Fused [q|k|v|gate] weight (_qkv sentinel vp=None): qg is the contiguous [q|k|v] block,
-            # kp is the gate. Slice q and (already-contiguous) kv directly — no concat needed.
+            # Fused [q|k|v|gate] weight (_qkv sentinel vp=None): qg is already the contiguous
+            # [q|k|v] block nlp_create_qkv_heads' single-tensor form expects directly (input_tensor_kv
+            # is optional — same idiom tt_transformers/attention.py and llama3_70b_galaxy use for their
+            # fused xqkv_fused). kp is the gate. Skips the q_flat/kv re-slice of qg entirely (measured
+            # 60us + 33us at S=2048, tests/perf/test_attn_qkv_inproj_sweep.py).
             gate_flat = kp
-            # q_flat, kv feed nlp_create_qkv_heads then free immediately -> L1 (short-lived, no clash).
-            q_flat = ttnn.slice(qg, (0, 0, 0, 0), (1, 1, S, NH * HD), memory_config=ttnn.L1_MEMORY_CONFIG)
-            kv = ttnn.slice(
-                qg, (0, 0, 0, NH * HD), (1, 1, S, NH * HD + 2 * NKV * HD), memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-            ttnn.deallocate(qg)
             q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-                q_flat,
-                kv,
+                qg,
                 num_heads=NH,
                 num_kv_heads=NKV,
                 transpose_k_heads=False,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            ttnn.deallocate(q_flat)
-            ttnn.deallocate(kv)
+            ttnn.deallocate(qg)
             return q, gate_flat, k, v
         # Interleaved qg: split [q;gate] per head; gate flattened to [1,1,S,NH*HD] (applied post-concat).
         qg = ttnn.reshape(qg, (1, S, NH, 2 * HD))
