@@ -2,7 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""End-to-end `t2va` perf + quality gate at the production working point (768x1344, 124f, 50 steps)."""
+"""End-to-end `t2va` perf + quality gate, swept over the published working points.
+
+Six aspect ratios (21:9 .. 9:16) x three durations (5 / 10 / 15 s), 50 steps. The canvas comes from
+`resolve_canvas_size` -- short edge 768 from 16:9 through 9:16, ~1 MPix for wider -- and the frame
+count from `align_num_frames`, so neither is tabulated here. Each case writes its own artifact stem,
+so a sweep does not overwrite itself.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +17,7 @@ import os
 import pytest
 from loguru import logger
 
-from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames
+from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....utils.test import ring_params_req_exact_devices
 from ..wan2_2.common import check_output_sanity
@@ -32,14 +38,21 @@ from .common_av import (
     write_artifacts,
 )
 
-HEIGHT, WIDTH = 768, 1344
-NUM_FRAMES = 124
 NUM_INFERENCE_STEPS = 50
 SEED = 0
 
-PROMPT = CALIBRATED_FOX_PROMPT  # tier-6 thresholds are calibrated against this exact prompt
+# The published working points: short edge 768 from 16:9 through 9:16, and ~1 MPix for anything
+# wider. `resolve_canvas_size` already implements exactly that (768 short edge, area capped at
+# 768*1344, both axes snapped to 32), so the canvas is derived rather than tabulated here --
+# 21:9 lands on 672x1536, which is the documented example.
+ASPECT_RATIOS = [(21, 9), (16, 9), (4, 3), (1, 1), (3, 4), (9, 16)]
+DURATIONS_S = [5, 10, 15]
 
-EXPECTED_TOTAL_S = 400.0  # loose did-something-collapse bar, not a perf target
+# Loose did-something-collapse bar, per second of video rather than absolute: the 400 s figure was
+# set for one 5.17 s clip, and 10 s / 15 s at 1 MPix cost proportionally more. 77 s of compute per
+# video second is the same allowance (400 / 5.167), i.e. still ~5x looser than the 13.4x realtime
+# factor measured at 16:9 / 5 s.
+EXPECTED_S_PER_VIDEO_SECOND = 77.0
 
 # Ring collectives require FABRIC_1D_RING; a LINE fabric fails as `fabric.cpp:174 forwarding_direction.has_value()`.
 MESH_4X8 = [
@@ -60,13 +73,29 @@ VBENCH_THRESHOLDS = {
 }
 CLIP_THRESHOLD = 33.0  # measured mean 37.05 (2026-08-04, fox prompt, seed 0)
 
+# tier-6 thresholds are calibrated against this exact prompt; swapping it invalidates both bars.
+PROMPT = CALIBRATED_FOX_PROMPT
+
+SWEEP = [
+    pytest.param(ratio, seconds, id=f"{ratio[0]}x{ratio[1]}_{seconds}s")
+    for seconds in DURATIONS_S
+    for ratio in ASPECT_RATIOS
+]
+
 
 @pytest.mark.timeout(7200)
+@pytest.mark.parametrize(("aspect_ratio", "duration_s"), SWEEP)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
-def test_t2va_end_to_end(mesh_device, reset_seeds):
+def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
     weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
     artifacts = artifact_dir("h3_t2va_artifacts")
     prompt = PROMPT
+
+    HEIGHT, WIDTH = resolve_canvas_size(*aspect_ratio)
+    NUM_FRAMES = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
+    # One artifact per working point, so a sweep does not overwrite itself.
+    stem = f"t2va_{aspect_ratio[0]}x{aspect_ratio[1]}_{WIDTH}x{HEIGHT}_{duration_s}s"
+    logger.info(f"working point: {aspect_ratio[0]}:{aspect_ratio[1]} -> {WIDTH}x{HEIGHT}, {NUM_FRAMES} frames, {stem}")
 
     # A missing dependency must report SKIPPED before the long generation, never silently pass as green.
     pytest.importorskip("open_clip", reason="the CLIP gate needs open_clip, which is not installed")
@@ -102,10 +131,11 @@ def test_t2va_end_to_end(mesh_device, reset_seeds):
         "t2va",
         num_forwards=num_forwards,
         video_seconds=video_seconds,
-        expected_total_s=EXPECTED_TOTAL_S,
+        expected_total_s=EXPECTED_S_PER_VIDEO_SECOND * video_seconds,
         extra=(
-            f" | {WIDTH}x{HEIGHT}, {expected_frames} frames @ {MINIMAX_H3_FPS} fps "
-            f"({video_seconds:.2f} s), {num_forwards} forwards, padded_len {pipeline.last_padded_len}"
+            f" | {aspect_ratio[0]}:{aspect_ratio[1]} {WIDTH}x{HEIGHT}, {expected_frames} frames "
+            f"@ {MINIMAX_H3_FPS} fps ({video_seconds:.2f} s), {num_forwards} forwards, "
+            f"padded_len {pipeline.last_padded_len}"
         ),
     )
 
@@ -130,11 +160,22 @@ def test_t2va_end_to_end(mesh_device, reset_seeds):
     (y_starts, _, _), (x_starts, _, _) = pipeline.vae.decode_tile_grid(HEIGHT // ratio, WIDTH // ratio)
     check_spatial_seams(frames, vertical_boundaries=x_starts[1:], horizontal_boundaries=y_starts[1:])
 
-    paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts)
-    check_written_file(paths, expected_frames)
+    paths = write_artifacts(frames, output.audio.cpu().numpy(), output.sampling_rate, artifacts, stem=stem)
+    check_written_file(paths, expected_frames, height=HEIGHT, width=WIDTH)
 
-    gate_clip(frames, prompt, CLIP_THRESHOLD, "t2va")
-    gate_vbench(paths, prompt, VBENCH_THRESHOLDS, "t2va")
+    # CLIP_THRESHOLD was measured at 16:9 / 5 s. Applying it across the sweep is an extrapolation,
+    # but a generous one: the calibrated point measures ~37 against a bar of 33, and the score is a
+    # prompt-alignment number rather than a resolution-dependent one. A prompt change would
+    # invalidate it outright -- recalibrate before swapping PROMPT.
+    gate_clip(frames, prompt, CLIP_THRESHOLD, stem)
+    # RUN_VBENCH=0 drops the VBench gate. It needs its own interpreter (~/vbench_env, pinned to
+    # numpy<2 / transformers 4.33), and without one `run_vbench` skips -- which marks the whole
+    # test SKIPPED *after* the full generation, hiding the perf and A/V results behind a
+    # non-result. Off means "not measured": everything above still gates.
+    if os.environ.get("RUN_VBENCH", "1") not in ("0", "false", "False"):
+        gate_vbench(paths, prompt, VBENCH_THRESHOLDS, stem)
+    else:
+        logger.warning("RUN_VBENCH=0, so the VBench gate did not run; generative quality is UNMEASURED")
 
     logger.info(f"artifacts in {artifacts}: {sorted(p.name for p in artifacts.iterdir())}")
     logger.info(

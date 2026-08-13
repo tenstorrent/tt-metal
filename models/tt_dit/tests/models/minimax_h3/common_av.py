@@ -255,7 +255,11 @@ def write_artifacts(frames, audio, sampling_rate, directory: Path, stem: str = "
             "aac",
             "-b:a",
             "192k",
-            "-shortest",
+            # No -shortest. Video is quantised to 1/24 s and audio to 1/40 s (latent rate), so which
+            # stream is shorter depends on the duration (+8 ms at 5 s, 0 at 10 s, -8 ms at 15 s) and
+            # -shortest would clip whichever it is. That sub-frame trim is not what shortened the
+            # decoded frame count -- an mp4 edit list from AAC priming is, see `decoded_frames` --
+            # but there is no reason to let the muxer discard either stream's tail either.
             str(muxed),
         ],
         check=True,
@@ -298,8 +302,16 @@ _FALLBACK_HEIGHT = 768
 _FALLBACK_WIDTH = 1344
 
 
-def decoded_frames(path: Path, count: int) -> np.ndarray:
-    """Sample `count` frames evenly out of the written file, as uint8 luma."""
+def decoded_frames(path: Path, count: int, height: int = 0, width: int = 0) -> np.ndarray:
+    """Sample `count` frames evenly out of the written file, as uint8 luma.
+
+    `height`/`width` are the caller's known canvas. They matter: the frame count is derived by
+    dividing the raw byte stream by the frame size, and the only other source for that size is
+    `probe_streams`, which needs `ffprobe` -- absent wherever ffmpeg comes from imageio_ffmpeg.
+    Without them this fell back to a hardcoded 768x1344, which silently miscounts every canvas
+    with a different pixel total (4:3 read 94 frames for a correct 124-frame file). 16:9 and 21:9
+    both happen to be 1032192 px, so the constant looked fine until a sweep left that budget.
+    """
     exe = _ffmpeg()
     if exe is None:
         return np.empty((0,))
@@ -308,12 +320,18 @@ def decoded_frames(path: Path, count: int) -> np.ndarray:
             exe,
             "-v",
             "error",
+            # Count what the file STORES. Muxing AAC writes an mp4 edit list (the codec's priming
+            # shifts the timeline), and a decoder honouring it drops frames at the edges: a 362-frame
+            # write reads back as 362 stored / 361 in-container / 359 after the edit list. The gate
+            # asks "were the frames written", so the edit list must not be applied here.
+            "-ignore_editlist",
+            "1",
             "-i",
             str(path),
-            "-vf",
-            f"select='not(mod(n\\,{max(1, count)}))'",
-            "-vsync",
-            "0",
+            # `select` with count<=1 is a no-op (`not(mod(n,1))` is always true) but combined with
+            # `-vsync 0` on an edit-list-shifted timeline it silently drops frames at the edges --
+            # 2 of them on a muxed 15 s clip. Only ask for the filter when actually subsampling.
+            *(["-vf", f"select='not(mod(n\\,{count}))'", "-vsync", "0"] if count > 1 else []),
             "-f",
             "rawvideo",
             "-pix_fmt",
@@ -324,8 +342,8 @@ def decoded_frames(path: Path, count: int) -> np.ndarray:
         capture_output=True,
     )
     probe = probe_streams(path).get("video", {})
-    height = int(probe.get("height") or _FALLBACK_HEIGHT)
-    width = int(probe.get("width") or _FALLBACK_WIDTH)
+    height = int(probe.get("height") or height or _FALLBACK_HEIGHT)
+    width = int(probe.get("width") or width or _FALLBACK_WIDTH)
     buffer = np.frombuffer(result.stdout, dtype=np.uint8)
     usable = (buffer.size // (height * width)) * height * width
     return buffer[:usable].reshape(-1, height, width)
@@ -420,6 +438,19 @@ def run_warm_generation(pipeline, prompt: str, *, seed: int, **gen_kwargs):
     pipeline.warmup(prompt=prompt, **gen_kwargs)
     warm_padded_len = pipeline.last_padded_len
 
+    # The warmup is a full generation too, so its stage timings are the *cold* numbers -- program
+    # compilation, per-shape conv3d blocking and buffer allocation all land in them. Log them
+    # before the measured call overwrites `last_timings`. Not gated: cold cost depends on what the
+    # weight/JIT caches already held, so it is a diagnostic, not a bar.
+    cold_rows = list(pipeline.last_timings)
+    if cold_rows:
+        cold_total = sum(seconds for _, seconds in cold_rows)
+        logger.info("WARMUP (cold: program compile + buffer alloc included, not a perf target)")
+        for row_label, seconds in cold_rows:
+            share = 100 * seconds / cold_total if cold_total else 0.0
+            logger.info(f"  {row_label:<18} {seconds:8.1f} s  ({share:4.1f} %)")
+        logger.info(f"  {'Total (warmup)':<18} {cold_total:8.1f} s")
+
     output = pipeline(prompt, seed=seed, **gen_kwargs)
 
     assert pipeline.last_padded_len == warm_padded_len, (
@@ -462,7 +493,7 @@ def to_uint8_frames(output) -> np.ndarray:
     return frames.cpu().numpy()
 
 
-def check_written_file(paths: dict, expected_frames: int, seam_period: int = 17):
+def check_written_file(paths: dict, expected_frames: int, seam_period: int = 17, height: int = 0, width: int = 0):
     """Gate the written *file* (streams, A/V skew, frame count, temporal seam); silently no-ops without an mp4."""
     if "mp4" not in paths:
         return
@@ -477,7 +508,7 @@ def check_written_file(paths: dict, expected_frames: int, seam_period: int = 17)
             assert abs(skew) < 0.15, f"muxed A/V skew {skew:+.3f} s"
             logger.info(f"muxed A/V skew: {skew:+.4f} s")
 
-    decoded = decoded_frames(paths["mp4"], count=1)
+    decoded = decoded_frames(paths["mp4"], count=1, height=height, width=width)
     if decoded.size:
         assert (
             decoded.shape[0] >= expected_frames - 1
