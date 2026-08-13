@@ -25,25 +25,33 @@ Inputs, both READ-only (never copied — the ``/mnt`` golden trees are read-only
     ``decoder_io/decoder_output_layer_{1,12,24,35,47,58}/rows_*.safetensors``, bf16 ``[56320, 7168]`` each.
     Concatenated on the feature axis they are the drafter's ``target_feature_size`` (6 * 7168 = 43008) input,
     i.e. the REAL verifier residual stream in place of ``test_dflash_pcc``'s ``torch.randn``.
-  * golden context K/V, ``$DFLASH_GOLDEN_KV_DIR`` (default ``.../golden/dflash_context_kv_55k``) —
-    ``{k,v}_cache.safetensors``, bf16 ``[6, 8, 56320, 128]``, axes ``(draft_layer, kv_head, seq, head_dim)``.
+  * golden context K/V, ``$DFLASH_GOLDEN_KV_DIR`` (default ``.../golden/dflash_context_kv_55k_v3``) —
+    ``{k,v}_cache.safetensors``, fp32 ``[6, 8, 56320, 128]``, axes ``(draft_layer, kv_head, seq, head_dim)``.
     Those axes ARE the address table's ``(layer, config -> head, position)`` key plus head_dim, so the golden
     indexes straight against the readback: ``read_device_chunk`` returns chunks by NATURAL position (the
     table performs the block-cyclic un-rotation internally), so no host ``blockcyclic_positions`` is needed
     on this path at all.
 
-Which reference gates what, and why they differ. Measured host-side at ctx_len 5120 — the trace taps fed
-through the in-process HF drafter, compared to this golden, per (layer, head), min over all 48:
+Two independent references, both hard-gated. Measured host-side at ctx_len 5120 — the trace taps fed through
+the in-process HF drafter, compared to this golden, worst of the 48 (layer, head) slices, as ``1 - PCC``:
 
-    V   0.999996          K   0.053   (whole-tensor per layer: 0.0725 .. 0.2130)
+    K   1.2e-12          V   1.6e-12          (median relative difference 1.3e-06 on both)
 
-So golden **V** is an independent, rope-free oracle and is hard-gated here. Golden **K** is reported but NOT
-gated: the golden's K does not agree with what the checkpoint's own ``rope_parameters`` block produces
-(``deepseek_yarn``, theta 50000, factor 64, original_max_position_embeddings 4096 — which is what
-``conftest.normalize_rope_config`` hands the reference), while its V, which never touches RoPE, agrees to
-1e-5 through the same code path. That is the A/B; this test does not assert anything about what produced the
-file. K's hard gate is instead the in-process HF reference built from the SAME trace taps, which covers the
-whole K pipeline including RoPE and k_norm.
+which is fp32 accumulation-order noise between two independent forwards, so the golden and the in-process
+reference are interchangeable and the device is gated against both. Verified at true GLOBAL positions in
+three 5120-wide windows spread across the whole 56320-token span, not just the prefix these parametrizations
+read: worst-head ``1 - PCC`` flat at 1.2e-12, and the residual rotation angle between the two K's flat at
+6.0e-07 rad median. Flatness is the load-bearing part — both earlier failure modes were position-amplified
+(a rope table rounded before the position multiply, and a wrong theta) and would grow that column ~10x from
+the first window to the last.
+
+Those earlier revisions disagreed on K ALONE — 0.053 at ctx 5120, while V, which never touches RoPE, agreed
+through the same code path — and the disagreement was exactly one rope table wide: un-roping both sides to
+the pre-rope basis showed the K CONTENT already agreed, so the whole difference lived in the rotation, not
+in the taps or the projections. The rotation this reference applies is the one the checkpoint's own
+``rope_parameters`` block specifies (``deepseek_yarn``, theta 50000, factor 64,
+original_max_position_embeddings 4096 — what ``conftest.normalize_rope_config`` hands it). That is the A/B;
+this test asserts nothing about what produced any revision of the file.
 
     DFLASH_HF_MODEL=/mnt/models/Kimi-K2.6-DFlash MESH_DEVICE=8x4 \
     pytest models/demos/deepseek_v3_d_p/tests/dflash_prefill/test_dflash_trace_table.py -svv
@@ -88,16 +96,15 @@ HF_ENV = "DFLASH_HF_MODEL"
 # The drafter golden lives beside the verifier's structured traces but is a separate artifact with its own
 # layout (whole-tensor safetensors, not row-sharded), so it gets its own env var rather than riding
 # PREFILL_TRACE_DIR — a CI leg may point that at a DeepSeek trace, which has no decoder_io/ at all.
-GOLDEN_KV_DEFAULT = "/mnt/models/deepseek-prefill-cache/golden/dflash_context_kv_55k"
+GOLDEN_KV_DEFAULT = "/mnt/models/deepseek-prefill-cache/golden/dflash_context_kv_55k_v3"
 
 # Host-side agreement required between the golden and the in-process HF reference BEFORE any device work.
-# Measured 0.999996 for V at ctx 5120 (see the module docstring); this fails fast and unambiguously if the
-# trace dir and the golden dir are ever paired with different runs.
-GOLDEN_V_VS_REF_THRESHOLD = 0.9999
-
-# Golden K is compared and logged but not gated — see the module docstring. Set this to a float to promote
-# the golden-K comparison to a hard gate once the RoPE-base question is settled upstream.
-GOLDEN_K_PCC_THRESHOLD = None
+# Measured 1 - PCC = 1.2e-12 (K) and 1.6e-12 (V), worst of the 48 (layer, head) slices at ctx 5120 (see the
+# module docstring) — fp32 accumulation-order noise between two independent forwards, so this bar has eight
+# orders of headroom. It fails fast if the trace dir and the golden dir are ever paired with different runs,
+# and it is the only gate here that would catch OUR OWN rope table drifting: the golden is a separate
+# artifact, so a change to what ``conftest.normalize_rope_config`` feeds the reference moves one side only.
+GOLDEN_VS_REF_THRESHOLD = 0.9999
 
 
 # Resolved at IMPORT time so a missing input skips at COLLECTION. Deferring these checks into the test body
@@ -177,8 +184,8 @@ def _read_cache_via_table(lookup_table, base_config_id, num_layers, num_kv_heads
 
     Returns ``[num_layers, num_kv_heads, total_len, head_dim]`` fp32 in NATURAL token order. Natural, not
     rotated: ``populate_kv_chunk_address_table_dflash`` registers chip ``row``'s local block
-    ``seq_chunk * blocks_per_chunk_local + j`` under position ``seq_chunk * chunk_size_global +
-    row * tokens_per_chunk_local + j * 32`` — i.e. the table already encodes the writer's block-cyclic
+    ``seq_chunk * blocks_per_chunk_local + block_in_chunk`` under position ``seq_chunk * chunk_size_global +
+    row * tokens_per_chunk_local + block_in_chunk * 32`` — i.e. the table already encodes the block-cyclic
     staircase, so this path never touches ``blockcyclic_positions``. It is therefore an INDEPENDENT inverse
     of the same permutation ``_read_cache_natural`` computes on the host, which is what makes comparing the
     two (below) worth doing.
@@ -312,14 +319,11 @@ def test_dflash_trace_kv_cache_table(
     ref_v = torch.stack([real[i][1] for i in range(num_layers)])
 
     logger.info("golden vs in-process HF reference (both from the same trace taps), host side:")
-    _pcc_per_head("golden-V vs ref-V", ref_v, golden_v, GOLDEN_V_VS_REF_THRESHOLD, num_layers)
-    # Logged, never gated: V agrees to ~1e-5 through this same path while K does not, which localizes the
-    # disagreement to the only stage V skips (RoPE). Reported as measurement, not as a claim about the file.
-    k_ref_vs_golden = _pcc_per_head("golden-K vs ref-K", ref_k, golden_k, None, num_layers)
-    logger.info(
-        f"golden-K vs ref-K min = {k_ref_vs_golden:.6f} — expected LOW (~0.05 at ctx 5120). V never touches "
-        f"RoPE and agrees to ~1e-5, so K's hard gate below is the in-process reference, not the golden."
-    )
+    # V first, and keep it first: V never touches RoPE, so V-passes-while-K-fails localizes a disagreement to
+    # the rope table rather than to the taps, the tap ORDER, or the projections. Earlier revisions of this
+    # golden failed exactly that way (K 0.053 at ctx 5120 while V agreed); this one agrees on both.
+    _pcc_per_head("golden-V vs ref-V", ref_v, golden_v, GOLDEN_VS_REF_THRESHOLD, num_layers)
+    _pcc_per_head("golden-K vs ref-K", ref_k, golden_k, GOLDEN_VS_REF_THRESHOLD, num_layers)
 
     # ---- device: one drafter, streamed chunk by chunk exactly as the prefill runner does ----
     drafter = TtDFlashDrafter(
@@ -426,10 +430,11 @@ def test_dflash_trace_kv_cache_table(
     # ---- the gates ----
     # Threshold: the same bar as test_dflash.py's device-vs-HF gate. That path already reads this bfp8 cache
     # back, so 0.999 is calibrated WITH the cache quantization included; and the golden agrees with the
-    # in-process reference to ~1e-5 (V), so the same bar carries over to the golden comparison.
+    # in-process reference to 1e-12 on BOTH K and V (gated above), so the same bar carries over unchanged —
+    # measured, the two reference blocks below print the same six decimals entry for entry.
     logger.info(f"device (read via the KV chunk address table) vs golden trace, threshold {PCC_THRESHOLD}:")
     _pcc_per_head("dev-V vs golden-V", golden_v, dv, PCC_THRESHOLD, num_layers)
-    _pcc_per_head("dev-K vs golden-K", golden_k, dk, GOLDEN_K_PCC_THRESHOLD, num_layers)
+    _pcc_per_head("dev-K vs golden-K", golden_k, dk, PCC_THRESHOLD, num_layers)
 
     logger.info(f"device (read via the KV chunk address table) vs in-process HF reference, {PCC_THRESHOLD}:")
     # V first: V never touches RoPE, so V-passes-while-K-fails localizes the fault to the rope table rather

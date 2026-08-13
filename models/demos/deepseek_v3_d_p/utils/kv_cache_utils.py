@@ -652,21 +652,23 @@ def populate_kv_chunk_address_table_dflash(
         (layer, position, slot) with no head axis, so each head needs its own config — and a per-head
         config visits only every ``heads_per_chip``-th run of that chip's ND shards. The incremental
         ``curr_bank_id += 1`` counter the kimi/M3 builders use is correct only for a contiguous walk,
-        so this one computes the shard index outright. The two agree exactly at heads_per_chip == 1.
+        so this one computes ``dram_shard_idx`` outright. The two agree exactly at heads_per_chip == 1.
 
-    Address math. The cache is ND-sharded ``[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim]``
-    ROUND_ROBIN_1D over the DRAM banks, so shard ``i`` of a chip's buffer lives in bank
-    ``i % num_banks`` at ``base + (i // num_banks) * chunk_size_bytes``. Enumerating the per-chip shard
-    grid ``[num_users*num_layers, heads_per_chip, seq_local/32, 1]`` row-major gives
+    Address math. One ND shard — the same 32-token object ``blocks_local`` / ``blocks_per_chunk_local``
+    count as a "block" — is ``[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim]``: 32 tokens of ONE
+    head of ONE layer. Shards are laid out ROUND_ROBIN_1D over the DRAM banks, so a chip's shard ``s``
+    lives in bank ``s % num_banks`` at ``base + (s // num_banks) * chunk_size_bytes``. Enumerating the
+    per-chip shard grid ``[num_users*num_layers, heads_per_chip, seq_local/32, 1]`` row-major gives ``s``:
 
-        i = ((slot * num_layers + layer) * heads_per_chip + head_idx % heads_per_chip) * blocks_local
-            + seq_chunk * blocks_per_chunk_local + j
+        dram_shard_idx = ((slot * num_layers + layer) * heads_per_chip + head_idx % heads_per_chip)
+                         * blocks_local + seq_chunk * blocks_per_chunk_local + block_in_chunk
 
-    for the chip's ``j``-th local 32-token block of block-cyclic chunk ``seq_chunk``, which holds global
-    position ``seq_chunk * chunk_size_global + row * tokens_per_chunk_local + j * 32``. That row-major
-    ordering — dim 1 between dim 0 and dim 2 — is the one assumption here the working MLA builder does
-    NOT already prove, since its dim 1 has extent 1; a per-head write/readback settles it, and getting
-    it backwards swaps head and layer strides rather than failing loudly.
+    for the chip's ``block_in_chunk``-th local 32-token block of block-cyclic chunk ``seq_chunk``, which
+    holds global position ``seq_chunk * chunk_size_global + row * tokens_per_chunk_local
+    + block_in_chunk * 32``. That row-major ordering — dim 1 between dim 0 and dim 2 — is the one
+    assumption here the working MLA builder does NOT already prove, since its dim 1 has extent 1; a
+    per-head write/readback settles it, and getting it backwards swaps head and layer strides rather
+    than failing loudly.
 
     Single-stage only (no ``stage_layout``): the drafter is written on the last pipeline rank alone
     (``tt_prefill_runtime`` guards the write with ``is_last_rank``), so there is no cross-stage layer
@@ -731,7 +733,7 @@ def populate_kv_chunk_address_table_dflash(
     num_chunks_per_seq_len = seq_len // chunk_size_global
 
     host_name = socket.gethostname()
-    base_addr = int(kv_cache.buffer_address())
+    dram_bank_base_addr = int(kv_cache.buffer_address())
     # Must match the bank count the cache was ND-sharded across (see get_num_dram_banks).
     num_dram_banks = get_num_dram_banks(mesh_device)
 
@@ -750,20 +752,27 @@ def populate_kv_chunk_address_table_dflash(
 
         for slot in range(num_users):
             for layer in range(num_layers):
-                # Shard index of this (slot, layer, local head)'s FIRST local block. A head's seq blocks
-                # are contiguous in the shard grid, so the per-position term below is a plain add.
-                head_base_shard = ((slot * num_layers + layer) * heads_per_chip + h_local) * blocks_local
+                # DRAM shard index of the FIRST block of this (slot, layer, local head) plane. A plane's
+                # seq blocks are contiguous in the shard grid, so the per-position term below is an add.
+                head_base_dram_shard = ((slot * num_layers + layer) * heads_per_chip + h_local) * blocks_local
                 for seq_chunk in range(num_chunks_per_seq_len):
                     chunk_token_start = seq_chunk * chunk_size_global + row * tokens_per_chunk_local
-                    for j in range(blocks_per_chunk_local):
-                        shard_idx = head_base_shard + seq_chunk * blocks_per_chunk_local + j
-                        bank_id = shard_idx % num_dram_banks
-                        bank_offset = (shard_idx // num_dram_banks) * chunk_size_bytes
+                    chunk_token_end = chunk_token_start + tokens_per_chunk_local
+                    # Same loop shape as populate_kv_chunk_address_table_kimi — position IS the table key
+                    # rather than a value derived after the fact. enumerate recovers the block index the
+                    # shard walk needs; the tokens_per_chunk_local assert above makes block_in_chunk
+                    # exactly 0..blocks_per_chunk_local-1.
+                    for block_in_chunk, position in enumerate(
+                        range(chunk_token_start, chunk_token_end, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK)
+                    ):
+                        dram_shard_idx = head_base_dram_shard + seq_chunk * blocks_per_chunk_local + block_in_chunk
+                        # No curr_ prefix on purpose: derived per entry, not a carried cursor as in kimi/M3.
+                        bank_id = dram_shard_idx % num_dram_banks
+                        bank_offset = (dram_shard_idx // num_dram_banks) * chunk_size_bytes
                         location = ttnn.experimental.disaggregation.KvCacheLocation()
-                        location.noc_addr = (bank_id << 32) | (base_addr + bank_offset)
+                        location.noc_addr = (bank_id << 32) | (dram_bank_base_addr + bank_offset)
                         location.size_bytes = chunk_size_bytes
                         location.device_group_index = group_idx
-                        position = chunk_token_start + j * NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
                         lookup_table.set(layer, position, slot, location, config_id)
     return lookup_table
 
