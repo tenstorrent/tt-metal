@@ -1279,11 +1279,14 @@ def exclude_undefined_pair(
     op: MathOperation,
     specs: "OperandSpecs",
 ) -> "OperandSpecs":
-    """Apply per-operand undefined-region subtraction to both operands of an
-    OperandSpecs in one call.
+    """Apply per-operand undefined-region subtraction to every operand of an OperandSpecs.
 
     Convenience wrapper around exclude_undefined.  Returns a deep copy so the
     caller can mutate further without aliasing the registry.
+
+    Named "_pair" from when OperandSpecs held two operands. It covers C as well now: a C
+    range left unsubtracted would be drawn from a region the op does not define, and the
+    ternary suite is the only caller that has a third operand to get wrong.
     """
     op_ranges = _SFPU_UNDEFINED_RANGES.get(op, {})
     new = copy.deepcopy(specs)
@@ -1291,6 +1294,8 @@ def exclude_undefined_pair(
         new.spec_A = exclude_intervals(new.spec_A, op_ranges[Operand.A])
     if Operand.B in op_ranges and new.spec_B is not None:
         new.spec_B = exclude_intervals(new.spec_B, op_ranges[Operand.B])
+    if Operand.C in op_ranges and new.spec_C is not None:
+        new.spec_C = exclude_intervals(new.spec_C, op_ranges[Operand.C])
     return new
 
 
@@ -1671,8 +1676,20 @@ UINT32_MAX = 2**32 - 1
 # Shift amounts worth driving on purpose, shared by the unary and binary shift sweeps.
 #
 # Spans the in-range ends (0, 31), the first out-of-range value (32), larger out-of-range
-# ones, and negatives. The kernel defines everything outside [0, 31] as producing 0, so the
-# out-of-range half is the part that actually asserts a contract rather than arithmetic.
+# ones, and negatives. The out-of-range half is the part that asserts a contract rather than
+# arithmetic, which is why it is worth carrying so many values.
+#
+# This list is the *amounts*, deliberately not the rule for what they produce -- because
+# there is no single rule to state here. Three consumers, two behaviours:
+#
+#   binary shifts        every out-of-range amount produces 0, both signs
+#   unary left shift     the same: calculate_left_shift zeroes the result
+#   unary right shift    calculate_right_shift clamps the amount to 31 and shifts anyway, so
+#                        a negative operand yields -1 rather than 0
+#
+# An earlier revision of this comment asserted "everything outside [0, 31] produces 0" for all
+# of them, which is true for two consumers out of three. Each golden states its own kernel's
+# rule instead.
 #
 # Lives here rather than in either test because both suites drive it: the binary shift ops
 # take the amount as an operand and the unary ones as a compile-time immediate

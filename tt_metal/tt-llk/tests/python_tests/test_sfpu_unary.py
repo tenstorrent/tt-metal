@@ -885,10 +885,16 @@ def test_eltwise_unary_sfpu_int(
 # out-of-range ones. (The *binary* shift ops take theirs as a second operand and have been
 # swept over this same list for a while; that asymmetry is why this needed a C++ change.)
 #
-# The amounts are borrowed from test_sfpu_binary._SHIFT_EDGE_AMOUNTS rather than copied, so
-# the two suites cannot drift on what counts as an interesting shift: the in-range ends
-# (0, 31), the first out-of-range value (32), larger ones, and negatives. Everything outside
-# [0, 31] must produce 0 -- that is the kernel's rule and the golden's `_shift` enforces it.
+# The amounts are shared with the binary shift sweep through sfpu_domains.SHIFT_EDGE_AMOUNTS
+# rather than copied, so the two suites cannot drift on what counts as an interesting shift:
+# the in-range ends (0, 31), the first out-of-range value (32), larger ones, and negatives.
+#
+# **The two unary shifts do not share an out-of-range rule.** calculate_left_shift zeroes the
+# result; calculate_right_shift clamps the amount to 31 and shifts anyway. They agree for a
+# positive operand, because x >> 31 is 0 either way, and part company for a negative one,
+# where the clamped arithmetic shift yields -1. The goldens model each kernel separately.
+# Assuming one rule for both is easy and wrong -- and it is also where the *unary* right shift
+# differs from the *binary* one, which really does produce 0 for both signs.
 _UNARY_SHIFT_OPS = [MathOperation.LeftShift, MathOperation.RightShift]
 
 # A shift is exact, so the stimulus only has to reach the interesting magnitudes rather than
@@ -913,9 +919,16 @@ def _shift_stimulus_values(mathop, shift_amount):
 
     Positive-only, for the reason _int_unary_stimuli_spec gives: Dst stores integers as
     sign-magnitude, so a negative operand does not survive the round trip the way two's
-    complement would, while Python's >> is arithmetic. Driving negatives here made every
-    RightShift variant except a shift of 0 disagree -- a stimulus limitation reported as a
-    kernel divergence, which is the mistake this suite keeps having to avoid.
+    complement would. Driving negatives makes every RightShift variant except a shift of 0
+    disagree, in range as well as out, which is what identifies it as delivery rather than
+    arithmetic -- a stimulus limitation, not a kernel divergence.
+
+    **This is what makes the out-of-range half of the sweep weaker than it looks for
+    RightShift.** The two kernels do not share a rule: left shift zeroes, right shift clamps
+    the amount to 31 and shifts anyway, so an out-of-range right shift of a *negative* gives
+    -1. UnarySFPUGolden models that, but no probe can reach it while negatives cannot be
+    delivered, so the assertion here only covers the positive half where the two rules happen
+    to coincide at 0. Re-measure this the day a negative int32 operand can be delivered.
     """
     magnitudes = _SHIFT_STIMULUS_MAGNITUDES
     if mathop == MathOperation.LeftShift and 0 <= shift_amount < 32:

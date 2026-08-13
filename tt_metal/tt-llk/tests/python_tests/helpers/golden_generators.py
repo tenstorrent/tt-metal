@@ -3011,29 +3011,33 @@ class UnarySFPUGolden:
         result = untilize_block(result, input_format, dimensions).flatten()
         return result
 
+    # The two unary shifts do NOT share an out-of-range rule, which is easy to assume and
+    # wrong. calculate_left_shift zeroes the result; calculate_right_shift clamps the amount
+    # to 31 and shifts anyway. They agree for a positive operand -- x >> 31 is 0 -- and part
+    # company for a negative one, where the clamped arithmetic shift gives -1. Note this is
+    # also where the *unary* right shift differs from the *binary* one, which really does
+    # produce 0 for both signs (see BinarySFPUGolden._right_shift).
+    #
+    # Both kernels take the amount as `const uint`, so a negative Python amount arrives as a
+    # large unsigned and is out of range on that path rather than by being negative.
+    def _shift_amount(self) -> int:
+        return int(self._int_shift_amount)
+
     def _left_shift(self, x):
-        # Matches calculate_left_shift at self._int_shift_amount, which the shift sweep
-        # varies through the SFPU_SHIFT_AMOUNT template parameter. Amounts outside [0, 31]
-        # are defined by the kernel as producing 0 -- the same rule the binary shift ops
-        # follow, and the reason Python's unbounded << cannot be used unguarded here.
-        return self._shift(int(x), lambda v, n: v << n)
-
-    def _right_shift(self, x):
-        # Arithmetic right shift (Python >> on ints is sign-propagating), same out-of-range
-        # rule as _left_shift.
-        return self._shift(int(x), lambda v, n: v >> n)
-
-    def _shift(self, value: int, op) -> int:
-        """Apply *op* at self._int_shift_amount, with the kernel's out-of-range rule.
-
-        A shift amount below 0 or at/above 32 yields 0. Without that guard a swept amount of
-        1000 would make Python compute a 1000-bit integer and the golden would disagree with
-        the kernel on every element rather than on none.
-        """
-        n = int(self._int_shift_amount)
+        # calculate_left_shift: `out_of_range ? vInt(0) : (v << amt)`.
+        n = self._shift_amount()
         if n < 0 or n >= 32:
             return 0
-        return op(value, n)
+        return int(x) << n
+
+    def _right_shift(self, x):
+        # calculate_right_shift: `eff = (shift_amt >= 32) ? 31u : shift_amt`, then a logical
+        # shift with the sign bits OR'd back in for a negative operand -- an arithmetic shift
+        # at the clamped amount. Python's >> on ints is already sign-propagating, so shifting
+        # by eff reproduces it, including the -1 an out-of-range amount gives for a negative.
+        n = self._shift_amount()
+        eff = 31 if (n < 0 or n >= 32) else n
+        return int(x) >> eff
 
     def _unary_max_int32(self, x):
         return max(int(x), self._int_maxmin_scalar)

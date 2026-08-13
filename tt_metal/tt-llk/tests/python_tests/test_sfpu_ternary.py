@@ -55,12 +55,15 @@ def _ternary_default_specs(mathop, input_format):
     built-in branch. This is the single place a registered domain would take effect, and
     callers of _run_sfpu_ternary can override any operand to reach an edge the defaults
     exclude (e.g. the c -> 0 pole that addcdiv and snake_beta pin away from).
+
+    The registry branch reads spec_C rather than reusing spec_B for it. That reuse was
+    correct only while OperandSpecs had two operands; once it grew spec_C, keeping it would
+    have silently dropped a registered C domain on the one code path that exists to honour
+    it -- and dead today, since nothing is registered, is exactly when that goes unnoticed.
     """
     if mathop in _OP_DOMAIN_REGISTRY:
-        # OperandSpecs carries only A and B, so a registered ternary op has no third
-        # operand to read; reuse B for C.
         specs = exclude_undefined_pair(mathop, for_op(mathop, input_format))
-        return specs.spec_A, specs.spec_B, specs.spec_B
+        return specs.spec_A, specs.spec_B, specs.spec_C
 
     # addcdiv and snake_beta divide by c, so c is held away from zero.
     divide_by_c = mathop in (MathOperation.SfpuAddcdiv, MathOperation.SfpuSnakeBeta)
