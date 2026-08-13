@@ -29,6 +29,11 @@ That 5 % is the same order as several real optimisations in this document, so **
 are separate columns and neither backfills the other's missing cells.** `p150a` is the headline
 part.
 
+**One measurement postdates that commit** and is marked where it appears: the `ttnn.cumsum` occupancy
+measurement below (`2026-08-13`, same two machines, branch head `23d1e63aa85`). Same hardware, later
+tree — noted rather than folded in, because the table's claim is that one commit produced everything
+under it, and quietly widening that is how an environment table stops meaning anything.
+
 ## Benchmark commands
 ```bash
 pytest models/demos/cosyvoice/tests/perf/test_pipeline_perf.py -v -s   # end-to-end RTF
@@ -665,9 +670,10 @@ run inside a captured trace, which unprepared weights make impossible. Instead t
 `(length, batch)` is seen and keep the prepared weight only where the two agree. One extra call per
 geometry, amortised to nothing; the affected geometries fall back and the rest keep the fast path.
 
-That choice aged well. The vocoder is now traced too, and the verification is a host read that a
-trace could not contain — but capture waits for a geometry's *second* sighting, so the read has
-always happened before the recording starts.
+That choice aged well. The vocoder can now be trace-captured too
+(`TtHiFTGenerator.enable_trace()`, off by default), and this verification is a host read that a
+trace cannot contain — but capture waits for a geometry's *second* sighting, so the read has always
+happened before the recording starts.
 
 Measured on n300: vocoder `0.084 → 0.077 s` (the check is free at the utterance level), and the
 streamed test goes from mel-space PCC `0.218` to **`0.9024`** — matching Blackhole's `0.9019` — with
@@ -681,10 +687,15 @@ fires 12 times, all at `stft_frames = 8321`, all in the source ResBlocks.
 | traced vs untraced | `1.0000000000` | `1.0000000000` | `1.0000000000` |
 | in-place, worst PCC over 72 steps | `0.9987379437` | — | `0.9991855486` |
 | CFM trace cache, 3 solves, new conditioning each | — | `1.0000000000` | `1.0000000000` |
-| test suite | **155 passed** | **155 passed** | **155 passed** |
+| test suite | `155 passed` ‡ | **157 passed** | **157 passed** |
 
 Traced-vs-untraced is bit-exact everywhere, and so is the cached CFM trace across three consecutive
 solves with different conditioning — the test that would catch a stale `_packed_const`.
+
+‡ `p150b` and n300 were re-run on `2026-08-13` at branch head `23d1e63aa85`, which adds two vocoder
+trace tests to `tests/perf/test_trace.py` — hence `157` where the earlier run counted `155`. The
+`p150a` cell is the older count on the older tree; Tavern has been unavailable since, so it is left
+as measured rather than assumed to have gained the same two.
 
 **Every device test now passes on both architectures.** n300 stood at 154 passed / 1 failed from F42
 until the convolution defect above was found: the failure was
@@ -724,7 +735,7 @@ randomised by the end of the utterance. At T=1024 and T=8192 the error is ~1e-5,
 passed every module-level test and surfaced only end to end. `phase_mod1()` reduces each block total
 mod 1 before accumulating, keeping every partial sum O(1): `0.843 → 0.99999745`.
 
-**It is also 6.9× faster**, which is not a coincidence: `ttnn.cumsum` parallelises only over the axes
+**It is also 6.9× faster** (measured `2026-08-13`; see *Environment*), which is not a coincidence: `ttnn.cumsum` parallelises only over the axes
 it is *not* scanning (`num_rows_total = tiles / tiles_per_row`), so `[1, 72192, 9]` on `dim=1`
 permutes to `[72192, 1, 1, 9]` and lands on **one core** with 72 192 serial tile-steps. Blocking gives
 it 282 rows to spread across the grid. Precision and occupancy wanted the same restructuring.
@@ -735,90 +746,6 @@ it 282 rows to spread across the grid. Precision and occupancy wanted the same r
 | `phase_mod1` | `5.9 ms` | `12.5 ms` |
 
 `BLOCK = 512` is 5 % faster again but 3.6× less accurate; below 256 the serial carry scan dominates.
-
-### The vocoder is dispatch-bound, and two weights were keeping it out of a trace
-
-Every submodule of the vocoder that could be captured ran **2.7–11× faster traced**, which says the
-untraced path is paced by host dispatch rather than by the device:
-
-| piece | untraced | traced |
-|---|---:|---:|
-| `conv_pre` | `0.33 ms` | `0.03 ms` |
-| `ups[0]` convT1d | `0.56 ms` | `0.21 ms` |
-| `source_downs[0]` | `0.40 ms` | `0.06 ms` |
-| `resblocks[0]` | `4.59 ms` | `0.71 ms` |
-| `f0_predictor` | `2.14 ms` | `0.21 ms` |
-
-`decode` as a whole would not capture at all: `TtStft` handed a raw host-layout weight straight to
-`ttnn.conv1d` and `TtIStft` did the same to `conv_transpose2d`, so both redid a host-side layout
-transform on every call and capture died on `Writes are not supported during trace capture`.
-`TtConv1d._prepared` had solved exactly this for the main conv stack; those two never adopted it.
-They do now, and the whole vocoder captures:
-
-| | untraced | traced | capture | break-even |
-|---|---:|---:|---:|---:|
-| `p150b`, 282 mel frames | `46.7 ms` | **`14.3 ms`** (`3.3×`) | `74.7 ms` | 2.3 replays |
-| `p150b`, 141 mel frames | `43.1 ms` | **`8.3 ms`** (`5.2×`) | `64.4 ms` | 1.9 replays |
-| n300, 282 mel frames | `46–61 ms` | **`30.1 ms`** (`1.5–2.0×`) | `108–148 ms` | 3.5–6.7 replays |
-
-Bit-identical, not merely within PCC — `max|d| 0.000e+00` on both parts, over eight consecutive
-replays.
-
-**The n300 range is not sloppy measurement, it is the finding.** Across three runs on one box the
-untraced figure moved `61.1 → 55.1 → 46.3 ms` while the traced one held `30.3 → 29.9 → 30.1`. A
-host-bound path varies with whatever else the host is doing; a device-bound one does not. `p150b`
-holds both steady (`46.7 / 46.0 / 46.2` untraced) because that host is less contended — which is
-itself the reason the same silicon shows `3.3×` there and `1.5–2.0×` here.
-
-Three things this measurement settles:
-
-**Preparation on its own is worth nothing** (`1.00×` untraced). Its entire value is making the
-capture possible. Landed as an enabler, not as an optimisation.
-
-**Halving the audio barely moves the untraced time** (`46.7 → 43.1 ms`) while nearly halving the
-traced time (`14.3 → 8.3 ms`). Untraced cost tracks the *op count*, which the architecture fixes;
-only once dispatch is gone does the time track the work. So the speedup grows as chunks get shorter
-— which is the streaming case.
-
-**Capturing is what makes this a trade, and it is dearer than a single-call measurement suggests.**
-Taking a trace for a geometry the process has not captured before costs about `980 ms` on both
-parts. Against `~34 ms` saved per replay the crossover is near **30 chunks** — roughly a minute of
-audio — so the cache is **off by default**, including for `TtStreamingSynthesizer`.
-
-Measured over a repeated middle-chunk geometry (`mel_frames = 172`), cumulative:
-
-| chunks | `p150b` off | `p150b` on | n300 off | n300 on |
-|---:|---:|---:|---:|---:|
-| 1 | `43 ms` | `46 ms` | `101 ms` | `49 ms` |
-| 2 | `88 ms` | `1058 ms` | `160 ms` | `1157 ms` |
-| 12 | `519 ms` | `1151 ms` | `640 ms` | `1347 ms` |
-
-Per chunk after capture: `43.3 → 9.3 ms` on `p150b` (`4.7×`) and `53 → 19 ms` on n300 (`2.8×`).
-
-Two wrong guesses at that `980 ms`, both worth recording so they are not made again. It is **not**
-kernel compilation — warming twice instead of once moved it `933 → 970 ms`. It is **not** the first
-capture in the process — priming with a one-op trace costs `0.4 ms` and changes nothing. It is the
-first capture *of a given geometry*: a second capture of one already seen costs `~110 ms`, which is
-why an in-session measurement flatters it and why the figure first recorded here was `110 ms`.
-
-No sighting-count heuristic can decide this, because it is a guess about the future. The first
-version tried anyway, capturing on a geometry's second sighting, and the RTF gate caught it — that
-harness warms once and times the second call:
-
-| `p150b`, one-shot RTF gate | vocoder stage | total | RTF |
-|---|---:|---:|---:|
-| capture on second sighting | `0.172 s` | `1.406 s` | `0.429` |
-| off (the default) | `0.058 s` | `1.271 s` | `0.388` |
-
-A caller that knows its stream is long opts in with `enable_trace()`; `COSYVOICE_HIFT_TRACE=1`/`=0`
-overrides. Needs the device opened with a `trace_region_size`; without one, capture fails, the
-fallback logs once, and the vocoder stays untraced.
-
-At the utterance level a *replayed* decode is worth `0.032 s` on `p150b` and `0.016–0.031 s` on n300 — real, but the
-vocoder is only 4 % of end-to-end, so it does not move RTF much. On n300 it is `0.575 → 0.570`; even
-a vocoder that cost nothing at all would only reach `0.551`, so **RTF `0.5` is not reachable from
-here** — the LLM is 71 % of a Wormhole utterance and would have to give up `0.246 s`. This is worth
-having because streaming replays it per chunk, not because it changes the headline number.
 
 ### Why the waveform gate injects the reference excitation
 
