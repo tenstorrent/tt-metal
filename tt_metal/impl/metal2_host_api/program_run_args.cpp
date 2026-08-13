@@ -793,7 +793,8 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     program_impl.mark_program_run_args_initialized();
 }
 
-void UpdateTensorArgs(Program& program, const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args) {
+void UpdateTensorArgs(
+    Program& program, const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args, bool skip_validation) {
     log_debug(tt::LogMetal, "Updating tensor args (partial fast-path)");
 
     detail::ProgramImpl& program_impl = program.impl();
@@ -808,7 +809,9 @@ void UpdateTensorArgs(Program& program, const Table<TensorParamName, ProgramRunA
         "UpdateTensorArgs called on Program before SetProgramRunArgs. Call SetProgramRunArgs at least once first.");
 
     // Validate the TensorArgument list (shared with the full-path validator).
-    ValidateTensorArgs(program, tensor_args);
+    if (!skip_validation) {
+        ValidateTensorArgs(program, tensor_args);
+    }
 
     // Build a tensor_parameter_name -> MeshTensor lookup.
     // As in SetProgramRunArgs, this assumes lockstep mesh allocation:
