@@ -45,21 +45,25 @@ docs/source/tt-metalium/tt_metal/apis/host_apis/metal_2.0/analyses/ttnn_op_porti
 
 ## Reading the CSV
 
-**Reference every column by its header name, not its position.** The sheet evolves — Diego adds and reorders columns — but two guarantees hold: **existing column names never change, and no column is ever deleted.** So read the **header row** (row 1) to find a column by name; never hard-code "column N." A grep-by-op-path lookup gives you the row; the header row tells you which cell is which. (Do not reproduce a positional column list here — it goes stale the moment a column is inserted.)
+**Reference every column by its header name, not its position.** The sheet evolves — columns get added and reordered — so read the **header row** (row 1) to find a column by name; never hard-code "column N." **Match on the distinctive stem of the header, not the whole string**: the parenthetical suffixes are edited from time to time (`Override runtime args method?` has carried more than one), so an exact-string match on a full header can miss a column that is right there. Columns are added far more often than removed, but do not assume a name you remember is still present — check the header row. A grep-by-op-path lookup gives you the row; the header row tells you which cell is which. (Do not reproduce a positional column list here — it goes stale the moment a column is inserted.)
 
 One row per **(op, DeviceOperation, ProgramFactory variant)** — an op with several factories has several rows. The columns the audit reads, by name:
+
+> **This list is for *finding and reading* the columns.** What to *do* with a value — which ones gate, and who a block routes to — lives in the [audit's TTNN factory concept prerequisite](../ai/audit/metal2_audit.md#ttnn-factory-concept-prerequisite), and is deliberately not repeated here.
 
 - **`Op`** — op path (`data_movement/slice`); the lookup key.
 - **`Device operation`** / **`Factory (variant)`** — which DeviceOperation and ProgramFactory the row describes.
 - **`Concept`** — the factory's *current* concept: `descriptor`, `WorkloadDescriptor`, `legacy device-op`, or `MetalV2` (already ported).
-- **`Custom hash (…)`** — declares a custom `compute_program_hash`?
-- **`Runtime-args update (get_dynamic_runtime_args)`** — has the deprecated `get_dynamic_runtime_args` hook? (Possible only on `descriptor` / `WorkloadDescriptor` concepts — a cross-column invariant.) A gate conjunct in `Is able to port?`, routed to **TTNN** (the hook is being retired). The hook lives on the *device-op* and may fire for only some of its factories — see the [audit cross-check](../ai/audit/metal2_audit.md#ttnn-factory-concept-prerequisite).
-- **`Override runtime args method? (PD and legacy)`** — has an `override_runtime_arguments` method (PD- or legacy-style)? A **separate** gate conjunct in `Is able to port?`: on a `descriptor`/PD op it blocks the port because Metal 2.0's `FactoryConcept` + this recipe don't support it yet, routed to the **Metal 2.0 side**. Distinct from the `get_dynamic_runtime_args` column above — the two are TTNN's successive runtime-arg-update mechanisms, gate for different reasons, and route to different owners.
+- **`Custom hash (…)`** — declares a custom `compute_program_hash`? A companion column tracks the *backdoor* route (a hand-written `attribute_values` / `to_hash`).
+- **`Runtime-args update (get_dynamic_runtime_args)`** — has the deprecated `get_dynamic_runtime_args` hook? (Possible only on `descriptor` / `WorkloadDescriptor` concepts — a cross-column invariant.) The hook is deprecated and nearly retired. The hook lives on the *device-op* and may fire for only some of its factories — see the [audit cross-check](../ai/audit/metal2_audit.md#ttnn-factory-concept-prerequisite).
+- **`Override runtime args method?`** — has an `override_runtime_arguments` method? Read it together with `Concept`: on a `descriptor`/PD op this is the Metal 2.0 target-concept signal, while on a *legacy* op the same method name is just part of the legacy-concept signature. Distinct from `get_dynamic_runtime_args` above — the two are TTNN's successive runtime-arg-update mechanisms.
 - **`Pybind descriptor (…)`** — pybinds factory / device-op internals (`create_descriptor`)?
-- **`Smuggled pointer (…)`** — an un-annotated pointer argument (a PD-migration bug); feeds `Is safe to port?`.
-- **`Is safe to port?`** — Diego's correctness call (`yes` / `no` / `warning` / blank): did the prior PD migration introduce a bug?
-- **`Is able to port?`** — the derived Metal-2.0 **gate** verdict. Its derivation is documented in the [audit's TTNN factory concept prerequisite](../ai/audit/metal2_audit.md#ttnn-factory-concept-prerequisite).
-- **`TensorParameter relaxation`** — proposed relaxation, if any (e.g. `dynamic_tensor_shape`, `match_padded_shape_only`, `none`).
+- **`Smuggled pointer (…)`** — an un-annotated pointer argument (a PD-migration bug).
+- **`Is safe to port?`** — a correctness call from the sheet owner. Its derivation is stale and the column is expected to be retired; **the audit does not read it.**
+- **`Is able to port?`** — the derived verdict, and the cell the audit reads. Its derivation lives in the sheet; the recipe deliberately does not mirror it.
+- **`TensorParameter relaxation`** — whether the op needs a relaxation of the strict `TensorSpec` match. Values are short tags (`none`, `dynamic`, and analysis-state markers); **quote the cell verbatim** rather than paraphrasing it, since the vocabulary distinguishes work that is queued from work already scheduled.
+- **`Known op issues`** — free text, reserved for problems that must be cleared before a port. Read the cell; it names its own owner.
+- **`Op Classification`** — a derived summary of an op's overall state, including whether it reads as *broken*.
 - **`Op-owned tensors?`** / **`Secretly SPMD Workload?`** — feed the target concept and the `WorkloadDescriptor` escape respectively.
 - **`Factory definition path`** / **`Declared in`** — the source files, for the cross-check.
 
