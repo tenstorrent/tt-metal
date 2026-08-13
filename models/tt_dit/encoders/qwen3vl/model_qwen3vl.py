@@ -208,8 +208,8 @@ class Qwen3VlTextEncoder(Module):
                 hidden_act=hidden_act,
                 num_attention_heads=num_attention_heads,
                 num_key_value_heads=num_key_value_heads,
-                head_dim=head_dim,
                 rms_norm_eps=rms_norm_eps,
+                head_dim=head_dim,
                 ctx=ctx,
             )
             for _ in range(num_hidden_layers)
@@ -220,7 +220,9 @@ class Qwen3VlTextEncoder(Module):
         self._tp_axis = ctx.tp_axis
         self._ccl_manager = ctx.ccl_manager
         self._mrope_section = mrope_section
-        self._head_dim = head_dim
+        # See Qwen3VlAttention: head_dim is not derivable from hidden_size / num_heads for every
+        # Qwen3-VL checkpoint. The rope tables are built at this width, so it must agree.
+        self._head_dim = head_dim if head_dim is not None else hidden_size // num_attention_heads
         self._rope_theta = rope_theta
         # When set, forward returns the raw hidden states after each of these decoder layers
         # (no final norm) — the Ideogram4 multi-layer feature tap. Otherwise returns the
@@ -334,10 +336,10 @@ class Qwen3VlDecoderLayer(Module):
         hidden_size: int,
         num_attention_heads: int,
         num_key_value_heads: int,
-        head_dim: int,
         intermediate_size: int,
         hidden_act: str,
         rms_norm_eps: float,
+        head_dim: int | None = None,
         ctx: Qwen3VlContext,
     ) -> None:
         super().__init__()
@@ -346,8 +348,8 @@ class Qwen3VlDecoderLayer(Module):
             hidden_size=hidden_size,
             num_heads=num_attention_heads,
             num_key_value_heads=num_key_value_heads,
-            head_dim=head_dim,
             rms_norm_eps=rms_norm_eps,
+            head_dim=head_dim,
             ctx=ctx,
         )
         self.mlp = Qwen3VlMlp(
@@ -382,8 +384,8 @@ class Qwen3VlAttention(Module):
         hidden_size: int,
         num_heads: int,
         num_key_value_heads: int,
-        head_dim: int,
         rms_norm_eps: float,
+        head_dim: int | None = None,
         ctx: Qwen3VlContext,
     ) -> None:
         super().__init__()
@@ -391,9 +393,19 @@ class Qwen3VlAttention(Module):
         if ctx.tp_axis is not None:
             assert ctx.ccl_manager is not None
 
-        # `num_heads * head_dim` need not equal `hidden_size` — see the note in
-        # `Qwen3VlTextEncoder.__init__`. The projections below are sized from `head_dim` throughout,
-        # so a q/k/v inner dimension wider (or narrower) than the residual stream is supported.
+        # Qwen3-VL does not require `head_dim == hidden_size // num_heads`, and the larger
+        # checkpoints do not satisfy it: the 32B-class model MiniMax-H3 conditions on has
+        # hidden_size 5120 with 64 heads of 128, so `q_proj` is [8192, 5120] rather than square.
+        # `num_heads * head_dim` need not equal `hidden_size`: the projections below are sized from
+        # `head_dim` throughout, so a q/k/v inner dimension wider (or narrower) than the residual
+        # stream is supported. Passing head_dim explicitly is therefore required for those
+        # checkpoints; the derivation stays the default because it is correct for the 8B
+        # (4096 / 32 = 128) that Ideogram-4 loads.
+        if head_dim is None:
+            if hidden_size % num_heads != 0:
+                msg = f"hidden_size {hidden_size} must be divisible by num_heads {num_heads}"
+                raise ValueError(msg)
+            head_dim = hidden_size // num_heads
 
         # Qwen3 (unlike Qwen2.5) applies per-head RMSNorm to q and k (over head_dim),
         # after the qkv projection / head split and before RoPE.
