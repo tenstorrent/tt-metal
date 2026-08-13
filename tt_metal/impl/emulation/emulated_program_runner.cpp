@@ -339,22 +339,26 @@ static uint64_t get_pcie_base_cached(uint32_t device_id) {
 extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     emule_require_self(__func__);
 
-    // Host-facing (PCIe) address: SimulationSysmemManager's device_io_addr space starts at
-    // pcie_base_ and shares the same 64-bit range as a real on-chip NOC address, so this branch
-    // must run FIRST, before any noc_x/noc_y/local_addr decomposition below.
+    // Host-facing (PCIe) address: SimulationSysmemManager's device_io_addr space shares the 64-bit
+    // range with on-chip NOC addresses, and pcie_base_ alone cannot separate them — on Wormhole it
+    // is 0x8'0000'0000, below the bit-36 coordinate field, so every on-chip address clears it.
+    // Membership in the mapped-buffer registry is the discriminator; the threshold is a pre-filter.
     uint32_t device_id = __emule_self->chip_id;
     if (noc_addr >= get_pcie_base_cached(device_id)) {
         auto* sw_emu = get_sw_emulated_chip(static_cast<tt::ChipId>(device_id));
         auto* sysmem = sw_emu ? static_cast<tt::umd::SimulationSysmemManager*>(sw_emu->get_sysmem_manager()) : nullptr;
         // A host-facing address (>= pcie_base) is by construction on an emule chip that has a
         // SimulationSysmemManager, so a null manager is a contract violation, not a resolvable miss.
-        // (A buffer miss still returns nullptr below — callers like noc_semaphore_set_remote rely on it.)
         TT_FATAL(
             sysmem != nullptr,
             "emule: host-facing NOC address 0x{:x} on chip {} has no SimulationSysmemManager.",
             noc_addr,
             device_id);
-        return static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr));
+        if (auto* host_ptr = static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr))) {
+            return host_ptr;
+        }
+        // Registry miss — fall through and decode as on-chip. A genuine host-facing miss finds no
+        // core either and still returns nullptr, which callers like noc_semaphore_set_remote need.
     }
 
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
@@ -651,7 +655,7 @@ struct CoreSetup {
     uint8_t phys_x;
     uint8_t phys_y;
     std::vector<DFBAllocInfo> dfb_allocs;
-    bool has_dfbs = false;
+    bool has_tc_dfbs = false;  // Quasar: DFBs here are tile-counter-backed, not CB-backed
     uint32_t sem_base;
     uint32_t sem_size;
     // Globally-allocated (persistent) CB extents on this core, packed (start<<32|end);
@@ -1535,9 +1539,13 @@ static std::map<std::string, std::string> build_kernel_defines(
         // See tt-emule docs/cb-dataformat.md.
         for (const auto& dfb_impl : impl.dataflow_buffers_on_core(first_core)) {
             const uint32_t slot = dfb_impl->device_slot;
-            if (slot >= EMULE_NUM_CBS) {  // no CB view above the ceiling, so no metadata either
-                continue;
-            }
+            TT_FATAL(
+                slot < EMULE_NUM_CBS,
+                "DFB device slot {} exceeds the emulated CB ceiling ({}); the host assigns slots below the arch's "
+                "NUM_CIRCULAR_BUFFERS ({}).",
+                slot,
+                EMULE_NUM_CBS,
+                MetalContext::instance().hal().get_arch_num_circular_buffers());
             const auto& dfb_cfg = dfb_impl->config;
             tile_sizes[slot] = dfb_cfg.entry_size;
             cb_formats[slot] = static_cast<uint8_t>(dfb_cfg.data_format);
@@ -2936,10 +2944,10 @@ static void init_core_cb_sync(
             const auto& cb_fg = cb_impl->unpack_face_geometry(idx);
             if (cb_fg.has_value()) {
                 cb_face_r_dim = cb_fg->face_r_dim;
-                cb_num_faces  = cb_fg->num_faces;
+                cb_num_faces = cb_fg->num_faces;
             }
-            core->init_cb_sync(idx, base, page_size, num_pages, cb_impl->globally_allocated(),
-                               cb_face_r_dim, cb_num_faces);
+            core->init_cb_sync(
+                idx, base, page_size, num_pages, cb_impl->globally_allocated(), cb_face_r_dim, cb_num_faces);
             configured[idx] = true;
             log_debug(
                 tt::LogMetal,
@@ -2981,25 +2989,29 @@ static void init_core_semaphores(
     }
 }
 
-// Allocate L1 for each DFB on a core, register CB-sync bridges, and initialize
-// tile counters. Returns per-DFB allocation info consumed by launch_cores.
+// Allocate L1 for each DFB on a core, register CB-sync bridges, and — on Quasar —
+// initialize tile counters. Returns per-DFB allocation info consumed by launch_cores.
 static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
     tt_emule::Core* core,
     const CoreCoord& logical_core,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dfb_impls) {
     core->reset_dfb_sync();
     if (dfb_impls.empty()) {
-        // No DFBs to allocate (always the case on WH/BH; DFBs are Quasar-only),
-        // so the L1 bump allocator never grows and there's nothing to reset.
-        // Skipping reset also leaves the mmap-init zeros at MEM_ZEROS_BASE
-        // undisturbed for kernels that NOC-read the region.
+        // Nothing to allocate, so the L1 bump allocator never grows and there's
+        // nothing to reset. Skipping reset also leaves the mmap-init zeros at
+        // MEM_ZEROS_BASE undisturbed for kernels that NOC-read the region.
         return {};
     }
-    // DFB fallback path (Quasar): start the bump allocator at 0.  When Quasar
-    // bring-up needs to protect MEM_ZEROS from bump-allocator overlap, dispatch
-    // its per-arch MEM_ZEROS_BASE here.
+    // Tile counters are Quasar hardware; on WH/BH a DFB is the circular buffer the
+    // kernel-side DataflowBuffer wraps, so init_cb_sync below is its whole sync state.
+    // Same predicate metal's own finalize_dataflow_buffer_configs() splits on.
+    // See docs/DFB_EMULATION.md §1.
+    const bool tc_backed = MetalContext::instance().hal().has_tile_counter_registers();
+    // DFB fallback path: start the bump allocator at 0.  When Quasar bring-up needs
+    // to protect MEM_ZEROS from bump-allocator overlap, dispatch its per-arch
+    // MEM_ZEROS_BASE here.
     core->reset_l1_bump();
-    if (!core->tile_counters()) {
+    if (tc_backed && !core->tile_counters()) {
         core->init_tile_counters(4);
     }
 
@@ -3044,34 +3056,53 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
         bool is_all = (cfg.cap == ::dfb::AccessPattern::ALL);
         uint32_t M = is_all ? cfg.num_producers : std::max<uint32_t>(cfg.num_producers, cfg.num_consumers);
         uint32_t capacity = cfg.num_entries / M;
-        core->init_dfb_sync(device_slot, base, cfg.entry_size, cfg.num_entries, capacity);
 
         // Also populate CB sync state for this DFB so compute ops (pack_tile,
         // matmul_tiles) can reuse the same L1 buffer via cb_read_ptr/cb_write_ptr.
+        // On WH/BH this IS the DFB's sync state, and the slot is a CB index — host
+        // assign_dfb_device_slot() picks it below get_arch_num_circular_buffers().
+        TT_FATAL(
+            device_slot < EMULE_NUM_CBS,
+            "DFB device slot {} exceeds the emulated CB ceiling ({}); the host assigns slots below the arch's "
+            "NUM_CIRCULAR_BUFFERS ({}).",
+            device_slot,
+            EMULE_NUM_CBS,
+            MetalContext::instance().hal().get_arch_num_circular_buffers());
         // Same faced-tile geometry carry as the CB pass above, else full-tile 16/4.
-        if (device_slot < EMULE_NUM_CBS) {
-            uint32_t dfb_face_r_dim = 16, dfb_num_faces = 4;
-            if (cfg.unpack_face_geometry.has_value()) {
-                dfb_face_r_dim = cfg.unpack_face_geometry->face_r_dim;
-                dfb_num_faces  = cfg.unpack_face_geometry->num_faces;
-            }
-            core->init_cb_sync(static_cast<uint8_t>(device_slot), base, cfg.entry_size, cfg.num_entries,
-                               /*globally_allocated=*/false, dfb_face_r_dim, dfb_num_faces);
+        uint32_t dfb_face_r_dim = 16, dfb_num_faces = 4;
+        if (cfg.unpack_face_geometry.has_value()) {
+            dfb_face_r_dim = cfg.unpack_face_geometry->face_r_dim;
+            dfb_num_faces = cfg.unpack_face_geometry->num_faces;
         }
+        core->init_cb_sync(
+            static_cast<uint8_t>(device_slot),
+            base,
+            cfg.entry_size,
+            cfg.num_entries,
+            /*globally_allocated=*/false,
+            dfb_face_r_dim,
+            dfb_num_faces);
 
-        // Initialize tile counters for this DFB.
-        // STRIDED: M TCs. ALL DM-DM: P*C TCs. Counter IDs are spaced by
-        // MAX_TC_SLOTS_PER_DFB to prevent cross-DFB collisions.
-        if (device_slot >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
-            throw std::out_of_range("DFB device slot exceeds safe TC range (max 8 DFBs per NEO with neo_id=0)");
-        }
-        uint8_t counter_base = static_cast<uint8_t>(device_slot * tt_emule::MAX_TC_SLOTS_PER_DFB);
-        uint32_t num_tcs_to_init = is_all ? static_cast<uint32_t>(cfg.num_producers) * cfg.num_consumers : M;
-        for (uint32_t tc_idx = 0; tc_idx < num_tcs_to_init; ++tc_idx) {
-            auto& tc = core->tile_counters()->get(0, counter_base + static_cast<uint8_t>(tc_idx));
-            tc.capacity = capacity;
-            tc.posted.store(0, std::memory_order_relaxed);
-            tc.acked.store(0, std::memory_order_relaxed);
+        // Quasar tile counters: STRIDED gets M TCs, ALL DM-DM gets P*C. Counter IDs are
+        // spaced by MAX_TC_SLOTS_PER_DFB to prevent cross-DFB collisions. DFBSyncState is
+        // part of the same tile-counter model, so it is populated here too.
+        if (tc_backed) {
+            core->init_dfb_sync(device_slot, base, cfg.entry_size, cfg.num_entries, capacity);
+            if (device_slot >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
+                // counter_base below assigns out of NEO 0 only. Lifting this means spreading
+                // DFBs across NEOs and threading neo_id through populate_dfb_interface_slots
+                // and the cb_api CB->DFB bridge.
+                throw std::out_of_range(
+                    "Quasar DFB device slot exceeds safe TC range (max 8 DFBs per NEO with neo_id=0)");
+            }
+            uint8_t counter_base = static_cast<uint8_t>(device_slot * tt_emule::MAX_TC_SLOTS_PER_DFB);
+            uint32_t num_tcs_to_init = is_all ? static_cast<uint32_t>(cfg.num_producers) * cfg.num_consumers : M;
+            for (uint32_t tc_idx = 0; tc_idx < num_tcs_to_init; ++tc_idx) {
+                auto& tc = core->tile_counters()->get(0, counter_base + static_cast<uint8_t>(tc_idx));
+                tc.capacity = capacity;
+                tc.posted.store(0, std::memory_order_relaxed);
+                tc.acked.store(0, std::memory_order_relaxed);
+            }
         }
 
         dfb_allocs.push_back({device_slot, base_addr, &cfg});
@@ -3113,7 +3144,11 @@ static void setup_core_state(
         init_core_semaphores(core, impl, logical_core, emule_sem_base);
 
         auto dfb_impls = impl.dataflow_buffers_on_core(logical_core);
-        bool has_dfbs = !dfb_impls.empty();
+        // Tile-counter and per-thread DFB-interface state is Quasar-only. Leaving both null
+        // on WH/BH keeps the cb_api CB->DFB bridge short-circuited, where a DFB is already
+        // CB-backed (allocate_dfbs_on_core) — and keeps a WH/BH slot, which may run to
+        // get_arch_num_circular_buffers(), from indexing the MAX_DFBS-sized interface array.
+        bool has_tc_dfbs = !dfb_impls.empty() && MetalContext::instance().hal().has_tile_counter_registers();
         std::vector<DFBAllocInfo> dfb_allocs = allocate_dfbs_on_core(core, logical_core, dfb_impls);
 
         uint32_t sem_region_size = tt::tt_metal::NUM_SEMAPHORES * EMULE_SEM_ALIGN;
@@ -3124,7 +3159,7 @@ static void setup_core_state(
              phys_x,
              phys_y,
              std::move(dfb_allocs),
-             has_dfbs,
+             has_tc_dfbs,
              emule_sem_base,
              sem_region_size,
              std::move(persistent_cb_ranges)});
@@ -3531,7 +3566,7 @@ static void launch_cores(
         auto* core = cs.core;
         uint8_t* l1_data = core->l1_data();
         tt_emule::CBSyncState* cb_array = core->cb_sync_array();
-        tt_emule::TileCounterArray* tc_array = cs.has_dfbs ? core->tile_counters() : nullptr;
+        tt_emule::TileCounterArray* tc_array = cs.has_tc_dfbs ? core->tile_counters() : nullptr;
         const uint8_t px = cs.phys_x;
         const uint8_t py = cs.phys_y;
         const uint32_t lx = cs.logical_core.x;
@@ -3543,7 +3578,7 @@ static void launch_cores(
         cstate.logical_y = ly;
 
         std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> per_thread_dfbs;
-        if (cs.has_dfbs) {
+        if (cs.has_tc_dfbs) {
             per_thread_dfbs = build_per_thread_dfb_interfaces(*cs.ki_list, cs.dfb_allocs);
         }
 
@@ -3569,7 +3604,7 @@ static void launch_cores(
         for (size_t kidx = 0; kidx < cs.ki_list->size(); ++kidx) {
             KernelInfo* ki_ptr = &(*cs.ki_list)[kidx];
             auto& ki = *ki_ptr;
-            tt_emule::EmuleDFBInterface* dfb_array = cs.has_dfbs ? per_thread_dfbs[kidx].get() : nullptr;
+            tt_emule::EmuleDFBInterface* dfb_array = cs.has_tc_dfbs ? per_thread_dfbs[kidx].get() : nullptr;
 
             // Build + populate the fiber-owned ctx (set-once identity). The scheduler
             // repoints __emule_self to this ctx on swap-in; my_x/my_y are restored from
