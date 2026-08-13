@@ -46,8 +46,12 @@ ALWI void logaddexp_binary_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
  * Please refer to documentation for any_init.
  */
 ALWI void logaddexp_binary_tile_init() {
+    // Baseline (add1) binary addrmod setup, like fmod/remainder: the op-specific work
+    // is the program-constant load in calculate_sfpu_logaddexp_init. There is no
+    // SfpuType::logaddexp — naming one here fails to compile the first time a kernel
+    // instantiates this init.
     MATH((SFPU_BINARY_INIT_FN(
-        logaddexp, sfpu::calculate_sfpu_logaddexp_init, (DST_ACCUM_MODE))));
+        add1, sfpu::calculate_sfpu_logaddexp_init, (DST_ACCUM_MODE))));
 }
 
 }  // namespace ckernel
