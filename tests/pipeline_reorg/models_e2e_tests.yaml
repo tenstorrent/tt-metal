@@ -320,7 +320,9 @@
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      timeout: 15
+      # Headroom for the first run, which must generate the bfp8 tensor cache
+      # under TT_CACHE_PATH. Tighten toward the wh_llmbox_perf valu
+      timeout: 45
       tier: 2
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
