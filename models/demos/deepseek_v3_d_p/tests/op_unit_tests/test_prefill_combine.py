@@ -424,9 +424,9 @@ def _model_scaledown_for_combine(model, ref_mesh, target_mesh, pcc_only):
         model.NUM_EXPERTS_PER_TOKEN = (model.NUM_EXPERTS_PER_TOKEN // ref_mesh[1]) * target_mesh[1]
 
     # further reduce these two hyperparams in case of pcc check test to get faster, although not perf-representative test
-    if pcc_only:
-        model.NUM_ROUTED_EXPERTS = max(target_num_chips, model.NUM_ROUTED_EXPERTS // 16)
-        model.NUM_EXPERTS_PER_TOKEN = max(2, model.NUM_EXPERTS_PER_TOKEN // 4)
+    # if pcc_only:
+    #    model.NUM_ROUTED_EXPERTS = max(target_num_chips, model.NUM_ROUTED_EXPERTS // 16)
+    #    model.NUM_EXPERTS_PER_TOKEN = max(2, model.NUM_EXPERTS_PER_TOKEN // 4)
 
     return model
 
