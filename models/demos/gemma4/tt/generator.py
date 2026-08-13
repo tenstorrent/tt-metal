@@ -501,7 +501,46 @@ class ChunkedPrefillPageTableGuardMixin:
         ttnn.end_trace_capture(self.model_args[model_id].mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.model_args[model_id].mesh_device)
         logger.info("Done Capturing Prefill Trace")
+        # Drop any stale page-table skip cache bound to older device buffers.
+        stage_cache = getattr(self.model[model_id], "_prefill_trace_stage_cache", None)
+        if stage_cache is not None:
+            stage_cache.clear()
         return trace_id, tt_out_trace, *device_inputs
+
+    def _prefill_forward_trace(
+        self,
+        trace_id,
+        device_inputs,
+        tt_out_trace,
+        prefill_ids,
+        user_id=0,
+        page_table=None,
+        chunk_page_table=None,
+        model_id=-1,
+        global_user_id=None,
+        batch_size=1,
+        start_pos=0,
+        refresh_page_table=True,
+    ):
+        """Replay prefill trace: CH2D into captured buffers, then execute.
+
+        ``stage_prefill_trace_inputs`` refreshes persistent device tokens /
+        page tables (optionally skipping an already-staged full page_table)
+        instead of reallocating device tensors via ``from_torch(..., device=)``.
+        """
+        del global_user_id  # threaded at capture; replay binds captured addresses
+        self.model[model_id].stage_prefill_trace_inputs(
+            prefill_ids,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=start_pos,
+            batch_size=batch_size,
+            user_id=user_id,
+            device_tensors=device_inputs,
+            refresh_page_table=refresh_page_table,
+        )
+        ttnn.execute_trace(self.model_args[model_id].mesh_device, trace_id, cq_id=0, blocking=False)
+        return tt_out_trace
 
     def _easy_trace_prefill(self, *args, **kwargs):
         # Refresh before capture *and* replay so the writer kernel sees the
@@ -562,9 +601,16 @@ class ChunkedPrefillPageTableGuardMixin:
         sliding-window tail path (``is_chunked=True``) and so absolute-block fill
         matches the eager multi-chunk loop. Trace keys use ``sp0_mc`` / ``sp1_mc``
         so they do not collide with cold single-chunk ``sp0``/`sp1`` captures.
+
+        Outer multi-chunk loops may pass ``page_table_pre_sized=True`` and
+        ``prebuilt_chunk_page_table=...`` so this path does not re-pad or re-slice.
+        ``refresh_page_table=False`` skips full-table CH2D after the first chunk.
         """
         del last_token_idx  # refresh already done by caller
         global_user_id = kwargs.get("global_user_id", None)
+        page_table_pre_sized = bool(kwargs.pop("page_table_pre_sized", False))
+        prebuilt_chunk_pt = kwargs.pop("prebuilt_chunk_page_table", None)
+        refresh_page_table = bool(kwargs.pop("refresh_page_table", True))
         use_start_pos = "sp1_mc" if num_cached_tokens > 0 else "sp0_mc"
         trace_key = f"{prefill_seq_len}_{model_id}_{batch_size}_{use_start_pos}"
 
@@ -587,22 +633,28 @@ class ChunkedPrefillPageTableGuardMixin:
         # Long-ISL replay then hands a full-attention-wide host table (e.g. 4096
         # cols at 256k) into a short device buffer → shape TT_FATAL. Size to the
         # model's max_seq_len so capture (8k warmup) and replay share one width.
-        max_seq_blocks = num_blocks_in_seq(int(self.model_args[model_id].max_seq_len), block_size)
-        target_blocks = max(max_blocks_prefill, max_seq_blocks, int(source_page_table.shape[1]))
-        # Pad once into a contiguous buffer (no per-chunk torch.cat). Outer
-        # multi-chunk loops should already size to this width when possible.
-        page_table = ensure_page_table_width(source_page_table, target_blocks)
+        if page_table_pre_sized:
+            page_table = source_page_table
+        else:
+            max_seq_blocks = num_blocks_in_seq(int(self.model_args[model_id].max_seq_len), block_size)
+            target_blocks = max(max_blocks_prefill, max_seq_blocks, int(source_page_table.shape[1]))
+            # Pad once into a contiguous buffer (no per-chunk torch.cat). Outer
+            # multi-chunk loops should already size to this width when possible.
+            page_table = ensure_page_table_width(source_page_table, target_blocks)
         chunk_page_table = None
         if batch_size == 1:
-            chunk_start_block = num_cached_tokens // block_size
-            chunk_end_block = num_blocks_in_seq(num_cached_tokens + prefill_seq_len, block_size)
-            chunk_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
-            chunk_page_table = self._fill_chunk_page_table(
-                page_table,
-                chunk_start_block=chunk_start_block,
-                chunk_end_block=chunk_end_block,
-                chunk_blocks=chunk_blocks,
-            )
+            if prebuilt_chunk_pt is not None:
+                chunk_page_table = prebuilt_chunk_pt
+            else:
+                chunk_start_block = num_cached_tokens // block_size
+                chunk_end_block = num_blocks_in_seq(num_cached_tokens + prefill_seq_len, block_size)
+                chunk_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
+                chunk_page_table = self._fill_chunk_page_table(
+                    page_table,
+                    chunk_start_block=chunk_start_block,
+                    chunk_end_block=chunk_end_block,
+                    chunk_blocks=chunk_blocks,
+                )
 
         if self.trace_id_prefill[trace_key] is None:
             trace_id, tt_out_trace, *device_inputs = self._capture_trace_prefill(
@@ -632,6 +684,7 @@ class ChunkedPrefillPageTableGuardMixin:
             batch_size=batch_size,
             user_id=user_id,
             start_pos=chunk_start_idx,
+            refresh_page_table=refresh_page_table,
         )
 
     def _release_all_sliding_prefill_tails(self, model_id=-1, *, clear_persistent: bool = False):
@@ -739,6 +792,12 @@ class ChunkedPrefillPageTableGuardMixin:
         )
         self._release_all_sliding_prefill_tails(model_id)
 
+        chunk_blocks = num_blocks_in_seq(chunk_size, block_size)
+        # No synchronize_device between chunks — execute_trace is non-blocking;
+        # CQ ordering keeps fills coherent across chunk replays.
+        # Full page_table is CH2D'd once per captured buffer (sp0 vs sp1) per
+        # request — not once per chunk (sp1 is reused for every continuation).
+        refreshed_pt_keys: set[str] = set()
         for chunk_start in range(num_cached_tokens, num_cached_tokens + seq_len, chunk_size):
             chunk_end = chunk_start + chunk_size
             chunk_start_relative = chunk_start - num_cached_tokens
@@ -753,6 +812,21 @@ class ChunkedPrefillPageTableGuardMixin:
             else:
                 chunk_last_token_idx = chunk_start + chunk_size - 1
 
+            chunk_start_block = chunk_start // block_size
+            chunk_end_block = num_blocks_in_seq(chunk_start + chunk_size, block_size)
+            chunk_page_table = self._fill_chunk_page_table(
+                page_table_user_padded,
+                chunk_start_block=chunk_start_block,
+                chunk_end_block=chunk_end_block,
+                chunk_blocks=chunk_blocks,
+            )
+
+            # Match ``_easy_trace_prefill_with_chunk_page_table`` trace_key.
+            use_start_pos = "sp1_mc" if chunk_start > 0 else "sp0_mc"
+            pt_key = f"{chunk_size}_{model_id}_1_{use_start_pos}"
+            refresh_page_table = pt_key not in refreshed_pt_keys
+            refreshed_pt_keys.add(pt_key)
+
             tt_out = self._easy_trace_prefill(
                 chunk_tokens,
                 page_table=page_table_user_padded,
@@ -765,6 +839,9 @@ class ChunkedPrefillPageTableGuardMixin:
                 batch_size=1,
                 num_cached_tokens=chunk_start,
                 force_chunk_page_table=True,
+                page_table_pre_sized=True,
+                prebuilt_chunk_page_table=chunk_page_table,
+                refresh_page_table=refresh_page_table,
             )
             if is_last_chunk:
                 last_token_idx_for_trace = last_token_idx_in_chunk
@@ -855,7 +932,15 @@ class ChunkedPrefillPageTableGuardMixin:
                 if chunk_tokens.shape[-1] < chunk_size:
                     chunk_tokens = torch.nn.functional.pad(chunk_tokens, (0, chunk_size - chunk_tokens.shape[-1]))
 
-                chunk_page_table = page_table_user_padded[:, chunk_start // block_size : chunk_end // block_size]
+                chunk_start_block = chunk_start // block_size
+                chunk_end_block = chunk_end // block_size
+                chunk_blocks = num_blocks_in_seq(chunk_size, block_size)
+                chunk_page_table = self._fill_chunk_page_table(
+                    page_table_user_padded,
+                    chunk_start_block=chunk_start_block,
+                    chunk_end_block=chunk_end_block,
+                    chunk_blocks=chunk_blocks,
+                )
                 # Continuation chunks must see real block IDs. All -1 means the
                 # source table was truncated to the first scheduler chunk width
                 # (vLLM APC / #51186) — fill would skip and full-attn KV for
