@@ -101,7 +101,8 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
             TT_FATAL(
                 tensor.dtype() == tt::tt_metal::DataType::FLOAT32,
                 "Tensor '{}' must be FLOAT32, but got '{}'. The bias correction 1 - beta^t cancels badly in "
-                "lower precision - bfloat16 rounds beta^t to 1.0 for small step counts, which would divide by zero.",
+                "lower precision - the nearest bfloat16 value to beta2^1 = 0.999 is exactly 1.0, so the kernel "
+                "would divide by zero on the first step.",
                 name,
                 enchantum::to_string(tensor.dtype()));
             check_tensor(tensor, name, tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::FLOAT32);
@@ -110,6 +111,10 @@ void AdamWDeviceOperation::validate_on_program_cache_miss(
                 "Tensor '{}' must hold exactly one element, got {}",
                 name,
                 tensor.logical_volume());
+            TT_FATAL(
+                tensor.device() == param.device(),
+                "Tensor '{}' must live on the same device as the parameter tensor.",
+                name);
         };
         check_bias_tensor(beta1_pow.value(), "Beta1 Bias Correction");
         check_bias_tensor(beta2_pow.value(), "Beta2 Bias Correction");

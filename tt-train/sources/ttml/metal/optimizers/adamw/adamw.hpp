@@ -33,9 +33,14 @@ ttnn::Tensor adamw(
 //
 // Both tensors must be FLOAT32. bfloat16 is rejected rather than supported: the
 // kernel needs 1 - beta^t, beta^t sits just below 1 for most of a run, and the
-// subtraction cancels - bfloat16 rounds beta2^1 = 0.999 to exactly 1.0, which
-// would divide by zero. Convert on device before calling if your betas are held
-// in lower precision.
+// subtraction cancels. With only 8 mantissa bits the nearest bfloat16 value to
+// beta2^1 = 0.999 is exactly 1.0, so 1 - beta2^t would be zero on the very first
+// step. Convert on device before calling if your betas are held in lower
+// precision.
+//
+// Precondition: both tensors hold beta^t for a step count t >= 1, so beta^t < 1.
+// Same requirement the float overload already carries, except the value stays on
+// device and so cannot be checked on host.
 ttnn::Tensor adamw(
     const ttnn::Tensor& param_in,
     const ttnn::Tensor& grad,

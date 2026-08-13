@@ -10,6 +10,7 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <random>
 #include <vector>
@@ -103,14 +104,14 @@ protected:
         return inputs;
     }
 
-    static ttnn::Tensor run_float(const StepInputs& inputs, float beta1_pow, float beta2_pow) {
+    static ttnn::Tensor run_float(const StepInputs& inputs, float beta1_pow, float beta2_pow, float lr) {
         return ttml::metal::adamw(
             inputs.param,
             inputs.grad,
             inputs.exp_avg,
             inputs.exp_avg_sq,
             inputs.max_exp_avg_sq,
-            kLr,
+            lr,
             kBeta1,
             kBeta2,
             beta1_pow,
@@ -120,14 +121,14 @@ protected:
     }
 
     static ttnn::Tensor run_tensor(
-        const StepInputs& inputs, float beta1_pow, float beta2_pow, ttnn::DataType bias_dtype) {
+        const StepInputs& inputs, float beta1_pow, float beta2_pow, ttnn::DataType bias_dtype, float lr = kLr) {
         return ttml::metal::adamw(
             inputs.param,
             inputs.grad,
             inputs.exp_avg,
             inputs.exp_avg_sq,
             inputs.max_exp_avg_sq,
-            kLr,
+            lr,
             kBeta1,
             kBeta2,
             make_scalar(beta1_pow, bias_dtype),
@@ -152,6 +153,7 @@ protected:
         ttnn::DataType bias_dtype,
         bool amsgrad,
         uint32_t step,
+        float lr,
         float tolerance) {
         const float beta1_pow = std::pow(kBeta1, static_cast<float>(step));
         const float beta2_pow = std::pow(kBeta2, static_cast<float>(step));
@@ -159,10 +161,26 @@ protected:
         auto expected_inputs = make_inputs(shape, param_dtype, amsgrad);
         auto actual_inputs = make_inputs(shape, param_dtype, amsgrad);
 
-        auto expected = run_float(expected_inputs, beta1_pow, beta2_pow);
-        auto actual = run_tensor(actual_inputs, beta1_pow, beta2_pow, bias_dtype);
+        // The op updates the parameter in place, so snapshot it before running.
+        const auto initial = ttml::core::to_vector(expected_inputs.param);
 
-        expect_all_near(ttml::core::to_vector(actual), ttml::core::to_vector(expected), tolerance, "param");
+        auto expected = run_float(expected_inputs, beta1_pow, beta2_pow, lr);
+        auto actual = run_tensor(actual_inputs, beta1_pow, beta2_pow, bias_dtype, lr);
+
+        const auto expected_values = ttml::core::to_vector(expected);
+
+        // Without this the comparison below can be vacuous: if the tolerance is as
+        // large as the update itself, the test passes even when the tensor path
+        // leaves the parameter untouched.
+        float largest_update = 0.0F;
+        for (size_t i = 0; i < expected_values.size(); ++i) {
+            largest_update = std::max(largest_update, std::abs(expected_values[i] - initial[i]));
+        }
+        ASSERT_GT(largest_update, 4.0F * tolerance)
+            << "tolerance " << tolerance << " is not small against the update " << largest_update
+            << "; this comparison could not fail";
+
+        expect_all_near(ttml::core::to_vector(actual), expected_values, tolerance, "param");
 
         // The moments do not involve the bias correction, so they must agree far
         // more tightly than the parameter does.
@@ -199,9 +217,14 @@ TEST_F(AdamWBiasCorrectionTensorTest, Fp32ParamFp32Bias) {
         ttnn::DataType::FLOAT32,
         /* amsgrad = */ false,
         /* step = */ 10U,
+        /* lr = */ kLr,
         /* tolerance = */ 1e-5F);
 }
 
+// Driven at lr = 1.0 rather than kLr. One step at kLr moves a parameter by ~1e-4,
+// which is far below one bfloat16 ulp (~4e-3 for values near 1), so the update
+// rounds away and no tolerance can tell the two overloads apart. A large lr puts
+// the update well above the ulp and makes the comparison mean something.
 TEST_F(AdamWBiasCorrectionTensorTest, Bf16ParamFp32Bias) {
     compare_overloads(
         ttnn::Shape({1U, 1U, 64U, 64U}),
@@ -209,10 +232,9 @@ TEST_F(AdamWBiasCorrectionTensorTest, Bf16ParamFp32Bias) {
         ttnn::DataType::FLOAT32,
         /* amsgrad = */ false,
         /* step = */ 10U,
+        /* lr = */ 1.0F,
         /* tolerance = */ 1e-2F);
 }
-
-
 
 TEST_F(AdamWBiasCorrectionTensorTest, AmsgradFp32Bias) {
     compare_overloads(
@@ -221,9 +243,9 @@ TEST_F(AdamWBiasCorrectionTensorTest, AmsgradFp32Bias) {
         ttnn::DataType::FLOAT32,
         /* amsgrad = */ true,
         /* step = */ 10U,
+        /* lr = */ kLr,
         /* tolerance = */ 1e-5F);
 }
-
 
 // Step 1 is the extreme case: bias_correction1 is 1 - beta1 = 0.1, so step_size is
 // 10x the learning rate, and 1 / bias_correction2 is ~1000.
@@ -234,7 +256,8 @@ TEST_F(AdamWBiasCorrectionTensorTest, FirstStepLargeCorrection) {
         ttnn::DataType::FLOAT32,
         /* amsgrad = */ false,
         /* step = */ 1U,
-        /* tolerance = */ 1e-4F);
+        /* lr = */ kLr,
+        /* tolerance = */ 1e-5F);
 }
 
 // Late in training bias_correction1 approaches 1 and beta2^t approaches 0.
@@ -245,18 +268,23 @@ TEST_F(AdamWBiasCorrectionTensorTest, LateStepSmallCorrection) {
         ttnn::DataType::FLOAT32,
         /* amsgrad = */ false,
         /* step = */ 5000U,
+        /* lr = */ kLr,
         /* tolerance = */ 1e-5F);
 }
 
-// Enough tiles that split_work_to_cores produces two core groups with different
-// per-core tile counts, so the second compute kernel is exercised too.
+// 7 x 23 = 161 tiles. split_work_to_cores only produces a second core group when
+// the tile count does not divide evenly across the grid, so the count is chosen
+// coprime to the usual grids - 161 leaves a remainder on 8x8 = 64 cores (the
+// earlier 512x1024 = 512 tiles divided exactly there and left core_group_2 empty),
+// 8x7 = 56, and 13x10 = 130.
 TEST_F(AdamWBiasCorrectionTensorTest, MultiTileAcrossCoreGroups) {
     compare_overloads(
-        ttnn::Shape({1U, 1U, 512U, 1024U}),
+        ttnn::Shape({1U, 1U, 224U, 736U}),
         ttnn::DataType::FLOAT32,
         ttnn::DataType::FLOAT32,
         /* amsgrad = */ false,
         /* step = */ 10U,
+        /* lr = */ kLr,
         /* tolerance = */ 1e-5F);
 }
 
@@ -287,26 +315,40 @@ TEST_F(AdamWBiasCorrectionTensorTest, StochasticRounding) {
     }
 }
 
-// Successive steps with different beta^t must reuse the same program: nothing the
-// program hash covers changes, so only the tensor contents differ.
-TEST_F(AdamWBiasCorrectionTensorTest, StepInvariantProgram) {
+// The central claim of the overload: beta^t is read out of L1 on every dispatch,
+// not folded in when the program is built. Nothing in the program hash changes
+// between these two calls, so the second reuses the program the first built. If
+// the kernel had captured beta^t at build time, the step-400 call would still be
+// applying the step-1 correction and would disagree with the float overload.
+//
+// This has to be self-contained rather than relying on an earlier test having
+// warmed the cache for this configuration, which would make it order-dependent.
+TEST_F(AdamWBiasCorrectionTensorTest, CachedProgramPicksUpNewBetaPow) {
     const ttnn::Shape shape({1U, 1U, 32U, 32U});
-    auto inputs = make_inputs(shape, ttnn::DataType::FLOAT32, /* amsgrad = */ false);
 
-    for (uint32_t step = 1U; step <= 5U; ++step) {
-        auto result = run_tensor(
-            inputs,
-            std::pow(kBeta1, static_cast<float>(step)),
-            std::pow(kBeta2, static_cast<float>(step)),
-            ttnn::DataType::FLOAT32);
-        for (float value : ttml::core::to_vector(result)) {
-            ASSERT_TRUE(std::isfinite(value)) << "non-finite parameter after step " << step;
-        }
-    }
+    ASSERT_NO_FATAL_FAILURE(compare_overloads(
+        shape,
+        ttnn::DataType::FLOAT32,
+        ttnn::DataType::FLOAT32,
+        /* amsgrad = */ false,
+        /* step = */ 1U,
+        /* lr = */ kLr,
+        /* tolerance = */ 1e-5F));
+
+    ASSERT_NO_FATAL_FAILURE(compare_overloads(
+        shape,
+        ttnn::DataType::FLOAT32,
+        ttnn::DataType::FLOAT32,
+        /* amsgrad = */ false,
+        /* step = */ 400U,
+        /* lr = */ kLr,
+        /* tolerance = */ 1e-5F));
 }
 
-// Running the same step twice through the tensor path must be bit-identical: the
-// scalars are read fresh from L1 each dispatch, not captured at program build.
+// Two dispatches of the same step over identical inputs must land on the same
+// values. Only checks determinism - it cannot distinguish a fresh L1 read from a
+// captured scalar, since both dispatches use the same beta^t. That distinction is
+// CachedProgramPicksUpNewBetaPow's job.
 TEST_F(AdamWBiasCorrectionTensorTest, RepeatedDispatchIsStable) {
     const ttnn::Shape shape({1U, 1U, 64U, 64U});
     const float beta1_pow = std::pow(kBeta1, 7.0F);
@@ -324,9 +366,9 @@ TEST_F(AdamWBiasCorrectionTensorTest, RepeatedDispatchIsStable) {
     }
 }
 
-
-// bfloat16 bias tensors are rejected: 1 - beta^t cancels, and bf16 rounds
-// beta2^1 = 0.999 to exactly 1.0, which would divide by zero in the kernel.
+// bfloat16 bias tensors are rejected: 1 - beta^t cancels, and the nearest bfloat16
+// value to beta2^1 = 0.999 is exactly 1.0, so the kernel would divide by zero on
+// the first step.
 TEST_F(AdamWBiasCorrectionTensorTest, RejectsBf16Bias) {
     const ttnn::Shape shape({1U, 1U, 64U, 64U});
     auto inputs = make_inputs(shape, ttnn::DataType::FLOAT32, /* amsgrad = */ false);

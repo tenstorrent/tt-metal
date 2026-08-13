@@ -80,6 +80,7 @@ void kernel_main() {
         // value: the op rejects any other bias dtype.
         const float beta1_pow = __builtin_bit_cast(float, read_tile_value(cb_bias_correction_idx, 0, 0));
         const float beta2_pow = __builtin_bit_cast(float, read_tile_value(cb_bias_correction_idx, 1, 0));
+        cb_pop_front(cb_bias_correction_idx, 2);
 
         const float learning_rate = __builtin_bit_cast(float, lr);
         step_size = __builtin_bit_cast(uint32_t, learning_rate / (1.0F - beta1_pow));
