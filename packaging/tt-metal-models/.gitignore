@@ -1,0 +1,7 @@
+# The repository root .gitignore ignores `build_*` to keep build *output* directories
+# (build_Release, build_tt_metal_models, ...) out of the index. The two scripts below
+# match that pattern by name but are source, not output -- without these negations they
+# are silently dropped from commits, which is easy to miss because `git status` never
+# mentions them.
+!build_wheel.py
+!build_native_packages.py

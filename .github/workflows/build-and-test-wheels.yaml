@@ -24,9 +24,14 @@ jobs:
     uses: ./.github/workflows/_test-wheels-impl.yaml
     with:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # Independent of build-artifact: tt-metal-models is pure Python and needs no C++ build,
+  # so it runs in parallel rather than waiting on the wheel. It self-verifies via the
+  # import matrix.
+  build-models-wheel:
+    uses: ./.github/workflows/models-wheel.yaml
   publish-wheels:
     name: "Publish wheels to internal PyPI"
-    needs: [build-artifact, test-wheels]
+    needs: [build-artifact, test-wheels, build-models-wheel]
     runs-on: ubuntu-latest
     permissions:
       id-token: write # Required for AWS OIDC
@@ -50,6 +55,15 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          path: ./wheels
+
+      # Into the same directory: the publish step below globs *.whl, so the
+      # tt-metal-models wheel is picked up alongside ttnn. The .deb/.rpm in this artifact
+      # are not wheels and are ignored here.
+      - name: Download tt-metal-models artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build-models-wheel.outputs.artifact-name }}
           path: ./wheels
 
       - name: Publish wheels to internal PyPI

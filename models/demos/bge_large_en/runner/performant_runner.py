@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
+from models.common.utility_functions import assert_with_pcc
 from models.demos.bge_large_en.runner.performant_runner_infra import BGEPerformanceRunnerInfra
-from models.demos.wormhole.bge_large_en.tests.pcc.utils import assert_with_pcc
 
 
 class BGEPerformantRunner:

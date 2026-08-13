@@ -1,0 +1,129 @@
+name: "Build tt-metal-models wheel"
+
+# Builds the `tt-metal-models` distribution: the models/ Python tree, packaged so it can
+# be installed rather than cloned. See packaging/tt-metal-models/README.md.
+#
+# Deliberately separate from wheels.yaml. That workflow drives cibuildwheel to compile the
+# `ttnn` C++ extension inside a manylinux container; this artifact is pure Python
+# (py3-none-any) and needs none of that, so building it here keeps it off the critical
+# path of the expensive build and lets it run on a plain runner in about a minute.
+#
+# Version coupling: the wheel takes its version from the same setuptools-scm derivation
+# `ttnn` uses, so an artifact built from a given ref matches the `ttnn` wheel built from
+# that ref, and it declares `ttnn==<that version>`. Callers that need a specific version
+# (the release path) must pass `ref`.
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "Git ref to build from. Defaults to the triggering ref."
+        required: false
+        type: string
+      runs-on:
+        required: false
+        type: string
+        default: "ubuntu-22.04"
+      build-native-packages:
+        description: "Also build python3-tt-metal-models .deb and .rpm."
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      artifact-name:
+        value: ${{ jobs.build-models-wheel.outputs.artifact_name }}
+
+jobs:
+  build-models-wheel:
+    name: "🐍 Build tt-metal-models wheel"
+    runs-on: ${{ inputs.runs-on }}
+    timeout-minutes: 20
+    outputs:
+      artifact_name: ${{ steps.artifact-name.outputs.name }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          # setuptools-scm derives the version from the tag history, so a shallow clone
+          # without tags would silently produce the 0.0.0.dev0 fallback version.
+          fetch-depth: 0
+          fetch-tags: true
+          # The one submodule under models/ is intentionally NOT initialized: it is
+          # licensed under the Llama 2 Community License rather than Apache-2.0, so
+          # vendoring it into a published wheel is a licensing decision, not a build
+          # setting. See packaging/tt-metal-models/README.md.
+          submodules: false
+
+      # 3.11+ so build_wheel.py can use stdlib tomllib to read the repository's
+      # setuptools-scm configuration. The artifact itself is py3-none-any and supports
+      # 3.10 onwards regardless of which interpreter builds it.
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade build setuptools setuptools-scm wheel
+
+      - name: Build the wheel
+        run: python packaging/tt-metal-models/build_wheel.py --output-dir dist
+
+      # .deb only. Debian's dist-packages path is version-independent, so an Ubuntu
+      # runner produces a correct package for every Debian/Ubuntu target. The .rpm is
+      # not built here: RPM distros use a version-qualified
+      # /usr/lib/python3.N/site-packages, N is resolved by the %{python3_sitelib} macro
+      # that only exists on those distros, and guessing it from an Ubuntu runner yields
+      # an rpm that installs cleanly and is then silently unimportable. Build it on the
+      # target distro (see packaging/tt-metal-models/README.md); build_native_packages.py
+      # refuses to guess rather than emit a broken package.
+      - name: Build python3-tt-metal-models (.deb)
+        if: ${{ inputs.build-native-packages }}
+        run: |
+          python packaging/tt-metal-models/build_native_packages.py \
+            --wheel dist/tt_metal_models-*.whl --output-dir dist --deb
+
+      # The gate. A wheel missing a package_data file, or pruned too far, still builds
+      # and still imports at the top level; it fails later at model construction. This
+      # imports every vLLM entry point in the tree against the built wheel, in a venv
+      # containing nothing but the wheel and its declared dependencies.
+      #
+      # The wheel is installed with --no-deps and its dependencies listed separately,
+      # because its `ttnn==<version>` pin refers to this exact build, which is not on any
+      # index until the ttnn wheel from this same commit is published. `ttnn` is
+      # therefore supplied here from the newest published release instead.
+      #
+      # That is an approximation, and a deliberate one: it is close enough to catch what
+      # this gate exists to catch -- missing package data, over-pruning, and undeclared
+      # dependencies, all of which surface as ModuleNotFoundError/FileNotFoundError
+      # regardless of the ttnn version. It does not verify API compatibility between
+      # models/ and the matching ttnn; that needs the two installed together, which
+      # happens after both are published.
+      - name: Import matrix
+        run: |
+          python packaging/tt-metal-models/build_wheel.py --print-requirements > /tmp/models-requirements.txt
+          python -m venv /tmp/matrixvenv
+          /tmp/matrixvenv/bin/pip install --quiet --upgrade pip
+          /tmp/matrixvenv/bin/pip install --quiet \
+            --extra-index-url https://download.pytorch.org/whl/cpu \
+            -r /tmp/models-requirements.txt
+          /tmp/matrixvenv/bin/pip install --quiet ttnn
+          /tmp/matrixvenv/bin/pip install --quiet --no-deps dist/tt_metal_models-*.whl
+          python packaging/tt-metal-models/import_matrix.py --python /tmp/matrixvenv/bin/python
+
+      - name: Compute artifact name
+        id: artifact-name
+        run: |
+          SANITIZED_REF=$(echo "${{ inputs.ref || github.ref_name }}" | tr '/' '-')
+          # Must NOT match `ttnn-dist-*`: package-and-release.yaml globs that pattern and
+          # uploads everything it finds to the `ttnn` PyPI project, whose trusted-publisher
+          # token would reject a differently-named distribution and fail the release.
+          echo "name=tt-metal-models-dist-${SANITIZED_REF}-${{ github.run_id }}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ steps.artifact-name.outputs.name }}
+          path: |
+            dist/*.whl
+            dist/*.deb
+            dist/*.rpm
+          if-no-files-found: error

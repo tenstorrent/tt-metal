@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# Non-Python payload for the `tt-metal-models` distribution.
+#
+# This is the source of truth for data files. It is paired with
+# `include-package-data = true` in pyproject.toml: setuptools reads this list and
+# attaches each file to the deepest *discovered* package above it. That indirection is
+# what makes directories like `model_params/Llama-3.1-70B-Instruct/` work -- they contain
+# no .py, and their names are not valid Python identifiers, so they are not packages and
+# package-data globs cannot reach them.
+#
+# The `models/` tree staged here has already had test directories removed by
+# build_wheel.py; the excludes at the bottom are a second line of defence only.
+
+include README.md
+include LICENSE
+
+# --- Load-bearing configuration read at import or model-construction time -------------
+# Each of these is opened by name at runtime. Omitting any of them produces a wheel that
+# imports and then dies with FileNotFoundError. Confirmed loaders:
+#   models/tt_transformers/tt/prefetcher/prefetcher_config.yaml
+#       -> tt/prefetcher.py, module-level open() (fires on nearly every import)
+#   models/tt_transformers/model_params/**/*.json
+#       -> tt/model_config.py, LOCAL_LLAMA_PARAMS / LOCAL_HF_PARAMS
+#   models/model_targets.yaml            -> demos/utils/model_targets.py
+#   models/model_trace_region_sizes.yaml -> demos/utils/trace_region_sizes.py
+#   models/demos/gemma4/precision_overrides.json -> demos/gemma4/tt/precision.py
+recursive-include models *.json
+recursive-include models *.yaml
+recursive-include models *.textproto
+
+# --- Device kernel sources, JIT-compiled by the tt-metal runtime ----------------------
+# All of these currently live under models/demos/deepseek_v3_b1/. Note the glob is not
+# restricted to */kernels/* : two kernels sit directly beside their op.py
+# (micro_ops/eltwise_add/, fused_ops/moe_routed_expert/) and a kernels-only glob drops
+# them. See README.md "deepseek_v3_b1 kernels" for why shipping these is necessary but
+# not by itself sufficient.
+recursive-include models *.cpp
+recursive-include models *.h
+recursive-include models *.hpp
+
+# --- Small text payload (class/label lists, vocab-adjacent files) ---------------------
+recursive-include models *.txt
+recursive-include models *.names
+
+# Reference outputs for deepseek_v3's teacher-forcing demo. Resolved module-relative
+# (Path(__file__).with_name(...)), which is the one path style that still works from an
+# installed package -- so unlike the cwd-relative assets elsewhere in the tree, shipping
+# these actually makes the demo work.
+recursive-include models *.refpt
+
+# --- Third-party licence texts carried by vendored reference implementations ----------
+recursive-include models LICENSE*
+
+# --- Deliberately NOT shipped ---------------------------------------------------------
+# Sample media (~12 MB of .wav/.png/.jpg/.JPEG/.tif/.pdf) and ~1.4 MB of .md docs are
+# demo inputs and documentation, not runtime payload. Excluded by omission above; the
+# rules below only guard against a stray `recursive-include models *` being added later.
+global-exclude *.png *.jpg *.jpeg *.JPEG *.tif *.pdf *.svg *.wav
+global-exclude *.pth *.pkl *.ipynb
+global-exclude *.pyc *.pyo *.so *.dylib
+global-exclude .gitignore .gitmodules
+prune **/__pycache__

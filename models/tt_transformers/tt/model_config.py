@@ -63,11 +63,37 @@ ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
 # Resolving these paths against the repo root makes LOCAL_LLAMA_PARAMS /
 # LOCAL_HF_PARAMS independent of the caller's current working directory, which
 # matters when tt-run scripts cd into an example directory before launching.
-_REPO_ROOT = Path(
-    os.environ.get("TT_METAL_RUNTIME_ROOT")
-    or os.environ.get("TT_METAL_HOME")
-    or str(Path(__file__).resolve().parents[3])
-)
+#
+# An environment-supplied root is only honored if it actually contains this package's
+# parameter directory. Once `models` is installed as a package (tt-metal-models) rather
+# than used from a checkout, a leftover TT_METAL_HOME pointing at an unrelated or older
+# tree would otherwise load model_params/ from *there* -- silently, with no version
+# check, and producing wrong configs rather than an error. The location of this file is
+# the only root guaranteed to match the code doing the loading, so it is the fallback.
+_PARAMS_DIRNAME = "models/tt_transformers/model_params"
+_INSTALLED_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _resolve_repo_root() -> Path:
+    for env_var in ("TT_METAL_RUNTIME_ROOT", "TT_METAL_HOME"):
+        value = os.environ.get(env_var)
+        if not value:
+            continue
+        candidate = Path(value)
+        if (candidate / _PARAMS_DIRNAME).is_dir():
+            return candidate
+        if (_INSTALLED_ROOT / _PARAMS_DIRNAME).is_dir():
+            logger.warning(
+                f"{env_var}={value} does not contain {_PARAMS_DIRNAME}; "
+                f"resolving bundled model parameters against {_INSTALLED_ROOT} instead. "
+                f"Unset {env_var} if you meant to use the installed models package."
+            )
+            return _INSTALLED_ROOT
+        return candidate
+    return _INSTALLED_ROOT
+
+
+_REPO_ROOT = _resolve_repo_root()
 
 
 class TensorGroup(Enum):
