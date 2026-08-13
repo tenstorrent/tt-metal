@@ -4189,3 +4189,117 @@ The report also refuses to print at all when `credit_timeouts`, `dropped_frames`
 because `pages`/`pushes` are success counters that simply stop: a footprint computed from them after an egress
 failure would read plausibly LOW. Same class as the §N+41 tail flush that could never fire.
 
+
+## §N+43 — The NoC-footprint PLOTS land on the device timebase, and every code-size intuition was wrong (bh-26, 2026-08-13)
+
+The per-sweep NoC sample now reaches Tracy as **plots on the device timebase**, so "how much NoC is the
+profiler moving, right now, next to the zones that explain it" is a picture rather than a teardown total.
+Capture: `tracy_captures/drisc_nocfp_plots_sd15.tracy`, SD delay 15, 120 cores, `--iters 500`, zones +
+footprint on, 18.78 MB, 126 contexts, 25 plots.
+
+### The alignment proof, which is the deliverable
+
+A plot stamped at DECODE time would sit milliseconds right of its zones — the mover's ring tail alone trails
+the last worker zone by 2.5–2.9 ms (§N+41). Measured with `tools/drisc_drain/tracy_plot_check`:
+
+| | value |
+|---|---|
+| worker window (from `tracy_zone_csv`) | `[931,159,767 .. 933,083,161]` ns, span **1.923 ms** |
+| DRISC zone window | `[931,167,176 .. 936,499,299]` ns |
+| filler 9-9 plot: samples / span / inside window | **117** / 1.953 ms / **97.4%** |
+| filler 9-9 first sample vs window open | **+16.7 us** |
+| mover 9-0 last sample | **936,499,299 ns — the last DRISC zone, to the nanosecond** |
+| filler sampling interval | dt p50 **17.3–17.6 us** = the SWEEP+PACE cadence |
+| mover sampling interval | dt p50 **1.3–2.0 us** = its faster sweep rate |
+| samples per filler | 117 / 140 / 138 / 136 vs §N+41's 117 / 138 / 142 / 139 SWEEP zones |
+| **CONTROL: Tracy's own CPU-side `Frame` plot** | span **2,994 ms**, **0.0%** inside the worker window |
+
+The control row is what makes this a proof rather than a plausible table: a host-timebase plot in the same
+capture misses the worker window entirely, and the device-timebase ones sit inside it. Sample counts match
+SWEEP-zone counts one-for-one, so the series really is one sample per sweep.
+
+**Movers show only 33–35% containment and that is correct.** They keep draining the DRAM ring for ~2.5–2.9 ms
+after the last worker zone, so most of their samples legitimately fall past the worker window. That is
+§N+41's drain tail, not misalignment — and the fact that their LAST sample coincides exactly with the last
+DRISC zone is the check that distinguishes the two.
+
+### The mechanism: a client-only change, because the plot time was already on the wire
+
+`Profiler::PlotData` stamps `GetTime()`. But the time is carried in `QueuePlotDataBase{name, time}` and the
+server converts it with `TscTime(RefTime(...))`, so only the client stamp needed to change — **no server,
+wire-format, GUI or `tracy-capture` change**. `PlotDataAt` takes the instant explicitly and the caller inverts
+the device-zone mapping:
+
+```
+zone displays at  ConvertGpuTime(tgpu) = round(ts/freq) - anchor_ns + TscTime(host_anchor)
+plot displays at  TscTime(tsc) = (tsc - baseTime) * timerMul
+=>                tsc = (round(ts/freq) - anchor_ns) / timerMul + host_anchor
+```
+
+The server-private `baseTime` **cancels**, which is the only reason this is computable client-side. Verified
+against `Worker::ProcessGpuNewContext` (`timeDiff = TscTime(cpuTime) - gpuTime`), `Worker::TscTime` and both
+branches of `ConvertGpuTime` (they agree because `calibrationMod` stays 1.0). Backdating is safe because
+`Dequeue()`'s delta encoder is a plain running subtraction with **no ordering assertion** — the same property
+`GpuZoneEnd`'s `cpuTime` already relies on. The anchor comes from the handler's own `chip_anchors_`, so
+nothing had to be plumbed out of `start()`.
+
+### CODE SIZE: every intuition was wrong, and `noinline` was actively harmful
+
+The DRISC code region is 11,264 B and the sample had to fit alongside self-profiling. Measured per change:
+
+| build (zones + footprint on) | text | |
+|---|---|---|
+| series, first cut | 11,508 | 244 over |
+| + shared `self_mark_w0` prologue | 11,348 | 84 over — real, −160 B |
+| + constexpr index table | 11,332 | 68 over — marginal, −16 B |
+| + `noinline` on the prologue | 11,332 | **zero effect** |
+| + `noinline` wrapper over 47 `get_timestamp()` sites | 11,332 | **zero effect** |
+| **− delete all three `noinline` attributes** | **11,228** | **36 B spare** — **−104 B** |
+
+Three corrections, all evidence-backed:
+
+- **`noinline` is NOT ignored here.** `nm` shows real out-of-line symbols (`ts_now`, `nf_sample_regs`,
+  `nf_sweep_end`). An earlier note in the kernel claiming "GCC ignores the attribute" was a wrong diagnosis of
+  a right observation, and is corrected in place.
+- **`noinline` made the binary BIGGER.** Deleting three attributes bought 104 B. GCC's own `-Os` inlining beat
+  the hint. **This is what made the series fit** — it fits because hints were removed, not added.
+- **Outlining does nothing for small bodies.** Collapsing 47 inlined `get_timestamp()` call sites into one
+  wrapper changed the ELF by **exactly 0 bytes**: a call sequence costs what the ~3 inlined instructions did.
+
+The only mechanism that ever paid was restructuring **data** — flat arrays over `[2][4]`, runtime index
+tables, and dropping a per-sweep 64 B stack snapshot (that trio bought 424 B). **Do not budget code space
+against dead `if constexpr` branches either:** removing the ablation knobs freed 16 B, i.e. nothing, because a
+compile arg that is 0 by default was never emitted.
+
+**Splitting the drain kernel into separate filler/mover files would not help.** `kRole` is already a
+compile-time arg so each role gets its own ELF: movers come out at 6,788 B against fillers at 11,228 B from
+one source, and a filler ELF contains **zero** `socket`/`pcie`/`write_to_host`/`reserve_pages` symbols. The
+dead role is already gone; separation would only remove `.bss`, and code is what is scarce.
+
+### RETRACTION: the ~252 GB lifetime figure was ~10x high
+
+§N+42's per-filler lifetime read was extrapolated as ~63 GB (~252 GB across four, ~3,400x the frame bytes)
+from an assumed ~200,000 sweeps/filler, taken from §N+41's "167k–379k total sweeps". **That config runs
+16,226 sweeps.** Measured: **4.87 GiB per filler**, ~19 GiB across four. The qualitative conclusion is
+unchanged and still the headline — a filler's lifetime read is ~279x its in-window frame bytes, so the
+profiler's NoC cost is dominated by POLLING, not payload — but the magnitude was wrong by an order of
+magnitude and the arithmetic that produced it should not be reused.
+
+**And any lifetime byte total must be quoted WITH ITS SWEEP COUNT.** Two runs of the same code and config gave
+6.57 GB/filler at 21,831 sweeps and 4.87 GiB at 16,226 — the drainer is resident, so the total is a function
+of how long the process lived, not a property of the workload. A lifetime figure without its sweep count is
+not comparable to anything.
+
+### Measurement gotchas
+
+- **`tracy-capture`'s "Zones:" headline is CPU zones only.** This capture reports 8,179 while carrying
+  3,003,119 device zone rows. Same trap as `tracy_capture_zones_headline_gotcha`; judge a device capture by
+  `tracy_zone_csv` or `tracy_ctx_inspect`, never the headline.
+- **Three ways to crash a Tracy server walk, all hit here**: resolving a GPU zone's source location, recursing
+  `Child()` (its empty sentinel is not `>= 0`), and walking `GetGpuData()` in-process at all — the last
+  segfaults even with empty-lane and null-entry guards. `tracy_plot_check` therefore does plots only and takes
+  the zone windows from `tracy_zone_csv`, which already does that walk correctly. Two small tools beat one that
+  crashes.
+- **The default 4 Mi host record ring silently drops at this volume**: 1,801,941 records dropped until
+  `TT_METAL_PERF_DEBUG_RING_RECS=16777216`. Producer stalls stayed 0 throughout, so the stall counters do NOT
+  tell you the trace is incomplete — check the BroadcastRing line.
