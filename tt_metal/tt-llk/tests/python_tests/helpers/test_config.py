@@ -456,6 +456,16 @@ class TestConfig:
             f"{debug_flag}-{opt_level} "
             "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
             "-ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit "
+            # The backend replay pass records repeated Tensix sequences into
+            # the replay buffer, but it does not exclude MOP: the Replay
+            # Expander sits after the MOP Expander, which is the sole unit
+            # that handles MOP, so a MOP replayed out of the buffer is never
+            # expanded and the unpacker/packer hang waiting for instructions
+            # that never arrive.  Harmless while most instructions were opaque
+            # MMIO stores; routing TT_*/TTI_* through intrinsics made the pass
+            # visible to FPU/sync sequences and it started recording MOPs.
+            # Re-enable once the pass refuses to record MOP/MOP_CFG.
+            "-mno-tt-tensix-optimize-replay "
             f"{os.environ.get('TT_LLK_EXTRA_CFLAGS', '')} "
         )
         TestConfig.WITH_COVERAGE = with_coverage
@@ -1314,7 +1324,14 @@ class TestConfig:
                         f"-DPROCESSOR_INDEX={risc_id} "
                     )
                 compile_command = (
-                    f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} {TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
+                    f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.ARCH_SPECIFIC_OPTIONS} {TestConfig.OPTIONS_ALL} "
+                    # Compute-only flags.  Only the three TRISCs build with the
+                    # Tensix extension, so Tensix-specific options (e.g.
+                    # -mtensix-config-diagnose) must not go in OPTIONS_ALL --
+                    # the BRISC/NCRISC build uses plain -mcpu=tt-bh and rejects
+                    # them outright.
+                    f"{os.environ.get('TT_LLK_COMPUTE_CFLAGS', '')} "
+                    f"-I{TestConfig.TESTS_WORKING_DIR} "
                     f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
                     f"-DLLK_TRISC_{trisc_define} {device_print_flags}{TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
                     f"-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / name}.ld -T{TestConfig.LINKER_SCRIPTS}/sections.ld "
