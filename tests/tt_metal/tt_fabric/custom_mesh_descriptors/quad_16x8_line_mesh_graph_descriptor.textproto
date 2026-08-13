@@ -1,0 +1,11 @@
+# Whole quad as a single 16x8 LINE/LINE mesh (128 chips, no torus wrap).
+# If this places on the SC4 mock, the 128 chips form one connected quad grid.
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 16, 8 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 2, 2 ] }
+  channels { count: 2 policy: RELAXED }
+}
+graph_descriptors { name: "G0" type: "FABRIC" instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } } }
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

@@ -1,0 +1,38 @@
+# Llama + audio enc/decoder: current working "1x2 pod" MGD on a quad (tt-blaze #3089).
+# Two 4x16 BLACKHOLE decode meshes (M0 host [1,8], M1 host [4,8]) joined by 16 intermesh
+# links. 128 chips total (a full quad). Verbatim from the issue (16 RELAXED channels), which
+# differs from the checked-in llama_8b_1x2_pod (8 STRICT + mapper-limit comment).
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 16 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 1, 8 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 16 ] dim_types: [ RING, LINE ] }
+  host_topology   { dims: [ 4, 8 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+graph_descriptors {
+  name: "G0"
+  # MGD 1.0 compatibility requires the single top-level graph to be a FABRIC graph
+  # (a "POD"/other type trips "There can only be one FABRIC level graph").
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1  } }
+    channels { count: 16 policy: RELAXED }
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
