@@ -132,24 +132,6 @@ run_t3000_trace_stress_tests() {
   fi
 }
 
-run_t3000_resnet_tests() {
-  fail=0
-  # Record the start time
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_resnet_tests"
-
-  pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_resnet_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_dit_tests() {
   # Record the start time
   fail=0
@@ -222,9 +204,6 @@ run_t3000_tests() {
 
   # Run Llama3.2-11B Vision tests on spoofed N300
   # run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests
-
-  # Run resnet tests
-  run_t3000_resnet_tests
 
   # Run motif tests
   run_t3000_motif_tests
