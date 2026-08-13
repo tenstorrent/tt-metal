@@ -1,0 +1,98 @@
+2026-08-13 14:36:27.961 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-13 14:36:28.044 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-13 14:36:28.044 | info     |             UMD | Cluster constructor started. (cluster.cpp:348)
+2026-08-13 14:36:28.044 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:91)
+2026-08-13 14:36:28.044 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:110)
+2026-08-13 14:36:28.045 | info     |             UMD | Established firmware bundle version: 19.8.0 (topology_discovery.cpp:569)
+2026-08-13 14:36:28.045 | info     |             UMD | Firmware bundle version 19.8.0 on the system is newer than the latest fully tested version 19.5.0 for blackhole architecture. Newest features may not be supported. (topology_discovery.cpp:601)
+2026-08-13 14:36:28.049 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:114)
+2026-08-13 14:36:28.269 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:168)
+2026-08-13 14:36:28.269 | info     |             UMD | IOMMU: enabled (cluster.cpp:142)
+2026-08-13 14:36:28.269 | info     |             UMD | KMD version: 2.8.0 (cluster.cpp:145)
+2026-08-13 14:36:28.269 | info     |             UMD | Cluster constructor completed. (cluster.cpp:520)
+2026-08-13 14:36:28.271 | info     |             UMD | Starting devices in cluster (cluster.cpp:1024)
+2026-08-13 14:36:28.460 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1032)
+2026-08-13 14:36:28.589 | DEBUG    | ttnn.device:__init__:152 - Using default dispatch core type for this system: DispatchCoreType.WORKER
+2026-08-13 14:36:28.589 | DEBUG    | ttnn.device:__init__:154 - Using default dispatch core axis for this system: DispatchCoreAxis.COL
+2026-08-13 14:36:28.589 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:367)
+2026-08-13 14:36:28.589 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:429)
+2026-08-13 14:36:28.589 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-13 14:36:28.589 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-13 14:36:28.589 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-13 14:36:28.589 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-13 14:36:28.589 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=1 (bus_id=0x2) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-13 14:36:28.589 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-13 14:36:28.589 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=2 (bus_id=0x3) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-13 14:36:28.589 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=3 (bus_id=0x4) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:89)
+2026-08-13 14:36:28.590 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2342)
+2026-08-13 14:36:28.590 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:2350)
+2026-08-13 14:36:28.594 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-13 14:36:28.594 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-13 14:36:28.594 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-13 14:36:28.594 | info     |    BuildKernels | Using pre-compiled firmware from: /home/mvasiljevic/tt-metal/tt_metal/pre-compiled/13793420398762238087/ (build_env_manager.cpp:347)
+2026-08-13 14:36:28.666 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929600_memory' (shm_resource_tracker.cpp:282)
+2026-08-13 14:36:28.666 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681929601_memory' (shm_resource_tracker.cpp:282)
+2026-08-13 14:36:28.666 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932032_memory' (shm_resource_tracker.cpp:282)
+2026-08-13 14:36:28.666 | info     |           Metal | ShmResourceTracker: removed orphaned shm '/tt_device_154095681932033_memory' (shm_resource_tracker.cpp:282)
+2026-08-13 14:36:29.245 | info     |           Metal | [Real-time profiler] Device 0 sync complete: 100 samples, frequency=1.349985 GHz, device_time_at_sync=2320648444133 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-13 14:36:29.245 | info     |           Metal | [Real-time profiler] Device 2 sync complete: 100 samples, frequency=1.349983 GHz, device_time_at_sync=2359839558499 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-13 14:36:29.246 | info     |           Metal | [Real-time profiler] Device 3 sync complete: 100 samples, frequency=1.349980 GHz, device_time_at_sync=2369089472666 cycles (realtime_profiler_manager.cpp:1127)
+2026-08-13 14:36:29.248 | info     |           Metal | [Real-time profiler] Device 1 sync complete: 100 samples, frequency=1.349986 GHz, device_time_at_sync=2327253810946 cycles (realtime_profiler_manager.cpp:1127)
+{"candidate": "auto", "median_ms": 0.6387839093804359, "minimum_ms": 0.6346404552459717, "pcc": [0.9999811662108443, 0.9999811662108443, 0.9999811662108443, 0.9999811662108443], "status": "pass"}
+{"candidate": "grid4x1_w1_n1_s1", "median_ms": 1.0752156376838684, "minimum_ms": 1.0650912299752235, "pcc": [0.999984268468558, 0.999984268468558, 0.999984268468558, 0.999984268468558], "status": "pass"}
+{"candidate": "grid2x1_w1_n2_s1", "median_ms": 1.145639456808567, "minimum_ms": 1.142348162829876, "pcc": [0.999984268468558, 0.999984268468558, 0.999984268468558, 0.999984268468558], "status": "pass"}
+{"candidate": "grid2x1_w1_n2_s2", "median_ms": 1.0858499445021152, "minimum_ms": 1.083696261048317, "pcc": [0.999984268468558, 0.999984268468558, 0.999984268468558, 0.999984268468558], "status": "pass"}
+{"candidate": "grid1x1_w1_n4_s1", "median_ms": 1.441624015569687, "minimum_ms": 1.4381827786564827, "pcc": [0.999984268468558, 0.999984268468558, 0.999984268468558, 0.999984268468558], "status": "pass"}
+{"candidate": "grid1x1_w1_n4_s2", "median_ms": 1.2506945058703423, "minimum_ms": 1.2428099289536476, "pcc": [0.999984268468558, 0.999984268468558, 0.999984268468558, 0.999984268468558], "status": "pass"}
+{"candidate": "grid1x1_w1_n4_s4", "median_ms": 1.2041963636875153, "minimum_ms": 1.2013204395771027, "pcc": [0.999984268468558, 0.999984268468558, 0.999984268468558, 0.999984268468558], "status": "pass"}
+{"candidate": "grid2x2_w1_n1_s1", "median_ms": 1.2326412834227085, "minimum_ms": 1.230134628713131, "pcc": [0.999984268468558, 0.999984268468558, 0.999984268468558, 0.999984268468558], "status": "pass"}
+{"candidate": "grid4x1_w2_n1_s1", "median_ms": 0.6351210176944733, "minimum_ms": 0.6304820999503136, "pcc": [0.9999811662108443, 0.9999811662108443, 0.9999811662108443, 0.9999811662108443], "status": "pass"}
+{"candidate": "grid2x1_w2_n2_s1", "median_ms": 0.8338754996657372, "minimum_ms": 0.8317055180668831, "pcc": [0.9999811662108443, 0.9999811662108443, 0.9999811662108443, 0.9999811662108443], "status": "pass"}
+{"candidate": "grid2x1_w2_n2_s2", "median_ms": 0.7513221353292465, "minimum_ms": 0.7467642426490784, "pcc": [0.9999811662108443, 0.9999811662108443, 0.9999811662108443, 0.9999811662108443], "status": "pass"}
+{"candidate": "grid1x1_w2_n4_s1", "median_ms": 1.1776951141655445, "minimum_ms": 1.1724159121513367, "pcc": [0.9999811662108443, 0.9999811662108443, 0.9999811662108443, 0.9999811662108443], "status": "pass"}
+{"candidate": "grid1x1_w2_n4_s2", "median_ms": 0.9949770756065845, "minimum_ms": 0.993805006146431, "pcc": [0.9999811662108443, 0.9999811662108443, 0.9999811662108443, 0.9999811662108443], "status": "pass"}
+{"candidate": "grid1x1_w2_n4_s4", "median_ms": 0.9672599844634533, "minimum_ms": 0.9649302810430527, "pcc": [0.9999811662108443, 0.9999811662108443, 0.9999811662108443, 0.9999811662108443], "status": "pass"}
+{"candidate": "grid2x2_w2_n1_s1", "median_ms": 0.6840396672487259, "minimum_ms": 0.6813500076532364, "pcc": [0.9999811662108443, 0.9999811662108443, 0.9999811662108443, 0.9999811662108443], "status": "pass"}
+{"candidate": "grid4x1_w4_n1_s1", "median_ms": 0.4528239369392395, "minimum_ms": 0.45173242688179016, "pcc": [0.9999811662108443, 0.9999811662108443, 0.9999811662108443, 0.9999811662108443], "status": "pass"}
+{"candidate": "grid2x1_w4_n2_s1", "median_ms": 0.6509162485599518, "minimum_ms": 0.6488170474767685, "pcc": [0.9999811662108443, 0.9999811662108443, 0.9999811662108443, 0.9999811662108443], "status": "pass"}
+{"candidate": "grid2x1_w4_n2_s2", "median_ms": 0.5755932070314884, "minimum_ms": 0.573684461414814, "pcc": [0.9999811662108443, 0.9999811662108443, 0.9999811662108443, 0.9999811662108443], "status": "pass"}
+{"candidate": "grid1x1_w4_n4_s1", "median_ms": 0.9951521642506123, "minimum_ms": 0.9891269728541374, "pcc": [0.9999811662108443, 0.9999811662108443, 0.9999811662108443, 0.9999811662108443], "status": "pass"}
+{"candidate": "grid1x1_w4_n4_s2", "median_ms": 0.8122636936604977, "minimum_ms": 0.8102655410766602, "pcc": [0.9999811662108443, 0.9999811662108443, 0.9999811662108443, 0.9999811662108443], "status": "pass"}
+{"candidate": "grid1x1_w4_n4_s4", "median_ms": 0.7942947559058666, "minimum_ms": 0.7924921810626984, "pcc": [0.9999811662108443, 0.9999811662108443, 0.9999811662108443, 0.9999811662108443], "status": "pass"}
+{"candidate": "grid2x2_w4_n1_s1", "median_ms": 0.467812642455101, "minimum_ms": 0.46569760888814926, "pcc": [0.9999811662108443, 0.9999811662108443, 0.9999811662108443, 0.9999811662108443], "status": "pass"}
+nanobind: leaked 2 instances!
+ - leaked instance 0x7eff9d3fceb8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7eff9d50d038 of type "ttnn._ttnn.device.DispatchCoreConfig"
+nanobind: leaked 41 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 341 functions!
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "__repr__"
+ - leaked function "GetNumAvailableDevices"
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "create_sub_device_manager"
+ - leaked function "element_size"
+ - leaked function ""
+ - leaked function "to_rank"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-13 14:36:36.310 | info     |    BuildKernels | JIT cache stats: 23/104 hits (22.1%) [23 cached, 50 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-13 14:36:36.310 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-13 14:36:36.321 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:512)
+2026-08-13 14:36:36.321 | info     |             UMD | Closing devices in cluster (cluster.cpp:1037)
+2026-08-13 14:36:36.900 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1046)
+2026-08-13 14:36:36.900 | info     |             UMD | Cluster destructor started. (cluster.cpp:754)
+2026-08-13 14:36:36.900 | info     |             UMD | Cluster destructor completed. (cluster.cpp:757)

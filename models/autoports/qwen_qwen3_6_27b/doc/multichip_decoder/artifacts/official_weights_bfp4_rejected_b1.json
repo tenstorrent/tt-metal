@@ -1,0 +1,180 @@
+{
+  "batch": 1,
+  "checkpoint_shards": [
+    "model-00001-of-00015.safetensors",
+    "model-00004-of-00015.safetensors",
+    "model-00006-of-00015.safetensors",
+    "model-00007-of-00015.safetensors",
+    "model-00008-of-00015.safetensors"
+  ],
+  "max_context": 128,
+  "mesh": [
+    1,
+    4
+  ],
+  "model": "Qwen/Qwen3.6-27B",
+  "reference": "OptimizedDecoder 1x1, candidate=default",
+  "results": {
+    "full_attention": {
+      "cache_pass": {
+        "key": [
+          true,
+          true,
+          true,
+          true
+        ],
+        "value": [
+          true,
+          true,
+          true,
+          true
+        ]
+      },
+      "cache_shapes": {
+        "key": [
+          [
+            2,
+            1,
+            64,
+            256
+          ],
+          [
+            2,
+            1,
+            64,
+            256
+          ],
+          [
+            2,
+            1,
+            64,
+            256
+          ],
+          [
+            2,
+            1,
+            64,
+            256
+          ]
+        ],
+        "value": [
+          [
+            2,
+            1,
+            64,
+            256
+          ],
+          [
+            2,
+            1,
+            64,
+            256
+          ],
+          [
+            2,
+            1,
+            64,
+            256
+          ],
+          [
+            2,
+            1,
+            64,
+            256
+          ]
+        ]
+      },
+      "output_pass": false,
+      "output_pcc": 0.9870166982498954,
+      "policy": {
+        "attention_weight_dtype": "DataType.BFLOAT4_B",
+        "cache_dtype": "DataType.BFLOAT8_B",
+        "ccl_dtype": "bfloat16",
+        "effective_candidate": "geometry_w4",
+        "requested_candidate": "geometry_w4"
+      },
+      "replicas_equal": true
+    },
+    "linear_attention": {
+      "cache_pass": {
+        "conv": [
+          false,
+          false,
+          false,
+          false
+        ],
+        "recurrent": [
+          false,
+          false,
+          false,
+          false
+        ]
+      },
+      "cache_shapes": {
+        "conv": [
+          [
+            1,
+            1,
+            2560,
+            4
+          ],
+          [
+            1,
+            1,
+            2560,
+            4
+          ],
+          [
+            1,
+            1,
+            2560,
+            4
+          ],
+          [
+            1,
+            1,
+            2560,
+            4
+          ]
+        ],
+        "recurrent": [
+          [
+            1,
+            12,
+            128,
+            128
+          ],
+          [
+            1,
+            12,
+            128,
+            128
+          ],
+          [
+            1,
+            12,
+            128,
+            128
+          ],
+          [
+            1,
+            12,
+            128,
+            128
+          ]
+        ]
+      },
+      "output_pass": true,
+      "output_pcc": 0.9998611652297562,
+      "policy": {
+        "attention_weight_dtype": "DataType.BFLOAT4_B",
+        "cache_dtype": "DataType.BFLOAT8_B",
+        "ccl_dtype": "bfloat16",
+        "effective_candidate": "geometry_w4",
+        "requested_candidate": "geometry_w4"
+      },
+      "replicas_equal": true
+    }
+  },
+  "revision": "6a9e13bd6fc8f0983b9b99948120bc37f49c13e9"
+}

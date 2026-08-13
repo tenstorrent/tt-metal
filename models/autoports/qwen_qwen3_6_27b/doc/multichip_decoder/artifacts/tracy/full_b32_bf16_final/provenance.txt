@@ -1,0 +1,7 @@
+Profiler command:
+python_env/bin/python -m tracy -r -p -o models/autoports/qwen_qwen3_6_27b/doc/multichip_decoder/artifacts/tracy/full_b32_bf16_final models/autoports/qwen_qwen3_6_27b/tests/multichip_traced_decode.py --kind full --batch 32 --steps 4 --forbid-program-cache-misses --result-json models/autoports/qwen_qwen3_6_27b/doc/multichip_decoder/artifacts/tracy/full_b32_bf16_final/trace_result.json
+
+Report command:
+python_env/bin/tt-perf-report <reports/*/ops_perf_results_*.csv> --start-signpost PERF_DECODE --end-signpost PERF_DECODE_END --no-color --csv decode_perf_report.csv --summary-file decode_summary
+
+Complete log: doc/multichip_decoder/logs/tracy_full_b32_bf16_final.log

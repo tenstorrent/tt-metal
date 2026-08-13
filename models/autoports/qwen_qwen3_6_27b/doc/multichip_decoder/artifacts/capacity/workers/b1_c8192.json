@@ -1,0 +1,26 @@
+{
+  "batch": 1,
+  "categories": {},
+  "context": 8192,
+  "device_ids": [
+    3,
+    2,
+    1,
+    0
+  ],
+  "elapsed_seconds": 1.240769020281732,
+  "error": "'ttnn._ttnn.multi_device.MeshDevice' object has no attribute 'get_device'",
+  "error_type": "AttributeError",
+  "fabric_opened": false,
+  "memory_view_failure": "AttributeError: 'ttnn._ttnn.multi_device.MeshDevice' object has no attribute 'get_device'",
+  "memory_views": {},
+  "mesh_shape": [
+    1,
+    4
+  ],
+  "mode": "worker",
+  "pid": 3661651,
+  "schema_version": 1,
+  "success": false,
+  "traceback": "Traceback (most recent call last):\n  File \"/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tests/multichip_capacity_probe.py\", line 123, in _worker\n    result[\"memory_views\"][\"opened\"] = _mesh_memory_views(mesh)\n                                       ^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tests/multichip_capacity_probe.py\", line 76, in _mesh_memory_views\n    return [dict(device_index=index, **_memory_view(mesh.get_device(index))) for index in range(len(mesh.get_device_ids()))]\n                                                    ^^^^^^^^^^^^^^^\nAttributeError: 'ttnn._ttnn.multi_device.MeshDevice' object has no attribute 'get_device'. Did you mean: 'get_device_id'?\n"
+}
