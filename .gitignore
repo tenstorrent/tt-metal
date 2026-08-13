@@ -173,3 +173,9 @@ tray_to_pcie_device_mapping.yaml
 # model bringup manifests and tensor artifacts
 bringup/artifacts
 model_tracer/traced_operations
+
+# Autoport bringup evidence: perf CSVs and raw op profiles are cited by row
+# number in each stage's README/work_log, so they are the evidence for the
+# published numbers rather than build output. Exempt them from the blanket
+# *.csv rule above.
+!models/autoports/**/doc/**/*.csv

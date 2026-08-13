@@ -269,6 +269,7 @@ def attention_decode(
     kv_cache: KVCache,
     current_pos: ttnn.Tensor,
     token_index: int,
+    compute_kernel_config=None,
 ) -> ttnn.Tensor:
     """Single-token attention against the KV cache.
 
@@ -279,7 +280,13 @@ def attention_decode(
     """
     k_cache, v_cache, page_table = kv_cache.k, kv_cache.v, kv_cache.page_table
 
-    xqkv = ttnn.linear(x, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    xqkv = ttnn.linear(
+        x,
+        weights.wqkv,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=compute_kernel_config,
+    )
 
     # Blackhole: nlp_create_qkv_heads_decode's interleaved reader zeroes
     # odd-indexed Q rows when the fused input sits in DRAM, due to a NoC
@@ -337,7 +344,13 @@ def attention_decode(
     ttnn.deallocate(q)
 
     attn = _concat_heads_decode(attn, config)
-    out = ttnn.linear(attn, weights.wo, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.linear(
+        attn,
+        weights.wo,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=compute_kernel_config,
+    )
     ttnn.deallocate(attn)
     return out
 
@@ -349,13 +362,21 @@ def attention_prefill(
     cos_cache: ttnn.Tensor,
     sin_cache: ttnn.Tensor,
     kv_cache: KVCache | None = None,
+    user_id: int = 0,
+    compute_kernel_config=None,
 ) -> ttnn.Tensor:
     """Causal self-attention over a full sequence. ``x``/return ``[1, 1, S, hidden]``.
 
     When ``kv_cache`` is given, the post-RoPE K and V for the whole sequence are
     written into it so a decode pass can continue from position S.
     """
-    xqkv = ttnn.linear(x, weights.wqkv, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    xqkv = ttnn.linear(
+        x,
+        weights.wqkv,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=compute_kernel_config,
+    )
 
     q, k, v = ttnn.experimental.nlp_create_qkv_heads(
         xqkv,
@@ -375,7 +396,7 @@ def attention_prefill(
 
     # Seed the cache with the prompt's post-RoPE K/V so decode can continue.
     if kv_cache is not None:
-        _fill_cache(kv_cache, k, v, user_id=0)
+        _fill_cache(kv_cache, k, v, user_id=user_id)
 
     # GQA is handled inside SDPA: it broadcasts the 4 KV heads across 32 Q heads.
     # Default scale is head_dim ** -0.5, which is what Qwen3 uses.
@@ -384,7 +405,13 @@ def attention_prefill(
         ttnn.deallocate(t)
 
     attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    out = ttnn.linear(attn, weights.wo, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out = ttnn.linear(
+        attn,
+        weights.wo,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        compute_kernel_config=compute_kernel_config,
+    )
     ttnn.deallocate(attn)
     return out
 
@@ -555,11 +582,19 @@ def build_expert_sparsity(device, num_experts: int) -> ttnn.Tensor:
 def _expert_compute_kernel_config(device):
     """HiFi4, and ``fp32_dest_acc_en`` deliberately OFF.
 
-    The expert matmuls accumulate over hidden/intermediate with bf8 weights, so
-    LoFi (the matmul default) is not enough. Enabling fp32 dest accumulation
-    looks like the natural next lever but must not be used here: it halves the
-    matmul dest from 8 tiles to 4, which corrupts expert output on Blackhole
-    (tt-metal #49068, hit on BH-QB-2). HiFi4 alone provides the accuracy.
+    The functional path holds expert weights in **bf16** (see
+    ``upload_expert_weights``), so the accumulation over hidden/intermediate has
+    16 bits of mantissa to preserve and LoFi -- the matmul default, which keeps
+    the top 5 -- is not enough. Enabling fp32 dest accumulation looks like the
+    natural next lever but must not be used here: it halves the matmul dest from
+    8 tiles to 4, which corrupts expert output on Blackhole (tt-metal #49068,
+    hit on BH-QB-2). HiFi4 alone provides the accuracy.
+
+    The optimized decoder quantises the experts to bfloat4_b, where there is no
+    longer any low-order mantissa for HiFi4 to resolve, and measured LoFi as
+    both faster and marginally more accurate -- so it overrides this with its
+    own config rather than reusing it. See
+    ``optimized_decoder.EXPERT_MATH_FIDELITY``.
     """
     return ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -822,6 +857,7 @@ def decoder_layer_prefill(
     sin_cache: ttnn.Tensor,
     sparsity: ttnn.Tensor,
     kv_cache: KVCache | None = None,
+    user_id: int = 0,
 ) -> ttnn.Tensor:
     """One full decoder layer. ``x`` / return ``[1, 1, S, hidden]``.
 
@@ -842,7 +878,7 @@ def decoder_layer_prefill(
     eps = config.rms_norm_eps
 
     normed = ttnn.rms_norm(x, weight=weights.input_layernorm, epsilon=eps)
-    attn_out = attention_prefill(normed, weights.attention, config.attention, cos_cache, sin_cache, kv_cache)
+    attn_out = attention_prefill(normed, weights.attention, config.attention, cos_cache, sin_cache, kv_cache, user_id)
     ttnn.deallocate(normed)
     hidden = ttnn.add(x, attn_out)
     ttnn.deallocate(attn_out)

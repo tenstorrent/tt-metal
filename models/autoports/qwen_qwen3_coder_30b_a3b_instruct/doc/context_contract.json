@@ -4,7 +4,7 @@
   "current_supported_context": 262144,
   "capability_reduction": false,
   "limiting_reason": null,
-  "stage": "functional_decoder",
+  "stage": "optimized_decoder",
   "scope": "single decoder layer (layer 0) on one Blackhole p300c die, batch 1",
   "device": {
     "arch": "blackhole",
@@ -51,5 +51,8 @@
   "evidence": [
     "doc/functional_decoder/work_log.md (context probe section)",
     "scratchpad logs: context_probe.log, prefill_sweep.log"
-  ]
+  ],
+  "expert_weight_dtype": "bfloat4_b",
+  "optimized_note": "Stage 02 changed expert weight dtype to bfloat4_b, attention projection dtype to bfloat8_b, the expert matmul block widths, expert math fidelity to LoFi, and the decode attention projections to a DRAM-sharded program config. None of these touches the KV cache layout, dtype, or paging, so the measured context limits carry over unchanged. Per-layer weight DRAM: expert weights shrink ~3.6x (bf16 to bfloat4_b, which is 0.5625 B/elem once each 16-element block's exponent byte is counted). Decode additionally needs a second, DRAM-width-sharded copy of wqkv/wo; at bfloat8_b (1.0625 B/elem) each copy is 20.05 MB, so the pair is 40.11 MB against the single bf16 copy stage 01 held at 37.75 MB -- a 2.36 MB increase, not a wash, and an earlier revision of this file called it one by rounding bfloat8_b to 1 B/elem. Against 24 GB of usable DRAM it changes nothing: no capability reduction.",
+  "attention_weight_dtype": "bfloat8_b"
 }
