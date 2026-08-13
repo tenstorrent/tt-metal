@@ -144,19 +144,21 @@ def _footprint_bytes(block_rows, slice_tiles, num_slices, *, is_row_major, has_g
 # ---------------------------------------------------------------------------
 
 
-def _slice_candidates(gx, gy):
-    """Slice counts that tile the grid into exact rectangles.
+def _rect_candidates(gx, gy):
+    """Every (num_hidden_slices, rect_w, rect_h) a row-group rectangle can take.
 
-    s <= gx  -> rect is (s x 1) and s must divide gx.
-    s >  gx  -> rect is (gx x rect_h), so s must be gx * rect_h with rect_h <= gy.
+    A row-group must be an exact rectangle because `Mcast2D` takes the bounding
+    box of the core set as THE multicast rect: a non-rectangular group would
+    broadcast a stat tile into cores that do not own those rows.  Any
+    rect_w <= grid_x, rect_h <= grid_y tiles the grid by floor division; the
+    leftover columns/rows simply hold no row-group.
+
+    Pinning rect_w to grid_x (or to a divisor of it) is what starved the decode
+    regime on an 11-wide grid: `s` was forced to a multiple of 11, so a shape
+    wanting 56 slices could only take 11.  Searching rect_w x rect_h instead
+    lets 56 land as 8 x 7.
     """
-    out = set()
-    for s in range(1, gx + 1):
-        if gx % s == 0:
-            out.add(s)
-    for rect_h in range(2, gy + 1):
-        out.add(gx * rect_h)
-    return sorted(out)
+    return [(rect_w * rect_h, rect_w, rect_h) for rect_h in range(1, gy + 1) for rect_w in range(1, gx + 1)]
 
 
 def _plan(device, input_tensor, *, has_gamma, bytes_):
@@ -173,26 +175,22 @@ def _plan(device, input_tensor, *, has_gamma, bytes_):
     slice_cap = min(hidden_tiles, max(1, _div_up(hidden_tiles, HIDDEN_TILES_PER_CORE_FLOOR)), gx * gy)
 
     best = None
-    for s in _slice_candidates(gx, gy):
+    for s, rect_w, rect_h in _rect_candidates(gx, gy):
         if s > slice_cap:
             continue
         slice_tiles = _div_up(hidden_tiles, s)
         # Tightness: every slice must own at least one tile (no idle rect core).
         if _div_up(hidden_tiles, slice_tiles) != s:
             continue
-        rect_w = min(s, gx)
-        if s % rect_w != 0 or gx % rect_w != 0:
-            continue
-        rect_h = s // rect_w
-        if rect_h > gy:
-            continue
         if _footprint_bytes(1, slice_tiles, s, is_row_major=is_row_major, has_gamma=has_gamma, bytes_=bytes_) > budget:
             continue
         groups_geom = (gx // rect_w) * (gy // rect_h)
         groups = min(groups_geom, max(1, row_tiles))
         cores = groups * s
-        # Occupancy first; tie-break toward FEWER slices (fewer combines).
-        score = (cores, -s)
+        # Occupancy first; then FEWER slices (fewer combines); then the WIDEST
+        # rectangle, so a hidden line lies along a grid ROW — a column line is
+        # 2.91x slower when bandwidth-bound (noc_placement/report.md:20-37).
+        score = (cores, -s, rect_w)
         if best is None or score > best[0]:
             best = (score, groups, s, slice_tiles, rect_w, rect_h)
 
