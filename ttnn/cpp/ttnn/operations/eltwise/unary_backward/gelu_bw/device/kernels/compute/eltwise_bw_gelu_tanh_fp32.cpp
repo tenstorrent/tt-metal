@@ -45,7 +45,7 @@ void kernel_main() {
         ckl::FillScalar<ckl::Dst::D3>{kBeta},
         ckl::MulBinary<ckl::Dst::D1, ckl::Dst::D3, ckl::Dst::D1>{},
         ckl::Tanh<ckl::Dst::D1>{},
-        ckl::CopyDest<ckl::Dst::D1, ckl::Dst::D0>{},
+        ckl::CopyDest<ckl::Dst::D1, ckl::Dst::D0, COPY_DEST_DATA_FORMAT>{},
         ckl::FillScalar<ckl::Dst::D3>{1.0f},
         ckl::AddBinary<ckl::Dst::D1, ckl::Dst::D3, ckl::Dst::D1>{},
         ckl::FillScalar<ckl::Dst::D3>{0.5f},
