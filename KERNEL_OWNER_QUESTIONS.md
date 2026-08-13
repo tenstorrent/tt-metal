@@ -5,20 +5,23 @@ boundaries through the tt-llk Python suite. Until they are settled there is no w
 right outcome is a pass, an `xfail`, or a bug report, and a guess becomes a permanent reason string
 that nobody re-derives.
 
-> ## Read this first: Q3 is answered, and the answer reverses it
+> ## Read this first: Q3 was answered by the ISA, and is now fixed
 >
-> [tt-isa-documentation](https://github.com/tenstorrent/tt-isa-documentation) settles Q3 for Blackhole,
+> [tt-isa-documentation](https://github.com/tenstorrent/tt-isa-documentation) settled Q3 for Blackhole,
 > and not in the direction the question assumed. `SFPGT`, `SFPLE` and `SFPSWAP` all specify a **total
 > order** for FP32 in which `+NaN` is the largest value:
 >
 > > `-NaN < -Inf < ... < -0 < +0 < ... < +Inf < +NaN`
 >
-> So the hardware is behaving exactly as documented, and it is **the goldens that are wrong** — they
-> model IEEE's unordered comparisons, which the SFPU does not implement. Those ops need a golden that
-> models the total order, not an xfail against the kernel. See §3.
+> The hardware was behaving exactly as documented, and it was **the goldens that were wrong** — they
+> modelled IEEE's unordered comparisons, which the SFPU does not implement. **Seven ops have since
+> been fixed and enrolled** (`Clamp`, `Hardsigmoid`, `Hardtanh`, `ReluMax`, `UnaryGe`, `UnaryGt`,
+> `UnaryMin`); they pass as ordinary tests, and the xfails this document was about to request were
+> never written. See §3 for what is left of the question.
 >
-> That takes the count these questions decide from 33 ops down to **26**, and moves 7 of them from
-> "blocked on an owner" to ordinary golden work.
+> **That is the argument for this whole file.** Three questions were drafted against measured tables.
+> One dissolved on contact with the ISA, and had it been filed as a kernel bug — or worse, silently
+> xfailed — it would have left seven permanent, plausible-looking lies about documented hardware.
 
 **What is left for an owner**, and it is now mostly one question:
 
@@ -26,7 +29,7 @@ that nobody re-derives.
 |---|---|---|---|
 | 1 | What should an approximation kernel do with an input outside its series' range? | **23** | **Open** — the ISA is silent by construction |
 | 2 | Why does `RsqrtCompat` saturate at the pole where `Rsqrt` does not? | 1 | **Open**, but narrowed — see the ISA note in §2 |
-| 3 | Are SFPU comparisons defined for a `NaN` operand? | 9 | **Answered** for Blackhole; 2 ops and the Wormhole gap remain |
+| 3 | Are SFPU comparisons defined for a `NaN` operand? | 9 | **Answered and fixed** — 7 enrolled; 2 ops and the Wormhole gap remain |
 
 Both remaining questions were originally written up as one-op curiosities (`Log`, `signbit`). Driving
 the full unary set showed each was a single behaviour with wide blast radius.
@@ -194,7 +197,7 @@ All three route through `SignMagIsSmaller()`, which "treats C and D as sign-magn
 comparison is a bit-pattern compare remapped to two's complement, not an IEEE compare. A `+NaN` has an
 all-ones exponent and a set mantissa, so it outranks every finite value **by design**.
 
-### So the goldens are the wrong party
+### So the goldens were the wrong party — and have been fixed
 
 Every measured result follows from the total order, including the ops that *agree* — which is what
 makes the explanation checkable rather than plausible:
@@ -212,10 +215,11 @@ makes the explanation checkable rather than plausible:
 through `SFPSWAP`: each returns its own upper-bound dispatch constant, which is what clamping a value
 that ranks above everything must give.
 
-**The action is therefore golden work, not an xfail.** Seven ops need goldens that model the total
-order, after which they enrol as ordinary passes. Writing them off as kernel divergences would have
-recorded a permanent, plausible-looking lie about documented hardware — the exact failure mode the
-per-op gate exists to prevent.
+**Done: seven ops now model the total order and are enrolled** as ordinary passes. The mapping was
+confirmed against the kernels rather than inferred from behaviour — `_relu_max_body_` is
+`v_if (result > threshold)`, a two-vector compare and therefore `SFPGT`, and `_calculate_clamp_` has
+the same shape; `Hardsigmoid` turned out to *be* `_relu_max_body_(x/6 + 0.5, 1.0)`. Over 8000 finite
+inputs the rewritten goldens are bit-identical to the ones they replace; only the NaN answers moved.
 
 ### What is still open
 
@@ -231,10 +235,9 @@ per-op gate exists to prevent.
    rests on is **Blackhole-only**, and the goldens may need arch-keying rather than one total-order
    model. **Question: what is the intended `NaN` comparison behaviour on Wormhole?** Nothing in this
    suite has been measured there.
-3. **The op→instruction mapping is inferred from behaviour, not read from the kernels.** The pass/fail
-   split matches the total order exactly, which is strong, but confirming which ops lower to
-   `SFPGT`/`SFPLE`/`SFPSWAP` versus `SFPSETCC` needs a read of each kernel before the goldens are
-   changed.
+3. **The seven enrolled goldens are unverified on Wormhole.** They model a Blackhole-documented order.
+   If they fail there, the goldens need arch-keying rather than the model being wrong — but nobody has
+   run them to find out.
 
 ---
 

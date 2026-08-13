@@ -2,13 +2,25 @@
 
 **Issue:** [tenstorrent/tt-metal#49739 — [LLK] SFPU testing edge cases](https://github.com/tenstorrent/tt-metal/issues/49739)
 **Plan for what is left:** [SFPU_EDGE_CASE_EXPANSION_PLAN.md](SFPU_EDGE_CASE_EXPANSION_PLAN.md)
-**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-13 (revision 11)
+**Audited:** 2026-07-23 · **Regenerated from code:** 2026-08-13 (revision 12)
 **Scope:** All SFPU LLK kernels in `tt-metal/tt_metal/tt-llk`, audited through the tt-llk Python test
 infra (`tests/python_tests/`). Wormhole B0 and Blackhole share essentially the same SFPU kernel set
 (BH adds only `topk_xl`), so this audit treats them together and notes arch-specific gaps inline.
 Quasar has its own suite under `quasar/` and is **out of scope** — an op driven only from `quasar/`
 counts as untested here.
 
+> ### Revision 12 — the seven ops the ISA freed are enrolled
+>
+> The total order is now modelled (`sfpu_total_order_key` and its `min`/`max`/`clamp`/`relu_max`
+> helpers), and `Clamp`, `Hardsigmoid`, `Hardtanh`, `ReluMax`, `UnaryGe`, `UnaryGt` and `UnaryMin`
+> pass as ordinary tests rather than xfails — **67 of the 97 unary ops are enrolled**. The
+> op→instruction mapping was confirmed against the kernels first: `_relu_max_body_` and
+> `_calculate_clamp_` are two-vector compares, and `Hardsigmoid` turned out to *be*
+> `_relu_max_body_(x/6 + 0.5, 1.0)`. Over 8000 finite inputs the rewritten goldens are bit-identical
+> to the ones they replace; only the NaN answers moved.
+>
+> Every cat-B op that remains is now waiting on someone else — §5.6's two questions, or a harness.
+>
 > ### Revision 11 — the ISA answers the `NaN` comparison question, and reverses it
 >
 > `tt-isa-documentation` specifies a total order for FP32 — `-NaN < -Inf < ... < -0 < +0 < ... < +Inf
@@ -127,9 +139,9 @@ single kernel behaviour holding that op out, which is why the 37 unenrolled ops 
 they look. The two markers now mean different things:
 
 - **🟡 §5.9** — waiting on §5.6's approximation-contract question. 23 ops, blocked on an owner.
-- **🟡 §5.8** — the SFPU's documented total order. 7 of these 9 are *not* blocked: the ISA settles them
-  and they need a golden that models the total order. Only `Sign` and `Heaviside` are still questions,
-  because they compare through `SFPSETCC`, whose contract excludes a `NaN` operand.
+- **🟡 §5.8** — only `Sign` and `Heaviside` still carry this marker. The other seven ops that used to
+  are now ✅: the ISA settles them and their goldens model the total order. These two compare through
+  `SFPSETCC`, whose contract excludes a `NaN` operand.
 
 ---
 
@@ -149,14 +161,14 @@ All figures re-derived from the tree on 2026-08-12 (see §7 for the commands).
 | Binary integer / ternary / scalar / reduce / FPU-binary ops | 5 / 5 / 5 / 3 / 3 |
 | `_OP_SINGULARITIES` entries | **21** — +2 for the ternary operand-C poles |
 | `_OP_EDGE_POINTS` entries | 43, plus `_OP_OPERAND_EDGE_POINTS` for `lerp`'s operand-C knees |
-| `SPECIALS_READY_OPS` (cat B opt-in) | **60 of 97 unary**, plus all **5 scalar binops**; of the 37 unary still outside, 26 wait on the two questions in §5.6 and **7 are golden work the ISA has already settled** (§5.8) |
+| `SPECIALS_READY_OPS` (cat B opt-in) | **67 of 97 unary**, plus all **5 scalar binops**; all 30 unary still outside wait on §5.6's two questions or on a harness — none is work this suite can simply do |
 | `(format, dest_acc)` triples that can carry specials | 7 cells of 50 (Wormhole); **3 of those 7 reachable and confirmed on Blackhole**. Carrying a `-0.0` is a strictly narrower gate — see §5.2 |
 | Ops diverging from their golden at a driven edge | 13 over 52 cells, of which **16 cells now arch-gated to Wormhole**; the 3 newest are cat-B and derived from the delivery rules rather than listed |
 | Host-side guards over the gates and metadata | 107 tests (`test_sfpu_domains.py`) |
 
 **Category status:** A ✅ closed for every op that has a boundary, unary **and ternary** · B 🟡 live
-for 60 of the 97 unary ops plus all 5 scalar binops; of the 37 still outside, 7 are golden work the ISA
-settles (§5.8) and 26 wait on §5.6's two questions · C ✅ closed for the 5 ops whose kernels claim the
+for 67 of the 97 unary ops plus all 5 scalar binops; the 30 still outside all wait on §5.6's two
+questions or on a harness · C ✅ closed for the 5 ops whose kernels claim the
 full int32 range · D ✅ closed for all 43 knees, plus `lerp`'s weight boundaries · E ✅ closed, unary
 and binary · F ⬜ 11 kernels untouched.
 
@@ -185,7 +197,7 @@ The same happened to approximate `exp` in the unary suite (4 XPASS → 4 pass). 
 Ordered by how much coverage each item is worth. This is the list to work from; §1 of the plan
 sequences it.
 
-### 2.1 Cat B — IEEE specials for the other 37 unary ops
+### 2.1 Cat B — IEEE specials for the other 30 unary ops
 
 **No longer zero.** Nine ops — `Identity`, `Abs`, `Exp`, `Sin`, `Cos`, and now `Neg`, `Reciprocal`,
 `Sqrt` and `Rsqrt` — inject `±inf`, `NaN` and signed zeros through `SPECIALS_READY_OPS` and are green
@@ -383,7 +395,7 @@ registered domain at all, so neither sweep reaches it and coverage depends on a 
 | `Atanh` | `atanh` | broad | -1.0 (abo); 1.0 (bel) | — | ✅ driven | ✅ | — |  |
 | `Ceil` | `ceil` | broad | — | `-2, -1, 0, 1, 2` | ✅ driven | ✅ | — |  |
 | `Celu` | `celu` | broad | — | `0, -0` | ✅ driven | ✅ | — |  |
-| `Clamp` | `clamp` | standard | — | `-1, 1` | 🟡 §5.8 | ✅ | — |  |
+| `Clamp` | `clamp` | standard | — | `-1, 1` | ✅ driven | ✅ | — |  |
 | `Elu` | `elu` | broad | — | `0, -0` | ✅ driven | ✅ | — |  |
 | `EqualZero` | `equal_zero` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
 | `Erfinv` | `erfinv` | standard | -1.0 (abo); 1.0 (bel) | — | 🟡 §5.9 | ✅ | — | ⚠️ |
@@ -393,8 +405,8 @@ registered domain at all, so neither sweep reaches it and coverage depends on a 
 | `GreaterThanZero` | `greater_than_zero` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
 | `Hardmish` | `hardmish` | standard | — | `-2, 0` | ✅ driven | ✅ | — |  |
 | `Hardshrink` | `hardshrink` | standard | — | `-0.5, 0.5` | ✅ driven | ✅ | — |  |
-| `Hardsigmoid` | `hardsigmoid` | broad | — | `-3, 3` | 🟡 §5.8 | ✅ | — |  |
-| `Hardtanh` | `hardtanh` | standard | — | `-1, 1` | 🟡 §5.8 | ✅ | — |  |
+| `Hardsigmoid` | `hardsigmoid` | broad | — | `-3, 3` | ✅ driven | ✅ | — |  |
+| `Hardtanh` | `hardtanh` | standard | — | `-1, 1` | ✅ driven | ✅ | — |  |
 | `Heaviside` | `heaviside` | standard | — | `0, -0` | 🟡 §5.8 | ✅ | — | ⚠️ |
 | `LessThanEqualZero` | `less_than_equal_zero` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
 | `LessThanZero` | `less_than_zero` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
@@ -406,7 +418,7 @@ registered domain at all, so neither sweep reaches it and coverage depends on a 
 | `Prelu` | `prelu` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
 | `Rdiv` | `rdiv` | standard | 0.0 (bot) | — | 🟡 §5.9 | ✅ | — |  |
 | `Reciprocal` | `reciprocal` | broad | 0.0 (bot) | — | ✅ driven | ✅ | — | ⚠️ `1/NaN` xfail |
-| `ReluMax` | `relu_max` | broad | — | `0, 5` | 🟡 §5.8 | ✅ | — |  |
+| `ReluMax` | `relu_max` | broad | — | `0, 5` | ✅ driven | ✅ | — |  |
 | `ReluMin` | `relu_min` | broad | — | `5` | ⬜ | ✅ | — |  |
 | `Round` | `round` | standard | — | `-2.5, -1.5, -0.5, 0.5, 1.5, 2.5` | ✅ driven | ✅ | — |  |
 | `Rsqrt` | `rsqrt` | broad | 0.0 (abo) | — | ✅ driven | ✅ | — | ⚠️ `rsqrt(-0)` xfail |
@@ -420,12 +432,12 @@ registered domain at all, so neither sweep reaches it and coverage depends on a 
 | `SqrtCustom` | `sqrt_custom` | standard | 0.0 (abo) | — | 🟡 §5.9 | ✅ | — |  |
 | `Threshold` | `threshold` | broad | — | `5` | ✅ driven | ✅ | — |  |
 | `Trunc` | `trunc` | broad | — | `-1, 0, 1` | ✅ driven | ✅ | — |  |
-| `UnaryGe` | `unary_ge` | standard | — | `0.5` | 🟡 §5.8 | ✅ | — |  |
-| `UnaryGt` | `unary_gt` | standard | — | `0.5` | 🟡 §5.8 | ✅ | — |  |
+| `UnaryGe` | `unary_ge` | standard | — | `0.5` | ✅ driven | ✅ | — |  |
+| `UnaryGt` | `unary_gt` | standard | — | `0.5` | ✅ driven | ✅ | — |  |
 | `UnaryLe` | `unary_le` | standard | — | `0.5` | ✅ driven | ✅ | — |  |
 | `UnaryLt` | `unary_lt` | standard | — | `0.5` | ✅ driven | ✅ | — |  |
 | `UnaryMax` | `unary_max` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
-| `UnaryMin` | `unary_min` | standard | — | `0, -0` | 🟡 §5.8 | ✅ | — |  |
+| `UnaryMin` | `unary_min` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
 | `Xielu` | `xielu` | standard | — | `0, -0` | ✅ driven | ✅ | — |  |
 
 #### 4.2 Unary ops smooth everywhere — cat B is their **entire** edge story (47 ops)
@@ -803,7 +815,7 @@ ops in hand.
 cast had invented. Nothing was failing, because `Signbit` is not enrolled for specials; it was waiting
 to.
 
-### 5.8 New: SFPU comparisons rank `NaN` above every finite value — and the ISA says so
+### 5.8 ~~New: SFPU comparisons rank `NaN` above every finite value~~ ✅ closed — the ISA specifies it
 
 IEEE 754 makes every ordered comparison with a `NaN` operand false. The SFPU behaves as though `NaN`
 were larger than everything — which is what an unsigned magnitude comparison gives, since a `NaN` has an
@@ -834,11 +846,21 @@ comparison is a bit-pattern compare remapped to two's complement, not an IEEE co
 outranking every finite value is by design
 (`tt-isa-documentation BlackholeA0/TensixTile/TensixCoprocessor/{SFPGT,SFPLE,SFPSWAP}.md`).
 
-So seven of the nine ops need goldens that model the total order, after which they enrol as ordinary
-passes. Recording them as kernel divergences would have written a permanent, plausible-looking lie
-about documented hardware.
+**Seven of the nine are now enrolled**, with goldens that model the total order
+(`sfpu_total_order_key` and its `min`/`max`/`clamp`/`relu_max` helpers) and pass as ordinary tests.
+Recording them as kernel divergences — which is what this suite was about to do — would have written
+seven permanent, plausible-looking lies about documented hardware.
 
-Two caveats keep the other two out, and one of them is architectural:
+The mapping was confirmed against the kernels before the goldens changed rather than assumed from
+behaviour: `_relu_max_body_` is `v_if (result > threshold)`, a two-vector compare and therefore
+`SFPGT`, and `_calculate_clamp_` has the same shape. `Hardsigmoid` turned out to *be*
+`_relu_max_body_(x * (1/6) + 0.5, 1.0)` — it shares the kernel helper outright, which is why its
+golden now shares one too, and why it diverged in exactly the same way.
+
+Only the NaN answers moved: over 8000 finite inputs the rewritten goldens are bit-identical to the
+ones they replace.
+
+Two caveats keep the other two ops out, and one of them is architectural:
 
 - **`Sign` and `Heaviside` compare against zero**, which is `SFPSETCC`, and its contract is explicitly
   conditioned: *"Provided that `VC` is neither negative zero nor any kind of NaN"*. `NaN` is outside it,
@@ -848,9 +870,7 @@ Two caveats keep the other two out, and one of them is architectural:
   `SFPSETCC` is its only comparison, with the same NaN proviso. Nothing here has been measured on
   Wormhole, so the goldens may need arch-keying rather than one model.
 
-The op→instruction mapping is inferred from the pass/fail split rather than read from the kernels.
-That split matches the total order exactly, which is strong, but confirm it before editing goldens.
-See §5.6.
+See §5.6 for what remains.
 
 ### 5.9 The `Log` saturation is a whole-family behaviour, not one op
 
@@ -876,7 +896,7 @@ one answer settles 23 held-out ops.
 ### 5.6 What to raise with kernel owners
 
 Written up in full, with measured tables and a reproduce command, in `KERNEL_OWNER_QUESTIONS.md`.
-**Two remain**, after the ISA answered a third:
+**Two remain**, plus two narrow ones the ISA raised rather than settled:
 
 1. **Approximation kernels do not propagate non-finite inputs** (§5.5, §5.9) — 23 ops. Is the input
    clamp intended, and should it be documented? The ISA cannot settle this and it is worth knowing
@@ -890,10 +910,17 @@ Written up in full, with measured tables and a reproduce command, in `KERNEL_OWN
    added above the primitive, and `Rsqrt`'s `+inf` is what the hardware itself would give. The
    question is therefore *why the clamp was added*, not which one the hardware does.
 
-**The `NaN` comparison question is answered** — see §5.8. `SFPGT`, `SFPLE` and `SFPSWAP` document a
-total order in which `+NaN` is the largest FP32 value, so seven of those nine ops are golden work
-rather than a question. `Sign` and `Heaviside` remain, because `SFPSETCC`'s contract excludes a `NaN`
-operand, and so does the Wormhole gap: that architecture has no `SFPGT`/`SFPLE` at all.
+**The `NaN` comparison question is answered and acted on** — see §5.8. `SFPGT`, `SFPLE` and `SFPSWAP`
+document a total order in which `+NaN` is the largest FP32 value, so seven of those nine ops were
+golden work rather than a question, and are now enrolled. Two remain for an owner:
+
+3. **Is `SFPSETCC` usable with a `NaN` operand?** Its contract is conditioned — *"Provided that `VC` is
+   neither negative zero nor any kind of NaN"* — which leaves `Sign` and `Heaviside` returning `1.0`
+   at `NaN` by an unspecified route, even though it is consistent with an `int32` test on a positive
+   NaN's bit pattern.
+4. **What is the intended `NaN` comparison behaviour on Wormhole?** It has no `SFPGT` and no `SFPLE`,
+   so the total order the seven new goldens model is a Blackhole guarantee. If they fail there, the
+   goldens need arch-keying rather than the model being wrong. Nothing here has been run on Wormhole.
 
 The `signbit` question is **withdrawn**: §5.2's measurement shows the probe is not delivered on those
 six combinations, so there is no kernel contract to question there.

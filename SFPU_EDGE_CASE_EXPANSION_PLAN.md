@@ -7,7 +7,7 @@ audit, and the record of every finding to date
 **Scope:** Wormhole B0 and Blackhole. Quasar keeps its own inline stimulus definitions under
 `quasar/` and is tracked separately.
 
-**Revision 15 — 2026-08-13.** This document contains **only work that is not done**. Completed items
+**Revision 16 — 2026-08-13.** This document contains **only work that is not done**. Completed items
 are deleted rather than ticked off, because their results live in two places that cannot drift from the
 code: the code itself, and the coverage audit. For what a finished item established, read the audit —
 §5 has the findings, §4 has the per-op state.
@@ -19,11 +19,10 @@ non-coverage companion groups instead of nowhere). Earlier revisions deleted the
 same way; 60 of the 97 unary ops are enrolled and green on Blackhole. What survived from all of it is
 not history but advice, and it is in §8.
 
-**Checking the ISA moved work off the blocked list.** Of the 37 unary ops still outside cat B, 26 wait
-on the questions in §3; **7 no longer wait on anything** — `tt-isa-documentation` specifies the total
-order the SFPU compares under, which makes those a golden fix rather than a question. Start there. One
-item needs hardware nobody here has; the rest is cat F, large but unblocked, and one number to tune
-after the next nightly.
+**Everything unblocked is done, so what remains is genuinely other people's.** 67 of the 97 unary ops
+are enrolled. Of the 30 still outside, **all 30 wait on the two questions in §3 or on a harness** —
+there is no cat-B op left that this document could simply fix. What is actionable here is cat F
+(large, unblocked) and one CI number to tune after the next nightly.
 
 ---
 
@@ -31,28 +30,28 @@ after the next nightly.
 
 | # | Item | Blocked on | Size | Where |
 |---|---|---|---|---|
-| 1 | **Model the SFPU total order in 7 goldens** — the ISA already answers this | nothing | small | §2.1 |
-| 2 | **Two questions for kernel owners** — approximation contract, `RsqrtCompat(0)` (+ `SFPSETCC`/`NaN`) | judgement, not code | drafted, need sending | §3 |
-| 3 | **Cat B, the rest** — 26 ops blocked on item 2's answers | see §2 | small, once answered | §2 |
-| 4 | **Wormhole re-measurement** — `specials_safe()`'s four unreachable rows, and whether the total order holds there | Wormhole hardware | one sweep | §4 |
-| 5 | **Cat F** — harnesses for 11 kernels with no enum entry | new C++ source + golden each | large, per kernel | §5 |
-| 6 | **Tune the new non-coverage CI groups' timeouts** | one nightly run's data | one YAML edit | §6 |
+| 1 | **Two questions for kernel owners** — approximation contract, `RsqrtCompat(0)` (+ `SFPSETCC`/`NaN`) | judgement, not code | drafted, need sending | §3 |
+| 2 | **Cat B, the rest** — 26 ops blocked on item 1's answers | see §2 | small, once answered | §2 |
+| 3 | **Wormhole re-measurement** — `specials_safe()`'s four unreachable rows, and whether the total order holds there | Wormhole hardware | one sweep | §4 |
+| 4 | **Cat F** — harnesses for 11 kernels with no enum entry | new C++ source + golden each | large, per kernel | §5 |
+| 5 | **Tune the new non-coverage CI groups' timeouts** | one nightly run's data | one YAML edit | §6 |
 
-**Start with item 1** — it is the only thing here that is both unblocked and small, and it exists
-because the ISA was checked rather than assumed. **Then send item 2**, which still decides 26 of the 37
-ops and is two emails. Item 6 bounds the value of everything else: coverage that no job runs can
-regress silently.
+**Start with item 1**: it is two emails and it decides 26 of the 30 remaining cat-B ops. Item 5 bounds
+the value of everything else — coverage that no job runs can regress silently — and item 4 is the only
+large build left.
 
-**And check the ISA before filing anything else.** Q3 was written as a kernel question, drafted with a
-measured table, and turned out to be documented behaviour with the *golden* at fault — the whole thing
-was answered by one page of `tt-isa-documentation`. The measurement was still what located that page,
-so the order that worked was: measure, then read the ISA, then ask a human.
+**And check the ISA before filing anything else.** The third question on this list was written as a
+kernel divergence, drafted with a measured table, and turned out to be documented behaviour with the
+*golden* at fault; seven ops were enrolled instead of xfailed. The measurement was still what located
+the ISA page, so the order that worked was: **measure, then read the ISA, then ask a human** — and
+skipping the middle step would have written seven permanent, plausible-looking lies about the
+hardware.
 
 ---
 
-## 2. Cat B — IEEE specials for the other 37 ops
+## 2. Cat B — IEEE specials for the other 30 ops
 
-**60 of the 97 unary ops are enrolled and green.** The gate is two-sided and per op, so an op joins on its own:
+**67 of the 97 unary ops are enrolled and green**, plus all 5 scalar binops. The gate is two-sided and per op, so an op joins on its own:
 
 - `specials_safe(input, output, dest_acc)` — does the *pipeline* deliver a special intact. Measured;
   7 cells of 50; pinned by `test_sfpu_domains.py`.
@@ -66,33 +65,34 @@ because an xfail for an undelivered datum blames the kernel for the stimulus. Th
 
 Both of the first two must pass. What follows is per-op golden work, not stimulus work.
 
-### 2.1 The 37 that are left, and what each is waiting for
+### 2.1 The 30 that are left, and what each is waiting for
 
 Every one has been driven over the full specials set on every Blackhole-reachable triple, so this is a
-measured list, not a to-do list of unknowns. **26 of the 37 wait on someone else; 7 are ordinary
-golden work that the ISA has already settled.**
+measured list, not a to-do list of unknowns. **All 30 that remain wait on someone else** — the seven
+the ISA settled have been done.
 
 | Waiting on | Ops | Which |
 |---|---|---|
 | **§3 Q1** — approximation contract | 23 | `CastFp32ToFp16a`, `Digamma`, `Erf`, `Erfc`, `Erfinv`, `Expm1Cw`, `Frac`, `Gelu`, `GeluDerivative`, `I1`, `Lgamma`, `Log`, `LogWithBase`, `Polygamma`, `Rdiv`, `Rpow`, `Sigmoid`, `SigmoidAppx`, `SqrtCustom`, `Tanh`, `TanhDerivative`, `TanhDerivativeLut`, `UnaryPower` |
-| **Golden work — model the SFPU total order** (nothing blocks this) | 7 | `Clamp`, `Hardsigmoid`, `Hardtanh`, `ReluMax`, `UnaryGe`, `UnaryGt`, `UnaryMin` |
 | **§3 Q3** — `SFPSETCC` and `NaN`, plus the Wormhole gap | 2 | `Sign`, `Heaviside` |
 | §5 — no `MathOperation` golden at all | 3 | `TopKLocalSort`, `TopKMerge`, `TopKRebuild` (perf-only) |
 | tt-llk#1120 | 1 | `ReluMin` (skipped outright) |
 | §3 Q2 | 1 | `RsqrtCompat` |
 
-**Seven of these are now ordinary work, and they were the ones this document had wrong.** The ISA
-specifies a total order for FP32 — `-NaN < -Inf < ... < -0 < +0 < ... < +Inf < +NaN` — on `SFPGT`,
-`SFPLE` and `SFPSWAP`, so `+NaN` outranking every finite value is documented Blackhole behaviour and
-**the goldens are the wrong party**. They model IEEE's unordered comparisons, which the SFPU does not
-implement. Give them the total order and the seven enrol as plain passes; an xfail here would have
-recorded a permanent lie about documented hardware. `Sign` and `Heaviside` stay out because they
-compare against zero via `SFPSETCC`, whose contract explicitly excludes a `NaN` operand.
+**The seven the ISA settled are done and enrolled** — `Clamp`, `Hardsigmoid`, `Hardtanh`, `ReluMax`,
+`UnaryGe`, `UnaryGt`, `UnaryMin`. `sfpu_total_order_key` and its `min`/`max`/`clamp`/`relu_max`
+helpers model the documented order, and the seven pass as ordinary tests rather than xfails. The
+mapping was confirmed against the kernels before the goldens changed, not assumed: `_relu_max_body_`
+is `v_if (result > threshold)` — a two-vector compare, so `SFPGT`, so the total order — and
+`_calculate_clamp_` has the same shape. `Hardsigmoid` turned out to *be* `_relu_max_body_(x/6 + 0.5,
+1.0)`, sharing the kernel helper outright, which is why the golden now shares one too.
 
-**Confirm the op→instruction mapping before changing the goldens.** The pass/fail split matches the
-total order exactly, which is strong evidence, but it is inferred from behaviour rather than read from
-the kernels. And the guarantee is Blackhole-only: Wormhole has no `SFPGT`/`SFPLE` at all, so the
-goldens may need arch-keying rather than one model.
+`Sign` and `Heaviside` stay out: they compare against zero via `SFPSETCC`, whose contract explicitly
+excludes a `NaN` operand.
+
+**The model is Blackhole-documented and Wormhole-unverified.** Wormhole has no `SFPGT`/`SFPLE` at all,
+so if these seven fail there, the goldens need arch-keying rather than the model being wrong. Nothing
+in this suite has been run on Wormhole.
 
 **Neither blocked group needs per-op work — each needs one answer**, and the measured tables are in
 [KERNEL_OWNER_QUESTIONS.md](KERNEL_OWNER_QUESTIONS.md). Once answered, a group enrols together: as
