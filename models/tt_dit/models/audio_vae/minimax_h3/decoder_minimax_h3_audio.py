@@ -42,6 +42,7 @@ from ....layers.audio_ops import DEFAULT_MAX_C_IN_BLOCK, _AlignedOutConv1d
 from ....layers.module import Module
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
+from ....utils.tensor import local_device_to_torch
 from ..vocoder_ltx import Vocoder
 from .blockings_minimax_h3_audio import register_h3_audio_blockings
 
@@ -149,9 +150,10 @@ class MiniMaxH3AudioDecoder(Module):
         # result: read back one. A bare ``ttnn.to_torch`` asserts ``buffers.size() == 1`` and
         # so only works on a single-device mesh. Same shape as the vocoder's own
         # ``_device_to_host``.
-        if self.mesh_device.get_num_devices() > 1:
-            projected_device = ttnn.get_device_tensors(projected_device)[0]
-        projected = ttnn.to_torch(projected_device).float()
+        # `utils.tensor.to_torch`, not `ttnn.to_torch(get_device_tensors(t)[0])`: slicing one coordinate
+        # keeps the parent's distribution metadata, which the converter rejects on a multi-host mesh.
+        # Once per generation, so the composer's collective is not worth avoiding.
+        projected = local_device_to_torch(projected_device).float()
         if t_pad:
             # Crop the alignment padding back off before handing T to the vocoder, which
             # applies its own padding for its own sharding.

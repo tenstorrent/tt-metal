@@ -476,6 +476,33 @@ def _reassemble_2d(
     """
     d0, d1 = concat_dims
 
+    if d0 is not None and d0 == d1:
+        # One tensor dim fractured row-major over the *whole* mesh (`ShardTensorToMesh(dim=d)` hands
+        # shard `i` to device `(i // cols, i % cols)`), so both mesh indices fold into a single
+        # linearised block offset rather than two independent per-axis concats. The general branch
+        # writes `slices[d0]` then `slices[d1]` into the same index, losing the row: shard `(r, c)`
+        # lands at position `c` for every `r`. The C++ equivalent refuses duplicate dims outright
+        # (`ttnn/core/tensor/xtensor/partition.cpp`).
+        cols = mesh_shape[1]
+        span = shard_shape[d0]
+        full_shape = list(shard_shape)
+        full_shape[d0] = span * mesh_shape[0] * cols
+
+        out_dtype = dtype if dtype is not None else shards[0].dtype
+        if permute is not None:
+            out = torch.empty([full_shape[p] for p in permute], dtype=out_dtype)
+            d0_out = list(permute).index(d0)
+        else:
+            out = torch.empty(full_shape, dtype=out_dtype)
+            d0_out = d0
+
+        for coord, shard in zip(mesh_coords, shards):
+            base = (int(coord[0]) * cols + int(coord[1])) * span
+            slices = [slice(None)] * len(full_shape)
+            slices[d0_out] = slice(base, base + span)
+            out[tuple(slices)] = shard.permute(*permute).contiguous() if permute is not None else shard
+        return out
+
     if d0 is not None and d1 is not None:
         s0, s1 = shard_shape[d0], shard_shape[d1]
         full_shape = list(shard_shape)
@@ -664,6 +691,21 @@ def fast_device_to_host(
         local_mesh_shape[inter_host_axis] = len(local_inter_positions)
         local_mesh_shape[intra_host_axis] = len(local_intra_positions)
         local_mesh_shape = tuple(local_mesh_shape)
+
+        if concat_dims[0] is not None and concat_dims[0] == concat_dims[1]:
+            # `_reassemble_2d`'s linearised branch rebuilds a global block index from this host's
+            # remapped 0-based coordinates, which only matches the true index when the host owns a
+            # contiguous run starting at a multiple of its length -- what the quad descriptor gives
+            # (host `h` owns columns `8h..8h+7`). A ragged layout would permute frames silently.
+            run = len(local_inter_positions)
+            first = local_inter_positions[0]
+            if local_inter_positions != list(range(first, first + run)) or first % run:
+                msg = (
+                    f"a dim-{concat_dims[0]} fracture read back on rank {rank} needs this host's "
+                    f"inter-host (axis {inter_host_axis}) positions to be a contiguous run aligned "
+                    f"to its own length; got {local_inter_positions}"
+                )
+                raise ValueError(msg)
 
         inter_remap = {pos: i for i, pos in enumerate(local_inter_positions)}
         intra_remap = {pos: i for i, pos in enumerate(local_intra_positions)}

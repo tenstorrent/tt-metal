@@ -36,6 +36,7 @@ import ttnn
 
 from ....layers.module import Module, Parameter
 from ....utils.conv3d import _FP32_BLOCKINGS, _ntuple, aligned_channels, get_conv3d_config, register_conv3d_configs
+from ....utils.tensor import local_device_to_torch
 
 # Every conv shape in this encoder misses the fp32 blocking table and falls back to
 # (32, 32, 1, 1, 1). As the LTX audio entries in conv3d.py note, an ``H_out=W_out=1``
@@ -242,7 +243,7 @@ class MiniMaxH3CausalConv3d(Module):
         prepared = ttnn.experimental.prepare_conv3d_weights(
             weight_tensor=weight_tt, C_in_block=self.conv_config.C_in_block, device=self.mesh_device
         )
-        state["weight"] = ttnn.to_torch(ttnn.get_device_tensors(prepared)[0])
+        state["weight"] = local_device_to_torch(prepared)
         if bias is not None:
             state["bias"] = bias.reshape(1, -1)
 

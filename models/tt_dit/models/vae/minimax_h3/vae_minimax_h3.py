@@ -44,6 +44,7 @@ from loguru import logger
 import ttnn
 
 from ....layers.module import Module
+from ....utils.tensor import fast_device_to_host, local_device_to_torch
 from .encoder_minimax_h3 import MiniMaxH3Encoder3d
 
 DEFAULT_TILE_SIZE = 256
@@ -196,10 +197,15 @@ class MiniMaxH3Vae(Module):
         weight_loader=None,
         device_stitch: bool = False,
         profile: bool = False,
+        ccl_manager=None,
     ) -> None:
         super().__init__()
         self.config = config
         self.mesh_device = mesh_device
+        # Used only to read a wave back (`_read_wave_units`); this VAE has no tensor parallelism and
+        # runs no collectives in its forward. Optional because the standalone numerics tests build the
+        # VAE on a 1x1 mesh with no fabric configured, where a CCL is neither needed nor openable.
+        self.ccl_manager = ccl_manager
         self.dtype = dtype
         self.tile_size = tile_size
         self.tile_overlap = tile_overlap
@@ -244,6 +250,20 @@ class MiniMaxH3Vae(Module):
             "readback_each": [],
             "device_each": [],
         }
+
+    def _read_wave_units(self, wave: ttnn.Tensor) -> torch.Tensor:
+        """Read a ``wave_size``-way dim-0 fracture back to host in unit order.
+
+        Both readers are correct; the choice is cost. ``ConcatMeshToTensor`` MPI-broadcasts every
+        shard this host does not own, so each rank pulls the whole wave over MPI on top of its own
+        DMA. ``fast_device_to_host`` moves the inter-host hop onto the fabric and DMAs only local
+        shards. ``concat_dims=[0, 0]`` is one dim fractured over the whole mesh, which
+        ``_reassemble_2d`` handles in its ``d0 == d1`` branch; the two are pinned bit-for-bit by
+        ``tests/unit/test_fast_device_to_host.py::TestLinearisedShardReadback``.
+        """
+        if self.ccl_manager is None:
+            return ttnn.to_torch(wave, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+        return fast_device_to_host(wave, self.mesh_device, [0, 0], ccl_manager=self.ccl_manager)
 
     def _report_profile(self, total: float) -> None:
         """Log where a decode's wall time went, and stash it on `last_decode_profile`."""
@@ -385,6 +405,9 @@ class MiniMaxH3Vae(Module):
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
             )
+            # Composer, not `_read_wave_units`: this output is rank 5 and `CCLManager.all_gather` only
+            # reshapes rank < 4, so the fabric path would need a flatten around it. An encode wave is
+            # ~31 MB against the decode wave's 1.4 GB, so the multi-host broadcast is not worth it.
             out = ttnn.to_torch(
                 encoder(x_device),
                 mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
@@ -551,22 +574,7 @@ class MiniMaxH3Vae(Module):
 
         def read_wave(decoded, count: int) -> list[torch.Tensor]:
             mark = time.perf_counter()
-            # `ConcatMeshToTensor`, **not** `fast_device_to_host`.
-            #
-            # `fast_device_to_host(concat_dims=[0, 0])` looks like the right call -- it is what
-            # `vae_ltx.py` and `vae_wan2_1.py` use, and it measures 39 % faster -- but it is a misuse
-            # of that API and returns garbage here. `concat_dims` names, per mesh axis, the tensor
-            # dimension to concatenate along, and it is meant for a tensor fractured on *different*
-            # dims per axis (LTX shards H on one axis and W on the other). This tensor is fractured
-            # 32 ways along dim 0 by `ShardTensorToMesh(dim=0)`, so passing dim 0 for both axes is not
-            # a valid spec: measured, it returns `[24..31, 0, 0, ... 0]` where the correct order is
-            # `[0..31]` -- one mesh row of real data and the rest left unwritten. The speed comes from
-            # not moving the data.
-            #
-            # Nothing in the per-shard numerics suite catches the misuse (every shard is individually
-            # correct, and the roundtrip tests run on a 1x1 mesh where the spec is trivially right);
-            # only the e2e CLIP prompt-alignment gate does (37.37 -> 19.58).
-            out = ttnn.to_torch(decoded, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
+            out = self._read_wave_units(decoded)
             elapsed = time.perf_counter() - mark
             profile["readback"] += elapsed
             profile["readback_each"].append(elapsed)
@@ -725,8 +733,11 @@ class MiniMaxH3Vae(Module):
         profile["device_each"].append(elapsed)
 
         mark = time.perf_counter()
-        # One replica: the gather made every device identical (the stitch-device test asserts this).
-        out = ttnn.to_torch(ttnn.get_device_tensors(canvas)[0]).float()
+        # One replica: the gathers above made every device identical (the stitch-device test
+        # asserts this), so this is the replicated case `local_device_to_torch` is for -- a
+        # single-shard read with no collective.
+        # One replica: the gathers above made every device identical.
+        out = local_device_to_torch(canvas).float()
         elapsed = time.perf_counter() - mark
         profile["readback"] += elapsed
         profile["readback_each"].append(elapsed)
@@ -850,7 +861,6 @@ class MiniMaxH3Vae(Module):
             # before stitching any of them would hold 6.8 GB (and ~29 GB at 1440P/10s).
             # Group chunks into a few waves' worth, stitch, release. Groups are whole chunks
             # so a group never straddles a stitch boundary.
-            # Floor, not ceil: ceil could never express "one chunk per group", the setting that
             # keeps the held pile at one chunk's worth (see `_DECODE_WAVES_IN_FLIGHT`).
             chunks_per_group = max(1, _DECODE_WAVES_IN_FLIGHT * wave_size // tiles_per_chunk)
             clips = []
