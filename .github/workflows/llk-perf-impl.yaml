@@ -126,9 +126,6 @@ jobs:
         run: |
           ${{ matrix.test-group.cmd }}
 
-      # Write a typed Parquet next to the CSVs so the zip below ships both.
-      # Best-effort (strict=False): a single dirty test logs and is skipped, it
-      # never fails the run. Provenance comes from the GitHub context.
       - name: Publish Parquet from CSVs
         if: always() && hashFiles('tt_metal/tt-llk/perf_data/**/*.csv') != ''
         shell: bash
