@@ -556,7 +556,7 @@ def test_moreh_group_norm_backward_callback(
     ],
     ids=["input_grad", "gamma_grad"],
 )
-def test_moreh_group_norm_backward_rejects_invalid_mean_volume(are_required_outputs, device):
+def test_moreh_group_norm_backward_rejects_invalid_mean_volume(are_required_outputs, device, expect_error):
     torch.manual_seed(2024)
 
     N, C, H, W = 2, 4, 23, 23
@@ -584,7 +584,7 @@ def test_moreh_group_norm_backward_rejects_invalid_mean_volume(are_required_outp
     if are_required_outputs[1]:
         npu_gamma_grad = to_ttnn(torch.empty(gamma_beta_shape, dtype=torch.bfloat16), device=device)
 
-    with pytest.raises(RuntimeError, match="mean must have logical volume"):
+    with expect_error(RuntimeError, "mean must have logical volume"):
         ttnn.operations.moreh.group_norm_backward(
             npu_output_grad,
             npu_input,
