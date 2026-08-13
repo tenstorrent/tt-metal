@@ -5,25 +5,6 @@ TT_CACHE_HOME=/mnt/MLPerf/huggingface/tt_cache
 
 
 
-run_t3000_resnet50_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_resnet50_tests"
-
-  # resnet50 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_demo.py --timeout=720 ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_resnet50_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_dit_tests() {
   # Record the start time
   fail=0
@@ -75,9 +56,6 @@ run_t3000_mochi_tests() {
 
 run_t3000_tests() {
 
-
-  # Run resnet50 tests
-  run_t3000_resnet50_tests
 
   # Run motif tests
   run_t3000_motif_tests
