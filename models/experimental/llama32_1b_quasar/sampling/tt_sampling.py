@@ -79,17 +79,6 @@ class TTSampling(LightweightModule):
             and is_default_value(temp, 1.0)
         )
 
-    def _select_topk_indices_dtype(self, per_device_vocab_size: int, multi_step_reduction: bool):
-        # if vocab is larger than uint16 max, return uint32 for indices
-        if per_device_vocab_size > torch.iinfo(torch.uint16).max:
-            return ttnn.uint32
-
-        # if vocab size is missaligned with tile size and multi-step reduction is used, we need uint32 because of slice op compatibility
-        if multi_step_reduction and (per_device_vocab_size // 2) % ttnn.TILE_SIZE != 0:
-            return ttnn.uint32
-
-        return ttnn.uint16
-
     @property
     def force_argmax_sampling(self) -> bool:
         return self._force_argmax_sampling
@@ -273,12 +262,11 @@ class TTSampling(LightweightModule):
         return self.cluster_shape[self.sampling_all_gather_axis]
 
     def _create_indices_tensors(self):
-        """Create the indices tensors needed for distributed top-k operations."""
+        """Create the per-shard index offsets added to the top-k indices after the gather."""
         num_devices_in_mesh = self._get_num_sampling_shards()
         indices_device_offsets = torch.ones(
             1, 1, self.max_batch_size, self.max_top_k * num_devices_in_mesh, dtype=torch.int64
         )
-        # padded_per_device: tile-aligned width matching actual logit tensors (for indices tensor)
         padded_per_device = self.padded_vocab_size // num_devices_in_mesh
 
         for device_id in range(num_devices_in_mesh):
@@ -290,31 +278,6 @@ class TTSampling(LightweightModule):
             device=self.mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        # Create local indices tensor for top-k operations (must match logit width)
-        indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, padded_per_device, dtype=torch.int32)
-        for i in range(padded_per_device):
-            indices_tensor_torch[:, :, :, i] = i
-
-        # pad to power of 2 if needed
-        if self.pad_to_power_of_2 and not is_power_of_2(indices_tensor_torch.shape[-1]):
-            padded_value = upper_power_of_2(indices_tensor_torch.shape[-1])
-            indices_tensor_torch = torch.nn.functional.pad(
-                indices_tensor_torch,
-                (0, padded_value - indices_tensor_torch.shape[-1]),  # pad only last dim
-                mode="constant",
-                value=-1,  # invalid index to ensure that the padding values are not used
-            )
-
-        indices_dtype = self._select_topk_indices_dtype(padded_per_device, self.multi_step_reduction)
-        self.tt_indices_tensor = ttnn.from_torch(
-            indices_tensor_torch,
-            dtype=indices_dtype,
-            layout=ttnn.Layout.TILE,
-            device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.cluster_shape),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -642,7 +605,6 @@ class TTSampling(LightweightModule):
 
         if self.multi_step_reduction:
             x_bf16_list = ttnn.split(x_bf16, x_bf16.shape[-1] // 2, dim=3)
-            indices_tensor_list = ttnn.split(self.tt_indices_tensor, self.tt_indices_tensor.shape[-1] // 2, dim=3)
             topk_values_list = []
             topk_indices_list = []
 
@@ -652,12 +614,10 @@ class TTSampling(LightweightModule):
                     k=self.max_top_k,
                     dim=-1,
                     sub_core_grids=self.sub_core_grid_topk,
-                    indices_tensor=indices_tensor_list[i],
                 )
                 topk_values_list.append(topk_values)
                 topk_indices_list.append(topk_indices)
                 x_bf16_list[i].deallocate()
-                indices_tensor_list[i].deallocate()
 
             topk_values_gathered_bf16_interleaved = ttnn.concat(topk_values_list, dim=3)
             topk_indices_gathered = ttnn.concat(topk_indices_list, dim=3)
@@ -685,7 +645,6 @@ class TTSampling(LightweightModule):
                 k=self.max_top_k,
                 dim=-1,
                 sub_core_grids=self.sub_core_grid_topk,
-                indices_tensor=self.tt_indices_tensor,
             )
 
             # For 1D meshes use `cluster_axis=None`. For 2D meshes, use the configured gather axis.

@@ -148,7 +148,6 @@ class TestSampling1DDevice:
         sampler.load_device_buffers()
         assert sampler._device_buffers_loaded
         assert isinstance(sampler._index_offsets, ttnn.Tensor)
-        assert isinstance(sampler._local_indices, ttnn.Tensor)
         assert isinstance(sampler._seeds, ttnn.Tensor)
         assert isinstance(sampler._user_ids, ttnn.Tensor)
 
