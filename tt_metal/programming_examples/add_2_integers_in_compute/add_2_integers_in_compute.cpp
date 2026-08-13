@@ -133,8 +133,8 @@ int main() {
     // is not released before the operation is complete.
     // In this case, we will wait for the program to finish eventually in the same scope, so we can set it
     // to false safely.
-    EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, false);
-    EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, false);
+    cq.enqueue_write_mesh_buffer(src0_dram_buffer, src0_vec.data(), false);
+    cq.enqueue_write_mesh_buffer(src1_dram_buffer, src1_vec.data(), false);
 
     // Setup arguments for the kernels in the program.
     // Unlike OpenCL/CUDA, every kernel can have its own set of arguments.
@@ -151,11 +151,10 @@ int main() {
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
-    // Data can be read from a MeshBuffer using the ReadShard function. This function is used to read data from a
-    // specific shard of a MeshBuffer. The shard is specified by the MeshCoordinate. The last argument indicates if the
-    // operation is blocking or not.
+    // Read the destination MeshBuffer back to host (blocking).
     std::vector<bfloat16> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, true);
+    result_vec.resize(dst_dram_buffer->size() / sizeof(bfloat16));
+    cq.enqueue_read_mesh_buffer(result_vec.data(), dst_dram_buffer, true);
 
     // compare the results with the expected values.
     bool success = true;

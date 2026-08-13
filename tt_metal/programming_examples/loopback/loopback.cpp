@@ -103,7 +103,7 @@ int main() {
         // upload is complete. This is useful for performance reasons, as it allows the host to continue while the
         // upload is in progress. Note that the host is responsible for ensuring that the upload is complete before the
         // memory holding the data is freed.
-        distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, /*blocking=*/false);
+        cq.enqueue_write_mesh_buffer(input_dram_buffer, input_vec.data(), false);
 
         // Set runtime arguments for the kernel.
         const std::vector<uint32_t> runtime_args = {
@@ -118,10 +118,10 @@ int main() {
         distributed::Finish(cq);
         // NOTE: The above is equivalent to a blocking enqueue of the workload.
 
-        // Read the result back from the shard at mesh coordinate {0,0}. Use blocking=true to wait for completion.
-        // The vector is automatically resized to fit the data.
+        // Read the result back. Use blocking=true to wait for completion.
         std::vector<bfloat16> result_vec;
-        distributed::EnqueueReadMeshBuffer(cq, result_vec, output_dram_buffer, /*blocking*/ true);
+        result_vec.resize(output_dram_buffer->size() / sizeof(bfloat16));
+        cq.enqueue_read_mesh_buffer(result_vec.data(), output_dram_buffer, true);
 
         // Compare the result with the input. The result should be the same as the input.
         TT_FATAL(

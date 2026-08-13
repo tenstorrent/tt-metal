@@ -247,10 +247,10 @@ int main() {
     // =========== Step 7: Write inputs on MeshCQ1 ===========
     // IO is done through MeshCQ1 and Workload dispatch is done through MeshCQ0. Use MeshEvents to synchronize the
     // independent MeshCQs.
-    EnqueueWriteMeshBuffer(data_movement_cq, add_src0_buf, add_src0_vec);
-    EnqueueWriteMeshBuffer(data_movement_cq, add_src1_buf, add_src1_vec);
-    EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src0_buf, mul_sub_src0_vec);
-    EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src1_buf, mul_sub_src1_vec);
+    data_movement_cq.enqueue_write_mesh_buffer(add_src0_buf, add_src0_vec.data(), false);
+    data_movement_cq.enqueue_write_mesh_buffer(add_src1_buf, add_src1_vec.data(), false);
+    data_movement_cq.enqueue_write_mesh_buffer(mul_sub_src0_buf, mul_sub_src0_vec.data(), false);
+    data_movement_cq.enqueue_write_mesh_buffer(mul_sub_src1_buf, mul_sub_src1_vec.data(), false);
     // Synchronize
     MeshEvent write_event = data_movement_cq.enqueue_record_event();
     workload_cq.enqueue_wait_for_event(write_event);
@@ -262,8 +262,10 @@ int main() {
     // =========== Step 9: Read Outputs on MeshCQ1 ===========
     std::vector<bfloat16> add_dst_vec = {};
     std::vector<bfloat16> mul_sub_dst_vec = {};
-    EnqueueReadMeshBuffer(data_movement_cq, add_dst_vec, add_output_buf);
-    EnqueueReadMeshBuffer(data_movement_cq, mul_sub_dst_vec, mul_sub_output_buf);
+    add_dst_vec.resize(add_output_buf->size() / sizeof(bfloat16));
+    data_movement_cq.enqueue_read_mesh_buffer(add_dst_vec.data(), add_output_buf, true);
+    mul_sub_dst_vec.resize(mul_sub_output_buf->size() / sizeof(bfloat16));
+    data_movement_cq.enqueue_read_mesh_buffer(mul_sub_dst_vec.data(), mul_sub_output_buf, true);
 
     // =========== Step 10: Verify Outputs ===========
     bool pass = true;

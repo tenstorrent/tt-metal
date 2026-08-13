@@ -79,8 +79,8 @@ int main() {
     // write operation should block until the data is written to the device. In this case, we set it to false for
     // asynchronous writes, allowing the program to continue executing while the data is being written. This is
     // recommended for most writes to device in applications to improve performance.
-    EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, /*blocking=*/false);
-    EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, /*blocking=*/false);
+    cq.enqueue_write_mesh_buffer(src0_dram_buffer, src0_vec.data(), false);
+    cq.enqueue_write_mesh_buffer(src1_dram_buffer, src1_vec.data(), false);
 
     // Create the kernel (code that runs on the Tensix core) that will perform the addition of the 2 integers.
     // The Data Movement cores are the only cores that can read/write data from/to DRAM. Thus we use them for
@@ -113,12 +113,12 @@ int main() {
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
 
-    // Read a shard of the destination MeshBuffer back to host.
-    // ReadShard reads from a specific device identified by MeshCoordinate; the last argument controls blocking.
+    // Read the destination MeshBuffer back to host.
     // This time we set blocking=true since we must have the data before comparing.
     // NOTE: Everything on the command queue executes in order; a read will not run before the prior kernel finishes.
     std::vector<uint32_t> result_vec;
-    distributed::EnqueueReadMeshBuffer(cq, result_vec, dst_dram_buffer, /*blocking=*/true);
+    result_vec.resize(dst_dram_buffer->size() / sizeof(uint32_t));
+    cq.enqueue_read_mesh_buffer(result_vec.data(), dst_dram_buffer, true);
     if (result_vec.size() != 1) {
         std::cout << "Error: Expected result vector size of 1, got " << result_vec.size() << std::endl;
         mesh_device->close();

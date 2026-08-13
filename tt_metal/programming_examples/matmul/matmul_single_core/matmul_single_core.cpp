@@ -173,11 +173,11 @@ void matmul_single_core(
 
     // Upload the input data to the DRAM buffers, execute the kernels, wait for the result to be read into the output
     // buffer
-    distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, a, false);
-    distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, b, false);
+    cq.enqueue_write_mesh_buffer(src0_dram_buffer, a.data(), false);
+    cq.enqueue_write_mesh_buffer(src1_dram_buffer, b.data(), false);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    distributed::EnqueueReadMeshBuffer(cq, output, dst_dram_buffer, true);
+    cq.enqueue_read_mesh_buffer(output.data(), dst_dram_buffer, true);
 }
 
 ///////////////////////////////////////
