@@ -523,3 +523,111 @@ def test_sharded_nlp_create_qkv_heads_with_program_cache(device):
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
     assert device.num_program_cache_entries() == 2
+
+
+"""
+K=V tied shapes + functionality
+
+The fused input carries Q and a single K/V section -- (num_q_heads + num_kv_heads) * head_dim
+wide instead of (num_q_heads + 2 * num_kv_heads) -- and V is read from the same columns as K.
+Used by models that tie K and V to one projection (Gemma4's global layers), where computing the
+duplicate columns in the projection matmul is pure waste.
+"""
+
+
+def run_nlp_create_qkv_heads_kv_tied_test(
+    batch, seq_len, head_dim, num_q_heads, num_kv_heads, dtype, in_mem_config, out_mem_config, device
+):
+    torch.manual_seed(1234)
+
+    in0_shape = [batch, 1, seq_len, (num_q_heads + num_kv_heads) * head_dim]
+    A = torch.randn(in0_shape)
+    in0_t = ttnn.Tensor(A, dtype).to(ttnn.TILE_LAYOUT).to(device, in_mem_config)
+
+    q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        in0_t,
+        None,
+        num_heads=num_q_heads,
+        num_kv_heads=num_kv_heads,
+        transpose_k_heads=False,
+        memory_config=out_mem_config,
+        kv_tied=True,
+    )
+
+    assert list(q.padded_shape) == [batch, num_q_heads, seq_len, head_dim]
+    assert list(k.padded_shape) == [batch, num_kv_heads, seq_len, head_dim]
+    assert list(v.padded_shape) == [batch, num_kv_heads, seq_len, head_dim]
+
+    got_q = tt2torch_tensor(q)
+    got_k = tt2torch_tensor(k)
+    got_v = tt2torch_tensor(v)
+
+    ref_q, ref_kv = torch.split(A, [num_q_heads * head_dim, num_kv_heads * head_dim], dim=-1)
+    ref_q = torch.reshape(ref_q, [batch, seq_len, num_q_heads, head_dim]).transpose(-3, -2)
+    ref_kv = torch.reshape(ref_kv, [batch, seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
+
+    pcc = 0.99 if dtype == ttnn.bfloat8_b else 1.0
+
+    passing_q, pcc_q = comp_pcc(got_q, ref_q, pcc)
+    logger.debug(f"Q passing={passing_q} pcc={pcc_q}")
+    passing_k, pcc_k = comp_pcc(got_k, ref_kv, pcc)
+    logger.debug(f"K passing={passing_k} pcc={pcc_k}")
+    passing_v, pcc_v = comp_pcc(got_v, ref_kv, pcc)
+    logger.debug(f"V passing={passing_v} pcc={pcc_v}")
+    assert passing_q
+    assert passing_k
+    assert passing_v
+    # The whole point of the mode: V is K's columns read a second time, so the two outputs are
+    # the same values in two tensors. A PCC check alone would pass on an off-by-one column read.
+    assert torch.equal(got_k, got_v)
+
+
+@pytest.mark.parametrize(
+    "out_mem_config",
+    (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG),
+    ids=["out_DRAM", "out_L1"],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    (ttnn.bfloat8_b, ttnn.bfloat16),
+    ids=["BFLOAT8_B", "BFLOAT16"],
+)
+@pytest.mark.parametrize(
+    "batch, seq_len, head_dim, num_q_heads, num_kv_heads",
+    (
+        (1, 128, 512, 4, 1),  # Gemma4-31B global layer, per device at TP=8
+        (1, 128, 64, 8, 2),  # >1 KV head, so a tied read spanning several head slices
+        (2, 32, 32, 3, 3),  # batch > 1 and num_kv_heads == num_q_heads
+    ),
+    ids=["gemma4_global", "multi_kv_head", "batch2"],
+)
+def test_nlp_create_qkv_heads_kv_tied(
+    batch, seq_len, head_dim, num_q_heads, num_kv_heads, dtype, out_mem_config, device
+):
+    run_nlp_create_qkv_heads_kv_tied_test(
+        batch, seq_len, head_dim, num_q_heads, num_kv_heads, dtype, ttnn.DRAM_MEMORY_CONFIG, out_mem_config, device
+    )
+
+
+def test_nlp_create_qkv_heads_kv_tied_rejects_unsupported(device, expect_error):
+    """The paths a tied read would silently corrupt must fail instead.
+
+    The sharded reader walks per-core head offsets and the transpose path routes K through a
+    compute kernel; neither rewinds to K's pages for V, so they would read whatever follows K.
+    """
+    dtype = ttnn.bfloat16
+    num_q_heads, num_kv_heads, head_dim, seq_len = 4, 1, 64, 32
+    A = torch.randn([1, 1, seq_len, (num_q_heads + num_kv_heads) * head_dim])
+    in0_t = ttnn.Tensor(A, dtype).to(ttnn.TILE_LAYOUT).to(device, ttnn.DRAM_MEMORY_CONFIG)
+
+    with expect_error(RuntimeError, "kv_tied does not support transpose_k_heads"):
+        ttnn.experimental.nlp_create_qkv_heads(
+            in0_t, None, num_heads=num_q_heads, num_kv_heads=num_kv_heads, transpose_k_heads=True, kv_tied=True
+        )
+
+    B = torch.randn([1, 1, seq_len, 2 * num_kv_heads * head_dim])
+    in1_t = ttnn.Tensor(B, dtype).to(ttnn.TILE_LAYOUT).to(device, ttnn.DRAM_MEMORY_CONFIG)
+    with expect_error(RuntimeError, "separate KV tensor is invalid"):
+        ttnn.experimental.nlp_create_qkv_heads(
+            in0_t, in1_t, num_heads=num_q_heads, num_kv_heads=num_kv_heads, transpose_k_heads=False, kv_tied=True
+        )

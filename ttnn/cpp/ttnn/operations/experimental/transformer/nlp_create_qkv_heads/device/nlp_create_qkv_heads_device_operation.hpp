@@ -25,6 +25,9 @@ struct NlpCreateHeadsDeviceOperation {
         uint32_t head_dim;
         bool transpose_k_heads;
         MemoryConfig output_mem_config;
+        // Fused input holds one K/V section, read twice: once as K, once as V. See
+        // nlp_create_qkv_heads.hpp. Part of the attributes so it takes part in the program hash.
+        bool kv_tied = false;
     };
 
     struct tensor_args_t {
@@ -94,5 +97,6 @@ std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
     uint32_t head_dim,
     bool transpose_k_heads,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors);
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors,
+    bool kv_tied = false);
 }  // namespace ttnn::prim

@@ -212,6 +212,12 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Interleaved::create_descriptor(
     if (read_from_input_tensor_kv) {
         reader_defines.emplace_back("READ_FROM_INPUT_TENSOR_KV", "1");
     }
+    if (operation_attributes.kv_tied) {
+        // in0_w_tiles is (q + kv) tiles wide rather than (q + 2*kv), so the reader rewinds to the
+        // K pages for V instead of walking past them. Validation has already ruled out the
+        // separate-KV and transpose paths.
+        reader_defines.emplace_back("KV_TIED", "1");
+    }
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
