@@ -100,7 +100,7 @@ CircularBufferConfig from_flatbuffer(
         config_fb->buffer_size());
     impl.set_shadow_global_buffer(shadow_global_buffer);
 
-    return make_circular_buffer_config(std::move(impl));
+    return CircularBufferConfig(std::move(impl));
 }
 
 // TODO: Opportunity to share with TTNN. This was straight up copied from tensor_spec_flatbuffer.cpp

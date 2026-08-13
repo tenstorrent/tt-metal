@@ -158,8 +158,7 @@ TEST_F(MeshDeviceFixture, TestCircularBufferConfigConstructorWithDataTypeMatches
     }
 
     CircularBufferConfig config_via_data_format(cb_config.page_size, data_format_spec);
-    CircularBufferConfig config_via_impl =
-        make_circular_buffer_config(CircularBufferConfigImpl(cb_config.page_size, data_type_spec));
+    CircularBufferConfig config_via_impl(CircularBufferConfigImpl(cb_config.page_size, data_type_spec));
 
     EXPECT_EQ(config_via_data_format.impl(), config_via_impl.impl());
     EXPECT_EQ(config_via_data_format.impl().total_size(), cb_config.page_size);

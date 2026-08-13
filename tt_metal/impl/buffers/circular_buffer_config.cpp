@@ -298,10 +298,6 @@ CircularBufferConfig::CircularBufferConfig(uint32_t total_size) :
 CircularBufferConfig::CircularBufferConfig(CircularBufferConfigImpl impl) :
     impl_(std::make_unique<CircularBufferConfigImpl>(std::move(impl))) {}
 
-CircularBufferConfig make_circular_buffer_config(CircularBufferConfigImpl impl) {
-    return CircularBufferConfig(std::move(impl));
-}
-
 CircularBufferConfig::~CircularBufferConfig() = default;
 
 CircularBufferConfig::CircularBufferConfig(const CircularBufferConfig& other) :
