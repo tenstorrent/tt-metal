@@ -3,30 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """CLI: turn one run's per-test CSVs into a single typed ``run.parquet``.
+It gathers the combined per-test CSVs, stamps run provenance (from CLI args + env
+set by CI), and reuses the tested ``convert_csvs_to_parquet`` converter. One
+Parquet per architecture per run.
 
-This is the entry point the CI ``publish-parquet`` job calls after a perf sweep.
-It gathers the combined per-test CSVs, stamps run provenance, and reuses the
-tested ``convert_csvs_to_parquet`` converter. One Parquet per architecture per run.
-
-    python -m helpers.perf.publish_run --csv-dir perf_data --out run-wormhole.parquet --arch wormhole
-
-Provenance comes from the environment (CI sets these). ``commit_sha``, ``run_id``
-and ``pipeline`` are part of the row identity, so they are REQUIRED and validated:
-an unset/empty value — or an out-of-set pipeline/arch — fails loud rather than
-publishing an immutable Parquet with a colliding or mis-partitioned key.
-    COMMIT_SHA, RUN_ID   required, non-empty
-    PIPELINE             required, one of {"PR", "nightly"}
-    RUN_TIMESTAMP        optional (defaults to now, UTC)
-    PR_NUMBER            optional (NULL for nightly)
-``--arch`` is a required flag restricted to {wormhole, blackhole}.
-
-TILE_LOOP note: the timing columns are the RAW loop totals emitted in
-``<test>.csv`` — they are NOT divided by ``loop_factor * tile_cnt``. That
-per-tile normalization lives only in the sibling ``<test>.post.csv``, which this
-tool intentionally does not read. To get cycles-per-tile, divide the
-mean(...)/std(...) of TILE_LOOP rows by ``loop_factor * tile_cnt`` (both are
-columns in the schema). This differs from the LLK perf dashboard, which prefers
-``.post.csv`` and labels its axis "Cycles / Tile".
+TILE_LOOP timing columns are RAW loop totals (as emitted in ``<test>.csv``), NOT
+divided by ``loop_factor * tile_cnt``; that per-tile normalization lives only in
+``<test>.post.csv``, which this tool does not read. Divide by
+``loop_factor * tile_cnt`` for cycles-per-tile.
 """
 
 import argparse
