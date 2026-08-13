@@ -10,7 +10,10 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::data_movement {
+// Nested per the sibling ports' convention: these names (`supported_by_codegen`, `is_demoted`,
+// `ImplementationSelector`) are generic enough that the bare data_movement namespace cannot hold one
+// port's copy without colliding with the next.
+namespace ttnn::operations::data_movement::repeat_interleave_codegen {
 
 // Correctness-only: transcribed from codegen_repeat_interleave.py's invalidate_vector plus the
 // op's own guards (RepeatInterleaveCodegen.repeat_interleave). Must agree with every case in
@@ -44,4 +47,4 @@ enum class ImplementationSelector { Auto, Native, Codegen };
 
 ImplementationSelector parse_implementation(const std::string& implementation);
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::repeat_interleave_codegen

@@ -9,7 +9,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 
-namespace ttnn::operations::data_movement {
+namespace ttnn::operations::data_movement::repeat_interleave_codegen {
 
 namespace {
 
@@ -141,4 +141,4 @@ ImplementationSelector parse_implementation(const std::string& implementation) {
         implementation);
 }
 
-}  // namespace ttnn::operations::data_movement
+}  // namespace ttnn::operations::data_movement::repeat_interleave_codegen

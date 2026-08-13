@@ -26,7 +26,7 @@ void RepeatInterleaveCodegenDeviceOperation::validate_on_program_cache_miss(
 
     const uint32_t rep_dim = recover_rep_dim(operation_attributes.rep_dim, input_tensor.logical_shape().rank());
     TT_FATAL(
-        ttnn::operations::data_movement::supported_by_codegen(
+        ttnn::operations::data_movement::repeat_interleave_codegen::supported_by_codegen(
             input_tensor,
             operation_attributes.num_repeats,
             static_cast<int32_t>(rep_dim),

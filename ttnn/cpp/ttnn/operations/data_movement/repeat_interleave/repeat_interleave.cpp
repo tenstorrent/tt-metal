@@ -264,10 +264,10 @@ Tensor repeat_interleave(
     int32_t dim,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::string& implementation) {
-    using ttnn::operations::data_movement::ImplementationSelector;
-    using ttnn::operations::data_movement::is_demoted;
-    using ttnn::operations::data_movement::parse_implementation;
-    using ttnn::operations::data_movement::supported_by_codegen;
+    using ttnn::operations::data_movement::repeat_interleave_codegen::ImplementationSelector;
+    using ttnn::operations::data_movement::repeat_interleave_codegen::is_demoted;
+    using ttnn::operations::data_movement::repeat_interleave_codegen::parse_implementation;
+    using ttnn::operations::data_movement::repeat_interleave_codegen::supported_by_codegen;
 
     const ImplementationSelector selector = parse_implementation(implementation);
 

@@ -171,14 +171,15 @@ ProgramDescriptor RepeatInterleaveCodegenProgramFactory::create_descriptor(
     // An RM slot is a whole stick, so kRiReadBatch/kRiWriteBatch worth of them is not guaranteed to
     // fit: shrink the batch (and with it the CB depth) to what per-core L1 admits. The gate
     // rejects anything below kRmCbMinSlots, so the loop always terminates with batch >= 1.
-    const auto cb_budget = ttnn::operations::data_movement::rm_cb_budget(input, output.memory_config());
+    const auto cb_budget =
+        ttnn::operations::data_movement::repeat_interleave_codegen::rm_cb_budget(input, output.memory_config());
     const uint32_t slot_stride = cb_budget.slot_stride;
     TT_FATAL(
-        cb_budget.max_slots >= ttnn::operations::data_movement::kRmCbMinSlots,
+        cb_budget.max_slots >= ttnn::operations::data_movement::repeat_interleave_codegen::kRmCbMinSlots,
         "repeat_interleave codegen: a {} B row-major stick needs {} CB slots' worth of per-core L1 "
         "but only {} fit; supported_by_codegen() must reject this config",
         operation_attributes.stick_size,
-        ttnn::operations::data_movement::kRmCbMinSlots,
+        ttnn::operations::data_movement::repeat_interleave_codegen::kRmCbMinSlots,
         cb_budget.max_slots);
     uint32_t batch = kRiReadBatch;
     while (2 * batch > cb_budget.max_slots) {
