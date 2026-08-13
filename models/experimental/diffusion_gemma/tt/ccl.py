@@ -139,13 +139,9 @@ def _validate_minimal_allgather_input(tensor, dim: int):
             "composite all_broadcast and bypasses the supplied semaphores"
         )
     if gather_dim == rank - 1 and int(tensor.shape[gather_dim]) % ttnn.TILE_SIZE != 0:
-        raise ValueError(
-            f"DG ccl_allgather dim {gather_dim} must be tile-aligned; got shape {tensor.shape}"
-        )
+        raise ValueError(f"DG ccl_allgather dim {gather_dim} must be tile-aligned; got shape {tensor.shape}")
     if gather_dim == rank - 2 and int(tensor.shape[gather_dim]) % ttnn.TILE_SIZE != 0:
-        raise ValueError(
-            f"DG ccl_allgather dim {gather_dim} must be tile-aligned; got shape {tensor.shape}"
-        )
+        raise ValueError(f"DG ccl_allgather dim {gather_dim} must be tile-aligned; got shape {tensor.shape}")
 
 
 def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):

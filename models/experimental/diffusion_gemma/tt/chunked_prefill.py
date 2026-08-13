@@ -597,9 +597,7 @@ def chunked_prefill(
         if embed_chunk_fn is not None:
             raise ValueError("pass prompt_embeds or embed_chunk_fn, not both")
         if int(prompt_embeds.shape[-2]) != seq_len:
-            raise ValueError(
-                f"prompt embedding length {prompt_embeds.shape[-2]} does not match token length {seq_len}"
-            )
+            raise ValueError(f"prompt embedding length {prompt_embeds.shape[-2]} does not match token length {seq_len}")
     if seq_len % chunk_size != 0:
         raise ValueError(f"prompt seq_len {seq_len} must be a multiple of chunk_size {chunk_size} (pad the caller)")
     num_chunks = seq_len // chunk_size
@@ -621,9 +619,7 @@ def chunked_prefill(
             raise ValueError("hybrid chunked prefill requires full and sliding layer page tables")
         sliding_window = int(text_config.sliding_window)
         if chunk_size % sliding_window != 0:
-            raise ValueError(
-                f"hybrid chunk_size {chunk_size} must be a multiple of sliding_window={sliding_window}"
-            )
+            raise ValueError(f"hybrid chunk_size {chunk_size} must be a multiple of sliding_window={sliding_window}")
         full_pt_dev = None
     else:
         if page_table_torch is None:
