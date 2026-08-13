@@ -16,6 +16,7 @@
 // the whole point: if the conversion were wrong the plot span would be offset from the zone span by the
 // decode lag, and that offset is exactly what the numbers below would show.
 #include <algorithm>
+#include <cmath>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -97,8 +98,8 @@ int main(int argc, char** argv) {
            (long long)worker_win.lo, (long long)worker_win.hi, worker_win.span_ms());
 
     printf("\nplots: %zu\n", worker.GetPlots().size());
-    printf("%-44s %8s %14s %14s %10s %10s %8s %8s\n", "name", "n", "first_ns", "last_ns", "span_ms", "dt_p50_us",
-           "dt_max_us", "in_win%");
+    printf("%-44s %8s %10s %10s %10s %7s %10s %8s %8s\n", "name", "n", "val_min", "val_p50", "val_max",
+           "!2dp", "span_ms", "dt_p50_us", "in_win%");
     for (const auto& p : worker.GetPlots()) {
         const char* nm = nullptr;
         // GUARDED: a plot name is a client STRING POINTER the server resolves lazily. On a file load it may
@@ -114,9 +115,26 @@ int main(int argc, char** argv) {
             continue;
         }
         std::vector<int64_t> ts;
+        std::vector<double> vals;
         ts.reserve(d.size());
+        vals.reserve(d.size());
         for (const auto& it : d) {
             ts.push_back(it.time.Val());
+            vals.push_back(it.val);
+        }
+        // Value stats, not just timing. Without these there is no way to check that a rate plot carries
+        // plausible numbers -- or that the 2-decimal quantisation actually took effect -- from the file itself.
+        std::sort(vals.begin(), vals.end());
+        const double v_min = vals.front();
+        const double v_p50 = vals[vals.size() / 2];
+        const double v_max = vals.back();
+        // How many samples are NOT an exact multiple of 0.01: proves the 2dp rounding is applied (or is not).
+        size_t not_2dp = 0;
+        for (double v : vals) {
+            const double scaled = v * 100.0;
+            if (std::fabs(scaled - std::round(scaled)) > 1e-6) {
+                not_2dp++;
+            }
         }
         std::sort(ts.begin(), ts.end());
         std::vector<int64_t> dt;
@@ -133,14 +151,15 @@ int main(int argc, char** argv) {
             }
         }
         printf(
-            "%-44s %8zu %14lld %14lld %10.3f %10.2f %8.2f %7.1f%%\n",
+            "%-44s %8zu %10.2f %10.2f %10.2f %7zu %10.3f %8.2f %7.1f%%\n",
             nm,
             ts.size(),
-            (long long)ts.front(),
-            (long long)ts.back(),
+            v_min,
+            v_p50,
+            v_max,
+            not_2dp,
             double(ts.back() - ts.front()) / 1e6,
             dt.empty() ? 0.0 : double(dt[dt.size() / 2]) / 1e3,
-            dt.empty() ? 0.0 : double(dt.back()) / 1e3,
             ts.empty() ? 0.0 : 100.0 * double(inside) / double(ts.size()));
     }
     return 0;
