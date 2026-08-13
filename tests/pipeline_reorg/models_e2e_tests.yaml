@@ -311,6 +311,21 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
+- name: Qwen2.5-Coder-32B e2e tests (Blackhole)
+  cmd: |
+    export HF_MODEL=Qwen/Qwen2.5-Coder-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-Coder-32B-Instruct
+    pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+  model: qwen2.5-coder-32b
+  model_family: Qwen
+  skus:
+    bh_quietbox_2:
+      timeout: 15
+      tier: 2
+      release_ready: false
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
 - name: Qwen2.5-7B e2e tests
   cmd: |
     export HF_MODEL=Qwen/Qwen2.5-7B-Instruct HF_HUB_OFFLINE=1 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/Qwen/Qwen2.5-7B-Instruct MESH_DEVICE=N300
@@ -964,6 +979,24 @@
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
 
+# ── Stable Diffusion 3.5 Large (TT-DiT) ────────────────────────────
+
+- name: TT-DiT Stable Diffusion 3.5 Large e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --timeout 1200 models/tt_dit/tests/models/sd35/test_pipeline_sd35.py
+    pytest --timeout 600 models/tt_dit/tests/models/sd35/test_performance_sd35.py
+  model: sd35
+  model_family: Stable Diffusion
+  skus:
+    wh_llmbox_perf:
+      timeout: 20
+      tier: 3
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # ── Panoptic DeepLab ───────────────────────────────────────────────
 - name: panoptic-deeplab e2e tests
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1020
@@ -1001,6 +1034,115 @@
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: models
 
+- name: VGGNet e2e tests
+  cmd: |
+    pytest --timeout 180 models/demos/vision/classification/vgg/demo/demo.py
+  model: vggnet
+  model_family: VGGNet
+  skus:
+    wh_n150:
+      timeout: 4
+      tier: 3
+  owner_id: U06Q7ESTFEV # Borys Bradel
+  team: ttnn
+
+- name: BERT-Tiny e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 120 models/demos/wormhole/bert_tiny/demo/demo.py
+  model: bert-tiny
+  model_family: BERT
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+  owner_id: U024A4EFV6U # Brian Liu
+  team: ttnn
+
+- name: BERT-Large e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 210 models/demos/metal_BERT_large_11/demo/demo.py -k batch_8
+  model: bert-large
+  model_family: BERT
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 3
+  owner_id: U024A4EFV6U # Brian Liu
+  team: ttnn
+
+- name: DistilBERT e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 120 models/demos/wormhole/distilbert/demo/demo.py
+  model: distilbert
+  model_family: DistilBERT
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+  owner_id: U087S3K319A # Austin Ho (CODEOWNERS models/**/distilbert/ @tt-aho)
+  team: ttnn
+
+- name: SqueezeBERT e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 120 models/demos/squeezebert/demo/demo.py
+  model: squeezebert
+  model_family: SqueezeBERT
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+  owner_id: U07D5N7QL4U # Joseph Chu
+  team: ttnn
+
+- name: MNIST MLP e2e tests
+  cmd: |
+    pytest --timeout 120 models/demos/vision/classification/mnist/demo/demo.py
+  model: mnist-mlp
+  model_family: MNIST MLP
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+  owner_id: U088DBNUKGR # Evan Smal
+  team: models
+
+- name: ResNet-50 e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 300 models/demos/vision/classification/resnet50/wormhole/demo/demo.py
+    pytest --timeout 120 models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_stability.py -k "short"
+    pytest --timeout 300 models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_demo.py
+  model: resnet50
+  model_family: ResNet
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 1
+    wh_llmbox_perf:
+      timeout: 6
+      tier: 1
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+
+- name: TT-DiT Wan2.2-T2V-A14B e2e tests (BH QuietBox 2)
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1 TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    pytest --timeout 2700 models/tt_dit/tests/models/wan2_2/test_performance_wan.py \
+      -k "resolution_480p and t2v"
+  model: wan-2.2-t2v
+  model_family: Wan
+  skus:
+    bh_quietbox_2:
+      timeout: 50
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # ── WAN 2.2 (Black Hole quad galaxy, bh_sc4 / exabox-multihost-ci-sc4) ──
 - name: TT-DiT Wan2.2-T2V-A14B multihost quad e2e tests
   cmd: |
@@ -1024,6 +1166,7 @@
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
       python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and t2v"
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
@@ -1031,6 +1174,7 @@
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
       python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
   model: wan-2.2-t2v
   model_family: Wan
@@ -1064,6 +1208,7 @@
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
       python3 -m pytest --timeout 10000 "${PERF_TEST}" -k "bh_4x32 and 720p and i2v"
     python3 "${TTRUN_PY}" \
       --skip-executable-check \
@@ -1071,6 +1216,7 @@
       --mesh-graph-descriptor "${MGD}" \
       --hosts "${RESOLVED_HOSTS}" \
       --mpi-args "--bind-to none --tag-output --wdir ${TT_METAL_HOME} --output-filename ${PIPELINE_DIR}/ranklogs" \
+      -- \
       python3 -m pytest --timeout 10000 "${PIPE_TEST}" -k "4x32sp1tp0nl2_ring_is_fsdp0 and resolution_720p"
   model: wan-2.2-i2v
   model_family: Wan

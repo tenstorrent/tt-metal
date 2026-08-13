@@ -53,7 +53,7 @@
 #include <fmt/format.h>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <tt_metal_profiler.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <program.hpp>
 #include "program/program_impl.hpp"
 #include "impl/buffers/semaphore.hpp"
@@ -66,7 +66,7 @@
 #include "common/tt_backend_api_types.hpp"
 #include <experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <internal/service/service_core_manager.hpp>
 
@@ -1400,10 +1400,12 @@ KernelHandle CreateDataMovementKernel(
         config.processor == DataMovementProcessor::RISCV_0 || config.processor == DataMovementProcessor::RISCV_1,
         "DataMovementKernel creation failure: Data movement kernels can only be created on DM0 or DM1 processors.");
 
-    std::shared_ptr<Kernel> kernel = std::make_shared<DataMovementKernel>(kernel_src, core_range_set, config);
+    const ContextId context_id = program.impl().get_context_id();
+    std::shared_ptr<Kernel> kernel =
+        std::make_shared<DataMovementKernel>(context_id, kernel_src, core_range_set, config);
 
     // Inject all fabric-related defines (routing mode, UDM mode, dynamic header sizes, etc.)
-    const auto fabric_defines = MetalContext::instance().get_control_plane().get_fabric_kernel_defines();
+    const auto fabric_defines = MetalContext::instance(context_id).get_control_plane().get_fabric_kernel_defines();
     if (!fabric_defines.empty()) {
         kernel->add_defines(fabric_defines);
     }
@@ -1413,7 +1415,8 @@ KernelHandle CreateDataMovementKernel(
 
 KernelHandle CreateComputeKernel(
     Program& program, const KernelSource& kernel_src, const CoreRangeSet& core_range_set, const ComputeConfig& config) {
-    std::shared_ptr<Kernel> kernel = std::make_shared<ComputeKernel>(kernel_src, core_range_set, config);
+    std::shared_ptr<Kernel> kernel =
+        std::make_shared<ComputeKernel>(program.impl().get_context_id(), kernel_src, core_range_set, config);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
 }
 
@@ -1434,29 +1437,31 @@ KernelHandle CreateEthernetKernel(
         config.processor == DataMovementProcessor::RISCV_0 || config.processor == DataMovementProcessor::RISCV_1,
         "EthernetKernel creation failure: Ethernet kernels can only be created on DM0 or DM1 processors.");
 
-    std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(kernel_src, core_range_set, config);
+    const ContextId context_id = program.impl().get_context_id();
+    auto& metal_context = MetalContext::instance(context_id);
+    std::shared_ptr<Kernel> kernel = std::make_shared<EthernetKernel>(context_id, kernel_src, core_range_set, config);
 
     // Inject all fabric-related defines (routing mode, UDM mode, dynamic header sizes, etc.)
-    const auto fabric_defines = MetalContext::instance().get_control_plane().get_fabric_kernel_defines();
+    const auto fabric_defines = metal_context.get_control_plane().get_fabric_kernel_defines();
     if (!fabric_defines.empty()) {
         kernel->add_defines(fabric_defines);
     }
 
     // Disable watcher on ethernet cores if requested
-    const auto& rt_options = MetalContext::instance().rtoptions();
+    const auto& rt_options = metal_context.rtoptions();
     if (rt_options.watcher_eth_disabled()) {
         kernel->add_defines({{"FORCE_WATCHER_OFF", "1"}});
     }
 
     TT_FATAL(
         ttsl::as_underlying_type<DataMovementProcessor>(config.processor) <
-            MetalContext::instance().hal().get_num_risc_processors(eth_core_type),
+            metal_context.hal().get_num_risc_processors(eth_core_type),
         "EthernetKernel creation failure: {} kernel cannot target processor {} because Ethernet core only has {} "
         "processors. "
         "Update DataMovementProcessor in the config.",
         kernel->name(),
         enchantum::to_string(config.processor),
-        MetalContext::instance().hal().get_num_risc_processors(eth_core_type));
+        metal_context.hal().get_num_risc_processors(eth_core_type));
     TT_FATAL(
         !(are_both_riscv_in_use),
         "EthernetKernel creation failure: Cannot create data movement kernel for {} across specified "
@@ -1477,9 +1482,9 @@ KernelHandle CreateEthernetKernel(
     // | Single         | Not enabled for dispatch    | Dedicated NOC1              |
     // | Dual           | Dedicated NOC0, Dynamic NOC | Dedicated NOC1, Dynamic NOC |
     //
-    if (!MetalContext::instance().hal().get_eth_fw_is_cooperative() && config.eth_mode != Eth::IDLE &&
+    if (!metal_context.hal().get_eth_fw_is_cooperative() && config.eth_mode != Eth::IDLE &&
         config.noc_mode != NOC_MODE::DM_DYNAMIC_NOC) {
-        bool is_dual_erisc_mode = MetalContext::instance().rtoptions().get_enable_2_erisc_mode();
+        bool is_dual_erisc_mode = metal_context.rtoptions().get_enable_2_erisc_mode();
         bool is_erisc0 = (config.processor == DataMovementProcessor::RISCV_0);
         bool is_erisc1 = (config.processor == DataMovementProcessor::RISCV_1);
 
@@ -1512,8 +1517,7 @@ KernelHandle CreateEthernetKernel(
     }
 
     // Dynamic noc is not supported on single erisc mode
-    if (!MetalContext::instance().hal().get_eth_fw_is_cooperative() &&
-        !MetalContext::instance().rtoptions().get_enable_2_erisc_mode()) {
+    if (!metal_context.hal().get_eth_fw_is_cooperative() && !metal_context.rtoptions().get_enable_2_erisc_mode()) {
         TT_FATAL(
             config.noc_mode == NOC_MODE::DM_DEDICATED_NOC,
             "EthernetKernel creation failure: Dynamic NOC is not supported on single ERISC mode. "
@@ -1522,7 +1526,7 @@ KernelHandle CreateEthernetKernel(
             config.noc_mode);
     }
 
-    if (MetalContext::instance().hal().get_eth_fw_is_cooperative()) {
+    if (metal_context.hal().get_eth_fw_is_cooperative()) {
         // Dynamic NOC is not supported with this configuration
         TT_FATAL(
             config.noc_mode != NOC_MODE::DM_DYNAMIC_NOC,
@@ -1551,7 +1555,7 @@ KernelHandle CreateKernel(
 
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-    KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+    KernelSource kernel_src = KernelSource::from_path(program.impl().get_context_id(), file_name);
     KernelHandle kernel = std::visit(
         [&](const auto& cfg) -> KernelHandle {
             using T = std::decay_t<decltype(cfg)>;
@@ -1578,7 +1582,7 @@ KernelHandle CreateKernel(
     const EthernetConfig& config) {
     ValidateKernelConfigDefines(config.defines);
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-    KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+    KernelSource kernel_src = KernelSource::from_path(program.impl().get_context_id(), file_name);
     return CreateEthernetKernel(program, kernel_src, core_ranges, config);
 }
 
@@ -1589,7 +1593,7 @@ KernelHandle CreateKernelFromString(
     const std::variant<DataMovementConfig, ComputeConfig>& config) {
     std::visit([](const auto& cfg) { ValidateKernelConfigDefines(cfg.defines); }, config);
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-    KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
+    KernelSource kernel_src = KernelSource::from_source(kernel_src_code);
     return std::visit(
         [&](const auto& cfg) -> KernelHandle {
             using T = std::decay_t<decltype(cfg)>;
@@ -1609,19 +1613,20 @@ KernelHandle CreateKernelFromString(
     const EthernetConfig& config) {
     ValidateKernelConfigDefines(config.defines);
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-    KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
+    KernelSource kernel_src = KernelSource::from_source(kernel_src_code);
     return CreateEthernetKernel(program, kernel_src, core_ranges, config);
 }
 
 static KernelHandle CreateDramKernel(
     Program& program, const KernelSource& kernel_src, const CoreRangeSet& core_range_set, const DramConfig& config) {
+    const ContextId context_id = program.impl().get_context_id();
+    auto& metal_context = MetalContext::instance(context_id);
+    TT_FATAL(metal_context.get_cluster().arch() == ARCH::BLACKHOLE, "DramKernel is only supported on Blackhole.");
     TT_FATAL(
-        MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE, "DramKernel is only supported on Blackhole.");
-    TT_FATAL(
-        MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM),
+        metal_context.hal().has_programmable_core_type(HalProgrammableCoreType::DRAM),
         "DRAM programmable cores are not enabled; they auto-enable on Blackhole with firmware >= 19.12.0.0 "
         "and either no harvested DRAM channels or a single device.");
-    std::shared_ptr<Kernel> kernel = std::make_shared<DramKernel>(kernel_src, core_range_set, config);
+    std::shared_ptr<Kernel> kernel = std::make_shared<DramKernel>(context_id, kernel_src, core_range_set, config);
     return program.impl().add_kernel(kernel, HalProgrammableCoreType::DRAM);
 }
 
@@ -1632,7 +1637,7 @@ KernelHandle CreateKernel(
     const DramConfig& config) {
     ValidateKernelConfigDefines(config.defines);
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-    KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+    KernelSource kernel_src = KernelSource::from_path(program.impl().get_context_id(), file_name);
     return CreateDramKernel(program, kernel_src, core_ranges, config);
 }
 
@@ -1643,7 +1648,7 @@ KernelHandle CreateKernelFromString(
     const DramConfig& config) {
     ValidateKernelConfigDefines(config.defines);
     CoreRangeSet core_ranges = detail::GetCoreRangeSet(core_spec);
-    KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
+    KernelSource kernel_src = KernelSource::from_source(kernel_src_code);
     return CreateDramKernel(program, kernel_src, core_ranges, config);
 }
 

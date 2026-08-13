@@ -10,8 +10,6 @@ on:
         default: all
         options:
           - all
-          - resnet50
-          - stable_diffusion_35_large
           - mochi
           - motif
           - qwenimage

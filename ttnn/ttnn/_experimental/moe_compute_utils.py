@@ -377,6 +377,11 @@ def _w2_shard_tiles(Ht: int, core_id: int, Nt: int, n_cores: int) -> int:
     return _shard_tiles(Ht, core_id, n_cores)
 
 
+def _even_stride_at_least_a2a_width(tiles: int) -> int:
+    even_tiles = tiles + (tiles % 2)
+    return max(even_tiles, W2_TILES_PER_A2A_ITER_W)
+
+
 def effective_matmul_ring_size(mesh_device, bh_ring_size: int = 8) -> int:
     """Matmul ring N used by ``moe_compute`` on this device.
 
@@ -458,6 +463,11 @@ def prepare_w0_w1_tensor_for_moe_compute(
     # in general, pad K up to a factor of transaction size (32*7)
     Kp = math.ceil(K // ttnn.TILE_SIZE / BLOCK_TILES_H) * ttnn.TILE_SIZE * BLOCK_TILES_H
     num_cores = len(shard_map)
+    if num_cores == 0:
+        raise ValueError("shard_map must contain one entry per ring core")
+    expected_shard_map = [_shard_tiles(Nt, core_id, num_cores) for core_id in range(num_cores)]
+    if shard_map != expected_shard_map:
+        raise RuntimeError(f"W0W1 shard map must match the kernel distribution {expected_shard_map}, got: {shard_map}")
 
     if K < Kp:
         padding = torch.zeros((L, E, Kp - K, N), dtype=torch_w0.dtype)
@@ -483,20 +493,14 @@ def prepare_w0_w1_tensor_for_moe_compute(
     torch_w0_w1_permuted = torch_w0_w1_interleaved.permute(0, 1, 3, 2, 4)
 
     each_shard = []
-    max_shard_size = max(shard_map)
-    max_shard_size = max_shard_size + (max_shard_size % 2)  # round up to even
-    if any(x not in [max_shard_size, max_shard_size - 1, max_shard_size - 2] for x in shard_map):
-        raise RuntimeError(
-            f"W0W1 shard sizes must be in [{max_shard_size - 2}, {max_shard_size}] "
-            f"(after rounding max to even), got: {shard_map}"
-        )
+    max_shard_size = _even_stride_at_least_a2a_width(max(shard_map))
 
     # Pick appropriate number of column tiles for each core based on the ring position.
     start_tile = 0
     for num_tiles in shard_map:
         each_shard.append(torch_w0_w1_permuted[:, :, start_tile : start_tile + num_tiles, :, :])
 
-        # Pad to max_shard_size (which may have been rounded up to even)
+        # Pad to the physical per-core stride expected by the kernel.
         pad_tiles = max_shard_size - num_tiles
         if pad_tiles > 0:
             each_shard.append(torch.zeros(L, E, pad_tiles, Kp, 2 * ttnn.TILE_SIZE, dtype=torch_w0_w1_permuted.dtype))
@@ -939,7 +943,7 @@ def get_weight_mem_configs(
 
     # W0/W1 memory config. Use ceiling div to handle odd shard counts (PR #43932 generalization).
     max_w0_w1 = max(w0_w1_shard_map)
-    w1_w0_groups_per_core = (max_w0_w1 + (max_w0_w1 % 2)) // 2
+    w1_w0_groups_per_core = _even_stride_at_least_a2a_width(max_w0_w1) // 2
     # Total flat rows = num_layers * experts_per_device * num_cores * w1_w0_groups_per_core * K_for_shard
     # Per-bank shard height = total_rows / num_banks.
     w0_w1_total_rows = num_layers * experts_per_device * num_cores * w1_w0_groups_per_core * K_for_shard

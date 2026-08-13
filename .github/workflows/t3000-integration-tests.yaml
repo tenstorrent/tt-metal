@@ -12,8 +12,6 @@ on:
           - all
           - tteager
           - trace stress
-          - resnet
-          - sd35_large
           - motif
           - qwenimage
           - mochi

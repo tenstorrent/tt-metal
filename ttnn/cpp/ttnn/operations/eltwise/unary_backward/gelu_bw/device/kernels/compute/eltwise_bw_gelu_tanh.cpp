@@ -61,7 +61,7 @@ void kernel_main() {
         mul_binary_tile(1, 3, 1);
 
         // tile[1] = x + kKappa * x³
-        add_binary_tile(1, 2, 1);
+        add_binary_tile<BF16_ROUNDING_MODE>(1, 2, 1);
 
         // tile[1] = kBeta * (x + kKappa * x³) = inner
         fill_tile(3, kBeta);
@@ -74,14 +74,14 @@ void kernel_main() {
 
         // CDF term: tile[1] = 0.5 * (1 + tanh)
         fill_tile(3, 1.0f);
-        add_binary_tile(1, 3, 1);  // tile[1] = 1 + tanh
+        add_binary_tile<BF16_ROUNDING_MODE>(1, 3, 1);  // tile[1] = 1 + tanh
         fill_tile(3, 0.5f);
         mul_binary_tile(1, 3, 1);  // tile[1] = 0.5*(1 + tanh) = CDF term
 
         // sech²: tile[4] = 1 - tanh²
         square_tile(4);  // tile[4] = tanh²
         fill_tile(3, 1.0f);
-        sub_binary_tile(3, 4, 3);  // tile[3] = 1 - tanh²
+        sub_binary_tile<BF16_ROUNDING_MODE>(3, 4, 3);  // tile[3] = 1 - tanh²
         COPY_DEST_VALUES(3, 4);    // tile[4] = sech²
 
         // PDF term: 0.5 * kBeta * x * (1 + 3*kKappa*x²) * sech²
@@ -90,7 +90,7 @@ void kernel_main() {
         square_tile(2);            // tile[2] = x²
         mul_binary_tile(2, 3, 2);  // tile[2] = 3*kKappa * x²
         fill_tile(3, 1.0f);
-        add_binary_tile(2, 3, 2);  // tile[2] = 1 + 3*kKappa*x²
+        add_binary_tile<BF16_ROUNDING_MODE>(2, 3, 2);  // tile[2] = 1 + 3*kKappa*x²
 
         // tile[2] = sech² * (1 + 3*kKappa*x²)
         mul_binary_tile(2, 4, 2);
@@ -104,7 +104,7 @@ void kernel_main() {
         mul_binary_tile(2, 3, 2);
 
         // result = grad * (CDF_term + PDF_term)
-        add_binary_tile(1, 2, 1);  // tile[1] = CDF + PDF
+        add_binary_tile<BF16_ROUNDING_MODE>(1, 2, 1);  // tile[1] = CDF + PDF
         mul_binary_tile(0, 1, 0);  // tile[0] = grad * (CDF + PDF)
 
         tile_regs_commit();

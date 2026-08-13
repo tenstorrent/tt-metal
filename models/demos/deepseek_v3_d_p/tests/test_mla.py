@@ -996,6 +996,10 @@ _CHUNKED_SCENARIOS = (
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            # high_bw_all_gather parks its readiness/completion semaphores in L1_SMALL when the device
+            # reserves one, and falls back to general L1 otherwise. On the 8x4 grid the fallback
+            # fragments L1 enough that a later op's static circular buffers collide with it.
+            "l1_small_size": 1152,
         },
     ],
     ids=["line", "ring", "fabric2d"],
@@ -1084,6 +1088,7 @@ def test_mla_chunked_prefill(
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
             "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "l1_small_size": 1152,
         }
     ],
     ids=["fabric2d"],
