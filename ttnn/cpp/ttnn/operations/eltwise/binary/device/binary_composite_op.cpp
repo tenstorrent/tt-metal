@@ -822,9 +822,7 @@ Tensor rsub(
         post_activations,
         lhs_activations,
         rhs_activations,
-        ttnn::detail::resolve_fast_and_approximate_mode(
-            fast_and_approximate_mode,
-            is_block_float(input_tensor_a.dtype()) || is_block_float(input_tensor_b.dtype())));
+        ttnn::detail::resolve_fast_and_approximate_mode(fast_and_approximate_mode));
 }
 
 Tensor rsub(
@@ -847,8 +845,7 @@ Tensor rsub(
         post_activations,
         lhs_activations,
         rhs_activations,
-        ttnn::detail::resolve_fast_and_approximate_mode(
-            fast_and_approximate_mode, is_block_float(input_tensor_a.dtype())));
+        ttnn::detail::resolve_fast_and_approximate_mode(fast_and_approximate_mode));
 }
 
 Tensor bias_gelu(

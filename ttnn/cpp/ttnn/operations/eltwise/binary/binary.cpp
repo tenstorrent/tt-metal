@@ -146,110 +146,108 @@
             sub_device_id);                                                          \
     }
 
-#define TTNN_BINARY_OP_TENSOR_TENSOR_FAST_APPROX_IMPL(NAME, OP_TYPE)                                    \
-    Tensor NAME(                                                                                        \
-        const Tensor& lhs,                                                                              \
-        const Tensor& rhs,                                                                              \
-        const std::optional<const DataType>& output_dtype,                                              \
-        const std::optional<MemoryConfig>& memory_config,                                               \
-        const std::optional<Tensor>& output,                                                            \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,                    \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,                     \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                     \
-        const std::optional<bool>& fast_and_approximate_mode,                                           \
-        const std::optional<CoreRangeSet>& sub_core_grids,                                              \
-        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                                \
-        return ttnn::detail::invoke_binary_ng(                                                          \
-            lhs,                                                                                        \
-            rhs,                                                                                        \
-            operations::binary::BinaryOpType::OP_TYPE,                                                  \
-            output_dtype,                                                                               \
-            memory_config,                                                                              \
-            output,                                                                                     \
-            post_activations,                                                                           \
-            lhs_activations,                                                                            \
-            rhs_activations,                                                                            \
-            ttnn::detail::resolve_fast_and_approximate_mode(                                            \
-                fast_and_approximate_mode, is_block_float(lhs.dtype()) || is_block_float(rhs.dtype())), \
-            sub_core_grids,                                                                             \
-            sub_device_id);                                                                             \
+#define TTNN_BINARY_OP_TENSOR_TENSOR_FAST_APPROX_IMPL(NAME, OP_TYPE)                    \
+    Tensor NAME(                                                                        \
+        const Tensor& lhs,                                                              \
+        const Tensor& rhs,                                                              \
+        const std::optional<const DataType>& output_dtype,                              \
+        const std::optional<MemoryConfig>& memory_config,                               \
+        const std::optional<Tensor>& output,                                            \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,    \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,     \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,     \
+        const std::optional<bool>& fast_and_approximate_mode,                           \
+        const std::optional<CoreRangeSet>& sub_core_grids,                              \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                \
+        return ttnn::detail::invoke_binary_ng(                                          \
+            lhs,                                                                        \
+            rhs,                                                                        \
+            operations::binary::BinaryOpType::OP_TYPE,                                  \
+            output_dtype,                                                               \
+            memory_config,                                                              \
+            output,                                                                     \
+            post_activations,                                                           \
+            lhs_activations,                                                            \
+            rhs_activations,                                                            \
+            ttnn::detail::resolve_fast_and_approximate_mode(fast_and_approximate_mode), \
+            sub_core_grids,                                                             \
+            sub_device_id);                                                             \
     }
 
-#define TTNN_BINARY_OP_TENSOR_SCALAR_FAST_APPROX_IMPL(NAME, OP_TYPE)                                                 \
-    Tensor NAME(                                                                                                     \
-        const Tensor& lhs,                                                                                           \
-        operations::unary::ScalarVariant rhs,                                                                        \
-        const std::optional<const DataType>& output_dtype,                                                           \
-        const std::optional<MemoryConfig>& memory_config,                                                            \
-        const std::optional<Tensor>& output,                                                                         \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,                                 \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,                                  \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                                  \
-        const std::optional<bool>& fast_and_approximate_mode,                                                        \
-        const std::optional<CoreRangeSet>& sub_core_grids,                                                           \
-        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                                             \
-        return ttnn::detail::invoke_binary_ng(                                                                       \
-            lhs,                                                                                                     \
-            rhs,                                                                                                     \
-            operations::binary::BinaryOpType::OP_TYPE,                                                               \
-            output_dtype,                                                                                            \
-            memory_config,                                                                                           \
-            output,                                                                                                  \
-            post_activations,                                                                                        \
-            lhs_activations,                                                                                         \
-            rhs_activations,                                                                                         \
-            ttnn::detail::resolve_fast_and_approximate_mode(fast_and_approximate_mode, is_block_float(lhs.dtype())), \
-            sub_core_grids,                                                                                          \
-            sub_device_id);                                                                                          \
+#define TTNN_BINARY_OP_TENSOR_SCALAR_FAST_APPROX_IMPL(NAME, OP_TYPE)                    \
+    Tensor NAME(                                                                        \
+        const Tensor& lhs,                                                              \
+        operations::unary::ScalarVariant rhs,                                           \
+        const std::optional<const DataType>& output_dtype,                              \
+        const std::optional<MemoryConfig>& memory_config,                               \
+        const std::optional<Tensor>& output,                                            \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,    \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,     \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,     \
+        const std::optional<bool>& fast_and_approximate_mode,                           \
+        const std::optional<CoreRangeSet>& sub_core_grids,                              \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                \
+        return ttnn::detail::invoke_binary_ng(                                          \
+            lhs,                                                                        \
+            rhs,                                                                        \
+            operations::binary::BinaryOpType::OP_TYPE,                                  \
+            output_dtype,                                                               \
+            memory_config,                                                              \
+            output,                                                                     \
+            post_activations,                                                           \
+            lhs_activations,                                                            \
+            rhs_activations,                                                            \
+            ttnn::detail::resolve_fast_and_approximate_mode(fast_and_approximate_mode), \
+            sub_core_grids,                                                             \
+            sub_device_id);                                                             \
     }
 
-#define TTNN_BINARY_OP_INPLACE_FAST_APPROX_IMPL(NAME, OP_TYPE)                                                       \
-    Tensor NAME(                                                                                                     \
-        const Tensor& lhs,                                                                                           \
-        const Tensor& rhs,                                                                                           \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,                                 \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,                                  \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                                  \
-        std::optional<bool> fast_and_approximate_mode,                                                               \
-        const std::optional<CoreRangeSet>& sub_core_grids,                                                           \
-        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                                             \
-        return ttnn::detail::invoke_binary_ng(                                                                       \
-            lhs,                                                                                                     \
-            rhs,                                                                                                     \
-            operations::binary::BinaryOpType::OP_TYPE,                                                               \
-            std::nullopt,                                                                                            \
-            std::nullopt,                                                                                            \
-            lhs,                                                                                                     \
-            post_activations,                                                                                        \
-            lhs_activations,                                                                                         \
-            rhs_activations,                                                                                         \
-            ttnn::detail::resolve_fast_and_approximate_mode(                                                         \
-                fast_and_approximate_mode, is_block_float(lhs.dtype()) || is_block_float(rhs.dtype())),              \
-            sub_core_grids,                                                                                          \
-            sub_device_id);                                                                                          \
-    }                                                                                                                \
-    Tensor NAME(                                                                                                     \
-        const Tensor& lhs,                                                                                           \
-        operations::unary::ScalarVariant rhs,                                                                        \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,                                 \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,                                  \
-        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                                  \
-        std::optional<bool> fast_and_approximate_mode,                                                               \
-        const std::optional<CoreRangeSet>& sub_core_grids,                                                           \
-        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                                             \
-        return ttnn::detail::invoke_binary_ng(                                                                       \
-            lhs,                                                                                                     \
-            rhs,                                                                                                     \
-            operations::binary::BinaryOpType::OP_TYPE,                                                               \
-            std::nullopt,                                                                                            \
-            std::nullopt,                                                                                            \
-            lhs,                                                                                                     \
-            post_activations,                                                                                        \
-            lhs_activations,                                                                                         \
-            rhs_activations,                                                                                         \
-            ttnn::detail::resolve_fast_and_approximate_mode(fast_and_approximate_mode, is_block_float(lhs.dtype())), \
-            sub_core_grids,                                                                                          \
-            sub_device_id);                                                                                          \
+#define TTNN_BINARY_OP_INPLACE_FAST_APPROX_IMPL(NAME, OP_TYPE)                          \
+    Tensor NAME(                                                                        \
+        const Tensor& lhs,                                                              \
+        const Tensor& rhs,                                                              \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,    \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,     \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,     \
+        std::optional<bool> fast_and_approximate_mode,                                  \
+        const std::optional<CoreRangeSet>& sub_core_grids,                              \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                \
+        return ttnn::detail::invoke_binary_ng(                                          \
+            lhs,                                                                        \
+            rhs,                                                                        \
+            operations::binary::BinaryOpType::OP_TYPE,                                  \
+            std::nullopt,                                                               \
+            std::nullopt,                                                               \
+            lhs,                                                                        \
+            post_activations,                                                           \
+            lhs_activations,                                                            \
+            rhs_activations,                                                            \
+            ttnn::detail::resolve_fast_and_approximate_mode(fast_and_approximate_mode), \
+            sub_core_grids,                                                             \
+            sub_device_id);                                                             \
+    }                                                                                   \
+    Tensor NAME(                                                                        \
+        const Tensor& lhs,                                                              \
+        operations::unary::ScalarVariant rhs,                                           \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,    \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,     \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,     \
+        std::optional<bool> fast_and_approximate_mode,                                  \
+        const std::optional<CoreRangeSet>& sub_core_grids,                              \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                \
+        return ttnn::detail::invoke_binary_ng(                                          \
+            lhs,                                                                        \
+            rhs,                                                                        \
+            operations::binary::BinaryOpType::OP_TYPE,                                  \
+            std::nullopt,                                                               \
+            std::nullopt,                                                               \
+            lhs,                                                                        \
+            post_activations,                                                           \
+            lhs_activations,                                                            \
+            rhs_activations,                                                            \
+            ttnn::detail::resolve_fast_and_approximate_mode(fast_and_approximate_mode), \
+            sub_core_grids,                                                             \
+            sub_device_id);                                                             \
     }
 
 #define TTNN_BINARY_OP_INPLACE_IMPL(NAME, OP_TYPE)                                   \
@@ -798,11 +796,9 @@ Tensor invoke_binary_ng(
         sub_device_id);
 }
 
-bool resolve_fast_and_approximate_mode(
-    const std::optional<bool>& fast_and_approximate_mode, bool has_block_float_operand) {
+bool resolve_fast_and_approximate_mode(const std::optional<bool>& fast_and_approximate_mode) {
     // ADD/SUB/RSUB keep the FPU kernel as their default, so an unset flag means `true`.
-    // Block-float operands have no SFPU add/sub/rsub kernel, so they stay on the FPU.
-    return has_block_float_operand || fast_and_approximate_mode.value_or(true);
+    return fast_and_approximate_mode.value_or(true);
 }
 
 Tensor invoke_binary_ng_isclose(
@@ -1033,7 +1029,8 @@ Tensor binary_operation_addalpha(
         {},
         {},
         rhs_activations,
-        /*fast_and_approximate_mode*/ false,
+        // Keep the FPU kernel: ADD/SUB honour this flag, and addalpha/subalpha do not expose it.
+        /*fast_and_approximate_mode*/ true,
         std::nullopt);
 }
 
@@ -1055,7 +1052,8 @@ Tensor binary_operation_subalpha(
         {},
         {},
         rhs_activations,
-        /*fast_and_approximate_mode*/ false,
+        // Keep the FPU kernel: ADD/SUB honour this flag, and addalpha/subalpha do not expose it.
+        /*fast_and_approximate_mode*/ true,
         std::nullopt);
 }
 

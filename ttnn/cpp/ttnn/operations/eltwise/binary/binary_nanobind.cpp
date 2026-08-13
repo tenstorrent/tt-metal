@@ -84,7 +84,7 @@ constexpr auto kDivideDtypeFootnote =
 constexpr auto kAdditiveFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True` (default) for bfloat16 datatype, the operation uses the FPU implementation for better performance, with a max error of 1 ULP.
         When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses the SFPU with the result rounded to nearest even (RNE), which matches the golden exactly at a slight perf cost.
-        The flag is a hint and is silently ignored where it cannot apply: FLOAT32, INT32, UINT32 and UINT16 operands of equal dtype already use the SFPU, and BFLOAT8_B/BFLOAT4_B operands always use the FPU.)doc";
+        `False` is only accepted when the output dtype is BFLOAT16, since the accurate path exists to round the bfloat16 result; requesting it for any other output dtype raises an error. Leave the flag unset (or pass `True`) for those.)doc";
 constexpr auto kMultiplyFastApproxPostNote =
     R"doc(When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
         When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).)doc";

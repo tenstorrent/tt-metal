@@ -224,10 +224,9 @@ Tensor invoke_binary_ng(
 
 // Resolves the user-facing fast_and_approximate_mode flag for ADD/SUB/RSUB. These ops keep the
 // faster FPU kernel as their default, so an unset flag means `true`; passing `false` routes
-// bfloat16 through the SFPU kernel, which rounds the result to nearest even. Block-float operands
-// are always kept on the FPU because the SFPU path does not support bfloat8_b/bfloat4_b.
-bool resolve_fast_and_approximate_mode(
-    const std::optional<bool>& fast_and_approximate_mode, bool has_block_float_operand);
+// bfloat16 through the SFPU kernel, which rounds the result to nearest even. Requesting `false`
+// for a non-bfloat16 output is rejected in binary_ng, so nothing is coerced here.
+bool resolve_fast_and_approximate_mode(const std::optional<bool>& fast_and_approximate_mode);
 
 Tensor invoke_binary_ng_isclose(
     const Tensor& lhs,
