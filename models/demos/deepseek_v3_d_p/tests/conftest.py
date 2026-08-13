@@ -201,6 +201,28 @@ def pytest_configure(config):
         "device/topology combinations. mesh_shape is (rows, cols) tuple, topology is 'ring' or 'linear'. "
         "Skips automatically based on available devices and arch constraints.",
     )
+    config.addinivalue_line(
+        "markers",
+        "uncollect_if(pred): deselect parametrized cases for which pred(**params) returns True. "
+        "pred receives the test's collection-time param values as keyword args, plus is_ci_env / is_ci_v2_env.",
+    )
+
+
+def _test_defined_uncollection(items, is_ci_env, is_ci_v2_env):
+    kept = []
+    for item in items:
+        marker = item.get_closest_marker("uncollect_if")
+        if marker is None:
+            kept.append(item)
+            continue
+        params = dict(getattr(getattr(item, "callspec", None), "params", {}))
+        # Values the predicate wants that come from fixtures, not parametrization.
+        params.setdefault("is_ci_env", is_ci_env)
+        params.setdefault("is_ci_v2_env", is_ci_v2_env)
+        if marker.kwargs["pred"](**params):
+            kept.append(item)
+
+    return kept
 
 
 def pytest_collection_modifyitems(config, items):
@@ -220,7 +242,11 @@ def pytest_collection_modifyitems(config, items):
     native there, and galaxy-only torus configs can't be collected on it anyway (device count).
     None of this fires off CI, so a subtorus-wired host (CI unset) still runs everything.
     """
-    on_ci = os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ
+    is_ci_env = os.getenv("CI") == "true"
+    is_ci_v2_env = "TT_GH_CI_INFRA" in os.environ
+    items = _test_defined_uncollection(items, is_ci_env, is_ci_v2_env)
+
+    on_ci = is_ci_env or is_ci_v2_env
     ring_or_torus_fabrics = {
         ttnn.FabricConfig.FABRIC_2D_TORUS_X,
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
