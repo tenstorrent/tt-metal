@@ -7,8 +7,8 @@ name: "[internal] Models end-to-end tests multihost (exabox) impl"
 # marks it "multihost": true (SKU runs_on contains an exabox-multihost* label).
 #
 # Split out of models-e2e-tests-impl.yaml so the exabox lifecycle lives in one file.
-# The matrix is computed by load-test-matrix in models-e2e-tests-impl.yaml
-# (matrix_multihost output) and passed in.
+# models-e2e-tests-impl.yaml splits the filtered JSON array and passes the
+# multihost slice as the `matrix` input.
 
 on:
   workflow_call:
@@ -25,7 +25,7 @@ on:
       matrix:
         required: true
         type: string
-        description: "JSON array of exabox multihost legs (models-e2e-tests-impl.yaml matrix_multihost output)."
+        description: "JSON array of exabox multihost legs (fromJson into strategy.matrix.test-group). Pass [] to skip."
 
 # Multihost-ci runner chart may need OIDC. Callers must grant id-token: write on the job that
 # `uses` this workflow (job-level permissions replace inherited defaults) and pass `secrets: inherit`.
