@@ -542,6 +542,16 @@ def _device_params_from_source(traced_source):
     return out
 
 
+def resolved_open_params_for_source(traced_source):
+    """The device-open params a given traced source would contribute, as a comparable dict.
+
+    Public so the runner can tell whether a NEW vector's source would change the configuration the
+    current device was opened with, without duplicating the resolution rules. Empty whenever the
+    feature is off, so a caller comparing two results sees "no change" and never reopens.
+    """
+    return _device_params_from_source(traced_source)
+
+
 def extra_device_open_kwargs(l1_small_size, traced_source=None):
     """The device-open kwargs beyond mesh_shape/dispatch, from the traced source and env overrides.
 

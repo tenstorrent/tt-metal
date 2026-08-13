@@ -52,16 +52,25 @@ DEVICE_PARAM_KEYS = (
 
 _SENTINEL = object()
 
+# Upper bound on the AST nodes in one value expression before literal_eval is skipped. A device
+# parameter is a byte size, a queue count or an enum -- a handful of nodes. Anything larger is not a
+# device parameter, so refusing to evaluate it costs nothing and keeps literal_eval away from an
+# arbitrarily large nested literal (CWE-400). The input here is repo source, not user input, but the
+# bound is one line and makes that independent of who can write to the tree being parsed.
+_MAX_VALUE_NODES = 64
+
 
 def _render(node):
     """A literal as its Python value, anything else as its source text."""
     try:
-        return ast.literal_eval(node)
+        if sum(1 for _ in ast.walk(node)) <= _MAX_VALUE_NODES:
+            return ast.literal_eval(node)
     except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
-        try:
-            return ast.unparse(node)
-        except Exception:
-            return _SENTINEL
+        pass
+    try:
+        return ast.unparse(node)
+    except Exception:
+        return _SENTINEL
 
 
 def _is_parametrize(call: ast.Call) -> bool:
@@ -102,8 +111,14 @@ def _decorator_calls(node) -> list[ast.Call]:
     return [d for d in getattr(node, "decorator_list", []) if isinstance(d, ast.Call)]
 
 
-def _collect_for_function(tree: ast.Module, test_name: str) -> list[ast.Dict]:
-    """device_params dicts visible to ``test_name``: its own decorators, its class's, and pytestmark."""
+def _collect_for_function(tree: ast.Module, test_name: str | None) -> list[ast.Dict]:
+    """device_params dicts visible to ``test_name``: its own decorators, its class's, and pytestmark.
+
+    ``test_name`` of None means the source named a file with no ``::test`` (which the tracer stores
+    verbatim, and which most documented tracing commands use): collect from every test function in
+    the file instead. The agreement rule in _merge then does the disambiguation -- a file whose tests
+    declare different device_params yields nothing, exactly as a multi-variant test does.
+    """
     dicts: list[ast.Dict] = []
 
     def module_pytestmark():
@@ -119,11 +134,14 @@ def _collect_for_function(tree: ast.Module, test_name: str) -> list[ast.Dict]:
                     found.extend(_device_params_entries(mark))
         return found
 
+    def _wanted(name):
+        return name == test_name if test_name is not None else name.startswith("test_")
+
     def walk(body, in_scope_decorators):
         for node in body:
             if isinstance(node, ast.ClassDef):
                 walk(node.body, in_scope_decorators + _decorator_calls(node))
-            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == test_name:
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _wanted(node.name):
                 for call in in_scope_decorators + _decorator_calls(node):
                     dicts.extend(_device_params_entries(call))
 
@@ -156,11 +174,18 @@ def resolve_device_params(source: str, repo_root: str | None = None) -> tuple:
     ``dict(resolve_device_params(...))``. Empty when the source is unparseable, the test is not
     found, nothing is declared, or the declarations disagree.
     """
-    if not source or "::" not in source:
+    if not source or not isinstance(source, str):
         return ()
-    path_part, _, test_part = source.partition("::")
-    test_name = test_part.split("[", 1)[0].split("::")[-1].strip()
-    if not test_name:
+    path_part, separator, test_part = source.partition("::")
+    if separator:
+        test_name = test_part.split("[", 1)[0].split("::")[-1].strip()
+        if not test_name:
+            return ()
+    else:
+        # File-only source (``models/.../demo.py``): generic_ops_tracer stores test_path verbatim and
+        # most documented tracing commands omit ``::test``. Resolve across the file's tests.
+        test_name = None
+    if not path_part.endswith(".py"):
         return ()
 
     root = Path(repo_root or os.environ.get("TT_METAL_HOME") or ".")

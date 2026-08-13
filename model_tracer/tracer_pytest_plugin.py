@@ -91,6 +91,11 @@ def _per_test_trace_dir(request):
 
     os.environ["TTNN_OPERATION_TRACE_DIR"] = per_test_dir
 
+    # Read device_params BEFORE the yield, while the fixture is still active. After the yield this
+    # fixture resumes during teardown, by which point the other function-scoped fixtures have been
+    # finalised and getfixturevalue no longer resolves -- the sidecar then silently wrote nothing.
+    device_params_snapshot = _read_device_params(request, node_id)
+
     yield
 
     os.environ["TTNN_OPERATION_TRACE_DIR"] = base_trace_dir
@@ -120,7 +125,7 @@ def _per_test_trace_dir(request):
     except OSError as exc:
         logger.debug("Could not write trace status for {}: {}", node_id, exc)
 
-    _write_device_params_sidecar(request, per_test_dir, node_id)
+    _write_device_params_sidecar(device_params_snapshot, per_test_dir, node_id)
 
 
 # Device configuration the test opened its mesh with. The trace records machine_info
@@ -158,21 +163,26 @@ _DEVICE_PARAM_KEYS = (
 )
 
 
-def _write_device_params_sidecar(request, per_test_dir, node_id):
+def _read_device_params(request, node_id):
+    """The test's materialised device_params, or None. Must be called while the fixture is live."""
+    if "device_params" not in getattr(request.node, "fixturenames", ()):
+        return None
+    try:
+        params = request.getfixturevalue("device_params")
+    except Exception as exc:  # fixture errored, was overridden oddly, or is unavailable
+        logger.debug("Could not read device_params for {}: {}", node_id, exc)
+        return None
+    return params if isinstance(params, dict) else None
+
+
+def _write_device_params_sidecar(params, per_test_dir, node_id):
     """Record the test's device_params next to its traces, for the tracer to attach.
 
     Best-effort and never fatal: a missing or unserialisable value is dropped rather than
     guessed at, because a wrong device parameter is worse than an absent one -- an absent one
     leaves the replayer on its documented default, a wrong one silently changes the workload.
     """
-    if "device_params" not in getattr(request.node, "fixturenames", ()):
-        return
-    try:
-        params = request.getfixturevalue("device_params")
-    except Exception as exc:  # fixture errored, was overridden oddly, or is unavailable
-        logger.debug("Could not read device_params for {}: {}", node_id, exc)
-        return
-    if not isinstance(params, dict):
+    if not params:
         return
 
     recorded = {}

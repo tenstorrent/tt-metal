@@ -344,6 +344,7 @@ def run(input_queue, output_queue, config: SweepsConfig):
         clear_job_device_program_cache,
         close_job_device,
         device_canary,
+        resolved_open_params_for_source,
         set_traced_source_for_open,
     )
 
@@ -351,6 +352,7 @@ def run(input_queue, output_queue, config: SweepsConfig):
     cur_module = None
     cur_gen = None  # current module's device fixture generator
     cur_device = None
+    cur_open_params = {}  # source-derived device params the current device was opened with
 
     def _exhaust_fixture():
         nonlocal cur_gen
@@ -389,7 +391,21 @@ def run(input_queue, output_queue, config: SweepsConfig):
                 test_module = importlib.import_module("sweeps." + module_name)
                 module_cache[module_name] = test_module
 
+            # A source change WITHIN a module changes the device configuration too, and the module's
+            # fixture holds its device open across vectors -- so reopening on module change alone
+            # would replay the rest of the module under the first source's config. Compare the
+            # RESOLVED params, not the raw source: they are empty unless the opt-in env is set, so
+            # with the feature off this is always "no change" and no reopen is added.
+            new_open_params = resolved_open_params_for_source(traced_source)
+            if module_name == cur_module and new_open_params != cur_open_params:
+                logger.info(
+                    f"SWEEPS: traced-source device params changed within {module_name} "
+                    f"({cur_open_params} -> {new_open_params}); reopening the device"
+                )
+                cur_module = None  # force the reopen path below
+
             if module_name != cur_module:
+                cur_open_params = new_open_params
                 _exhaust_fixture()
                 # Clear the reused device's program cache so this module starts
                 # clean (no cross-module kernel-binary collision, kernel.cpp:443).
@@ -530,6 +546,21 @@ def _kill_child(p, timeout_before_rejoin):
         p.join()
 
 
+def _set_traced_source_for_open(source):
+    """Declare the traced source for an imminent device open in THIS process.
+
+    Imported lazily (like the other mesh_tensor_utils uses in this file) so importing the runner
+    never pulls in ttnn, and never fatal: the source only refines the device config, so failing to
+    declare it leaves the open on its defaults.
+    """
+    try:
+        from tests.sweep_framework.sweep_utils.mesh_tensor_utils import set_traced_source_for_open
+
+        set_traced_source_for_open(source)
+    except Exception as exc:
+        logger.debug(f"SWEEPS: could not declare traced source for device open: {exc}")
+
+
 def _attempt_vector(
     test_vector,
     module_name,
@@ -552,6 +583,11 @@ def _attempt_vector(
         p.start()
 
     if p is None and main_proc_runner is not None:
+        # Main-process mode runs in THIS process, so declare the source directly instead of sending
+        # it through the queue. execute_suite has already declared the suite's source before the
+        # runner opened its device; this keeps a per-vector change visible to any module that opens
+        # its own device inside run().
+        _set_traced_source_for_open(traced_source)
         main_proc_runner(test_vector)
     else:
         # persistent worker is module-agnostic: tag each vector with its module, and with the
@@ -1241,6 +1277,13 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     main_proc_context = None
     if not child_mode and not config.dry_run:
         logger.info("Running in main process mode - device will remain open for all vectors in suite")
+        # Declare the source BEFORE the runner opens its device: in main-process mode the device is
+        # opened once, up front, so a source declared later (per vector) would arrive too late to
+        # affect it. Only when the suite agrees on one source -- a mixed suite has no single answer,
+        # and guessing one would replay some vectors under another model's configuration.
+        declared = [h.get("traced_source") for h in header_info if h.get("traced_source") not in (None, "", [])]
+        if declared and len({str(s) for s in declared}) == 1:
+            _set_traced_source_for_open(declared[0])
         main_proc_runner, main_proc_context = _create_main_proc_runner(module_name, input_queue, output_queue, config)
 
     if child_mode and owns_worker:
