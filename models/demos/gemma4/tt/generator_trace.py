@@ -56,13 +56,47 @@ GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = 32 * 1024
 
 
 def chunked_prefill_trace_enabled() -> bool:
-    """True when long-ISL multi-chunk should replay captured 4k prefill traces.
+    """True when long-ISL multi-chunk should replay captured chunk prefill traces.
 
-    Set ``GEMMA4_CHUNKED_PREFILL_TRACE=1`` to measure / enable. Each generator
-    chunk (default 4096) replays the matching ``sp0``/``sp1`` prefill trace
-    instead of an eager ``ttnn_prefill_forward``.
+    Each generator chunk (WH T3K 2048 / QB2 4096) replays the matching
+    ``sp0_mc``/``sp1_mc`` prefill trace instead of an eager
+    ``ttnn_prefill_forward``.
+
+    Default is off unless the demo auto-enables via
+    :func:`maybe_auto_enable_chunked_prefill_trace`. Force with
+    ``GEMMA4_CHUNKED_PREFILL_TRACE=1``; opt out with ``0``.
     """
     return os.environ.get("GEMMA4_CHUNKED_PREFILL_TRACE", "0").lower() in ("1", "true", "yes")
+
+
+def maybe_auto_enable_chunked_prefill_trace(
+    *,
+    batch_size: int,
+    max_seq_len: int,
+    prefill_chunk: int,
+    bounded_sliding: bool,
+) -> bool:
+    """Auto-enable traced multi-chunk when it can win; leave env overrides alone.
+
+    Conditions (all required when the env var is unset):
+      * ``batch_size == 1`` (traced multi-chunk is B=1 only)
+      * not ``bounded_sliding`` (bounded final-chunk KV cannot safely replay)
+      * ``max_seq_len > prefill_chunk`` (otherwise a single chunk is enough)
+
+    Measured on WH T3K 31B long-4k (chunk=2048, packet 6144): warm TTFT
+    ~1737 ms eager → ~1699 ms traced (~−2%). Needs WH ``trace_region_size``
+    ≥ ~68 MB so decode capture still fits after the extra prefill traces.
+    """
+    if "GEMMA4_CHUNKED_PREFILL_TRACE" in os.environ:
+        return chunked_prefill_trace_enabled()
+    if batch_size == 1 and (not bounded_sliding) and max_seq_len > int(prefill_chunk):
+        os.environ["GEMMA4_CHUNKED_PREFILL_TRACE"] = "1"
+        logger.info(
+            "Auto-enabled GEMMA4_CHUNKED_PREFILL_TRACE "
+            f"(max_seq_len={max_seq_len} > chunk={prefill_chunk}, unbounded batch-1)"
+        )
+        return True
+    return False
 
 
 # Default generator-level prefill chunk when GEMMA4_GEN_PREFILL_CHUNK is unset,

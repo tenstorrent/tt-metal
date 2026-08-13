@@ -50,6 +50,10 @@ def fabric_router_config_from_env():
     ``0`` / ``none`` / ``default`` → Fabric default; else ``max(4352, int)``.
     Shared by demo ``_device_params`` and ``parametrize_mesh_with_fabric``.
     """
+    # Wormhole Fabric rejects payloads above this (TT_FATAL); BH keeps its own
+    # ceiling via the unset/default path.
+    _wh_max_packet_bytes = 7616
+
     pkt_env = os.environ.get("GEMMA4_CCL_PACKET_BYTES")
     if pkt_env is None:
         pkt_bytes = default_ccl_packet_bytes()
@@ -59,6 +63,8 @@ def fabric_router_config_from_env():
         pkt_bytes = max(4352, int(pkt_env))
     if pkt_bytes is None:
         return None
+    if not is_blackhole():
+        pkt_bytes = min(pkt_bytes, _wh_max_packet_bytes)
     router = ttnn.FabricRouterConfig()
     router.max_packet_payload_size_bytes = pkt_bytes
     return router
