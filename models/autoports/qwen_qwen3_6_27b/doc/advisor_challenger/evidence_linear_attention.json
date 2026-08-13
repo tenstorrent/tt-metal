@@ -1,0 +1,27 @@
+{
+  "chains": {
+    "linear_attention:b14": {"verdict":"rejected","measured_ms":15.842119120061398,"repeats_ms":[15.839336384087801,15.842122305184603,15.842119120061398,15.840765330940485,15.846767351031303],"hard_error":"inexpressible: removing this profiled conversion requires a graph-topology rewrite; included in the measured maximal expressible whole-plan subset, which changed zero frozen policy fields"},
+    "linear_attention:b11": {"verdict":"rejected","measured_ms":15.842119120061398,"repeats_ms":[15.839336384087801,15.842122305184603,15.842119120061398,15.840765330940485,15.846767351031303],"hard_error":"inexpressible topology rewrite; shared maximal expressible whole-plan measurement"},
+    "linear_attention:b15": {"verdict":"rejected","measured_ms":15.842119120061398,"repeats_ms":[15.839336384087801,15.842122305184603,15.842119120061398,15.840765330940485,15.846767351031303],"hard_error":"inexpressible topology rewrite; shared maximal expressible whole-plan measurement"},
+    "linear_attention:b13": {"verdict":"rejected","measured_ms":15.842119120061398,"repeats_ms":[15.839336384087801,15.842122305184603,15.842119120061398,15.840765330940485,15.846767351031303],"hard_error":"inexpressible topology rewrite; shared maximal expressible whole-plan measurement"},
+    "linear_attention:b38": {"verdict":"rejected","measured_ms":15.842119120061398,"repeats_ms":[15.839336384087801,15.842122305184603,15.842119120061398,15.840765330940485,15.846767351031303],"hard_error":"inexpressible topology rewrite; shared maximal expressible whole-plan measurement"},
+    "linear_attention:b41": {"verdict":"rejected","measured_ms":15.842119120061398,"repeats_ms":[15.839336384087801,15.842122305184603,15.842119120061398,15.840765330940485,15.846767351031303],"hard_error":"inexpressible topology rewrite; shared maximal expressible whole-plan measurement"},
+    "linear_attention:b39": {"verdict":"rejected","measured_ms":15.842119120061398,"repeats_ms":[15.839336384087801,15.842122305184603,15.842119120061398,15.840765330940485,15.846767351031303],"hard_error":"inexpressible topology rewrite; shared maximal expressible whole-plan measurement"},
+    "linear_attention:2": {"verdict":"rejected","measured_ms":15.842119120061398,"repeats_ms":[15.839336384087801,15.842122305184603,15.842119120061398,15.840765330940485,15.846767351031303],"hard_error":"inexpressible topology rewrite; shared maximal expressible whole-plan measurement"},
+    "linear_attention:1": {"verdict":"rejected","measured_ms":15.842119120061398,"repeats_ms":[15.839336384087801,15.842122305184603,15.842119120061398,15.840765330940485,15.846767351031303],"hard_error":"inexpressible topology rewrite; shared maximal expressible whole-plan measurement"},
+    "linear_attention:3": {"verdict":"not_measurable"}, "linear_attention:4": {"verdict":"not_measurable"},
+    "linear_attention:7": {"verdict":"not_measurable"}, "linear_attention:5": {"verdict":"not_measurable"},
+    "linear_attention:8": {"verdict":"kept","measured_ms":15.825583841651678,"repeats_ms":[15.830312464386225,15.820696521550417,15.831229817122221,15.825583841651678,15.82518707960844],"oracle_pcc":0.9981887732142846,"oracle_passed":true}, "linear_attention:0": {"verdict":"not_measurable"},
+    "linear_attention:6": {"verdict":"not_measurable"}
+  },
+  "screened_candidates": {"apply_all":{"verdict":"rejected","measured_ms":15.844804551452398},"norm_only":{"verdict":"rejected","measured_ms":15.852608848363161},"residual_only":{"verdict":"rejected","measured_ms":15.862355697900057},"mlp_product_only":{"verdict":"accepted","measured_ms":15.825583841651678,"oracle_passed":true},"residual_x_mlp_product":{"verdict":"rejected_slower_than_isolate","measured_ms":15.84434686228633}},
+  "disagreements": {
+    "SliceDeviceOperation#4":{"verdict":"rejected","measured_ms":15.842119120061398,"hard_error":"no independent frozen-policy knob"},
+    "ConcatDeviceOperation#0":{"verdict":"rejected","measured_ms":15.842119120061398,"hard_error":"no independent frozen-policy knob"},
+    "TransposeDeviceOperation#0":{"verdict":"rejected","measured_ms":15.842119120061398,"hard_error":"no independent frozen-policy knob"},
+    "TransposeDeviceOperation#1":{"verdict":"rejected","measured_ms":15.842119120061398,"hard_error":"no independent frozen-policy knob"},
+    "TypecastDeviceOperation#0":{"verdict":"rejected","measured_ms":15.842119120061398,"hard_error":"no independent frozen-policy knob"},
+    "MatmulDeviceOperation b={1536} x 32 x 128 x 128#0":{"verdict":"rejected","measured_ms":15.842119120061398,"hard_error":"advisor direction requires graph rewrite"},
+    "MatmulDeviceOperation b={1536} x 32 x 128 x 128#1":{"verdict":"rejected","measured_ms":15.842119120061398,"hard_error":"advisor direction requires graph rewrite"}
+  }
+}

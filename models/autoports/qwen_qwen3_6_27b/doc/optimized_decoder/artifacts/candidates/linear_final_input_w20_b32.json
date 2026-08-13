@@ -1,0 +1,26 @@
+{
+  "argv": [
+    "/home/mvasiljevic/tt-metal/python_env/bin/python",
+    "/home/mvasiljevic/tt-metal/models/autoports/qwen_qwen3_6_27b/tests/traced_synthetic_pcc.py",
+    "--kind",
+    "linear",
+    "--batch",
+    "32",
+    "--optimized",
+    "--candidate",
+    "linear_final_input_w20",
+    "--steps",
+    "10"
+  ],
+  "batch": 32,
+  "candidate": "linear_final_input_w20",
+  "exit_status": 1,
+  "kind": "linear",
+  "result": "fail",
+  "retained_output": [
+    "2026-07-30 13:20:52.798 | critical |          Always | TT_THROW: Statically allocated circular buffers on core range [0-0 - 7-9] grow to 2587136 B which is beyond max L1 size of 1572864 B (assert.hpp:104)",
+    "OPTIMIZED_POLICY candidate=linear_final_input_w20 layer_kind=linear_attention attention_dtype=DataType.BFLOAT4_B cache_dtype=DataType.BFLOAT8_B sdpa_fidelity=MathFidelity.LoFi qkv_fidelity=MathFidelity.LoFi o_fidelity=MathFidelity.LoFi qkv_w=2 o_w=3 gate_w=2 up_w=2 down_w=17 linear_packed=True linear_outer=True linear_recurrent=grid4_w4 linear_recurrent_fidelity=MathFidelity.HiFi2 linear_recurrent_state_dtype=DataType.BFLOAT8_B linear_input_dtype=DataType.BFLOAT4_B linear_input_fidelity=MathFidelity.LoFi linear_output_dtype=DataType.BFLOAT4_B linear_output_fidelity=MathFidelity.LoFi storage_cores=8",
+    "RuntimeError: TT_THROW @ /home/mvasiljevic/tt-metal/tt_metal/impl/program/program.cpp:1492: tt::exception"
+  ],
+  "steps": 10
+}

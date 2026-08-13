@@ -1,0 +1,37 @@
+{
+  "batch": 1,
+  "bit_exact": null,
+  "candidate": "linear_state_bf16",
+  "command_result": "pass",
+  "decode_median_ms": 3.16129994392395,
+  "decode_min_ms": 2.7674589946400374,
+  "decode_steps": 4,
+  "pcc": [
+    {
+      "phase": "prefill",
+      "value": 0.9979503873281855
+    },
+    {
+      "phase": "decode_0",
+      "value": 0.9987636534960778
+    },
+    {
+      "phase": "decode_1",
+      "value": 0.9987087279867034
+    },
+    {
+      "phase": "decode_2",
+      "value": 0.9988499046308063
+    },
+    {
+      "phase": "decode_3",
+      "value": 0.9990168601072226
+    }
+  ],
+  "prefill_sequence": 65,
+  "real_weights": true,
+  "recurrent_nonzero": 786144,
+  "recurrent_state_dtype": "DataType.BFLOAT16",
+  "repeat_runs": 1,
+  "watcher_enabled": false
+}

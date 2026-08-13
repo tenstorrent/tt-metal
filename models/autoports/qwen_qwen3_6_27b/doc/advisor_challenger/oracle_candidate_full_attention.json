@@ -1,0 +1,9 @@
+{
+  "batch": 32,
+  "candidate": "advisor_mlp_product_full_b32",
+  "kind": "full_attention",
+  "passed": true,
+  "path": "optimized",
+  "pcc": 0.9980950192619897,
+  "reference": "hf"
+}

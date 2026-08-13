@@ -1,0 +1,21 @@
+Command:
+python models/autoports/qwen_qwen3_6_27b/tests/linear_attention_synthetic_pcc.py --mode prefill --sequence 65
+
+Date: 2026-07-29 09:02 UTC
+Exit code: 1
+
+Result:
+The test did not reach decoder execution. Device initialization waited for
+CHIP_IN_USE_0_PCIe held by PID/TID 246282, then failed because sysmem was
+already mapped at a different NOC address:
+
+  Expected sysmem to be mapped at NOC address 0x1000000000000000, but it was
+  mapped at 0x1000000040000000.
+
+TTNN raised:
+
+  RuntimeError: Sysmem mapped at unexpected NOC address (likely a stale
+  process holding sysmem); proceeding could lead to undefined behavior
+
+No device reset or process termination was attempted. This run supplies no
+numerical evidence for the bounded concat change.

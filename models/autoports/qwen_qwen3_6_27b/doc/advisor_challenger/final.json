@@ -1,0 +1,131 @@
+{
+  "outcome": "shipped",
+  "changed": true,
+  "incumbent_ms": 1.449490711092949,
+  "final_ms": 1.4347944967448711,
+  "repeats_ms": [1.4348010905086994, 1.4344312064349651, 1.434660218656063, 1.4347944967448711, 1.4351224899291992],
+  "winning_repeats_ms": [1.4348010905086994, 1.4344312064349651, 1.434660218656063, 1.4347944967448711, 1.4351224899291992],
+  "confirmed_fresh_process": true,
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "shipped_policy": {
+    "linear_attention": {"candidate": "default", "advisor_plan": "mlp_product_only"},
+    "full_attention": {"candidate": "default", "advisor_plan": "mlp_product_only"}
+  },
+  "shipped_weight_dtypes": {
+    "attention": "BFLOAT16", "linear_input": "BFLOAT4_B", "linear_output": "BFLOAT4_B",
+    "mlp_gate_up": "BFLOAT4_B", "mlp_down": "BFLOAT4_B", "kv_cache": "BFLOAT8_B",
+    "recurrent_state": "BFLOAT8_B"
+  },
+  "oracle": "real-weight optimized TTNN layer output against HuggingFace Qwen3.6-27B layer output",
+  "oracle_scope": "absolute B32 decode oracle for both layer kinds",
+  "oracle_reference": "HuggingFace Qwen3.6-27B layer",
+  "oracle_kind": "absolute",
+  "oracle_pcc_bar": 0.995,
+  "oracle_bar_source": "models/autoports/qwen_qwen3_6_27b/tests/full_attention_real_pcc.py:206 and models/autoports/qwen_qwen3_6_27b/tests/linear_attention_real_pcc.py:104",
+  "incumbent_pcc_vs_reference": {"linear_attention": 0.9981887732142846, "full_attention": 0.9980950192619897},
+  "oracle_weights": "real",
+  "oracle_passed": true,
+  "oracle_per_kind": {
+    "linear_attention": {"candidate_pcc": 0.9981887732142846, "incumbent_pcc": 0.9981887732142846, "artifact": "oracle_candidate_linear_attention.json"},
+    "full_attention": {"candidate_pcc": 0.9980950192619897, "incumbent_pcc": 0.9980950192619897, "artifact": "oracle_candidate_full_attention.json"}
+  },
+  "advised_plan_verbatim": {
+    "verdict": "hard_error_then_maximal_expressible_subset_measured",
+    "per_kind": {
+      "linear_attention": {"measured_ms": 15.844804551452398, "artifact": "measurements/advised_plan_verbatim_linear_attention_repaired.json"},
+      "full_attention": {"measured_ms": 1.4499632269144058, "artifact": "measurements/advised_plan_verbatim_full_attention_repaired.json"}
+    },
+    "hard_error": "DRAM-sharded matmul overrides the advised output shard instead of executing it: isolated linear projection requested 103 cores/[32,160] but executed 8/[32,2080]; isolated full projection requested 90/[32,160] but executed 8/[32,1792].",
+    "single_op_test": "scripts/isolate_advised_matmul_output.py",
+    "maximal_expressible_subset": ["11-core block-sharded RMS norms", "80-core residual/add boundary", "109-core MLP product"],
+    "advisor_unfixable_dropped": ["full_attention nlp_concat_heads_decode"]
+  },
+  "model_estimate": {
+    "before_us": 778781.2,
+    "after_us": 777651.4151179313,
+    "band_us": 371.745228767395,
+    "per_kind": {
+      "linear_attention": {"before_us": 758472.96, "after_us": 757578.3145475006, "layers": 48, "winner_ms": 15.825583841651678},
+      "full_attention": {"before_us": 20308.24, "after_us": 20073.100570430757, "layers": 16, "winner_ms": 1.4347944967448711}
+    },
+    "method": "per-layer measured delta x layers_of_kind, applied to reconciled device-profile windows and summed",
+    "saving_us": 1129.784882068634,
+    "saving_exceeds_band": true
+  },
+  "reachable_by_advisor": {
+    "captured_kinds": ["linear_attention", "full_attention"],
+    "captured_layers": 64, "total_layers": 64, "model_layer_share_reached": 1.0,
+    "untraced_window_share_pct": {"linear_attention": 13.88, "full_attention": 2.16},
+    "capture_substitutions": ["_rms_norm_decode dynamic memory-config guard omitted", "_decode_linear dynamic memory-config guard omitted"]
+  },
+  "could_not_do": [
+    {
+      "item": "execute advised DRAM-sharded matmul output grids",
+      "why": "TTNN recomputes and substitutes the 8-core output layout for this program family",
+      "evidence": "isolated tests: linear 103/[32,160] -> 8/[32,2080]; full 90/[32,160] -> 8/[32,1792]"
+    },
+    {"item": "screen nlp_concat_heads_decode", "why": "advisor_unfixable", "evidence": "reconciliation_full_attention.json"}
+  ],
+  "rejected_knobs": [
+    {"name": "advisor_norm_11_core", "default": "off", "reason": "linear 15.852609 ms; full 1.455297 ms, both regressions"},
+    {"name": "advisor_residual_80_core", "default": "off", "reason": "linear 15.862356 ms; full 1.461941 ms, both regressions"},
+    {"name": "advisor_residual_times_mlp_product", "default": "off", "reason": "slower than the product isolate in both kinds"},
+    {"name": "advisor_matmul_output_grids", "default": "off", "reason": "runtime substituted incumbent layout; exact config not executable"}
+  ],
+  "op_under_test": {
+    "name": "MLP gate-times-up multiply output",
+    "incumbent_grid": "L1 width-sharded 8 cores, shard [32,2176]",
+    "candidate_grid": "L1 width-sharded 109 cores, shard [32,160]",
+    "legal_ladder": [1,2,4,8,11,16,17,22,32,34,55,68],
+    "advised_value": 109,
+    "reachable_by_advisor": true
+  },
+  "candidate_shape_assumptions": {
+    "decode_batch": 32, "tile_rows": 1, "physical_rows": 32, "intermediate_width": 17408,
+    "candidate_grid": "109 of 110 Blackhole workers", "shard_shape": [32,160],
+    "batch_guard": "candidate is enabled only when self.batch == 32"
+  },
+  "perf_report_incumbent": ["profiles/incumbent_linear_attention_ops/perf.csv", "profiles/incumbent_full_attention_ops/perf.csv"],
+  "perf_report_winner": ["profiles/winner_linear_attention_ops/perf.csv", "profiles/winner_full_attention_ops/perf.csv"],
+  "profile_category_split": {
+    "linear_attention": {"before_us": {"Compute": 6740.97, "TM": 8411.49, "DM": 238.99, "Other": 410.07}, "after_us": {"Compute": 6714.64, "TM": 8410.24, "DM": 244.62, "Other": 410.03}},
+    "full_attention": {"before_us": {"Compute": 1079.81, "TM": 75.78, "DM": 31.00, "Other": 82.68}, "after_us": {"Compute": 1059.37, "TM": 76.31, "DM": 35.53, "Other": 82.61}}
+  },
+  "combination": {
+    "measured_sets": [
+      {
+        "set": ["linear_attention:mlp_product_109_core"],
+        "measured_ms": 15.825583841651678,
+        "repeats_ms": [15.830312464386225, 15.820696521550417, 15.831229817122221, 15.825583841651678, 15.82518707960844],
+        "oracle_passed": true,
+        "op_under_test": {"name": "MLP gate-times-up multiply output", "incumbent_grid": "8 cores", "candidate_grid": "109 cores", "legal_ladder": [1,2,4,8,11,16,17,22,32,34,55,68]}
+      },
+      {
+        "set": ["full_attention:mlp_product_109_core"],
+        "measured_ms": 1.4347944967448711,
+        "repeats_ms": [1.4348010905086994, 1.4344312064349651, 1.434660218656063, 1.4347944967448711, 1.4351224899291992],
+        "oracle_passed": true,
+        "op_under_test": {"name": "MLP gate-times-up multiply output", "incumbent_grid": "8 cores", "candidate_grid": "109 cores", "legal_ladder": [1,2,4,8,11,16,17,22,32,34,55,68]}
+      },
+      {
+        "set": ["linear_attention:mlp_product_109_core", "full_attention:mlp_product_109_core"],
+        "measured_ms": 1.4347944967448711,
+        "repeats_ms": [1.4348010905086994, 1.4344312064349651, 1.434660218656063, 1.4347944967448711, 1.4351224899291992],
+        "oracle_passed": true,
+        "op_under_test": {"name": "per-kind product used in the weighted full-model estimate", "incumbent_grid": "8 cores", "candidate_grid": "109 cores", "legal_ladder": [1,2,4,8,11,16,17,22,32,34,55,68]}
+      }
+    ]
+  },
+  "iterations": [
+    {"trigger": "initial frozen-incumbent capture and reconciliation", "result": "apply-all ablation selected the 109-core MLP product in both layer kinds; no recapture or reranking iteration was needed"}
+  ],
+  "disconfirmation": {
+    "order_swap": {
+      "linear_attention_knob_off_ms": 15.84323350340128,
+      "full_attention_knob_off_ms": 1.4490360394120216,
+      "artifacts": ["measurements/disconfirm_knob_off_linear_attention.json", "measurements/disconfirm_knob_off_full_attention.json"]
+    },
+    "knob_off": "returned to incumbent timing regime in fresh processes after candidate confirmations"
+  }
+}

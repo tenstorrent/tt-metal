@@ -1,0 +1,15 @@
+Detected CSV format: v2.1 (with device arch and worker core count)
+Using architecture from CSV: blackhole
+Architecture: blackhole, Worker cores: 110
+Sorting CSV by 'HOST START TS' column...
+Using operations after 'PERF_DECODE'.
+Using operations until 'PERF_DECODE_END'.
+Detected data from 1 devices. Merging device data...
+Writing CSV output to models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/profiles/incumbent_full_attention_ops/perf.csv
+Overall DRAM roofline (modeled ops): 52.8% (271 GB/s)
+Warning: Unclassified operation 'NLPCreateQKVHeadsDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'ReshapeViewDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'RepeatDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Warning: Unclassified operation 'SdpaDecodeDeviceOperation' found. Please add to OPERATION_CATEGORIES for proper classification.
+Writing CSV stacked report to models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/profiles/incumbent_full_attention_ops/summary.csv.csv
+Plotting PNG stacked report to models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/profiles/incumbent_full_attention_ops/summary.csv.png

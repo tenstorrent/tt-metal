@@ -1,0 +1,16 @@
+{
+  "shipped_policy": {
+    "candidate": "default",
+    "policy_updates": {
+      "advisor_plan": "apply_all"
+    }
+  },
+  "shipped_weight_dtypes": {
+    "linear_input": "BFLOAT4_B",
+    "linear_output": "BFLOAT4_B",
+    "mlp_gate_up": "BFLOAT4_B",
+    "mlp_down": "BFLOAT4_B",
+    "recurrent_state": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "advised_plan.ops maximal expressible memory-config/program-config subset; dataclasses.replace(frozen_policy, advisor_plan='apply_all')"
+}

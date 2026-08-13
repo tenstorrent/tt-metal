@@ -1,0 +1,4202 @@
+{
+  "feasibility": {
+    "noise_floor_us": 1.318,
+    "noise_floor_source": "max-min of incumbent repeats_ms",
+    "noise_floor_excluding_first_us": 0.598,
+    "first_repeat_share_of_floor": 0.546,
+    "repeats_monotone_decreasing": false,
+    "repeats": 5,
+    "ceiling_us": 33.623,
+    "ceiling_vs_floor": 25.51,
+    "regrid_pool_us": 0,
+    "cliff_ops": 0,
+    "regrid_pool_note": "cost sitting on cliff ops -- the op's own incumbent cost, not an achievable saving. Measured savings in this class were 6-13 % of the layer, 4 times out of 4.",
+    "chains_resolvable_alone": 12,
+    "verdict": "measurable",
+    "advice": "12 chain(s) exceed the 1.318 us floor; screen those individually and group the rest.",
+    "warmup_suspect": {
+      "first_repeat_share_of_floor": 0.546,
+      "monotone": false,
+      "floor_without_first_repeat_us": 0.598,
+      "verdict_if_warmed_properly": "measurable",
+      "note": "The first timed repeat carries most of the spread, and/or the repeats fall monotonically, so this is a settling ramp rather than noise. Re-measure with at least 10 untimed warm-up replays before accepting the verdict above -- and never measure a candidate after the incumbent in one process, since the later run is simply warmer."
+    }
+  },
+  "model_estimate": {
+    "this_kind_us": 20308.24,
+    "per_layer_window_us": 1269.265,
+    "layers_in_window": 1,
+    "layers_of_kind": 16,
+    "total_layers": 64,
+    "kind_share_of_layers": 0.25,
+    "layer_counts": {
+      "linear_attention": 48,
+      "full_attention": 16
+    },
+    "layer_counts_source": "incumbent.json layer_counts (cross-checked)",
+    "ceiling_per_model_us": 537.968,
+    "uncertainty_per_model_us": 21.088,
+    "layer_handoff": {
+      "entry_from_dram": true,
+      "exit_in_l1": true,
+      "entry_op": "InterleavedToShardedDeviceOperation",
+      "entry_us": 1.373,
+      "redundant_per_model_us": 20.595,
+      "note": "This layer loads its input from DRAM but leaves its output in L1, so consecutive layers do not hand off in L1 and this conversion is paid once per layer. NOT this stage's to fix -- the advisor is not asked about layer boundaries -- but report it upstream."
+    },
+    "note": "Sum this_kind_us over every layer kind for the full-model estimate, and choose between candidates on THAT. Per-layer microseconds are for detection against the per-layer noise floor; per-model microseconds are for deciding, because layer counts differ by kind. Report the model estimate as before/after with the uncertainty band: a per-layer delta scaled by the layer count carries the per-layer floor scaled by the same factor."
+  },
+  "capture_provenance": {
+    "capture_batch": 32,
+    "capture_policy_source": "models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/incumbent_full_attention.json",
+    "traced_weight_dtypes": {
+      "attention": "BFLOAT16",
+      "mlp_gate_up": "BFLOAT4_B",
+      "mlp_down": "BFLOAT4_B",
+      "kv_cache": "BFLOAT8_B"
+    },
+    "allow_bf16_dram_sharded_matmul": null,
+    "spills": 2,
+    "spill_ran": true,
+    "op_counts": {
+      "report_total_ops": 70,
+      "ops_listed": 66,
+      "final_choices": 67
+    },
+    "dram_sharded_advised": null,
+    "layers_in_window": 1,
+    "graph_input_reshards": 8,
+    "graph_input_note": "reshards with producer=='input' come off a graph input the py-to-IR boundary hardcodes to DRAM interleaved. Some are genuine weight placement (DRAM is where weights live); the one feeding the first op is the layer's activation entry and is an artifact. Capturing N consecutive layers reduces the artifact to 1/N of the layer boundaries.",
+    "spill_caution": "the optimizer spilled 2 time(s) building this plan, so it did not fit L1 as a whole. Expect single-chain application to hit the same wall, and treat a capacity failure as a partial-application artifact rather than evidence the direction is wrong."
+  },
+  "untraced_detail": {
+    "ops": [
+      {
+        "device": "TransposeDeviceOperation",
+        "us": 3.226,
+        "share_pct": 0.254
+      },
+      {
+        "device": "TransposeDeviceOperation",
+        "us": 3.123,
+        "share_pct": 0.246
+      },
+      {
+        "device": "TransposeDeviceOperation",
+        "us": 3.116,
+        "share_pct": 0.245
+      },
+      {
+        "device": "TransposeDeviceOperation",
+        "us": 3.124,
+        "share_pct": 0.246
+      },
+      {
+        "device": "PagedUpdateCacheDeviceOperation",
+        "us": 7.454,
+        "share_pct": 0.587
+      },
+      {
+        "device": "PagedUpdateCacheDeviceOperation",
+        "us": 7.397,
+        "share_pct": 0.583
+      }
+    ],
+    "declared_uncapturable_by_report": [
+      "nlp_concat_heads_decode"
+    ],
+    "note": "untraced means the profile has it and the advisor's graph does not. That is expected for ops the report declares uncapturable (terminal in the tracer) and a problem otherwise. This tool cannot tell the two apart per op -- the capture log can."
+  },
+  "generated_by": "advisor-challenger/scripts/reconcile.py",
+  "tool_version": 6,
+  "advised_plan": {
+    "source": "models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/shard_advise/full_attention/final_ir.mlir",
+    "ops": [
+      {
+        "op": "reshape",
+        "logical_shape": [
+          5120
+        ],
+        "layout_ref": "ttnn_layout11",
+        "unfixable": false,
+        "grid": "1x1",
+        "grid_cores": 1,
+        "space": "dram",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          5120
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "layout_ref": "ttnn_layout12",
+        "unfixable": false,
+        "grid": "1x11",
+        "grid_cores": 11,
+        "space": "l1",
+        "layout": "block_sharded",
+        "shard_shape": [
+          32,
+          480
+        ],
+        "core_ranges": [
+          "(0,0)-(10,0)"
+        ],
+        "core_range_cores": 11
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          5120
+        ],
+        "layout_ref": "ttnn_layout13",
+        "unfixable": false,
+        "grid": "1x80",
+        "grid_cores": 80,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,6)",
+          "(0,7)-(2,7)"
+        ],
+        "core_range_cores": 80
+      },
+      {
+        "op": "rms_norm",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "layout_ref": "ttnn_layout12",
+        "unfixable": false,
+        "grid": "1x11",
+        "grid_cores": 11,
+        "space": "l1",
+        "layout": "block_sharded",
+        "shard_shape": [
+          32,
+          480
+        ],
+        "core_ranges": [
+          "(0,0)-(10,0)"
+        ],
+        "core_range_cores": 11
+      },
+      {
+        "op": "typecast",
+        "logical_shape": [
+          32
+        ],
+        "layout_ref": "ttnn_layout14",
+        "unfixable": false,
+        "grid": "1x1",
+        "grid_cores": 1,
+        "space": "dram",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "layout_ref": "ttnn_layout15",
+        "unfixable": false,
+        "grid": "1x8",
+        "grid_cores": 8,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          640
+        ],
+        "core_ranges": [
+          "(0,0)-(7,0)"
+        ],
+        "core_range_cores": 8
+      },
+      {
+        "op": "linear",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          14336
+        ],
+        "layout_ref": "ttnn_layout16",
+        "unfixable": false,
+        "grid": "1x90",
+        "grid_cores": 90,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          160
+        ],
+        "core_ranges": [
+          "(0,0)-(10,7)",
+          "(0,8)-(1,8)"
+        ],
+        "core_range_cores": 90
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          14336
+        ],
+        "layout_ref": "ttnn_layout17",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          160
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "slice_static",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          8192
+        ],
+        "layout_ref": "ttnn_layout18",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          96
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "slice_static",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          6144
+        ],
+        "layout_ref": "ttnn_layout19",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "nlp_create_qkv_heads_decode",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          256
+        ],
+        "layout_ref": "ttnn_layout20",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          256
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "reshape",
+        "logical_shape": [
+          1,
+          1,
+          768,
+          256
+        ],
+        "layout_ref": "ttnn_layout21",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          1,
+          768,
+          256
+        ],
+        "layout_ref": "ttnn_layout22",
+        "unfixable": false,
+        "grid": "8x8",
+        "grid_cores": 64,
+        "space": "l1",
+        "layout": "block_sharded",
+        "shard_shape": [
+          96,
+          32
+        ],
+        "core_ranges": [
+          "(0,0)-(7,7)"
+        ],
+        "core_range_cores": 64
+      },
+      {
+        "op": "rms_norm",
+        "logical_shape": [
+          1,
+          1,
+          768,
+          256
+        ],
+        "layout_ref": "ttnn_layout22",
+        "unfixable": false,
+        "grid": "8x8",
+        "grid_cores": 64,
+        "space": "l1",
+        "layout": "block_sharded",
+        "shard_shape": [
+          96,
+          32
+        ],
+        "core_ranges": [
+          "(0,0)-(7,7)"
+        ],
+        "core_range_cores": 64
+      },
+      {
+        "op": "reshape",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          256
+        ],
+        "layout_ref": "ttnn_layout23",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          96
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "reshape",
+        "logical_shape": [
+          1,
+          1,
+          128,
+          256
+        ],
+        "layout_ref": "ttnn_layout24",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          1,
+          128,
+          256
+        ],
+        "layout_ref": "ttnn_layout25",
+        "unfixable": false,
+        "grid": "4x8",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "block_sharded",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": [
+          "(0,0)-(7,3)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "rms_norm",
+        "logical_shape": [
+          1,
+          1,
+          128,
+          256
+        ],
+        "layout_ref": "ttnn_layout25",
+        "unfixable": false,
+        "grid": "4x8",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "block_sharded",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": [
+          "(0,0)-(7,3)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "reshape",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          256
+        ],
+        "layout_ref": "ttnn_layout23",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          96
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "slice_static",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          64
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "slice_static",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          192
+        ],
+        "layout_ref": "ttnn_layout27",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "embedding",
+        "logical_shape": [
+          32,
+          64
+        ],
+        "layout_ref": "ttnn_layout28",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "embedding",
+        "logical_shape": [
+          32,
+          64
+        ],
+        "layout_ref": "ttnn_layout28",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "reshape",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          64
+        ],
+        "layout_ref": "ttnn_layout29",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "reshape",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          64
+        ],
+        "layout_ref": "ttnn_layout29",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "transpose",
+        "logical_shape": [
+          1,
+          32,
+          1,
+          64
+        ],
+        "layout_ref": "ttnn_layout30",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "transpose",
+        "logical_shape": [
+          1,
+          32,
+          1,
+          64
+        ],
+        "layout_ref": "ttnn_layout30",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          32,
+          1,
+          64
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "slice_static",
+        "logical_shape": [
+          1,
+          32,
+          1,
+          64
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          32,
+          1,
+          64
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "slice_static",
+        "logical_shape": [
+          1,
+          32,
+          1,
+          64
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "repeat",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          64
+        ],
+        "layout_ref": "ttnn_layout30",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "repeat",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          64
+        ],
+        "layout_ref": "ttnn_layout30",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "multiply",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          64
+        ],
+        "layout_ref": "ttnn_layout30",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "slice_static",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          32
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "neg",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          32
+        ],
+        "layout_ref": "ttnn_layout31",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "slice_static",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          32
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          32
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "concat",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          64
+        ],
+        "layout_ref": "ttnn_layout32",
+        "unfixable": false,
+        "grid": "1x1",
+        "grid_cores": 1,
+        "space": "dram",
+        "layout": "interleaved",
+        "shard_shape": [
+          1024,
+          64
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          64
+        ],
+        "layout_ref": "ttnn_layout30",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "multiply",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          64
+        ],
+        "layout_ref": "ttnn_layout30",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "add",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          64
+        ],
+        "layout_ref": "ttnn_layout30",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          64
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "concat",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          256
+        ],
+        "layout_ref": "ttnn_layout33",
+        "unfixable": false,
+        "grid": "1x1",
+        "grid_cores": 1,
+        "space": "dram",
+        "layout": "interleaved",
+        "shard_shape": [
+          1024,
+          256
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "slice_static",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          64
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "slice_static",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          192
+        ],
+        "layout_ref": "ttnn_layout27",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "embedding",
+        "logical_shape": [
+          32,
+          64
+        ],
+        "layout_ref": "ttnn_layout28",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "embedding",
+        "logical_shape": [
+          32,
+          64
+        ],
+        "layout_ref": "ttnn_layout28",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "reshape",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          64
+        ],
+        "layout_ref": "ttnn_layout29",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "reshape",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          64
+        ],
+        "layout_ref": "ttnn_layout29",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "transpose",
+        "logical_shape": [
+          1,
+          32,
+          1,
+          64
+        ],
+        "layout_ref": "ttnn_layout30",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "transpose",
+        "logical_shape": [
+          1,
+          32,
+          1,
+          64
+        ],
+        "layout_ref": "ttnn_layout30",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          32,
+          1,
+          64
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "slice_static",
+        "logical_shape": [
+          1,
+          32,
+          1,
+          64
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          32,
+          1,
+          64
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "slice_static",
+        "logical_shape": [
+          1,
+          32,
+          1,
+          64
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "repeat",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          64
+        ],
+        "layout_ref": "ttnn_layout30",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "repeat",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          64
+        ],
+        "layout_ref": "ttnn_layout30",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "multiply",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          64
+        ],
+        "layout_ref": "ttnn_layout30",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "slice_static",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          32
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "neg",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          32
+        ],
+        "layout_ref": "ttnn_layout31",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "slice_static",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          32
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          32
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "concat",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          64
+        ],
+        "layout_ref": "ttnn_layout32",
+        "unfixable": false,
+        "grid": "1x1",
+        "grid_cores": 1,
+        "space": "dram",
+        "layout": "interleaved",
+        "shard_shape": [
+          1024,
+          64
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          64
+        ],
+        "layout_ref": "ttnn_layout34",
+        "unfixable": false,
+        "grid": "8x1",
+        "grid_cores": 8,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          128,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(7,0)"
+        ],
+        "core_range_cores": 8
+      },
+      {
+        "op": "multiply",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          64
+        ],
+        "layout_ref": "ttnn_layout30",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "add",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          64
+        ],
+        "layout_ref": "ttnn_layout30",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          64
+        ],
+        "layout_ref": "ttnn_layout26",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          32
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "concat",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          256
+        ],
+        "layout_ref": "ttnn_layout33",
+        "unfixable": false,
+        "grid": "1x1",
+        "grid_cores": 1,
+        "space": "dram",
+        "layout": "interleaved",
+        "shard_shape": [
+          1024,
+          256
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          32,
+          4,
+          256
+        ],
+        "layout_ref": "ttnn_layout20",
+        "unfixable": false,
+        "grid": "32x1",
+        "grid_cores": 32,
+        "space": "l1",
+        "layout": "height_sharded",
+        "shard_shape": [
+          32,
+          256
+        ],
+        "core_ranges": [
+          "(0,0)-(10,1)",
+          "(0,2)-(9,2)"
+        ],
+        "core_range_cores": 32
+      },
+      {
+        "op": "to_layout",
+        "logical_shape": [
+          32
+        ],
+        "layout_ref": "ttnn_layout35",
+        "unfixable": false
+      },
+      {
+        "op": "to_layout",
+        "logical_shape": [
+          32,
+          1
+        ],
+        "layout_ref": "ttnn_layout36",
+        "unfixable": false
+      },
+      {
+        "op": "to_layout",
+        "logical_shape": [
+          32
+        ],
+        "layout_ref": "ttnn_layout35",
+        "unfixable": false
+      },
+      {
+        "op": "to_layout",
+        "logical_shape": [
+          32,
+          1
+        ],
+        "layout_ref": "ttnn_layout36",
+        "unfixable": false
+      },
+      {
+        "op": "to_layout",
+        "logical_shape": [
+          32,
+          1
+        ],
+        "layout_ref": "ttnn_layout36",
+        "unfixable": false
+      },
+      {
+        "op": "to_layout",
+        "logical_shape": [
+          32
+        ],
+        "layout_ref": "ttnn_layout35",
+        "unfixable": false
+      },
+      {
+        "op": "paged_scaled_dot_product_attention_decode",
+        "logical_shape": [
+          1,
+          32,
+          24,
+          256
+        ],
+        "layout_ref": "ttnn_layout33",
+        "unfixable": false,
+        "grid": "1x1",
+        "grid_cores": 1,
+        "space": "dram",
+        "layout": "interleaved",
+        "shard_shape": [
+          1024,
+          256
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "nlp_concat_heads_decode",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          6144
+        ],
+        "layout_ref": "ttnn_layout37",
+        "unfixable": true,
+        "grid": "1x1",
+        "grid_cores": 1,
+        "space": "dram",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          6144
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "sigmoid",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          6144
+        ],
+        "layout_ref": "ttnn_layout38",
+        "unfixable": false,
+        "grid": "1x96",
+        "grid_cores": 96,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,7)",
+          "(0,8)-(7,8)"
+        ],
+        "core_range_cores": 96
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          6144
+        ],
+        "layout_ref": "ttnn_layout38",
+        "unfixable": false,
+        "grid": "1x96",
+        "grid_cores": 96,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,7)",
+          "(0,8)-(7,8)"
+        ],
+        "core_range_cores": 96
+      },
+      {
+        "op": "multiply",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          6144
+        ],
+        "layout_ref": "ttnn_layout38",
+        "unfixable": false,
+        "grid": "1x96",
+        "grid_cores": 96,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,7)",
+          "(0,8)-(7,8)"
+        ],
+        "core_range_cores": 96
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          6144
+        ],
+        "layout_ref": "ttnn_layout39",
+        "unfixable": false,
+        "grid": "1x8",
+        "grid_cores": 8,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          768
+        ],
+        "core_ranges": [
+          "(0,0)-(7,0)"
+        ],
+        "core_range_cores": 8
+      },
+      {
+        "op": "linear",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "layout_ref": "ttnn_layout40",
+        "unfixable": false,
+        "grid": "1x80",
+        "grid_cores": 80,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,6)",
+          "(0,7)-(2,7)"
+        ],
+        "core_range_cores": 80
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "layout_ref": "ttnn_layout19",
+        "unfixable": false,
+        "grid": "10x11",
+        "grid_cores": 110,
+        "space": "l1",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "layout_ref": "ttnn_layout40",
+        "unfixable": false,
+        "grid": "1x80",
+        "grid_cores": 80,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,6)",
+          "(0,7)-(2,7)"
+        ],
+        "core_range_cores": 80
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "layout_ref": "ttnn_layout40",
+        "unfixable": false,
+        "grid": "1x80",
+        "grid_cores": 80,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,6)",
+          "(0,7)-(2,7)"
+        ],
+        "core_range_cores": 80
+      },
+      {
+        "op": "add",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "layout_ref": "ttnn_layout40",
+        "unfixable": false,
+        "grid": "1x80",
+        "grid_cores": 80,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,6)",
+          "(0,7)-(2,7)"
+        ],
+        "core_range_cores": 80
+      },
+      {
+        "op": "reshape",
+        "logical_shape": [
+          5120
+        ],
+        "layout_ref": "ttnn_layout11",
+        "unfixable": false,
+        "grid": "1x1",
+        "grid_cores": 1,
+        "space": "dram",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          5120
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "layout_ref": "ttnn_layout12",
+        "unfixable": false,
+        "grid": "1x11",
+        "grid_cores": 11,
+        "space": "l1",
+        "layout": "block_sharded",
+        "shard_shape": [
+          32,
+          480
+        ],
+        "core_ranges": [
+          "(0,0)-(10,0)"
+        ],
+        "core_range_cores": 11
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          5120
+        ],
+        "layout_ref": "ttnn_layout13",
+        "unfixable": false,
+        "grid": "1x80",
+        "grid_cores": 80,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,6)",
+          "(0,7)-(2,7)"
+        ],
+        "core_range_cores": 80
+      },
+      {
+        "op": "rms_norm",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "layout_ref": "ttnn_layout12",
+        "unfixable": false,
+        "grid": "1x11",
+        "grid_cores": 11,
+        "space": "l1",
+        "layout": "block_sharded",
+        "shard_shape": [
+          32,
+          480
+        ],
+        "core_ranges": [
+          "(0,0)-(10,0)"
+        ],
+        "core_range_cores": 11
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "layout_ref": "ttnn_layout15",
+        "unfixable": false,
+        "grid": "1x8",
+        "grid_cores": 8,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          640
+        ],
+        "core_ranges": [
+          "(0,0)-(7,0)"
+        ],
+        "core_range_cores": 8
+      },
+      {
+        "op": "linear",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          17408
+        ],
+        "layout_ref": "ttnn_layout42",
+        "unfixable": false,
+        "grid": "1x109",
+        "grid_cores": 109,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          160
+        ],
+        "core_ranges": [
+          "(0,0)-(10,8)",
+          "(0,9)-(9,9)"
+        ],
+        "core_range_cores": 109
+      },
+      {
+        "op": "linear",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          17408
+        ],
+        "layout_ref": "ttnn_layout42",
+        "unfixable": false,
+        "grid": "1x109",
+        "grid_cores": 109,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          160
+        ],
+        "core_ranges": [
+          "(0,0)-(10,8)",
+          "(0,9)-(9,9)"
+        ],
+        "core_range_cores": 109
+      },
+      {
+        "op": "multiply",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          17408
+        ],
+        "layout_ref": "ttnn_layout42",
+        "unfixable": false,
+        "grid": "1x109",
+        "grid_cores": 109,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          160
+        ],
+        "core_ranges": [
+          "(0,0)-(10,8)",
+          "(0,9)-(9,9)"
+        ],
+        "core_range_cores": 109
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          17408
+        ],
+        "layout_ref": "ttnn_layout43",
+        "unfixable": false,
+        "grid": "1x8",
+        "grid_cores": 8,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          2176
+        ],
+        "core_ranges": [
+          "(0,0)-(7,0)"
+        ],
+        "core_range_cores": 8
+      },
+      {
+        "op": "linear",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "layout_ref": "ttnn_layout40",
+        "unfixable": false,
+        "grid": "1x80",
+        "grid_cores": 80,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,6)",
+          "(0,7)-(2,7)"
+        ],
+        "core_range_cores": 80
+      },
+      {
+        "op": "add",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "layout_ref": "ttnn_layout40",
+        "unfixable": false,
+        "grid": "1x80",
+        "grid_cores": 80,
+        "space": "l1",
+        "layout": "width_sharded",
+        "shard_shape": [
+          32,
+          64
+        ],
+        "core_ranges": [
+          "(0,0)-(10,6)",
+          "(0,7)-(2,7)"
+        ],
+        "core_range_cores": 80
+      },
+      {
+        "op": "to_memory_config",
+        "logical_shape": [
+          1,
+          1,
+          32,
+          5120
+        ],
+        "layout_ref": "ttnn_layout",
+        "unfixable": false,
+        "grid": "1x1",
+        "grid_cores": 1,
+        "space": "dram",
+        "layout": "interleaved",
+        "shard_shape": [
+          32,
+          5120
+        ],
+        "core_ranges": null,
+        "core_range_cores": null
+      }
+    ],
+    "advised_cores_source": "grid-string product from report.json, cross-checked against final_ir.mlir",
+    "cores_bbox_understated": "21 of 66 advised ops have a report.json cores= bounding box below the true core count. The grid product is used throughout.",
+    "unfixable_ops": {
+      "nlp_concat_heads_decode": "MetalBackendError - Op constraint query failed with error: TT_FATAL @ /home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/nlp_concat_heads_decode_device_operation.cpp:44: input_tensor.is_sharded() info: Input tensor must be sharded"
+    },
+    "note": "CANDIDATE #1 IS THIS PLAN, APPLIED WHOLE. Build it from the shard shapes here, not from report.json, which has none. Drop the unfixable_ops entries first -- the advisor has already declared those impossible, with the exact runtime error. If what remains will not run, remove ONLY the failing item and record the single-op test that isolates it. Then ablate: an advised item whose REMOVAL is faster is feedback about the advisor that no build-up order can produce."
+  },
+  "confidence": {
+    "paired_by_name": 35,
+    "paired_by_position": 13,
+    "us_paired_by_position": 74.143,
+    "pct_paired_by_position": 5.841,
+    "device_to_advised_fanout": 1.12,
+    "report_declares_uncapturable": false,
+    "degraded": false,
+    "degraded_because": [],
+    "hard": [
+      "measured_window_us",
+      "per-op us and share_pct",
+      "accounting_closes_100pct",
+      "the single-replay and window-ratio guards",
+      "by_conversion_class us"
+    ],
+    "soft": [
+      "which advised op each device op is",
+      "advised_here / advisor_removes_us",
+      "the chain ranking, since it is computed from the soft items above"
+    ]
+  },
+  "limitations": [
+    "Ops are paired by normalised name, then by position when no name matches. A positional pair is a guess; rows carry pair_confidence, and pct_paired_by_position says how much of the window rests on guesses. On an unfamiliar model expect this to rise.",
+    "advised_here is keyed on producer/consumer op NAMES, so a repeated edge collapses to one key: presence is a strong signal, absence a weak one.",
+    "untraced conflates 'terminal in the tracer' with 'ran but the advisor never placed it'. This tool cannot tell them apart; the capture log can.",
+    "The profile exposes no grid and no output memory config, so a conversion that only regrids is invisible here and unresolved classes cannot be settled without the IR.",
+    "agrees_with_shipped compares the space using the profile's INPUT-0 memory class, the only one it exposes; where that column is absent the row is `grid_only_space_unknown` and the space is unchecked. A ds_family agreement says nothing about the grid, deliberately.",
+    "The legal ladder models the shard-padding rule and the model's grid helper, not the op's own layout rulebook. It bounds a sweep; it does not prove a rung will run.",
+    "Nothing here is a measurement. Every verdict comes from the device."
+  ],
+  "layer_kind": "full_attention",
+  "layers_of_kind": 16,
+  "total_layers": 64,
+  "measured_window_us": 1269.265,
+  "accounting": {
+    "boundary": {
+      "us": 77.761,
+      "ops": 20,
+      "share_pct": 6.126
+    },
+    "chain": {
+      "us": 554.237,
+      "ops": 33,
+      "share_pct": 43.666
+    },
+    "dram_resident": {
+      "us": 30.046,
+      "ops": 6,
+      "share_pct": 2.367
+    },
+    "agrees_with_shipped": {
+      "us": 570.832,
+      "ops": 8,
+      "share_pct": 44.973
+    },
+    "untraced": {
+      "us": 27.44,
+      "ops": 6,
+      "share_pct": 2.162
+    },
+    "advisor_unfixable": {
+      "us": 8.949,
+      "ops": 1,
+      "share_pct": 0.705
+    }
+  },
+  "accounting_closes_100pct": true,
+  "accounted_us": 1269.265,
+  "scope": {
+    "window_us": 1269.265,
+    "incumbent_us": 1449.491,
+    "note": "The profile and the harness both cover ONE decoder layer, and window_us should be within a few percent of incumbent_us. per_model_us on each chain scales by layers_of_kind to the whole model and is an extrapolation -- never compare it to incumbent_ms, which is per layer.",
+    "layers_of_kind": 16,
+    "total_layers": 64
+  },
+  "ranked_by": "advisor_removes_us (conversions the advice does not place), then total conversion value + chain op us. NOT the advised ops' window share. Compare each chain's vs_noise_floor before spending a measurement on it.",
+  "advised_boundaries": {
+    "advisor_drops_ops": 14,
+    "us_advisor_drops": 33.623,
+    "advisor_agrees_ops": 1,
+    "us_advisor_agrees": 1.596,
+    "undetermined_ops": 1,
+    "us_undetermined": 1.373,
+    "unresolved_ops": 4,
+    "us_unresolved": 41.169,
+    "by_conversion_class": {
+      "dram_to_l1": {
+        "us": 7.45,
+        "ops": 4
+      },
+      "l1_to_dram": {
+        "us": 7.099,
+        "ops": 3
+      },
+      "reshape_view": {
+        "us": 41.169,
+        "ops": 4
+      },
+      "retilize": {
+        "us": 20.447,
+        "ops": 8
+      },
+      "l1_regrid": {
+        "us": 1.596,
+        "ops": 1
+      }
+    },
+    "note": "us_advisor_drops is what this stage can attribute to the advisor. us_advisor_agrees is real conversion time the advisor endorses: attacking it is a separate activity and crediting it here would contaminate the measurement. us_unresolved needs the IR to classify -- resolve it, do not skip it."
+  },
+  "cliff_candidates": [],
+  "chains": [
+    {
+      "chain": "full_attention:10",
+      "ops": [
+        "repeat"
+      ],
+      "us": 1.111,
+      "boundary_us": 5.41,
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "repeats_ms": [
+        1.4497867226600647,
+        1.4493160136044025,
+        1.451921183615923,
+        1.4532042108476162,
+        1.4513533003628254
+      ],
+      "advisor_removes_us": 5.41,
+      "conversion_value_us": 5.41,
+      "op_share_pct": 0.088,
+      "per_model_us": 104.336,
+      "advisor_removes_per_model_us": 86.56,
+      "vs_noise_floor": 4.1,
+      "resolvable_alone": true,
+      "confidence": "high",
+      "hard_error": "inexpressible topology rewrite; shared maximal expressible whole-plan measurement"
+    },
+    {
+      "chain": "full_attention:5",
+      "ops": [
+        "repeat"
+      ],
+      "us": 1.741,
+      "boundary_us": 4.886,
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "repeats_ms": [
+        1.4497867226600647,
+        1.4493160136044025,
+        1.451921183615923,
+        1.4532042108476162,
+        1.4513533003628254
+      ],
+      "advisor_removes_us": 4.886,
+      "conversion_value_us": 4.886,
+      "op_share_pct": 0.137,
+      "per_model_us": 106.032,
+      "advisor_removes_per_model_us": 78.176,
+      "vs_noise_floor": 3.71,
+      "resolvable_alone": true,
+      "confidence": "high",
+      "hard_error": "inexpressible topology rewrite; shared maximal expressible whole-plan measurement"
+    },
+    {
+      "chain": "full_attention:11",
+      "ops": [
+        "repeat"
+      ],
+      "us": 1.139,
+      "boundary_us": 3.591,
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "repeats_ms": [
+        1.4497867226600647,
+        1.4493160136044025,
+        1.451921183615923,
+        1.4532042108476162,
+        1.4513533003628254
+      ],
+      "advisor_removes_us": 3.591,
+      "conversion_value_us": 3.591,
+      "op_share_pct": 0.09,
+      "per_model_us": 75.68,
+      "advisor_removes_per_model_us": 57.456,
+      "vs_noise_floor": 2.72,
+      "resolvable_alone": true,
+      "confidence": "high",
+      "hard_error": "inexpressible topology rewrite; shared maximal expressible whole-plan measurement"
+    },
+    {
+      "chain": "full_attention:6",
+      "ops": [
+        "repeat"
+      ],
+      "us": 1.748,
+      "boundary_us": 3.315,
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "repeats_ms": [
+        1.4497867226600647,
+        1.4493160136044025,
+        1.451921183615923,
+        1.4532042108476162,
+        1.4513533003628254
+      ],
+      "advisor_removes_us": 3.315,
+      "conversion_value_us": 3.315,
+      "op_share_pct": 0.138,
+      "per_model_us": 81.008,
+      "advisor_removes_per_model_us": 53.04,
+      "vs_noise_floor": 2.52,
+      "resolvable_alone": true,
+      "confidence": "high",
+      "hard_error": "inexpressible topology rewrite; shared maximal expressible whole-plan measurement"
+    },
+    {
+      "chain": "full_attention:b12",
+      "ops": [],
+      "us": 0.0,
+      "boundary_us": 2.569,
+      "advisor_removes_us": 2.569,
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "repeats_ms": [
+        1.4497867226600647,
+        1.4493160136044025,
+        1.451921183615923,
+        1.4532042108476162,
+        1.4513533003628254
+      ],
+      "kind": "boundary_only",
+      "edge": "rms_norm -> rms_norm",
+      "how": "remove the l1_to_dram on this edge; the advice places no conversion here and both neighbours already match shipped, so no geometry change is needed",
+      "conversion_value_us": 2.569,
+      "op_share_pct": 0.0,
+      "per_model_us": 41.104,
+      "advisor_removes_per_model_us": 41.104,
+      "vs_noise_floor": 1.95,
+      "resolvable_alone": true,
+      "confidence": "high",
+      "hard_error": "inexpressible topology rewrite; shared maximal expressible whole-plan measurement"
+    },
+    {
+      "chain": "full_attention:b8",
+      "ops": [],
+      "us": 0.0,
+      "boundary_us": 2.316,
+      "advisor_removes_us": 2.316,
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "repeats_ms": [
+        1.4497867226600647,
+        1.4493160136044025,
+        1.451921183615923,
+        1.4532042108476162,
+        1.4513533003628254
+      ],
+      "kind": "boundary_only",
+      "edge": "nlp_create_qkv_heads_decode -> rms_norm",
+      "how": "remove the l1_to_dram on this edge; the advice places no conversion here and both neighbours already match shipped, so no geometry change is needed",
+      "conversion_value_us": 2.316,
+      "op_share_pct": 0.0,
+      "per_model_us": 37.056,
+      "advisor_removes_per_model_us": 37.056,
+      "vs_noise_floor": 1.76,
+      "resolvable_alone": true,
+      "confidence": "high",
+      "hard_error": "inexpressible topology rewrite; shared maximal expressible whole-plan measurement"
+    },
+    {
+      "chain": "full_attention:b6",
+      "ops": [],
+      "us": 0.0,
+      "boundary_us": 2.214,
+      "advisor_removes_us": 2.214,
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "repeats_ms": [
+        1.4497867226600647,
+        1.4493160136044025,
+        1.451921183615923,
+        1.4532042108476162,
+        1.4513533003628254
+      ],
+      "kind": "boundary_only",
+      "edge": "slice_static -> nlp_create_qkv_heads_decode",
+      "how": "remove the l1_to_dram on this edge; the advice places no conversion here and both neighbours already match shipped, so no geometry change is needed",
+      "conversion_value_us": 2.214,
+      "op_share_pct": 0.0,
+      "per_model_us": 35.424,
+      "advisor_removes_per_model_us": 35.424,
+      "vs_noise_floor": 1.68,
+      "resolvable_alone": true,
+      "confidence": "high",
+      "hard_error": "inexpressible topology rewrite; shared maximal expressible whole-plan measurement"
+    },
+    {
+      "chain": "full_attention:b61",
+      "ops": [],
+      "us": 0.0,
+      "boundary_us": 2.065,
+      "advisor_removes_us": 2.065,
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "repeats_ms": [
+        1.4497867226600647,
+        1.4493160136044025,
+        1.451921183615923,
+        1.4532042108476162,
+        1.4513533003628254
+      ],
+      "kind": "boundary_only",
+      "edge": "paged_scaled_dot_product_attention_decode -> nlp_concat_heads_decode",
+      "how": "remove the dram_to_l1 on this edge; the advice places no conversion here and both neighbours already match shipped, so no geometry change is needed",
+      "conversion_value_us": 2.065,
+      "op_share_pct": 0.0,
+      "per_model_us": 33.04,
+      "advisor_removes_per_model_us": 33.04,
+      "vs_noise_floor": 1.57,
+      "resolvable_alone": true,
+      "confidence": "high",
+      "hard_error": "inexpressible topology rewrite; shared maximal expressible whole-plan measurement"
+    },
+    {
+      "chain": "full_attention:b57",
+      "ops": [],
+      "us": 0.0,
+      "boundary_us": 2.009,
+      "advisor_removes_us": 2.009,
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "repeats_ms": [
+        1.4497867226600647,
+        1.4493160136044025,
+        1.451921183615923,
+        1.4532042108476162,
+        1.4513533003628254
+      ],
+      "kind": "boundary_only",
+      "edge": "concat -> paged_scaled_dot_product_attention_decode",
+      "how": "remove the dram_to_l1 on this edge; the advice places no conversion here and both neighbours already match shipped, so no geometry change is needed",
+      "conversion_value_us": 2.009,
+      "op_share_pct": 0.0,
+      "per_model_us": 32.144,
+      "advisor_removes_per_model_us": 32.144,
+      "vs_noise_floor": 1.52,
+      "resolvable_alone": true,
+      "confidence": "high",
+      "hard_error": "inexpressible topology rewrite; shared maximal expressible whole-plan measurement"
+    },
+    {
+      "chain": "full_attention:9",
+      "ops": [
+        "slice_static",
+        "embedding",
+        "embedding"
+      ],
+      "us": 6.627,
+      "boundary_us": 2.003,
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "repeats_ms": [
+        1.4497867226600647,
+        1.4493160136044025,
+        1.451921183615923,
+        1.4532042108476162,
+        1.4513533003628254
+      ],
+      "advisor_removes_us": 2.003,
+      "conversion_value_us": 2.003,
+      "op_share_pct": 0.522,
+      "per_model_us": 138.08,
+      "advisor_removes_per_model_us": 32.048,
+      "vs_noise_floor": 1.52,
+      "resolvable_alone": true,
+      "confidence": "high",
+      "hard_error": "inexpressible topology rewrite; shared maximal expressible whole-plan measurement"
+    },
+    {
+      "chain": "full_attention:12",
+      "ops": [
+        "multiply",
+        "slice_static",
+        "neg",
+        "slice_static"
+      ],
+      "us": 5.901,
+      "boundary_us": 1.779,
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "repeats_ms": [
+        1.4497867226600647,
+        1.4493160136044025,
+        1.451921183615923,
+        1.4532042108476162,
+        1.4513533003628254
+      ],
+      "advisor_removes_us": 1.779,
+      "conversion_value_us": 1.779,
+      "_unresolved_us": 0.0,
+      "op_share_pct": 0.465,
+      "per_model_us": 122.88,
+      "advisor_removes_per_model_us": 28.464,
+      "vs_noise_floor": 1.35,
+      "resolvable_alone": true,
+      "confidence": "low",
+      "hard_error": "inexpressible topology rewrite; shared maximal expressible whole-plan measurement"
+    },
+    {
+      "chain": "full_attention:7",
+      "ops": [
+        "multiply",
+        "slice_static",
+        "neg",
+        "slice_static"
+      ],
+      "us": 5.903,
+      "boundary_us": 1.466,
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "repeats_ms": [
+        1.4497867226600647,
+        1.4493160136044025,
+        1.451921183615923,
+        1.4532042108476162,
+        1.4513533003628254
+      ],
+      "advisor_removes_us": 1.466,
+      "conversion_value_us": 1.466,
+      "_unresolved_us": 0.0,
+      "op_share_pct": 0.465,
+      "per_model_us": 117.904,
+      "advisor_removes_per_model_us": 23.456,
+      "vs_noise_floor": 1.11,
+      "resolvable_alone": true,
+      "confidence": "low",
+      "hard_error": "inexpressible topology rewrite; shared maximal expressible whole-plan measurement"
+    },
+    {
+      "chain": "full_attention:1",
+      "ops": [
+        "linear"
+      ],
+      "us": 294.987,
+      "boundary_us": 0.0,
+      "verdict": "not_measurable",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "conversion_value_us": 0.0,
+      "advisor_removes_us": 0.0,
+      "op_share_pct": 23.241,
+      "per_model_us": 4719.792,
+      "advisor_removes_per_model_us": 0.0,
+      "vs_noise_floor": 0.0,
+      "resolvable_alone": false,
+      "confidence": "high"
+    },
+    {
+      "chain": "full_attention:15",
+      "ops": [
+        "linear",
+        "add",
+        "rms_norm",
+        "multiply",
+        "add"
+      ],
+      "us": 183.808,
+      "boundary_us": 0.798,
+      "verdict": "kept",
+      "measured_ms": 1.4347944967448711,
+      "repeats_ms": [
+        1.4348010905086994,
+        1.4344312064349651,
+        1.434660218656063,
+        1.4347944967448711,
+        1.4351224899291992
+      ],
+      "conversion_value_us": 0.798,
+      "advisor_removes_us": 0.0,
+      "_unresolved_us": 0.0,
+      "op_share_pct": 14.481,
+      "per_model_us": 2953.696,
+      "advisor_removes_per_model_us": 0.0,
+      "vs_noise_floor": 0.0,
+      "resolvable_alone": false,
+      "confidence": "low",
+      "oracle_pcc": 0.9980950192619897,
+      "oracle_passed": true
+    },
+    {
+      "chain": "full_attention:2",
+      "ops": [
+        "rms_norm"
+      ],
+      "us": 7.307,
+      "boundary_us": 26.351,
+      "verdict": "not_measurable",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "conversion_value_us": 26.351,
+      "advisor_removes_us": 0.0,
+      "op_share_pct": 0.576,
+      "per_model_us": 538.528,
+      "advisor_removes_per_model_us": 0.0,
+      "vs_noise_floor": 0.0,
+      "resolvable_alone": false,
+      "confidence": "low"
+    },
+    {
+      "chain": "full_attention:3",
+      "ops": [
+        "rms_norm"
+      ],
+      "us": 6.311,
+      "boundary_us": 11.543,
+      "verdict": "not_measurable",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "conversion_value_us": 11.543,
+      "advisor_removes_us": 0.0,
+      "op_share_pct": 0.497,
+      "per_model_us": 285.664,
+      "advisor_removes_per_model_us": 0.0,
+      "vs_noise_floor": 0.0,
+      "resolvable_alone": false,
+      "confidence": "low"
+    },
+    {
+      "chain": "full_attention:14",
+      "ops": [
+        "sigmoid",
+        "multiply"
+      ],
+      "us": 12.837,
+      "boundary_us": 0.798,
+      "verdict": "not_measurable",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "conversion_value_us": 0.798,
+      "advisor_removes_us": 0.0,
+      "_unresolved_us": 0.0,
+      "op_share_pct": 1.011,
+      "per_model_us": 218.16,
+      "advisor_removes_per_model_us": 0.0,
+      "vs_noise_floor": 0.0,
+      "resolvable_alone": false,
+      "confidence": "low"
+    },
+    {
+      "chain": "full_attention:0",
+      "ops": [
+        "rms_norm"
+      ],
+      "us": 9.639,
+      "boundary_us": 1.373,
+      "verdict": "not_measurable",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "conversion_value_us": 1.373,
+      "advisor_removes_us": 0.0,
+      "op_share_pct": 0.759,
+      "per_model_us": 176.192,
+      "advisor_removes_per_model_us": 0.0,
+      "vs_noise_floor": 0.0,
+      "resolvable_alone": false,
+      "confidence": "high"
+    },
+    {
+      "chain": "full_attention:4",
+      "ops": [
+        "slice_static",
+        "embedding",
+        "embedding"
+      ],
+      "us": 6.561,
+      "boundary_us": 3.276,
+      "verdict": "not_measurable",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "conversion_value_us": 3.276,
+      "advisor_removes_us": 0.0,
+      "op_share_pct": 0.517,
+      "per_model_us": 157.392,
+      "advisor_removes_per_model_us": 0.0,
+      "vs_noise_floor": 0.0,
+      "resolvable_alone": false,
+      "confidence": "low"
+    },
+    {
+      "chain": "full_attention:8",
+      "ops": [
+        "multiply",
+        "add"
+      ],
+      "us": 4.346,
+      "boundary_us": 0.0,
+      "verdict": "not_measurable",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "conversion_value_us": 0.0,
+      "advisor_removes_us": 0.0,
+      "_unresolved_us": 0.0,
+      "op_share_pct": 0.342,
+      "per_model_us": 69.536,
+      "advisor_removes_per_model_us": 0.0,
+      "vs_noise_floor": 0.0,
+      "resolvable_alone": false,
+      "confidence": "low"
+    },
+    {
+      "chain": "full_attention:13",
+      "ops": [
+        "multiply",
+        "add"
+      ],
+      "us": 4.271,
+      "boundary_us": 0.0,
+      "verdict": "not_measurable",
+      "measured_ms": null,
+      "repeats_ms": null,
+      "conversion_value_us": 0.0,
+      "advisor_removes_us": 0.0,
+      "_unresolved_us": 0.0,
+      "op_share_pct": 0.336,
+      "per_model_us": 68.336,
+      "advisor_removes_per_model_us": 0.0,
+      "vs_noise_floor": 0.0,
+      "resolvable_alone": false,
+      "confidence": "low"
+    }
+  ],
+  "material_ops_on_le_2_cores": [],
+  "starved_ops_not_attributable": [],
+  "screening_order": [
+    "1. the advised plan applied WHOLE, built from advised_plan.ops (minus unfixable_ops)",
+    "2. cliff_candidates, in the order given -- highest per_model_us first",
+    "3. chains, in the order given",
+    "4. ablate the plan: drop one advised item at a time from the apply-all candidate"
+  ],
+  "note": "Screen in the order in `screening_order`, and record repeats_ms for everything measured. The advised core count is a DETECTION signal, not a SELECTION one: the advisor's objective has no latency term at any level and for normalization ops the core-count term is overridden with a value that cannot vary with the candidate. So trust it for WHICH op and WHICH DIRECTION, and sweep `legal_ladder` on both sides of its number for the geometry.",
+  "disagreements": [
+    {
+      "op": null,
+      "device": "InterleavedToShardedDeviceOperation",
+      "cls": "InterleavedToSharded",
+      "pair_confidence": null,
+      "us": 1.373,
+      "share_pct": 0.108,
+      "shipped_cores": 8,
+      "bucket": "boundary",
+      "conversion_class": "dram_to_l1",
+      "edge": "None -> rms_norm",
+      "advised_here": null,
+      "reason": "boundary on an edge with no paired advised op either side -- undetermined"
+    },
+    {
+      "op": "rms_norm",
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": "name",
+      "us": 9.639,
+      "share_pct": 0.759,
+      "shipped_cores": 8,
+      "bucket": "chain",
+      "advised": "l1/block_sharded/1x11 cores=(0,0)-(10,0)",
+      "advised_cores": 11,
+      "advised_cores_bbox": 11,
+      "advised_shard_shape": [
+        32,
+        480
+      ],
+      "shipped_input0_space": "l1",
+      "chain": "full_attention:0"
+    },
+    {
+      "op": "typecast",
+      "device": "TypecastDeviceOperation",
+      "cls": "Typecast",
+      "pair_confidence": "name",
+      "us": 0.87,
+      "share_pct": 0.069,
+      "shipped_cores": 1,
+      "bucket": "dram_resident",
+      "advised": "dram/interleaved/1x1",
+      "reason": "advisor placed it in DRAM -- that is advice, and it disagrees with a sharded shipped op",
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "hard_error": "no independent frozen-policy knob"
+    },
+    {
+      "op": "linear",
+      "device": "MatmulDeviceOperation 32 x 5120 x 14336",
+      "cls": "Matmul",
+      "pair_confidence": "name",
+      "us": 294.987,
+      "share_pct": 23.241,
+      "shipped_cores": 12,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x90 cores=(0,0)-(10,7)",
+      "advised_cores": 90,
+      "advised_cores_bbox": 88,
+      "advised_shard_shape": [
+        32,
+        160
+      ],
+      "shipped_input0_space": "l1",
+      "chain": "full_attention:1"
+    },
+    {
+      "op": "slice_static",
+      "device": "SliceDeviceOperation",
+      "cls": "Slice",
+      "pair_confidence": "name",
+      "us": 4.995,
+      "share_pct": 0.394,
+      "shipped_cores": 110,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/interleaved/10x11",
+      "advised_cores": 110,
+      "advised_cores_bbox": null,
+      "advised_shard_shape": [
+        32,
+        96
+      ],
+      "shipped_input0_space": "l1",
+      "agreed_on": "grid"
+    },
+    {
+      "op": "slice_static",
+      "device": "SliceDeviceOperation",
+      "cls": "Slice",
+      "pair_confidence": "name",
+      "us": 4.462,
+      "share_pct": 0.352,
+      "shipped_cores": 110,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/interleaved/10x11",
+      "advised_cores": 110,
+      "advised_cores_bbox": null,
+      "advised_shard_shape": [
+        32,
+        96
+      ],
+      "shipped_input0_space": "l1",
+      "agreed_on": "grid"
+    },
+    {
+      "op": null,
+      "device": "ShardedToInterleavedDeviceOperation",
+      "cls": "ShardedToInterleaved",
+      "pair_confidence": null,
+      "us": 2.214,
+      "share_pct": 0.174,
+      "shipped_cores": 5,
+      "bucket": "boundary",
+      "conversion_class": "l1_to_dram",
+      "edge": "slice_static -> nlp_create_qkv_heads_decode",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": "nlp_create_qkv_heads_decode",
+      "device": "NLPCreateQKVHeadsDecodeDeviceOperation",
+      "cls": "NLPCreateQKVHeadsDecode",
+      "pair_confidence": "name",
+      "us": 16.111,
+      "share_pct": 1.269,
+      "shipped_cores": 32,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "advised_cores": 32,
+      "advised_cores_bbox": 22,
+      "advised_shard_shape": [
+        32,
+        256
+      ],
+      "shipped_input0_space": "l1",
+      "agreed_on": "grid"
+    },
+    {
+      "op": null,
+      "device": "ShardedToInterleavedDeviceOperation",
+      "cls": "ShardedToInterleaved",
+      "pair_confidence": null,
+      "us": 2.316,
+      "share_pct": 0.182,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "l1_to_dram",
+      "edge": "nlp_create_qkv_heads_decode -> rms_norm",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": null,
+      "device": "ReshapeViewDeviceOperation",
+      "cls": "ReshapeView",
+      "pair_confidence": null,
+      "us": 12.398,
+      "share_pct": 0.977,
+      "shipped_cores": 110,
+      "bucket": "boundary",
+      "conversion_class": "reshape_view",
+      "edge": "nlp_create_qkv_heads_decode -> rms_norm",
+      "advisor_comparable": "unresolved",
+      "reason": "reshape_view is not a placement edge the advisor states, and the profile cannot show whether it changed layout. It may still be a chain boundary -- check this edge's layouts in the IR. Do not drop it: it is unresolved, not out of scope"
+    },
+    {
+      "op": "rms_norm",
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": "name",
+      "us": 7.307,
+      "share_pct": 0.576,
+      "shipped_cores": 24,
+      "bucket": "chain",
+      "advised": "l1/block_sharded/8x8 cores=(0,0)-(7,7)",
+      "advised_cores": 64,
+      "advised_cores_bbox": 64,
+      "advised_shard_shape": [
+        32,
+        480
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:2"
+    },
+    {
+      "op": null,
+      "device": "ReshapeViewDeviceOperation",
+      "cls": "ReshapeView",
+      "pair_confidence": null,
+      "us": 13.953,
+      "share_pct": 1.099,
+      "shipped_cores": 110,
+      "bucket": "boundary",
+      "conversion_class": "reshape_view",
+      "edge": "rms_norm -> rms_norm",
+      "advisor_comparable": "unresolved",
+      "reason": "reshape_view is not a placement edge the advisor states, and the profile cannot show whether it changed layout. It may still be a chain boundary -- check this edge's layouts in the IR. Do not drop it: it is unresolved, not out of scope"
+    },
+    {
+      "op": null,
+      "device": "ShardedToInterleavedDeviceOperation",
+      "cls": "ShardedToInterleaved",
+      "pair_confidence": null,
+      "us": 2.569,
+      "share_pct": 0.202,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "l1_to_dram",
+      "edge": "rms_norm -> rms_norm",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": null,
+      "device": "ReshapeViewDeviceOperation",
+      "cls": "ReshapeView",
+      "pair_confidence": null,
+      "us": 8.267,
+      "share_pct": 0.651,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "reshape_view",
+      "edge": "rms_norm -> rms_norm",
+      "advisor_comparable": "unresolved",
+      "reason": "reshape_view is not a placement edge the advisor states, and the profile cannot show whether it changed layout. It may still be a chain boundary -- check this edge's layouts in the IR. Do not drop it: it is unresolved, not out of scope"
+    },
+    {
+      "op": "rms_norm",
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": "name",
+      "us": 6.311,
+      "share_pct": 0.497,
+      "shipped_cores": 4,
+      "bucket": "chain",
+      "advised": "l1/block_sharded/4x8 cores=(0,0)-(7,3)",
+      "advised_cores": 32,
+      "advised_cores_bbox": 32,
+      "advised_shard_shape": [
+        32,
+        480
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:3"
+    },
+    {
+      "op": null,
+      "device": "ReshapeViewDeviceOperation",
+      "cls": "ReshapeView",
+      "pair_confidence": null,
+      "us": 6.551,
+      "share_pct": 0.516,
+      "shipped_cores": 110,
+      "bucket": "boundary",
+      "conversion_class": "reshape_view",
+      "edge": "rms_norm -> slice_static",
+      "advisor_comparable": "unresolved",
+      "reason": "reshape_view is not a placement edge the advisor states, and the profile cannot show whether it changed layout. It may still be a chain boundary -- check this edge's layouts in the IR. Do not drop it: it is unresolved, not out of scope"
+    },
+    {
+      "op": "slice_static",
+      "device": "SliceDeviceOperation",
+      "cls": "Slice",
+      "pair_confidence": "name",
+      "us": 1.933,
+      "share_pct": 0.152,
+      "shipped_cores": 64,
+      "bucket": "chain",
+      "advised": "l1/interleaved/10x11",
+      "advised_cores": 110,
+      "advised_cores_bbox": null,
+      "advised_shard_shape": [
+        32,
+        96
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:4"
+    },
+    {
+      "op": "slice_static",
+      "device": "SliceDeviceOperation",
+      "cls": "Slice",
+      "pair_confidence": "name",
+      "us": 2.805,
+      "share_pct": 0.221,
+      "shipped_cores": 110,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/interleaved/10x11",
+      "advised_cores": 110,
+      "advised_cores_bbox": null,
+      "advised_shard_shape": [
+        32,
+        96
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "agreed_on": "grid"
+    },
+    {
+      "op": "embedding",
+      "device": "EmbeddingsDeviceOperation",
+      "cls": "Embeddings",
+      "pair_confidence": "name",
+      "us": 2.309,
+      "share_pct": 0.182,
+      "shipped_cores": 1,
+      "bucket": "chain",
+      "advised": "l1/interleaved/10x11",
+      "advised_cores": 110,
+      "advised_cores_bbox": null,
+      "advised_shard_shape": [
+        32,
+        32
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:4"
+    },
+    {
+      "op": "embedding",
+      "device": "EmbeddingsDeviceOperation",
+      "cls": "Embeddings",
+      "pair_confidence": "name",
+      "us": 2.319,
+      "share_pct": 0.183,
+      "shipped_cores": 1,
+      "bucket": "chain",
+      "advised": "l1/interleaved/10x11",
+      "advised_cores": 110,
+      "advised_cores_bbox": null,
+      "advised_shard_shape": [
+        32,
+        32
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:4"
+    },
+    {
+      "op": null,
+      "device": "TransposeDeviceOperation",
+      "cls": "Transpose",
+      "pair_confidence": null,
+      "us": 3.226,
+      "share_pct": 0.254,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "TransposeDeviceOperation",
+      "cls": "Transpose",
+      "pair_confidence": null,
+      "us": 3.123,
+      "share_pct": 0.246,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "UntilizeWithUnpaddingDeviceOperation",
+      "cls": "UntilizeWithUnpadding",
+      "pair_confidence": null,
+      "us": 1.887,
+      "share_pct": 0.149,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "retilize",
+      "edge": "embedding -> repeat",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": "repeat",
+      "device": "RepeatDeviceOperation",
+      "cls": "Repeat",
+      "pair_confidence": "name",
+      "us": 1.741,
+      "share_pct": 0.137,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "advised_cores": 32,
+      "advised_cores_bbox": 22,
+      "advised_shard_shape": [
+        32,
+        64
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:5"
+    },
+    {
+      "op": null,
+      "device": "TilizeWithValPaddingDeviceOperation",
+      "cls": "TilizeWithValPadding",
+      "pair_confidence": null,
+      "us": 2.999,
+      "share_pct": 0.236,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "retilize",
+      "edge": "repeat -> repeat",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": null,
+      "device": "UntilizeWithUnpaddingDeviceOperation",
+      "cls": "UntilizeWithUnpadding",
+      "pair_confidence": null,
+      "us": 1.849,
+      "share_pct": 0.146,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "retilize",
+      "edge": "repeat -> repeat",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": "repeat",
+      "device": "RepeatDeviceOperation",
+      "cls": "Repeat",
+      "pair_confidence": "name",
+      "us": 1.748,
+      "share_pct": 0.138,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "advised_cores": 32,
+      "advised_cores_bbox": 22,
+      "advised_shard_shape": [
+        32,
+        64
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:6"
+    },
+    {
+      "op": null,
+      "device": "TilizeWithValPaddingDeviceOperation",
+      "cls": "TilizeWithValPadding",
+      "pair_confidence": null,
+      "us": 2.932,
+      "share_pct": 0.231,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "retilize",
+      "edge": "repeat -> multiply",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": "multiply",
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": "position",
+      "us": 2.424,
+      "share_pct": 0.191,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "advised_cores": 32,
+      "advised_cores_bbox": 22,
+      "advised_shard_shape": [
+        32,
+        64
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:7"
+    },
+    {
+      "op": "slice_static",
+      "device": "SliceDeviceOperation",
+      "cls": "Slice",
+      "pair_confidence": "name",
+      "us": 1.036,
+      "share_pct": 0.082,
+      "shipped_cores": 32,
+      "bucket": "chain",
+      "advised": "l1/interleaved/10x11",
+      "advised_cores": 110,
+      "advised_cores_bbox": null,
+      "advised_shard_shape": [
+        32,
+        96
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:7"
+    },
+    {
+      "op": "neg",
+      "device": "UnaryDeviceOperation",
+      "cls": "Unary",
+      "pair_confidence": "position",
+      "us": 1.29,
+      "share_pct": 0.102,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "advised_cores": 32,
+      "advised_cores_bbox": 22,
+      "advised_shard_shape": [
+        32,
+        32
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:7"
+    },
+    {
+      "op": "slice_static",
+      "device": "SliceDeviceOperation",
+      "cls": "Slice",
+      "pair_confidence": "name",
+      "us": 1.153,
+      "share_pct": 0.091,
+      "shipped_cores": 32,
+      "bucket": "chain",
+      "advised": "l1/interleaved/10x11",
+      "advised_cores": 110,
+      "advised_cores_bbox": null,
+      "advised_shard_shape": [
+        32,
+        96
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:7"
+    },
+    {
+      "op": "concat",
+      "device": "ConcatDeviceOperation",
+      "cls": "Concat",
+      "pair_confidence": "name",
+      "us": 1.315,
+      "share_pct": 0.104,
+      "shipped_cores": 64,
+      "bucket": "dram_resident",
+      "advised": "dram/interleaved/1x1",
+      "reason": "advisor placed it in DRAM -- that is advice, and it disagrees with a sharded shipped op",
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "hard_error": "no independent frozen-policy knob"
+    },
+    {
+      "op": "multiply",
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": "position",
+      "us": 2.474,
+      "share_pct": 0.195,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "advised_cores": 32,
+      "advised_cores_bbox": 22,
+      "advised_shard_shape": [
+        32,
+        64
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:8"
+    },
+    {
+      "op": "add",
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": "position",
+      "us": 1.872,
+      "share_pct": 0.147,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "advised_cores": 32,
+      "advised_cores_bbox": 22,
+      "advised_shard_shape": [
+        32,
+        64
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:8"
+    },
+    {
+      "op": "concat",
+      "device": "ConcatDeviceOperation",
+      "cls": "Concat",
+      "pair_confidence": "name",
+      "us": 3.442,
+      "share_pct": 0.271,
+      "shipped_cores": 110,
+      "bucket": "dram_resident",
+      "advised": "dram/interleaved/1x1",
+      "reason": "advisor placed it in DRAM -- that is advice, and it disagrees with a sharded shipped op",
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "hard_error": "no independent frozen-policy knob"
+    },
+    {
+      "op": null,
+      "device": "InterleavedToShardedDeviceOperation",
+      "cls": "InterleavedToSharded",
+      "pair_confidence": null,
+      "us": 2.003,
+      "share_pct": 0.158,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "dram_to_l1",
+      "edge": "concat -> slice_static",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": "slice_static",
+      "device": "SliceDeviceOperation",
+      "cls": "Slice",
+      "pair_confidence": "name",
+      "us": 2.015,
+      "share_pct": 0.159,
+      "shipped_cores": 64,
+      "bucket": "chain",
+      "advised": "l1/interleaved/10x11",
+      "advised_cores": 110,
+      "advised_cores_bbox": null,
+      "advised_shard_shape": [
+        32,
+        96
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:9"
+    },
+    {
+      "op": "slice_static",
+      "device": "SliceDeviceOperation",
+      "cls": "Slice",
+      "pair_confidence": "name",
+      "us": 2.784,
+      "share_pct": 0.219,
+      "shipped_cores": 110,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/interleaved/10x11",
+      "advised_cores": 110,
+      "advised_cores_bbox": null,
+      "advised_shard_shape": [
+        32,
+        96
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "agreed_on": "grid"
+    },
+    {
+      "op": "embedding",
+      "device": "EmbeddingsDeviceOperation",
+      "cls": "Embeddings",
+      "pair_confidence": "name",
+      "us": 2.293,
+      "share_pct": 0.181,
+      "shipped_cores": 1,
+      "bucket": "chain",
+      "advised": "l1/interleaved/10x11",
+      "advised_cores": 110,
+      "advised_cores_bbox": null,
+      "advised_shard_shape": [
+        32,
+        32
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:9"
+    },
+    {
+      "op": "embedding",
+      "device": "EmbeddingsDeviceOperation",
+      "cls": "Embeddings",
+      "pair_confidence": "name",
+      "us": 2.319,
+      "share_pct": 0.183,
+      "shipped_cores": 1,
+      "bucket": "chain",
+      "advised": "l1/interleaved/10x11",
+      "advised_cores": 110,
+      "advised_cores_bbox": null,
+      "advised_shard_shape": [
+        32,
+        32
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:9"
+    },
+    {
+      "op": null,
+      "device": "TransposeDeviceOperation",
+      "cls": "Transpose",
+      "pair_confidence": null,
+      "us": 3.116,
+      "share_pct": 0.245,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "TransposeDeviceOperation",
+      "cls": "Transpose",
+      "pair_confidence": null,
+      "us": 3.124,
+      "share_pct": 0.246,
+      "shipped_cores": 110,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "UntilizeWithUnpaddingDeviceOperation",
+      "cls": "UntilizeWithUnpadding",
+      "pair_confidence": null,
+      "us": 1.848,
+      "share_pct": 0.146,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "retilize",
+      "edge": "embedding -> repeat",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": "repeat",
+      "device": "RepeatDeviceOperation",
+      "cls": "Repeat",
+      "pair_confidence": "name",
+      "us": 1.111,
+      "share_pct": 0.088,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "advised_cores": 32,
+      "advised_cores_bbox": 22,
+      "advised_shard_shape": [
+        32,
+        64
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:10"
+    },
+    {
+      "op": null,
+      "device": "TilizeWithValPaddingDeviceOperation",
+      "cls": "TilizeWithValPadding",
+      "pair_confidence": null,
+      "us": 3.562,
+      "share_pct": 0.281,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "retilize",
+      "edge": "repeat -> repeat",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": null,
+      "device": "UntilizeWithUnpaddingDeviceOperation",
+      "cls": "UntilizeWithUnpadding",
+      "pair_confidence": null,
+      "us": 1.812,
+      "share_pct": 0.143,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "retilize",
+      "edge": "repeat -> repeat",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": "repeat",
+      "device": "RepeatDeviceOperation",
+      "cls": "Repeat",
+      "pair_confidence": "name",
+      "us": 1.139,
+      "share_pct": 0.09,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "advised_cores": 32,
+      "advised_cores_bbox": 22,
+      "advised_shard_shape": [
+        32,
+        64
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:11"
+    },
+    {
+      "op": null,
+      "device": "TilizeWithValPaddingDeviceOperation",
+      "cls": "TilizeWithValPadding",
+      "pair_confidence": null,
+      "us": 3.558,
+      "share_pct": 0.28,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "retilize",
+      "edge": "repeat -> multiply",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": "multiply",
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": "position",
+      "us": 2.43,
+      "share_pct": 0.191,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "advised_cores": 32,
+      "advised_cores_bbox": 22,
+      "advised_shard_shape": [
+        32,
+        64
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:12"
+    },
+    {
+      "op": "slice_static",
+      "device": "SliceDeviceOperation",
+      "cls": "Slice",
+      "pair_confidence": "name",
+      "us": 1.065,
+      "share_pct": 0.084,
+      "shipped_cores": 32,
+      "bucket": "chain",
+      "advised": "l1/interleaved/10x11",
+      "advised_cores": 110,
+      "advised_cores_bbox": null,
+      "advised_shard_shape": [
+        32,
+        96
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:12"
+    },
+    {
+      "op": "neg",
+      "device": "UnaryDeviceOperation",
+      "cls": "Unary",
+      "pair_confidence": "position",
+      "us": 1.246,
+      "share_pct": 0.098,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "advised_cores": 32,
+      "advised_cores_bbox": 22,
+      "advised_shard_shape": [
+        32,
+        32
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:12"
+    },
+    {
+      "op": "slice_static",
+      "device": "SliceDeviceOperation",
+      "cls": "Slice",
+      "pair_confidence": "name",
+      "us": 1.16,
+      "share_pct": 0.091,
+      "shipped_cores": 32,
+      "bucket": "chain",
+      "advised": "l1/interleaved/10x11",
+      "advised_cores": 110,
+      "advised_cores_bbox": null,
+      "advised_shard_shape": [
+        32,
+        96
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:12"
+    },
+    {
+      "op": "concat",
+      "device": "ConcatDeviceOperation",
+      "cls": "Concat",
+      "pair_confidence": "name",
+      "us": 1.314,
+      "share_pct": 0.104,
+      "shipped_cores": 64,
+      "bucket": "dram_resident",
+      "advised": "dram/interleaved/1x1",
+      "reason": "advisor placed it in DRAM -- that is advice, and it disagrees with a sharded shipped op",
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "hard_error": "no independent frozen-policy knob"
+    },
+    {
+      "op": "multiply",
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": "position",
+      "us": 2.439,
+      "share_pct": 0.192,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "advised_cores": 32,
+      "advised_cores_bbox": 22,
+      "advised_shard_shape": [
+        32,
+        64
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:13"
+    },
+    {
+      "op": "add",
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": "position",
+      "us": 1.832,
+      "share_pct": 0.144,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "advised_cores": 32,
+      "advised_cores_bbox": 22,
+      "advised_shard_shape": [
+        32,
+        64
+      ],
+      "shipped_input0_space": "dram",
+      "space_hint": "advised into l1, and this op's INPUT 0 is in dram. The profile carries no output memory config, so this is not a disagreement -- an op can read one space and write another. Check the edge in final_ir.mlir before treating it as one.",
+      "chain": "full_attention:13"
+    },
+    {
+      "op": "concat",
+      "device": "ConcatDeviceOperation",
+      "cls": "Concat",
+      "pair_confidence": "name",
+      "us": 3.442,
+      "share_pct": 0.271,
+      "shipped_cores": 110,
+      "bucket": "dram_resident",
+      "advised": "dram/interleaved/1x1",
+      "reason": "advisor placed it in DRAM -- that is advice, and it disagrees with a sharded shipped op",
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "hard_error": "no independent frozen-policy knob"
+    },
+    {
+      "op": null,
+      "device": "InterleavedToShardedDeviceOperation",
+      "cls": "InterleavedToSharded",
+      "pair_confidence": null,
+      "us": 2.009,
+      "share_pct": 0.158,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "dram_to_l1",
+      "edge": "concat -> paged_scaled_dot_product_attention_decode",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": null,
+      "device": "PagedUpdateCacheDeviceOperation",
+      "cls": "PagedUpdateCache",
+      "pair_confidence": null,
+      "us": 7.454,
+      "share_pct": 0.587,
+      "shipped_cores": 32,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": null,
+      "device": "PagedUpdateCacheDeviceOperation",
+      "cls": "PagedUpdateCache",
+      "pair_confidence": null,
+      "us": 7.397,
+      "share_pct": 0.583,
+      "shipped_cores": 32,
+      "bucket": "untraced",
+      "reason": "in the profile, absent from the advisor's graph"
+    },
+    {
+      "op": "paged_scaled_dot_product_attention_decode",
+      "device": "SdpaDecodeDeviceOperation",
+      "cls": "SdpaDecode",
+      "pair_confidence": "name",
+      "us": 19.663,
+      "share_pct": 1.549,
+      "shipped_cores": 64,
+      "bucket": "dram_resident",
+      "advised": "dram/interleaved/1x1",
+      "reason": "advisor placed it in DRAM -- that is advice, and it disagrees with a sharded shipped op",
+      "verdict": "rejected",
+      "measured_ms": 1.4513533003628254,
+      "hard_error": "advisor plan keeps shipped DRAM residency; no change to screen"
+    },
+    {
+      "op": null,
+      "device": "InterleavedToShardedDeviceOperation",
+      "cls": "InterleavedToSharded",
+      "pair_confidence": null,
+      "us": 2.065,
+      "share_pct": 0.163,
+      "shipped_cores": 32,
+      "bucket": "boundary",
+      "conversion_class": "dram_to_l1",
+      "edge": "paged_scaled_dot_product_attention_decode -> nlp_concat_heads_decode",
+      "advised_here": false,
+      "reason": "no advised reshard on this edge: the advisor keeps this run in L1. Removing this conversion is the change to measure."
+    },
+    {
+      "op": "nlp_concat_heads_decode",
+      "device": "NLPConcatHeadsDecodeDeviceOperation",
+      "cls": "NLPConcatHeadsDecode",
+      "pair_confidence": "name",
+      "us": 8.949,
+      "share_pct": 0.705,
+      "shipped_cores": 24,
+      "bucket": "advisor_unfixable",
+      "advised": "dram/interleaved/1x1",
+      "advisor_unfixable": true,
+      "unfixable_reason": "MetalBackendError - Op constraint query failed with error: TT_FATAL @ /home/mvasiljevic/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/device/nlp_concat_heads_decode_device_operation.cpp:44: input_tensor.is_sharded() info: Input tensor must be sharded",
+      "reason": "the advisor declared this op UNPLACEABLE, with the runtime error in unfixable_reason. The layout it shows is a fallback after that declared failure, not a recommendation -- do not screen it, and do not count it as a disagreement. If you think the error is wrong, disprove it with an isolated single-op test, not with a whole-decoder measurement."
+    },
+    {
+      "op": "sigmoid",
+      "device": "UnaryDeviceOperation",
+      "cls": "Unary",
+      "pair_confidence": "position",
+      "us": 6.064,
+      "share_pct": 0.478,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x96 cores=(0,0)-(10,7)",
+      "advised_cores": 96,
+      "advised_cores_bbox": 88,
+      "advised_shard_shape": [
+        32,
+        64
+      ],
+      "shipped_input0_space": "l1",
+      "chain": "full_attention:14"
+    },
+    {
+      "op": "multiply",
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": "position",
+      "us": 6.773,
+      "share_pct": 0.534,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x96 cores=(0,0)-(10,7)",
+      "advised_cores": 96,
+      "advised_cores_bbox": 88,
+      "advised_shard_shape": [
+        32,
+        64
+      ],
+      "shipped_input0_space": "l1",
+      "chain": "full_attention:14"
+    },
+    {
+      "op": null,
+      "device": "ReshardDeviceOperation",
+      "cls": "Reshard",
+      "pair_confidence": null,
+      "us": 1.596,
+      "share_pct": 0.126,
+      "shipped_cores": 8,
+      "bucket": "boundary",
+      "conversion_class": "l1_regrid",
+      "edge": "multiply -> linear",
+      "advised_here": true,
+      "advised_reshard": {
+        "kind": "to_memory_config",
+        "from": "l1/width_sharded/1x96 cores=(0,0)-(10,7)",
+        "to": "l1/width_sharded/1x8 cores=(0,0)-(7,0)",
+        "transition": "l1->l1",
+        "output_revert": false
+      },
+      "reason": "the advisor puts a conversion here too -- agreement, not a candidate"
+    },
+    {
+      "op": "linear",
+      "device": "MatmulDeviceOperation 32 x 6144 x 5120",
+      "cls": "Matmul",
+      "pair_confidence": "name",
+      "us": 127.928,
+      "share_pct": 10.079,
+      "shipped_cores": 12,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x80 cores=(0,0)-(10,6)",
+      "advised_cores": 80,
+      "advised_cores_bbox": 77,
+      "advised_shard_shape": [
+        32,
+        160
+      ],
+      "shipped_input0_space": "l1",
+      "chain": "full_attention:15"
+    },
+    {
+      "op": "add",
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": "position",
+      "us": 1.683,
+      "share_pct": 0.133,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x80 cores=(0,0)-(10,6)",
+      "advised_cores": 80,
+      "advised_cores_bbox": 77,
+      "advised_shard_shape": [
+        32,
+        64
+      ],
+      "shipped_input0_space": "l1",
+      "chain": "full_attention:15"
+    },
+    {
+      "op": "rms_norm",
+      "device": "LayerNormDeviceOperation",
+      "cls": "LayerNorm",
+      "pair_confidence": "name",
+      "us": 10.581,
+      "share_pct": 0.834,
+      "shipped_cores": 8,
+      "bucket": "chain",
+      "advised": "l1/block_sharded/1x11 cores=(0,0)-(10,0)",
+      "advised_cores": 11,
+      "advised_cores_bbox": 11,
+      "advised_shard_shape": [
+        32,
+        480
+      ],
+      "shipped_input0_space": "l1",
+      "chain": "full_attention:15"
+    },
+    {
+      "op": "linear",
+      "device": "MatmulDeviceOperation 32 x 5120 x 17408",
+      "cls": "Matmul",
+      "pair_confidence": "name",
+      "us": 225.481,
+      "share_pct": 17.765,
+      "shipped_cores": 12,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/width_sharded/1x109 cores=(0,0)-(10,8)",
+      "advised_cores": 109,
+      "advised_cores_bbox": 99,
+      "advised_shard_shape": [
+        32,
+        160
+      ],
+      "shipped_input0_space": "l1",
+      "agreed_on": "ds_family"
+    },
+    {
+      "op": "linear",
+      "device": "MatmulDeviceOperation 32 x 5120 x 17408",
+      "cls": "Matmul",
+      "pair_confidence": "name",
+      "us": 159.852,
+      "share_pct": 12.594,
+      "shipped_cores": 12,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/width_sharded/1x109 cores=(0,0)-(10,8)",
+      "advised_cores": 109,
+      "advised_cores_bbox": 99,
+      "advised_shard_shape": [
+        32,
+        160
+      ],
+      "shipped_input0_space": "l1",
+      "agreed_on": "ds_family"
+    },
+    {
+      "op": "multiply",
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": "position",
+      "us": 41.627,
+      "share_pct": 3.28,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x109 cores=(0,0)-(10,8)",
+      "advised_cores": 109,
+      "advised_cores_bbox": 99,
+      "advised_shard_shape": [
+        32,
+        64
+      ],
+      "shipped_input0_space": "l1",
+      "chain": "full_attention:15"
+    },
+    {
+      "op": "linear",
+      "device": "MatmulDeviceOperation 32 x 17408 x 5120",
+      "cls": "Matmul",
+      "pair_confidence": "name",
+      "us": 154.342,
+      "share_pct": 12.16,
+      "shipped_cores": 12,
+      "bucket": "agrees_with_shipped",
+      "advised": "l1/width_sharded/1x80 cores=(0,0)-(10,6)",
+      "advised_cores": 80,
+      "advised_cores_bbox": 77,
+      "advised_shard_shape": [
+        32,
+        160
+      ],
+      "shipped_input0_space": "l1",
+      "agreed_on": "ds_family"
+    },
+    {
+      "op": "add",
+      "device": "BinaryNgDeviceOperation",
+      "cls": "BinaryNg",
+      "pair_confidence": "position",
+      "us": 1.989,
+      "share_pct": 0.157,
+      "shipped_cores": 110,
+      "bucket": "chain",
+      "advised": "l1/width_sharded/1x80 cores=(0,0)-(10,6)",
+      "advised_cores": 80,
+      "advised_cores_bbox": 77,
+      "advised_shard_shape": [
+        32,
+        64
+      ],
+      "shipped_input0_space": "l1",
+      "chain": "full_attention:15"
+    },
+    {
+      "op": "transpose",
+      "bucket": "advised_but_not_present",
+      "us": 0.0,
+      "share_pct": 0.0,
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "reason": "no device op paired with this advised op. Either it did not run (a capture/shape mismatch worth a look), or its name does not pair with any device class -- add it to TTNN_TO_DEVICE if so."
+    },
+    {
+      "op": "transpose",
+      "bucket": "advised_but_not_present",
+      "us": 0.0,
+      "share_pct": 0.0,
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "reason": "no device op paired with this advised op. Either it did not run (a capture/shape mismatch worth a look), or its name does not pair with any device class -- add it to TTNN_TO_DEVICE if so."
+    },
+    {
+      "op": "slice_static",
+      "bucket": "unmapped_advised",
+      "us": 0.0,
+      "share_pct": 0.0,
+      "advised": "l1/interleaved/10x11",
+      "reason": "no device op paired with this advised op. Either it did not run (a capture/shape mismatch worth a look), or its name does not pair with any device class -- add it to TTNN_TO_DEVICE if so."
+    },
+    {
+      "op": "slice_static",
+      "bucket": "unmapped_advised",
+      "us": 0.0,
+      "share_pct": 0.0,
+      "advised": "l1/interleaved/10x11",
+      "reason": "no device op paired with this advised op. Either it did not run (a capture/shape mismatch worth a look), or its name does not pair with any device class -- add it to TTNN_TO_DEVICE if so."
+    },
+    {
+      "op": "transpose",
+      "bucket": "advised_but_not_present",
+      "us": 0.0,
+      "share_pct": 0.0,
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "reason": "no device op paired with this advised op. Either it did not run (a capture/shape mismatch worth a look), or its name does not pair with any device class -- add it to TTNN_TO_DEVICE if so."
+    },
+    {
+      "op": "transpose",
+      "bucket": "advised_but_not_present",
+      "us": 0.0,
+      "share_pct": 0.0,
+      "advised": "l1/height_sharded/32x1 cores=(0,0)-(10,1)",
+      "reason": "no device op paired with this advised op. Either it did not run (a capture/shape mismatch worth a look), or its name does not pair with any device class -- add it to TTNN_TO_DEVICE if so."
+    },
+    {
+      "op": "slice_static",
+      "bucket": "unmapped_advised",
+      "us": 0.0,
+      "share_pct": 0.0,
+      "advised": "l1/interleaved/10x11",
+      "reason": "no device op paired with this advised op. Either it did not run (a capture/shape mismatch worth a look), or its name does not pair with any device class -- add it to TTNN_TO_DEVICE if so."
+    },
+    {
+      "op": "slice_static",
+      "bucket": "unmapped_advised",
+      "us": 0.0,
+      "share_pct": 0.0,
+      "advised": "l1/interleaved/10x11",
+      "reason": "no device op paired with this advised op. Either it did not run (a capture/shape mismatch worth a look), or its name does not pair with any device class -- add it to TTNN_TO_DEVICE if so."
+    }
+  ],
+  "measurement_evidence": "models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/evidence_full_attention.json"
+}

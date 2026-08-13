@@ -1,0 +1,46 @@
+{
+  "label": "residual_only_linear_attention",
+  "decode_batch": 32,
+  "requested_decode_batch": 32,
+  "warmup_replays": 10,
+  "iters_per_repeat": 50,
+  "process_ordinal": 19,
+  "device_users_at_start": {
+    "count": 0,
+    "processes": []
+  },
+  "device_users_at_end": {
+    "count": 0,
+    "processes": []
+  },
+  "repeats_ms": [
+    15.853657592087984,
+    15.862356014549732,
+    15.876165758818388,
+    15.850634034723043,
+    15.862815286964178
+  ],
+  "median_ms": 15.862356014549732,
+  "noise_floor_ms": 0.025531724095344543,
+  "harness": "models/autoports/qwen_qwen3_6_27b/doc/advisor_challenger/scripts/harness.py",
+  "harness_scope": "one decoder layer, traced decode replay, batch 32, measured end to end on the host",
+  "measured_at": "2026-08-10T19:30:58+00:00",
+  "shipped_policy": {
+    "candidate": "default",
+    "policy_updates": {
+      "advisor_plan": "residual_only"
+    }
+  },
+  "shipped_weight_dtypes": {
+    "linear_input": "BFLOAT4_B",
+    "linear_output": "BFLOAT4_B",
+    "mlp_gate_up": "BFLOAT4_B",
+    "mlp_down": "BFLOAT4_B",
+    "recurrent_state": "BFLOAT8_B"
+  },
+  "shipped_policy_source": "dataclasses.replace(frozen_policy, advisor_plan='residual_only')",
+  "signposts": [
+    "PERF_DECODE",
+    "PERF_DECODE_END"
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "dram_sharded_decode_matmul": {
+    "api_surface": {
+      "evidence": "ttnn/cpp/ttnn/operations/matmul/matmul_nanobind.cpp:546-599",
+      "exposed_fields": [
+        "in0_block_w",
+        "per_core_M",
+        "per_core_N",
+        "fused_activation"
+      ],
+      "not_exposed": [
+        "compute_grid",
+        "worker_cores",
+        "out_subblock_h",
+        "out_subblock_w"
+      ]
+    },
+    "factory_behavior": {
+      "evidence": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp:93-170",
+      "worker_grid": "device compute-with-storage grid plus DRAM-bank reader assignment",
+      "output_subblock": "selected internally by get_matmul_subblock_params and factory widening"
+    },
+    "adapted_storage_grid_probe": {
+      "candidate": "final_cum_grid4",
+      "result": "failed on device at both B1 and B32 with exact L1/CB collisions",
+      "artifacts": [
+        "candidates/final_cum_grid4_b1.json",
+        "candidates/final_cum_grid4_b32.json"
+      ]
+    },
+    "linear_projection_geometry": {
+      "activation_storage_cores": 8,
+      "dram_bank_workers": 12,
+      "batch_contract": "B1 and B32 activations are both one physical 32-row tile, so per_core_M=1 and program geometry is shared; paired whole-layer timing is still required.",
+      "packed_input": {
+        "shape": "32 x 5120 x 16480",
+        "k_tiles_per_storage_core": 20,
+        "legal_in0_block_w": [1, 2, 4, 5, 10, 20],
+        "config_per_core_N": 65,
+        "factory_per_bank_N": 43,
+        "factory_internal_subblock": "1x8",
+        "selected_in0_block_w": 5
+      },
+      "output": {
+        "shape": "32 x 6144 x 5120",
+        "k_tiles_per_storage_core": 24,
+        "legal_in0_block_w": [1, 2, 3, 4, 6, 8, 12, 24],
+        "config_per_core_N": 20,
+        "factory_per_bank_N": 14,
+        "factory_internal_subblock": "1x7",
+        "selected_in0_block_w": 12
+      },
+      "subblock_contract": {
+        "result": "No Python/API subblock control exists for MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig; the factory selects it internally. The profiler message 'No output subblock size found' is an introspection limitation.",
+        "config_source": "ttnn/cpp/ttnn/operations/matmul/device/config/matmul_program_config_types.hpp:71-76",
+        "binding_source": "ttnn/cpp/ttnn/operations/matmul/matmul_nanobind.cpp:546-600",
+        "factory_source": "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp:147-170",
+        "selector_source": "ttnn/cpp/ttnn/operations/matmul/device/config/matmul_program_config.cpp:946-982",
+        "static_test": "tests/test_optimized_decoder.py::test_dram_sharded_program_contract_has_no_compute_grid_or_subblock_controls"
+      },
+      "smaller_storage_grid_probe": {
+        "candidate": "linear_final_grid4",
+        "result": "failed at B1 and B32 with exact L1/static-CB collisions",
+        "artifacts": [
+          "candidates/linear_final_grid4_b1.json",
+          "candidates/linear_final_grid4_b32.json"
+        ]
+      }
+    }
+  },
+  "linear_recurrent_l1": {
+    "one_dimensional_mcast_contract": {
+      "evidence": "ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp:1063-1068,1181-1187",
+      "reason": "A sharded mcast-in0 tensor requires fuse_batch=true, while fuse_batch requires B batch size 1; recurrent B has batch 48 at B1 and 1536 at B32."
+    },
+    "capacity": {
+      "batch": 32,
+      "logical_shape": "1536 x 32 x 128",
+      "tile32_bf16_bytes_per_core_on_4_cores": 3145728,
+      "blackhole_l1_bytes_per_core": 1572864,
+      "result": "cannot keep the recurrent A input in L1 on the measured four-core family"
+    },
+    "height_sharded_family": {
+      "required_tile": "Tile(4,32)",
+      "upstream_tile": "Tile(32,32)",
+      "result": "no generic device retile exists at this boundary and matmul output tile height must match in0",
+      "adaptation": "The expressible Tile32 1D candidates w1/w2/w4, subblock 1x2, and HiFi4 were all measured at B1 and B32; w4 won."
+    }
+  }
+}
