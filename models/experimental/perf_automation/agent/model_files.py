@@ -249,19 +249,65 @@ def _enumerate_pipelines(root: Path) -> list[dict[str, Any]]:
     from .perf_test_gen import generate_perf_test
 
     out: list[dict[str, Any]] = []
+    # WALK BEFORE WRITING, same reason as before_loop's --pcc-test path: generate_perf_test has
+    # always accepted `stacks` and always had a multi-stack branch behind it (one depth variable per
+    # stack instead of a single TT_PERF_LAYERS), and no caller ever passed it -- so every perf test
+    # this tool wrote assumed one stack. A model with several sections then gets ONE depth, which has
+    # to be max(per-stack depths), which on a model whose deepest stack IS the model caps nothing.
+    #
+    # Here the walkable node is the task's own PCC test: like the --pcc-test gate it already exists
+    # (it is not generated), and it builds the model. No answer -> generation is as blind as before.
+    _survey_stacks = _survey_describe = None
+    try:
+        from .stack_survey import describe as _survey_describe, survey as _survey_stacks
+    except Exception:  # noqa: BLE001
+        pass
+
+    def _stacks_for(pcc_node):
+        if not (_survey_stacks and pcc_node):
+            return None
+        try:
+            # Absolute: _find_pcc_for_task returns a MODEL-root-relative node and the probe runs from
+            # the repo root, where that path does not exist.
+            _f, _, _c = str(pcc_node).partition("::")
+            _abs = (Path(root) / _f).resolve()
+            # The REPO root, found by walking up to the tree that actually holds the probe -- not
+            # root.parent, which is only the demos directory.
+            _repo = next(
+                (
+                    a
+                    for a in Path(root).resolve().parents
+                    if (a / "models" / "experimental" / "perf_automation").is_dir()
+                ),
+                None,
+            )
+            if _repo is None:
+                return None
+            found = _survey_stacks(_repo, ("%s::%s" % (_abs, _c)) if _c else str(_abs)) or None
+            if found:
+                print("      stack survey (pre-generation): %s" % _survey_describe(found), flush=True)
+            return found
+        except Exception:  # noqa: BLE001 -- never block generation on the survey
+            return None
+
     tasks = _demo_tasks(root)
     if tasks:
         # Always (re)generate each pipeline's perf test from its demo (force=True); never reuse an
         # existing/partial one. No demo file to lift from -> None (caller gates; no silent reuse).
         for task in tasks:
             demo_rel = f"demo/demo_{task}.py"
-            perf = generate_perf_test(root, task, demo_rel, force=True) if (root / demo_rel).is_file() else None
+            _pcc = _find_pcc_for_task(root, task)
+            perf = (
+                generate_perf_test(root, task, demo_rel, force=True, stacks=_stacks_for(_pcc))
+                if (root / demo_rel).is_file()
+                else None
+            )
             out.append(
                 {
                     "task": task,
                     "demo": demo_rel,
                     "perf_test": perf,
-                    "pcc_test": _find_pcc_for_task(root, task),
+                    "pcc_test": _pcc,
                 }
             )
         return out
@@ -269,8 +315,9 @@ def _enumerate_pipelines(root: Path) -> list[dict[str, Any]]:
     # (same from-scratch rule as above; never reuse an existing test). No demo.py -> [] (caller gates).
     demo_main = "demo/demo.py"
     if (root / demo_main).is_file():
-        perf = generate_perf_test(root, "main", demo_main, force=True)
-        return [{"task": "main", "demo": demo_main, "perf_test": perf, "pcc_test": _find_pcc_for_task(root, "main")}]
+        _pcc_main = _find_pcc_for_task(root, "main")
+        perf = generate_perf_test(root, "main", demo_main, force=True, stacks=_stacks_for(_pcc_main))
+        return [{"task": "main", "demo": demo_main, "perf_test": perf, "pcc_test": _pcc_main}]
     return []
 
 

@@ -46,7 +46,12 @@ def model_root(tmp_path, monkeypatch):
     monkeypatch.setattr(
         _ptg,
         "generate_perf_test",
-        lambda root, task, case=None, force=False, source_abs=None, source_kind="": str(Path(root) / "test_e2e.py"),
+        # `stacks` is not optional here on purpose: the generator has always accepted it and no
+        # production caller passed it, so every generated perf test assumed one stack. A double
+        # that quietly swallowed **kwargs would let that regress unnoticed.
+        lambda root, task, case=None, force=False, source_abs=None, source_kind="", stacks=None: str(
+            Path(root) / "test_e2e.py"
+        ),
     )
     return tmp_path / "model"
 

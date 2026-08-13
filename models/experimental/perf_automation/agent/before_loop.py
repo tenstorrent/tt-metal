@@ -599,7 +599,52 @@ def before_loop(
         if os.environ.get("TT_PERF_MODULE_LEVEL", "") not in ("", "0", "false", "False"):
             _stem = Path(str(config["pcc_test"]).partition("::")[0]).stem
             _task = (_stem[5:] if _stem.startswith("test_") else _stem) or "main"
-        perf_node = generate_perf_test(model_root, _task, None, force=True, source_abs=pcc_abs, source_kind="pcc")
+        # WALK BEFORE WRITING. generate_perf_test has always accepted `stacks` and has always had a
+        # multi-stack branch behind it -- one depth variable per stack instead of a single
+        # TT_PERF_LAYERS -- and no production caller ever passed it, so that branch had never run.
+        # Every perf test this tool generated was written as if the model had one stack.
+        #
+        # Measured on Voxtral 2026-08-13: the test read only TT_PERF_LAYERS, the bridge later set
+        # TT_PERF_STACK0/1_LAYERS that nothing read, so ONE depth went to every stack and had to be
+        # max(2, 32, 3) = 32 -- the encoder's full depth. Capping to full depth changes no work, and
+        # the run concluded the knob never reached the builder.
+        #
+        # The PCC gate makes this answerable here: it is supplied by the operator, not generated, so
+        # it exists before anything is written and it builds the model. An empty answer costs nothing
+        # -- generation is then exactly as blind as it was before.
+        _survey = []
+        try:
+            from .stack_survey import (
+                describe as _survey_describe,
+                survey as _survey_stacks,
+                survey_model as _survey_build,
+            )
+
+            # BUILD THE MODEL, do not borrow a test's. Running a test and waiting for it to call
+            # build_pipeline works only for tests that build it that way -- the correctness gate does
+            # not, so the hook never fired and a two-stack model reported zero. The contract
+            # guarantees the factory; calling it directly is both correct and seconds rather than
+            # minutes.
+            _survey = _survey_build(
+                tt_root,
+                model_root,
+                env=sub_env,
+                model_id=str(config.get("model_name") or config.get("config_ref") or ""),
+            )
+            if not _survey:
+                # Fall back to walking the PCC gate: a model the factory cannot build standalone is
+                # still worth one attempt through the test that is known to build it.
+                # ABSOLUTE, not pcc_node_rel: that is MODEL-root relative and the probe runs from the
+                # REPO root, so the relative form is a path pytest cannot find.
+                _pcc_case = str(config["pcc_test"]).partition("::")[2] or pcc_node_rel.partition("::")[2]
+                _survey_node = "%s::%s" % (pcc_abs, _pcc_case) if _pcc_case else str(pcc_abs)
+                _survey = _survey_stacks(tt_root, _survey_node, env=sub_env)
+            print("      stack survey (pre-generation): %s" % _survey_describe(_survey), file=sys.stderr, flush=True)
+        except Exception as _sv_e:  # noqa: BLE001 -- never block generation on the survey
+            print("      stack survey skipped: %s" % str(_sv_e)[:120], file=sys.stderr, flush=True)
+        perf_node = generate_perf_test(
+            model_root, _task, None, force=True, source_abs=pcc_abs, source_kind="pcc", stacks=_survey or None
+        )
         if not perf_node:
             raise RuntimeError("could not auto-generate a perf test from --pcc-test (see messages above)")
         _pp, _, _pf = perf_node.partition("::")
@@ -788,7 +833,15 @@ def before_loop(
             flush=True,
         )
         if _bl_cov:
-            os.environ["TT_PERF_LAYERS"] = str(_bl_cov)
+            # A SCALAR, BECAUSE THAT IS WHAT A MODEL READS. _coverage_layers returns a per-stack
+            # DICT, and str() of it wrote "{'stack3': 2, 'stack2': 2}" into the one variable the perf
+            # test parses -- which fails .isdigit(), yields None, and means ALL LAYERS. The BASELINE
+            # was therefore measured at FULL depth while every candidate after it was measured
+            # capped, so "before" and "after" described different models and any gain computed from
+            # the pair was meaningless. Measured on Voxtral 2026-08-13: baseline 3977 ms over ~32700
+            # device ops against a capped model of 2965 dispatched ops.
+            _bl_scalar = max(int(v) for v in _bl_cov.values()) if isinstance(_bl_cov, dict) else int(_bl_cov)
+            os.environ["TT_PERF_LAYERS"] = str(_bl_scalar)
         # The bridge exists to find an env spelling that makes a cap REACH the builder. With no cap
         # to apply there is nothing for it to search for, and calling it with a None depth would only
         # rediscover -- at the price of more device probes -- what _coverage_layers already proved.
@@ -889,6 +942,13 @@ def before_loop(
     _seq_env = os.environ.get("TT_PERF_SEQ_LEN")
     if _seq_env:
         (run.dir / "perf_seq_len").write_text(_seq_env)
+    # STAMP THE DEPTH ONTO THE MEASUREMENT. A device_ms with no record of the depth it was taken at
+    # cannot be checked against anything: the baseline was measured at FULL depth for a whole day
+    # while every candidate after it ran capped, and nothing in the artifact could reveal it --
+    # _record_baseline_anchor already reads profile["perf_layers"] and had been getting None, so the
+    # anchor said "all" whatever the truth was. The cap is expressed by ABSENCE, so absent means all.
+    if isinstance(profile, dict) and "perf_layers" not in profile:
+        profile["perf_layers"] = os.environ.get("TT_PERF_LAYERS") or "all"
     # Persist the tagged buckets for the loop: ROUTE reads this, not the CSVs.
     (Path(run.profiles_dir) / "baseline_profile.json").write_text(json.dumps(profile, indent=2, sort_keys=True))
     # ...and record the SAME profile as the ledger's eager anchor, right here. This file and the
