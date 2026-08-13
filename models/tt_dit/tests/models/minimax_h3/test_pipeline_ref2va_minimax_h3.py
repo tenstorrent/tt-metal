@@ -155,7 +155,9 @@ def _pipeline(mesh_device) -> MiniMaxH3Pipeline:
 
 
 CASE = "mixed"
-EXPECTED_PADDED_LEN = 89856  # measured e2e (a host estimate says 90112); asserted so the case cannot drift off the probed shape
+EXPECTED_PADDED_LEN = (
+    89856  # measured e2e (a host estimate says 90112); asserted so the case cannot drift off the probed shape
+)
 
 
 @pytest.mark.timeout(10800)

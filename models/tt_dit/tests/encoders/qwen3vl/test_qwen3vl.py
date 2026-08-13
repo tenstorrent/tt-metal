@@ -51,9 +51,7 @@ def _reference_lm(weights: str):
     ("mesh_device", "submesh_shape", "tp_axis"),
     [
         pytest.param((2, 4), (2, 4), 1, id="tp4_fsdp2"),
-        pytest.param(
-            (2, 4), (2, 4), 0, id="tp2_fsdp4"
-        ),
+        pytest.param((2, 4), (2, 4), 0, id="tp2_fsdp4"),
     ],
     indirect=["mesh_device"],
 )

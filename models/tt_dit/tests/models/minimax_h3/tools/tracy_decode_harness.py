@@ -21,7 +21,6 @@ import pytest
 import torch
 
 import ttnn
-
 from models.tt_dit.models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from models.tt_dit.tests.models.minimax_h3.common import (
     DECODE_LATENT_FRAMES,

@@ -258,7 +258,16 @@ def _assert_same(expected: torch.Tensor, actual: torch.Tensor, *, pcc: float) ->
 )
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
 def test_causal_conv3d(
-    mesh_device, in_channels, out_channels, kernel_size, spatial_padding, stride, trailing_pad, num_frames, height, width
+    mesh_device,
+    in_channels,
+    out_channels,
+    kernel_size,
+    spatial_padding,
+    stride,
+    trailing_pad,
+    num_frames,
+    height,
+    width,
 ):
     """One conv per shape the encoder uses, reflect edges and causal pad included."""
     torch.manual_seed(0)

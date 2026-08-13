@@ -1688,9 +1688,7 @@ class MiniMaxH3Pipeline:
             # early in the schedule and separates later), so positional correspondence is not
             # guaranteed. Rows are then absolute, which is what the resident table is indexed by.
             levels = self._adaln_table.step_timesteps(i)
-            position = torch.tensor(
-                [int((levels == value).nonzero()[0, 0]) for value in unique], dtype=row_index.dtype
-            )
+            position = torch.tensor([int((levels == value).nonzero()[0, 0]) for value in unique], dtype=row_index.dtype)
             step_row_index = adaln_cache.step_offset(i) + position[row_index]
 
             tt_adaln = self._row_indices(adaln_indices(layout.token_tags, step_row_index), padded_len)

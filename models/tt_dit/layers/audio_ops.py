@@ -925,21 +925,25 @@ class Conv1dViaConv3d(Module):
         if self.tap_matmul:
             # One (C_in, C_out) matrix per tap, plus its bf16 residual when splitting. The conv3d-prepared
             # weight is deliberately not allocated: it would never be loaded, leaving a Parameter holding
-            # uninitialised device memory behind an attribute that reads like a live weight.
+            # uninitialised device memory behind an attribute that reads like a live weight. The taps are
+            # held in lists and registered in `_parameters` under their state-dict names (`tap_w{k}`,
+            # `tap_w{k}_lo`), so save/load naming and cache paths are unchanged.
             self.weight = None
             self.weight_lo = None
+            self.tap_weights = []
+            self.tap_weights_lo = []
             for tap in range(self.kernel_size[0]):
-                for suffix in ("", "_lo") if self.split_mode != "off" else ("",):
-                    setattr(
-                        self,
-                        f"tap_w{tap}{suffix}",
-                        Parameter(
-                            total_shape=[self.in_channels, self.out_channels],
-                            device=self.mesh_device,
-                            pad_value=0,
-                            dtype=self.dtype,
-                        ),
+                for suffix, taps in (("", self.tap_weights), ("_lo", self.tap_weights_lo)):
+                    if suffix == "_lo" and self.split_mode == "off":
+                        continue
+                    parameter = Parameter(
+                        total_shape=[self.in_channels, self.out_channels],
+                        device=self.mesh_device,
+                        pad_value=0,
+                        dtype=self.dtype,
                     )
+                    self._parameters[f"tap_w{tap}{suffix}"] = parameter
+                    taps.append(parameter)
         else:
             self.weight = Parameter(
                 total_shape=[d, self.out_channels],
@@ -1018,11 +1022,11 @@ class Conv1dViaConv3d(Module):
             if x_tap is not x_padded:
                 ttnn.deallocate(x_tap)
 
-            weight = getattr(self, f"tap_w{tap}").data
+            weight = self.tap_weights[tap].data
             if self.split_mode == "off":
                 term = ttnn.matmul(x_tile, weight, dtype=self.dtype, compute_kernel_config=self.compute_kernel_config)
             else:
-                weight_lo = getattr(self, f"tap_w{tap}_lo").data
+                weight_lo = self.tap_weights_lo[tap].data
                 if self.split_mode == "full":
                     x_hi, x_lo = _split_operand(x_tile)
                 else:

@@ -253,8 +253,7 @@ def _prepare_tt_inputs(
         audio_1BAC=bf16_tensor(audio_input.unsqueeze(0), device=mesh_device),
         prompt_1BLP=bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device),
         condition_blocks=[
-            (bf16_tensor(block["input"].unsqueeze(0), device=mesh_device), block["modality"])
-            for block in cond_blocks
+            (bf16_tensor(block["input"].unsqueeze(0), device=mesh_device), block["modality"]) for block in cond_blocks
         ]
         or None,
         timestep=from_torch(timestep.reshape(1, 1, num_timesteps, 1), device=mesh_device, dtype=ttnn.float32),
@@ -286,8 +285,12 @@ def _prepare_tt_inputs(
     ("num_text", "num_audio", "num_video", "grid", "cond_spec", "weights"),
     [
         pytest.param(512, 256, 1280, (8, 8), (), "random", id="small_s2048"),
-        pytest.param(512, 256, 1344, (8, 8), (), "random", id="unaligned_s2112"),  # multiple of TILE, not SP*TILE: tail padding
-        pytest.param(512, 414, 37296, (24, 42), (), "random", id="prod_768p_5s"),  # 37296 == 16 mod 32: ROW_MAJOR assembly
+        pytest.param(
+            512, 256, 1344, (8, 8), (), "random", id="unaligned_s2112"
+        ),  # multiple of TILE, not SP*TILE: tail padding
+        pytest.param(
+            512, 414, 37296, (24, 42), (), "random", id="prod_768p_5s"
+        ),  # 37296 == 16 mod 32: ROW_MAJOR assembly
         # skipped unless MINIMAX_H3_MODEL_PATH is set
         pytest.param(512, 414, 37296, (24, 42), (), "checkpoint", id="prod_768p_5s_real_weights"),
         pytest.param(512, 414, 37296, (24, 42), (("video", 1008, (24, 42)),), "random", id="prod_768p_5s_fl2va"),
