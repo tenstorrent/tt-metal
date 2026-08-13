@@ -186,6 +186,11 @@ inline void _llk_math_mul_reduce_scalar_init_()
     }
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // The reduce runs on the FPU (MVMUL/GMPOOL). Restore the operand-driven zero-flag baseline so a
+    // preceding datacopy/copy_init that left PRESERVE (keep denormals) does not leak into it, mirroring
+    // the standard _llk_math_reduce_init_.
+    math::_configure_default_zero_flag_state_(math::src_zero_flag_srca_fmt, math::src_zero_flag_srcb_fmt);
 }
 
 /**
