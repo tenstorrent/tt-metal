@@ -182,7 +182,9 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_cb_size(
         alignment *= 2;
     }
     const uint32_t unpadded_row_size_bytes = output.padded_shape()[-1] * input.element_size();
-    const uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes, alignment);
+    // The reader starts from the preceding aligned address, so it temporarily writes the
+    // useful row plus the leading misalignment into the CB before compacting the row in place.
+    const uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes + misalignment, alignment);
     const uint32_t stick_stride_for_merge = tt::round_up(unpadded_row_size_bytes, single_alignment);
     const uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2
                                          ? num_sticks_per_core_group_1

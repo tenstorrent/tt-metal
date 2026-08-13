@@ -1534,3 +1534,26 @@ def test_slice_rm_nd_misaligned_last_dim(device, shape, slice_start, slice_end):
         slice_start[4] : slice_end[4],
     ]
     assert_with_pcc(torch_expected, ttnn.to_torch(tt_output), 0.9999)
+
+
+def test_slice_rm_cb_page_covers_misaligned_prefix(device):
+    """The CB page must cover a 128-byte BF16 row plus its 2-byte alignment prefix."""
+    torch.manual_seed(0)
+    torch_input = torch.randn((1, 1, 4, 66), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_output = ttnn.slice(
+        tt_input,
+        (0, 0, 0, 1),
+        (1, 1, 4, 65),
+        (1, 1, 1, 1),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    assert_equal(torch_input[:, :, :, 1:65], ttnn.to_torch(tt_output))

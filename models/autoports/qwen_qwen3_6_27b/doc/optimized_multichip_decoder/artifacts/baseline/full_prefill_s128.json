@@ -1,0 +1,25 @@
+{
+  "batch": 1,
+  "candidate": "default",
+  "fallback_audit": true,
+  "iterations": 7,
+  "kind": "full",
+  "logical_sequence": 128,
+  "mesh": [
+    1,
+    4
+  ],
+  "pcc": "0.9999945998163279",
+  "replicas_equal": true,
+  "samples_ms": [
+    2.163305878639221,
+    2.160770818591118,
+    2.0716609433293343,
+    2.080509439110756,
+    2.0770616829395294,
+    2.1228892728686333,
+    2.102028578519821
+  ],
+  "warmed_prefill_median_ms": 2.102028578519821,
+  "warmup": 2
+}

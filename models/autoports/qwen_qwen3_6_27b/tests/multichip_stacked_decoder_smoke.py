@@ -65,6 +65,7 @@ def main():
     parser.add_argument("--mode", choices=("decode", "prefill"), default="decode")
     parser.add_argument("--batch", type=int, choices=(1, 32), default=1)
     parser.add_argument("--sequence", type=int, default=5, help="Logical prefill length; need not be tile aligned")
+    parser.add_argument("--fractured-residual", action="store_true")
     parsed = parser.parse_args()
     if parsed.mode == "prefill" and parsed.batch != 1:
         parser.error("this focused non-aligned prefill smoke supports batch 1")
@@ -120,14 +121,34 @@ def main():
         x = upload(input_host, mesh)
         page = upload(page_host, mesh, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
         positions = upload(positions_host, mesh, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        forward = MultichipDecoder.decode_forward if parsed.mode == "decode" else MultichipDecoder.prefill_forward
+        if parsed.fractured_residual:
+            if parsed.mode != "decode":
+                parser.error("fractured residual probe currently targets decode")
+            x = ttnn.reduce_scatter(
+                x,
+                dim=3,
+                num_links=1,
+                topology=ttnn.Topology.Ring,
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            forward = MultichipDecoder.decode_forward_fractured
+        else:
+            forward = MultichipDecoder.decode_forward if parsed.mode == "decode" else MultichipDecoder.prefill_forward
         boundary = forward(linear, hidden_states=x, page_table=page, current_positions=positions)
         boundary_shape = tuple(boundary.shape)
         # Deliberately pass the original mesh tensor, without composing through host.
         output = forward(full, hidden_states=boundary, page_table=page, current_positions=positions)
         ttnn.synchronize_device(mesh)
-        boundary_replicas = replicated_values(boundary)
-        output_replicas = replicated_values(output)
+        if parsed.fractured_residual:
+            boundary_for_check = ttnn.all_gather(
+                boundary, dim=3, num_links=1, topology=ttnn.Topology.Ring, cluster_axis=1
+            )
+            output_for_check = ttnn.all_gather(output, dim=3, num_links=1, topology=ttnn.Topology.Ring, cluster_axis=1)
+        else:
+            boundary_for_check, output_for_check = boundary, output
+        boundary_replicas = replicated_values(boundary_for_check)
+        output_replicas = replicated_values(output_for_check)
 
         logical_shape = (
             (1, 1, batch, config.hidden_size) if parsed.mode == "decode" else (1, batch, sequence, config.hidden_size)
@@ -181,7 +202,8 @@ def main():
             "direct_device_boundary=True",
             "fallback_audit=True",
         )
-        assert boundary_shape == logical_shape
+        expected_boundary_shape = (*logical_shape[:-1], 1280) if parsed.fractured_residual else logical_shape
+        assert boundary_shape == expected_boundary_shape
         assert boundary_pcc and output_pcc
         assert boundary_equal and output_equal
         assert all(all(values) for values in linear_cache_pcc.values())

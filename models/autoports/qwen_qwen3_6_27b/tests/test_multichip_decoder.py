@@ -61,7 +61,10 @@ def test_tp4_head_and_channel_shapes_are_exact():
 def test_row_parallel_boundaries_reduce_on_ring():
     source = inspect.getsource(MultichipDecoder._tp_linear)
     collective = inspect.getsource(MultichipDecoder._all_reduce)
-    assert "self._all_reduce(output) if row else output" in source
+    assert 'self._multichip_candidate == "multichip_preallocated_ccl"' in source
+    assert 'output_tensor=buffers["reduce_scatter"]' in source
+    assert 'output_tensor=buffers["all_gather"]' in source
+    assert "self._all_reduce(output)" in source
     assert "ttnn.all_reduce" in collective
     assert "TARGET_TOPOLOGY" in collective
 

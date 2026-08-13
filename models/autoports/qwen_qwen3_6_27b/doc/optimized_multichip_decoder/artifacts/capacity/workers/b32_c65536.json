@@ -1,0 +1,1530 @@
+{
+  "batch": 32,
+  "categories": {
+    "measured_peak_warmed_trace_workspace": {
+      "allocated_payload_bytes_per_device": 1970176,
+      "requested_bytes_per_device": 1969152
+    },
+    "optimized_default_preallocated_ccl_buffers": {
+      "allocated_payload_bytes_per_device": 52428800,
+      "requested_bytes_per_device": 52428800
+    },
+    "state_linear_convolution_state": {
+      "allocated_payload_bytes_per_device": 251658240,
+      "requested_bytes_per_device": 251658240
+    },
+    "state_linear_recurrent_state": {
+      "allocated_payload_bytes_per_device": 320864256,
+      "requested_bytes_per_device": 320864256
+    },
+    "weight_duplicated_tp_mlp_decode_prefill": {
+      "allocated_payload_bytes_per_device": 4812963840,
+      "requested_bytes_per_device": 4812963840
+    },
+    "weight_full_attention_projection_objects": {
+      "allocated_payload_bytes_per_device": 2264924160,
+      "requested_bytes_per_device": 2264924160
+    },
+    "weight_full_attention_qk_norms": {
+      "allocated_payload_bytes_per_device": 524288,
+      "requested_bytes_per_device": 524288
+    },
+    "weight_linear_misc_constants": {
+      "allocated_payload_bytes_per_device": 9443328,
+      "requested_bytes_per_device": 9441792
+    },
+    "weight_linear_projection_objects": {
+      "allocated_payload_bytes_per_device": 1362493440,
+      "requested_bytes_per_device": 1362493440
+    },
+    "weight_norms": {
+      "allocated_payload_bytes_per_device": 1310720,
+      "requested_bytes_per_device": 1310720
+    },
+    "weight_per_layer_rope_c262144": {
+      "allocated_payload_bytes_per_device": 2147483648,
+      "requested_bytes_per_device": 2147483648
+    }
+  },
+  "context": 65536,
+  "device_ids": [
+    3,
+    2,
+    1,
+    0
+  ],
+  "elapsed_seconds": 1.2557139620184898,
+  "fabric_opened": false,
+  "kv": {
+    "dtype": "bfloat8_b",
+    "logical_payload_bytes_all_32_tensors_per_device": 17179869184,
+    "logical_payload_bytes_per_tensor_per_device": 536870912,
+    "shape_per_tensor_per_device": [
+      32768,
+      1,
+      64,
+      256
+    ],
+    "tensor_count": 32
+  },
+  "memory_views": {
+    "after_layer_00_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2722474112,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 12366938112,
+        "total_bytes_allocated_per_bank": 1545867264,
+        "total_bytes_free": 21779792896,
+        "total_bytes_free_per_bank": 2722474112,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2722474112,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 12366938112,
+        "total_bytes_allocated_per_bank": 1545867264,
+        "total_bytes_free": 21779792896,
+        "total_bytes_free_per_bank": 2722474112,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2722474112,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 12366938112,
+        "total_bytes_allocated_per_bank": 1545867264,
+        "total_bytes_free": 21779792896,
+        "total_bytes_free_per_bank": 2722474112,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2722474112,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 12366938112,
+        "total_bytes_allocated_per_bank": 1545867264,
+        "total_bytes_free": 21779792896,
+        "total_bytes_free_per_bank": 2722474112,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_01_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2579867776,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 13507788800,
+        "total_bytes_allocated_per_bank": 1688473600,
+        "total_bytes_free": 20638942208,
+        "total_bytes_free_per_bank": 2579867776,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2579867776,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 13507788800,
+        "total_bytes_allocated_per_bank": 1688473600,
+        "total_bytes_free": 20638942208,
+        "total_bytes_free_per_bank": 2579867776,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2579867776,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 13507788800,
+        "total_bytes_allocated_per_bank": 1688473600,
+        "total_bytes_free": 20638942208,
+        "total_bytes_free_per_bank": 2579867776,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2579867776,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 13507788800,
+        "total_bytes_allocated_per_bank": 1688473600,
+        "total_bytes_free": 20638942208,
+        "total_bytes_free_per_bank": 2579867776,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_02_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2437261440,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 14648639488,
+        "total_bytes_allocated_per_bank": 1831079936,
+        "total_bytes_free": 19498091520,
+        "total_bytes_free_per_bank": 2437261440,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2437261440,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 14648639488,
+        "total_bytes_allocated_per_bank": 1831079936,
+        "total_bytes_free": 19498091520,
+        "total_bytes_free_per_bank": 2437261440,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2437261440,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 14648639488,
+        "total_bytes_allocated_per_bank": 1831079936,
+        "total_bytes_free": 19498091520,
+        "total_bytes_free_per_bank": 2437261440,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2437261440,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 14648639488,
+        "total_bytes_allocated_per_bank": 1831079936,
+        "total_bytes_free": 19498091520,
+        "total_bytes_free_per_bank": 2437261440,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_03_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2294655104,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 15789490176,
+        "total_bytes_allocated_per_bank": 1973686272,
+        "total_bytes_free": 18357240832,
+        "total_bytes_free_per_bank": 2294655104,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2294655104,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 15789490176,
+        "total_bytes_allocated_per_bank": 1973686272,
+        "total_bytes_free": 18357240832,
+        "total_bytes_free_per_bank": 2294655104,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2294655104,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 15789490176,
+        "total_bytes_allocated_per_bank": 1973686272,
+        "total_bytes_free": 18357240832,
+        "total_bytes_free_per_bank": 2294655104,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2294655104,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 15789490176,
+        "total_bytes_allocated_per_bank": 1973686272,
+        "total_bytes_free": 18357240832,
+        "total_bytes_free_per_bank": 2294655104,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_04_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2152048768,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 16930340864,
+        "total_bytes_allocated_per_bank": 2116292608,
+        "total_bytes_free": 17216390144,
+        "total_bytes_free_per_bank": 2152048768,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2152048768,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 16930340864,
+        "total_bytes_allocated_per_bank": 2116292608,
+        "total_bytes_free": 17216390144,
+        "total_bytes_free_per_bank": 2152048768,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2152048768,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 16930340864,
+        "total_bytes_allocated_per_bank": 2116292608,
+        "total_bytes_free": 17216390144,
+        "total_bytes_free_per_bank": 2152048768,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2152048768,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 16930340864,
+        "total_bytes_allocated_per_bank": 2116292608,
+        "total_bytes_free": 17216390144,
+        "total_bytes_free_per_bank": 2152048768,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_05_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2009442432,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 18071191552,
+        "total_bytes_allocated_per_bank": 2258898944,
+        "total_bytes_free": 16075539456,
+        "total_bytes_free_per_bank": 2009442432,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2009442432,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 18071191552,
+        "total_bytes_allocated_per_bank": 2258898944,
+        "total_bytes_free": 16075539456,
+        "total_bytes_free_per_bank": 2009442432,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2009442432,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 18071191552,
+        "total_bytes_allocated_per_bank": 2258898944,
+        "total_bytes_free": 16075539456,
+        "total_bytes_free_per_bank": 2009442432,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2009442432,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 18071191552,
+        "total_bytes_allocated_per_bank": 2258898944,
+        "total_bytes_free": 16075539456,
+        "total_bytes_free_per_bank": 2009442432,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_06_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 1866836096,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 19212042240,
+        "total_bytes_allocated_per_bank": 2401505280,
+        "total_bytes_free": 14934688768,
+        "total_bytes_free_per_bank": 1866836096,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 1866836096,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 19212042240,
+        "total_bytes_allocated_per_bank": 2401505280,
+        "total_bytes_free": 14934688768,
+        "total_bytes_free_per_bank": 1866836096,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 1866836096,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 19212042240,
+        "total_bytes_allocated_per_bank": 2401505280,
+        "total_bytes_free": 14934688768,
+        "total_bytes_free_per_bank": 1866836096,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 1866836096,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 19212042240,
+        "total_bytes_allocated_per_bank": 2401505280,
+        "total_bytes_free": 14934688768,
+        "total_bytes_free_per_bank": 1866836096,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_07_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 1724229760,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 20352892928,
+        "total_bytes_allocated_per_bank": 2544111616,
+        "total_bytes_free": 13793838080,
+        "total_bytes_free_per_bank": 1724229760,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 1724229760,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 20352892928,
+        "total_bytes_allocated_per_bank": 2544111616,
+        "total_bytes_free": 13793838080,
+        "total_bytes_free_per_bank": 1724229760,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 1724229760,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 20352892928,
+        "total_bytes_allocated_per_bank": 2544111616,
+        "total_bytes_free": 13793838080,
+        "total_bytes_free_per_bank": 1724229760,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 1724229760,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 20352892928,
+        "total_bytes_allocated_per_bank": 2544111616,
+        "total_bytes_free": 13793838080,
+        "total_bytes_free_per_bank": 1724229760,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_08_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 1581623424,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 21493743616,
+        "total_bytes_allocated_per_bank": 2686717952,
+        "total_bytes_free": 12652987392,
+        "total_bytes_free_per_bank": 1581623424,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 1581623424,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 21493743616,
+        "total_bytes_allocated_per_bank": 2686717952,
+        "total_bytes_free": 12652987392,
+        "total_bytes_free_per_bank": 1581623424,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 1581623424,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 21493743616,
+        "total_bytes_allocated_per_bank": 2686717952,
+        "total_bytes_free": 12652987392,
+        "total_bytes_free_per_bank": 1581623424,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 1581623424,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 21493743616,
+        "total_bytes_allocated_per_bank": 2686717952,
+        "total_bytes_free": 12652987392,
+        "total_bytes_free_per_bank": 1581623424,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_09_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 1439017088,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 22634594304,
+        "total_bytes_allocated_per_bank": 2829324288,
+        "total_bytes_free": 11512136704,
+        "total_bytes_free_per_bank": 1439017088,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 1439017088,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 22634594304,
+        "total_bytes_allocated_per_bank": 2829324288,
+        "total_bytes_free": 11512136704,
+        "total_bytes_free_per_bank": 1439017088,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 1439017088,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 22634594304,
+        "total_bytes_allocated_per_bank": 2829324288,
+        "total_bytes_free": 11512136704,
+        "total_bytes_free_per_bank": 1439017088,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 1439017088,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 22634594304,
+        "total_bytes_allocated_per_bank": 2829324288,
+        "total_bytes_free": 11512136704,
+        "total_bytes_free_per_bank": 1439017088,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_10_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 1296410752,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 23775444992,
+        "total_bytes_allocated_per_bank": 2971930624,
+        "total_bytes_free": 10371286016,
+        "total_bytes_free_per_bank": 1296410752,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 1296410752,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 23775444992,
+        "total_bytes_allocated_per_bank": 2971930624,
+        "total_bytes_free": 10371286016,
+        "total_bytes_free_per_bank": 1296410752,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 1296410752,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 23775444992,
+        "total_bytes_allocated_per_bank": 2971930624,
+        "total_bytes_free": 10371286016,
+        "total_bytes_free_per_bank": 1296410752,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 1296410752,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 23775444992,
+        "total_bytes_allocated_per_bank": 2971930624,
+        "total_bytes_free": 10371286016,
+        "total_bytes_free_per_bank": 1296410752,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_11_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 1153804416,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 24916295680,
+        "total_bytes_allocated_per_bank": 3114536960,
+        "total_bytes_free": 9230435328,
+        "total_bytes_free_per_bank": 1153804416,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 1153804416,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 24916295680,
+        "total_bytes_allocated_per_bank": 3114536960,
+        "total_bytes_free": 9230435328,
+        "total_bytes_free_per_bank": 1153804416,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 1153804416,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 24916295680,
+        "total_bytes_allocated_per_bank": 3114536960,
+        "total_bytes_free": 9230435328,
+        "total_bytes_free_per_bank": 1153804416,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 1153804416,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 24916295680,
+        "total_bytes_allocated_per_bank": 3114536960,
+        "total_bytes_free": 9230435328,
+        "total_bytes_free_per_bank": 1153804416,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_12_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 1011198080,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 26057146368,
+        "total_bytes_allocated_per_bank": 3257143296,
+        "total_bytes_free": 8089584640,
+        "total_bytes_free_per_bank": 1011198080,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 1011198080,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 26057146368,
+        "total_bytes_allocated_per_bank": 3257143296,
+        "total_bytes_free": 8089584640,
+        "total_bytes_free_per_bank": 1011198080,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 1011198080,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 26057146368,
+        "total_bytes_allocated_per_bank": 3257143296,
+        "total_bytes_free": 8089584640,
+        "total_bytes_free_per_bank": 1011198080,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 1011198080,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 26057146368,
+        "total_bytes_allocated_per_bank": 3257143296,
+        "total_bytes_free": 8089584640,
+        "total_bytes_free_per_bank": 1011198080,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_13_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 868591744,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 27197997056,
+        "total_bytes_allocated_per_bank": 3399749632,
+        "total_bytes_free": 6948733952,
+        "total_bytes_free_per_bank": 868591744,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 868591744,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 27197997056,
+        "total_bytes_allocated_per_bank": 3399749632,
+        "total_bytes_free": 6948733952,
+        "total_bytes_free_per_bank": 868591744,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 868591744,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 27197997056,
+        "total_bytes_allocated_per_bank": 3399749632,
+        "total_bytes_free": 6948733952,
+        "total_bytes_free_per_bank": 868591744,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 868591744,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 27197997056,
+        "total_bytes_allocated_per_bank": 3399749632,
+        "total_bytes_free": 6948733952,
+        "total_bytes_free_per_bank": 868591744,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_14_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 725985408,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 28338847744,
+        "total_bytes_allocated_per_bank": 3542355968,
+        "total_bytes_free": 5807883264,
+        "total_bytes_free_per_bank": 725985408,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 725985408,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 28338847744,
+        "total_bytes_allocated_per_bank": 3542355968,
+        "total_bytes_free": 5807883264,
+        "total_bytes_free_per_bank": 725985408,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 725985408,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 28338847744,
+        "total_bytes_allocated_per_bank": 3542355968,
+        "total_bytes_free": 5807883264,
+        "total_bytes_free_per_bank": 725985408,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 725985408,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 28338847744,
+        "total_bytes_allocated_per_bank": 3542355968,
+        "total_bytes_free": 5807883264,
+        "total_bytes_free_per_bank": 725985408,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_layer_15_kv": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 583379072,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 29479698432,
+        "total_bytes_allocated_per_bank": 3684962304,
+        "total_bytes_free": 4667032576,
+        "total_bytes_free_per_bank": 583379072,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 583379072,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 29479698432,
+        "total_bytes_allocated_per_bank": 3684962304,
+        "total_bytes_free": 4667032576,
+        "total_bytes_free_per_bank": 583379072,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 583379072,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 29479698432,
+        "total_bytes_allocated_per_bank": 3684962304,
+        "total_bytes_free": 4667032576,
+        "total_bytes_free_per_bank": 583379072,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 583379072,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 29479698432,
+        "total_bytes_allocated_per_bank": 3684962304,
+        "total_bytes_free": 4667032576,
+        "total_bytes_free_per_bank": 583379072,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_measured_peak_warmed_trace_workspace": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2865080448,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 11226087424,
+        "total_bytes_allocated_per_bank": 1403260928,
+        "total_bytes_free": 22920643584,
+        "total_bytes_free_per_bank": 2865080448,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2865080448,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 11226087424,
+        "total_bytes_allocated_per_bank": 1403260928,
+        "total_bytes_free": 22920643584,
+        "total_bytes_free_per_bank": 2865080448,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2865080448,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 11226087424,
+        "total_bytes_allocated_per_bank": 1403260928,
+        "total_bytes_free": 22920643584,
+        "total_bytes_free_per_bank": 2865080448,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2865080448,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 11226087424,
+        "total_bytes_allocated_per_bank": 1403260928,
+        "total_bytes_free": 22920643584,
+        "total_bytes_free_per_bank": 2865080448,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_optimized_default_preallocated_ccl_buffers": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2865328256,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 11224104960,
+        "total_bytes_allocated_per_bank": 1403013120,
+        "total_bytes_free": 22922626048,
+        "total_bytes_free_per_bank": 2865328256,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2865328256,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 11224104960,
+        "total_bytes_allocated_per_bank": 1403013120,
+        "total_bytes_free": 22922626048,
+        "total_bytes_free_per_bank": 2865328256,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2865328256,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 11224104960,
+        "total_bytes_allocated_per_bank": 1403013120,
+        "total_bytes_free": 22922626048,
+        "total_bytes_free_per_bank": 2865328256,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2865328256,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 11224104960,
+        "total_bytes_allocated_per_bank": 1403013120,
+        "total_bytes_free": 22922626048,
+        "total_bytes_free_per_bank": 2865328256,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_state_linear_convolution_state": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2911989888,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 10850811904,
+        "total_bytes_allocated_per_bank": 1356351488,
+        "total_bytes_free": 23295919104,
+        "total_bytes_free_per_bank": 2911989888,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2911989888,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 10850811904,
+        "total_bytes_allocated_per_bank": 1356351488,
+        "total_bytes_free": 23295919104,
+        "total_bytes_free_per_bank": 2911989888,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2911989888,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 10850811904,
+        "total_bytes_allocated_per_bank": 1356351488,
+        "total_bytes_free": 23295919104,
+        "total_bytes_free_per_bank": 2911989888,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2911989888,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 10850811904,
+        "total_bytes_allocated_per_bank": 1356351488,
+        "total_bytes_free": 23295919104,
+        "total_bytes_free_per_bank": 2911989888,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_state_linear_recurrent_state": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2871881856,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 11171676160,
+        "total_bytes_allocated_per_bank": 1396459520,
+        "total_bytes_free": 22975054848,
+        "total_bytes_free_per_bank": 2871881856,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2871881856,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 11171676160,
+        "total_bytes_allocated_per_bank": 1396459520,
+        "total_bytes_free": 22975054848,
+        "total_bytes_free_per_bank": 2871881856,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2871881856,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 11171676160,
+        "total_bytes_allocated_per_bank": 1396459520,
+        "total_bytes_free": 22975054848,
+        "total_bytes_free_per_bank": 2871881856,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2871881856,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 11171676160,
+        "total_bytes_allocated_per_bank": 1396459520,
+        "total_bytes_free": 22975054848,
+        "total_bytes_free_per_bank": 2871881856,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_weight_duplicated_tp_mlp_decode_prefill": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 3666557056,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 4814274560,
+        "total_bytes_allocated_per_bank": 601784320,
+        "total_bytes_free": 29332456448,
+        "total_bytes_free_per_bank": 3666557056,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 3666557056,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 4814274560,
+        "total_bytes_allocated_per_bank": 601784320,
+        "total_bytes_free": 29332456448,
+        "total_bytes_free_per_bank": 3666557056,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 3666557056,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 4814274560,
+        "total_bytes_allocated_per_bank": 601784320,
+        "total_bytes_free": 29332456448,
+        "total_bytes_free_per_bank": 3666557056,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 3666557056,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 4814274560,
+        "total_bytes_allocated_per_bank": 601784320,
+        "total_bytes_free": 29332456448,
+        "total_bytes_free_per_bank": 3666557056,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_weight_full_attention_projection_objects": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 3383441536,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 7079198720,
+        "total_bytes_allocated_per_bank": 884899840,
+        "total_bytes_free": 27067532288,
+        "total_bytes_free_per_bank": 3383441536,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 3383441536,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 7079198720,
+        "total_bytes_allocated_per_bank": 884899840,
+        "total_bytes_free": 27067532288,
+        "total_bytes_free_per_bank": 3383441536,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 3383441536,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 7079198720,
+        "total_bytes_allocated_per_bank": 884899840,
+        "total_bytes_free": 27067532288,
+        "total_bytes_free_per_bank": 3383441536,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 3383441536,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 7079198720,
+        "total_bytes_allocated_per_bank": 884899840,
+        "total_bytes_free": 27067532288,
+        "total_bytes_free_per_bank": 3383441536,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_weight_full_attention_qk_norms": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 3383376000,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 7079723008,
+        "total_bytes_allocated_per_bank": 884965376,
+        "total_bytes_free": 27067008000,
+        "total_bytes_free_per_bank": 3383376000,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 3383376000,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 7079723008,
+        "total_bytes_allocated_per_bank": 884965376,
+        "total_bytes_free": 27067008000,
+        "total_bytes_free_per_bank": 3383376000,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 3383376000,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 7079723008,
+        "total_bytes_allocated_per_bank": 884965376,
+        "total_bytes_free": 27067008000,
+        "total_bytes_free_per_bank": 3383376000,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 3383376000,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 7079723008,
+        "total_bytes_allocated_per_bank": 884965376,
+        "total_bytes_free": 27067008000,
+        "total_bytes_free_per_bank": 3383376000,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_weight_linear_misc_constants": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2943447168,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 10599153664,
+        "total_bytes_allocated_per_bank": 1324894208,
+        "total_bytes_free": 23547577344,
+        "total_bytes_free_per_bank": 2943447168,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2943447168,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 10599153664,
+        "total_bytes_allocated_per_bank": 1324894208,
+        "total_bytes_free": 23547577344,
+        "total_bytes_free_per_bank": 2943447168,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2943447168,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 10599153664,
+        "total_bytes_allocated_per_bank": 1324894208,
+        "total_bytes_free": 23547577344,
+        "total_bytes_free_per_bank": 2943447168,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2943447168,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 10599153664,
+        "total_bytes_allocated_per_bank": 1324894208,
+        "total_bytes_free": 23547577344,
+        "total_bytes_free_per_bank": 2943447168,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_weight_linear_projection_objects": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 2944628864,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 10589700096,
+        "total_bytes_allocated_per_bank": 1323712512,
+        "total_bytes_free": 23557030912,
+        "total_bytes_free_per_bank": 2944628864,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 2944628864,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 10589700096,
+        "total_bytes_allocated_per_bank": 1323712512,
+        "total_bytes_free": 23557030912,
+        "total_bytes_free_per_bank": 2944628864,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 2944628864,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 10589700096,
+        "total_bytes_allocated_per_bank": 1323712512,
+        "total_bytes_free": 23557030912,
+        "total_bytes_free_per_bank": 2944628864,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 2944628864,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 10589700096,
+        "total_bytes_allocated_per_bank": 1323712512,
+        "total_bytes_free": 23557030912,
+        "total_bytes_free_per_bank": 2944628864,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_weight_norms": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 4268177536,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 1310720,
+        "total_bytes_allocated_per_bank": 163840,
+        "total_bytes_free": 34145420288,
+        "total_bytes_free_per_bank": 4268177536,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 4268177536,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 1310720,
+        "total_bytes_allocated_per_bank": 163840,
+        "total_bytes_free": 34145420288,
+        "total_bytes_free_per_bank": 4268177536,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 4268177536,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 1310720,
+        "total_bytes_allocated_per_bank": 163840,
+        "total_bytes_free": 34145420288,
+        "total_bytes_free_per_bank": 4268177536,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 4268177536,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 1310720,
+        "total_bytes_allocated_per_bank": 163840,
+        "total_bytes_free": 34145420288,
+        "total_bytes_free_per_bank": 4268177536,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "after_weight_per_layer_rope_c262144": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 3114940544,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 9227206656,
+        "total_bytes_allocated_per_bank": 1153400832,
+        "total_bytes_free": 24919524352,
+        "total_bytes_free_per_bank": 3114940544,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 3114940544,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 9227206656,
+        "total_bytes_allocated_per_bank": 1153400832,
+        "total_bytes_free": 24919524352,
+        "total_bytes_free_per_bank": 3114940544,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 3114940544,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 9227206656,
+        "total_bytes_allocated_per_bank": 1153400832,
+        "total_bytes_free": 24919524352,
+        "total_bytes_free_per_bank": 3114940544,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 3114940544,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 9227206656,
+        "total_bytes_allocated_per_bank": 1153400832,
+        "total_bytes_free": 24919524352,
+        "total_bytes_free_per_bank": 3114940544,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "complete": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 583379072,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 29479698432,
+        "total_bytes_allocated_per_bank": 3684962304,
+        "total_bytes_free": 4667032576,
+        "total_bytes_free_per_bank": 583379072,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 583379072,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 29479698432,
+        "total_bytes_allocated_per_bank": 3684962304,
+        "total_bytes_free": 4667032576,
+        "total_bytes_free_per_bank": 583379072,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 583379072,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 29479698432,
+        "total_bytes_allocated_per_bank": 3684962304,
+        "total_bytes_free": 4667032576,
+        "total_bytes_free_per_bank": 583379072,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 583379072,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 29479698432,
+        "total_bytes_allocated_per_bank": 3684962304,
+        "total_bytes_free": 4667032576,
+        "total_bytes_free_per_bank": 583379072,
+        "total_bytes_per_bank": 4268341376
+      }
+    ],
+    "opened": [
+      {
+        "device_index": 0,
+        "largest_contiguous_bytes_free_per_bank": 4268341376,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 0,
+        "total_bytes_allocated_per_bank": 0,
+        "total_bytes_free": 34146731008,
+        "total_bytes_free_per_bank": 4268341376,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 1,
+        "largest_contiguous_bytes_free_per_bank": 4268341376,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 0,
+        "total_bytes_allocated_per_bank": 0,
+        "total_bytes_free": 34146731008,
+        "total_bytes_free_per_bank": 4268341376,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 2,
+        "largest_contiguous_bytes_free_per_bank": 4268341376,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 0,
+        "total_bytes_allocated_per_bank": 0,
+        "total_bytes_free": 34146731008,
+        "total_bytes_free_per_bank": 4268341376,
+        "total_bytes_per_bank": 4268341376
+      },
+      {
+        "device_index": 3,
+        "largest_contiguous_bytes_free_per_bank": 4268341376,
+        "num_banks": 8,
+        "symmetric_mesh_view": true,
+        "total_bytes": 34146731008,
+        "total_bytes_allocated": 0,
+        "total_bytes_allocated_per_bank": 0,
+        "total_bytes_free": 34146731008,
+        "total_bytes_free_per_bank": 4268341376,
+        "total_bytes_per_bank": 4268341376
+      }
+    ]
+  },
+  "mesh_shape": [
+    1,
+    4
+  ],
+  "mode": "worker",
+  "pid": 3710307,
+  "schema_version": 1,
+  "success": true
+}

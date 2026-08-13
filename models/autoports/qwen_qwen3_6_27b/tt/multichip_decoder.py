@@ -110,7 +110,7 @@ class MultichipDecoder(OptimizedDecoder):
         "mesh": TARGET_MESH_SHAPE,
         "tensor_parallel": 4,
         "residual_layout": "replicated_hidden_5120",
-        "collective": "ring_all_reduce_after_row_parallel_o_and_down",
+        "collective": "preallocated_ring_reduce_scatter_all_gather_inside_row_parallel_o_and_down",
         "cache": "one_local_kv_head_per_device_paged_bfp8",
         "moe": "not_applicable_dense_mlp",
     }
@@ -137,7 +137,21 @@ class MultichipDecoder(OptimizedDecoder):
         # BFP4/LoFi full-attention candidate was faster on synthetic tensors
         # but failed the pinned official-weight PCC gate (0.9870 < 0.995).
         effective_candidate = candidate
-        policy = policy_override or resolve_policy(effective_candidate, kind)
+        supported_multichip_candidates = {
+            "multichip_baseline",
+            "multichip_packed_mlp",
+            "multichip_bfp8_ccl_attention",
+            "multichip_bfp8_ccl_mlp",
+            "multichip_bfp8_ccl_all",
+            "multichip_preallocated_ccl",
+            "multichip_prefill_l1",
+            "multichip_linear_packed_l1",
+        }
+        if candidate.startswith("multichip_") and candidate not in supported_multichip_candidates:
+            raise ValueError(f"unknown multichip candidate {candidate!r}")
+        multichip_candidate = candidate if candidate.startswith("multichip_") else "default"
+        policy_candidate = "default" if candidate == "default" or candidate.startswith("multichip_") else candidate
+        policy = policy_override or resolve_policy(policy_candidate, kind)
         hidden, intermediate = int(hf_config.hidden_size), int(hf_config.intermediate_size)
         local_i = intermediate // TARGET_TP
 
@@ -160,6 +174,19 @@ class MultichipDecoder(OptimizedDecoder):
                 mesh_device=mesh_device,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             ),
+            # Stack-compatible fractured-residual candidate. Distributed
+            # RMSNorm consumes one hidden-width quarter and therefore needs a
+            # semantic mesh shard rather than the replicated tiled norm view.
+            "input_norm_fractured": _shard(
+                host("input_layernorm.weight", add_one=True).reshape(1, 1, 1, hidden),
+                -1,
+                mesh_device=mesh_device,
+            ),
+            "post_attention_norm_fractured": _shard(
+                host("post_attention_layernorm.weight", add_one=True).reshape(1, 1, 1, hidden),
+                -1,
+                mesh_device=mesh_device,
+            ),
         }
         gate, up = host("mlp.gate_proj.weight", transpose=True), host("mlp.up_proj.weight", transpose=True)
         down = host("mlp.down_proj.weight", transpose=True)
@@ -169,6 +196,24 @@ class MultichipDecoder(OptimizedDecoder):
         weights["mlp_up_decode"] = _shard_decode_weight(
             up, -1, mesh_device=mesh_device, dtype=policy.mlp_gate_up_dtype, k=hidden, n=local_i
         )
+        if multichip_candidate == "multichip_packed_mlp":
+            packed_gate_up = _device_major(
+                [
+                    torch.cat(
+                        [gate[:, rank * local_i : (rank + 1) * local_i], up[:, rank * local_i : (rank + 1) * local_i]],
+                        dim=-1,
+                    )
+                    for rank in range(TARGET_TP)
+                ]
+            )
+            weights["mlp_gate_up_decode"] = _shard_decode_weight(
+                packed_gate_up,
+                -1,
+                mesh_device=mesh_device,
+                dtype=policy.mlp_gate_up_dtype,
+                k=hidden,
+                n=2 * local_i,
+            )
         weights["mlp_down_decode"] = _shard_decode_weight(
             down, -2, mesh_device=mesh_device, dtype=policy.mlp_down_dtype, k=local_i, n=hidden
         )
@@ -271,6 +316,19 @@ class MultichipDecoder(OptimizedDecoder):
         decoder.local_linear_key_heads, decoder.local_linear_value_heads = 4, 12
         decoder.local_linear_key_width, decoder.local_linear_value_width = 512, 1536
         decoder._configure_multichip_compute()
+        decoder._row_collective_mode = "all_reduce"
+        decoder._multichip_candidate = multichip_candidate
+        decoder._ccl_buffers = {}
+        if multichip_candidate == "multichip_preallocated_ccl":
+            # Full-attention O reaches its CCL before the B1 logical view;
+            # linear O and MLP-down reach theirs after that view.
+            rows_by_role = {"token_mixer": 32 if kind == "full_attention" else batch, "mlp": batch}
+            for role, rows in rows_by_role.items():
+                zeros = torch.zeros((1, 1, rows, hidden), dtype=torch.bfloat16)
+                decoder._ccl_buffers[role] = {
+                    "reduce_scatter": _shard(zeros, -1, mesh_device=mesh_device),
+                    "all_gather": _replicate(zeros, mesh_device=mesh_device),
+                }
         return decoder
 
     @staticmethod
@@ -384,6 +442,16 @@ class MultichipDecoder(OptimizedDecoder):
             tensor, num_links=1, topology=TARGET_TOPOLOGY, cluster_axis=1, memory_config=memory_config
         )
 
+    def _reduce_scatter(self, tensor, *, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        return ttnn.reduce_scatter(
+            tensor,
+            dim=3,
+            num_links=1,
+            topology=TARGET_TOPOLOGY,
+            cluster_axis=1,
+            memory_config=memory_config,
+        )
+
     def _tp_linear(
         self,
         hidden_states,
@@ -412,6 +480,8 @@ class MultichipDecoder(OptimizedDecoder):
             )
         else:
             rows = math.prod(tuple(hidden_states.padded_shape)[:-1])
+            if self._multichip_candidate == "multichip_prefill_l1":
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.L1_MEMORY_CONFIG)
             if rows <= 2048:
                 kwargs["program_config"] = _prefill_program(
                     rows=rows,
@@ -424,9 +494,109 @@ class MultichipDecoder(OptimizedDecoder):
         output = ttnn.linear(hidden_states, self.weights[weight_name], **kwargs)
         if not decode and fused_activation == ttnn.UnaryOpType.SILU:
             output = ttnn.silu(output)
-        return self._all_reduce(output) if row else output
+        if not row:
+            return output
+        ccl_bfp8 = self._multichip_candidate == "multichip_bfp8_ccl_all"
+        ccl_bfp8 |= self._multichip_candidate == "multichip_bfp8_ccl_attention" and weight_name in {
+            "o_proj_decode",
+            "linear_out_decode",
+        }
+        ccl_bfp8 |= self._multichip_candidate == "multichip_bfp8_ccl_mlp" and weight_name == "mlp_down_decode"
+        if ccl_bfp8:
+            output = ttnn.typecast(output, ttnn.bfloat8_b)
+        if self._multichip_candidate == "multichip_preallocated_ccl" and decode:
+            role = "mlp" if weight_name == "mlp_down_decode" else "token_mixer"
+            buffers = self._ccl_buffers[role]
+            scattered = ttnn.reduce_scatter(
+                output,
+                dim=3,
+                num_links=1,
+                topology=TARGET_TOPOLOGY,
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                output_tensor=buffers["reduce_scatter"],
+            )
+            return ttnn.all_gather(
+                scattered,
+                dim=3,
+                num_links=1,
+                topology=TARGET_TOPOLOGY,
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                output_tensor=buffers["all_gather"],
+            )
+        if self._row_collective_mode == "reduce_scatter":
+            output = self._reduce_scatter(output)
+        else:
+            output = self._all_reduce(output)
+        return ttnn.typecast(output, ttnn.bfloat16) if ccl_bfp8 else output
+
+    def _distributed_rms_norm_decode(self, hidden_states, weight_name):
+        """Normalize a semantic hidden-width mesh shard without replicating it."""
+        stats = ttnn.rms_norm_pre_all_gather(hidden_states, dtype=ttnn.bfloat16)
+        gathered_stats = ttnn.all_gather(
+            stats,
+            dim=3,
+            num_links=1,
+            topology=TARGET_TOPOLOGY,
+            cluster_axis=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return ttnn.rms_norm_post_all_gather(
+            hidden_states,
+            gathered_stats,
+            epsilon=self.eps,
+            weight=self.weights[weight_name],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _gather_fractured_hidden(self, hidden_states):
+        return ttnn.all_gather(
+            hidden_states,
+            dim=3,
+            num_links=1,
+            topology=TARGET_TOPOLOGY,
+            cluster_axis=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def decode_forward_fractured(self, *, hidden_states, page_table, current_positions):
+        """Decode with a 1280-wide per-rank residual boundary.
+
+        The caller owns the fractured input contract. The returned tensor stays
+        fractured for the next decoder layer; comparison gathers belong in the
+        test harness outside the measured stack.
+        """
+        if hidden_states.shape[-1] != 5120 // TARGET_TP:
+            raise ValueError(f"fractured residual must have local width 1280, got {hidden_states.shape[-1]}")
+        residual = hidden_states
+        normalized = self._distributed_rms_norm_decode(residual, "input_norm_fractured")
+        consumer_input = self._gather_fractured_hidden(normalized)
+        previous_mode = self._row_collective_mode
+        self._row_collective_mode = "reduce_scatter"
+        try:
+            mixed = self._token_mixer_decode(consumer_input, page_table, current_positions)
+            residual = ttnn.add(residual, mixed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            normalized = self._distributed_rms_norm_decode(residual, "post_attention_norm_fractured")
+            consumer_input = self._gather_fractured_hidden(normalized)
+            mlp = self._mlp_decode(consumer_input)
+            return ttnn.add(residual, mlp, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        finally:
+            self._row_collective_mode = previous_mode
 
     def _mlp_decode(self, hidden_states):
+        if self._multichip_candidate == "multichip_packed_mlp":
+            packed = self._tp_linear(
+                hidden_states,
+                "mlp_gate_up_decode",
+                k=5120,
+                n=8704,
+                decode=True,
+                in0_block_w=4,
+            )
+            gate, up = ttnn.split(packed, (4352, 4352), dim=-1)
+            product = ttnn.multiply(ttnn.silu(gate), up)
+            return self._tp_linear(product, "mlp_down_decode", k=4352, n=5120, decode=True, row=True, in0_block_w=17)
         gate = self._tp_linear(
             hidden_states,
             "mlp_gate_decode",
@@ -475,8 +645,13 @@ class MultichipDecoder(OptimizedDecoder):
         )
         # The recurrent path uses independently sharded state matmuls; do not
         # propagate the projection's eight-core L1 width layout into them.
-        packed = ttnn.to_memory_config(packed, ttnn.DRAM_MEMORY_CONFIG)
+        if self._multichip_candidate != "multichip_linear_packed_l1":
+            packed = ttnn.to_memory_config(packed, ttnn.DRAM_MEMORY_CONFIG)
         mixed, z, beta_padded, decay_padded = ttnn.split(packed, (conv_width, value_width, 32, 32), dim=-1)
+        if self._multichip_candidate == "multichip_linear_packed_l1":
+            mixed, z, beta_padded, decay_padded = (
+                ttnn.to_memory_config(part, ttnn.DRAM_MEMORY_CONFIG) for part in (mixed, z, beta_padded, decay_padded)
+            )
         beta = beta_padded[..., :value_heads]
         decay = decay_padded[..., :value_heads]
 
@@ -702,7 +877,8 @@ class MultichipDecoder(OptimizedDecoder):
             compute_kernel_config=self.o_compute_kernel_config,
             in0_block_w=3,
         )
-        return ttnn.reshape(partial, (1, 1, self.batch, 5120), (1, 1, 32, 5120))
+        output_width = 5120 // TARGET_TP if self._row_collective_mode == "reduce_scatter" else 5120
+        return ttnn.reshape(partial, (1, 1, self.batch, output_width), (1, 1, 32, output_width))
 
     def _full_attention_prefill(self, hidden_states, page_table, current_positions):
         sequence = hidden_states.shape[2]

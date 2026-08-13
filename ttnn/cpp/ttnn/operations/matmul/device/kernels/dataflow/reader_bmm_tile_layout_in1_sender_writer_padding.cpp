@@ -677,5 +677,8 @@ void kernel_main() {
     cb_out.wait_front(
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
+    if constexpr (fuse_op_reduce_scatter) {
+        noc.async_atomic_barrier();
+    }
     noc.async_write_barrier();
 }
