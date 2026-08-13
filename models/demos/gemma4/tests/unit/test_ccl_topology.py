@@ -78,9 +78,18 @@ def test_ccl_topology_env_override_beats_device_count(monkeypatch):
 
 def test_ccl_async_env(monkeypatch):
     monkeypatch.delenv("GEMMA4_CCL_ASYNC", raising=False)
+    monkeypatch.delenv("GEMMA4_CCL_ASYNC_PREFILL", raising=False)
     assert ccl_async_enabled() is False
+    assert ccl_async_enabled(32) is False
+    assert ccl_async_enabled(2048) is True
+    monkeypatch.setenv("GEMMA4_CCL_ASYNC_PREFILL", "0")
+    assert ccl_async_enabled(2048) is False
+    monkeypatch.delenv("GEMMA4_CCL_ASYNC_PREFILL", raising=False)
     monkeypatch.setenv("GEMMA4_CCL_ASYNC", "1")
     assert ccl_async_enabled() is True
+    assert ccl_async_enabled(32) is True
+    monkeypatch.setenv("GEMMA4_CCL_ASYNC", "0")
+    assert ccl_async_enabled(2048) is False
 
 
 def test_fabric_router_clamps_wh_packet_bytes(monkeypatch):
