@@ -83,6 +83,6 @@ def main(fifo_size: int) -> int:
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        print(f"usage: {sys.argv[0]} <fifo_size_bytes>", file=sys.stderr)
+        print(f"Expected exactly one argument, got more.", file=sys.stderr)
         raise SystemExit(2)
     raise SystemExit(main(int(sys.argv[1])))
