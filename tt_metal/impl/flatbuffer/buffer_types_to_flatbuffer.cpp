@@ -4,7 +4,6 @@
 
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
-#include "impl/buffers/circular_buffer_config_impl.hpp"
 #include "lightmetal/lightmetal_capture.hpp"  // For LightMetalCaptureContext
 
 #include <vector>
@@ -73,36 +72,34 @@ flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
         return builder.CreateVector(std::vector<uint8_t>(set.begin(), set.end()));
     };
 
-    const auto& impl = config.impl();
-
     // Optional shadow buffer for dynamically allocated CBs.
     auto& ctx = LightMetalCaptureContext::get();
     auto shadow_buf_global_id_offset =
-        impl.shadow_global_buffer()
-            ? flatbuffer::CreateUint32Optional(builder, ctx.get_global_id(impl.shadow_global_buffer()))
+        config.shadow_global_buffer
+            ? flatbuffer::CreateUint32Optional(builder, ctx.get_global_id(config.shadow_global_buffer))
             : 0;
 
     auto globally_allocated_address =
-        impl.globally_allocated_address()
-            ? flatbuffer::CreateUint32Optional(builder, *impl.globally_allocated_address())
+        config.globally_allocated_address()
+            ? flatbuffer::CreateUint32Optional(builder, *config.globally_allocated_address())
             : 0;
 
     // Create the FlatBuffer object
     return flatbuffer::CreateCircularBufferConfig(
         builder,
-        impl.total_size(),
+        config.total_size(),
         globally_allocated_address,
-        create_fb_vec_of_structs(impl.data_formats(), flatbuffer::CBConfigDataFormat{}),
-        create_fb_vec_of_structs(impl.page_sizes(), flatbuffer::CBConfigPageSize{}),
-        create_fb_vec_of_structs(impl.tiles(), flatbuffer::CBConfigTile{}),
+        create_fb_vec_of_structs(config.data_formats(), flatbuffer::CBConfigDataFormat{}),
+        create_fb_vec_of_structs(config.page_sizes(), flatbuffer::CBConfigPageSize{}),
+        create_fb_vec_of_structs(config.tiles(), flatbuffer::CBConfigTile{}),
         shadow_buf_global_id_offset,
-        create_fb_vec_of_uint8(impl.buffer_indices()),
-        create_fb_vec_of_uint8(impl.local_buffer_indices()),
-        create_fb_vec_of_uint8(impl.remote_buffer_indices()),
-        impl.dynamic_cb(),
-        impl.max_size(),
-        impl.buffer_size(),
-        create_fb_vec_of_unpack_face_geometry(impl.unpack_face_geometry()));
+        create_fb_vec_of_uint8(config.buffer_indices()),
+        create_fb_vec_of_uint8(config.local_buffer_indices()),
+        create_fb_vec_of_uint8(config.remote_buffer_indices()),
+        config.dynamic_cb(),
+        config.max_size(),
+        config.buffer_size(),
+        create_fb_vec_of_unpack_face_geometry(config.unpack_face_geometry()));
 }
 
 // TODO: Opportunity to share with TTNN. This was straight up copied from tensor_spec_flatbuffer.cpp

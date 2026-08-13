@@ -28,7 +28,6 @@
 
 // Access to internal API: ProgramImpl::get_sem_base_addr, ProgramImpl::get_cb_size
 #include "impl/program/program_impl.hpp"
-#include "impl/buffers/circular_buffer_config_impl.hpp"
 
 namespace tt {
 enum class DataFormat : uint8_t;
@@ -117,7 +116,7 @@ TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
     actual_config.index(tt::CBIndex::c_16).set_page_size(cb_config.page_size).set_data_format(cb_config.data_format);
     actual_config.index(tt::CBIndex::c_24).set_page_size(cb_config.page_size).set_data_format(cb_config.data_format);
 
-    EXPECT_TRUE(actual_config.impl() == expected_config.impl());
+    EXPECT_TRUE(actual_config == expected_config);
 
     CreateCircularBuffer(program_, cr_set, actual_config);
 
@@ -141,8 +140,10 @@ TEST_F(MeshDeviceFixture, TestCreateCircularBufferWithMismatchingConfig) {
         CircularBufferConfig(cb_config.page_size, {{0, cb_config.data_format}}).set_page_size(1, cb_config.page_size));
 }
 
-// Verifies that converting DataType specs to DataFormat via datatype_to_dataformat_converter and constructing
-// CircularBufferConfig with the DataFormat ctor yields the expected formats/size. The DataType ctor is Impl-only.
+// Verifies that the DataType-based CircularBufferConfig constructor produces a config with identical state to the
+// tt::DataFormat-based constructor when the spec entries map to each other via datatype_to_dataformat_converter.
+// CircularBufferConfig::operator== covers total_size, globally_allocated_address, data_formats, page_sizes, tiles,
+// and shadow_global_buffer.
 TEST_F(MeshDeviceFixture, TestCircularBufferConfigConstructorWithDataTypeMatchesDataFormat) {
     CBConfig cb_config;
 
@@ -158,12 +159,12 @@ TEST_F(MeshDeviceFixture, TestCircularBufferConfigConstructorWithDataTypeMatches
     }
 
     CircularBufferConfig config_via_data_format(cb_config.page_size, data_format_spec);
-    CircularBufferConfig config_via_impl(CircularBufferConfigImpl(cb_config.page_size, data_type_spec));
+    CircularBufferConfig config_via_data_type(cb_config.page_size, data_type_spec);
 
-    EXPECT_EQ(config_via_data_format.impl(), config_via_impl.impl());
-    EXPECT_EQ(config_via_data_format.impl().total_size(), cb_config.page_size);
-    EXPECT_EQ(config_via_impl.impl().total_size(), cb_config.page_size);
-    EXPECT_EQ(config_via_data_format.impl().data_formats(), config_via_impl.impl().data_formats());
+    EXPECT_EQ(config_via_data_format, config_via_data_type);
+    EXPECT_EQ(config_via_data_format.total_size(), cb_config.page_size);
+    EXPECT_EQ(config_via_data_type.total_size(), cb_config.page_size);
+    EXPECT_EQ(config_via_data_format.data_formats(), config_via_data_type.data_formats());
 }
 
 TEST_F(MeshDeviceFixture, TensixTestCreateCircularBufferAtOverlappingIndex) {

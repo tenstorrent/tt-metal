@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "circular_buffer_config.hpp"
-#include "impl/buffers/circular_buffer_config_impl.hpp"
 
 #include <unordered_map>
 
@@ -35,18 +34,14 @@ void validate_unpack_face_geometry(uint32_t face_r_dim, uint32_t num_faces) {
 
 namespace tt::tt_metal {
 
-// ---------------------------------------------------------------------------
-// CircularBufferConfigImpl
-// ---------------------------------------------------------------------------
-
-CircularBufferConfigImpl::CircularBufferConfigImpl(
+// Static circular buffer spec
+CircularBufferConfig::CircularBufferConfig(
     uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec) :
     total_size_(total_size), globally_allocated_address_(std::nullopt) {
     this->set_config(data_format_spec);
 }
 
-CircularBufferConfigImpl::CircularBufferConfigImpl(
-    uint32_t total_size, const std::map<uint8_t, DataType>& data_type_spec) :
+CircularBufferConfig::CircularBufferConfig(uint32_t total_size, const std::map<uint8_t, DataType>& data_type_spec) :
     total_size_(total_size), globally_allocated_address_(std::nullopt) {
     std::map<uint8_t, tt::DataFormat> data_format_spec;
     for (const auto& [idx, dtype] : data_type_spec) {
@@ -55,18 +50,19 @@ CircularBufferConfigImpl::CircularBufferConfigImpl(
     this->set_config(data_format_spec);
 }
 
-CircularBufferConfigImpl::CircularBufferConfigImpl(uint32_t total_size) :
+// User is expected to use the builder here.
+CircularBufferConfig::CircularBufferConfig(uint32_t total_size) :
     total_size_(total_size), globally_allocated_address_(std::nullopt) {}
 
-CircularBufferConfigImpl::CircularBufferConfigImpl(
+// Dynamic circular buffer spec
+CircularBufferConfig::CircularBufferConfig(
     uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec, const Buffer& buffer) :
     total_size_(total_size) {
     this->set_globally_allocated_address(buffer);
     this->set_config(data_format_spec);
 }
 
-CircularBufferConfigImpl::CircularBufferConfigImpl(const CBDescriptor& descriptor) :
-    total_size_(descriptor.total_size) {
+CircularBufferConfig::CircularBufferConfig(const CBDescriptor& descriptor) : total_size_(descriptor.total_size) {
     TT_FATAL(
         !(descriptor.buffer && descriptor.tensor),
         "CBDescriptor cannot specify both buffer and tensor as the globally-allocated backing storage");
@@ -137,7 +133,8 @@ CircularBufferConfigImpl::CircularBufferConfigImpl(const CBDescriptor& descripto
     }
 }
 
-CircularBufferConfigImpl::CircularBufferConfigImpl(
+// For flatbuffer deserialization, set all private members.
+CircularBufferConfig::CircularBufferConfig(
     uint32_t total_size,
     std::optional<uint32_t> globally_allocated_address,
     const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& data_formats,
@@ -169,7 +166,7 @@ CircularBufferConfigImpl::CircularBufferConfigImpl(
     }
 }
 
-CircularBufferConfigImpl& CircularBufferConfigImpl::set_page_size(uint8_t buffer_index, uint32_t page_size) {
+CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, uint32_t page_size) {
     uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
     if (buffer_index > max_cbs - 1) {
         TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_cbs);
@@ -193,7 +190,7 @@ CircularBufferConfigImpl& CircularBufferConfigImpl::set_page_size(uint8_t buffer
     return *this;
 }
 
-CircularBufferConfigImpl& CircularBufferConfigImpl::set_total_size(uint32_t total_size) {
+CircularBufferConfig& CircularBufferConfig::set_total_size(uint32_t total_size) {
     if (dynamic_cb_) {
         TT_FATAL(
             total_size <= this->max_size_,
@@ -206,20 +203,20 @@ CircularBufferConfigImpl& CircularBufferConfigImpl::set_total_size(uint32_t tota
     return *this;
 }
 
-CircularBufferConfigImpl& CircularBufferConfigImpl::set_globally_allocated_address(const Buffer& buffer) {
+CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const Buffer& buffer) {
     return this->set_globally_allocated_address_and_total_size(buffer, this->total_size_);
 }
 
-CircularBufferConfigImpl& CircularBufferConfigImpl::set_globally_allocated_address(const MeshTensor& tensor) {
+CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const MeshTensor& tensor) {
     return set_globally_allocated_address(*tensor.mesh_buffer().get_reference_buffer());
 }
 
-CircularBufferConfigImpl& CircularBufferConfigImpl::set_globally_allocated_address_and_total_size(
+CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
     const MeshTensor& tensor, uint32_t total_size) {
     return set_globally_allocated_address_and_total_size(*tensor.mesh_buffer().get_reference_buffer(), total_size);
 }
 
-CircularBufferConfigImpl& CircularBufferConfigImpl::set_globally_allocated_address_and_total_size(
+CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address_and_total_size(
     const Buffer& buffer, uint32_t total_size) {
     if (not buffer.is_l1()) {
         TT_THROW("Only L1 buffers can have an associated circular buffer!");
@@ -228,17 +225,17 @@ CircularBufferConfigImpl& CircularBufferConfigImpl::set_globally_allocated_addre
     this->dynamic_cb_ = true;
     this->max_size_ = buffer.aligned_size_per_bank();
     this->buffer_size_ = buffer.aligned_size();
-    this->shadow_global_buffer_ = &buffer;
+    this->shadow_global_buffer = &buffer;
     this->set_total_size(total_size);
     return *this;
 }
 
-CircularBufferConfigImpl& CircularBufferConfigImpl::set_tile_dims(uint8_t buffer_index, const Tile& tile) {
+CircularBufferConfig& CircularBufferConfig::set_tile_dims(uint8_t buffer_index, const Tile& tile) {
     this->tiles_[buffer_index] = tile;
     return *this;
 }
 
-CircularBufferConfigImpl& CircularBufferConfigImpl::set_unpack_face_geometry(
+CircularBufferConfig& CircularBufferConfig::set_unpack_face_geometry(
     uint8_t buffer_index, uint32_t face_r_dim, uint32_t num_faces) {
     uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
     if (buffer_index > max_cbs - 1) {
@@ -255,123 +252,69 @@ CircularBufferConfigImpl& CircularBufferConfigImpl::set_unpack_face_geometry(
     return *this;
 }
 
-void CircularBufferConfigImpl::set_config(const std::map<uint8_t, tt::DataFormat>& data_format_spec) {
-    uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
-    if (data_format_spec.size() > max_cbs) {
-        TT_THROW(
-            "Only {} circular buffer slots are available but data formats are specified for {} indices",
-            max_cbs,
-            data_format_spec.size());
-    }
-
-    for (const auto& [buffer_index, data_format] : data_format_spec) {
-        if (buffer_index > max_cbs - 1) {
-            TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_cbs);
-        }
-        this->data_formats_[buffer_index] = data_format;
-        this->buffer_indices_.insert(buffer_index);
-        this->local_buffer_indices_.insert(buffer_index);
-    }
+const std::array<std::optional<Tile>, NUM_CIRCULAR_BUFFERS>& CircularBufferConfig::tiles() const {
+    return this->tiles_;
 }
 
-bool operator==(const CircularBufferConfigImpl& lhs, const CircularBufferConfigImpl& rhs) {
-    return lhs.total_size() == rhs.total_size() &&
-           lhs.globally_allocated_address() == rhs.globally_allocated_address() &&
-           lhs.data_formats() == rhs.data_formats() && lhs.page_sizes() == rhs.page_sizes() &&
-           lhs.tiles() == rhs.tiles() && lhs.unpack_face_geometry() == rhs.unpack_face_geometry() &&
-           lhs.shadow_global_buffer() == rhs.shadow_global_buffer();
+const std::array<std::optional<FaceGeometry>, NUM_CIRCULAR_BUFFERS>& CircularBufferConfig::unpack_face_geometry()
+    const {
+    return this->unpack_face_geometry_;
 }
 
-bool operator!=(const CircularBufferConfigImpl& lhs, const CircularBufferConfigImpl& rhs) { return !(lhs == rhs); }
+uint32_t CircularBufferConfig::total_size() const { return this->total_size_; }
 
-// ---------------------------------------------------------------------------
-// CircularBufferConfig shell
-// ---------------------------------------------------------------------------
-
-CircularBufferConfig::CircularBufferConfig(
-    uint32_t total_size, const std::map<uint8_t, tt::DataFormat>& data_format_spec) :
-    impl_(std::make_unique<CircularBufferConfigImpl>(total_size, data_format_spec)) {}
-
-CircularBufferConfig::CircularBufferConfig(uint32_t total_size) :
-    impl_(std::make_unique<CircularBufferConfigImpl>(total_size)) {}
-
-CircularBufferConfig::CircularBufferConfig(CircularBufferConfigImpl impl) :
-    impl_(std::make_unique<CircularBufferConfigImpl>(std::move(impl))) {}
-
-CircularBufferConfig::~CircularBufferConfig() = default;
-
-CircularBufferConfig::CircularBufferConfig(const CircularBufferConfig& other) :
-    impl_(other.impl_ ? std::make_unique<CircularBufferConfigImpl>(*other.impl_) : nullptr) {}
-
-CircularBufferConfig& CircularBufferConfig::operator=(const CircularBufferConfig& other) {
-    if (this == &other) {
-        return *this;
-    }
-    impl_ = other.impl_ ? std::make_unique<CircularBufferConfigImpl>(*other.impl_) : nullptr;
-    return *this;
+std::optional<uint32_t> CircularBufferConfig::globally_allocated_address() const {
+    return this->globally_allocated_address_;
 }
 
-CircularBufferConfig::CircularBufferConfig(CircularBufferConfig&& other) noexcept = default;
-CircularBufferConfig& CircularBufferConfig::operator=(CircularBufferConfig&& other) noexcept = default;
-
-CircularBufferConfigImpl& CircularBufferConfig::impl() {
-    TT_FATAL(impl_ != nullptr, "CircularBufferConfig is in a moved-from state.");
-    return *impl_;
+const std::unordered_set<uint8_t>& CircularBufferConfig::buffer_indices() const { return this->buffer_indices_; }
+const std::unordered_set<uint8_t>& CircularBufferConfig::local_buffer_indices() const {
+    return this->local_buffer_indices_;
+}
+const std::unordered_set<uint8_t>& CircularBufferConfig::remote_buffer_indices() const {
+    return this->remote_buffer_indices_;
 }
 
-const CircularBufferConfigImpl& CircularBufferConfig::impl() const {
-    TT_FATAL(impl_ != nullptr, "CircularBufferConfig is in a moved-from state.");
-    return *impl_;
+const std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS>& CircularBufferConfig::data_formats() const {
+    return this->data_formats_;
 }
 
-CircularBufferConfig& CircularBufferConfig::set_page_size(uint8_t buffer_index, uint32_t page_size) {
-    impl().set_page_size(buffer_index, page_size);
-    return *this;
+const std::array<std::optional<uint32_t>, NUM_CIRCULAR_BUFFERS>& CircularBufferConfig::page_sizes() const {
+    return this->page_sizes_;
 }
 
-CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const Buffer& buffer) {
-    impl().set_globally_allocated_address(buffer);
-    return *this;
-}
+bool CircularBufferConfig::dynamic_cb() const { return this->dynamic_cb_; }
 
-CircularBufferConfig& CircularBufferConfig::set_globally_allocated_address(const MeshTensor& tensor) {
-    impl().set_globally_allocated_address(tensor);
-    return *this;
-}
+uint32_t CircularBufferConfig::max_size() const { return this->max_size_; }
 
-CircularBufferConfig& CircularBufferConfig::set_tile_dims(uint8_t buffer_index, const Tile& tile) {
-    impl().set_tile_dims(buffer_index, tile);
-    return *this;
-}
+uint32_t CircularBufferConfig::buffer_size() const { return this->buffer_size_; }
 
-CircularBufferConfig& CircularBufferConfig::set_unpack_face_geometry(
-    uint8_t buffer_index, uint32_t face_r_dim, uint32_t num_faces) {
-    impl().set_unpack_face_geometry(buffer_index, face_r_dim, num_faces);
-    return *this;
-}
+uint32_t CircularBufferConfig::address_offset() const { return this->address_offset_; }
+
+void CircularBufferConfig::set_address_offset(uint32_t offset) { this->address_offset_ = offset; }
 
 CircularBufferConfig::Builder CircularBufferConfig::Builder::LocalBuilder(
     CircularBufferConfig& parent, uint8_t buffer_index) {
-    auto is_remote_index = parent.impl().remote_buffer_indices().contains(buffer_index);
+    auto is_remote_index = parent.remote_buffer_indices_.contains(buffer_index);
     if (is_remote_index) {
         TT_THROW("Buffer index {} is already marked as remote", buffer_index);
     }
     auto builder = Builder(parent, buffer_index);
-    parent.impl().insert_local_buffer_index(buffer_index);
+    parent.local_buffer_indices_.insert(buffer_index);
     return builder;
 }
 
 CircularBufferConfig::Builder CircularBufferConfig::Builder::RemoteBuilder(
     CircularBufferConfig& parent, uint8_t buffer_index) {
-    auto is_local_index = parent.impl().local_buffer_indices().contains(buffer_index);
+    auto is_local_index = parent.local_buffer_indices_.contains(buffer_index);
     if (is_local_index) {
         TT_THROW("Buffer index {} is already marked as local", buffer_index);
     }
-    if (!parent.impl().remote_buffer_indices().contains(buffer_index)) {
-        TT_FATAL(parent.impl().remote_buffer_indices().empty(), "Can only specify one remote buffer index per config");
+    if (!parent.remote_buffer_indices_.contains(buffer_index)) {
+        TT_FATAL(parent.remote_buffer_indices_.empty(), "Can only specify one remote buffer index per config");
     }
     auto builder = Builder(parent, buffer_index);
-    parent.impl().insert_remote_buffer_index(buffer_index);
+    parent.remote_buffer_indices_.insert(buffer_index);
     return builder;
 }
 
@@ -381,16 +324,16 @@ CircularBufferConfig::Builder::Builder(CircularBufferConfig& parent, uint8_t buf
     if (buffer_index > max_cbs - 1) {
         TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_cbs);
     }
-    parent_.impl().insert_buffer_index(buffer_index_);
+    parent_.buffer_indices_.insert(buffer_index_);
 }
 
 const CircularBufferConfig::Builder& CircularBufferConfig::Builder::set_data_format(tt::DataFormat data_format) const {
-    parent_.impl().set_data_format(buffer_index_, data_format);
+    parent_.data_formats_[buffer_index_] = data_format;
     return *this;
 }
 
 const CircularBufferConfig::Builder& CircularBufferConfig::Builder::set_total_size(uint32_t total_size) const {
-    parent_.impl().set_total_size(total_size);
+    parent_.set_total_size(total_size);
     return *this;
 }
 
@@ -412,7 +355,32 @@ CircularBufferConfig::Builder CircularBufferConfig::remote_index(uint8_t buffer_
     return Builder::RemoteBuilder(*this, buffer_index);
 }
 
-bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs) { return lhs.impl() == rhs.impl(); }
+void CircularBufferConfig::set_config(const std::map<uint8_t, tt::DataFormat>& data_format_spec) {
+    uint32_t max_cbs = tt::tt_metal::MetalContext::instance().hal().get_arch_num_circular_buffers();
+    if (data_format_spec.size() > max_cbs) {
+        TT_THROW(
+            "Only {} circular buffer slots are available but data formats are specified for {} indices",
+            max_cbs,
+            data_format_spec.size());
+    }
+
+    for (const auto& [buffer_index, data_format] : data_format_spec) {
+        if (buffer_index > max_cbs - 1) {
+            TT_THROW("Buffer index ({}) exceeds max number of circular buffers per core ({})", buffer_index, max_cbs);
+        }
+        this->data_formats_[buffer_index] = data_format;
+        this->buffer_indices_.insert(buffer_index);
+        this->local_buffer_indices_.insert(buffer_index);
+    }
+}
+
+bool operator==(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs) {
+    return lhs.total_size() == rhs.total_size() &&
+           lhs.globally_allocated_address() == rhs.globally_allocated_address() &&
+           lhs.data_formats() == rhs.data_formats() && lhs.page_sizes() == rhs.page_sizes() &&
+           lhs.tiles() == rhs.tiles() && lhs.unpack_face_geometry() == rhs.unpack_face_geometry() &&
+           lhs.shadow_global_buffer == rhs.shadow_global_buffer;
+}
 
 bool operator!=(const CircularBufferConfig& lhs, const CircularBufferConfig& rhs) { return !(lhs == rhs); }
 
