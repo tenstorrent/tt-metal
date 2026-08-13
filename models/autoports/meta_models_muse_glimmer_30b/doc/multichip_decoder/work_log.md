@@ -633,7 +633,8 @@ become active again. Try resetting the board.
   --- tt::tt_metal::MetalContext::~MetalContext()
 ```
 
-Seen three times (18:48, 19:52 and 22:05), every time closing the 1x4 `FABRIC_1D_RING` mesh
+Seen three times (18:48, 19:52 and 22:04 — the abort timestamps, from each run's
+`watcher_run.log`), every time closing the 1x4 `FABRIC_1D_RING` mesh
 with no submesh and no second mesh in the process -- so it is *not* the
 1x1-after-1x4 interaction documented in `test_multichip_vs_single_chip.py`, which
 an earlier version of this log wrongly conflated with it. It does not
@@ -651,7 +652,10 @@ have produced its own artifact.
 The comparison module is deliberately not in that run. It opens a 1x1 mesh, and
 opening one shortly after a `FABRIC_1D_RING` 1x4 mesh has closed intermittently
 times out on an Ethernet core (*"Timed out while waiting for active ethernet core
-29-25 to become active again"*) and costs a `tt-smi -r`; it happened twice, once
+29-25 to become active again"*) and costs a `tt-smi -r`. That is a *different*
+signature from the teardown abort above even though the message is the same: this
+one fires when a 1x1 mesh **opens** after a 1x4 has closed, the other when the 1x4
+**closes**. It happened twice, once
 in the watcher chain and once when the two correctness modules shared a pytest
 invocation. Every op it dispatches is covered by the same layer on the same mesh
 in the 31 nodes above.
@@ -1184,16 +1188,15 @@ never ran.
 ## 18. Review round 8: one contradiction left, and two more gate holes
 
 Round 8 returned a single required item and confirmed the rest of the stage. The
-item was §9.2 still enumerating "three more resets … after each of the **two**
-watcher runs' teardown aborts" while §9.4, the README and the contract had all
-been raised to three. Round 7 had raised the count in three documents; §17.5 said
+item was §9.2 still enumerating the resets over one fewer watcher abort than had
+happened, while §9.4, the README and the contract had all been raised to three. Round 7 had raised the count in three documents; §17.5 said
 "Both fixed"; a fourth location existed and nobody had looked for it.
 
 That is now the second time a count was propagated by hand and missed a site, so
 it stopped being propagated by hand. `bench/check_reported_figures.py` derives the
 occurrence count once — from the timestamps §9.4 enumerates — and compares it
 against every statement of it in the README, this log and
-`context_contract.json`. Reverting any one document to "two" fails the gate.
+`context_contract.json`.
 
 The same pass added two more derivations that had been left to prose: each PCC
 population's **worst** value (the counts, bars and total were already checked; the
@@ -1225,3 +1228,47 @@ in the tree, both named in this log and in §17.5, and by the delegation itself
 failing if the named check disappears — but "the marker names a check that
 verifies *these* figures" is not mechanically established, and a future stage that
 adds delegations should know that.
+
+
+## 19. Review round 9: the check that claimed more than it did
+
+Round 9 returned one required item, and it was §18's own closing sentence. §18
+said the teardown count was pinned everywhere and that reverting any one document
+would fail the gate. The reviewer planted exactly that in §9.2 — the site round 8
+had found stale — and the gate stayed green.
+
+Two things were wrong. The check matched only `(from|has|Seen) N (occurrences|
+times)`, which in this log is the *same sentence the count is derived from*, so
+the work-log comparison was tautological; and §9.2 states the count in two other
+shapes — once per watcher abort, and once as a reset total that is one more than
+the abort count — that nothing matched. Worse, every one of
+these phrases is hard-wrapped in these documents, so a pattern written with plain
+spaces could not match across the line break — which is why the first attempt at
+the fix still missed §9.2.
+
+The check now matches all three shapes, is whitespace-tolerant, and also verifies
+the word in front of the timestamp list against the list itself, so the derivation
+sentence cannot drift from its own evidence either. Four plants, all caught:
+
+| planted | caught |
+| --- | --- |
+| §9.2's per-watcher-abort enumeration, lowered by one | ✅ |
+| §9.2's reset total, lowered by one | ✅ |
+| §9.4's count word raised by one with the timestamp list unchanged | ✅ (two failures) |
+| the README's statement of the count, lowered by one | ✅ |
+
+This is the third round in which the fix landed but the *account* of the fix
+overstated it, and the second in which the overstatement was itself the finding.
+The pattern is specific and worth naming for whoever maintains this next: a claim
+about what a checker covers is a claim about code, and the only way this stage has
+ever established one is by planting the defect and watching it fail. Every
+coverage sentence in §15 through §19 now has a planted-defect row behind it.
+
+Two smaller round-9 points, both fixed: §9.4's third timestamp was 22:05, the
+wedged process's start, where the other two are abort times — it is now 22:04 from
+`logs/watcher_run.log`, and the list is labelled as abort timestamps, which
+matters because the gate now derives the count from it. And §9.2 and §9.4 gave two
+reset ledgers that could not be reconciled: the 1x1-after-1x4 timeout in §9.4 and
+the teardown abort in §9.2 print the *same* ethernet-core message but are
+different events — one fires when a 1x1 mesh opens after a 1x4 has closed, the
+other when the 1x4 itself closes. §9.4 now says so.

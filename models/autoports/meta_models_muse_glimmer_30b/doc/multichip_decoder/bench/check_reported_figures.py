@@ -577,20 +577,40 @@ def main() -> int:
     # Round 8: work_log 9.4 said three, 9.2 said two.  The count is derived from
     # the timestamps 9.4 enumerates and compared against every document that
     # states it, so a future occurrence has one place to land.
+    words = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
     log_text = WORK_LOG.read_text()
-    occurrences = len(re.search(r"Seen three times \(([^)]+)\)", log_text).group(1).split(" and ")[0].split(",")) + 1
-    words = {"two": 2, "three": 3, "four": 4, "five": 5}
+    # The timestamps §9.4 enumerates are the source of truth; the word in front
+    # of them is checked against them too, so neither can drift alone.
+    listed = re.search(r"Seen (\w+) times \(([^)]+)\)", log_text)
+    stamps = re.findall(r"\d{2}:\d{2}", listed.group(2))
+    occurrences = len(stamps)
+    failures.check(
+        "work log: 'Seen N times' matches the timestamps listed", words[listed.group(1)], occurrences, exact=True
+    )
+    # Round 9: the first version of this check matched only the sentence it
+    # derived from, so §9.2's own statement of the count -- the site round 8
+    # found stale -- was still hand-maintained.  Every phrasing either document
+    # uses is matched now, including the reset total, which is one more than the
+    # abort count (the extra reset is the two-modules-in-one-invocation case).
+    # ``\s+`` throughout: these documents are hard-wrapped, so any of these
+    # phrases can straddle a newline -- which is why round 9's plant of §9.2
+    # survived the first version of this check.
+    patterns = (
+        (r"(?:from|has|Seen)\s+(\w+)(?:\s+more)?\s+(?:occurrences|times)", 0),
+        (r"each\s+of\s+the\s+\**(\w+)\**\s+watcher\s+runs'\s+teardown\s+aborts", 0),
+        (r"(\w+)\s+more\s+resets\s+were\s+needed", 1),
+    )
     for doc_name, text in (
         ("README", README.read_text()),
         ("work log", log_text),
         ("contract", CONTRACT.read_text()),
     ):
-        stated = {
-            words[w]
-            for w in re.findall(r"(?:from|has|Seen) (two|three|four|five)(?: more)? (?:occurrences|times)", text)
-        }
-        for count in sorted(stated):
-            failures.check(f"{doc_name}: teardown occurrence count", count, occurrences, exact=True)
+        for pattern, offset in patterns:
+            for word in re.findall(pattern, text):
+                if word.lower() in words:
+                    failures.check(
+                        f"{doc_name}: teardown count '{word}'", words[word.lower()], occurrences + offset, exact=True
+                    )
 
     # ---- every figure a doc attributes to a log is in that log ---------------
     # The module's own docstring tables cite logs too, and round 5 found a stale
