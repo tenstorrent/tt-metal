@@ -20,7 +20,8 @@
     "31285846176",
     "31362719766",
     "31229899895",
-    31566814739
+    31566814739,
+    31596449343
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -39,7 +40,8 @@
     "galaxy-demo-tests.yaml",
     "t3000-e2e-tests.yaml",
     "galaxy-e2e-tests.yaml",
-    "runtime-integration-tests.yaml"
+    "runtime-integration-tests.yaml",
+    "models-t2-unit-tests.yaml"
   ],
   "in_flight_prs": [
     {
@@ -122,23 +124,29 @@
       "number": 52705
     },
     {
-      "number": null,
+      "number": 52807,
       "branch": "silencer/fabric-1d-rx-log-noise",
       "pattern": "log_info -> log_debug for per-iteration Rx launch/status tracing in test_basic_1d_fabric.cpp (>2200/3675 info lines in sample)",
       "source_run_id": "31229899895",
       "source_job_id": "93040818652",
-      "status": "pr-opened-pending-ci",
-      "note": "PR just created this run (draft, safeoutputs create_pull_request); dispatched galaxy-e2e-tests on the branch for validation. Number to be filled in once known from GitHub."
+      "status": "resolved",
+      "note": "PR #52807 fully resolved: validation run 31476262556 (galaxy-e2e-tests) job 93734020681 (Galaxy Fabric unit tests) completed/success. Re-grepped test-execution logs for 'Rx Launched'/'Checking Status of Rx': 0 occurrences confirmed, while test_basic_1d_fabric.cpp still emits 3685 other info lines in-window (file exercised, only targeted lines silenced). Unrelated multi-mesh job in same run failed, not related to this fix. Outcome commented and marked ready for review (2026-08-13)."
     },
     {
       "branch": "silencer/eth-buffer-movement-log-noise",
+      "number": 52996,
+      "status": "pr_opened_no_ci_run_found",
+      "note": "PR #52996 opened (draft, +7/-7, 2 files). No workflow_dispatch run found on branch silencer/eth-buffer-movement-log-noise for runtime-integration-tests.yaml (0 results) as of this check; only generic action_required checks (merge-gate, sanity-tests-pr, pr-gate, all-static-checks) are visible via get_check_runs, none of which exercise the demoted code. mergeable_state=behind. Left as draft pending validation dispatch; will re-check next run rather than re-dispatching now (dispatch budget reserved for this run's new Phase B target)."
+    },
+    {
+      "branch": "silencer/groupnorm-unused-var-warning",
       "number": null,
-      "status": "pr_opened",
-      "note": "Demoted 7 log_info->log_debug in tests/tt_metal/tt_metal/eth/{test_buffer_movement_kernels.cpp,test_erisc_app_direct_send.cpp}; 99.6% of spdlog info lines in job 94034078128 (run 31566814739, runtime-integration-tests) were these per-iteration messages. Awaiting PR number assignment / CI validation."
+      "status": "pr_opened_pending_ci",
+      "note": "Removed unused out_block_hw_actual local var (3 call sites) in ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/compute/groupnorm.cpp -- GCC -Wunused-but-set-variable fired 18x in one sampled models-t2-unit-tests job (run 31596449343, job 94201855345, SDXL base unet-loop unit tests [wh_n150]). Dispatched models-t2-unit-tests (ref=silencer/groupnorm-unused-var-warning, model=sdxl) for validation; awaiting PR number assignment and CI outcome."
     }
   ],
   "backlog_cursor": {
     "next_category": 6,
-    "note": "From histogram of run 30737004712 (models-t3-unit-tests, jobs 91469569372/91469569414): top LLRuntime info lines (Watcher attached/detached device) targeted this run via silencer/demote-watcher-attach-detach-log. Remaining candidates from same histogram not yet targeted: info/Metal 'Watcher checking device {}' (watcher_device_reader.cpp:412, 156x) - lower priority, only fires when watcher enabled and file redirected; info/Metal 'Fabric initialized on Device' family already covered by PR #51849; info/LLRuntime 'Watcher thread stopped watching...'/'Watcher server initialized' fire only a handful of times per job (18x) - not yet worth a fix. warning/Op mem-config-mismatch already covered by PR #51894. Next run: sample a workflow not yet in workflows_sampled, or re-check in-flight PR CI outcomes. | 2026-08-07: sampled blackhole-sanity-tests.yaml run 31197186569 (job 92937599024, sdpa nightly tests QB2); job failure was a genuine infra/GitHub job timeout (AI job summary category infra:timeout), not a logging/noise issue - no new candidate found there. Phase A this run: PR #52249 validation run 31047265933 came back failure (unrelated MeshTensorDeviceTest.UniformCopyToHost_ReusesPinnedMemoryCacheEntries, not the mock-cluster-descriptor line touched); commented outcome and marked ready for review, no follow-up fix pushed. | 2026-08-09: root-caused and fixed all_gather deprecated-args warning (1376x in DeepSeek v3 demo job sample, run 31285846176) via silencer/deprecate-all-gather-legacy-args-in-sampling. ~13 other production call sites (gpt_oss*, gemma4, minimax_m3, mistral_24b, llama3_70b_galaxy, z_image_turbo, sampling_1d.py) still pass these deprecated args -- candidates for a follow-up PR if this one is well received."
+    "note": "2026-08-13: Phase A resolved PR #52807 (fabric Rx-log demotion) -- validation run 31476262556 job 93734020681 success, re-grep confirmed 0 occurrences of demoted lines; commented + marked ready for review. PR #52996 (eth-buffer-movement) still has no findable CI run on runtime-integration-tests.yaml for its branch; left as draft with an interim comment, will re-check next run. Phase B: sampled models-t2-unit-tests.yaml run 31596449343 job 94201855345 (SDXL base unet-loop unit tests wh_n150) -- spdlog histogram was mostly benign UMD/Op lifecycle lines (30x info/UMD, 8x throttle-matmul), but a genuine compiler warning '-Wunused-but-set-variable' for out_block_hw_actual in groupnorm.cpp fired 18x. Fixed via silencer/groupnorm-unused-var-warning (dead-variable removal, 3 call sites); dispatched models-t2-unit-tests(sdxl) for validation. Next run: check this PR's CI outcome, and continue rotating through un-sampled workflows (models-t1-e2e-tests, models-t3-*, single-card-*, t3000-*, tt-metal-l2-nightly, perf-device-models, runtime-perf-tests, runtime-sanity-tests, pipeline-select-profiler not yet in workflows_sampled)."
   }
 }
