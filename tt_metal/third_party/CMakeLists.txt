@@ -21,6 +21,16 @@ endif()
 # Avoid hard failures on hosts without invariant TSC.
 set(TRACY_TIMER_FALLBACK ON)
 
+# Tracy's CMakeLists unconditionally probes for AMD's rocprofiler-sdk at a hardcoded
+# /opt/rocm path and, when it is found, compiles TracyClient with -DTRACY_ROCPROF and
+# links rocprofiler-sdk into it. That makes the artifact depend on whether the *build
+# host* happens to have ROCm installed -- and on such hosts the build fails outright,
+# because Tracy's own TracyRocprof.cpp does not compile against its TracyProfiler.hpp
+# (it calls the 8-argument AllocSourceLocation overload with 7 arguments).
+# tt-metal profiles Tenstorrent hardware, not AMD GPUs, so keep the probe from ever
+# succeeding. This makes the build reproducible across hosts regardless of ROCm.
+set(CMAKE_DISABLE_FIND_PACKAGE_rocprofiler-sdk ON)
+
 add_subdirectory(tracy)
 
 # TracyClient is linked unconditionally by libtt_metal and several installed tools. With
