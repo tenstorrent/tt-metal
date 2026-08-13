@@ -198,13 +198,21 @@ inline bool write_barrier_bounded(
 //   drisc.elf: segment[0] [0x6660,+0x2da8) overflows region:0 limit of 0x2c00 bytes
 //
 // 0x2da8 = 11,688 B against an 11,264 B limit -- 424 B over. Each knob fit alone; together they did not, and
-// the plots need both. Three things fix it, and they are all here rather than in a comment elsewhere because
-// the next person to add a counter will re-introduce the problem otherwise:
-//   1. `static noinline` => exactly ONE copy of the read/accumulate body, not one per call site.
-//   2. A FLAT array indexed at runtime => one loop body, not 8 unrolled MMIO address computations.
-//   3. The register ids in a runtime-indexed table => the loop is over data, not over code.
-// `static` also means that when kNocFootprint == 0 nothing references these and the compiler discards them,
-// so the OFF build is unchanged -- which is the property the whole feature is gated on.
+// the plots need both. What fixed it was DATA STRUCTURE, and only data structure:
+//   1. A FLAT array indexed at runtime => one loop body, not 8 unrolled MMIO address computations.
+//   2. The register ids in a runtime-indexed table => the loop is over data, not over code.
+//   3. Taking the window base from life[] before sampling => no 64 B stack snapshot per sweep.
+// `static` (file scope, not lambdas) is what lets these be ONE body with a state pointer rather than a capture
+// set replicated per site, and it means that when kNocFootprint == 0 nothing references them and the compiler
+// discards them -- so the OFF build is unchanged, which is what the whole feature is gated on.
+//
+// DO NOT ADD `noinline` HERE. It was tried and it made things WORSE: with these two functions and
+// self_mark_w0 marked noinline the build was 11,216 B, and simply deleting all three attributes took it to
+// 11,124 B -- 92 B SMALLER, and 104 B smaller with the per-sweep series enabled. GCC's own inlining decisions
+// beat the hint at -Os here. The attribute is genuinely honoured (nm shows real out-of-line symbols), so this
+// is not a case of it being ignored; it is a case of the hint being wrong. Outlining also does nothing for
+// SMALL bodies: collapsing 47 inlined get_timestamp() call sites into one noinline wrapper changed the ELF by
+// exactly 0 bytes, because a call sequence costs what the ~3 inlined instructions did.
 //
 // SAMPLED ONCE PER SWEEP INTO 64-BIT SOFTWARE ACCUMULATORS, and never differenced end to end. The NIU
 // counters are 32 bits wide and they WRAP. A filler pulls one whole 10,496 B span per core per sweep -- 164
@@ -258,7 +266,7 @@ struct NocFpState {
 // NOC_INDEX; a mover does both on NOC_INDEX -- but that is the thing being verified, not an assumption worth
 // baking in. The zero columns ARE the measurement: a non-zero filler read count on NoC 0 would mean the
 // read/write NoC split is not doing what the code claims.
-static __attribute__((noinline)) void nf_sample_regs(NocFpState* s) {
+static void nf_sample_regs(NocFpState* s) {
     // Runtime-indexed so the eight loads collapse into one loop body. NOC_STATUS_READ_REG resolves to a load
     // from (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_STATUS(id) -- this core's own memory-mapped NIU register
     // block -- so it issues NO NoC transaction and the instrument cannot perturb what it measures.
@@ -286,7 +294,7 @@ static __attribute__((noinline)) void nf_sample_regs(NocFpState* s) {
 // the sample falls on cannot change a byte total; taking it before means the window's DURATION is measured
 // over sweeps rather than over sweeps-plus-whatever-pace-trailed-the-last-one, which is the honest
 // denominator for a MB/s figure.
-static __attribute__((noinline)) void nf_sweep_end(
+static void nf_sweep_end(
     NocFpState* s, uint32_t sweep, uint64_t t_sweep0, uint32_t sweep_cyc, bool did_work) {
     // ORDER IS THE TRICK, and it is what removes a whole 64 B stack snapshot. On entry life[] still holds the
     // through-PREVIOUS-sweep totals, so a window opening now can take its base straight from life[] -- no
@@ -463,18 +471,22 @@ void kernel_main() {
     constexpr uint32_t kNocFootprint = get_compile_time_arg_val(37);
     // PER-SWEEP SERIES (the plot source), separate from the out[] totals above and currently FORCED OFF.
     //
-    // The totals fit; the per-sweep PP_DATA sample does NOT. Measured on the DRISC code region, all with
-    // zones + footprint both on (limit 11,264 B):
-    //   ablation removed, no series ....... see FINDINGS N+43   <- this build
-    //   + series, first cut ............... 11,508  (244 over)
-    //   + shared self_mark_w0 prologue .... 11,348  ( 84 over)
-    //   + constexpr index table ........... 11,332  ( 68 over)
-    //   + noinline on the prologue ........ 11,332  (no effect: GCC ignores the attribute there)
-    // 68 B short with no candidate left that does not either degrade a REPORTED number into a silent zero
-    // (dropping the posted-write check or the instrument-cost timing) or risk silent truncation (packing the
-    // four 32-bit deltas into two 16-bit pairs). So the emitter is kept, compiled out, and the shortfall is a
-    // documented number rather than a broken build -- see FINDINGS N+43 for the options.
-    constexpr uint32_t kNocFpSeries = 0;
+    // 1 = also ship a per-sweep PP_DATA sample (the plot source) on top of the out[] totals. It FITS, but only
+    // just, and the road there is worth keeping because every intuition about it was wrong. All measured on the
+    // DRISC code region with zones + footprint both on, limit 11,264 B:
+    //   series, first cut ..................... 11,508  (244 over)
+    //   + shared self_mark_w0 prologue ........ 11,348  ( 84 over)  -- real win, -160 B
+    //   + constexpr index table ............... 11,332  ( 68 over)  -- marginal, -16 B
+    //   + noinline on the prologue ............ 11,332  ( 68 over)  -- ZERO effect
+    //   + noinline wrapper on get_timestamp ... 11,332  ( 68 over)  -- ZERO effect, 47 sites collapsed
+    //   - DELETE all three noinline attributes  11,228  (36 SPARE)  -- -104 B, the thing that actually fit it
+    // So the sample fits because three `noinline` hints were REMOVED, not added. Nothing had to be sacrificed:
+    // the posted-write validation and the instrument-cost timing both stay, and the four deltas stay 32-bit
+    // (packing them into 16-bit pairs would have risked silent truncation on a wider filler slice).
+    //
+    // 36 B of headroom is not much. Before adding anything here, re-measure -- and prefer restructuring data
+    // over hinting at the inliner, which is the one lesson this whole exercise supports.
+    constexpr uint32_t kNocFpSeries = 1;
     constexpr bool kSelfPhases = kSelfZones != 0 && kSelfDetail != 0;
     // The self frame lives in staging slot kNStage -- one PAST every slot the drain pipeline can touch. The
     // host reserves it by passing (nstage - 1) as kNStage when this is on, so DRISC L1 does not grow and the
@@ -1070,7 +1082,7 @@ void kernel_main() {
     // the call sites keep their own `if constexpr (kSelfPhases)` / `if (self_on)` guards, so a call happens only
     // when a marker is actually being written -- the rare path. What it buys is large: this prologue calls
     // self_publish(), so inlining it at ~10 sites replicated the whole publish path ~10 times.
-    auto self_mark_w0 = [&](uint32_t w0, uint64_t ts) __attribute__((noinline)) -> bool {
+    auto self_mark_w0 = [&](uint32_t w0, uint64_t ts) -> bool {
         if constexpr (kSelfZones == 0) {
             (void)w0;
             (void)ts;
