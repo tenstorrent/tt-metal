@@ -436,11 +436,20 @@ What that changes about how you work:
 Because the build happens elsewhere, a compiler diagnostic names the file as `/work/...` while you
 edit it under the workspace root. Same file, different prefix.
 
-### Three things about this build you cannot find out except by failing
+### Four things about this build you cannot find out except by failing
 
 Each of these has already cost a whole build cycle in an earlier run of this workflow, and none of
 them is discoverable from the source you are reading.
 
+- **A green build says nothing about your kernel includes.** Device kernels are JIT-compiled on the
+  card at first use, so the host compile never opens them. A header your kernel `#include`s that you
+  did not copy into the port builds perfectly and then fails *every* in-scope case at runtime with
+  `No such file or directory`. This has happened: `writer_untilize_interleaved.cpp` includes
+  `rm_shard_split.h`, which lives in the generator under `common/templates/` rather than beside the
+  op's own kernels, and one missing file cost all 112 in-scope cases. Before you build, read every
+  `#include` in every kernel you copied and confirm each one either resolves inside tt-metal or has
+  been copied next to your kernels. `codegen/kernels/*.h` is already in the CMake glob, so copying it
+  there is the whole fix.
 - **`-Werror` is on.** An unused parameter or an unused local is a hard error, not a warning. If you
   leave a parameter unused because the path that needed it is not written yet, omit the name or cast
   it to `void`.
