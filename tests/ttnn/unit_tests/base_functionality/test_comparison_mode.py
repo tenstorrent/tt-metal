@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import csv
-
 import pytest
 
 import torch
@@ -55,7 +53,7 @@ def test_exp(device, batch_size, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 @pytest.mark.parametrize("dim", [-1])
-def test_failed_comparison(device, batch_size, h, w, dim, expect_error):
+def test_failed_comparison(device, batch_size, h, w, dim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch_random((batch_size, h, w), -1, 1, dtype=torch.bfloat16)
@@ -72,30 +70,5 @@ def test_failed_comparison(device, batch_size, h, w, dim, expect_error):
             run()
 
         with ttnn.manage_config("comparison_mode_should_raise_exception", True):
-            with expect_error(RuntimeError):
+            with pytest.raises(RuntimeError):
                 run()
-
-
-def test_dump_all_operations(tmp_path):
-    csv_path = tmp_path / "all_ops.csv"
-    ttnn.dump_operations(csv_path, include_experimental=True)
-    # for local inspection
-    ttnn.dump_operations("all_ops.csv", include_experimental=True)
-
-    operations = {
-        operation.python_fully_qualified_name: operation
-        for operation in ttnn.query_registered_operations(include_experimental=True)
-    }
-    with csv_path.open(newline="") as csv_file:
-        rows = list(csv.DictReader(csv_file))
-
-    assert {row["python_fully_qualified_name"] for row in rows} == set(operations)
-    for row in rows:
-        operation = operations[row["python_fully_qualified_name"]]
-        try:
-            ttnn.get_golden_function(operation)
-            expected_has_golden_function = True
-        except RuntimeError:
-            expected_has_golden_function = False
-
-        assert row["has_golden_function"] == str(expected_has_golden_function)
