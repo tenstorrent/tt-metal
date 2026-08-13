@@ -258,6 +258,8 @@ class TtPrefillRuntime:
         skip_lm_head: bool = True,
         get_last_token: int = -1,
         request_id: int = -1,  # accepted for the common-runner contract; single-request prefill ignores it
+        d2h_service=None,  # accepted for the common-runner contract; this runtime uses host-callback LayerAcks
+        record_dev=None,  # accepted for the common-runner contract; the D1H record path is unused here
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user ``slot_id``'s slice of the KV cache (self-owned or the engine's
         ``kv_caches``). Returns None (skip_lm_head) — the populated cache is the output.
@@ -273,6 +275,11 @@ class TtPrefillRuntime:
         they are embedded here. Non-first ranks receive activations over D2D already embedded.
         If a LayerAck channel is registered, the model bumps it once per layer via ``on_layer_complete``.
         """
+        if d2h_service is not None:
+            raise NotImplementedError(
+                "GPT-OSS prefill emits layer acks via set_layer_ack_channel, not the D2H path; "
+                "run with PREFILL_ENABLE_LAYER_ACK=0 or wire the D2H ack into this runtime."
+            )
         assert self.model_built, "build the model before prefill_chunk()"
         kv = self._resolve_kv(kv_caches)
         assert 0 <= slot_id < self.config.num_users, f"slot_id {slot_id} out of range [0, {self.config.num_users})"
