@@ -42,14 +42,20 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
-    MATH_OP,
     NUM_FACES,
+    NUM_FACES_C_DIM,
+    NUM_FACES_R_DIM,
     TEST_FACE_DIMS,
     TILE_COUNT,
     TYPECAST_FORMATS,
     UNPACKER_ENGINE_SEL,
+    TemplateParameter,
 )
-from helpers.tile_constants import MAX_NUM_FACES
+from helpers.tile_constants import (
+    MX_SUPPORTED_TILE_SIZES,
+    SUPPORTED_TILE_SIZES,
+)
+from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 
@@ -69,11 +75,36 @@ SFPU_UNARY_FORMATS = input_output_formats(
     ]
 )
 
+# Extra L1 storage formats from the Tensix Formats specification. SFPU never
+# computes in an MX encoding: the unpacker converts each of these to a native
+# Float16_b register value, and the packer converts the result back to L1.
+# Tf32 similarly occupies Float32 containers in Dest, so it is forced to the
+# 32-bit Dest mode by generate_sfpu_unary_combinations().
+SFPU_PARITY_L1_FORMATS = input_output_formats(
+    [
+        DataFormat.Tf32,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
+        DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
+    ],
+    same=True,
+)
+SFPU_PARITY_FLOAT_FORMATS = SFPU_UNARY_FORMATS + SFPU_PARITY_L1_FORMATS
+
 # The trigonometry / inverse-hyperbolic transcendentals. Float-only (they share the
 # SFPU_UNARY_FORMATS set), each with its own safe input domain (see prepare_trig_inputs).
 TRIGONOMETRY_OPS = [
     MathOperation.Sin,
     MathOperation.Cos,
+    MathOperation.Tan,
+    MathOperation.Atan,
+    MathOperation.Asin,
+    MathOperation.Acos,
+    MathOperation.Sinh,
+    MathOperation.Cosh,
     MathOperation.Acosh,
     MathOperation.Asinh,
     MathOperation.Atanh,
@@ -250,7 +281,7 @@ def prepare_inputs_for_operation(
         max_val = finfo.max / 2
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
-    elif mathop == MathOperation.Sqrt:
+    elif mathop in (MathOperation.Sqrt, MathOperation.SqrtCustom):
         # Scale to positive range using log-uniform distribution.
         # CRITICAL: golden converts input -> output format FIRST, then computes sqrt,
         # so the input must fit in the output format when converted.
@@ -307,6 +338,22 @@ def prepare_inputs_for_operation(
                 src_A_float32 = src_A.to(torch.float32)
                 src_A_float32 = torch.clamp(src_A_float32, min_val, max_safe_input)
                 src_A = src_A_float32.to(torch_format)
+    elif mathop == MathOperation.Log:
+        # Log's valid domain is positive. Log-uniform magnitudes exercise the
+        # exponent-reduction path rather than clustering around one decade.
+        finfo = torch.finfo(torch_format)
+        min_val = max(1e-6, finfo.tiny * 100)
+        max_val = min(float(finfo.max), 1e6)
+        log_min = math.log(min_val)
+        log_max = math.log(max_val)
+        src_A = torch.exp(
+            torch.tensor(log_min, dtype=torch.float32)
+            + src_A.to(torch.float32) * (log_max - log_min)
+        ).to(torch_format)
+    elif mathop == MathOperation.Log1p:
+        # Cover the high-curvature region around -1, zero, and a broad positive
+        # tail while staying inside log1p's real-valued domain.
+        src_A = (-0.99 + src_A.to(torch.float32) * 100.99).to(torch_format)
     elif mathop == MathOperation.Reciprocal:
         # Scale to range avoiding zero to prevent division by zero
         finfo = torch.finfo(torch_format)
@@ -398,6 +445,16 @@ def prepare_trig_inputs(
 
     if mathop in (MathOperation.Sin, MathOperation.Cos):
         lo, hi = -math.pi, math.pi
+    elif mathop == MathOperation.Tan:
+        # Stay away from odd pi/2 poles; range reduction and both signs remain covered.
+        lo, hi = -math.pi / 3.0, math.pi / 3.0
+    elif mathop == MathOperation.Atan:
+        lo, hi = -100.0, 100.0
+    elif mathop in (MathOperation.Asin, MathOperation.Acos):
+        lo, hi = -1.0, 1.0
+    elif mathop in (MathOperation.Sinh, MathOperation.Cosh):
+        # Keeps fp16 outputs finite while covering the exp-based tails.
+        lo, hi = -8.0, 8.0
     elif mathop == MathOperation.Asinh:
         lo, hi = -10.0, 10.0
     elif mathop == MathOperation.Acosh:
@@ -631,38 +688,95 @@ def _prepare_typecast_input(
 @dataclass(frozen=True)
 class OpConfig:
     mathop: MathOperation
-    input_dims: tuple  # list of [H, W] dimensions
+    tile_cases: tuple  # ((input H/W, tile H/W), ...)
     dest_sync_modes: tuple  # DestSync values to sweep
     uniform_spec: bool = False
 
 
-TENSOR_DIMS = ([32, 32], [64, 64])
+@dataclass
+class QUASAR_SFPU_UNARY_OP(TemplateParameter):
+    """Select a unary op without requiring a production Quasar SfpuType entry."""
+
+    mathop: MathOperation
+
+    def convert_to_cpp(self) -> str:
+        return (
+            "constexpr auto SFPU_UNARY_OPERATION = "
+            f"QuasarSfpuTestOperation::{self.mathop.cpp_enum_value};"
+        )
+
+
+DEFAULT_TILE_CASES = (
+    ((32, 32), (32, 32)),
+    ((64, 64), (32, 32)),
+)
+PARITY_TILE_CASES = tuple((shape, shape) for shape in SUPPORTED_TILE_SIZES) + (
+    ((64, 64), (32, 32)),
+)
 DEST_SYNC_MODES = (DestSync.Half, DestSync.Full)
 
 OP_CONFIGS = [
-    OpConfig(MathOperation.Abs, TENSOR_DIMS, DEST_SYNC_MODES),
-    OpConfig(MathOperation.Square, TENSOR_DIMS, DEST_SYNC_MODES),
-    OpConfig(MathOperation.Rsqrt, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(MathOperation.Abs, DEFAULT_TILE_CASES, DEST_SYNC_MODES),
+    OpConfig(MathOperation.Square, DEFAULT_TILE_CASES, DEST_SYNC_MODES),
+    OpConfig(
+        MathOperation.Rsqrt,
+        DEFAULT_TILE_CASES,
+        DEST_SYNC_MODES,
+        uniform_spec=True,
+    ),
     # Nonlinear ops: identical [32,32]/[64,64] × Half/Full × uniform-spec sweep.
-    OpConfig(MathOperation.Exp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Gelu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Relu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Reciprocal, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Sqrt, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Tanh, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Sigmoid, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Silu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Clamp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Neg, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Softplus, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
-    OpConfig(MathOperation.Typecast, TENSOR_DIMS, DEST_SYNC_MODES),
+    OpConfig(MathOperation.Exp, DEFAULT_TILE_CASES, DEST_SYNC_MODES, uniform_spec=True),
+    # Accurate FP32 GELU directly exercises ckernel_sfpu_piecewise_rational.h.
+    OpConfig(MathOperation.Gelu, PARITY_TILE_CASES, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(
+        MathOperation.Relu, DEFAULT_TILE_CASES, DEST_SYNC_MODES, uniform_spec=True
+    ),
+    OpConfig(
+        MathOperation.Reciprocal,
+        DEFAULT_TILE_CASES,
+        DEST_SYNC_MODES,
+        uniform_spec=True,
+    ),
+    OpConfig(
+        MathOperation.Sqrt, DEFAULT_TILE_CASES, DEST_SYNC_MODES, uniform_spec=True
+    ),
+    OpConfig(
+        MathOperation.SqrtCustom,
+        PARITY_TILE_CASES,
+        DEST_SYNC_MODES,
+        uniform_spec=True,
+    ),
+    OpConfig(MathOperation.Log, PARITY_TILE_CASES, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(
+        MathOperation.Log1p, PARITY_TILE_CASES, DEST_SYNC_MODES, uniform_spec=True
+    ),
+    OpConfig(
+        MathOperation.Tanh, DEFAULT_TILE_CASES, DEST_SYNC_MODES, uniform_spec=True
+    ),
+    OpConfig(
+        MathOperation.Sigmoid, DEFAULT_TILE_CASES, DEST_SYNC_MODES, uniform_spec=True
+    ),
+    OpConfig(
+        MathOperation.Silu, DEFAULT_TILE_CASES, DEST_SYNC_MODES, uniform_spec=True
+    ),
+    OpConfig(
+        MathOperation.Clamp, PARITY_TILE_CASES, DEST_SYNC_MODES, uniform_spec=True
+    ),
+    OpConfig(MathOperation.Neg, DEFAULT_TILE_CASES, DEST_SYNC_MODES, uniform_spec=True),
+    OpConfig(
+        MathOperation.Softplus,
+        PARITY_TILE_CASES,
+        DEST_SYNC_MODES,
+        uniform_spec=True,
+    ),
+    OpConfig(MathOperation.Typecast, DEFAULT_TILE_CASES, DEST_SYNC_MODES),
     # Trigonometry / inverse-hyperbolic ops: same matrix as the other transcendentals,
     # fed a uniform [0, 1] stimulus that prepare_trig_inputs maps into each op's domain.
     *[
-        OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True)
+        OpConfig(op, PARITY_TILE_CASES, DEST_SYNC_MODES, uniform_spec=True)
         for op in TRIGONOMETRY_OPS
     ],
-] + [OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in COMP_OPS]
+] + [OpConfig(op, DEFAULT_TILE_CASES, DEST_SYNC_MODES) for op in COMP_OPS]
 
 OP_CONFIG_BY_MATHOP = {cfg.mathop: cfg for cfg in OP_CONFIGS}
 
@@ -673,6 +787,16 @@ def formats_for_op(cfg: OpConfig) -> List[InputOutputFormat]:
         return [InputOutputFormat(case.src, case.dst) for case in TYPECAST_CASES]
     if cfg.mathop in COMP_OPS:
         return SFPU_UNARY_FORMATS + SFPU_COMP_EXTRA_FORMATS
+    if cfg.mathop in {
+        MathOperation.Gelu,
+        MathOperation.SqrtCustom,
+        MathOperation.Log,
+        MathOperation.Log1p,
+        MathOperation.Clamp,
+        MathOperation.Softplus,
+        *TRIGONOMETRY_OPS,
+    }:
+        return SFPU_PARITY_FLOAT_FORMATS
     return SFPU_UNARY_FORMATS
 
 
@@ -718,13 +842,13 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
     """
     Build the unary-SFPU sweep across all operations and their format matrices.
 
-    Functional mode sweeps dest-sync, implied-math, and both [32, 32]/[64, 64]
-    dimensions. Performance mode intentionally keeps the complete op, format,
-    dest_acc, and approximation coverage while pinning those three axes to
-    DestSync.Half, ImpliedMathFormat.Yes, and [32, 32].
+    Functional mode sweeps dest-sync, implied-math, tensor/tile shape, and the
+    L1 formats supported by each operation. Performance mode intentionally keeps
+    the complete op, format, dest_acc, and approximation coverage while pinning
+    those runtime axes to DestSync.Half, ImpliedMathFormat.Yes, and one 32x32 tile.
 
     Returns: list of (mathop, fmt, dest_acc, dest_sync, implied_math_format,
-    approx_mode, input_dimensions) tuples.
+    approx_mode, input_dimensions, tile_dimensions) tuples.
     """
     combinations = []
     for cfg in OP_CONFIGS:
@@ -738,6 +862,9 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
                 MathOperation.Gelu,
                 MathOperation.Reciprocal,
                 MathOperation.Rsqrt,
+                MathOperation.Sin,
+                MathOperation.Cos,
+                MathOperation.Tan,
             )
             else (ApproximationMode.No,)
         )
@@ -750,10 +877,12 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
             is_typecast = cfg.mathop == MathOperation.Typecast
             dest_acc_modes = (
                 (DestAccumulation.Yes,)
-                if in_fmt.is_32_bit() or (is_typecast and fmt.output_format.is_32_bit())
+                if in_fmt.is_32_bit()
+                or in_fmt == DataFormat.Tf32
+                or (is_typecast and fmt.output_format.is_32_bit())
                 else (
                     (DestAccumulation.No,)
-                    if is_typecast
+                    if is_typecast or in_fmt.is_mx_format()
                     else (DestAccumulation.No, DestAccumulation.Yes)
                 )
             )
@@ -767,14 +896,19 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
                 dest_sync_modes = (DestSync.Half,) if is_perf else cfg.dest_sync_modes
                 implied_math_formats = (
                     (ImpliedMathFormat.Yes,)
-                    if is_perf
+                    if is_perf or in_fmt.is_mx_format()
                     else (ImpliedMathFormat.No, ImpliedMathFormat.Yes)
                 )
-                input_dims = ([32, 32],) if is_perf else cfg.input_dims
+                tile_cases = (((32, 32), (32, 32)),) if is_perf else cfg.tile_cases
                 for dest_sync in dest_sync_modes:
                     for implied_math_format in implied_math_formats:
                         for approx_mode in approx_modes:
-                            for input_dimensions in input_dims:
+                            for input_dimensions, tile_dimensions in tile_cases:
+                                if (
+                                    in_fmt.is_mx_format()
+                                    and tile_dimensions not in MX_SUPPORTED_TILE_SIZES
+                                ):
+                                    continue
                                 combinations.append(
                                     (
                                         cfg.mathop,
@@ -784,6 +918,7 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
                                         implied_math_format,
                                         approx_mode,
                                         runtime(input_dimensions),
+                                        runtime(tile_dimensions),
                                     )
                                 )
 
@@ -792,10 +927,10 @@ def generate_sfpu_unary_combinations(*, is_perf=False):
 
 @pytest.mark.quasar
 @parametrize(
-    mathop_formats_dest_acc_sync_implied_math_input_dims=generate_sfpu_unary_combinations(),
+    mathop_formats_dest_acc_sync_implied_math_dims=generate_sfpu_unary_combinations(),
 )
 def test_eltwise_unary_sfpu_quasar(
-    mathop_formats_dest_acc_sync_implied_math_input_dims,
+    mathop_formats_dest_acc_sync_implied_math_dims,
     *,
     run_types=(PerfRunType.L1_TO_L1,),
     loop_factor=1,
@@ -817,7 +952,8 @@ def test_eltwise_unary_sfpu_quasar(
         implied_math_format,
         approx_mode,
         input_dimensions,
-    ) = mathop_formats_dest_acc_sync_implied_math_input_dims[0]
+        tile_dimensions,
+    ) = mathop_formats_dest_acc_sync_implied_math_dims[0]
 
     is_typecast = mathop == MathOperation.Typecast
 
@@ -834,6 +970,7 @@ def test_eltwise_unary_sfpu_quasar(
         input_dimensions_B=input_dimensions,
         spec_A=spec,
         spec_B=spec,
+        tile_dimensions=tile_dimensions,
     )
 
     # Prepare inputs with operation-specific ranges
@@ -846,7 +983,8 @@ def test_eltwise_unary_sfpu_quasar(
             mathop, src_A, src_B, formats.input_format, formats.output_format
         )
 
-    num_faces = MAX_NUM_FACES
+    tile_shape = construct_tile_shape(tile_dimensions)
+    num_faces = tile_shape.total_num_faces()
 
     if not is_perf:
         if format_dict[formats.input_format].is_floating_point:
@@ -858,6 +996,7 @@ def test_eltwise_unary_sfpu_quasar(
                 dest_acc,
                 formats.input_format,
                 input_dimensions,
+                skip_tilize=tile_dimensions != (32, 32),
             )
         else:
             # Integer-input ops (Int32/Int16/UInt16 — currently only the comp family): apply the
@@ -879,7 +1018,7 @@ def test_eltwise_unary_sfpu_quasar(
         "test_name": "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
         "formats": formats,
         "templates": [
-            MATH_OP(mathop=mathop),
+            QUASAR_SFPU_UNARY_OP(mathop=mathop),
             APPROX_MODE(approx_mode),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
@@ -903,7 +1042,9 @@ def test_eltwise_unary_sfpu_quasar(
         "runtimes": [
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
-            TEST_FACE_DIMS(),
+            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
+            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
+            TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
             DEST_INDEX(0),
             LOOP_FACTOR(loop_factor),
         ],
@@ -917,6 +1058,9 @@ def test_eltwise_unary_sfpu_quasar(
             tile_count_B=tile_cnt_A,
             tile_count_res=tile_cnt_A,
             num_faces=num_faces,
+            face_r_dim=tile_shape.face_r_dim,
+            tile_dimensions=tile_dimensions,
+            use_dense_tile_dimensions=tile_dimensions != (32, 32),
         ),
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
