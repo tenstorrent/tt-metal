@@ -24,15 +24,28 @@ SEM_MCAST_READY = 1
 SEM_MCAST_CONSUMED = 2
 SEM_STAGE2 = 3
 
+# Ordered BEST-FIRST. The first four are the ones worth running; the trailing three are
+# MEASURED NULLS kept for the record (see README) and excluded from the default sweep, so a
+# comparison baseline is never one of them.
 VARIANTS = (
-    "ring_push",
-    "ring_pull",
-    "unicast_all_gather",
-    "mcast_all_gather",
     "reduce_root_mcast",
-    "two_phase_reduce_mcast",
-    "two_stage_grid_reduce",
+    "reduce_scatter_mcast",
+    "tree_reduce_mcast",
+    "unicast_all_gather",
+    # --- measured nulls, opt in with `--variant all` -------------------------
+    "mcast_all_gather",
+    "ring_pull",
+    "ring_push",
 )
+
+# Consistently ~4x off the best on-chip reducer at every size measured. They are not bugs — they
+# are the wrong shape for an ON-CHIP group (rings pay a hop per step; rotating-sender all-gather
+# serializes G broadcast rounds) — and they stay in the file so nobody re-derives that by running
+# them. Excluded from the default sweep and from the report's baseline.
+MEASURED_NULLS = ("mcast_all_gather", "ring_pull", "ring_push")
+
+# What `--variant` runs when not asked otherwise.
+RECOMMENDED = tuple(v for v in VARIANTS if v not in MEASURED_NULLS)
 
 
 @dataclass(frozen=True)
@@ -502,7 +515,7 @@ void kernel_main() {
 """
 
 
-_TWO_PHASE_KERNEL = r"""
+_REDUCE_SCATTER_KERNEL = r"""
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -535,23 +548,29 @@ void kernel_main() {
     const uint32_t root_x = get_arg_val<uint32_t>(3);
     const uint32_t root_y = get_arg_val<uint32_t>(4);
     constexpr uint32_t payload_bytes = num_tiles * page_bytes;
+    // The tile split across workers is ragged: worker i owns either `q` or `q+1`
+    // tiles (round-robin, stride num_workers). Both CBs are allocated at the
+    // UNIFORM `max_assigned`, and a CB's capacity must be an exact multiple of its
+    // push/pop quantum, so every worker must push/pop `max_assigned` even when its
+    // own share is smaller - a ragged quantum wraps illegally and corrupts the
+    // gather. The pad slots are neither read nor written back, so their contents
+    // never reach the output.
+    constexpr uint32_t max_assigned = (num_tiles + num_workers - 1) / num_workers;
 
     Semaphore<> progress(progress_sem_id);
     Noc noc;
 
-    if (my_index == group_size - 1) {
-        auto sender = mc.sender(noc);
-        for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
-            progress.wait_min((iter + 1) * num_workers);
-            sender.send(output_addr, output_addr, payload_bytes);
-        }
-    } else {
+    // The root (index group_size - 1) takes a worker share like everyone else and
+    // only then multicasts. It writes its own partials to itself (NoC loopback) and
+    // bumps its own progress semaphore, so the sender's wait_min still counts a
+    // uniform one increment per worker per iteration.
+    {
         if (my_index < num_workers) {
             CircularBuffer gather(cb_gather);
             CircularBuffer partial(cb_partial);
             const uint32_t assigned = (num_tiles + num_workers - 1 - my_index) / num_workers;
             for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
-                gather.reserve_back(group_size * assigned);
+                gather.reserve_back(group_size * max_assigned);
                 const uint32_t gather_addr = gather.get_write_ptr();
                 for (uint32_t contributor = 0; contributor < group_size; ++contributor) {
                     const uint32_t x = get_arg_val<uint32_t>(coords_base + 2 * contributor);
@@ -560,14 +579,14 @@ void kernel_main() {
                         const uint32_t tile = my_index + local * num_workers;
                         noc_async_read(
                             get_noc_addr(x, y, input_addr + tile * page_bytes),
-                            gather_addr + (contributor * assigned + local) * page_bytes,
+                            gather_addr + (contributor * max_assigned + local) * page_bytes,
                             page_bytes);
                     }
                 }
                 noc_async_read_barrier();
-                gather.push_back(group_size * assigned);
+                gather.push_back(group_size * max_assigned);
 
-                partial.wait_front(assigned);
+                partial.wait_front(max_assigned);
                 const uint32_t partial_addr = partial.get_read_ptr();
                 for (uint32_t local = 0; local < assigned; ++local) {
                     const uint32_t tile = my_index + local * num_workers;
@@ -578,9 +597,18 @@ void kernel_main() {
                 }
                 noc_async_write_barrier();
                 progress.up(noc, root_x, root_y, 1);
-                partial.pop_front(assigned);
+                partial.pop_front(max_assigned);
             }
         }
+    }
+
+    if (my_index == group_size - 1) {
+        auto sender = mc.sender(noc);
+        for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
+            progress.wait_min((iter + 1) * num_workers);
+            sender.send(output_addr, output_addr, payload_bytes);
+        }
+    } else {
         auto receiver = mc.receiver(noc);
         for (uint32_t iter = 0; iter < kernel_iters; ++iter) {
             receiver.receive();
@@ -672,7 +700,7 @@ void kernel_main() {
 """
 
 
-_TWO_STAGE_GRID_KERNEL = r"""
+_TREE_REDUCE_KERNEL = r"""
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -1006,9 +1034,13 @@ def _create_reduce_root_descriptor(input_tensor, output_tensor, layout, num_tile
     return ttnn.ProgramDescriptor(kernels=[dataflow, compute], semaphores=semaphores, cbs=cbs)
 
 
-def _create_two_phase_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
+def _create_reduce_scatter_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
     group_size = layout.group_size
-    num_workers = min(num_tiles, group_size - 1)
+    # Every core works, the root included - it takes its share and then multicasts.
+    # Reserving a core made num_workers coprime with power-of-two tile counts, which
+    # forced a ragged split (32 over 7 -> 5,5,5,5,4,4,4) and left 1/G of the group
+    # idle through the whole gather/reduce phase.
+    num_workers = min(num_tiles, group_size)
     max_assigned = (num_tiles + num_workers - 1) // num_workers
     helpers = _mcast_helpers(
         input_tensor.device(),
@@ -1037,9 +1069,13 @@ def _create_two_phase_descriptor(input_tensor, output_tensor, layout, num_tiles,
                 + list(helper.runtime_args(core))
             )
             if index < num_workers:
-                assigned = (num_tiles + num_workers - 1 - index) // num_workers
                 worker_cores.append((x, y))
-                compute_rt[(x, y)] = [group_size, assigned, kernel_iters]
+                # max_assigned, not this worker's ragged share: the CBs are sized on
+                # max_assigned and a CB's capacity must be an exact multiple of its
+                # push/pop quantum. Compute therefore reduces (and the dataflow
+                # kernel gathers at) a uniform stride; the pad tiles on a
+                # lighter-loaded worker are never written back to the root.
+                compute_rt[(x, y)] = [group_size, max_assigned, kernel_iters]
 
     worker_ranges = _core_range_set(worker_cores)
     cbs = [
@@ -1052,7 +1088,7 @@ def _create_two_phase_descriptor(input_tensor, output_tensor, layout, num_tiles,
         ttnn.SemaphoreDescriptor(id=SEM_MCAST_CONSUMED, core_ranges=layout.core_ranges, initial_value=0),
     ]
     dataflow = _inline_kernel(
-        _TWO_PHASE_KERNEL,
+        _REDUCE_SCATTER_KERNEL,
         layout.core_ranges,
         [CB_GATHER, CB_PARTIAL]
         + mcast_ct
@@ -1064,7 +1100,7 @@ def _create_two_phase_descriptor(input_tensor, output_tensor, layout, num_tiles,
     return ttnn.ProgramDescriptor(kernels=[dataflow, compute], semaphores=semaphores, cbs=cbs)
 
 
-def _create_two_stage_grid_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
+def _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters):
     rows, cols = layout.group_shape
     # A 1-D group has only one grid axis to reduce along, so the hierarchy collapses to a single
     # gather-to-root: reuse the root-reduce path directly rather than run a degenerate second stage.
@@ -1121,7 +1157,7 @@ def _create_two_stage_grid_descriptor(input_tensor, output_tensor, layout, num_t
         ttnn.SemaphoreDescriptor(id=SEM_MCAST_CONSUMED, core_ranges=layout.core_ranges, initial_value=0),
     ]
     dataflow = _inline_kernel(
-        _TWO_STAGE_GRID_KERNEL,
+        _TREE_REDUCE_KERNEL,
         layout.core_ranges,
         [CB_GATHER, CB_PARTIAL, CB_STAGE2, CB_OUTPUT]
         + mcast_ct
@@ -1182,9 +1218,11 @@ def create_program_descriptor(
         )
     if variant == "reduce_root_mcast":
         return _create_reduce_root_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters)
-    if variant == "two_phase_reduce_mcast":
-        return _create_two_phase_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters)
-    return _create_two_stage_grid_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters)
+    if variant == "reduce_scatter_mcast":
+        return _create_reduce_scatter_descriptor(
+            input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters
+        )
+    return _create_tree_reduce_descriptor(input_tensor, output_tensor, layout, num_tiles, page_bytes, kernel_iters)
 
 
 def all_reduce(
