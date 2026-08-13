@@ -197,7 +197,8 @@ class TPAttention:
         # bf8 SDPA: bf8 Q + bf8 KV; keeps HiFi2 (HiFi4 was slower). Default ON for Wormhole N300,
         # override with QWEN_SDPA_BF8=0/1 — see tp_common.sdpa_bf8_enabled for the measurements.
         # Must agree with model.py's allocate_kv_caches (same helper), which sets the paged cache's
-        # dtype to match what this flag casts K/V to before the fill.
+        # dtype to match what this flag casts K/V to before the fill. Concat KV (reset_state /
+        # fill_cache) uses the same dtype so decode_tp stays numerically aligned with the paged path.
         self._sdpa_bf8 = tpc.sdpa_bf8_enabled(args)
         # Must match load_attention_weights_tp gates
         self._dram_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
@@ -518,10 +519,12 @@ class TPAttention:
         return ttnn.reshape(out, (1, B, NH * HD), memory_config=_L1)
 
     def reset_state(self):
+        cache_dtype = ttnn.bfloat8_b if self._sdpa_bf8 else ttnn.bfloat16
+
         def z():
             return ttnn.from_torch(
                 torch.zeros(self.B, 1, self.args.max_seq_len, self.HD, dtype=torch.bfloat16),
-                dtype=ttnn.bfloat16,
+                dtype=cache_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
@@ -550,8 +553,19 @@ class TPAttention:
         if self.k_caches is not None:
             # Don't deallocate slices — for NKV==1 they alias k/v used by SDPA
             for h in range(NKV):
-                ttnn.fill_cache(self.k_caches[h], ttnn.slice(k, (0, h, 0, 0), (1, h + 1, S, HD)), 0)
-                ttnn.fill_cache(self.v_caches[h], ttnn.slice(v, (0, h, 0, 0), (1, h + 1, S, HD)), 0)
+                k_h = ttnn.slice(k, (0, h, 0, 0), (1, h + 1, S, HD))
+                v_h = ttnn.slice(v, (0, h, 0, 0), (1, h + 1, S, HD))
+                # fill_cache does not cast; match paged_fill_cache (typecast before fill).
+                if self._sdpa_bf8:
+                    k_fill = ttnn.typecast(k_h, ttnn.bfloat8_b)
+                    v_fill = ttnn.typecast(v_h, ttnn.bfloat8_b)
+                else:
+                    k_fill, v_fill = k_h, v_h
+                ttnn.fill_cache(self.k_caches[h], k_fill, 0)
+                ttnn.fill_cache(self.v_caches[h], v_fill, 0)
+                if self._sdpa_bf8:
+                    ttnn.deallocate(k_fill)
+                    ttnn.deallocate(v_fill)
 
         q8, k8, v8 = q, k, v
         padded = max(32, ((S + 31) // 32) * 32)

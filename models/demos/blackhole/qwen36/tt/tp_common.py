@@ -82,10 +82,10 @@ COMPUTE_LOFI_NO_FP32_ACC = ttnn.WormholeComputeKernelConfig(
 
 
 def sdpa_bf8_enabled(args):
-    """QWEN_SDPA_BF8: bf8 Q/K/V + bf8 paged KV cache for chunked-prefill SDPA (faster, slightly
-    lower precision). Single source of truth for both attention/tp.py's TPAttention._sdpa_bf8 and
-    model.py's allocate_kv_caches — they must agree, since the cache dtype the KV is filled into has
-    to match what forward_prefill_paged casts K/V to before the fill.
+    """QWEN_SDPA_BF8: bf8 Q/K/V + bf8 KV cache for chunked-prefill SDPA (faster, slightly
+    lower precision). Single source of truth for attention/tp.py's TPAttention._sdpa_bf8,
+    model.py's allocate_kv_caches, and concat-path reset_state/fill_cache — they must agree,
+    since the cache dtype KV is filled into has to match what prefill casts K/V to before the fill.
 
     Default ON for Wormhole N300 only. MEASURED (device kernel duration, N300, single full-attention
     decoder layer, S=2048, Qwen3.5-9B, on top of the kpass1 matmul + fused-qk-norm changes above):

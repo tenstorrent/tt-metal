@@ -135,7 +135,21 @@ class Qwen36ModelArgs(ModelArgs):
         # Per-device width of the [qkv|z|a|b] fused in-projection: folding the tiny a/b (decay/beta)
         # projection into qkvz removes a whole decode matmul while keeping the (good) K=dim. Default
         # (was QWEN36_GDN_FUSE_AB); gdn/tp.py fuses whenever the qkvz weight is DRAM-sharded.
-        self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * self.gdn_nv_tp
+        #
+        # gdn_ab_gap: zero-column gap inserted between a and b so b starts on a tile boundary
+        # (gdn_nv_tp=24 isn't one). Splitting the fused ab tensor into a=[0:24)/b=[24:48) forces an
+        # Untilize->Slice->TilizeWithValPadding round-trip in _project_qkvzab, because a ttnn.slice's
+        # STARTING offset must be tile-aligned to stay tile-native (a non-tile-aligned END is free —
+        # confirmed empirically: slice[0:24] and slice[32:56] on a TILE tensor both dispatch as a
+        # single SliceDeviceOperation, only slice[24:48] triggers the 3-op untilize/retilize
+        # sequence). Moving b to start at the next tile boundary (32) makes both a=[0:24) and
+        # b=[32:56) single-op tile-native slices with no change to Nv/v/state/conv1d/the GQA ratio
+        # anywhere else — see tests/perf/test_gdn_ab_pad_check.py, which already confirmed a full
+        # extra tile's worth of padding here is free (lands inside per-core tile capacity already
+        # being paid for); this 8-column gap is smaller still (6176->6184, both round up to the same
+        # 194-tile/per_core_N=25 allocation at cols=8).
+        self.gdn_ab_gap = -(-self.gdn_nv_tp // 32) * 32 - self.gdn_nv_tp
+        self.gdn_qkvzab_dim_tp = self.gdn_qkvz_dim_tp + 2 * self.gdn_nv_tp + self.gdn_ab_gap
         # NO PAD (was: prefill_kpass_width padded 6176 -> 6912 on Wormhole). Kept at 0 so the weight
         # geometry, cache key and decode progcfgs all use the natural width; see the history below,
         # because the reason this is safe now is NOT the reason it was originally padded.
@@ -253,13 +267,13 @@ class Qwen36ModelArgs(ModelArgs):
             M, self.dim, self.attn_qkv_fused_dim_tp, num_cores=64
         )
         # gdn_qkvz: num_cores=44 -> 11x4 on BH, the fastest measured config (wide1d_11x4c, ~59us, +22%
-        # vs the old 8x5). On WH (decode_grid_w=8), 44 was never independently tuned -- it only ever
-        # fell back to whatever min(grid_w, 44) -> 8x6=48 cores happened to produce. MEASURED (WH,
-        # M=32 K=4096 N=6176, same fp32_dest_acc_en=True/PCC as today): the full 8x8=64-core grid is
-        # 150.4us vs 8x6's 156.5us, -3.9%, zero accuracy cost -- matches attn_qkv_decode_1d_progcfg
-        # above, which already uses num_cores=64 for the same reason.
+        # vs the old 8x5). On WH 27B decode (M=32 K=5120 N=8256) 64 cores give per_core_N=5 (prime)
+        # -> 1x1 subblock with 12 idle cores. 48 cores (8x6) give per_core_N=6 -> 1x3, same PCC.
+        # MEASURED (tests/perf/test_decode_matmul_grid_sweep.py): 8x6 257.5us vs 8x8 260.4us (-1.1%),
+        # pcc=0.99997 either way. N-pad and fp32_acc=False both lost (pads +12%..+53%; no-fp32 +1.2%).
+        # 9B (K=4096 N=6176) previously preferred 64; that shape's tile count is not 258.
         self.gdn_qkvz_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.dim, self.gdn_qkvzab_dim_tp, num_cores=44 if tpc.is_blackhole() else 64, grid_w=self.decode_grid_w
+            M, self.dim, self.gdn_qkvzab_dim_tp, num_cores=44 if tpc.is_blackhole() else 48, grid_w=self.decode_grid_w
         )
         # Output projections (attn wo, GDN o_proj): already interleaved+auto (no weight relayout, not in
         # the prefill AGMM fusion), so this just swaps ttnn-auto for a tuned ~32-core 1D decode grid.
@@ -272,9 +286,11 @@ class Qwen36ModelArgs(ModelArgs):
             M, self.attn_out_dim_tp, self.dim, num_cores=33 if tpc.is_blackhole() else 48, grid_w=self.decode_grid_w
         )
         # gdn_out: num_cores=33 -> 11x3 on BH, the fastest measured config (wide1d_11x3c, ~24us, +25%
-        # vs the old 8x4; same 1536x5120 shape as attn_wo). On WH (decode_grid_w=8) this falls back to 8x5.
+        # vs the old 8x4). On WH 27B decode (M=32 K=3072 N=5120) 33 falls back to 8x5=40 cores;
+        # 8x8=64 gives per_core_N=3 / 1x3. MEASURED (test_decode_matmul_grid_sweep.py): 105.6us vs
+        # 8x5's 107.5us (-1.8%), pcc=0.99996. fp32_acc=False did not beat that.
         self.gdn_out_decode_1d_progcfg = tpc.create_matmul_1d_decode_progcfg(
-            M, self.gdn_value_dim_tp, self.dim, num_cores=33, grid_w=self.decode_grid_w
+            M, self.gdn_value_dim_tp, self.dim, num_cores=33 if tpc.is_blackhole() else 64, grid_w=self.decode_grid_w
         )
 
         # Prefill matmul factory (M = seq_len). Shared by MLP down-proj, attention in/out-proj, and

@@ -12,9 +12,9 @@ format); the remaining dims pass through unchanged.
 
 * reference — HF ``apply_rotary_pos_emb`` from ``modeling_qwen3_5`` (the model's own
   function; it handles the partial split + pass-through concat).
-* TTNN — ``rope_tp.rot_mats_prefill/rot_mats_decode`` (cos/sin generation) +
-  ``apply_partial_rope_prefill/apply_partial_rope_decode`` (the slice→rotate→concat the
-  demo's TPAttention calls at ``attention/tp.py:155-156`` prefill / ``:236-237`` decode).
+* TTNN — ``rope_tp.rot_mats_prefill/rot_mats_decode`` (full-width cos/sin) +
+  ``apply_partial_rope_prefill/apply_partial_rope_decode`` (single rotary_embedding_hf
+  on Q/K pre-permuted by ``tp_common.permute_rope_channels``, matching TPAttention).
 
 Run:
     MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
@@ -50,6 +50,26 @@ def _cos_sin(positions, rope_dim, theta):
     return emb.cos(), emb.sin()
 
 
+def _permute_rope_head(x, head_dim, rope_dim):
+    """Match tp_common.permute_rope_channels on the last axis: [a, b, p1, p2] -> [a, p1, b, p2]."""
+    half_rope, half_full = rope_dim // 2, head_dim // 2
+    a = x[..., :half_rope]
+    b = x[..., half_rope:rope_dim]
+    p1 = x[..., rope_dim : rope_dim + (half_full - half_rope)]
+    p2 = x[..., half_full + half_rope : head_dim]
+    return torch.cat([a, p1, b, p2], dim=-1)
+
+
+def _unpermute_rope_head(x, head_dim, rope_dim):
+    """Inverse of _permute_rope_head: [a, p1, b, p2] -> [a, b, p1, p2]."""
+    half_rope, half_full = rope_dim // 2, head_dim // 2
+    a = x[..., :half_rope]
+    p1 = x[..., half_rope:half_full]
+    b = x[..., half_full : half_full + half_rope]
+    p2 = x[..., half_full + half_rope : head_dim]
+    return torch.cat([a, b, p1, p2], dim=-1)
+
+
 def _read0(mesh_device, x):
     """Read device-0's copy of a replicated tensor (rope is per-head, identical per device)."""
     t = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
@@ -83,11 +103,13 @@ def test_partial_rope_prefill(mesh_device, reset_seeds, ensure_gc, request):
     q = torch.randn(1, NH, S, HD, dtype=torch.bfloat16)
     k = torch.randn(1, NKV, S, HD, dtype=torch.bfloat16)
 
-    # ---- TTNN (demo path) ----
-    cos_tt, sin_tt = rot_mats_prefill(mesh_device, rope_dim, S, theta)
-    q_tt = apply_partial_rope_prefill(replicate_to_device(mesh_device, q), cos_tt, sin_tt, NH, rope_dim)
-    k_tt = apply_partial_rope_prefill(replicate_to_device(mesh_device, k), cos_tt, sin_tt, NKV, rope_dim)
-    q_out, k_out = _read0(mesh_device, q_tt), _read0(mesh_device, k_tt)
+    # ---- TTNN (demo path): Q/K last-dim pre-permuted, full-width rotary, then unpermute ----
+    q_perm, k_perm = _permute_rope_head(q, HD, rope_dim), _permute_rope_head(k, HD, rope_dim)
+    cos_tt, sin_tt = rot_mats_prefill(mesh_device, rope_dim, S, theta, head_dim=HD)
+    q_tt = apply_partial_rope_prefill(replicate_to_device(mesh_device, q_perm), cos_tt, sin_tt)
+    k_tt = apply_partial_rope_prefill(replicate_to_device(mesh_device, k_perm), cos_tt, sin_tt)
+    q_out = _unpermute_rope_head(_read0(mesh_device, q_tt), HD, rope_dim)
+    k_out = _unpermute_rope_head(_read0(mesh_device, k_tt), HD, rope_dim)
 
     # ---- torch reference (model's apply_rotary_pos_emb, positions 0..S-1, unsqueeze_dim=1) ----
     cos, sin = _cos_sin(torch.arange(S), rope_dim, theta)  # [S, rope_dim]
@@ -114,11 +136,13 @@ def test_partial_rope_decode(mesh_device, reset_seeds, ensure_gc, request):
     q = torch.randn(1, B, NH, HD, dtype=torch.bfloat16)
     k = torch.randn(1, B, NKV, HD, dtype=torch.bfloat16)
 
-    # ---- TTNN (demo path) ----
-    cos_tt, sin_tt = rot_mats_decode(mesh_device, rope_dim, 256, theta, positions)
-    q_tt = apply_partial_rope_decode(replicate_to_device(mesh_device, q), cos_tt, sin_tt, NH, B, rope_dim)
-    k_tt = apply_partial_rope_decode(replicate_to_device(mesh_device, k), cos_tt, sin_tt, NKV, B, rope_dim)
-    q_out, k_out = _read0(mesh_device, q_tt), _read0(mesh_device, k_tt)
+    # ---- TTNN (demo path): Q/K last-dim pre-permuted, full-width rotary, then unpermute ----
+    q_perm, k_perm = _permute_rope_head(q, HD, rope_dim), _permute_rope_head(k, HD, rope_dim)
+    cos_tt, sin_tt = rot_mats_decode(mesh_device, rope_dim, 256, theta, positions, head_dim=HD)
+    q_tt = apply_partial_rope_decode(replicate_to_device(mesh_device, q_perm), cos_tt, sin_tt, B)
+    k_tt = apply_partial_rope_decode(replicate_to_device(mesh_device, k_perm), cos_tt, sin_tt, B)
+    q_out = _unpermute_rope_head(_read0(mesh_device, q_tt), HD, rope_dim)
+    k_out = _unpermute_rope_head(_read0(mesh_device, k_tt), HD, rope_dim)
 
     # ---- torch reference (per-user positions, heads in dim 2 -> unsqueeze_dim=2) ----
     cos, sin = _cos_sin(positions, rope_dim, theta)  # [B, rope_dim]

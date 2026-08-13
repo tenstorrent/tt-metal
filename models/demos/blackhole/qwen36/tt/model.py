@@ -494,21 +494,25 @@ class Qwen36Model:
         return None
 
     def _rope_from_idx(self, idx):
-        """cos/sin [1, B, 1, head_dim] gathered ON DEVICE from a [1, B] position index.
+        """cos/sin [1, B, 1, rotary_width] gathered ON DEVICE from a [1, B] position index.
 
         Replaces the old host-computed, host-packed rope pair: the tables are resident (built in
         prepare_decode_inputs_host, outside any trace) and each step is a ttnn.embedding row fetch.
         Trace-safe: pure device ops, and the index arrives through the same persistent buffer the
         packed cos/sin used to, so nothing is baked at capture time.
 
-        Gathers from the FULL head_dim-wide table (_rope_dev_tables_full, pre-widened once via
-        tp_common.permute_rope_channels' layout) so apply_partial_rope_decode can rotate the whole
-        head_dim in a single call -- the gather itself stays the same single ttnn.embedding op as
-        before, just wider, so this adds zero device ops per decode step.
+        TP (num_devices>1): gathers from the FULL head_dim-wide table (_rope_dev_tables_full,
+        pre-widened via tp_common.permute_rope_channels' layout) so apply_partial_rope_decode can
+        rotate the whole head_dim in a single call. Single-device: gathers rope_head_dim-wide
+        tables so gated_attention_forward_ttnn's apply_rotary_pos_emb_ttnn only rotates the
+        partial-RoPE slice (it treats cos.shape[-1] as the rotary width).
         """
         from models.demos.blackhole.qwen36.tt.attention.rope_tp import _rope_dev_tables_full
 
-        hd, rd = self.args.head_dim, self.args.rope_head_dim
+        rd = self.args.rope_head_dim
+        # Single-device gated attention applies partial RoPE inside apply_rotary_pos_emb_ttnn
+        # (cos/sin last-dim == rotary width). TP permutes Q/K at load and gathers full head_dim.
+        hd = self.args.head_dim if self.num_devices > 1 else rd
         B = int(idx.shape[-1])
         tbl_cos, tbl_sin = _rope_dev_tables_full(self.device, hd, rd, self.args.max_seq_len, self.args.rope_theta)
 
@@ -1354,6 +1358,9 @@ class Qwen36Model:
             if layer.is_full_attention:
                 continue
             dn = layer.attention
+            # Native conv1d CBs occupy most of WH L1; a decode-promoted rec_state left in L1
+            # (this instance or a leftover B=1 scratch) clashes with those CBs.
+            dn._spill_rec_state_to_dram()
             prev.append(
                 (
                     dn,
@@ -1409,6 +1416,9 @@ class Qwen36Model:
             dn = layer.attention
             # reset_state allocates fresh B=1 buffers and assigns them WITHOUT freeing the current
             # (batched) ones, so save+restore the batched bindings and keep the scratch handles alive.
+            # Spill first: a decode-promoted rec_state left in L1 clashes with native conv1d CBs
+            # on the B=1 scratch (same WH L1 hole as _alloc_gdn_scratch_b1).
+            dn._spill_rec_state_to_dram()
             saved = (dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state)
             dn.B = 1
             dn.reset_state()  # builds rec_state [1,Nv,Dk,Dv], conv_states[*] [1,1,D], conv_carry, _zero_conv0
@@ -1424,6 +1434,7 @@ class Qwen36Model:
         self._ensure_gdn_prefill_scratch()
         prev = []
         for dn, rec, conv, carry, zero0 in self._gdn_prefill_scratch:
+            dn._spill_rec_state_to_dram()
             prev.append((dn, dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state))
             dn.B = 1
             dn.rec_state = rec
@@ -3006,6 +3017,7 @@ class Qwen36Model:
             if layer.is_full_attention:
                 continue
             dn = layer.attention
+            dn._spill_rec_state_to_dram()
             prev.append((dn, dn.B, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._stable_state))
             dn.B = bg
             dn.reset_state()  # builds rec_state [bg,Nv,Dk,Dv], conv_states[*] [1,bg,D], carry, zero0
@@ -3406,9 +3418,9 @@ class Qwen36Model:
                 cos_host, sin_host = self.rope.get_cos_sin_host(int(rope_pos_vec[0]))
                 rope_packed = pack_rope_host(cos_host, sin_host)
         else:
-            _rope_dev_tables_full(
-                self.device, self.args.head_dim, self.args.rope_head_dim, self.args.max_seq_len, self.args.rope_theta
-            )
+            rd = self.args.rope_head_dim
+            hd = self.args.head_dim if self.num_devices > 1 else rd
+            _rope_dev_tables_full(self.device, hd, rd, self.args.max_seq_len, self.args.rope_theta)
             rope_packed = ttnn.from_torch(
                 rope_pos_vec.to(torch.int32).reshape(1, B), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
             )

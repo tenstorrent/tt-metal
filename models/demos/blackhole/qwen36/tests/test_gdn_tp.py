@@ -17,6 +17,7 @@ Run:
     MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
       pytest models/demos/blackhole/qwen36/tests/test_gdn_tp.py -v -s
 """
+import gc
 import os
 
 import pytest
@@ -37,11 +38,9 @@ from models.demos.blackhole.qwen36.tests.test_factory import (
     shard_to_device,
     tp_composer,
 )
+from models.demos.blackhole.qwen36.tt.gdn.recurrent_decode_wh import recurrent_gated_delta_rule_decode_dispatch
 from models.demos.blackhole.qwen36.tt.gdn.tp import TPGatedDeltaNet, load_gdn_weights_tp
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
-from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
-    recurrent_gated_delta_rule_decode_ttnn,
-)
 
 
 def _pf_in(mesh_device, args, t):
@@ -133,12 +132,12 @@ def test_gdn_tp_decode_recurrence_state(mesh_device, high_precision, reset_seeds
 
     ``test_gdn_tp`` validates pos0 only, where the recurrent state is zero and the
     state-decay multiply (h * exp(g), fused as an EXP pre-activation on the multiply)
-    is invisible. This test drives ``recurrent_gated_delta_rule_decode_ttnn`` — the
-    exact T=1 function ``forward_decode`` dispatches to — for several steps from a
-    NONZERO initial state, checking both the step output and the carried state, so a
-    broken decay (or an ignored fused activation) collapses the PCC immediately.
-    fp32 mirrors the TP default (``high_precision=True``); bf16 covers the
-    ``QWEN35_GDN_DECODE_BF16=1`` fallback.
+    is invisible. This test drives ``recurrent_gated_delta_rule_decode_dispatch`` —
+    the same T=1 entry ``forward_decode`` uses (WH local path / BH upstream) — for
+    several steps from a NONZERO initial state, checking both the step output and
+    the carried state, so a broken decay (or an ignored fused activation) collapses
+    the PCC immediately. fp32 mirrors the BH default (``high_precision=True``);
+    bf16 covers the WH default and the ``QWEN35_GDN_DECODE_BF16=1`` fallback.
     """
     B, H, K, V = 2, 8, 128, 128
     steps = 4
@@ -166,7 +165,7 @@ def test_gdn_tp_decode_recurrence_state(mesh_device, high_precision, reset_seeds
         return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
 
     for s in range(steps):
-        o_tt, h_tt = recurrent_gated_delta_rule_decode_ttnn(
+        o_tt, h_tt = recurrent_gated_delta_rule_decode_dispatch(
             replicate_to_device(mesh_device, q[s].reshape(B, 1, H, K)),
             replicate_to_device(mesh_device, k[s].reshape(B, 1, H, K)),
             replicate_to_device(mesh_device, v[s].reshape(B, 1, H, V)),
@@ -235,6 +234,10 @@ def test_gdn_tp_peruser_state(mesh_device, B, reset_seeds, ensure_gc, request):
         g.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=T, capture_state=True)
         out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
         ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
+        # Decode leaves rec_state in L1; native conv1d CBs on the next instance clash unless spilled.
+        g._spill_rec_state_to_dram()
+        del g
+    gc.collect()
 
     # ---- batched: per-user prefill(return_state) -> assemble -> single batched decode ----
     gb = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
@@ -298,6 +301,9 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
         g.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=T, capture_state=True)
         out_u = g.forward_decode(replicate_to_device(mesh_device, xd[u]))
         ref_rows.append(ttnn.to_torch(out_u, mesh_composer=comp)[0, 0, 0].float())
+        g._spill_rec_state_to_dram()
+        del g
+    gc.collect()
 
     # ---- batched via write_slot: each user prefilled B=1, its state written into ITS slot ----
     gb = TPGatedDeltaNet(mesh_device, args, tw, tt_ccl)
@@ -306,8 +312,10 @@ def test_gdn_tp_write_slot_and_remap(mesh_device, B, reset_seeds, ensure_gc, req
         gu = TPGatedDeltaNet(mesh_device, args1, tw, tt_ccl)
         gu.reset_state()
         gu.forward_prefill(_pf_in(mesh_device, args, xp[u]), chunk_size=T, capture_state=True)
+        gu._spill_rec_state_to_dram()
         gb.write_slot(u, gu.rec_state, list(gu.conv_states))  # consumes gu's rec/conv buffers
         gu.rec_state, gu.conv_states = None, None
+        del gu
 
     x_dec = torch.cat(xd, dim=2)  # [1, 1, B, dim], row u = user u's decode token
     out_b = gb.forward_decode(replicate_to_device(mesh_device, x_dec))
