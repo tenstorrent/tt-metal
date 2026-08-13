@@ -10,7 +10,10 @@
 //
 
 #include <sys/types.h>
+#include <algorithm>
 #include <cstddef>
+#include <cstdio>
+#include <cstdlib>
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt_stl/enum.hpp>
@@ -323,6 +326,59 @@ public:
     virtual std::string weakened_firmware_target_name(const Params& params) const = 0;
 };
 
+#if defined(EMULE_CB_CEILING)
+// TT_EMULE_NUM_CBS opts into a CB cap above silicon, for emule-only debugging of programs
+// that exceed the real per-core budget. Read once; 0 means "not requested".
+inline uint32_t emule_requested_num_circular_buffers() {
+    static const uint32_t requested = []() -> uint32_t {
+        // 255, not 256: when a kernel group has no remote CBs, min_remote_cb_start_index is set
+        // to the cap as a "none" sentinel, and that launch-message field is a uint8_t. A cap of
+        // 256 truncates the sentinel to 0, which reads back as "every CB is remote".
+        constexpr uint32_t kMaxEnforceableCap = std::min<uint32_t>(NUM_CIRCULAR_BUFFERS, 255);
+        const char* env = std::getenv("TT_EMULE_NUM_CBS");
+        if (env == nullptr) {
+            return 0;
+        }
+        const long parsed = std::strtol(env, nullptr, 10);
+        TT_FATAL(
+            parsed > 0 && static_cast<uint64_t>(parsed) <= kMaxEnforceableCap,
+            "TT_EMULE_NUM_CBS='{}' is out of range: expected 1..{} (this build's EMULE_CB_CEILING, "
+            "capped at 255 by the uint8_t min_remote_cb_start_index sentinel). Reconfigure with "
+            "-DEMULE_CB_CEILING=<n> to raise the ceiling.",
+            env,
+            kMaxEnforceableCap);
+        return static_cast<uint32_t>(parsed);
+    }();
+    return requested;
+}
+
+// Announce the raised cap once. Numerics obtained above the silicon cap say nothing about
+// whether the program fits real hardware, so the mode must not be leavable on unnoticed;
+// stderr rather than the logger so a log-level setting cannot suppress it.
+inline void emule_announce_cb_ceiling(uint32_t silicon_cap, uint32_t effective_cap) {
+    static const bool announced = [silicon_cap, effective_cap]() {
+        if (effective_cap > silicon_cap) {
+            std::fprintf(
+                stderr,
+                "\n"
+                "[EMULE] ============================ FANTASY CB MODE ============================\n"
+                "[EMULE] Circular-buffer cap raised to %u; this arch has %u. TT_EMULE_NUM_CBS is set.\n"
+                "[EMULE] This device does not exist. A program that only fits above %u is NOT\n"
+                "[EMULE] shippable, and passing numerics here do not demonstrate silicon\n"
+                "[EMULE] feasibility. Unset TT_EMULE_NUM_CBS to return to the real cap.\n"
+                "[EMULE] ========================================================================\n"
+                "\n",
+                effective_cap,
+                silicon_cap,
+                silicon_cap);
+            std::fflush(stderr);
+        }
+        return true;
+    }();
+    (void)announced;
+}
+#endif
+
 class Hal {
 public:
     using RelocateFunc = std::function<uint64_t(uint64_t, uint64_t, bool)>;
@@ -493,8 +549,24 @@ public:
     float get_inf() const { return inf_; }
 
     // NUM_CIRCULAR_BUFFERS is a temporary constant pending DFB migration
+
+    // What the hardware actually has, never the emule debug ceiling. Anything reasoning about
+    // silicon feasibility wants this; anything sizing a container wants the accessor below.
+    uint32_t get_silicon_num_circular_buffers() const {
+        return (arch_ == tt::ARCH::WORMHOLE_B0) ? NUM_CIRCULAR_BUFFERS_WORMHOLE : NUM_CIRCULAR_BUFFERS_SILICON_MAX;
+    }
+
     uint32_t get_arch_num_circular_buffers() const {
-        return (arch_ == tt::ARCH::WORMHOLE_B0) ? 32 : NUM_CIRCULAR_BUFFERS;
+#if defined(EMULE_CB_CEILING)
+        // Opt-in debug ceiling above silicon. Returns the arch value unless TT_EMULE_NUM_CBS
+        // asks for more, so the mode is off by default.
+        const uint32_t silicon_cap = get_silicon_num_circular_buffers();
+        const uint32_t effective_cap = std::max(silicon_cap, emule_requested_num_circular_buffers());
+        emule_announce_cb_ceiling(silicon_cap, effective_cap);
+        return effective_cap;
+#else
+        return get_silicon_num_circular_buffers();
+#endif
     }
 
     uint32_t get_noc_max_burst_size_bytes() const { return noc_max_burst_size_bytes_; }

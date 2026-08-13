@@ -16,6 +16,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "jit_hw/internal/emule_cb_ceiling.h"  // __EMULE_CTX_MAX_CBS
+
 namespace tt_emule {
 struct CBSyncState;
 }
@@ -23,8 +25,17 @@ namespace tt::tt_metal {
 class IDevice;
 }
 
-// Wormhole has 32 CBs; JIT header cb_api.h sizes unpack_tile_size[32].
+// Must equal the emule headers' __EMULE_CTX_MAX_CBS, which sizes cb_api.h's per-CB arrays
+// and Core::cb_sync_states_. Both derive from the build-wide EMULE_CB_CEILING.
+#if defined(EMULE_CB_CEILING)
+static constexpr uint32_t EMULE_NUM_CBS = EMULE_CB_CEILING;
+#else
 static constexpr uint32_t EMULE_NUM_CBS = 64;
+#endif
+static_assert(
+    EMULE_NUM_CBS == __EMULE_CTX_MAX_CBS,
+    "EMULE_NUM_CBS must match the emule headers' __EMULE_CTX_MAX_CBS: the runner allocates the "
+    "per-fiber context and CB arrays that JIT kernels index");
 
 // The per-launch sanitizer range/counter state used to live in `extern
 // thread_local`s here; it now lives in the per-fiber context

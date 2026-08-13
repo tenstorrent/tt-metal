@@ -30,12 +30,23 @@
 //
 // TODO: This is TEMPORARY code structure - eventually will be replaced by Dataflow Buffers (DFBs)
 
-#if defined(ARCH_WORMHOLE)
+// The real silicon counts. These are the ENFORCED cap (via
+// hal::get_arch_num_circular_buffers) and must stay independent of the array sizing below,
+// which an emule debug build may raise.
+constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS_WORMHOLE = 32;
+constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS_SILICON_MAX = 64;
+
+#if defined(EMULE_CB_CEILING)
+// Emule build only: CBs are host memory, so a debug ceiling can size arrays past any arch.
+// Build-WIDE define (cmake/project_options.cmake) — never per-target, or CircularBufferConfig's
+// sizeof would differ between translation units. Applies to Wormhole too: sizing, not the cap.
+constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = EMULE_CB_CEILING;
+#elif defined(ARCH_WORMHOLE)
 // Device compilation for Wormhole (limited by 2KB TRISC memory)
-constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 32;
+constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = NUM_CIRCULAR_BUFFERS_WORMHOLE;
 #else
 // Blackhole device and HOST compilation (uses max for array sizing)
-constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = 64;
+constexpr static std::uint32_t NUM_CIRCULAR_BUFFERS = NUM_CIRCULAR_BUFFERS_SILICON_MAX;
 #endif
 constexpr static std::uint32_t UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG = 4;
 constexpr static std::uint32_t UINT32_WORDS_PER_REMOTE_CIRCULAR_BUFFER_CONFIG = 2;

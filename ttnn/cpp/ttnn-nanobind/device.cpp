@@ -657,6 +657,18 @@ void device_module(nb::module_& m_device) {
         "Return the L1 alignment requirement in bytes for the current architecture.");
 
     m_device.def(
+        "get_arch_num_circular_buffers",
+        &tt::tt_metal::hal::get_arch_num_circular_buffers,
+        "Return the number of circular buffer indices available per core. Callers that allocate CB "
+        "indices should read this rather than hardcoding a per-arch constant.");
+
+    m_device.def(
+        "get_silicon_num_circular_buffers",
+        &tt::tt_metal::hal::get_silicon_num_circular_buffers,
+        "Return the number of circular buffer indices real silicon has for this architecture, "
+        "ignoring any emule-only debug ceiling.");
+
+    m_device.def(
         "get_optimal_dram_bank_to_logical_worker_assignment",
         [](MeshDevice* device, tt::tt_metal::NOC noc) {
             return device->get_optimal_dram_bank_to_logical_worker_assignment(noc);

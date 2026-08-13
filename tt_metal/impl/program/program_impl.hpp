@@ -84,12 +84,18 @@ struct KernelGroup {
     std::vector<uint32_t> kernel_text_offsets;
     dev_msgs::launch_msg_t launch_msg;
     dev_msgs::go_msg_t go_msg;
+    // Exact CB extents, kept here rather than recovered from launch_msg's local_cb_mask:
+    // that field is a fixed-width firmware mask, so deriving the extents from it truncates
+    // once a CB index reaches its width. finalize_cbs sizes L1 from these.
+    uint32_t max_local_cb_end_index{};
+    uint32_t min_remote_cb_start_index{};
 
     KernelGroup(
         const detail::ProgramImpl& program,
         uint32_t programmable_core_type_index,
         std::vector<KernelHandle> kernel_ids,
         uint64_t local_cb_mask,
+        uint32_t max_local_cb_end_index,
         uint32_t min_remote_cb_start_index,
         const CoreRangeSet& new_ranges,
         const dev_msgs::Factory& dev_msgs_factory);

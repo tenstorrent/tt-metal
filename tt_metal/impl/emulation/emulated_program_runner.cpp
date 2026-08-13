@@ -1067,6 +1067,9 @@ static std::function<void()> jit_compile_kernel(
     // Note: EMULE_SEM_BASE and EMULE_SEM_ALIGN are passed via kernel defines (in wrapper.cpp)
     // rather than here, so they can be dynamically computed per-program.
     std::string define_flags = " -DTT_EMULE_USE_L1_POOL";
+    // Pass the host's own ceiling so kernels size ThreadCommonCtx / cb_api.h's per-CB arrays
+    // exactly as libtt-umd.so did. Disagreement here skews every CB access silently.
+    define_flags += " -DEMULE_CB_CEILING=" + std::to_string(EMULE_NUM_CBS);
 
     // 5b. Build -DKERNEL_COMPILE_TIME_ARG_MAP for named compile-time args
     if (!named_compile_args.empty()) {

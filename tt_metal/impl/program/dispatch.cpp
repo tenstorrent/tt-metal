@@ -307,14 +307,12 @@ uint32_t finalize_cbs(
     uint32_t max_cbs = MetalContext::instance().hal().get_arch_num_circular_buffers();
     uint32_t min_remote_start_index = max_cbs;
 
+    // From the KernelGroup, not from launch_msg: the message fields are fixed-width firmware
+    // plumbing, and recovering the extents from them truncates once a CB index reaches that
+    // width — which would under-size the region that sem_offset/rta_offset sit after.
     for (auto& kg : kernel_groups) {
-        auto kernel_config = kg->launch_msg.view().kernel_config();
-        uint64_t local_cb_mask = kernel_config.local_cb_mask();
-        uint32_t current_local_end_index =
-            local_cb_mask == 0 ? 0
-                               : ProgramImpl::cb_mask_width_ - static_cast<uint32_t>(__builtin_clzll(local_cb_mask));
-        max_local_end_index = std::max(max_local_end_index, current_local_end_index);
-        min_remote_start_index = std::min(min_remote_start_index, (uint32_t)kernel_config.min_remote_cb_start_index());
+        max_local_end_index = std::max(max_local_end_index, kg->max_local_cb_end_index);
+        min_remote_start_index = std::min(min_remote_start_index, kg->min_remote_cb_start_index);
     }
     local_cb_size = max_local_end_index * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     uint32_t remote_cb_offset = base_offset + local_cb_size;
