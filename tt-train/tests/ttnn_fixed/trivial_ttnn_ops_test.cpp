@@ -396,6 +396,12 @@ TEST_F(TrivialTnnFixedTest, TestSamplingBroadcastPaddingMask) {
     // height-1 tensor carries data only in row 0 of each tile, with rows 1..31 zero-filled, so an
     // implementation that subtracts tile-for-tile masks only token row 0 and lets every other row
     // argmax onto the first padding column.
+    //
+    // The mask is independent of the BATCH for the same reason one level up: every sequence is
+    // decoded by the same lm_head, so the same columns are padding for all of them. kBatch > 1 makes
+    // that explicit -- one [1, 1, 1, V] mask has to cover both entries, and the reader addresses mask
+    // tiles by column alone, with no batch stride to get wrong.
+    constexpr uint32_t kBatch = 2;
     constexpr uint32_t kRows = 32;          // must exceed 1, or the unmasked rows do not exist
     constexpr uint32_t kVocab = 64;         // real vocabulary
     constexpr uint32_t kPaddedVocab = 128;  // what a TP-padded LM head actually emits
@@ -404,14 +410,16 @@ TEST_F(TrivialTnnFixedTest, TestSamplingBroadcastPaddingMask) {
     // Real columns are negative (kBestRealId least so); padding columns sit at 0.0, exactly as
     // zero-filled LM-head rows do. So an UNMASKED argmax lands on kVocab -- the first padding
     // column -- and a correctly masked one lands on kBestRealId.
-    xt::xarray<float>::shape_type logits_shape = {1, 1, kRows, kPaddedVocab};
+    xt::xarray<float>::shape_type logits_shape = {kBatch, 1, kRows, kPaddedVocab};
     xt::xarray<float> logits = xt::zeros<float>(logits_shape);
-    for (uint32_t r = 0; r < kRows; ++r) {
-        for (uint32_t c = 0; c < kVocab; ++c) {
-            logits(0, 0, r, c) = -1.0F;
+    for (uint32_t b = 0; b < kBatch; ++b) {
+        for (uint32_t r = 0; r < kRows; ++r) {
+            for (uint32_t c = 0; c < kVocab; ++c) {
+                logits(b, 0, r, c) = -1.0F;
+            }
+            logits(b, 0, r, kBestRealId) = -0.5F;
+            // columns [kVocab, kPaddedVocab) stay at 0.0
         }
-        logits(0, 0, r, kBestRealId) = -0.5F;
-        // columns [kVocab, kPaddedVocab) stay at 0.0
     }
 
     xt::xarray<float>::shape_type mask_shape = {1, 1, 1, kPaddedVocab};
@@ -427,9 +435,9 @@ TEST_F(TrivialTnnFixedTest, TestSamplingBroadcastPaddingMask) {
     // Greedy: exact and deterministic, so assert the strongest thing -- every row picks the best
     // REAL column. A row that missed the mask would report kVocab instead.
     auto greedy = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_logits, 0.0F, 42, tensor_mask));
-    ASSERT_EQ(greedy.size(), kRows);
-    EXPECT_EQ(greedy, std::vector<uint32_t>(kRows, kBestRealId))
-        << "a [1, 1, 1, V] mask must apply to every token row, not just row 0";
+    ASSERT_EQ(greedy.size(), kBatch * kRows);
+    EXPECT_EQ(greedy, std::vector<uint32_t>(kBatch * kRows, kBestRealId))
+        << "a [1, 1, 1, V] mask must apply to every token row of every batch entry, not just row 0";
 
     // Positive temperature compiles a different kernel (the noise and the scaling are no longer
     // compiled out), so the broadcast has to hold there too. The noise makes the winner among the
@@ -441,8 +449,8 @@ TEST_F(TrivialTnnFixedTest, TestSamplingBroadcastPaddingMask) {
     if (board != tt::BoardType::P100 && board != tt::BoardType::P150) {
         auto sampled =
             ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(tensor_logits, 1.0F, 4242, tensor_mask));
-        ASSERT_EQ(sampled.size(), kRows);
-        for (uint32_t r = 0; r < kRows; ++r) {
+        ASSERT_EQ(sampled.size(), kBatch * kRows);
+        for (uint32_t r = 0; r < kBatch * kRows; ++r) {
             EXPECT_LT(sampled[r], kVocab) << "row " << r << " sampled a masked padding column";
         }
     }
@@ -495,6 +503,66 @@ TEST_F(TrivialTnnFixedTest, TestSamplingRaggedShapes) {
     for (uint32_t i = 0; i < sampled.size(); ++i) {
         EXPECT_LT(sampled[i], kVocab) << "index " << i << " left the logical vocabulary";
     }
+}
+
+TEST_F(TrivialTnnFixedTest, TestSamplingHonoursBufferPlacement) {
+    // TensorAccessorArgs bakes buffer placement into the reader/writer COMPILE-TIME args: it sets
+    // ArgConfig::IsDram from buffer->is_dram() and emits the buffer's aligned_page_size, both of
+    // which differ between DRAM and L1 (see tensor_accessor_args.cpp). Two calls that differ ONLY in
+    // placement therefore need two different programs -- but they have identical shapes, dtypes and
+    // mask-ness, so they collide in the program cache unless placement is part of its key. On the
+    // second call the cache hit patches addresses only, leaving accessors compiled for the wrong
+    // memory space pointed at the other one's addresses.
+    //
+    // Order matters: the DRAM call must run FIRST so it is the entry the L1 call then collides with.
+    constexpr uint32_t kRows = 32;
+    constexpr uint32_t kVocab = 64;
+    constexpr uint32_t kDecoy = kVocab - 1;  // always the raw argmax; only the mask can dethrone it
+
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    xt::xarray<float>::shape_type shape = {1, 1, kRows, kVocab};
+    xt::xarray<float> a = xt::zeros<float>(shape);
+    a.fill(-1.0F);
+    std::vector<uint32_t> expected(kRows);
+    for (uint32_t r = 0; r < kRows; ++r) {
+        const uint32_t winner = (r * 7U + 3U) % (kVocab - 1U);  // never the decoy
+        a(0, 0, r, winner) = 1.0F;
+        expected[r] = winner;
+    }
+
+    // ---- logits placement ----
+    auto dram_logits = ttml::core::from_xtensor(a, device);
+    ASSERT_EQ(dram_logits.memory_config().buffer_type(), tt::tt_metal::BufferType::DRAM);
+    auto from_dram = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(dram_logits, 0.0F, 42));
+    EXPECT_EQ(from_dram, expected) << "DRAM logits";
+
+    auto l1_logits = ttml::ttnn_fixed::to_l1_interleaved(dram_logits);
+    ASSERT_EQ(l1_logits.memory_config().buffer_type(), tt::tt_metal::BufferType::L1);
+    auto from_l1 = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(l1_logits, 0.0F, 42));
+    EXPECT_EQ(from_l1, expected) << "L1 logits must sample identically to DRAM logits";
+
+    // ---- mask placement ----
+    // Only the mask's has_value() reaches the program hash, never where it lives. The decoy column
+    // outranks every real winner, so a mask read from the wrong memory space cannot go unnoticed.
+    xt::xarray<float> decoyed = a;
+    for (uint32_t r = 0; r < kRows; ++r) {
+        decoyed(0, 0, r, kDecoy) = 2.0F;
+    }
+    xt::xarray<float>::shape_type mask_shape = {1, 1, 1, kVocab};
+    xt::xarray<float> m = xt::zeros<float>(mask_shape);
+    m(0, 0, 0, kDecoy) = 1e4F;
+
+    auto decoyed_logits = ttml::core::from_xtensor(decoyed, device);
+    auto dram_mask = ttml::core::from_xtensor(m, device);
+    ASSERT_EQ(dram_mask.memory_config().buffer_type(), tt::tt_metal::BufferType::DRAM);
+    auto masked_dram = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(decoyed_logits, 0.0F, 42, dram_mask));
+    EXPECT_EQ(masked_dram, expected) << "DRAM mask";
+
+    auto l1_mask = ttml::ttnn_fixed::to_l1_interleaved(dram_mask);
+    ASSERT_EQ(l1_mask.memory_config().buffer_type(), tt::tt_metal::BufferType::L1);
+    auto masked_l1 = ttml::core::to_vector<uint32_t>(ttml::ttnn_fixed::sample(decoyed_logits, 0.0F, 42, l1_mask));
+    EXPECT_EQ(masked_l1, expected) << "L1 mask must suppress the decoy exactly as a DRAM mask does";
 }
 
 TEST_F(TrivialTnnFixedTest, TestSamplingGumbelMatchesSoftmaxDistribution) {

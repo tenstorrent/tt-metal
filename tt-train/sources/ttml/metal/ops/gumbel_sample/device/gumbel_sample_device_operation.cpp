@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <enchantum/enchantum.hpp>
+#include <optional>
 
 #include "gumbel_sample_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
@@ -36,6 +37,14 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
     const auto& logits = tensor_args.logits;
     check_tensor(logits, "logits");
 
+    // The logits pick the device: the program is built against logits.device() and dispatched there.
+    // Every OTHER tensor contributes only a raw buffer ADDRESS to that program's runtime args, and
+    // addresses are local to a device's address space -- so a tensor belonging to a different mesh
+    // would have its address reinterpreted against unrelated memory on this one. That is not a
+    // fault, it is a silent read of whatever happens to live at that offset.
+    auto* device = logits.device();
+    TT_FATAL(device != nullptr, "GumbelSample: logits are not associated with a device");
+
     TT_FATAL(
         logits.dtype() == tt::tt_metal::DataType::BFLOAT16 || logits.dtype() == tt::tt_metal::DataType::FLOAT32,
         "GumbelSample: logits must be BFLOAT16 or FLOAT32, got '{}'",
@@ -59,6 +68,10 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
         const auto& mask = tensor_args.logits_padding_mask.value();
         check_tensor(mask, "logits_padding_mask");
         TT_FATAL(
+            mask.device() == device,
+            "GumbelSample: the mask must be on the same device as the logits (only its buffer address "
+            "reaches the kernel, and addresses are not portable across devices)");
+        TT_FATAL(
             mask.dtype() == logits.dtype(),
             "GumbelSample: mask dtype '{}' must match logits dtype '{}'",
             enchantum::to_string(mask.dtype()),
@@ -76,12 +89,34 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             mask.logical_shape()[-2] == 1U,
             "GumbelSample: mask token dim must be 1 (it is broadcast across all token rows), got {}. Build the "
-            "mask as [B, 1, 1, V].",
+            "mask as [1, 1, 1, V].",
             mask.logical_shape()[-2]);
+        // ... and independent of the batch for the same reason, one level up: every sequence in the
+        // batch is decoded by the SAME lm_head, so the same columns are padding for all of them. The
+        // reader relies on this -- it addresses mask tiles by column index alone, with no batch or
+        // row stride -- so a mask carrying real per-batch data would have only its batch-0 slice
+        // applied to every entry. Reject that rather than silently using a slice of it.
+        TT_FATAL(
+            mask.logical_shape()[-3] == 1U && mask.logical_shape()[-4] == 1U,
+            "GumbelSample: mask batch and channel dims must be 1 (one mask covers every batch entry), got [{}, {}, "
+            "{}, {}]. Build the mask as [1, 1, 1, V].",
+            mask.logical_shape()[-4],
+            mask.logical_shape()[-3],
+            mask.logical_shape()[-2],
+            mask.logical_shape()[-1]);
     }
 
     if (tensor_args.preallocated_output.has_value()) {
         const auto& out = tensor_args.preallocated_output.value();
+        // Same reasoning as the mask, plus: build_program dereferences output.buffer() directly, so a
+        // host-side tensor here would be a null dereference rather than a diagnosable error.
+        TT_FATAL(
+            out.storage_type() == ttnn::StorageType::DEVICE,
+            "GumbelSample requires 'preallocated_output' to be on DEVICE, got storage type '{}'",
+            enchantum::to_string(out.storage_type()));
+        TT_FATAL(out.buffer() != nullptr, "GumbelSample: preallocated output has a null buffer");
+        TT_FATAL(
+            out.device() == device, "GumbelSample: the preallocated output must be on the same device as the logits");
         TT_FATAL(
             out.dtype() == tt::tt_metal::DataType::UINT32,
             "GumbelSample: preallocated output must be UINT32, got '{}'",
@@ -131,13 +166,25 @@ ttsl::hash::hash_t GumbelSampleDeviceOperation::compute_program_hash(
     // cached noisy program be reused for a greedy call -- silently sampling when the caller asked
     // for argmax. `seed_axes` is in the key because it changes which mesh coordinates get distinct
     // programs.
+    // Buffer PLACEMENT is part of the key, not just presence. TensorAccessorArgs bakes
+    // ArgConfig::IsDram and the buffer's aligned_page_size into the reader/writer COMPILE-TIME args
+    // (tensor_accessor_args.cpp), and both differ between DRAM and L1. Two calls that differ only in
+    // placement would otherwise collide here, and the cache hit patches addresses only -- leaving
+    // accessors compiled for one memory space aimed at the other's addresses.
+    auto placement_of = [](const std::optional<ttnn::Tensor>& tensor) -> int {
+        return tensor.has_value() ? static_cast<int>(tensor->memory_config().buffer_type()) : -1;
+    };
+
     return tt::tt_metal::operation::hash_operation<GumbelSampleDeviceOperation>(
         args.temperature > 0.0F,
         args.seed_axes,
         logits.dtype(),
         logits.logical_shape(),
         logits.padded_shape(),
-        tensor_args.logits_padding_mask.has_value());
+        static_cast<int>(logits.memory_config().buffer_type()),
+        tensor_args.logits_padding_mask.has_value(),
+        placement_of(tensor_args.logits_padding_mask),
+        placement_of(tensor_args.preallocated_output));
 }
 
 }  // namespace ttml::metal::ops::gumbel_sample::device
