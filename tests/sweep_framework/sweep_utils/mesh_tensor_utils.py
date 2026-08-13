@@ -275,7 +275,14 @@ def _job_device_key(mesh_shape, l1_small_size, dispatch_core_axis, prefer_eth):
                 disp = ("WORKER", env_axis)
             else:
                 return None  # auto-detect axis is op-dependent -> not safe to share
-    return (tuple(mesh_shape), int(l1_small_size), bool(prefer_eth), disp)
+    # The source-derived device params are part of the opened config, so they belong in the key:
+    # without them a batch whose traced source changes mid-job would hit the cache and get a device
+    # still opened under the previous model's worker_l1_size. Empty (the default, and always when
+    # TTNN_SWEEP_DEVICE_PARAMS_FROM_SOURCE is off) leaves the key exactly as it was.
+    params = tuple(sorted(_device_params_from_source(_OPEN_TRACED_SOURCE).items()))
+    if not params:
+        return (tuple(mesh_shape), int(l1_small_size), bool(prefer_eth), disp)
+    return (tuple(mesh_shape), int(l1_small_size), bool(prefer_eth), disp, params)
 
 
 def create_mesh_device(
@@ -443,11 +450,41 @@ _FABRIC_APPLIED = False
 #   TTNN_SWEEP_WORKER_L1_SIZE     e.g. 1345000  (llama3_70b_galaxy)
 #   TTNN_SWEEP_TRACE_REGION_SIZE
 #   TTNN_SWEEP_L1_SMALL_SIZE      overrides the 79104 default
-# Once the tracer records device_params (see the _device_params.json sidecar written by
-# tracer_pytest_plugin), the per-vector values should be threaded through here instead of the env.
+# tracer_pytest_plugin writes a _device_params.json sidecar for new traces, but the existing corpus
+# predates it and re-tracing every model is not feasible, so the per-vector values come from
+# device_params_resolver instead: every vector already carries traced_source, and the traced test's
+# device_params parametrization is still in the repo. Opt-in via TTNN_SWEEP_DEVICE_PARAMS_FROM_SOURCE
+# until one Galaxy A/B confirms it, because these are real workload changes -- worker_l1_size=1345000
+# is SMALLER than the default, so enabling it can turn a passing config into an allocator failure.
+# Same sequencing the fabric change used: env A/B first, default second.
 _WORKER_L1_ENV = "TTNN_SWEEP_WORKER_L1_SIZE"
 _TRACE_REGION_ENV = "TTNN_SWEEP_TRACE_REGION_SIZE"
 _L1_SMALL_ENV = "TTNN_SWEEP_L1_SMALL_SIZE"
+_FROM_SOURCE_ENV = "TTNN_SWEEP_DEVICE_PARAMS_FROM_SOURCE"
+
+# Only the keys this file is entitled to set. The rest are resolvable but deliberately NOT applied:
+#   fabric_config      - owned by fabric_config_for_mesh(); the mesh shape decides 1D/2D/None, and a
+#                        traced True would silently override that (and the set/reset pairing).
+#   dispatch_core_axis - already a dimension of the device-key batch, so a vector cannot change it
+#                        without splitting the batch it was scheduled into.
+#   dispatch_core_type - owned by create_mesh_device()'s _SINGLE_HOST_MAX_DEVICES ETH/WORKER rule.
+_SOURCE_APPLIED_KEYS = ("worker_l1_size", "trace_region_size", "l1_small_size", "num_command_queues")
+
+# The batch's traced source, set by the runner before the device is opened. A module global rather
+# than a parameter because the device is opened from mesh_device_fixture() deep under
+# create_mesh_device(), which has no vector context -- threading it would change the signature of
+# every sweep module's fixture for a value that is constant across the batch.
+_OPEN_TRACED_SOURCE = None
+
+
+def set_traced_source_for_open(source) -> None:
+    """Declare the traced source the next device open belongs to (None to clear).
+
+    Batch-scoped: the runner sets it once per batch from the vectors' traced_source, and only when
+    they agree, so a mixed batch falls back to defaults instead of borrowing one model's config for
+    another model's ops."""
+    global _OPEN_TRACED_SOURCE
+    _OPEN_TRACED_SOURCE = source
 
 
 def _int_env(name, default=0):
@@ -466,20 +503,64 @@ def _int_env(name, default=0):
     return value
 
 
-def extra_device_open_kwargs(l1_small_size):
-    """The device-open kwargs beyond mesh_shape/dispatch, honouring env overrides.
+def _device_params_from_source(traced_source):
+    """The traced test's device_params, restricted to the keys this file may set.
 
-    Returns a dict to splat into ttnn.open_mesh_device. Only includes a key when it is non-zero,
-    so an unset override leaves ttnn on its own default and the call stays byte-identical to
-    before this existed."""
-    kwargs = {"l1_small_size": _int_env(_L1_SMALL_ENV, l1_small_size)}
-    worker_l1 = _int_env(_WORKER_L1_ENV, 0)
+    Returns {} unless TTNN_SWEEP_DEVICE_PARAMS_FROM_SOURCE is truthy. Non-int values are dropped
+    rather than coerced: every applied key is a byte size or a queue count, so anything that is not
+    an int is a shape we did not anticipate and guessing at it is worse than leaving the default.
+    """
+    if not traced_source or os.environ.get(_FROM_SOURCE_ENV, "").strip().lower() not in ("1", "true", "yes", "on"):
+        return {}
+    # A vector merged from several traces carries a list of sources; they must agree, or we cannot
+    # attribute a value to this vector any more than a multi-variant parametrization could.
+    sources = traced_source if isinstance(traced_source, (list, tuple)) else [traced_source]
+    sources = [s for s in sources if isinstance(s, str) and s]
+    if not sources:
+        return {}
+
+    try:
+        from model_tracer.device_params_resolver import resolve_device_params
+
+        resolved = [dict(resolve_device_params(s)) for s in sources]
+    except Exception as exc:  # resolver import/parse must never break a sweep
+        logger.debug(f"SWEEPS: device_params resolution unavailable: {exc}")
+        return {}
+
+    out = {}
+    for key in _SOURCE_APPLIED_KEYS:
+        values = [r[key] for r in resolved if key in r]
+        if len(values) != len(resolved) or not values:
+            continue
+        value = values[0]
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            continue
+        if all(v == value for v in values[1:]):
+            out[key] = value
+    if out:
+        logger.info(f"SWEEPS: device_params from traced source {sources[0]}: {out}")
+    return out
+
+
+def extra_device_open_kwargs(l1_small_size, traced_source=None):
+    """The device-open kwargs beyond mesh_shape/dispatch, from the traced source and env overrides.
+
+    Returns a dict to splat into ttnn.open_mesh_device. Precedence is env > traced source > ttnn
+    default, and a key is only included when it is non-zero, so with nothing set the call stays
+    byte-identical to before this existed."""
+    from_source = _device_params_from_source(_OPEN_TRACED_SOURCE if traced_source is None else traced_source)
+
+    kwargs = {"l1_small_size": _int_env(_L1_SMALL_ENV, from_source.get("l1_small_size", l1_small_size))}
+    worker_l1 = _int_env(_WORKER_L1_ENV, from_source.get("worker_l1_size", 0))
     if worker_l1:
         kwargs["worker_l1_size"] = worker_l1
-    trace_region = _int_env(_TRACE_REGION_ENV, 0)
+    trace_region = _int_env(_TRACE_REGION_ENV, from_source.get("trace_region_size", 0))
     if trace_region:
         kwargs["trace_region_size"] = trace_region
-    if worker_l1 or trace_region or kwargs["l1_small_size"] != l1_small_size:
+    num_cqs = from_source.get("num_command_queues", 0)
+    if num_cqs:
+        kwargs["num_command_queues"] = num_cqs
+    if worker_l1 or trace_region or num_cqs or kwargs["l1_small_size"] != l1_small_size:
         logger.info(f"SWEEPS: device-open overrides in effect: {kwargs}")
     return kwargs
 

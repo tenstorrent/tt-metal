@@ -133,6 +133,12 @@ def _per_test_trace_dir(request):
 # worker_l1_size=1345000, or with a fabric the model never set, runs the op under a device
 # configuration the model never used.
 #
+# This sidecar only covers NEW traces. The existing corpus predates it and re-tracing every model is
+# not feasible, so device_params_resolver.py recovers the same information for already-traced
+# executions by reading the parametrization back out of the test named in their recorded `source`.
+# Both paths produce the same key set (DEVICE_PARAM_KEYS there mirrors _DEVICE_PARAM_KEYS here); the
+# sidecar is authoritative where it exists, since it records the value the test actually ran with.
+#
 # Captured from the device_params FIXTURE VALUE rather than by intercepting open_mesh_device: it is
 # already materialised by the time the test runs, needs no device access, and stays correct if the
 # open path changes. Only read when the test actually declares it, so tests without device_params

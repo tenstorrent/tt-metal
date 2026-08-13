@@ -344,6 +344,7 @@ def run(input_queue, output_queue, config: SweepsConfig):
         clear_job_device_program_cache,
         close_job_device,
         device_canary,
+        set_traced_source_for_open,
     )
 
     module_cache = {}
@@ -372,7 +373,17 @@ def run(input_queue, output_queue, config: SweepsConfig):
             if item == _WORKER_CLOSE:
                 return
 
-            module_name, test_vector = item
+            # 3-tuple carries the vector's traced source so the device can be opened with the
+            # traced test's device_params; 2-tuple stays accepted so an in-flight vector from an
+            # older parent (or any other producer) is never mistaken for a sentinel.
+            if isinstance(item, tuple) and len(item) == 3:
+                module_name, test_vector, traced_source = item
+            else:
+                module_name, test_vector = item
+                traced_source = None
+            # Before get_devices() below: the fixture opens the mesh, and the source has to be
+            # declared while the open is still ahead of us.
+            set_traced_source_for_open(traced_source)
             test_module = module_cache.get(module_name)
             if test_module is None:
                 test_module = importlib.import_module("sweeps." + module_name)
@@ -520,7 +531,16 @@ def _kill_child(p, timeout_before_rejoin):
 
 
 def _attempt_vector(
-    test_vector, module_name, input_queue, output_queue, config, timeout, child_mode, p, main_proc_runner
+    test_vector,
+    module_name,
+    input_queue,
+    output_queue,
+    config,
+    timeout,
+    child_mode,
+    p,
+    main_proc_runner,
+    traced_source=None,
 ):
     """Send a single vector to the child process and collect the result.
 
@@ -534,8 +554,10 @@ def _attempt_vector(
     if p is None and main_proc_runner is not None:
         main_proc_runner(test_vector)
     else:
-        # persistent worker is module-agnostic: tag each vector with its module
-        input_queue.put((module_name, test_vector))
+        # persistent worker is module-agnostic: tag each vector with its module, and with the
+        # traced source it came from (sanitize_inputs strips that into header_info, so the child
+        # has no other way to know which model's device_params the vector was traced under).
+        input_queue.put((module_name, test_vector, traced_source))
 
     response = output_queue.get(block=True, timeout=timeout)
     return response, p
@@ -964,6 +986,7 @@ def _execute_vector_with_retry(
     p,
     result,
     main_proc_runner=None,
+    traced_source=None,
 ):
     """Execute a single test vector with up to MAX_RETRIES retries on timeout.
 
@@ -986,6 +1009,7 @@ def _execute_vector_with_retry(
                 child_mode,
                 p,
                 main_proc_runner,
+                traced_source,
             )
             _populate_result_from_response(result, response, config, suite_name, input_hash)
 
@@ -1272,6 +1296,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                     p,
                     result,
                     main_proc_runner,
+                    header_info[i].get("traced_source"),
                 )
                 p = result.pop("_child_process", p)
                 abort_suite = result.pop("_abort_suite", False)
