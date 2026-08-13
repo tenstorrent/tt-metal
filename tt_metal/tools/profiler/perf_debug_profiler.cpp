@@ -388,6 +388,19 @@ uint32_t drisc_zone_hold_cycles() {
     return v;
 }
 
+// TT_METAL_PERF_DEBUG_NOC_FOOTPRINT=1 makes each drainer sample its OWN NIU master counters once per sweep
+// (8 local MMIO loads, no NoC traffic of its own) and report the NoC bytes and transactions it actually issued,
+// on both NoCs. This exists because every footprint figure we have is ARITHMETIC over frame counts; this is the
+// hardware's own tally. Off by default: the per-sweep sample is not free on a drainer that is >99% idle, and
+// N+41 measured that a mere +4% on idle-sweep cost crosses the knee at SD delay 15.
+uint32_t noc_footprint() {
+    static const uint32_t v = [] {
+        const char* s = std::getenv("TT_METAL_PERF_DEBUG_NOC_FOOTPRINT");
+        return (s != nullptr && *s != '\0' && *s != '0') ? 1u : 0u;
+    }();
+    return v;
+}
+
 // DETAIL LEVEL. 0 (default) = DRISC-SWEEP + DRISC-PACE only: the two depth-0 zones that account for a
 // drainer's whole cadence with no unexplained whitespace, at ~4 markers per sweep. 1 = also the per-batch
 // child phases (read / read-wait / proc / credit-wait / write / wr-barrier), ~100 markers per sweep.
@@ -1815,7 +1828,8 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
                 (static_cast<uint32_t>(ctx.drisc_virtual[d].x) & 0xFFFFu) |
                     ((static_cast<uint32_t>(ctx.drisc_virtual[d].y) & 0xFFFFu) << 16),
                 self_frames_cap,
-                drisc_zone_detail()};
+                drisc_zone_detail(),
+                noc_footprint()};
             const std::string kdrain = "tt_metal/tools/profiler/kernels/drisc_profiler_drain.cpp";
             auto drain_id =
                 tensix_drain ? CreateKernel(
@@ -3278,6 +3292,96 @@ void PerfDebugProfiler::stop() {
                         d,
                         res[66]);
                 }
+
+            }
+            // ---- NoC FOOTPRINT (out[88..129], TT_METAL_PERF_DEBUG_NOC_FOOTPRINT=1) ----
+            //
+            // The hardware's own tally of what this drainer put on the mesh, replacing arithmetic over
+            // frame counts. TWO BLOCKS, NEVER BLENDED: the workload window (first busy sweep -> last busy
+            // sweep) and the resident lifetime (device open -> teardown). A resident drainer polls from
+            // device open, so the lifetime figure is dominated by traffic no workload asked for, and one
+            // number for both is the wrong-population trap this file has been burned by twice.
+            if (res[128] != 0) {
+                const uint32_t wbytes = res[129];  // NOC_WORD_BYTES, from the device header -- never hardcoded
+                auto q = [&](uint32_t base, uint32_t noc, uint32_t k) {
+                    const uint32_t o = base + (noc * 4u + k) * 2u;
+                    return (static_cast<uint64_t>(res[o + 1]) << 32) | res[o];
+                };
+                // A posted write is acked without the data words being counted where we read them, so a
+                // non-zero count means the byte totals are UNDER-reported. Every write on this path is
+                // posted=false, so this must be 0; say so rather than print a plausible low number.
+                const bool posted_ok = (res[125] == 0 && res[126] == 0);
+                const bool win_ok = (res[127] != 0);
+                for (uint32_t blk = 0; blk < 2; blk++) {
+                    const uint32_t base = (blk == 0) ? 104u : 88u;
+                    if (blk == 0 && !win_ok) {
+                        log_warning(
+                            tt::LogMetal,
+                            "[perf-debug profiler] DRISC {} NoC FOOTPRINT -- WORKLOAD WINDOW: no sweep ever "
+                            "did work, so there is no window to report. Lifetime block follows.",
+                            d);
+                        continue;
+                    }
+                    uint64_t rw = 0, rt = 0, ww = 0, wt = 0;
+                    for (uint32_t n = 0; n < 2; n++) {
+                        rw += q(base, n, 0);
+                        rt += q(base, n, 1);
+                        ww += q(base, n, 2);
+                        wt += q(base, n, 3);
+                    }
+                    const uint64_t bytes = (rw + ww) * wbytes;
+                    const uint64_t txns = rt + wt;
+                    log_info(
+                        tt::LogMetal,
+                        "[perf-debug profiler] DRISC {} NoC FOOTPRINT -- {}: {:.2f} MB in {} txns "
+                        "[NoC0 rd {:.2f} MB/{} txn, wr {:.2f} MB/{} txn | NoC1 rd {:.2f} MB/{} txn, wr "
+                        "{:.2f} MB/{} txn] | mean {} B/txn{}",
+                        d,
+                        blk == 0 ? "WORKLOAD WINDOW" : "RESIDENT LIFETIME",
+                        bytes / (1024.0 * 1024.0),
+                        txns,
+                        q(base, 0, 0) * wbytes / (1024.0 * 1024.0),
+                        q(base, 0, 1),
+                        q(base, 0, 2) * wbytes / (1024.0 * 1024.0),
+                        q(base, 0, 3),
+                        q(base, 1, 0) * wbytes / (1024.0 * 1024.0),
+                        q(base, 1, 1),
+                        q(base, 1, 2) * wbytes / (1024.0 * 1024.0),
+                        q(base, 1, 3),
+                        txns != 0 ? bytes / txns : 0,
+                        posted_ok ? "" : "  <<< POSTED WRITES SEEN: byte totals are UNDER-reported");
+                    if (blk == 0) {
+                        const uint64_t wcyc = (static_cast<uint64_t>(res[122]) << 32) | res[121];
+                        log_info(
+                            tt::LogMetal,
+                            "[perf-debug profiler] DRISC {}   window = {} sweeps / {} cycles. Amplification "
+                            "is NOT printed here: the frame payload is on the role-split line above, and a "
+                            "ratio belongs in FINDINGS with its derivation shown rather than asserted here",
+                            d,
+                            res[120],
+                            wcyc);
+                    }
+                }
+                // The instrument's own cost, as a share of the run. If this is not small the footprint
+                // numbers describe a perturbed drainer, and N+41 measured that +4% on idle-sweep cost is
+                // enough to cross the knee at SD delay 15.
+                const uint64_t nfc = (static_cast<uint64_t>(res[124]) << 32) | res[123];
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] DRISC {}   instrument cost {} cycles over {} sweeps "
+                    "({} cyc/sweep) -- compare against the sweep durations above before trusting the "
+                    "footprint at the knee",
+                    d,
+                    nfc,
+                    res[4],
+                    res[4] != 0 ? nfc / res[4] : 0);
+                log_info(
+                    tt::LogMetal,
+                    "[perf-debug profiler] DRISC {}   NO workload-relative percentage is quoted: the "
+                    "workload's own NoC traffic was not measured. That needs victim-side NIU_SLV deltas "
+                    "against a drainers-off baseline.",
+                    d);
+            }
                 // The cross-check side: phase totals over EXACTLY the sweeps the zones describe, so summing
                 // zone durations per name out of the Tracy capture must reproduce these. See the kernel.
                 auto u64r = [&res](size_t i) { return (static_cast<uint64_t>(res[i + 1]) << 32) | res[i]; };
@@ -3297,7 +3401,6 @@ void PerfDebugProfiler::stop() {
                     u64r(81) / kCycPerUs,
                     u64r(83) / kCycPerUs);
                 }
-            }
             const uint32_t sweeps_busy = res[4] > res[20] ? res[4] - res[20] : 0;
             log_info(
                 tt::LogMetal,

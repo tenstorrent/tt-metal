@@ -321,6 +321,19 @@ void kernel_main() {
     // frame instead of 2.5 -- so it is the level at which tracing EVERY sweep is nearly free. Detail is a
     // compile-time knob rather than a code change, so the cheap level stays available as the one left on.
     constexpr uint32_t kSelfDetail = get_compile_time_arg_val(36);
+    // ---- NoC FOOTPRINT (compile arg 37; 0 = off, and then every line below folds away to nothing) ----
+    //
+    // Measures the drainer's OWN NoC traffic off its NIU MASTER counters: bytes and transactions, per NoC,
+    // split read vs write. It exists because the footprint figures in FINDINGS are arithmetic over
+    // `sweeps x cores x kSpanBytes`, and a counter is exactly what arithmetic like that should be replaced by.
+    //
+    // LOCAL LOADS ONLY, so the instrument cannot perturb the quantity it measures. NOC_STATUS_READ_REG is a
+    // plain load from (noc << NOC_INSTANCE_OFFSET_BIT) + NOC_STATUS(id) -- this core's own memory-mapped NIU
+    // register block -- and issues NO NoC transaction. write_barrier_bounded above already reads
+    // NIU_MST_WR_ACK_RECEIVED the same way. Every address comes from NOC_STATUS() in noc_parameters.h and
+    // none is ever written as a literal: test_cluster_bh.cpp carries a misnamed 0xffb202e0 and copying a
+    // literal from there would propagate the error into a number nobody could check.
+    constexpr uint32_t kNocFootprint = get_compile_time_arg_val(37);
     constexpr bool kSelfPhases = kSelfZones != 0 && kSelfDetail != 0;
     // The self frame lives in staging slot kNStage -- one PAST every slot the drain pipeline can touch. The
     // host reserves it by passing (nstage - 1) as kNStage when this is on, so DRISC L1 does not grow and the
@@ -552,6 +565,45 @@ void kernel_main() {
     bool egress_dead = false;
     uint32_t credit_timeouts = 0;  // bounded credit wait expired -> frame dropped instead of deadlocking
     uint32_t dropped_frames = 0;
+    // ---- NoC FOOTPRINT state (all of it compiled out when kNocFootprint == 0) ----------------------------
+    //
+    // SAMPLED ONCE PER SWEEP INTO 64-BIT SOFTWARE ACCUMULATORS, and never differenced end to end. The NIU
+    // counters are 32 bits wide and they WRAP. A filler pulls one whole 10,496 B span per core per sweep --
+    // 164 NoC words of 64 B -- so at 30 cores it moves NIU_MST_RD_DATA_WORD_RECEIVED by 164 x 30 = 4,920
+    // words every sweep, and 2^32 / 4,920 = ~873,000 sweeps to wrap. A resident filler runs 167k-379k sweeps
+    // during a single ~2 ms capture (FINDINGS N+41), i.e. the SAME ORDER OF MAGNITUDE as the wrap: an
+    // entry/exit difference would read plausibly and be silently wrong on any longer run, and would go
+    // NEGATIVE-looking (huge) on a run that wrapped once. Per-sweep deltas are 32-bit-safe by a wide margin
+    // because one sweep cannot move any counter by anything close to 2^32.
+    //
+    // Index order is fixed by kNfRdW..kNfWrT below and is shared with the host's report, which reads these
+    // straight out of out[] -- so the order is part of the wire format, not an implementation detail.
+    constexpr uint32_t kNfRdW = 0;  // NIU_MST_RD_DATA_WORD_RECEIVED  -- read bytes in, in 64 B NoC words
+    constexpr uint32_t kNfRdT = 1;  // NIU_MST_RD_REQ_SENT            -- read transactions issued
+    constexpr uint32_t kNfWrW = 2;  // NIU_MST_NONPOSTED_WR_DATA_WORD_SENT -- write bytes out, in NoC words
+    constexpr uint32_t kNfWrT = 3;  // NIU_MST_NONPOSTED_WR_REQ_SENT  -- write transactions issued
+    constexpr uint32_t kNfN = 4;
+    uint32_t nf_prev[2][kNfN] = {{0, 0, 0, 0}, {0, 0, 0, 0}};
+    uint64_t nf_life[2][kNfN] = {{0, 0, 0, 0}, {0, 0, 0, 0}};
+    // The workload window: from the START of the first sweep that did work to the END of the last one. That
+    // is the same work-triggered definition self-profiling settled on (FINDINGS N+41), and it is the whole
+    // reason there are two blocks rather than one -- a drainer is resident from device open, so a lifetime
+    // figure is dominated by polling OUTSIDE any workload and blending the two is the wrong-population trap.
+    // Idle sweeps INTERLEAVED inside the window are included, deliberately: their span reads are real.
+    uint64_t nf_win_base[2][kNfN] = {{0, 0, 0, 0}, {0, 0, 0, 0}};
+    uint64_t nf_win_last[2][kNfN] = {{0, 0, 0, 0}, {0, 0, 0, 0}};
+    bool nf_win_open = false;
+    uint32_t nf_win_sweep_first = 0, nf_win_sweep_last = 0;
+    uint64_t nf_win_t0 = 0, nf_win_t1 = 0;
+    uint64_t nf_cost = 0;  // cycles this instrument spent on its own register reads -- reported, not hidden
+    // Posted writes, sampled ONCE at entry and once at exit rather than per sweep. Every write this kernel
+    // issues is non-posted (the D2H push passes posted=false and the write barrier waits on WR_ACK, which a
+    // posted write never returns), so these MUST come out 0. They are here because the byte totals above
+    // count non-posted words only: if a posted write ever appears, the totals are UNDER-reported and the host
+    // says so instead of quietly printing a low number. Entry/exit differencing is safe precisely because the
+    // expected value is 0 -- there is nothing to wrap.
+    uint32_t nf_posted_entry[2] = {0, 0};
+    uint32_t nf_posted_txns[2] = {0, 0};
     // ---- DRISC SELF-PROFILING: the last egress call's phase boundaries -----------------------------------
     //
     // stage_run/ship_once RECORD their credit-wait/write boundaries here instead of emitting zones directly,
@@ -1039,6 +1091,100 @@ void kernel_main() {
         }
     }
 
+    // ---- NoC FOOTPRINT: the one sampling primitive, and the only place NIU registers are read ------------
+    //
+    // Folds to nothing when the feature is off: `if constexpr` on a compile arg, so the OFF build has no
+    // check, no call and no register pressure -- which is the standard this file already holds itself to
+    // (FINDINGS N+41 measured a 6x difference between a runtime check inside an emitter and a compile-time
+    // one at the call site).
+    //
+    // Both NoCs are read unconditionally rather than just the one this role uses. A filler reads on kReadNoc
+    // and writes on NOC_INDEX, a mover does both on NOC_INDEX -- but that is the thing being verified, not an
+    // assumption to bake in. The zeros are the measurement: if a filler's NoC 0 read counter is non-zero the
+    // read/write NoC split is not doing what the code claims.
+    auto nf_sample = [&]() {
+        if constexpr (kNocFootprint == 0) {
+            return;
+        } else {
+            const uint64_t t0 = get_timestamp();
+            for (uint32_t n = 0; n < 2; n++) {
+                const uint32_t cur[kNfN] = {
+                    NOC_STATUS_READ_REG(n, NIU_MST_RD_DATA_WORD_RECEIVED),
+                    NOC_STATUS_READ_REG(n, NIU_MST_RD_REQ_SENT),
+                    NOC_STATUS_READ_REG(n, NIU_MST_NONPOSTED_WR_DATA_WORD_SENT),
+                    NOC_STATUS_READ_REG(n, NIU_MST_NONPOSTED_WR_REQ_SENT),
+                };
+                for (uint32_t k = 0; k < kNfN; k++) {
+                    // 32-bit subtract FIRST, then widen. That is what makes this wrap-proof: the truncated
+                    // difference of two 32-bit samples is the true delta for any delta < 2^32, whether or not
+                    // the counter rolled over between them.
+                    nf_life[n][k] += static_cast<uint64_t>(static_cast<uint32_t>(cur[k] - nf_prev[n][k]));
+                    nf_prev[n][k] = cur[k];
+                }
+            }
+            nf_cost += get_timestamp() - t0;
+        }
+    };
+    // Called at the end of every sweep: sample, then decide whether this sweep extends the workload window.
+    //
+    // Sampled HERE, after the sweep body and before the pacing gap. The gap issues no NoC traffic, so which
+    // side of it the sample falls on cannot change any byte total; taking it before means the window's
+    // DURATION is measured over sweeps rather than over sweeps-plus-whatever-pace-trailed-the-last-one, which
+    // is the honest denominator for a MB/s figure.
+    auto nf_sweep_end = [&](uint64_t t_sweep0, uint32_t sweep_cyc, bool did_work) {
+        if constexpr (kNocFootprint == 0) {
+            (void)t_sweep0;
+            (void)sweep_cyc;
+            (void)did_work;
+            return;
+        } else {
+            // Snapshot the accumulators as they stood BEFORE this sweep, so a window opening here starts at
+            // zero traffic for this sweep rather than part-way through it. Costs no register reads: the
+            // previous sample already left nf_life holding exactly the through-last-sweep totals.
+            uint64_t nf_before[2][kNfN];
+            for (uint32_t n = 0; n < 2; n++) {
+                for (uint32_t k = 0; k < kNfN; k++) {
+                    nf_before[n][k] = nf_life[n][k];
+                }
+            }
+            nf_sample();
+            if (!did_work) {
+                return;
+            }
+            if (!nf_win_open) {
+                nf_win_open = true;
+                nf_win_sweep_first = sweeps;
+                nf_win_t0 = t_sweep0;
+                for (uint32_t n = 0; n < 2; n++) {
+                    for (uint32_t k = 0; k < kNfN; k++) {
+                        nf_win_base[n][k] = nf_before[n][k];
+                    }
+                }
+            }
+            nf_win_sweep_last = sweeps;
+            nf_win_t1 = t_sweep0 + sweep_cyc;
+            for (uint32_t n = 0; n < 2; n++) {
+                for (uint32_t k = 0; k < kNfN; k++) {
+                    nf_win_last[n][k] = nf_life[n][k];
+                }
+            }
+        }
+    };
+
+    if constexpr (kNocFootprint != 0) {
+        // Seed the mirrors so the first sweep's delta is measured from HERE, not from whatever the counters
+        // held at chip reset. Everything the bring-up path did (NIU flip, socket config, the mock staging
+        // fill) is therefore excluded from both blocks, which is what makes the lifetime figure mean "this
+        // drain loop" rather than "this core since power-on".
+        for (uint32_t n = 0; n < 2; n++) {
+            nf_prev[n][kNfRdW] = NOC_STATUS_READ_REG(n, NIU_MST_RD_DATA_WORD_RECEIVED);
+            nf_prev[n][kNfRdT] = NOC_STATUS_READ_REG(n, NIU_MST_RD_REQ_SENT);
+            nf_prev[n][kNfWrW] = NOC_STATUS_READ_REG(n, NIU_MST_NONPOSTED_WR_DATA_WORD_SENT);
+            nf_prev[n][kNfWrT] = NOC_STATUS_READ_REG(n, NIU_MST_NONPOSTED_WR_REQ_SENT);
+            nf_posted_entry[n] = NOC_STATUS_READ_REG(n, NIU_MST_POSTED_WR_REQ_SENT);
+        }
+    }
+
     const uint64_t t_start = get_timestamp();
     while (sweeps < kMaxSweeps && *stop == 0 && !egress_dead) {
         sweeps++;
@@ -1518,6 +1664,7 @@ void kernel_main() {
         } else {
             c_busy += sweep_cyc;
         }
+        nf_sweep_end(t_sweep0, sweep_cyc, frames != frames_at_sweep_start);
 
         // ---- close this sweep's SWEEP zone; the PACE zone and the publish come AFTER the gap ----
         //
@@ -1771,8 +1918,64 @@ void kernel_main() {
     // MUST equal out[73] (self_tail). Anything less is trace LOST IN THE RING at teardown -- the defect the
     // tail flush above exists to prevent, and one that no other counter shows.
     out[87] = self_words_shipped;
+    // ---- NoC FOOTPRINT counters (0 on the default path) --------------------------------------------------
+    //
+    // TWO BLOCKS, NEVER BLENDED. `life` covers every sweep this drain loop ran; `win` covers the workload
+    // window only (first sweep that did work .. last sweep that did work, inclusive of the idle sweeps
+    // between them). They differ by orders of magnitude and mean different things: a resident drainer polls
+    // from device open, so the lifetime figure is dominated by traffic that no workload asked for. Reporting
+    // one number for both would be the wrong-population trap this file has already been burned by twice.
+    //
+    // Word units, not bytes: these are NoC words as the NIU counts them. The host multiplies by the NoC word
+    // size ONCE, in one place, rather than every producer of a byte figure guessing at it.
+    {
+        // Final sample, so the lifetime block includes the last sweep, the exit drain wait and the teardown
+        // barrier. Without it the tail of the loop is missing and the totals read slightly low -- the same
+        // shape of silent shortfall as the self-profiling tail flush that could never fire (N+41).
+        nf_sample();
+        if constexpr (kNocFootprint != 0) {
+            for (uint32_t n = 0; n < 2; n++) {
+                nf_posted_txns[n] = static_cast<uint32_t>(
+                    NOC_STATUS_READ_REG(n, NIU_MST_POSTED_WR_REQ_SENT) - nf_posted_entry[n]);
+            }
+        }
+        uint32_t o = 88;
+        for (uint32_t n = 0; n < 2; n++) {
+            for (uint32_t k = 0; k < kNfN; k++) {
+                out[o++] = static_cast<uint32_t>(nf_life[n][k] & 0xFFFFFFFFu);
+                out[o++] = static_cast<uint32_t>(nf_life[n][k] >> 32);
+            }
+        }
+        // out[88..103]: life[noc][rd_words, rd_txns, wr_words, wr_txns], each 64-bit lo/hi
+        for (uint32_t n = 0; n < 2; n++) {
+            for (uint32_t k = 0; k < kNfN; k++) {
+                const uint64_t v = nf_win_last[n][k] - nf_win_base[n][k];
+                out[o++] = static_cast<uint32_t>(v & 0xFFFFFFFFu);
+                out[o++] = static_cast<uint32_t>(v >> 32);
+            }
+        }
+        // out[104..119]: win[noc][...] in the same order
+        out[120] = nf_win_open ? (nf_win_sweep_last - nf_win_sweep_first + 1u) : 0u;
+        const uint64_t win_cyc = nf_win_open ? (nf_win_t1 - nf_win_t0) : 0u;
+        out[121] = static_cast<uint32_t>(win_cyc & 0xFFFFFFFFu);
+        out[122] = static_cast<uint32_t>(win_cyc >> 32);
+        // The instrument's own cost, reported rather than hidden: 8 NIU register loads plus 2 clock reads per
+        // sweep. The host prints it as a share of the run so "the footprint counters are free" is a measured
+        // claim and not an assertion.
+        out[123] = static_cast<uint32_t>(nf_cost & 0xFFFFFFFFu);
+        out[124] = static_cast<uint32_t>(nf_cost >> 32);
+        // MUST BE ZERO on both NoCs. Non-zero means a posted write happened, and the word totals above count
+        // non-posted words only -- so the byte figures would be UNDER-reported. The host warns instead of
+        // printing a plausible low number.
+        out[125] = nf_posted_txns[0];
+        out[126] = nf_posted_txns[1];
+        out[127] = nf_win_open ? 1u : 0u;  // did the window ever open? (0 = no sweep did work)
+        out[128] = kNocFootprint;          // echo, so the host never guesses whether this block is valid
+        out[129] = NOC_WORD_BYTES;         // the byte scale, from the header -- host never hardcodes it
+    }
     static_assert(
-        kernel_profiler::SPSC_DRAIN_RESULT_WORDS >= 88, "the results block must hold the self-profiling counters");
+        kernel_profiler::SPSC_DRAIN_RESULT_WORDS >= 130,
+        "the results block must hold the self-profiling and NoC-footprint counters");
 
     *phase = kPhaseExit;
     // Only hand the socket back if the consumer was still alive. update_socket_config() talks to the same
