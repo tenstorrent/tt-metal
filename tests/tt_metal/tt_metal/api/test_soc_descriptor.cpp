@@ -12,6 +12,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -65,9 +66,9 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
     for (int device_id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
         devices_to_open.push_back(device_id);
     }
-    auto devices = detail::CreateDevices(devices_to_open);
+    auto devices = distributed::MeshDevice::create_unit_meshes(devices_to_open);
     for (int device_id = 0; device_id < num_devices; device_id++) {
-        tt_metal::IDevice* device = devices[device_id];
+        const auto& device = devices.at(device_id);
         uint32_t harvested_rows_mask =
             tt::tt_metal::MetalContext::instance().get_cluster().get_harvesting_mask(device_id);
         const metal_SocDescriptor& soc_desc =
@@ -86,8 +87,6 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
             }
         }
     }
-
-    tt::tt_metal::detail::CloseDevices(devices);
 }
 
 }  // namespace tt::tt_metal

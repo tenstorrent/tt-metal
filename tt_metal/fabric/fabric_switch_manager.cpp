@@ -39,6 +39,14 @@ void FabricSwitchManager::setup(FabricConfig fabric_config, FabricReliabilityMod
     // Cache the device map returned by CreateDevices to use directly in CloseDevices
     // TODO: Issue #34040 - If routers are in standby mode, we could skip full reinitialization
     // and just reactivate them instead of calling CreateDevices.
+    //
+    // Cannot migrate to MeshDevice::create_unit_mesh / create_unit_meshes:
+    // those APIs fatal on tt-switch meshes (see MeshDeviceImpl::create_unit_meshes).
+    // FabricSwitchManager must open physical switch devices via CreateDevices.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     switch_devices_ = tt::tt_metal::detail::CreateDevices(
         switch_device_ids,
         1,  // num_command_queues
@@ -51,6 +59,8 @@ void FabricSwitchManager::setup(FabricConfig fabric_config, FabricReliabilityMod
         true,                    // use_max_eth_core_count_on_all_devices
         // TOD: for future optimization, switch meshes don't need dispatch fw.
         true);  // initialize_fabric_and_dispatch_fw
+#pragma GCC diagnostic pop
+#pragma clang diagnostic pop
 }
 
 void FabricSwitchManager::teardown() {
@@ -63,8 +73,16 @@ void FabricSwitchManager::teardown() {
     // In the future, we could keep routers in standby mode instead of fully terminating
     // them, allowing faster reactivation without recompilation and re-handshake overhead.
     if (!switch_devices_.empty()) {
-        // Use the cached device map returned by CreateDevices
+        // Cannot migrate to MeshDevice::create_unit_mesh / create_unit_meshes:
+        // those APIs fatal on tt-switch meshes (see MeshDeviceImpl::create_unit_meshes).
+        // FabricSwitchManager must close physical switch devices via CloseDevices.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
         tt::tt_metal::detail::CloseDevices(switch_devices_);
+#pragma GCC diagnostic pop
+#pragma clang diagnostic pop
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
 
         switch_devices_.clear();

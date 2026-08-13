@@ -6,10 +6,12 @@
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "impl/context/metal_context.hpp"
 #include <iostream>
 #include <map>
+#include <memory>
 #include <numeric>
 #include <optional>
 #include <span>
@@ -33,6 +35,17 @@ using namespace tt::tt_metal::tools::mem_bench;
 
 // Global variable to store user-specified device ID
 std::optional<int> g_user_device_id;
+
+namespace {
+std::map<ChipId, IDevice*> device_ptrs_from_meshes(
+    const std::map<int, std::shared_ptr<distributed::MeshDevice>>& mesh_devices) {
+    std::map<ChipId, IDevice*> devices;
+    for (const auto& [id, mesh] : mesh_devices) {
+        devices[id] = mesh.get();
+    }
+    return devices;
+}
+}  // namespace
 
 // Read L1 counters (cycles, bytes rd, bytes wr) and increment test_results
 void read_inc_data_from_cores(const Context& ctx, IDevice* device, const CoreRange& cores, TestResult& test_results) {
@@ -162,7 +175,8 @@ TestResult mem_bench_copy_multithread(benchmark::State& state) {
 TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
     TestResult results;
     auto device_ids = get_device_ids_for_single_device(g_user_device_id);
-    auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
+    auto mesh_devices = distributed::MeshDevice::create_unit_meshes(device_ids);
+    auto devices = device_ptrs_from_meshes(mesh_devices);
     const uint32_t device_id = device_ids.empty() ? 0 : device_ids[0];
     IDevice* device = devices[device_id];
     Context ctx{
@@ -224,7 +238,6 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
     }
 
     report_device_bw(state, results);
-    tt::tt_metal::detail::CloseDevices(devices);
     return results;
 }
 
@@ -233,7 +246,8 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
 TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) {
     TestResult results;
     auto device_ids = get_device_ids_for_single_device(g_user_device_id);
-    auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
+    auto mesh_devices = distributed::MeshDevice::create_unit_meshes(device_ids);
+    auto devices = device_ptrs_from_meshes(mesh_devices);
     const uint32_t device_id = device_ids.empty() ? 0 : device_ids[0];
     IDevice* device = devices[device_id];
     Context ctx{
@@ -284,7 +298,6 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
     state.SetBytesProcessed(ctx.total_size * state.iterations());
 
     report_device_bw(state, results);
-    tt::tt_metal::detail::CloseDevices(devices);
     return results;
 }
 
@@ -343,7 +356,8 @@ TestResult mem_bench_multi_mmio_devices(
 TestResult mem_bench_multi_mmio_devices_reading_same_node(benchmark::State& state) {
     // Node 0
     auto device_ids = get_device_ids_for_multi_device_same_node(g_user_device_id);
-    auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
+    auto mesh_devices = distributed::MeshDevice::create_unit_meshes(device_ids);
+    auto devices = device_ptrs_from_meshes(mesh_devices);
 
     Context ctx{
         devices,
@@ -356,16 +370,14 @@ TestResult mem_bench_multi_mmio_devices_reading_same_node(benchmark::State& stat
         0,                                      // Iterations is managed by the benchmark framework
     };
 
-    TestResult results = mem_bench_multi_mmio_devices(state, devices, ctx);
-    tt::tt_metal::detail::CloseDevices(devices);
-
-    return results;
+    return mem_bench_multi_mmio_devices(state, devices, ctx);
 }
 
 // Multi MMIO devices reading on different NUMA nodes.
 TestResult mem_bench_multi_mmio_devices_reading_different_node(benchmark::State& state) {
     auto device_ids = get_device_ids_for_multi_device_different_nodes(g_user_device_id);
-    auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
+    auto mesh_devices = distributed::MeshDevice::create_unit_meshes(device_ids);
+    auto devices = device_ptrs_from_meshes(mesh_devices);
 
     Context ctx{
         devices,
@@ -378,10 +390,7 @@ TestResult mem_bench_multi_mmio_devices_reading_different_node(benchmark::State&
         0,                                      // Iterations is managed by the benchmark framework
     };
 
-    TestResult results = mem_bench_multi_mmio_devices(state, devices, ctx);
-    tt::tt_metal::detail::CloseDevices(devices);
-
-    return results;
+    return mem_bench_multi_mmio_devices(state, devices, ctx);
 }
 
 // Benchmark memcpy_to_device while device is reading (prefetching) and writing (dispatching data back to host)
@@ -389,7 +398,8 @@ TestResult mem_bench_multi_mmio_devices_reading_different_node(benchmark::State&
 // Second half will be written to by device
 TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
     auto device_ids = get_device_ids_for_single_device(g_user_device_id);
-    auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
+    auto mesh_devices = distributed::MeshDevice::create_unit_meshes(device_ids);
+    auto devices = device_ptrs_from_meshes(mesh_devices);
     const uint32_t device_id = device_ids.empty() ? 0 : device_ids[0];
     IDevice* device = devices[device_id];
     Context ctx{
@@ -448,7 +458,6 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
 
     state.SetBytesProcessed(ctx.total_size * state.iterations());
     report_device_bw(state, results);
-    tt::tt_metal::detail::CloseDevices(devices);
     return results;
 }
 

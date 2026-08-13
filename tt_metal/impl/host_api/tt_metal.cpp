@@ -1311,22 +1311,21 @@ IDevice* CreateDevice(
     ZoneScoped;
 
     // MMIO devices do not support dispatch on galaxy cluster
-    // Suggest the user to use the CreateDevices API
+    // Suggest the user to use MeshDevice::create_unit_meshes
     if (MetalContext::instance().rtoptions().get_fast_dispatch()) {
         TT_FATAL(
             !(MetalContext::instance().get_cluster().is_galaxy_cluster() &&
               MetalContext::instance().get_cluster().get_cluster_desc()->is_chip_mmio_capable(device_id)),
-            "Galaxy cluster does not support dispatch on mmio devices. Please use CreateDevices API to open all "
-            "devices for dispatch.");
+            "Galaxy cluster does not support dispatch on mmio devices. Please use MeshDevice::create_unit_meshes to "
+            "open all devices for dispatch.");
     }
 
     // This API may not be used to create single remote device or multi chip clusters
-    // CreateDevices should be used instead to ensure proper init/teardown
+    // MeshDevice::create_unit_meshes should be used instead to ensure proper init/teardown
     TT_FATAL(
         MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id,
         "CreateDevice(device_id={}) may only be used for opening single MMIO capable devices. For multi chip clusters, "
-        "must use "
-        "CreateDevices().",
+        "must use MeshDevice::create_unit_meshes().",
         device_id);
 
     MetalContext::instance().initialize_device_manager(
@@ -1353,12 +1352,11 @@ bool CloseDevice(IDevice* device) {
     auto device_id = device->id();
 
     // This API may not be used to close single remote device or multi chip clusters
-    // CloseDevices should be used instead to ensure proper init/teardown
+    // Prefer MeshDevice RAII or device->close() for multi-device teardown
     TT_FATAL(
         MetalContext::instance().get_cluster().get_associated_mmio_device(device_id) == device_id,
-        "CloseDevice(device_id={}) may only be used for opening single MMIO capable devices. For multi chip clusters, "
-        "must use "
-        "CloseDevices().",
+        "CloseDevice(device_id={}) may only be used for closing single MMIO capable devices. For multi chip clusters, "
+        "prefer MeshDevice RAII or device->close().",
         device_id);
 
     return MetalContext::instance().device_manager()->close_device(device_id);

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <flatbuffers/flatbuffers.h>
+#include <memory>
 #include <string>
 #include <vector>
 #include <optional>
@@ -12,6 +13,7 @@
 
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 
 #include "impl/kernels/kernel.hpp"
@@ -133,6 +135,8 @@ private:
     bool disable_checking_ = false;
 
     tt::tt_metal::IDevice* device_ = nullptr;
+    // Owns the device when setup_devices() creates it; keeps MeshDevice alive for device_.
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> owned_device_;
 
     // Object maps for storing objects by global_id
     std::unordered_map<uint32_t, std::shared_ptr<::tt::tt_metal::Buffer>> buffer_map_;

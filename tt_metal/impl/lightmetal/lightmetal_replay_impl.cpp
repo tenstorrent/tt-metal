@@ -240,18 +240,30 @@ void LightMetalReplayImpl::remove_cb_handle_from_map(uint32_t global_id) { cb_ha
 // TODO (kmabee) - Hardcode for now, eventually capture/replay "systemdesc" from binary.
 // Alternatively, user can manage device open/close and pass to replay library.
 void LightMetalReplayImpl::setup_devices() {
-    log_debug(tt::LogMetalTrace, "LightMetalReplay(setup_devices) - Using hardcoded CreateDevices() as temp hack.");
+    log_debug(tt::LogMetalTrace, "LightMetalReplay(setup_devices) - Using hardcoded create_unit_mesh() as temp hack.");
     TT_FATAL(!device_, "Device already setup in LightMetalReplay, no need to call setup_devices()");
     const size_t trace_region_size = 4096;  // Default is 0
-    const auto dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
     const ChipId mmio_device_id = 0;
-    auto devices_map = tt::tt_metal::detail::CreateDevices(
-        {mmio_device_id}, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_type);
-    this->device_ = devices_map.at(mmio_device_id);
+    owned_device_ = tt::tt_metal::distributed::MeshDevice::create_unit_mesh(
+        mmio_device_id,
+        DEFAULT_L1_SMALL_SIZE,
+        trace_region_size,
+        /*num_command_queues=*/1,
+        tt_metal::DispatchCoreConfig{tt_metal::DispatchCoreType::WORKER});
+    this->device_ = owned_device_.get();
 }
 
 // TODO (kmabee) - Hardcode for now, eventually capture/replay "systemdesc" from binary or let user call.
-void LightMetalReplayImpl::close_devices() { CloseDevice(this->device_); }
+void LightMetalReplayImpl::close_devices() {
+    if (owned_device_) {
+        owned_device_->close();
+        owned_device_.reset();
+        device_ = nullptr;
+    } else if (device_) {
+        CloseDevice(device_);
+        device_ = nullptr;
+    }
+}
 
 // Clear object maps for items not deallocated/destroyed naturally during replay.
 // Later can update these to be asserts once all paths covered properly.

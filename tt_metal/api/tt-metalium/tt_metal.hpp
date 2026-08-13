@@ -33,6 +33,10 @@ namespace detail {
 
 bool DispatchStateCheck(bool isFastDispatch);
 
+[[deprecated(
+    "CreateDevices is deprecated and will be removed after 2026-09-16. "
+    "See tech_reports/TT-Distributed/TTMeshMigrationGuide.md for migration "
+    "(use MeshDevice::create_unit_meshes / create_unit_mesh; prefer RAII instead of CloseDevices).")]]
 std::map<ChipId, IDevice*> CreateDevices(
     // TODO: delete this in favour of DeviceManager
     const std::vector<ChipId>& device_ids,
@@ -54,6 +58,10 @@ std::map<ChipId, IDevice*> CreateDevices(
  *
  * Return value: void
  */
+[[deprecated(
+    "CloseDevices is deprecated and will be removed after 2026-09-16. "
+    "See tech_reports/TT-Distributed/TTMeshMigrationGuide.md for migration "
+    "(prefer MeshDevice RAII or device->close() instead of CloseDevices).")]]
 void CloseDevices(const std::map<ChipId, IDevice*>& devices);
 
 /**
