@@ -143,7 +143,6 @@ thread_local uintptr_t g_dfb_config_base_addr __attribute__((used));
 overlay::RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 volatile KernelBarrier g_kernel_barrier[NUM_KERNEL_BARRIERS] __attribute__((used));
-volatile KernelBarrier g_cached_sem_init_barrier __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -240,11 +239,9 @@ extern "C" uint32_t _start1() {
         do_crt1(__ldm_data_start);
         // Must precede the ready flag below, which releases the other pushers.
         WATCHER_RING_BUFFER_INIT();
-        // EXTERNAL down()'s per-semaphore NoC-CAS lock words must start unlocked; the contiguous
-        // CAS return slots are swept too (convenience only -- every use pre-writes a sentinel).
-        // Zeroed once via the uncached alias (these lines are never cache-dirtied); the lock
-        // protocol keeps each word at 0 between programs. Ordered before the GO signal.
-        for (uint32_t w = 0; w < (MEM_NOC_CAS_RET_SIZE + MEM_NOC_SEM_LOCK_SIZE) / 4; w++) {
+        // Zero out the EXTERNAL down() lock words and the cached-pool seed-protocol words once
+        // at boot; both protocols put their words back to 0 themselves after every use/program.
+        for (uint32_t w = 0; w < (MEM_NOC_CAS_RET_SIZE + MEM_NOC_SEM_LOCK_SIZE + MEM_DM_CACHED_SEM_SIZE) / 4; w++) {
             reinterpret_cast<volatile uint32_t*>(MEM_L1_UNCACHED_BASE + MEM_NOC_CAS_RET_BASE)[w] = 0;
         }
         // Originally initalized to WAIT by host firmware initializer.

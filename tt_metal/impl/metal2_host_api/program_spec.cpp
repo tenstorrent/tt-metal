@@ -96,36 +96,23 @@ struct CollectedSpecData {
     };
     std::unordered_map<DFBSpecName, DFBEndpointInfo> dfb_endpoints;
 
-    // Semaphore binder census (derived from kernel semaphore bindings). Drives the AUTO scope
-    // classifier (ResolveSemaphoreScope): writer bindings (INCREMENT/CONSUME/SET) count toward
-    // concurrency; OBSERVE readers do not. Keyed by SemaphoreSpecName.
+    // Semaphore binder census (derived from kernel semaphore bindings). Drives the scope
+    // classifier (ResolveSemaphoreScope).
     struct SemaphoreBinderInfo {
         struct BinderRecord {
             const KernelSpec* kernel = nullptr;
             const SemaphoreBinding* binding = nullptr;
         };
-        std::vector<BinderRecord> writers;  // INCREMENT + CONSUME + SET bindings
-        std::vector<BinderRecord> readers;  // OBSERVE bindings
-        // Union of ALL binders' node sets (writers + readers). Validates DM_LOCAL_CACHED
-        // eligibility: the cached pool is per-core, so an off-node binder would address that
-        // node's copy and silently split the semaphore.
+        std::vector<BinderRecord> binders;
+        // Union of all binders' node sets. Validates DM_LOCAL_CACHED eligibility: the cached pool
+        // is per-core, so an off-node binder would address that node's copy and silently split
+        // the semaphore.
         NodeRangeSet binder_node_set;
-        // Distinct binder KERNELS (writers + readers). Each binding kernel's entry re-seeds the
-        // cached pool slot with an unsynchronised store, so the cached path requires exactly ONE
-        // binder kernel (even a read-only second binder can reset a live counter).
-        uint32_t binder_kernel_count = 0;
-        // Set when ANOTHER kernel on this semaphore's node also binds a cached semaphore. Pool
-        // seeders rendezvous on ONE node-wide barrier (g_cached_sem_init_barrier), so co-resident
-        // cached-binder kernels can hang or re-seed a live counter. binder_kernel_count==1 cannot
-        // catch this (two DISTINCT semaphores, one kernel each).
-        bool cached_blocked_by_node_conflict = false;
-        // Sum over writers of num_cores(kernel_node_set) * num_threads = concurrent writer instances.
-        uint32_t writer_instance_count = 0;
-        // CONSUME writers only. down() spins on the LOCAL word, so every consumer must run on the
-        // semaphore's node -- consuming_node_set backs that config-time check.
-        uint32_t consuming_instance_count = 0;
-        NodeRangeSet consuming_node_set;
-        uint32_t setting_instance_count = 0;  // SET writers only (set() races any concurrent writer)
+        // Sum over binders of num_cores(kernel_node_set) * num_threads = potential concurrent
+        // writer instances. For a cached semaphore this is also the TOTAL binder hart count the
+        // generated entry/exit stubs use to seed once and self-restore the pool row (any number
+        // of binder kernels/threads: the node's DM cache domain is mutually coherent).
+        uint32_t binder_instance_count = 0;
     };
     std::unordered_map<SemaphoreSpecName, SemaphoreBinderInfo> semaphore_endpoints;
 
@@ -237,148 +224,60 @@ const CollectedSpecData::SemaphoreBinderInfo& SemaphoreBinders(
 // Is every binder a data-movement kernel? ValidateProgramSpec forbids semaphore bindings on compute
 // kernels, but validation can be skipped, so the cached path re-checks where the decision is made.
 bool all_binders_are_dm(const CollectedSpecData::SemaphoreBinderInfo& binders) {
-    for (const auto* recs : {&binders.writers, &binders.readers}) {
-        for (const auto& rec : *recs) {
-            if (!rec.kernel->is_data_movement_kernel()) {
-                return false;
-            }
+    for (const auto& rec : binders.binders) {
+        if (!rec.kernel->is_data_movement_kernel()) {
+            return false;
         }
     }
     return true;
 }
 
-// Structural eligibility for the cached pool, EXCLUDING the arch gate and the per-node conflict
-// check. Shared by the classifier and the conflict pre-pass in CollectSpecData so the two cannot
-// drift apart: a single-node semaphore whose every binder is one DM kernel on that same node.
+// Structural eligibility for the cached pool, excluding the arch/backend gate: a single-node
+// semaphore whose every binder is a DM kernel confined to that node. Any NUMBER of binder
+// kernels/threads is fine -- the node's DM cache domain is mutually coherent, and the generated
+// entry/exit stubs seed the pool row exactly once per program (claim-and-publish) and
+// self-restore it when the last binder hart exits.
 bool cached_geometry_ok(const SemaphoreSpec& sem, const CollectedSpecData::SemaphoreBinderInfo& binders) {
     const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
-    return sem_nodes.num_cores() == 1 && binders.binder_kernel_count == 1 &&
+    return sem_nodes.num_cores() == 1 &&
            sem_nodes.merge(binders.binder_node_set).num_cores() == sem_nodes.num_cores() && all_binders_are_dm(binders);
 }
 
-// Resolve a SemaphoreSpec's host-side scope INTENT (SemaphoreScope) to the device SemScope baked
-// into every kernel that binds it. Authoritative decision; contradictions FATAL here.
-//
-//   EXTERNAL        -> EXTERNAL.
-//   LOCAL_NONATOMIC -> LOCAL_NONATOMIC (escape hatch; caller is asserting single-writer).
-//   DM_LOCAL_CACHED -> DM_LOCAL_CACHED after FATAL-checking: Gen2 arch, single-node semaphore,
-//                      one binder kernel, no other cached-binder kernel on the node, every binder
-//                      a DM kernel confined to the semaphore's node.
-//   AUTO            -> the cheapest CORRECT mechanism, from the binder census:
-//                        Gen1 (Wormhole/Blackhole)            -> LOCAL_NONATOMIC (historical behaviour)
-//                        Gen2, <=1 writer instance, 1 node    -> LOCAL_NONATOMIC (nothing can race)
-//                        Gen2, cached geometry provably safe  -> DM_LOCAL_CACHED (node-local AMO)
-//                        anything else                        -> EXTERNAL (self-targeted NoC atomic)
-//                      A SET racing another writer FATALs (Gen2 only); forced scopes are the
-//                      escape for phase-separated init-then-write, which the census cannot see.
-// An off-node CONSUME binder FATALs before the switch, under EVERY scope: guaranteed hang.
+// Emule never gets the cached tier: its backend seeds no cached pool (it seeds only the
+// kernel_config ring), so the classifier falls through to EXTERNAL there instead.
+bool cached_tier_available() {
+    return MetalContext::instance().rtoptions().get_target_device() != tt::TargetDevice::Emule;
+}
+
+// Resolve the device SemScope baked into every kernel that binds this semaphore: the cheapest
+// CORRECT mechanism, decided purely from the binder census. Nothing is configured on the
+// SemaphoreSpec, and kernel code never sees the choice (it travels in the invisible codegen
+// scope table). Every binder is a possible reader AND writer (bindings carry no access
+// declaration), so the classification is pure topology:
+//   Gen1 (Wormhole/Blackhole)            -> LOCAL_NONATOMIC (historical behaviour)
+//   Gen2, <=1 binder instance, 1 node    -> LOCAL_NONATOMIC (nothing can race)
+//   Gen2, single-node sem, all binders   -> DM_LOCAL_CACHED (node-local AMO; any number of
+//         DM kernels confined to it         binder kernels/threads)
+//   anything else (off-node reach)       -> EXTERNAL (self-targeted NoC atomic)
 SemScope ResolveSemaphoreScope(const SemaphoreSpec& sem, const CollectedSpecData::SemaphoreBinderInfo& binders) {
-    // down() spins on the consumer's LOCAL word under every mechanism and arch, so an off-node
-    // consumer hangs no matter what the caller forces. Off-node OBSERVE readers are tolerated
-    // (read-only; a remote-fed shadow copy is a legitimate pattern).
-    {
-        const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
-        TT_FATAL(
-            binders.consuming_instance_count == 0 ||
-                sem_nodes.merge(binders.consuming_node_set).num_cores() == sem_nodes.num_cores(),
-            "SemaphoreSpec '{}' has a CONSUME (down()) binder kernel on a node outside the semaphore's "
-            "node set; down() spins on the consumer's LOCAL word, which is not this semaphore's word "
-            "there. Run consumers on the semaphore's node(s).",
-            sem.unique_id);
+    // Gen1 keeps the uncached RMW every semaphore has always used there; the atomic tiers are
+    // Quasar hardware paths, so no existing Gen1 program changes mechanism.
+    if (!is_gen2_arch()) {
+        return SemScope::LOCAL_NONATOMIC;
     }
-    switch (sem.scope) {
-        case SemaphoreScope::EXTERNAL: return SemScope::EXTERNAL;
-        case SemaphoreScope::DM_LOCAL_CACHED: {
-            // The cached-only pool is a per-core region in the DM cache domain: every access must
-            // come from a DM kernel on the semaphore's one node, or the semaphore splits or hangs.
-            const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
-            const uint32_t num_nodes = sem_nodes.num_cores();
-            TT_FATAL(
-                is_gen2_arch(),
-                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED, a Gen2 (Quasar) mechanism; the cached-only "
-                "pool does not exist on Gen1 (Wormhole/Blackhole), where the kernel would not even "
-                "compile. Use SemaphoreScope::EXTERNAL for an atomic semaphore here (on Gen1, AUTO "
-                "resolves to the historical non-atomic RMW).",
-                sem.unique_id);
-            TT_FATAL(
-                num_nodes == 1,
-                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but spans {} nodes; a DM-local cached "
-                "semaphore must live on exactly one node (it must never be reachable via the NoC).",
-                sem.unique_id,
-                num_nodes);
-            // The pool slot is re-seeded at every binding kernel's entry by an unsynchronised store.
-            TT_FATAL(
-                binders.binder_kernel_count <= 1,
-                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but is bound by {} kernels; each binding "
-                "kernel's entry re-seeds the pool slot with an unsynchronised store, so a second binder "
-                "kernel (even a read-only one) can reset a live counter. Bind a cached semaphore from "
-                "exactly one kernel (its threads may be many), or use SemaphoreScope::EXTERNAL.",
-                sem.unique_id,
-                binders.binder_kernel_count);
-            // Same reason, one level up: the seeder's rendezvous barrier is node-wide, so only ONE
-            // kernel per node may FORCE cached semaphores (AUTO candidates yield by demoting).
-            TT_FATAL(
-                !binders.cached_blocked_by_node_conflict,
-                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but another kernel on the same node also "
-                "FORCES a cached semaphore; the pool seeders share one node-wide rendezvous barrier, so two "
-                "forced-binder kernels can hang or re-seed a live counter. Bind all forced-cached "
-                "semaphores on a node from the SAME kernel, or use SemaphoreScope::EXTERNAL. (AUTO "
-                "cached candidates yield automatically.)",
-                sem.unique_id);
-            // Validator forbids compute-kernel semaphore bindings, but validation can be skipped.
-            TT_FATAL(
-                all_binders_are_dm(binders),
-                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but is bound by a non-data-movement kernel, "
-                "which would touch the pool word from outside the DM coherence domain. Bind it only from "
-                "DM kernels, or use SemaphoreScope::EXTERNAL.",
-                sem.unique_id);
-            // merge() then compare counts: if the union grew, some binder sits outside the sem's node.
-            TT_FATAL(
-                sem_nodes.merge(binders.binder_node_set).num_cores() == num_nodes,
-                "SemaphoreSpec '{}' is forced DM_LOCAL_CACHED but a binding kernel runs on node(s) outside "
-                "the semaphore's single node; the cached pool is per-core, so a remote binder would "
-                "increment its own node's copy and the semaphore would silently split. Confine the binding "
-                "kernels to the semaphore's node, or use SemaphoreScope::EXTERNAL.",
-                sem.unique_id);
-            return SemScope::DM_LOCAL_CACHED;
-        }
-        case SemaphoreScope::LOCAL_NONATOMIC: return SemScope::LOCAL_NONATOMIC;
-        default:
-            TT_THROW(
-                "SemaphoreSpec '{}' has an unknown SemaphoreScope ({})", sem.unique_id, static_cast<int>(sem.scope));
-        case SemaphoreScope::AUTO: {
-            // Decision table in the function header. Gen1 keeps its historical LOCAL_NONATOMIC;
-            // a Gen1 user who wants atomicity forces EXTERNAL.
-            const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
-            if (!is_gen2_arch()) {
-                return SemScope::LOCAL_NONATOMIC;
-            }
 
-            const bool single_node = sem_nodes.num_cores() == 1;
-            if (binders.writer_instance_count <= 1 && single_node) {
-                return SemScope::LOCAL_NONATOMIC;
-            }
-
-            // Concurrent writers from here on. A racing SET is mechanism-independent -- no scope
-            // can make a destructive store atomic -- so fail loud.
-            TT_FATAL(
-                !(binders.setting_instance_count >= 1 && binders.writer_instance_count >= 2),
-                "SemaphoreSpec '{}' has a SET (set()/set_multicast()) racing {} total writer instance(s); "
-                "set() is a non-atomic destructive store under ALL scopes. Use set() only for init/reset "
-                "with no concurrent writer, or serialize it.",
-                sem.unique_id,
-                binders.writer_instance_count);
-
-            // Cached only when PROVABLY safe: cached_geometry_ok() (structural half) plus the
-            // node-conflict flag (shared seeder-rendezvous barrier). The is_gen2_arch() conjunct
-            // is redundant with the Gen1 return above -- kept in case that return is relaxed.
-            if (is_gen2_arch() && cached_geometry_ok(sem, binders) && !binders.cached_blocked_by_node_conflict) {
-                return SemScope::DM_LOCAL_CACHED;
-            }
-            // Multi-consumer down() is safe on both atomic tiers.
-            return SemScope::EXTERNAL;
-        }
+    const NodeRangeSet sem_nodes = to_node_range_set(sem.target_nodes);
+    const bool single_node = sem_nodes.num_cores() == 1;
+    if (binders.binder_instance_count <= 1 && single_node) {
+        return SemScope::LOCAL_NONATOMIC;
     }
+
+    // Cached only when PROVABLY safe: cached_geometry_ok() plus a backend that seeds the pool.
+    if (cached_tier_available() && cached_geometry_ok(sem, binders)) {
+        return SemScope::DM_LOCAL_CACHED;
+    }
+    // Multi-consumer down() is safe on both atomic tiers.
+    return SemScope::EXTERNAL;
 }
 
 // Helper: return a DFB's alias-with list.
@@ -619,12 +518,12 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 "Kernel '{}' semaphore accessor_name '{}' must be a valid C++ identifier",
                 kernel.unique_id,
                 binding.accessor_name);
-            // Codegen emits these symbols into the accessors' namespace; a collision would be a
+            // Codegen emits this symbol into the accessors' namespace; a collision would be a
             // redefinition error inside generated code instead of a readable failure.
             TT_FATAL(
-                binding.accessor_name != "init_dm_cached" && binding.accessor_name != "SEM_HAS_DM_CACHED",
-                "Kernel '{}' semaphore accessor_name '{}' is reserved (generated cached-pool seeder "
-                "symbol / macro). Pick another name.",
+                binding.accessor_name != "init_dm_cached" && binding.accessor_name != "finish_dm_cached",
+                "Kernel '{}' semaphore accessor_name '{}' is reserved (generated cached-pool "
+                "entry/exit stub symbol). Pick another name.",
                 kernel.unique_id,
                 binding.accessor_name);
             TT_FATAL(
@@ -633,29 +532,23 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
                 kernel.unique_id,
                 binding.semaphore_spec_name);
 
-            // Census for the AUTO scope classifier: a writer (INCREMENT/CONSUME/SET) or a reader
-            // (OBSERVE). Instance counts are derived later, once kernel node sets exist.
+            // Census for the scope classifier. Instance counts are derived later, once
+            // kernel node sets exist.
             auto& sem_info = collected.semaphore_endpoints[binding.semaphore_spec_name];
             // At most one binding per kernel (mirrors the DFB and scratchpad rules): a second
             // binding would double-count this kernel's instances in the census.
-            for (const auto* recs : {&sem_info.writers, &sem_info.readers}) {
-                for (const auto& rec : *recs) {
-                    TT_FATAL(
-                        rec.kernel != &kernel,
-                        "Kernel '{}' binds semaphore '{}' more than once (accessor names '{}' and '{}'). A "
-                        "kernel may bind a given semaphore at most once; to refer to it by another name in "
-                        "kernel code, alias the handle (constexpr auto x = sem::y) instead.",
-                        kernel.unique_id,
-                        binding.semaphore_spec_name,
-                        rec.binding->accessor_name,
-                        binding.accessor_name);
-                }
+            for (const auto& rec : sem_info.binders) {
+                TT_FATAL(
+                    rec.kernel != &kernel,
+                    "Kernel '{}' binds semaphore '{}' more than once (accessor names '{}' and '{}'). A "
+                    "kernel may bind a given semaphore at most once; to refer to it by another name in "
+                    "kernel code, alias the handle (constexpr auto x = sem::y) instead.",
+                    kernel.unique_id,
+                    binding.semaphore_spec_name,
+                    rec.binding->accessor_name,
+                    binding.accessor_name);
             }
-            if (binding.access_type == SemaphoreAccessType::OBSERVE) {
-                sem_info.readers.push_back({&kernel, &binding});
-            } else {
-                sem_info.writers.push_back({&kernel, &binding});
-            }
+            sem_info.binders.push_back({&kernel, &binding});
         }
     }
 
@@ -859,83 +752,15 @@ CollectedSpecData CollectSpecData(const ProgramSpec& spec) {
         collected.kernel_node_set[kernel_name] = node_set;
     }
 
-    // Derive per-semaphore writer-instance counts (needs kernel_node_set above): a writer binding
-    // contributes num_cores(its kernel's node set) * num_threads. These drive the AUTO classifier
-    // and its hazard checks.
+    // Derive per-semaphore binder-instance counts (needs kernel_node_set above): every binding
+    // contributes num_cores(its kernel's node set) * num_threads -- each instance is a potential
+    // concurrent writer (bindings carry no access declaration). These drive the classifier.
     for (auto& [sem_name, sem_info] : collected.semaphore_endpoints) {
-        for (const auto& rec : sem_info.writers) {
-            const uint32_t instances =
+        for (const auto& rec : sem_info.binders) {
+            sem_info.binder_instance_count +=
                 collected.kernel_node_set.at(rec.kernel->unique_id).num_cores() * rec.kernel->num_threads;
-            sem_info.writer_instance_count += instances;
-            if (rec.binding->access_type == SemaphoreAccessType::CONSUME) {
-                sem_info.consuming_instance_count += instances;
-                sem_info.consuming_node_set =
-                    sem_info.consuming_node_set.merge(collected.kernel_node_set.at(rec.kernel->unique_id));
-            } else if (rec.binding->access_type == SemaphoreAccessType::SET) {
-                sem_info.setting_instance_count += instances;
-            }
-        }
-        // Cached-pool eligibility: where do ALL binders run, and how many distinct kernels are
-        // they? Readers count for both (they read the pool and receive the injected seeder).
-        std::unordered_set<const KernelSpec*> binder_kernels;
-        for (const auto* recs : {&sem_info.writers, &sem_info.readers}) {
-            for (const auto& rec : *recs) {
-                sem_info.binder_node_set =
-                    sem_info.binder_node_set.merge(collected.kernel_node_set.at(rec.kernel->unique_id));
-                binder_kernels.insert(rec.kernel);
-            }
-        }
-        sem_info.binder_kernel_count = static_cast<uint32_t>(binder_kernels.size());
-    }
-
-    // Per-NODE cached-pool conflict pass. Pool seeders share one node-wide barrier, so at most ONE
-    // kernel per node may bind cached semaphores -- which the per-semaphore binder_kernel_count rule
-    // cannot express (two distinct semaphores, one kernel each). Collect every cached CANDIDATE,
-    // group by node, flag all candidates on any node reached by >1 distinct kernel. Order-independent.
-    {
-        std::unordered_map<uint64_t, std::unordered_set<const KernelSpec*>> kernels_by_node;
-        std::unordered_map<uint64_t, std::unordered_set<const KernelSpec*>> forced_kernels_by_node;
-        std::unordered_map<uint64_t, std::vector<std::pair<SemaphoreSpecName, bool>>> candidates_by_node;
-        for (const auto& semaphore : spec.semaphores) {
-            const auto it = collected.semaphore_endpoints.find(semaphore.unique_id);
-            if (it == collected.semaphore_endpoints.end() || it->second.binder_kernel_count != 1) {
-                continue;  // unbound, or already ineligible on the per-semaphore rule
-            }
-            const auto& binders = it->second;
-            // A forced cached semaphore counts as a candidate even if its geometry is bad (that FATALs
-            // separately); an AUTO one only when it would actually reach the cached branch.
-            const bool forced_cached = semaphore.scope == SemaphoreScope::DM_LOCAL_CACHED;
-            const bool auto_cached = semaphore.scope == SemaphoreScope::AUTO && is_gen2_arch() &&
-                                     cached_geometry_ok(semaphore, binders) && binders.writer_instance_count >= 2;
-            if (!forced_cached && !auto_cached) {
-                continue;
-            }
-            const NodeRangeSet sem_nodes = to_node_range_set(semaphore.target_nodes);
-            if (sem_nodes.ranges().empty()) {
-                continue;
-            }
-            const auto& node = sem_nodes.ranges().front().start_coord;
-            const uint64_t node_key = (static_cast<uint64_t>(node.x) << 32) | static_cast<uint64_t>(node.y);
-            const KernelSpec* binder =
-                binders.writers.empty() ? binders.readers.front().kernel : binders.writers.front().kernel;
-            kernels_by_node[node_key].insert(binder);
-            if (forced_cached) {
-                forced_kernels_by_node[node_key].insert(binder);
-            }
-            candidates_by_node[node_key].push_back({semaphore.unique_id, forced_cached});
-        }
-        // AUTO candidates yield (demote to EXTERNAL, no seeder injected), so a lone FORCED sem
-        // stays safe; a forced sem is blocked only when a SECOND forced-binder kernel shares the node.
-        for (const auto& [node_key, kernels] : kernels_by_node) {
-            if (kernels.size() <= 1) {
-                continue;
-            }
-            const bool forced_conflict = forced_kernels_by_node[node_key].size() > 1;
-            for (const auto& [sem_name, forced] : candidates_by_node[node_key]) {
-                if (!forced || forced_conflict) {
-                    collected.semaphore_endpoints[sem_name].cached_blocked_by_node_conflict = true;
-                }
-            }
+            sem_info.binder_node_set =
+                sem_info.binder_node_set.merge(collected.kernel_node_set.at(rec.kernel->unique_id));
         }
     }
 
@@ -2046,9 +1871,6 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
                 sem.unique_id,
                 init_value);
         }
-        // Resolve the scope at validate time so contradictions FATAL here first. Same `collected`
-        // as the build-time call, so the decision is identical.
-        (void)ResolveSemaphoreScope(sem, SemaphoreBinders(collected, sem.unique_id));
     }
 
     //////////////////////////////
@@ -2855,12 +2677,14 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     return out;
 }
 
-// Create map of accessor name -> logical Semaphore id (+ the host-resolved scope and access label flag)
+// Create map of accessor name -> logical Semaphore id (+ the host-resolved scope for the codegen
+// table, and -- for cached sems -- the total binder hart count the generated entry/exit stubs
+// bake so the pool row is seeded once per program and self-restored by the last hart out).
 tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
     const KernelSpec& kernel_spec,
+    const CollectedSpecData& collected,
     const SemaphoreNameToIdMap& semaphore_name_to_id,
-    const SemaphoreNameToScopeMap& semaphore_name_to_scope,
-    const std::unordered_set<SemaphoreSpecName>& external_multi_consumer_sems) {
+    const SemaphoreNameToScopeMap& semaphore_name_to_scope) {
     tt::tt_metal::SemaphoreBindingHandleMap out;
     out.reserve(kernel_spec.semaphore_bindings.size());
     for (const auto& semaphore_binding : kernel_spec.semaphore_bindings) {
@@ -2871,24 +2695,20 @@ tt::tt_metal::SemaphoreBindingHandleMap MakeSemaphoreBindingHandles(
             kernel_spec.unique_id,
             semaphore_binding.semaphore_spec_name,
             id);
-        // The host-resolved scope and the declared AccessType are baked into the kernel via the
-        // emitted SemaphoreBindingToken<id, scope, access>; the device mutators static_assert
-        // against the label, so the census's assumptions are enforced, not trusted.
         const SemScope scope = semaphore_name_to_scope.at(semaphore_binding.semaphore_spec_name);
-        const SemAccess access = [&] {
-            switch (semaphore_binding.access_type) {
-                case SemaphoreAccessType::INCREMENT: return SemAccess::INCREMENT;
-                case SemaphoreAccessType::CONSUME: return SemAccess::CONSUME;
-                case SemaphoreAccessType::SET: return SemAccess::SET;
-                case SemaphoreAccessType::OBSERVE: return SemAccess::OBSERVE;
-            }
-            TT_THROW("unknown AccessType {}", static_cast<int>(semaphore_binding.access_type));
-        }();
-        const bool external_multi_consumer =
-            external_multi_consumer_sems.contains(semaphore_binding.semaphore_spec_name);
+        const uint32_t total_binder_harts =
+            scope == SemScope::DM_LOCAL_CACHED
+                ? SemaphoreBinders(collected, semaphore_binding.semaphore_spec_name).binder_instance_count
+                : 0u;
+        // The packed pool-row protocol word gives `exited` bits 30:16 (see dev_mem_map.h).
+        TT_FATAL(
+            total_binder_harts <= 0x7FFFu,
+            "Semaphore '{}' has {} binder harts; the cached seed protocol supports at most 32767",
+            semaphore_binding.semaphore_spec_name,
+            total_binder_harts);
         out.emplace(
             semaphore_binding.accessor_name,
-            tt::tt_metal::SemaphoreBindingHandle{static_cast<uint16_t>(id), scope, access, external_multi_consumer});
+            tt::tt_metal::SemaphoreBindingHandle{static_cast<uint16_t>(id), scope, total_binder_harts});
     }
     return out;
 }
@@ -3384,7 +3204,6 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     // NOTE: Iterate over spec.semaphores to preserve user-provided deterministic ordering.
     SemaphoreNameToIdMap semaphore_name_to_id;
     SemaphoreNameToScopeMap semaphore_name_to_scope;
-    std::unordered_set<SemaphoreSpecName> external_multi_consumer_sems;
     for (const auto& semaphore_spec : spec.semaphores) {
         const SemaphoreSpecName& semaphore_name = semaphore_spec.unique_id;
         const uint32_t init_value = semaphore_spec.advanced_options.initial_value;
@@ -3392,15 +3211,45 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
             to_node_range_set(semaphore_spec.target_nodes), init_value, CoreType::WORKER);
         program_impl->register_semaphore_spec_name(semaphore_name.get(), sem_id);
         semaphore_name_to_id[semaphore_name] = sem_id;
-        // Resolve the host intent to a device SemScope, baked into every kernel that binds this
-        // semaphore (rules in ResolveSemaphoreScope). Contradictions FATAL in ValidateProgramSpec
-        // -- or here, when validation is skipped.
-        const auto& binders = SemaphoreBinders(collected, semaphore_name);
-        semaphore_name_to_scope[semaphore_name] = ResolveSemaphoreScope(semaphore_spec, binders);
-        // EXTERNAL with >1 consuming instances works on real Quasar but not on emule (which
-        // compiles the single-consumer Gen1 down() arm); record it so the emule backend can refuse.
-        if (semaphore_name_to_scope[semaphore_name] == SemScope::EXTERNAL && binders.consuming_instance_count > 1) {
-            external_multi_consumer_sems.insert(semaphore_name);
+        // Resolve the mechanism baked into every kernel that binds this semaphore
+        // (rules in ResolveSemaphoreScope).
+        semaphore_name_to_scope[semaphore_name] =
+            ResolveSemaphoreScope(semaphore_spec, SemaphoreBinders(collected, semaphore_name));
+    }
+
+    // Semaphore ids are unique per CORE, not per program, so two semaphores on disjoint nodes can
+    // share an id -- and a kernel that binds both gets ONE scope-table slot for that id. If their
+    // resolved scopes differ, no single slot value is right for both, so promote every member of
+    // the collision to EXTERNAL (correct for any topology, merely not the cheapest) and iterate:
+    // a promotion changes that semaphore's scope in every OTHER kernel that binds it, which can
+    // surface a new collision there. Monotone toward EXTERNAL, so it terminates. The codegen
+    // tripwire static_asserts would fail the kernel build on any divergence this pass missed.
+    {
+        bool promoted = true;
+        while (promoted) {
+            promoted = false;
+            for (const KernelSpec& kernel_spec : spec.kernels) {
+                std::unordered_map<uint32_t, std::vector<const SemaphoreSpecName*>> members_by_id;
+                for (const auto& binding : kernel_spec.semaphore_bindings) {
+                    members_by_id[semaphore_name_to_id.at(binding.semaphore_spec_name)].push_back(
+                        &binding.semaphore_spec_name);
+                }
+                for (const auto& [id, members] : members_by_id) {
+                    const bool divergent = std::any_of(members.begin(), members.end(), [&](const auto* m) {
+                        return semaphore_name_to_scope.at(*m) != semaphore_name_to_scope.at(*members.front());
+                    });
+                    if (!divergent) {
+                        continue;
+                    }
+                    for (const auto* m : members) {
+                        SemScope& scope = semaphore_name_to_scope.at(*m);
+                        if (scope != SemScope::EXTERNAL) {
+                            scope = SemScope::EXTERNAL;
+                            promoted = true;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -3412,8 +3261,8 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         // Make the local accessor name -> DFB device slot map for this kernel
         const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles =
             MakeDataflowBufferBindingHandles(kernel_spec, dfb_name_to_slot);
-        const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles = MakeSemaphoreBindingHandles(
-            kernel_spec, semaphore_name_to_id, semaphore_name_to_scope, external_multi_consumer_sems);
+        const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
+            MakeSemaphoreBindingHandles(kernel_spec, collected, semaphore_name_to_id, semaphore_name_to_scope);
 
         // Resolve TensorBindings for this kernel:
         //  - pack each binding's pre-resolved CTA payload into the kernel's positional CTA buffer

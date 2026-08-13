@@ -4,12 +4,9 @@
 
 #pragma once
 
-// This file is part of the experimental Metal 2.0 host API: experimental and subject to change.
-
 #include <cstdint>
 #include <filesystem>
 #include <string>
-#include <type_traits>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -149,32 +146,10 @@ struct KernelSpec {
 
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
-    // The kernel constructs a Semaphore from the emitted binding token:
-    // Semaphore(sem::<accessor_name>) -- the token carries the host-resolved scope, which CTAD
-    // turns into the semaphore's physical mechanism.
+    // The kernel constructs a Semaphore from the emitted id: Semaphore(sem::<accessor_name>)
     struct SemaphoreBinding {
-        // How this kernel accesses the semaphore. Drives the AUTO scope classifier
-        // (ResolveSemaphoreScope): writer classes count toward concurrency; OBSERVE does not.
-        //   INCREMENT: up() / inc_multicast()
-        //   CONSUME:   down()
-        //   SET:       set() / set_multicast() / relay_* destination
-        //   OBSERVE:   wait() / wait_min() / value() -- pure reader, never RMWs
-        // Mixed use: anything that down()s is CONSUME, else anything that set()s is SET (up()
-        // stays legal under both); a single binding cannot both down() and set() -- use two
-        // bindings. The label picks hazard checks, never the mechanism.
-        // None of these says "reached over the NoC"; if a semaphore is reached remotely, force
-        // SemaphoreScope::EXTERNAL -- AUTO classifies from node placement and cannot see that.
-        enum class AccessType { INCREMENT, CONSUME, SET, OBSERVE };
-
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
-        // Defaults to INCREMENT (a writer): fail-safe -- an unlabeled binding can only push AUTO
-        // toward an atomic mechanism. Mark OBSERVE to opt a read-only binding out of the census.
-        // The label is compile-time enforced through the emitted sem:: token (down() needs
-        // CONSUME, set() needs SET), so the census trusts only what the kernel can exercise.
-        // The raw-id Semaphore(uint32_t) ctor bypasses this; the hygiene lint flags it in
-        // Metal 2.0 sources.
-        AccessType access_type = AccessType::INCREMENT;
     };
     Group<SemaphoreBinding> semaphore_bindings;
 
@@ -254,15 +229,11 @@ struct KernelSpec {
 // These aliases lift commonly-used nested enums to the namespace level
 using DFBEndpointType = KernelSpec::DFBBinding::EndpointType;
 using DFBAccessPattern = KernelSpec::DFBBinding::AccessPattern;
-using SemaphoreAccessType = KernelSpec::SemaphoreBinding::AccessType;
 
 // These aliases lift the kernel resource-binding types to the namespace level
 using DFBBinding = KernelSpec::DFBBinding;
 using TensorBinding = KernelSpec::TensorBinding;
 using SemaphoreBinding = KernelSpec::SemaphoreBinding;
-// Existing braced initializers must keep compiling with access_type defaulted to INCREMENT,
-// so SemaphoreBinding must stay an aggregate.
-static_assert(std::is_aggregate_v<SemaphoreBinding>);
 using ScratchpadBinding = KernelSpec::ScratchpadBinding;
 
 //------------------------------------------------

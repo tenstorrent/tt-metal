@@ -4,8 +4,6 @@
 
 #pragma once
 
-// This file is part of the experimental Metal 2.0 host API: experimental and subject to change.
-
 #include <cstdint>
 #include <string>
 #include <variant>
@@ -14,28 +12,8 @@
 #include <tt-metalium/experimental/metal2_host_api/advanced_options.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt_stl/strong_type.hpp>
-#include <hostdevcommon/sem_scope.h>
 
 namespace tt::tt_metal::experimental {
-
-/**
- * @brief Host-side per-semaphore scope INTENT, resolved to a device SemScope by the host.
- *
- * AUTO derives the SemScope from the semaphore's reach (who binds it, on how many
- * nodes). Forcing DM_LOCAL_CACHED is validated at build time (contradiction = host
- * FATAL); forcing EXTERNAL or LOCAL_NONATOMIC skips AUTO's SET-race FATAL -- the
- * escape for phase-separated init-then-write. An off-node CONSUME binder is
- * rejected under EVERY scope (guaranteed hang). Host-only; not used on the device.
- */
-// NOTE: a DM_LOCAL_CACHED semaphore's live count is in the device-side cached pool; the
-// host must never poke its word at runtime (WriteToDeviceL1 reaches only the ring slot,
-// which is read once by the seeder at kernel entry).
-enum class SemaphoreScope : uint8_t {
-    AUTO = 0,
-    LOCAL_NONATOMIC = 1,
-    DM_LOCAL_CACHED = 2,
-    EXTERNAL = 3,
-};
 
 // ============================================================================
 //  SemaphoreSpec API
@@ -50,10 +28,9 @@ enum class SemaphoreScope : uint8_t {
 //   remote resources for kernels. Placement cannot be inferred from kernel
 //   bindings.
 //
-// BINDING SCOPE: Any data-movement kernel can bind to any semaphore in the ProgramSpec and
-//   signal it (up() takes explicit coordinates for remote targets). Consumers
-//   (down(), labeled CONSUME) must run on the semaphore's node -- the host
-//   rejects off-node CONSUME binders at build time, under every scope.
+// BINDING SCOPE: Any kernel can bind to any semaphore in the ProgramSpec,
+//   regardless of location. Any kernel instance can signal or wait on any
+//   semaphore instance.
 //
 // ============================================================================
 
@@ -71,10 +48,6 @@ struct SemaphoreSpec {
     // Advanced options (see advanced_options.hpp)
     //////////////////////////////////////////////////////////////////////////////
     SemaphoreAdvancedOptions advanced_options;
-
-    // Physical-path INTENT for this semaphore (see SemaphoreScope above). The resolved
-    // SemScope reaches the kernel via CTAD (see noc_semaphore.h).
-    SemaphoreScope scope = SemaphoreScope::AUTO;
 };
 
 }  // namespace tt::tt_metal::experimental

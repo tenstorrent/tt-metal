@@ -128,13 +128,10 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
         .data_format_metadata = cb_data_format,
     });
 
-    // Semaphore used by the controller core to coordinate multicast. The SET-labeled binding
-    // trips AUTO's racing-SET check; forced EXTERNAL is the documented escape and matches
-    // what AUTO resolves today.
+    // Semaphore used by the controller core to coordinate multicast.
     spec.semaphores.push_back(m2::SemaphoreSpec{
         .unique_id = SEM,
         .target_nodes = all_cores,
-        .scope = m2::SemaphoreScope::EXTERNAL,
     });
 
     // Tensor parameters (src / dst). Their base addresses reach the kernel through the
@@ -168,8 +165,7 @@ ttnn::device_operation::ProgramArtifacts MoveOverlapProgramFactory::create_progr
             },
         .semaphore_bindings =
             {
-                m2::SemaphoreBinding{
-                    .semaphore_spec_name = SEM, .accessor_name = "sem", .access_type = m2::SemaphoreAccessType::SET},
+                m2::SemaphoreBinding{.semaphore_spec_name = SEM, .accessor_name = "sem"},
             },
         .tensor_bindings =
             {

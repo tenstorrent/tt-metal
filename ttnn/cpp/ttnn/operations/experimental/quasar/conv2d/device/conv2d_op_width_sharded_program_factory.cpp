@@ -474,12 +474,8 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
         m2::TensorParameter{.unique_id = TP_READER_INDICES, .spec = reader_indices_mesh_tensor.tensor_spec()});
 
     // ---- Semaphores (act mcast sender/receiver) ----
-    // SET-labeled mcast handshake bindings trip AUTO's racing-SET check; forced EXTERNAL is
-    // the documented escape and matches what AUTO resolves today.
-    spec.semaphores.push_back(m2::SemaphoreSpec{
-        .unique_id = SEM_ACT_MCAST_SENDER, .target_nodes = all_cores, .scope = m2::SemaphoreScope::EXTERNAL});
-    spec.semaphores.push_back(m2::SemaphoreSpec{
-        .unique_id = SEM_ACT_MCAST_RECEIVER, .target_nodes = all_cores, .scope = m2::SemaphoreScope::EXTERNAL});
+    spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = SEM_ACT_MCAST_SENDER, .target_nodes = all_cores});
+    spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = SEM_ACT_MCAST_RECEIVER, .target_nodes = all_cores});
 
     // ---- Dataflow buffers ----
     // Sizes/formats/backing come straight from get_cb_info() (entry_size = page_size,
@@ -669,14 +665,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
             },
         .semaphore_bindings =
             {
+                m2::SemaphoreBinding{.semaphore_spec_name = SEM_ACT_MCAST_SENDER, .accessor_name = "act_mcast_sender"},
                 m2::SemaphoreBinding{
-                    .semaphore_spec_name = SEM_ACT_MCAST_SENDER,
-                    .accessor_name = "act_mcast_sender",
-                    .access_type = m2::SemaphoreAccessType::SET},
-                m2::SemaphoreBinding{
-                    .semaphore_spec_name = SEM_ACT_MCAST_RECEIVER,
-                    .accessor_name = "act_mcast_receiver",
-                    .access_type = m2::SemaphoreAccessType::SET},
+                    .semaphore_spec_name = SEM_ACT_MCAST_RECEIVER, .accessor_name = "act_mcast_receiver"},
             },
         .compile_time_args =
             {

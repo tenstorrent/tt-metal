@@ -321,14 +321,12 @@ void Kernel::process_dataflow_buffer_binding_handles(
     }
 }
 
-void Kernel::process_semaphore_binding_handles(const std::function<void(
-                                                   const std::string& accessor_name,
-                                                   uint16_t semaphore_id,
-                                                   SemScope scope,
-                                                   SemAccess access,
-                                                   bool external_multi_consumer)> callback) const {
+void Kernel::process_semaphore_binding_handles(
+    std::function<void(
+        const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)> callback)
+    const {
     for (const auto& [accessor_name, handle] : this->semaphore_binding_handles_) {
-        callback(accessor_name, handle.id, handle.scope, handle.access, handle.external_multi_consumer);
+        callback(accessor_name, handle.id, handle.scope, handle.total_binder_harts);
     }
 }
 
@@ -579,10 +577,10 @@ uint64_t Kernel::compute_hash() const {
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);
         hasher.update(static_cast<uint64_t>(it->second.id));
-        // scope and access are baked into the emitted token, so kernels differing in either
-        // must not share a cached artifact. external_multi_consumer is never emitted -- NOT folded.
+        // The scope is baked into the emitted scope table (and, for cached sems, the binder-hart
+        // total into the exit stub), so kernels differing in either must not share a cached artifact.
         hasher.update(static_cast<uint64_t>(it->second.scope));
-        hasher.update(static_cast<uint64_t>(it->second.access));
+        hasher.update(static_cast<uint64_t>(it->second.total_binder_harts));
     }
     // Tensor binding handles:
     //  - stored as a std::vector (user-specified order), so no sort step needed

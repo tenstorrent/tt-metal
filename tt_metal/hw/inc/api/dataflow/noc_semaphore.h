@@ -7,8 +7,52 @@
 #include "dev_mem_map.h"
 #include "api/dataflow/noc.h"
 #include "api/debug/assert.h"
-#include <hostdevcommon/sem_scope.h>               // enum class SemScope (shared host/device)
-#include "api/dataflow/semaphore_binding_token.h"  // SemaphoreBindingToken<Id,Scope,Access> baked-sem token
+
+/**
+ * @brief Physical path a semaphore's accesses take. This is picked by the host at compile time
+ *        and baked into the kernel. The path picked provides the fastest access that keeps the
+ *        semaphore operations atomic.
+ *
+ *  - LOCAL_NONATOMIC: L1 read-modify-write. Picked only when at most one binder instance exists.
+ *  - DM_LOCAL_CACHED: Touched only by DM threads on the semaphore's one node -- any number of
+ *      binder kernels/threads (the node's DM harts are mutually coherent). Increments are a
+ *      32-bit RISC-V AMO and down() an LR/SC conditional decrement, both on the CACHED alias.
+ *      The word lives in a dedicated cached-only pool that the NoC path never addresses; the
+ *      host census guarantees no NoC or remote access exists (runtime watcher ASSERTs back it).
+ *      Generated entry/exit stubs seed the pool row once per program and self-restore it when
+ *      the last binder hart exits (see genfiles.cpp).
+ *  - EXTERNAL: reachable over the NoC. All ops go through self-targeted NoC atomics; down() is
+ *      multi-consumer-safe on Quasar DM via a NoC-CAS lock. Values must never legitimately be
+ *      0xFFFFFFFF (the CAS-return sentinel).
+ *
+ * The host-side mirror of this enum lives in jit_build/jit_build_settings.hpp; the generated
+ * per-kernel scope table (numeric values) is the bridge. Two emitted tripwires guard it
+ * (kernel_bindings_generated.h): one static_asserts this enum's numbering against the host
+ * mirror's values, one static_asserts per bound id that the table was visible when this header
+ * was compiled (include-order regression).
+ */
+enum class SemScope : uint8_t {
+    LOCAL_NONATOMIC = 0,
+    DM_LOCAL_CACHED = 1,
+    EXTERNAL = 2,
+};
+
+// The host's chosen mechanism for each bound semaphore id, injected invisibly by codegen:
+// kernel_bindings_generated.h #defines TT_METAL2_SEM_SCOPE_TABLE before this header is ever
+// seen in a Metal 2.0 kernel TU. Unbound ids -- and every id in a legacy kernel, which has no
+// generated header -- resolve to LOCAL_NONATOMIC, the historical plain-word behavior. For a
+// compile-time id (`sem::x` is constexpr) the lookup and the mechanism dispatch below fold
+// away entirely; a genuinely runtime id keeps a small predictable branch and stays correct.
+inline __attribute__((always_inline)) constexpr SemScope sem_scope_of(uint32_t semaphore_id) {
+#ifdef TT_METAL2_SEM_SCOPE_TABLE
+    constexpr SemScope table[] = TT_METAL2_SEM_SCOPE_TABLE;
+    constexpr uint32_t n = sizeof(table) / sizeof(table[0]);
+    return semaphore_id < n ? table[semaphore_id] : SemScope::LOCAL_NONATOMIC;
+#else
+    (void)semaphore_id;
+    return SemScope::LOCAL_NONATOMIC;
+#endif
+}
 
 /**
  * @brief Semaphore synchronization primitive for programmable cores.
@@ -18,8 +62,8 @@
  * as well as waiting for the semaphore to reach a desired value. The semaphore can be
  * manipulated locally or remotely via the NoC.
  *
- * The Scope template parameter selects the physical path / atomicity guarantee — see
- * hostdevcommon/sem_scope.h. It defaults to LOCAL_NONATOMIC (legacy behavior).
+ * The physical mechanism is host-chosen and invisible (see SemScope / sem_scope_of above):
+ * construct with the semaphore id and call the methods.
  *
  * Usage:
  *   - Construct a Semaphore with a given semaphore ID.
@@ -40,18 +84,10 @@
  *  - relay_unicast(dst_sem, ...): Set a different remote semaphore on one core to this semaphore's local value.
  *  - relay_multicast(dst_sem, ...): Multicast this semaphore's local value into a different destination semaphore.
  */
-// Access enforces the host's declared AccessType at compile time: down() needs CONSUME,
-// set()/set_multicast() need SET, up()/inc_multicast() anything but OBSERVE; reads are always
-// legal. Deduced from the baked token by the CTAD guide after the class. The RAW default keeps
-// raw-id call sites compiling unchanged (no declared label to enforce).
-template <
-    ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX,
-    SemScope Scope = SemScope::LOCAL_NONATOMIC,
-    SemAccess Access = SemAccess::RAW>
+template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX>
 class Semaphore {
-    // Lets relay_unicast / relay_multicast read dst_sem's private members. The parameter list
-    // must match the class template's arity exactly, or every instantiation is ill-formed.
-    template <ProgrammableCoreType OT, SemScope OS, SemAccess OA>
+    // Lets relay_unicast / relay_multicast read dst_sem's private members without a public accessor.
+    template <ProgrammableCoreType OT>
     friend class Semaphore;
 
     // LOCAL_NONATOMIC and EXTERNAL access the local word through the uncached alias on Quasar
@@ -63,32 +99,15 @@ class Semaphore {
     // LOAD-BEARING: the invalidate_l1_cache() calls below (and in noc_semaphore_wait/wait_min)
     // are a documented NO-OP on Quasar DM cores (tt-2xx/risc_common.h). If that ever becomes a
     // real discard-without-writeback, a cached semaphore would silently lose increments.
-    static constexpr bool kUseUncachedLocalView = (Scope != SemScope::DM_LOCAL_CACHED);
 
-    // DM_LOCAL_CACHED is Quasar-DM-only. Host FATALs cover only DECLARED bindings, so the raw-id
-    // back door is closed at compile time: these class-scope asserts cover off-Quasar and Quasar
-    // TRISC; the raw-id ctor's body assert covers Quasar DM (no binding -> no seeder runs).
-#if !defined(ARCH_QUASAR)
-    static_assert(
-        Scope != SemScope::DM_LOCAL_CACHED,
-        "SemScope::DM_LOCAL_CACHED is a Gen2 (Quasar) mechanism -- the cached-only pool, its cache "
-        "aliases and its seeding do not exist here. Use SemScope::EXTERNAL.");
-#elif defined(COMPILE_FOR_TRISC)
-    static_assert(
-        Scope != SemScope::DM_LOCAL_CACHED,
-        "SemScope::DM_LOCAL_CACHED is reachable only from a data-movement kernel: the pool lives in the "
-        "DM cache domain and its seeder is not emitted for TRISC. Use SemScope::EXTERNAL.");
-#endif
-
-    // Physical L1 offset of semaphore `id` for THIS scope: DM_LOCAL_CACHED uses the dedicated
-    // cached-only pool (MEM_DM_CACHED_SEM_BASE); every other scope uses the normal ring
-    // (get_semaphore). MEM_L1_BASE == 0, so the offset is also the cached-alias address.
-    static uintptr_t sem_l1_offset(uint32_t id) {
-#ifdef ARCH_QUASAR
-        if constexpr (Scope == SemScope::DM_LOCAL_CACHED) {
-            // The token ctor already bounds-checks Id at compile time; runtime defense-in-depth.
-            ASSERT(id < MEM_DM_CACHED_SEM_SIZE / L1_ALIGNMENT);
-            return static_cast<uintptr_t>(MEM_DM_CACHED_SEM_BASE) + id * L1_ALIGNMENT;
+    // Physical L1 offset of semaphore `id`: DM_LOCAL_CACHED lives in the dedicated cached-only
+    // pool (MEM_DM_CACHED_SEM_BASE); every other scope uses the normal ring (get_semaphore).
+    // MEM_L1_BASE == 0, so the offset is also the cached-alias address.
+    static __attribute__((always_inline)) inline uintptr_t sem_l1_offset(uint32_t id) {
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+        if (sem_scope_of(id) == SemScope::DM_LOCAL_CACHED) {
+            ASSERT(id < MEM_DM_CACHED_SEM_SIZE / MEM_DM_CACHED_SEM_ROW);
+            return static_cast<uintptr_t>(MEM_DM_CACHED_SEM_BASE) + id * MEM_DM_CACHED_SEM_ROW;
         }
 #endif
         return get_semaphore<core_type>(id);
@@ -116,49 +135,8 @@ class Semaphore {
 public:
     // l1_offset_ holds the physical L1 offset of the semaphore word (the cached-alias
     // address; MEM_L1_BASE == 0). Local views and NoC addresses are derived from it.
-    explicit Semaphore(uint32_t semaphore_id) : l1_offset_(sem_l1_offset(semaphore_id)) {
-        // Fires only when THIS ctor is used: a raw id has no declared binding, so the host never
-        // injects the cached-pool seeder -- the word would be boot garbage or a stale count.
-        static_assert(
-            Scope != SemScope::DM_LOCAL_CACHED,
-            "a DM_LOCAL_CACHED semaphore must be constructed from its sem:: binding token "
-            "(`Semaphore s(sem::<name>);`): the declared binding is what makes the host emit and "
-            "auto-inject the cached-pool seeder. A raw id would address a stale/unseeded pool "
-            "word. For an id-addressed semaphore use the default scope or SemScope::EXTERNAL.");
-    }
-
-    // Construct from a host-baked sem:: accessor token. Scope and Access come from the token
-    // via the CTAD guide after the class, so `Semaphore s(sem::x);` needs no explicit <>.
-    // The static_asserts reject an explicit `Semaphore<...>` that mismatches the token.
-    template <uint32_t Id, SemScope TokenScope, SemAccess TokenAccess>
-    explicit Semaphore(SemaphoreBindingToken<Id, TokenScope, TokenAccess>) : l1_offset_(sem_l1_offset(Id)) {
-#ifdef ARCH_QUASAR
-        // The pool is indexed by id, so a high id must not run past the pool.
-        if constexpr (Scope == SemScope::DM_LOCAL_CACHED) {
-            static_assert(
-                Id * L1_ALIGNMENT < MEM_DM_CACHED_SEM_SIZE,
-                "semaphore id does not fit the DM cached semaphore pool (grow MEM_DM_CACHED_SEM_SIZE)");
-        }
-        // The lock region sits right below the cached pool, so an out-of-range id would CAS-write
-        // a live cached counter. (The raw-id path is guarded only by the ASSERT in
-        // external_lock_l1_offset().)
-        if constexpr (Scope == SemScope::EXTERNAL) {
-            static_assert(
-                Id * L1_ALIGNMENT < MEM_NOC_SEM_LOCK_SIZE,
-                "semaphore id does not fit the EXTERNAL lock region (grow MEM_NOC_SEM_LOCK_SIZE)");
-        }
-#endif
-        static_assert(
-            TokenScope == Scope,
-            "The sem:: accessor's baked SemScope does not match this Semaphore's Scope. Write "
-            "`Semaphore s(sem::x);` and let CTAD pick the baked scope; do not spell "
-            "`Semaphore<...>` explicitly on a baked accessor.");
-        // Otherwise an explicit `Semaphore<...>` could silently swap the declared access for RAW.
-        static_assert(
-            TokenAccess == Access,
-            "The sem:: accessor's host-declared access (AccessType) does not match this Semaphore's "
-            "Access parameter. Write `Semaphore s(sem::x);` and let CTAD adopt it.");
-    }
+    explicit __attribute__((always_inline)) Semaphore(uint32_t semaphore_id) :
+        l1_offset_(sem_l1_offset(semaphore_id)), scope_(sem_scope_of(semaphore_id)) {}
 
     /**
      * @brief Increment the semaphore by the specified value (local).
@@ -169,20 +147,20 @@ public:
      *
      * @param value The value to increment the semaphore by.
      */
-    void up(uint32_t value) {
-        // The access asserts sit in function bodies (not class scope) so they fire only on a
-        // mutating CALL -- constructing any binding and wait()/wait_min()/value() stay legal.
-        // Never add an explicit instantiation of Semaphore; it would fire them all at once.
-        static_assert(
-            Access != SemAccess::OBSERVE,
-            "up() writes this semaphore, but its host binding is declared AccessType::OBSERVE. "
-            "Relabel the binding INCREMENT, or stop writing -- wait()/wait_min()/value() remain "
-            "available under OBSERVE.");
-        if constexpr (Scope == SemScope::DM_LOCAL_CACHED) {
+    __attribute__((always_inline)) void up(uint32_t value) {
+        if (scope_ == SemScope::DM_LOCAL_CACHED) {
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
             __atomic_add_fetch(reinterpret_cast<uint32_t*>(l1_offset_), value, __ATOMIC_SEQ_CST);
-        } else if constexpr (Scope == SemScope::EXTERNAL) {
+#else
+            ASSERT(false);  // the host census never bakes CACHED for this platform
+#endif
+        } else if (scope_ == SemScope::EXTERNAL) {
+#ifndef COMPILE_FOR_TRISC
             noc_semaphore_inc(::get_noc_addr(l1_offset_), value);
             noc_async_atomic_barrier();
+#else
+            ASSERT(false);  // compute kernels cannot bind semaphores (host-rejected)
+#endif
         } else {  // LOCAL_NONATOMIC
             *local_ptr() += value;
         }
@@ -191,21 +169,18 @@ public:
     /**
      * @brief Atomically increment the semaphore by the specified value on a remote core.
      *
+     * Not valid on a DM_LOCAL_CACHED semaphore (its word must never be touched via the NoC);
+     * the host census never picks CACHED for a semaphore with a remote writer.
+     *
      * @param noc The Noc object representing the NoC to use for the transaction.
      * @param noc_x The X coordinate of the remote core in the NoC.
      * @param noc_y The Y coordinate of the remote core in the NoC.
      * @param value The value to increment the semaphore by.
      * @param vc The virtual channel to use for the transaction (default is NOC_UNICAST_WRITE_VC).
      */
-    void up(const Noc& noc, uint32_t noc_x, uint32_t noc_y, uint32_t value, uint8_t vc = NOC_UNICAST_WRITE_VC) {
-        static_assert(
-            Access != SemAccess::OBSERVE,
-            "remote up() writes this semaphore on another core, but its host binding is declared "
-            "AccessType::OBSERVE. Relabel it INCREMENT.");
-        static_assert(
-            Scope != SemScope::DM_LOCAL_CACHED,
-            "remote up() is not valid on a DM_LOCAL_CACHED semaphore (it would be touched via the NoC); "
-            "use SemScope::EXTERNAL");
+    __attribute__((always_inline)) void up(
+        const Noc& noc, uint32_t noc_x, uint32_t noc_y, uint32_t value, uint8_t vc = NOC_UNICAST_WRITE_VC) {
+        ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);
         const uint64_t dest_noc_addr = get_noc_addr(noc_x, noc_y, noc.get_noc_id());
         noc_semaphore_inc(dest_noc_addr, value, noc.get_noc_id(), vc);
     }
@@ -224,17 +199,11 @@ public:
      *
      * @param value The value to decrement the semaphore by.
      */
-    void down(uint32_t value) {
-        // down() through any label but CONSUME would vacate the host's off-node-consumer
-        // rejection, which keys on that label.
-        static_assert(
-            Access == SemAccess::CONSUME || Access == SemAccess::RAW,
-            "down() consumes this semaphore, so its host binding must be declared "
-            "AccessType::CONSUME (the off-node-consumer rejection keys on that label). To only "
-            "wait on a value without consuming it, use wait_min().");
+    __attribute__((always_inline)) void down(uint32_t value) {
         auto* sem_addr = local_ptr();
         WAYPOINT("NSDW");
-        if constexpr (Scope == SemScope::DM_LOCAL_CACHED) {
+        if (scope_ == SemScope::DM_LOCAL_CACHED) {
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
             // Conditional decrement via LR/SC strong CAS on the CACHED alias (LR/SC and AMOs hang
             // uncached). A losing CAS re-enters the >= check, so two consumers can never both take
             // the same credit. A plain AMO subtract after the spin would NOT be multi-consumer-safe.
@@ -249,7 +218,10 @@ public:
                 WAYPOINT("NSDD");
             } while (!__atomic_compare_exchange_n(
                 word, &observed, observed - value, /*weak=*/false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST));
-        } else if constexpr (Scope == SemScope::EXTERNAL) {
+#else
+            ASSERT(false);  // the host census never bakes CACHED for this platform
+#endif
+        } else if (scope_ == SemScope::EXTERNAL) {
             // TT_EMULE_USE_L1_POOL: emule compiles the Gen1 arm (its shims cover those primitives).
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC) && !defined(TT_EMULE_USE_L1_POOL)
             // Lock protocol and sentinel invariant: see the down() doc block. Producers bypass the
@@ -268,16 +240,8 @@ public:
             // One consumed NoC atomic: sentinel, issue, fence, poll the returned pre-op value.
             auto consumed_cas4 = [&](uint32_t cmp4, uint32_t swap4) -> uint32_t {
                 *ret_word = kCasSentinel;
-                noc_fast_atomic_cas4<DM_DEDICATED_NOC, /*program_ret_addr=*/true>(
-                    noc_index,
-                    write_at_cmd_buf,
-                    lock_noc,
-                    NOC_UNICAST_WRITE_VC,
-                    cmp4,
-                    swap4,
-                    /*linked=*/false,
-                    /*posted=*/false,
-                    ret_slot);
+                noc_fast_atomic_cas4<DM_DEDICATED_NOC>(
+                    noc_index, lock_noc, NOC_UNICAST_WRITE_VC, cmp4, swap4, ret_slot);
                 noc_async_atomic_barrier();
                 // Re-arm: the barrier's waypoints overwrote ours; a hang here must dump as NSDD.
                 WAYPOINT("NSDD");
@@ -319,15 +283,16 @@ public:
                 }
                 // Credit vanished before we locked: released; back to the lock-free wait.
             }
-#else
-            // Gen1 single-consumer path: spin, then atomic subtract. (The TRISC leg of the gate
-            // is parse-safety only.)
+#elif !defined(COMPILE_FOR_TRISC)
+            // Gen1 single-consumer path: spin, then atomic subtract.
             do {
                 invalidate_l1_cache();
             } while ((*sem_addr) < value);
             WAYPOINT("NSDD");
             noc_semaphore_inc(::get_noc_addr(l1_offset_), (uint32_t)(0u - value));
             noc_async_atomic_barrier();
+#else
+            ASSERT(false);  // compute kernels cannot bind semaphores (host-rejected)
 #endif
         } else {  // LOCAL_NONATOMIC (legacy)
             do {
@@ -345,33 +310,29 @@ public:
      *
      * @param value The value to wait for.
      */
-    void wait(uint32_t value) { noc_semaphore_wait(local_ptr(), value); }
+    __attribute__((always_inline)) void wait(uint32_t value) { noc_semaphore_wait(local_ptr(), value); }
 
     /**
      * @brief Block until the semaphore is at least the specified value.
      *
      * @param value The minimum value to wait for.
      */
-    void wait_min(uint32_t value) { noc_semaphore_wait_min(local_ptr(), value); }
+    __attribute__((always_inline)) void wait_min(uint32_t value) { noc_semaphore_wait_min(local_ptr(), value); }
 
     /**
      * @brief Set the semaphore to the specified value.
      *
+     * A non-atomic destructive store under every scope: use it for init/reset only, never
+     * concurrently with up()/down().
+     *
      * @param value The value to set the semaphore to.
      */
-    void set(uint32_t value) {
-        // The racing-SET rejection keys on the SET label; any other label would vacate it.
-        static_assert(
-            Access == SemAccess::SET || Access == SemAccess::RAW,
-            "set() destructively overwrites this semaphore, so its host binding must be declared "
-            "AccessType::SET (the racing-SET rejection keys on that label).");
-        noc_semaphore_set(local_ptr(), value);
-    }
+    __attribute__((always_inline)) void set(uint32_t value) { noc_semaphore_set(local_ptr(), value); }
 
     /**
      * @brief Read the current semaphore value through this scope's coherent view.
      */
-    uint32_t value() const {
+    __attribute__((always_inline)) uint32_t value() const {
         invalidate_l1_cache();
         return *local_ptr();
     }
@@ -382,6 +343,9 @@ public:
      *       same semaphore on a remote core, use up(noc, noc_x, noc_y, value) instead.
      *       Writes 4 bytes from this->l1_offset_ to dst_sem.l1_offset_ on the remote core
      *       (noc_x, noc_y).
+     *       Neither endpoint may be DM_LOCAL_CACHED (a relay is a NoC write; the cached pool
+     *       must never be NoC-written) -- guarded by the runtime ASSERT below (the census sees topology, not method
+     * calls).
      *
      * @param noc The Noc object representing the NoC to use for the transaction.
      * @param dst_sem The destination Semaphore whose L1 offset receives the value.
@@ -389,27 +353,10 @@ public:
      * @param noc_y The Y coordinate of the remote core in the NoC.
      * @tparam dst_core_type Programmable core type of the destination (defaults to this Semaphore's core_type).
      */
-    // DstAccess is its own parameter: relay READS *this and WRITES dst_sem, so any source
-    // access is legitimate and only the DESTINATION's label is enforced (a relay is a remote
-    // set()). It must be deducible so the user gets the static_assert, not "no matching function".
-    template <
-        ProgrammableCoreType dst_core_type = core_type,
-        SemScope dst_scope = Scope,
-        SemAccess DstAccess = SemAccess::RAW>
-    void relay_unicast(
-        const Noc& noc, const Semaphore<dst_core_type, dst_scope, DstAccess>& dst_sem, uint32_t noc_x, uint32_t noc_y) {
-        static_assert(
-            DstAccess == SemAccess::SET || DstAccess == SemAccess::RAW,
-            "relay_unicast() destructively writes the DESTINATION semaphore (a remote set()), so "
-            "the destination binding must be declared AccessType::SET.");
-        static_assert(
-            Scope != SemScope::DM_LOCAL_CACHED,
-            "relay_unicast is a NoC op and is not valid on a DM_LOCAL_CACHED semaphore; use SemScope::EXTERNAL");
-        static_assert(
-            dst_scope != SemScope::DM_LOCAL_CACHED,
-            "the DESTINATION of relay_unicast must not be a DM_LOCAL_CACHED semaphore: its word lives in the "
-            "cached-only pool, so relaying to it would put a NoC write into that pool -- the one thing the "
-            "pool exists to exclude. Give the destination SemScope::EXTERNAL.");
+    template <ProgrammableCoreType dst_core_type = core_type>
+    void relay_unicast(const Noc& noc, const Semaphore<dst_core_type>& dst_sem, uint32_t noc_x, uint32_t noc_y) {
+        ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);
+        ASSERT(dst_sem.scope_ != SemScope::DM_LOCAL_CACHED);
         ASSERT(l1_offset_ != dst_sem.l1_offset_);
         const uint64_t dst_noc_addr = ::get_noc_addr(noc_x, noc_y, dst_sem.get_l1_addr(), noc.get_noc_id());
         noc_semaphore_set_remote(get_l1_addr(), dst_noc_addr, noc.get_noc_id());
@@ -438,14 +385,7 @@ public:
         uint32_t noc_y_end,
         uint32_t num_dests,
         bool linked = false) {
-        // Writes peer cores' copies rather than this core's own word -- still a destructive set.
-        static_assert(
-            Access == SemAccess::SET || Access == SemAccess::RAW,
-            "set_multicast() destructively writes this semaphore on the destination cores, so its "
-            "host binding must be declared AccessType::SET.");
-        static_assert(
-            Scope != SemScope::DM_LOCAL_CACHED,
-            "set_multicast is a NoC op and is not valid on a DM_LOCAL_CACHED semaphore; use SemScope::EXTERNAL");
+        ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);  // a multicast set is a NoC write
         const uint64_t multicast_addr =
             get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, noc.get_noc_id());
         const uintptr_t src_l1_addr = get_l1_addr();
@@ -474,33 +414,18 @@ public:
      *             (default is NocOptions::DEFAULT which excludes sender)
      * @tparam dst_core_type Programmable core type of the destination (defaults to this Semaphore's core_type).
      */
-    // See relay_unicast: the gate is on the DESTINATION, not on *this.
-    template <
-        NocOptions opts = NocOptions::DEFAULT,
-        ProgrammableCoreType dst_core_type = core_type,
-        SemScope dst_scope = Scope,
-        SemAccess DstAccess = SemAccess::RAW>
+    template <NocOptions opts = NocOptions::DEFAULT, ProgrammableCoreType dst_core_type = core_type>
     void relay_multicast(
         const Noc& noc,
-        const Semaphore<dst_core_type, dst_scope, DstAccess>& dst_sem,
+        const Semaphore<dst_core_type>& dst_sem,
         uint32_t noc_x_start,
         uint32_t noc_y_start,
         uint32_t noc_x_end,
         uint32_t noc_y_end,
         uint32_t num_dests,
         bool linked = false) {
-        static_assert(
-            DstAccess == SemAccess::SET || DstAccess == SemAccess::RAW,
-            "relay_multicast() destructively writes the DESTINATION semaphore on every core in the "
-            "region (a remote set()), so the destination binding must be declared AccessType::SET.");
-        static_assert(
-            Scope != SemScope::DM_LOCAL_CACHED,
-            "relay_multicast is a NoC op and is not valid on a DM_LOCAL_CACHED semaphore; use SemScope::EXTERNAL");
-        static_assert(
-            dst_scope != SemScope::DM_LOCAL_CACHED,
-            "the DESTINATION of relay_multicast must not be a DM_LOCAL_CACHED semaphore: its word lives in the "
-            "cached-only pool, so relaying to it would put a NoC write into that pool -- the one thing the "
-            "pool exists to exclude. Give the destination SemScope::EXTERNAL.");
+        ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);
+        ASSERT(dst_sem.scope_ != SemScope::DM_LOCAL_CACHED);
         ASSERT(l1_offset_ != dst_sem.l1_offset_);
         const uint64_t multicast_addr = ::get_noc_multicast_addr(
             noc_x_start, noc_y_start, noc_x_end, noc_y_end, dst_sem.get_l1_addr(), noc.get_noc_id());
@@ -532,14 +457,7 @@ public:
         uint32_t noc_y_end,
         uint32_t value,
         uint32_t num_dests) {
-        // Like set_multicast, but INCREMENT-shaped, so any writer label admits it.
-        static_assert(
-            Access != SemAccess::OBSERVE,
-            "inc_multicast() increments this semaphore on the destination cores, but its host binding "
-            "is declared AccessType::OBSERVE. Relabel it INCREMENT.");
-        static_assert(
-            Scope != SemScope::DM_LOCAL_CACHED,
-            "inc_multicast is a NoC op and is not valid on a DM_LOCAL_CACHED semaphore; use SemScope::EXTERNAL");
+        ASSERT(scope_ != SemScope::DM_LOCAL_CACHED);  // a multicast increment is a NoC write
         const uint64_t multicast_addr =
             get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, noc.get_noc_id());
         noc_semaphore_inc_multicast(multicast_addr, value, num_dests, noc.get_noc_id());
@@ -547,13 +465,14 @@ public:
 
 private:
     uintptr_t l1_offset_;  // physical L1 offset of the semaphore word (cached-alias address)
+    SemScope scope_;       // host-chosen mechanism (from the invisible codegen table)
 
     // Local access pointer for reads / non-atomic writes. Uncached alias on Quasar for
     // LOCAL_NONATOMIC and EXTERNAL; cached alias for DM_LOCAL_CACHED.
-    volatile tt_l1_ptr uint32_t* local_ptr() const {
+    __attribute__((always_inline)) volatile tt_l1_ptr uint32_t* local_ptr() const {
         uintptr_t addr = l1_offset_;
 #ifdef ARCH_QUASAR
-        if constexpr (kUseUncachedLocalView) {
+        if (scope_ != SemScope::DM_LOCAL_CACHED) {
             addr += MEM_L1_UNCACHED_BASE;
         }
 #endif
@@ -572,9 +491,3 @@ private:
         return ::get_noc_addr(noc_x, noc_y, get_l1_addr(), noc);
     }
 };
-
-// CTAD guide: `Semaphore s(sem::x)` deduces Semaphore<TENSIX, Scope, Access> from the token
-// (semaphores are TENSIX-scoped). A hand-spelled `Semaphore<...>` that mismatches the token trips
-// the token ctor's static_asserts; a matching one is caught by test_semaphore_binding_hygiene.
-template <uint32_t Id, SemScope S, SemAccess A>
-Semaphore(SemaphoreBindingToken<Id, S, A>) -> Semaphore<ProgrammableCoreType::TENSIX, S, A>;

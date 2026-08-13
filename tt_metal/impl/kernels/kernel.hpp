@@ -12,7 +12,6 @@
 #include <string_view>
 #include <unordered_map>
 
-#include <hostdevcommon/sem_scope.h>
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
 #include "api/tt-metalium/device.hpp"
@@ -93,17 +92,16 @@ KernelHandle CreateKernelFromString(
 
 // Metal 2.0: DFB accessor names -> logical DFB ids
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, uint16_t>;
-// Metal 2.0: per-binding semaphore handle: id, host-baked scope (ResolveSemaphoreScope), and the
-// declared access label (enforced on device by the Semaphore mutator static_asserts).
-// external_multi_consumer marks an EXTERNAL semaphore with >1 consuming instances program-wide;
-// not emitted into the token -- the emule backend refuses it.
+// Metal 2.0: per-binding semaphore handle: id and the host-baked scope (ResolveSemaphoreScope).
+// The scope reaches the kernel through the invisible codegen scope table; kernel code sees only
+// the plain uint32_t id.
 struct SemaphoreBindingHandle {
     uint16_t id = 0;
     SemScope scope = SemScope::LOCAL_NONATOMIC;
-    SemAccess access = SemAccess::INCREMENT;
-    bool external_multi_consumer = false;
+    // DM_LOCAL_CACHED only: the semaphore's total binder hart count (see SemBindingEntry).
+    uint32_t total_binder_harts = 0;
 };
-// Metal 2.0: semaphore accessor names -> {semaphore id, scope, access, external_multi_consumer}
+// Metal 2.0: semaphore accessor names -> {semaphore id, scope}
 using SemaphoreBindingHandleMap = std::unordered_map<std::string, SemaphoreBindingHandle>;
 
 // Metal 2.0: per-kernel resolved TensorBinding.
@@ -237,12 +235,10 @@ public:
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
     void process_dataflow_buffer_binding_handles(
         std::function<void(const std::string& accessor_name, uint16_t logical_dfb_id)>) const override;
-    void process_semaphore_binding_handles(std::function<void(
-                                               const std::string& accessor_name,
-                                               uint16_t semaphore_id,
-                                               SemScope scope,
-                                               SemAccess access,
-                                               bool external_multi_consumer)>) const override;
+    void process_semaphore_binding_handles(
+        std::function<
+            void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)
+        const override;
     void process_tensor_binding_handles(std::function<void(
                                             const std::string& accessor_name,
                                             uint32_t cta_offset,
