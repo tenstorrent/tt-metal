@@ -27,6 +27,7 @@
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
 
 /*
  * Similar to loopback programming example, except run on al devices and skip device teardown to check if we can

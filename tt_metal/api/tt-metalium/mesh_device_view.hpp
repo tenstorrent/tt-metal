@@ -14,7 +14,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_config.hpp>
 #include <tt-metalium/mesh_coord.hpp>
-#include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/maybe_remote.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 
@@ -56,14 +55,10 @@ public:
     // Get devices spanning the region defined by `range` in row-major order with start/end coordinates inclusive
     [[nodiscard]] std::vector<IDevice*> get_devices(const MeshCoordinateRange& range) const;
     [[nodiscard]] std::vector<IDevice*> get_devices() const;
-    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids(const MeshCoordinateRange& range) const;
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids() const;
     [[nodiscard]] size_t num_devices() const;
 
-    [[nodiscard]] bool empty() const noexcept;
-    [[nodiscard]] size_t size() const noexcept;
     [[nodiscard]] const MeshShape& shape() const noexcept;
-    [[nodiscard]] tt::tt_fabric::MeshId mesh_id() const noexcept;
     [[nodiscard]] bool contains(const MeshCoordinate& coord) const noexcept;
 
     // Returns `IDevice*` instance for `coord`.
@@ -72,13 +67,6 @@ public:
         "Deprecated, retrieving physical devices can fail in distributed contexts. This will be removed after "
         "28-02-2026.")]] [[nodiscard]] IDevice*
     get_device(const MeshCoordinate& coord) const;
-
-    // Returns `tt::tt_fabric::FabricNodeId` for `coord`.
-    // In multi-host context, fabric node IDs are always available, even for remote devices.
-    [[nodiscard]] tt::tt_fabric::FabricNodeId get_fabric_node_id(const MeshCoordinate& coord) const;
-
-    std::vector<MaybeRemote<IDevice*>>::const_iterator begin() const;
-    std::vector<MaybeRemote<IDevice*>>::const_iterator end() const;
 
     // Throws if no device corresponds to `device_id`.
     [[nodiscard]] MeshCoordinate find_device(ChipId device_id) const;
@@ -92,26 +80,8 @@ public:
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids_on_row(size_t row) const;
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_fabric_node_ids_on_column(size_t col) const;
 
-    // These utility methods linearize the set of devices in a mesh into a line or ring.
-    // Linearizing a mesh into a line asserts the condition that device[i-1] is connected to device[i].
-    // Linearizing a mesh into a ring asserts the condition that device[i-1] is connected to device[i] and device[0] is
-    // connected to device[-1].
-    //
-    // Given a starting coordinate, get the coordinates of a line of devices where device[i-1] is connected to device[i]
-    // The current support only provides left-to-right and right-to-left snaking of the line.
-    //
-    // Important: these utilities currently only support 2D meshes.
-    // TODO: #17477 - Remove the methods that assume 2D mesh.
-    [[nodiscard]] static std::vector<MeshCoordinate> get_line_coordinates(
-        size_t length, const Shape2D& mesh_shape, const Shape2D& mesh_offset);
-    [[nodiscard]] std::vector<MeshCoordinate> get_line_coordinates() const;
-    [[nodiscard]] static std::vector<MeshCoordinate> get_ring_coordinates(
-        const Shape2D& ring_shape, const Shape2D& mesh_shape);
-    [[nodiscard]] std::vector<MeshCoordinate> get_ring_coordinates() const;
     [[nodiscard]] std::vector<IDevice*> get_ring_devices() const;
-    [[nodiscard]] std::vector<IDevice*> get_line_devices() const;
     [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_ring_fabric_node_ids() const;
-    [[nodiscard]] std::vector<tt::tt_fabric::FabricNodeId> get_line_fabric_node_ids() const;
 
     // Returns true if the view is fully local, i.e. all devices in the view are local.
     // Throws if the coordinate is out of bounds of this view.
@@ -119,10 +89,6 @@ public:
         "Deprecated, is_local should be avoided as it is likely to cause issues in distributed contexts. This will be "
         "removed after 28-02-2026.")]]
     bool is_local(const MeshCoordinate& coord) const;
-
-    // Returns the coordinate range of all local devices in this view.
-    // The range is a bounding box that encompasses all local coordinates.
-    MeshCoordinateRange get_local_mesh_coord_range() const;
 
     // Destructor
     ~MeshDeviceView();

@@ -5,6 +5,7 @@
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <internal/service/service_core_manager.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
+#include "tt_metal/distributed/mesh_io.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"

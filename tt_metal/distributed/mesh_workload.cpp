@@ -438,31 +438,4 @@ const std::unordered_map<MeshCoordinateRange, Program>& MeshWorkload::get_progra
     return pimpl_->get_programs();
 }
 
-// For testing purposes only
-void MeshWorkload::set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq) {
-    pimpl_->set_last_used_command_queue_for_testing(mesh_cq);
-}
-
-MeshCommandQueue* MeshWorkload::get_last_used_command_queue() const { return pimpl_->get_last_used_command_queue(); }
-
-uint32_t MeshWorkload::get_sem_base_addr(
-    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
-    return pimpl_->get_sem_base_addr(mesh_device, logical_core, core_type);
-}
-
-uint32_t MeshWorkload::get_sem_size(
-    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
-    return pimpl_->get_sem_size(mesh_device, logical_core, core_type);
-}
-
-uint32_t MeshWorkload::get_cb_base_addr(
-    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
-    return pimpl_->get_cb_base_addr(mesh_device, logical_core, core_type);
-}
-
-uint32_t MeshWorkload::get_cb_size(
-    std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
-    return pimpl_->get_cb_size(mesh_device, logical_core, core_type);
-}
-
 }  // namespace tt::tt_metal::distributed

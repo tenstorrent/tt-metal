@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <distributed/mesh_io.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <cstdint>
 #include <iostream>

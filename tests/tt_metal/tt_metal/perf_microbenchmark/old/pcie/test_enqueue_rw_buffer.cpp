@@ -21,6 +21,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "test_common.hpp"

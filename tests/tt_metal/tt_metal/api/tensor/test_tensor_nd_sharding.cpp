@@ -47,6 +47,7 @@
 #include <tt-metalium/tensor/tensor_apis.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
 
 #include "impl/tensor/mesh_tensor_impl.hpp"
 

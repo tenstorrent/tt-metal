@@ -43,6 +43,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
 
 // Access to internal API: ProgramImpl::validate_circular_buffer_region
 #include "tt_metal/impl/program/program_impl.hpp"

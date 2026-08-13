@@ -16,7 +16,6 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_event.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 
@@ -34,38 +33,6 @@ class IDevice;
 namespace distributed {
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
-
-template <typename DType>
-void WriteShard(
-    MeshCommandQueue& mesh_cq,
-    const std::shared_ptr<MeshBuffer>& mesh_buffer,
-    std::vector<DType>& src,
-    const MeshCoordinate& coord,
-    bool blocking = false) {
-    std::vector<ShardDataTransfer> shard_data_transfers = {ShardDataTransfer{coord}.host_data(src.data())};
-    mesh_cq.enqueue_write_shards(mesh_buffer, shard_data_transfers, blocking);
-}
-
-template <typename DType>
-void ReadShard(
-    MeshCommandQueue& mesh_cq,
-    std::vector<DType>& dst,
-    const std::shared_ptr<MeshBuffer>& mesh_buffer,
-    const MeshCoordinate& coord,
-    bool blocking = true) {
-    // TODO: #26591 - `is_local` Handling should be done under `MeshCommandQueue`.
-    // Tracking removal of free function APIs in this file in this issue.
-    auto* mesh_device = mesh_cq.device();
-    auto devices = mesh_device->get_view().get_devices(MeshCoordinateRange(coord, coord));
-    if (devices.empty()) {
-        return;
-    }
-
-    auto* shard = mesh_buffer->get_device_buffer(coord);
-    dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));
-    std::vector<ShardDataTransfer> shard_data_transfers = {ShardDataTransfer{coord}.host_data(dst.data())};
-    mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
-}
 
 template <typename DType>
 void EnqueueWriteMeshBuffer(
@@ -100,12 +67,6 @@ void EnqueueReadMeshBuffer(
 
 // Make the current thread block until the event is recorded by the associated MeshCommandQueue.
 void EventSynchronize(const MeshEvent& event);
-
-// Query the status of an event tied to a MeshCommandQueue.
-// Returns true if the CQ has completed recording the event, false otherwise.
-bool EventQuery(const MeshEvent& event);
-
-MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
 
 void Synchronize(
     MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids = {});

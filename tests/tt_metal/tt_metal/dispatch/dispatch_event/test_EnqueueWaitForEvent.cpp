@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <sys/types.h>
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <functional>

@@ -20,6 +20,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <algorithm>
 #include <array>

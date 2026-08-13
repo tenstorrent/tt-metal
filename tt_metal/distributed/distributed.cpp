@@ -5,6 +5,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "mesh_io.hpp"
 #include <utility>
 
 #include "device.hpp"

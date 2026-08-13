@@ -11,6 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
 #include <cmath>
 #include <cstring>
 #include <exception>

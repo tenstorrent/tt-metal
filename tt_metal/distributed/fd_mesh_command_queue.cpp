@@ -36,6 +36,7 @@
 #include "mesh_coord.hpp"
 #include "mesh_workload.hpp"
 #include "mesh_workload_impl.hpp"
+#include "mesh_device_view_impl.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
 #include "tt-metalium/program.hpp"
 #include "shape2d.hpp"
@@ -548,7 +549,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     }
     // From the dispatcher's perspective, binaries are now committed to DRAM
     mesh_workload.impl().set_program_binary_status(mesh_device_id, ProgramBinaryStatus::Committed);
-    mesh_workload.set_last_used_command_queue_for_testing(this);
+    mesh_workload.impl().set_last_used_command_queue_for_testing(this);
 
     if (blocking) {
         this->finish_nolock({{sub_device_id}});
@@ -1306,7 +1307,7 @@ void FDMeshCommandQueue::record_end() {
 
     // Calculate device ranges that have an identical set of programs that run on them (including no programs at all).
     // Restrict to the local mesh partition so that multi-host traces only process locally-owned devices.
-    auto local_mesh_range = mesh_device_->get_view().get_local_mesh_coord_range();
+    auto local_mesh_range = mesh_device_->get_view().impl().get_local_mesh_coord_range();
     std::vector<MeshCoordinateRange> device_ranges{local_mesh_range};
     for (auto& trace_node : trace_nodes_) {
         for (auto& [device_range, program] : trace_node.trace_nodes) {

@@ -44,6 +44,7 @@
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
 using namespace tt;

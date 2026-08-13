@@ -8,6 +8,8 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
+#include <distributed/mesh_workload_impl.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -136,7 +138,7 @@ void verify_cb_config(
                     ::tt::tt_metal::detail::ReadFromDeviceL1(
                         device,
                         core_coord,
-                        workload.get_cb_base_addr(mesh_device, core_coord, CoreType::WORKER),
+                        workload.impl().get_cb_base_addr(mesh_device, core_coord, CoreType::WORKER),
                         cb_config_buffer_size,
                         cb_config_vector);
 
@@ -166,8 +168,8 @@ void validate_sems(
     MeshWorkload& mesh_workload,
     std::vector<uint32_t>& expected_semaphore_values) {
     for (const auto& core : crs) {
-        const uint32_t sem_buffer_size = mesh_workload.get_sem_size(mesh_device, core, CoreType::WORKER);
-        const uint32_t sem_buffer_base = mesh_workload.get_sem_base_addr(mesh_device, core, CoreType::WORKER);
+        const uint32_t sem_buffer_size = mesh_workload.impl().get_sem_size(mesh_device, core, CoreType::WORKER);
+        const uint32_t sem_buffer_base = mesh_workload.impl().get_sem_base_addr(mesh_device, core, CoreType::WORKER);
         std::vector<uint32_t> readback_sem_vals;
         ::tt::tt_metal::detail::ReadFromDeviceL1(device, core, sem_buffer_base, sem_buffer_size, readback_sem_vals);
         uint32_t sem_idx = 0;

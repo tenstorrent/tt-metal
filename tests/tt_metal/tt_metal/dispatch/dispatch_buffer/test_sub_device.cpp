@@ -27,6 +27,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 
 namespace tt::tt_metal {

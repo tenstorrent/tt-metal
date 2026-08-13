@@ -15,6 +15,7 @@
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/host_api.hpp>
+#include <distributed/mesh_io.hpp>
 #include <tt_stl/span.hpp>
 #include "sub_device_test_utils.hpp"
 #include <tt-metalium/sub_device_types.hpp>

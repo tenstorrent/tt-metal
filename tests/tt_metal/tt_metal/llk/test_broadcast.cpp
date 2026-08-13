@@ -25,6 +25,7 @@
 #include "llk_device_fixture.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <distributed/mesh_io.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>

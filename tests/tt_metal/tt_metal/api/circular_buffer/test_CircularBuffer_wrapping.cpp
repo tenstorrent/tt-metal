@@ -7,6 +7,7 @@
 #include "gtest/gtest.h"
 #include "host_api.hpp"
 #include "tt_metal.hpp"
+#include <distributed/mesh_io.hpp>
 namespace tt::tt_metal {
 
 /**

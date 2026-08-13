@@ -17,6 +17,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
 #include "llrt.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>

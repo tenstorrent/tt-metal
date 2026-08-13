@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
 #include <array>
 #include <cstddef>
 #include <iomanip>

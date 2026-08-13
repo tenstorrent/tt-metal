@@ -12,6 +12,7 @@
 #include <fstream>
 #include <numeric>
 #include <sstream>
+#include <distributed/mesh_io.hpp>
 
 namespace tt::tt_metal::distributed {
 

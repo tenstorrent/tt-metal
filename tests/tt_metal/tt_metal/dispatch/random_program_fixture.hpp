@@ -8,6 +8,7 @@
 #include "env_lib.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <distributed/mesh_io.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <gtest/gtest.h>
 #include <tt-metalium/circular_buffer_constants.h>

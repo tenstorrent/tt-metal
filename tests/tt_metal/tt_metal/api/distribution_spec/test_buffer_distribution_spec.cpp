@@ -10,6 +10,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>

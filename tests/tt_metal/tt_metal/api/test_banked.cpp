@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <distributed/mesh_io.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <map>

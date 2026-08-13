@@ -10,6 +10,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <distributed/mesh_io.hpp>
 #include "allocator/allocator.hpp"
 #include "dispatch/system_memory_manager.hpp"
 #include <tt-metalium/tt_metal.hpp>

@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
+#include <distributed/mesh_io.hpp>
 #include <memory>
 #include <vector>
 

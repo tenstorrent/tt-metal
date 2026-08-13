@@ -11,6 +11,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "llrt.hpp"
 

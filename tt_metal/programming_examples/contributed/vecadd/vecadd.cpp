@@ -139,8 +139,8 @@ int main(int argc, char** argv) {
     // We're writing to a shard allocated on MeshCoordinate 0, 0, since this is a 1x1 MeshDevice
     //  When the MeshDevice is 2 dimensional, this API can be used to target specific physical devices
     // The last argument indicates if the operation is blocking or not.
-    distributed::WriteShard(cq, a, a_data, device_coord, false);
-    distributed::WriteShard(cq, b, b_data, device_coord, false);
+    cq.enqueue_write_shards(a, {distributed::ShardDataTransfer{device_coord}.host_data(a_data.data())}, false);
+    cq.enqueue_write_shards(b, {distributed::ShardDataTransfer{device_coord}.host_data(b_data.data())}, false);
 
     // A Tensix core is made up with 5 processors. 2 data movement processors, and 3 compute processors. The 2 data
     // movement processors act independent to other cores. And the 3 compute processors act together (hence 1 kernel for

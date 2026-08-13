@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
 #include <algorithm>

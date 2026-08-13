@@ -79,7 +79,7 @@ TEST_F(MeshDevice2x4Test, ViewIs2D) {
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
         devices.push_back(mesh_device_->get_view().impl().get_device(coord));
-        fabric_node_ids.push_back(mesh_device_->get_view().get_fabric_node_id(coord));
+        fabric_node_ids.push_back(mesh_device_->get_view().impl().get_fabric_node_id(coord));
     }
 
     MeshDeviceView view_1d(MeshShape(8), devices, fabric_node_ids);

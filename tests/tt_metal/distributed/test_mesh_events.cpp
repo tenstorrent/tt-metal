@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
 #include <cstddef>
 #include <memory>
 #include <numeric>

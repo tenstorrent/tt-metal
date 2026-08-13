@@ -5,6 +5,8 @@
 
 
 #include <tt-metalium/distributed.hpp>
+#include <distributed/mesh_io.hpp>
+#include <distributed/mesh_workload_impl.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 
@@ -156,7 +158,7 @@ TEST_F(MeshEndToEnd2x4Tests, ProgramDispatchTest) {
 
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
-    EXPECT_EQ(mesh_workload.get_last_used_command_queue()->id(), cq_id);
+    EXPECT_EQ(mesh_workload.impl().get_last_used_command_queue()->id(), cq_id);
 
     Finish(cq);
 }

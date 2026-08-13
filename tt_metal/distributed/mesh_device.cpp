@@ -15,6 +15,7 @@
 #include "impl/sub_device/sub_device_impl.hpp"
 #include <system_mesh.hpp>
 #include <maybe_remote.hpp>
+#include "maybe_remote_utils.hpp"
 #include <tt_metal.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -148,7 +149,8 @@ decltype(auto) validate_and_get_reference_value(
 
 // Returns offset of the mesh device view in the system mesh.
 MeshCoordinate compute_system_mesh_offset(const MeshDeviceView& view) {
-    const auto origin_fabric_node_id = view.get_fabric_node_id(MeshCoordinate::zero_coordinate(view.shape().dims()));
+    const auto origin_fabric_node_id =
+        view.impl().get_fabric_node_id(MeshCoordinate::zero_coordinate(view.shape().dims()));
     const auto system_mesh_shape = MetalContext::instance().get_system_mesh().shape();
     for (const auto& coord : MeshCoordinateRange(system_mesh_shape)) {
         if (coord.to_linear_index(system_mesh_shape) == origin_fabric_node_id.chip_id) {
@@ -287,8 +289,9 @@ MeshDeviceImpl::MeshDeviceImpl(
     reader_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->id()) : std::nullopt);
-    const auto& mpi_context =
-        tt::tt_metal::MetalContext::instance(context_id_).get_control_plane().get_distributed_context(view_->mesh_id());
+    const auto& mpi_context = tt::tt_metal::MetalContext::instance(context_id_)
+                                  .get_control_plane()
+                                  .get_distributed_context(view_->impl().mesh_id());
     distributed_context_ =
         mpi_context->split(distributed::multihost::Color(id()), distributed::multihost::Key(*mpi_context->rank()));
 }
@@ -659,7 +662,7 @@ std::shared_ptr<MeshDevice> MeshDeviceImpl::create_submesh(
         } else {
             submesh_devices.push_back(MaybeRemote<IDevice*>::remote());
         }
-        submesh_fabric_node_ids.push_back(view_->get_fabric_node_id(coord));
+        submesh_fabric_node_ids.push_back(view_->impl().get_fabric_node_id(coord));
     }
 
     auto submesh = std::shared_ptr<MeshDevice>(new MeshDevice());
@@ -765,7 +768,7 @@ IDevice* MeshDeviceImpl::get_device(size_t row_idx, size_t col_idx) const {
 IDevice* MeshDeviceImpl::get_device(const MeshCoordinate& coord) const { return view_->impl().get_device(coord); }
 
 tt_fabric::FabricNodeId MeshDeviceImpl::get_fabric_node_id(const MeshCoordinate& coord) const {
-    return view_->get_fabric_node_id(coord);
+    return view_->impl().get_fabric_node_id(coord);
 }
 
 MeshCommandQueue& MeshDeviceImpl::mesh_command_queue(std::optional<uint8_t> cq_id) const {
@@ -843,7 +846,7 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
     // - Row-major order will be: [0,1,3,2]
     std::unordered_set<tt::tt_fabric::FabricNodeId> current_fabric_nodes;
     for (const auto& coord : MeshCoordinateRange(view_->shape())) {
-        current_fabric_nodes.insert(view_->get_fabric_node_id(coord));
+        current_fabric_nodes.insert(view_->impl().get_fabric_node_id(coord));
     }
 
     // From an MxN mesh, we can always reduce rank to a 1xM*N Line mesh.
@@ -853,12 +856,12 @@ void MeshDeviceImpl::reshape(const MeshShape& new_shape) {
     new_device_order.reserve(num_devices);
     new_fabric_node_ids.reserve(num_devices);
     if (new_shape.is_line_topology()) {
-        auto line_coords = view_->get_line_coordinates();
+        auto line_coords = view_->impl().get_line_coordinates();
         for (const auto& coord : line_coords) {
             new_device_order.push_back(
                 view_->impl().is_local(coord) ? MaybeRemote<IDevice*>::local(this->get_device(coord))
                                               : MaybeRemote<IDevice*>::remote());
-            new_fabric_node_ids.push_back(view_->get_fabric_node_id(coord));
+            new_fabric_node_ids.push_back(view_->impl().get_fabric_node_id(coord));
         }
     } else {
         // Do our best at requesting a new set of mapped devices from system mesh, starting at the offset of the first
@@ -1924,7 +1927,7 @@ bool MeshDevice::is_local(const MeshCoordinate& coord) const { return pimpl_->is
 const MeshShape& MeshDevice::shape() const { return pimpl_->shape(); }
 void MeshDevice::reshape(const MeshShape& new_shape) { pimpl_->reshape(new_shape); }
 const MeshDeviceView& MeshDevice::get_view() const { return pimpl_->get_view(); }
-uint32_t MeshDevice::get_system_mesh_id() const { return *get_view().mesh_id(); }
+uint32_t MeshDevice::get_system_mesh_id() const { return *get_view().impl().mesh_id(); }
 std::string MeshDevice::to_string() const { return pimpl_->to_string(); }
 bool MeshDevice::is_parent_mesh() const { return pimpl_->is_parent_mesh(); }
 const std::shared_ptr<MeshDevice>& MeshDevice::get_parent_mesh() const { return pimpl_->get_parent_mesh(); }
