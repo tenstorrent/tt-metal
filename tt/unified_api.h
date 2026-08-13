@@ -43,9 +43,42 @@ class ComputeBlock;
 // Geometry
 // ---------------------------------------------------------------------------
 
-struct Coord {
+// Core coordinates come in two flavours, kept as distinct types so the
+// translation between them is explicit and checked. LOGICAL coordinates are what
+// the host reasons about (0,0 is the first worker of the program's core range);
+// PHYSICAL coordinates are what the NOC addresses. Mixing them silently targets
+// the wrong core, which is why there is no implicit conversion.
+//
+// The member functions that touch NOC state are defined in the implementation
+// header behind a data-movement guard: my_x/my_y, the logical->virtual tables and
+// get_noc_addr are all data-movement-only names, and an unguarded body here
+// would be compiled on the compute projections too.
+
+struct PhysicalCoord {
     uint32_t y;
     uint32_t x;
+
+    // This core's own physical coordinate, on this thread's NOC.
+    static PhysicalCoord this_core();
+
+    uint64_t get_noc_addr(uintptr_t l1_addr) const;
+
+    bool operator==(PhysicalCoord o) const { return y == o.y && x == o.x; }
+    bool operator!=(PhysicalCoord o) const { return !(*this == o); }
+};
+
+struct LogicalCoord {
+    uint32_t y;
+    uint32_t x;
+
+    static LogicalCoord this_core();
+
+    PhysicalCoord to_physical(uint32_t y_offset = 0, uint32_t x_offset = 0) const;
+
+    uint64_t get_noc_addr(uintptr_t l1_addr) const;
+
+    bool operator==(LogicalCoord o) const { return y == o.y && x == o.x; }
+    bool operator!=(LogicalCoord o) const { return !(*this == o); }
 };
 
 struct Shape {
@@ -53,9 +86,33 @@ struct Shape {
     uint32_t w;
 };
 
-struct Mcast {
-    Coord coord;
+// A multicast rectangle, inclusive of both corners.
+struct PhysicalMcast {
+    PhysicalCoord start;
+    PhysicalCoord end;
+
+    uint64_t get_noc_addr(uintptr_t l1_addr) const;
+
+    uint32_t volume() const { return (end.y - start.y + 1) * (end.x - start.x + 1); }
+
+    // Destination count for a multicast issued BY `start`. Metal's multicast
+    // primitives exclude the sender unless NocOptions::MCAST_INCL_SRC is set, so
+    // a rectangle whose corner is the sender has volume() - 1 destinations.
+    uint32_t num_dests_excluding(PhysicalCoord sender) const {
+        return volume() -
+               (sender.y >= start.y && sender.y <= end.y && sender.x >= start.x && sender.x <= end.x ? 1 : 0);
+    }
+};
+
+struct LogicalMcast {
+    LogicalCoord coord;
     Shape shape;
+
+    PhysicalMcast to_physical() const;
+
+    uint64_t get_noc_addr(uintptr_t l1_addr) const;
+
+    uint32_t volume() const { return shape.h * shape.w; }
 };
 
 // ---------------------------------------------------------------------------
@@ -227,6 +284,92 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// Reserved multicast semaphores
+//
+// The multicast handshake needs two counters that mean nothing to the caller, so
+// the harness reserves them and passes their base id in as a define. Two PER DM
+// THREAD, at base + 2*thread: multicasts on one NOC serialize in hardware
+// anyway, so a pair per NOC is the natural granularity, and giving each thread
+// its own pair keeps a NOC-0 and a NOC-1 broadcast from sharing handshake state.
+//
+// The base is whatever the harness picked, chosen to sit above any semaphore the
+// caller allocated, so user ids are unconstrained.
+// ---------------------------------------------------------------------------
+
+#if defined(TT_UNIFIED_MCAST_SEM_BASE)
+inline constexpr bool kMcastSemsReserved = true;
+inline constexpr uint32_t kMcastSemBase = TT_UNIFIED_MCAST_SEM_BASE;
+#else
+inline constexpr bool kMcastSemsReserved = false;
+inline constexpr uint32_t kMcastSemBase = 0;
+#endif
+
+// Ids of the pair belonging to `thread`.
+template <int thread>
+inline constexpr uint32_t kMcastReadySem = kMcastSemBase + 2 * thread;
+template <int thread>
+inline constexpr uint32_t kMcastSentSem = kMcastSemBase + 2 * thread + 1;
+
+// ---------------------------------------------------------------------------
+// Semaphore -- a host-allocated L1 counter, projected onto one DM thread
+//
+// The storage belongs to the HOST: a SemaphoreDescriptor on the program reserves
+// one slot per core in a range and stamps its initial value, and `semaphore_id`
+// is the index into that reservation. This is what makes cross-core signalling
+// work at all -- every core resolves the same id to the same L1 offset, and the
+// offset is independent of which RISC is running, so a semaphore written by one
+// core's writer can be waited on by another core's reader.
+//
+// Do NOT give a Semaphore its own storage instead. A member or local would sit at
+// an address that only happens to agree across cores (and not at all across the
+// BRISC/NCRISC binaries), and its initial value would be set by a constructor
+// that runs once per binary load rather than once per program launch.
+//
+// `thread` selects the owning DM thread, exactly as for the Noc*Tx handles: every
+// operation is a no-op on the other projections, so one shared statement means
+// "thread N does this".
+template <int thread>
+class Semaphore {
+public:
+    explicit Semaphore(uint32_t semaphore_id);
+
+    // L1 offset, for handing to a routine that addresses the semaphore directly.
+    uintptr_t l1_addr() const;
+
+    // Local: spin until this core's copy reaches (or reaches at least) `value`.
+    Semaphore& wait(uint32_t value);
+    Semaphore& wait_min(uint32_t value);
+
+    // Local: overwrite this core's copy.
+    Semaphore& set(uint32_t value);
+
+    // Remote: atomically add to the SAME semaphore on another core.
+    Semaphore& inc_remote(PhysicalCoord coord, uint32_t value = 1);
+    Semaphore& inc_remote(LogicalCoord coord, uint32_t value = 1);
+
+    // Remote: atomically add to the same semaphore on every core of a rectangle.
+    // The sender is excluded from the destinations.
+    Semaphore& inc_mcast(PhysicalMcast mcast, uint32_t value = 1);
+    Semaphore& inc_mcast(LogicalMcast mcast, uint32_t value = 1);
+
+    // Remote: copy this core's value into the same semaphore on every core of a
+    // rectangle. Named for what it does -- do not call it `mcast`, or a parameter
+    // of the same name shadows the overload set.
+    Semaphore& set_mcast(PhysicalMcast mcast);
+    Semaphore& set_mcast(LogicalMcast mcast);
+
+private:
+    // Kept so l1_addr() can recompute the offset; metal's Semaphore keeps its
+    // own address private.
+    uint32_t id;
+
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+    // Metal's own semaphore. Spelled ::Semaphore because this class shadows it.
+    ::Semaphore<ProgrammableCoreType::TENSIX> sem;
+#endif
+};
+
+// ---------------------------------------------------------------------------
 // Adaptors letting a ComputeBlock stand in for an expression leaf. These are
 // the hooks tt/unified_math.hpp declares; they live here because this is the
 // only place the math layer needs to know about a core type.
@@ -365,8 +508,48 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, uin
 template <int thread, typename Fn>
 NocAsyncReadTx<thread> noc_load(const Storage& storage, Fn fn);
 
+// Multicast load: one core in the rectangle reads the block from `acc` and
+// multicasts it into the SAME circular buffer on every core of the rectangle.
+// Every core runs this same statement; which side of the handshake it takes is a
+// runtime decision on its own coordinate.
+//
+// Two semaphores are required, and both must be reserved by the host so all cores
+// agree on their offsets:
+//   receivers_ready -- receivers count themselves in; the sender waits for them
+//   data_sent       -- the sender announces the payload has been multicast
+//
+// The call is repeatable without host intervention, which takes deliberate
+// resets -- a semaphore that keeps its count lets the NEXT call fall straight
+// through the handshake. `receivers_ready` is cleared by the sender once it has
+// counted everyone in; `data_sent` is held at 1 on the sender (it is the constant
+// being broadcast) and cleared by each receiver after it observes it.
 template <int thread, typename Accessor>
-Block noc_load_mcast(const Storage& storage, Mcast mcast, const Accessor& acc, uint32_t block_idx);
+NocAsyncReadTx<thread> noc_load(
+    const Storage& storage,
+    PhysicalMcast mcast,
+    Semaphore<thread>& receivers_ready,
+    Semaphore<thread>& data_sent,
+    const Accessor& acc,
+    uint32_t block_idx);
+
+template <int thread, typename Accessor>
+NocAsyncReadTx<thread> noc_load(
+    const Storage& storage,
+    LogicalMcast mcast,
+    Semaphore<thread>& receivers_ready,
+    Semaphore<thread>& data_sent,
+    const Accessor& acc,
+    uint32_t block_idx);
+
+// Same, with the handshake semaphores supplied by the harness's reservation.
+// Prefer these: the pair is protocol plumbing, and having callers allocate it
+// invites the initial-value and reset mistakes the explicit form makes possible.
+// Reach for the explicit overloads only to give a broadcast its own pair.
+template <int thread, typename Accessor>
+NocAsyncReadTx<thread> noc_load(const Storage& storage, PhysicalMcast mcast, const Accessor& acc, uint32_t block_idx);
+
+template <int thread, typename Accessor>
+NocAsyncReadTx<thread> noc_load(const Storage& storage, LogicalMcast mcast, const Accessor& acc, uint32_t block_idx);
 
 // Drains a Block to a tensor. Takes the Block by value: this call consumes it.
 template <int thread, typename Accessor>
@@ -400,11 +583,11 @@ NocAsyncWriteTx<thread> noc_store(Block block, Fn fn);
 
 template <int thread>
 NocAsyncCopyTx<thread, /*SrcIsLocal=*/false> noc_read(
-    const Storage& storage, Block block, Coord coord, uint32_t offset);
+    const Storage& storage, Block block, LogicalCoord coord, uint32_t offset);
 
 template <int thread>
 NocAsyncCopyTx<thread, /*SrcIsLocal=*/true> noc_write(
-    const Storage& storage, Block block, Coord coord, uint32_t offset);
+    const Storage& storage, Block block, LogicalCoord coord, uint32_t offset);
 
 }  // namespace unified
 }  // namespace tt
