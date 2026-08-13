@@ -145,8 +145,10 @@ def load_tokenizer(hf_model: str):
 
 
 def _trace_seq_lens(num_devices: int, max_prefill_chunk_size: int, max_seq_len: int) -> tuple[int, ...]:
-    if num_devices != 8:
-        raise ValueError(f"Llama-3.3-70B supports exactly 8 devices (T3K), got {num_devices}")
+    if num_devices not in (4, 8):
+        raise ValueError(f"Llama-3.3-70B supports T3K (8 devices) or P150x4 (4 devices), got {num_devices}")
+    if num_devices == 4:
+        return (128,) if max_seq_len >= 128 else ()
     return tuple(length for length in (128, max_prefill_chunk_size) if length <= max_seq_len)
 
 
@@ -157,13 +159,24 @@ def _trace_warmup_seq_lens(max_prefill_chunk_size: int, max_seq_len: int) -> tup
     return tuple(dict.fromkeys(length for length in candidates if length <= max_seq_len))
 
 
-def _cache_path(hf_model: str, mesh_device, cache_dir: Path | str | None) -> Path:
+def _resolve_supported_sku(*, arch, cluster_type, num_devices: int) -> str:
+    if arch == ttnn.device.Arch.WORMHOLE_B0 and cluster_type == ttnn.cluster.ClusterType.T3K and num_devices == 8:
+        return "T3K"
+    if arch == ttnn.device.Arch.BLACKHOLE and cluster_type == ttnn.cluster.ClusterType.P150_X4 and num_devices == 4:
+        return "P150x4"
+    raise ValueError(
+        "Llama-3.3-70B supports physical Wormhole T3K (8 devices) or BlackHole P150x4 (4 devices); "
+        f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_devices}"
+    )
+
+
+def _cache_path(hf_model: str, mesh_device, cache_dir: Path | str | None, *, sku: str) -> Path:
     if cache_dir is not None:
         path = Path(cache_dir)
     elif os.getenv("TT_CACHE_PATH"):
         path = Path(os.environ["TT_CACHE_PATH"])
     else:
-        path = Path("model_cache") / hf_model / "T3K"
+        path = Path("model_cache") / hf_model / sku
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -231,8 +244,12 @@ def from_pretrained(
 ) -> Llama33_70BForCausalLM:
     del dtype
     num_devices = mesh_device.get_num_devices()
-    if num_devices != 8:
-        raise ValueError(f"Llama-3.3-70B supports exactly 8 devices (T3K), got {num_devices}")
+    arch = mesh_device.arch()
+    sku = _resolve_supported_sku(
+        arch=arch,
+        cluster_type=ttnn.cluster.get_cluster_type(),
+        num_devices=num_devices,
+    )
     ttnn.SetDefaultDevice(mesh_device)
     load_kwargs = {"local_files_only": os.getenv("CI") == "true"}
     hf_config = AutoConfig.from_pretrained(hf_model, **load_kwargs)
@@ -251,7 +268,7 @@ def from_pretrained(
     )
     if not isinstance(precision, Llama33_70BPrecisionConfig):
         raise TypeError("optimizations must be 'accuracy', 'performance', or Llama33_70BPrecisionConfig")
-    cache_path = _cache_path(hf_model, mesh_device, cache_dir)
+    cache_path = _cache_path(hf_model, mesh_device, cache_dir, sku=sku)
     if paged_attention_config is None:
         block_size = 32
         paged_attention_config = Llama33_70BPagedAttentionConfig(

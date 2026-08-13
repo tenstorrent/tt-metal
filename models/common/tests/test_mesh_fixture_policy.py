@@ -28,6 +28,7 @@ def test_default_fabric_config(logical_shape, expected):
     ("cluster_type", "num_devices", "expected"),
     [
         (ttnn.cluster.ClusterType.T3K, 8, ttnn.Topology.Ring),
+        (ttnn.cluster.ClusterType.P150_X4, 4, ttnn.Topology.Ring),
         (ttnn.cluster.ClusterType.GALAXY, 8, ttnn.Topology.Linear),
         (ttnn.cluster.ClusterType.GALAXY, 4, ttnn.Topology.Linear),
         (ttnn.cluster.ClusterType.GALAXY, 1, None),

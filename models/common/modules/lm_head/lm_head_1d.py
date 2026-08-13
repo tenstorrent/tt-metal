@@ -56,7 +56,10 @@ class LMHead1DConfig:
 
     # Optional: power-user overrides
     program_configs: List | None = None
-    compute_kernel_config: ttnn.WormholeComputeKernelConfig | None = None
+    compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
+    # Logical output width for each split on one device. A physical weight shard
+    # may be tile-padded beyond this width; forward trims it before concat.
+    output_split_sizes: List[int] | None = None
     lm_head_dtype: ttnn.DataType = ttnn.bfloat8_b
     output_memcfg: ttnn.MemoryConfig | None = None
 
@@ -96,14 +99,14 @@ class LMHead1D(LightweightModule):
 
     def __init__(self, output_weights: List[LazyWeight]):
         super().__init__()
-        self.config = _resolve_lm_head_1d_config(LMHead1DConfig(output_weights=output_weights))
+        self.config = resolve_lm_head_1d_arch_config(LMHead1DConfig(output_weights=output_weights))
         self._device_weights_loaded = False
 
     @classmethod
     def from_config(cls, config: LMHead1DConfig):
         instance = object.__new__(cls)
         super(LMHead1D, instance).__init__()
-        instance.config = _resolve_lm_head_1d_config(config)
+        instance.config = resolve_lm_head_1d_arch_config(config)
         instance._device_weights_loaded = False
         return instance
 
@@ -128,7 +131,7 @@ class LMHead1D(LightweightModule):
         cfg = self.config
 
         outputs = []
-        for weight, pc in zip(self.output_weights, cfg.program_configs):
+        for weight, pc, logical_width in zip(self.output_weights, cfg.program_configs, cfg.output_split_sizes):
             if pc is not None:
                 # DRAM-sharded path (from_model_args): width-sharded output → interleaved
                 output = ttnn.linear(
@@ -139,7 +142,7 @@ class LMHead1D(LightweightModule):
                     memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                     dtype=cfg.lm_head_dtype,
                 )
-                outputs.append(ttnn.sharded_to_interleaved(output, memory_config=cfg.output_memcfg))
+                output = ttnn.sharded_to_interleaved(output, memory_config=cfg.output_memcfg)
             else:
                 # Auto path (simple API): interleaved output directly
                 output = ttnn.linear(
@@ -149,7 +152,13 @@ class LMHead1D(LightweightModule):
                     memory_config=cfg.output_memcfg,
                     dtype=cfg.lm_head_dtype,
                 )
-                outputs.append(output)
+            if output.shape[-1] != logical_width:
+                output = ttnn.slice(
+                    output,
+                    (0, 0, 0, 0),
+                    (output.shape[0], output.shape[1], output.shape[2], logical_width),
+                )
+            outputs.append(output)
 
         # Concatenate splits
         output = ttnn.concat(outputs, dim=-1, memory_config=cfg.output_memcfg)
@@ -183,14 +192,19 @@ class LMHead1D(LightweightModule):
         vocab_size = args.vocab_size
         num_devices = mesh_device.get_num_devices()
         dim = args.dim
-        padded_vocab_size = math.ceil(vocab_size / 32) * 32
+        padded_vocab_size = math.ceil(vocab_size / (TILE_SIZE * num_devices)) * (TILE_SIZE * num_devices)
         size_per_device = padded_vocab_size // num_devices
         num_splits = math.ceil(size_per_device / max_columns_per_device)
         split_sizes = [min(size_per_device, max_columns_per_device)] * (num_splits - 1)
         split_sizes.append(size_per_device - sum(split_sizes))
 
         # Build output weights
-        torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
+        source_weight = state_dict[f"{state_dict_prefix}output.weight"]
+        if tuple(source_weight.shape) != (vocab_size, dim):
+            raise ValueError(
+                f"LMHead1D output weight must have shape {(vocab_size, dim)}, got {tuple(source_weight.shape)}"
+            )
+        torch_output_weights = source_weight.permute(1, 0)
         if vocab_size < padded_vocab_size:
             padding_size = padded_vocab_size - vocab_size
             torch_output_weights = torch.cat(
@@ -213,10 +227,20 @@ class LMHead1D(LightweightModule):
         weights_memcfgs = []
         for i, split_size in enumerate(split_sizes):
             device_splits = []
+            physical_split_size = math.ceil(split_size / TILE_SIZE) * TILE_SIZE
             for device_idx in range(num_devices):
                 start = device_idx * size_per_device + sum(split_sizes[:i])
                 end = start + split_size
-                device_splits.append(torch_output_weights[:, start:end])
+                device_split = torch_output_weights[:, start:end]
+                if split_size < physical_split_size:
+                    device_split = torch.cat(
+                        [
+                            device_split,
+                            torch.zeros(dim, physical_split_size - split_size, dtype=device_split.dtype),
+                        ],
+                        dim=-1,
+                    )
+                device_splits.append(device_split)
             combined_split = torch.cat(device_splits, dim=-1)
 
             mem_cfg = _create_dram_sharded_mem_config(
@@ -241,7 +265,9 @@ class LMHead1D(LightweightModule):
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=mem_cfg,
                     cache_dir_weight_name=(
-                        (cache_dir, f"output_split_{i}_{combined_split.shape[-1]}") if cache_dir else None
+                        (cache_dir, f"output_split_{i}_logical_{split_size}_physical_{combined_split.shape[-1]}")
+                        if cache_dir
+                        else None
                     ),
                 )
             )
@@ -278,7 +304,7 @@ class LMHead1D(LightweightModule):
             dim=dim,
             max_batch_size=args.max_batch_size,
             program_configs=program_configs,
-            compute_kernel_config=_compute_kernel_config_hifi2(),
+            output_split_sizes=split_sizes,
             lm_head_dtype=getattr(args, "lm_head_dtype", ttnn.bfloat8_b),
             output_memcfg=ttnn.L1_MEMORY_CONFIG,
             input_memcfg=input_memcfg,
@@ -292,30 +318,161 @@ class LMHead1D(LightweightModule):
 # =============================================================================
 
 
-def _resolve_lm_head_1d_config(config: LMHead1DConfig) -> LMHead1DConfig:
-    """Resolve defaults for LMHead1DConfig."""
-    to_set = {}
+def _compute_kernel_config_hifi2(arch) -> ttnn.DeviceComputeKernelConfig:
+    """Construct the TTTv1 LM-head recipe for the selected architecture."""
+    return ttnn.init_device_compute_kernel_config(
+        arch,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
 
-    # Mesh device
+
+def _validate_lm_head_compute_kernel_config(compute_kernel_config) -> None:
+    if compute_kernel_config is None:
+        raise ValueError("LMHead1D architecture config requires compute_kernel_config")
+    if not isinstance(compute_kernel_config, ttnn.WormholeComputeKernelConfig):
+        raise TypeError(
+            "LMHead1D compute_kernel_config must be a concrete TTNN compute kernel config, "
+            f"got {type(compute_kernel_config).__name__}"
+        )
+
+
+def _derive_lm_head_mesh_device(config: LMHead1DConfig) -> ttnn.MeshDevice:
+    if not config.output_weights:
+        raise ValueError("LMHead1D requires at least one output weight")
     mesh_device = config.mesh_device
     if mesh_device is None:
         mesh_device = config.output_weights[0].device
     if mesh_device is None:
         mesh_device = ttnn.GetDefaultDevice()
+    if mesh_device is None:
+        raise ValueError("LMHead1D mesh_device must be available")
+    for split_index, weight in enumerate(config.output_weights):
+        if weight.device is not None and weight.device is not mesh_device:
+            raise ValueError(f"LMHead1D mesh_device must match output weight {split_index} device")
+    return mesh_device
+
+
+def _validate_lm_head_program_configs(config: LMHead1DConfig) -> None:
+    num_splits = len(config.output_weights)
+    if num_splits == 0:
+        raise ValueError("LMHead1D requires at least one output weight")
+    if config.program_configs is None or len(config.program_configs) != num_splits:
+        raise ValueError("LMHead1D requires exactly one program config per output-weight split")
+    if config.weights_memcfgs is None or len(config.weights_memcfgs) != num_splits:
+        raise ValueError("LMHead1D requires exactly one weight memory config per output-weight split")
+    if config.output_split_sizes is None or len(config.output_split_sizes) != num_splits:
+        raise ValueError("LMHead1D requires exactly one logical output width per output-weight split")
+
+    num_devices = config.mesh_device.get_num_devices()
+    physical_widths = []
+    for split_index, (weight, logical_width) in enumerate(zip(config.output_weights, config.output_split_sizes)):
+        source_shape = weight.source.shape
+        if len(source_shape) < 2 or source_shape[-2] != config.dim:
+            raise ValueError(
+                f"LMHead1D split {split_index} weight K dimension must equal dim={config.dim}, got {source_shape}"
+            )
+        combined_width = source_shape[-1]
+        if combined_width % num_devices:
+            raise ValueError(
+                f"LMHead1D split {split_index} combined physical width {combined_width} "
+                f"must be divisible by {num_devices} devices"
+            )
+        physical_width = combined_width // num_devices
+        if physical_width % TILE_SIZE:
+            raise ValueError(
+                f"LMHead1D split {split_index} physical per-device width {physical_width} must be tile aligned"
+            )
+        if not isinstance(logical_width, int) or logical_width <= 0 or logical_width > physical_width:
+            raise ValueError(
+                f"LMHead1D split {split_index} logical width must satisfy 0 < logical <= {physical_width}, "
+                f"got {logical_width}"
+            )
+        physical_widths.append(physical_width)
+
+    has_explicit_program = any(program_config is not None for program_config in config.program_configs)
+    if has_explicit_program:
+        if config.input_memcfg is None or not config.input_memcfg.is_sharded():
+            raise ValueError("LMHead1D DRAM-sharded programs require a sharded input_memcfg")
+        if config.input_memcfg.buffer_type != ttnn.BufferType.L1:
+            raise ValueError("LMHead1D DRAM-sharded programs require input_memcfg in L1")
+        if config.input_memcfg.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+            raise ValueError("LMHead1D DRAM-sharded programs require width-sharded input_memcfg")
+        num_compute_cores = config.input_memcfg.shard_spec.grid.num_cores()
+
+    for split_index, program_config in enumerate(config.program_configs):
+        if program_config is None:
+            continue
+        if not isinstance(program_config, ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig):
+            raise TypeError(
+                "LMHead1D explicit program configs must use the DRAM-sharded matmul path; "
+                f"split {split_index} has {type(program_config).__name__}"
+            )
+        if program_config.in0_block_w <= 0 or program_config.per_core_M <= 0 or program_config.per_core_N <= 0:
+            raise ValueError(f"LMHead1D split {split_index} program dimensions must be positive")
+        dim_tiles = config.dim // TILE_SIZE
+        if dim_tiles % program_config.in0_block_w != 0:
+            raise ValueError(f"LMHead1D split {split_index} dim tiles must be divisible by in0_block_w")
+        expected_per_core_m = math.ceil(config.max_batch_size / TILE_SIZE)
+        if program_config.per_core_M != expected_per_core_m:
+            raise ValueError(
+                f"LMHead1D split {split_index} per_core_M={program_config.per_core_M} "
+                f"does not match padded batch tiles {expected_per_core_m}"
+            )
+
+        weight_memcfg = config.weights_memcfgs[split_index]
+        if not weight_memcfg.is_sharded():
+            raise ValueError(f"LMHead1D split {split_index} DRAM-sharded program requires sharded weight memory")
+        if weight_memcfg.buffer_type != ttnn.BufferType.DRAM:
+            raise ValueError(f"LMHead1D split {split_index} weight memory must reside in DRAM")
+        if weight_memcfg.memory_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+            raise ValueError(f"LMHead1D split {split_index} weight memory must be width sharded")
+        covered_width = program_config.per_core_N * TILE_SIZE * num_compute_cores
+        if covered_width < physical_widths[split_index]:
+            raise ValueError(
+                f"LMHead1D split {split_index} program covers {covered_width} columns, "
+                f"below physical width {physical_widths[split_index]}"
+            )
+
+
+def resolve_lm_head_1d_arch_config(config: LMHead1DConfig) -> LMHead1DConfig:
+    """Return an independent, fully resolved config after one architecture query."""
+    mesh_device = _derive_lm_head_mesh_device(config)
+    arch = mesh_device.arch()
+
+    if arch not in (ttnn.device.Arch.WORMHOLE_B0, ttnn.device.Arch.BLACKHOLE):
+        raise ValueError(f"Unsupported LMHead1D architecture: {arch}")
+    requested_compute = config.compute_kernel_config or _compute_kernel_config_hifi2(arch)
+    try:
+        compute_kernel_config = ttnn.init_device_compute_kernel_config(arch, requested_compute)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"Invalid LMHead1D compute recipe for {arch}: {error}") from error
+
+    _validate_lm_head_compute_kernel_config(compute_kernel_config)
+    resolved_common = _resolve_lm_head_1d_config(config)
+    resolved_common = replace(resolved_common, compute_kernel_config=compute_kernel_config)
+    _validate_lm_head_program_configs(resolved_common)
+    return resolved_common
+
+
+def _resolve_lm_head_1d_config(config: LMHead1DConfig) -> LMHead1DConfig:
+    """Resolve defaults for LMHead1DConfig."""
+    if not config.output_weights:
+        raise ValueError("LMHead1D requires at least one output weight")
+    to_set = {}
+
+    # Mesh device
+    mesh_device = _derive_lm_head_mesh_device(config)
     if config.mesh_device is None:
         to_set["mesh_device"] = mesh_device
-
-    assert mesh_device is not None
 
     # Dim
     dim = config.dim
     if dim is None:
         dim = config.output_weights[0].source.shape[-2]
         to_set["dim"] = dim
-
-    # Compute kernel config
-    if config.compute_kernel_config is None:
-        to_set["compute_kernel_config"] = _compute_kernel_config_hifi2()
 
     # Output memcfg
     if config.output_memcfg is None:
@@ -334,6 +491,20 @@ def _resolve_lm_head_1d_config(config: LMHead1DConfig) -> LMHead1DConfig:
         # which are only set up correctly via from_model_args.
         pcs = [None for _ in config.output_weights]
         to_set["program_configs"] = pcs
+
+    if config.output_split_sizes is None:
+        split_sizes = []
+        for split_index, weight in enumerate(config.output_weights):
+            combined_width = weight.source.shape[-1]
+            if combined_width % num_devices:
+                raise ValueError(
+                    f"LMHead1D split {split_index} combined physical width {combined_width} "
+                    f"must be divisible by {num_devices} devices"
+                )
+            split_sizes.append(combined_width // num_devices)
+        to_set["output_split_sizes"] = split_sizes
+    elif len(config.output_split_sizes) != len(config.output_weights):
+        raise ValueError("LMHead1D requires exactly one logical output split size per output weight")
 
     # Weight memory configs + resolve LazyWeights
     if config.weights_memcfgs is None:
@@ -386,15 +557,6 @@ def _load_input_device_tensor(x: ttnn.Tensor | LazyWeight, config: LMHead1DConfi
 # =============================================================================
 # Config helper functions (adapted from TTTv1 model_config.py)
 # =============================================================================
-
-
-def _compute_kernel_config_hifi2() -> ttnn.WormholeComputeKernelConfig:
-    return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
 
 
 def _create_dram_sharded_mem_config(

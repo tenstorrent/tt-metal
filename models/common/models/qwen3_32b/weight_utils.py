@@ -168,6 +168,15 @@ def lm_head_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
     return math.ceil(vocab_size / align) * align
 
 
+def lm_head_split_sizes(vocab_size: int, num_devices: int, max_columns_per_device: int) -> list[int]:
+    """Return per-device split widths without allocating the LM-head tensor."""
+    if max_columns_per_device <= 0:
+        raise ValueError("max_columns_per_device must be positive")
+    size_per_device = lm_head_padded_vocab_size(vocab_size, num_devices) // num_devices
+    num_splits = math.ceil(size_per_device / max_columns_per_device)
+    return [max_columns_per_device] * (num_splits - 1) + [size_per_device - max_columns_per_device * (num_splits - 1)]
+
+
 def build_lm_head_lazy_weights(
     mesh_device: ttnn.MeshDevice,
     lm_head_weight: torch.Tensor,
@@ -185,6 +194,8 @@ def build_lm_head_lazy_weights(
     Returns ``(lazy_weights, split_sizes, weights_memcfgs)`` for ``LMHead1DConfig`` DRAM-sharded matmuls.
     """
     num_devices = mesh_device.get_num_devices()
+    if tuple(lm_head_weight.shape) != (vocab_size, dim):
+        raise ValueError(f"Qwen3 LM-head weight must have shape {(vocab_size, dim)}, got {tuple(lm_head_weight.shape)}")
     torch_w = lm_head_weight.T.contiguous().to(torch.bfloat16)
     # Pad the vocab so the PER-DEVICE column count is tile-aligned, not just the total.
     # Qwen3-32B: vocab=151936 → 151936/8 = 18992 per device, which is NOT a multiple of
@@ -201,9 +212,7 @@ def build_lm_head_lazy_weights(
         torch_w = torch.cat([torch_w, torch.zeros(torch_w.shape[0], pad, dtype=torch_w.dtype)], dim=-1)
 
     size_per_device = padded_vocab_size // num_devices
-    num_splits = math.ceil(size_per_device / max_columns_per_device)
-    split_sizes = [min(size_per_device, max_columns_per_device)] * (num_splits - 1)
-    split_sizes.append(size_per_device - sum(split_sizes))
+    split_sizes = lm_head_split_sizes(vocab_size, num_devices, max_columns_per_device)
 
     dram_size = mesh_device.dram_grid_size()
     dram_grid = ttnn.CoreRangeSet(
@@ -220,14 +229,24 @@ def build_lm_head_lazy_weights(
     weights_memcfgs: list[ttnn.MemoryConfig] = []
     for i, split_size in enumerate(split_sizes):
         device_splits = []
+        physical_split_size = math.ceil(split_size / tile) * tile
         for device_idx in range(num_devices):
             start = device_idx * size_per_device + sum(split_sizes[:i])
             end = start + split_size
-            device_splits.append(torch_w[:, start:end])
+            device_split = torch_w[:, start:end]
+            if split_size < physical_split_size:
+                device_split = torch.cat(
+                    [
+                        device_split,
+                        torch.zeros(dim, physical_split_size - split_size, dtype=device_split.dtype),
+                    ],
+                    dim=-1,
+                )
+            device_splits.append(device_split)
         combined = torch.cat(device_splits, dim=-1)
         mem_cfg = dram_sharded_memcfg(dim, math.ceil(combined.shape[-1] / num_devices))
         weights_memcfgs.append(mem_cfg)
-        name = f"lm_head_split_{i}_{combined.shape[-1]}"
+        name = f"lm_head_split_{i}_logical_{split_size}_physical_{combined.shape[-1]}"
         output_weights.append(
             LazyWeight(
                 source=combined,

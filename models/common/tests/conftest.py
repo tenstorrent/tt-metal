@@ -127,8 +127,12 @@ def ttnn_mesh_device(request):
     if not hasattr(request, "param"):
         pytest.skip(f"{__file__}: mesh_device fixture called without parametrization")
 
-    if ttnn.device.is_blackhole():
-        pytest.skip(f"{__file__}: Blackhole device is not supported for this test yet")
+    mesh_device_name = os.environ.get("MESH_DEVICE", "").strip().upper()
+    blackhole_selected = mesh_device_name in {"P150", "P150X4"}
+    if ttnn.device.is_blackhole() and not blackhole_selected:
+        pytest.skip(f"{__file__}: select Blackhole explicitly with MESH_DEVICE=P150 or P150x4")
+    if blackhole_selected and not ttnn.device.is_blackhole():
+        pytest.skip(f"{__file__}: MESH_DEVICE={mesh_device_name} requires a Blackhole device")
 
     # request.param is either a Sequence of ints or a dict with fabric_config and etc.
     params = getattr(request, "param", tuple())
@@ -156,6 +160,14 @@ def ttnn_mesh_device(request):
     sys_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()  # type: ignore[attr-defined]
     sys_shape = tuple(sys_desc.shape())
     req_shape = tuple(mesh_shape)
+    if (
+        blackhole_selected
+        and req_shape == (1, 4)
+        and ttnn.cluster.get_cluster_type() != ttnn.cluster.ClusterType.P150_X4
+    ):
+        pytest.skip(
+            "Exact P150x4 hardware coverage requires a physical P150_X4 cluster; submeshes are not SKU-equivalent"
+        )
     allowed = _allowed_req_shapes_for_system(sys_shape)
     if req_shape not in allowed:
         pytest.skip(
@@ -202,6 +214,11 @@ def ttnn_mesh_device(request):
                 parent_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(parent_shape), **updated_params)
                 yield parent_device
         except Exception as e:
+            # Focused BH qualification nodes are required gates. Exceptions raised by the test body
+            # cross the fixture's ``yield`` and must remain failures rather than becoming skips.
+            # Retain the legacy skip behavior for non-opted-in WH tests.
+            if blackhole_selected:
+                raise
             pytest.skip(f"{__file__}: Mesh device unavailable or unsupported for this configuration: {e}")
         finally:
             if submesh_device is not None:
@@ -211,6 +228,15 @@ def ttnn_mesh_device(request):
             if fabric_config:
                 ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
             del parent_device
+
+
+@pytest.fixture(scope="session")
+def require_blackhole_mesh_device():
+    """Skip a Blackhole-only test unless the requested SKU is explicit."""
+    mesh_device_name = os.environ.get("MESH_DEVICE", "").strip().upper()
+    if mesh_device_name not in {"P150", "P150X4"}:
+        pytest.skip("Blackhole-only test requires MESH_DEVICE=P150 or P150x4")
+    return mesh_device_name
 
 
 def _default_fabric_config(mesh_shape: tuple[int, int]) -> ttnn.FabricConfig | None:
@@ -238,6 +264,11 @@ def _allowed_req_shapes_for_system(sys_shape: tuple[int, int]) -> set[tuple[int,
         # Without this entry the lookup below misses, `allowed` comes back empty, and EVERY test on
         # such a host skips.
         (2, 1): ((1, 2), (2, 1), (1, 1)),
+        # Blackhole P150x4 may enumerate as a line or square. Focused tests use
+        # the same logical 1x4 view as the 1D modules.
+        (1, 4): ((1, 4), (1, 2), (1, 1)),
+        (4, 1): ((1, 4), (4, 1), (1, 2), (1, 1)),
+        (2, 2): ((2, 2), (1, 4), (1, 2), (1, 1)),
         (2, 4): ((2, 4), (1, 8), (1, 4), (1, 2), (1, 1)),
         (8, 4): ((8, 4), (4, 8), (1, 8), (1, 4), (1, 2), (1, 1)),
         # [INFO] add more system shapes here

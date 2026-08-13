@@ -200,6 +200,69 @@ def _base_model_name(model_name: str) -> str:
     return model_name
 
 
+@dataclass(frozen=True, slots=True)
+class _Llama31_8BArchitectureProfile:
+    """Model/SKU-owned policy layered on top of shared WH/BH legality."""
+
+    rms_packer_l1_acc: bool
+    rms_distributed_at_dim_4096: bool
+    mlp_prefill_len_cutoff: int
+    mlp_prefill_dram_shard_grid_width: int
+    mlp_prefill_ff1_ff3_grid: tuple[int, int]
+    mlp_prefill_ff2_grid: tuple[int, int]
+    attention_prefill_qkv_grid: tuple[int, int]
+    attention_decode_create_qkv_head_grid: ttnn.CoreGrid | None
+    attention_decode_transformation_core_grid: ttnn.CoreCoord | None
+    enable_minimal_qkv: bool
+    enable_minimal_ff2: bool
+    lm_head_max_columns_per_device: int | None
+
+
+def _resolve_llama31_8b_architecture_profile(
+    *, arch, cluster_type, device_name: str, model_name: str, dram_grid_width: int
+) -> _Llama31_8BArchitectureProfile:
+    """Return the approved model/SKU overlay without querying global architecture state."""
+    if arch == ttnn.device.Arch.WORMHOLE_B0:
+        return _Llama31_8BArchitectureProfile(
+            rms_packer_l1_acc=False,
+            rms_distributed_at_dim_4096=True,
+            mlp_prefill_len_cutoff=(
+                512 if device_name == "N150" and _base_model_name(model_name) == "Llama-3.1-8B" else 1024
+            ),
+            mlp_prefill_dram_shard_grid_width=8,
+            mlp_prefill_ff1_ff3_grid=(8, 8),
+            mlp_prefill_ff2_grid=(8, 8),
+            attention_prefill_qkv_grid=(8, 8),
+            attention_decode_create_qkv_head_grid=None,
+            attention_decode_transformation_core_grid=None,
+            enable_minimal_qkv=False,
+            enable_minimal_ff2=False,
+            lm_head_max_columns_per_device=None,
+        )
+    if arch == ttnn.device.Arch.BLACKHOLE:
+        return _Llama31_8BArchitectureProfile(
+            rms_packer_l1_acc=True,
+            rms_distributed_at_dim_4096=False,
+            mlp_prefill_len_cutoff=512,
+            mlp_prefill_dram_shard_grid_width=dram_grid_width,
+            mlp_prefill_ff1_ff3_grid=(8, 8),
+            mlp_prefill_ff2_grid=(8, 8),
+            attention_prefill_qkv_grid=(8, 10),
+            attention_decode_create_qkv_head_grid=ttnn.CoreGrid(y=4, x=8),
+            attention_decode_transformation_core_grid=ttnn.CoreCoord(8, 8),
+            enable_minimal_qkv=True,
+            enable_minimal_ff2=True,
+            lm_head_max_columns_per_device={
+                "P100": 16032,
+                "P150": 16032,
+                "P300": 16032,
+                "P150x4": 4008,
+                "P150x8": 1002,
+            }.get(device_name),
+        )
+    raise ValueError(f"Unsupported Llama 3.1 8B architecture: {arch}")
+
+
 # =============================================================================
 # TransformerBlock1D
 # =============================================================================
@@ -390,6 +453,9 @@ class Llama3Transformer1DConfig:
     norm_config: RMSNorm1DConfig
     lm_head_config: LMHead1DConfig
     sampling_config: Sampling1DConfig | None = None
+
+    # Construction-only architecture compositions paired with the public
+    # common configs above.
 
     # Model-level memory configs
     decode_residual_memcfg: ttnn.MemoryConfig | None = None
@@ -881,6 +947,14 @@ def build_llama3_transformer_1d_config(
     device_name = get_device_name(mesh_device)
     cluster_shape = list(mesh_device.shape)
     cluster_type = ttnn.cluster.get_cluster_type()
+    arch = mesh_device.arch()
+    architecture_profile = _resolve_llama31_8b_architecture_profile(
+        arch=arch,
+        cluster_type=cluster_type,
+        device_name=device_name,
+        model_name=model_name,
+        dram_grid_width=dram_grid_size.x,
+    )
     is_galaxy_cluster = cluster_type in (
         ttnn.cluster.ClusterType.GALAXY,
         ttnn.cluster.ClusterType.TG,
@@ -904,47 +978,50 @@ def build_llama3_transformer_1d_config(
     tile_padded_batch_rows = ttnn.TILE_SIZE * int(math.ceil(max_batch_size / ttnn.TILE_SIZE))
     qkv_size = head_dim * (2 * n_kv_heads + n_heads)
     min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / (n_kv_heads // cluster_shape[1])
-    prefill_len_cutoff = 512 if ttnn.device.is_blackhole(mesh_device) else 1024
-    if _base_model_name(model_name) == "Llama-3.1-8B" and device_name in ("N150",):
-        prefill_len_cutoff = 512
-
-    compute_kernel_config_lofi = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config_lofi = ttnn.init_device_compute_kernel_config(
+        arch,
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
-    compute_kernel_config_hifi2 = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config_hifi2 = ttnn.init_device_compute_kernel_config(
+        arch,
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=True,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
-    compute_kernel_config_hifi2_fp16 = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config_hifi2_fp16 = ttnn.init_device_compute_kernel_config(
+        arch,
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=True,
     )
-    compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config_hifi4 = ttnn.init_device_compute_kernel_config(
+        arch,
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
-    compute_kernel_config_hifi4_fp32 = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config_hifi4_fp32 = ttnn.init_device_compute_kernel_config(
+        arch,
         math_fidelity=ttnn.MathFidelity.HiFi4,
         fp32_dest_acc_en=True,
         packer_l1_acc=True,
         dst_full_sync_en=False,
     )
-    compute_kernel_config_hifi2_na = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config_hifi2_na = ttnn.init_device_compute_kernel_config(
+        arch,
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
         fp32_dest_acc_en=False,
         packer_l1_acc=False,
     )
-    compute_kernel_config_hifi2_nol1acc = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config_hifi2_nol1acc = ttnn.init_device_compute_kernel_config(
+        arch,
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=True,
         fp32_dest_acc_en=True,
@@ -952,16 +1029,15 @@ def build_llama3_transformer_1d_config(
     )
 
     def ccl_topology():
-        current_cluster_type = ttnn.cluster.get_cluster_type()
-        if current_cluster_type in (
+        if cluster_type in (
             ttnn.cluster.ClusterType.P300_X2,
             ttnn.cluster.ClusterType.P150_X4,
             ttnn.cluster.ClusterType.P150_X8,
         ):
             return ttnn.Topology.Ring
-        if current_cluster_type == ttnn.cluster.ClusterType.T3K:
+        if cluster_type == ttnn.cluster.ClusterType.T3K:
             return ttnn.Topology.Ring if num_devices >= 8 else ttnn.Topology.Linear
-        if current_cluster_type in (
+        if cluster_type in (
             ttnn.cluster.ClusterType.GALAXY,
             ttnn.cluster.ClusterType.TG,
             ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
@@ -982,8 +1058,8 @@ def build_llama3_transformer_1d_config(
     )
 
     def find_grid(n):
-        max_rows = 8 if ttnn.device.is_wormhole_b0(mesh_device) else 10
-        max_cols = 8 if ttnn.device.is_wormhole_b0(mesh_device) else 12
+        max_rows = 8 if arch == ttnn.device.Arch.WORMHOLE_B0 else 10
+        max_cols = 8 if arch == ttnn.device.Arch.WORMHOLE_B0 else 12
         possible_cores = [k for k in range(1, max_rows * max_cols + 1) if n % k == 0]
         possible_cores.sort(key=lambda x: abs(x - 32))
         for cores in possible_cores:
@@ -1099,7 +1175,9 @@ def build_llama3_transformer_1d_config(
                 raise ValueError("Could not find a valid LM head core grid")
             lm_head_num_rows = 8
     lm_head_core_grid = ttnn.CoreGrid(y=lm_head_num_rows, x=lm_head_cores_per_row)
-    max_columns_per_device_lm_head = 668 * lm_head_core_grid.num_cores
+    max_columns_per_device_lm_head = (
+        architecture_profile.lm_head_max_columns_per_device or 668 * lm_head_core_grid.num_cores
+    )
     attn_input_grid = dram_shard_core_grid_for_k(dim)
     mlp_core_grid = dram_shard_core_grid_for_k_and_n(dim, hidden_dim // num_devices)
     mlp2_core_grid = dram_shard_core_grid_for_k_and_n(hidden_dim // num_devices, dim)
@@ -1202,7 +1280,7 @@ def build_llama3_transformer_1d_config(
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            if ttnn.device.is_blackhole(mesh_device)
+            if arch == ttnn.device.Arch.BLACKHOLE
             else ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         ),
         "ATTN_OUTPUT_PROGCFG": dram_matmul_config(
@@ -1309,14 +1387,17 @@ def build_llama3_transformer_1d_config(
             mesh_device=mesh_device,
             tt_ccl=tt_ccl_inst,
             max_batch_size=max_batch_size,
-            prefill_distributed=num_devices > 1 and dim >= 4096,
+            prefill_distributed=(
+                num_devices > 1 and (dim >= 4096 if architecture_profile.rms_distributed_at_dim_4096 else dim > 4096)
+            ),
             decode_program_config=sharded_program_config,
             decode_memory_config=sharded_output_config,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                arch,
                 math_fidelity=ttnn.MathFidelity.HiFi2,
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
-                packer_l1_acc=False,
+                packer_l1_acc=architecture_profile.rms_packer_l1_acc,
             ),
         )
 
@@ -1369,7 +1450,8 @@ def build_llama3_transformer_1d_config(
             ),
         )
 
-        qk_norm_compute_kernel = ttnn.WormholeComputeKernelConfig(
+        qk_norm_compute_kernel = ttnn.init_device_compute_kernel_config(
+            arch,
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
@@ -1457,6 +1539,16 @@ def build_llama3_transformer_1d_config(
             li_qkv_prefill_compute_kernel_cfg=get_math_fidelity(layer_num, "li_qkv_prefill"),
             sdpa_prefill_compute_kernel_cfg=get_math_fidelity(layer_num, "sdpa_prefill"),
             li_o_prefill_compute_kernel_cfg=get_math_fidelity(layer_num, "li_o_prefill"),
+            prefill_qkv_grid=architecture_profile.attention_prefill_qkv_grid,
+            dram_shard_grid_width=(
+                8 if arch == ttnn.device.Arch.WORMHOLE_B0 else architecture_profile.mlp_prefill_dram_shard_grid_width
+            ),
+            decode_create_qkv_head_grid=architecture_profile.attention_decode_create_qkv_head_grid,
+            decode_transformation_core_grid=(
+                architecture_profile.attention_decode_transformation_core_grid
+                or mesh_device.compute_with_storage_grid_size()
+            ),
+            prefill_qkv_minimal_matmul=architecture_profile.enable_minimal_qkv,
             transformation_mat_decode=transformation_mats.get("decode"),
             transformation_mat_prefill=transformation_mats.get("prefill"),
         )
@@ -1541,18 +1633,27 @@ def build_llama3_transformer_1d_config(
             ff2_compute_kernel_cfg=get_math_fidelity(layer_num, "li_ff2"),
             decode_ff1_3_compute_kernel_cfg=get_math_fidelity(layer_num, "li_ff1_ff3"),
             decode_ff2_compute_kernel_cfg=get_math_fidelity(layer_num, "li_ff2"),
-            prefill_len_cutoff=prefill_len_cutoff,
+            prefill_len_cutoff=architecture_profile.mlp_prefill_len_cutoff,
+            prefill_dram_shard_grid_width=architecture_profile.mlp_prefill_dram_shard_grid_width,
+            prefill_ff1_ff3_grid=architecture_profile.mlp_prefill_ff1_ff3_grid,
+            prefill_ff2_grid=architecture_profile.mlp_prefill_ff2_grid,
+            prefill_w2_minimal_matmul=architecture_profile.enable_minimal_ff2,
         )
 
     def make_lm_head_config() -> LMHead1DConfig:
-        lm_head_padded_vocab_size = math.ceil(vocab_size / TILE_SIZE) * TILE_SIZE
+        lm_head_padded_vocab_size = math.ceil(vocab_size / (TILE_SIZE * num_devices)) * (TILE_SIZE * num_devices)
         size_per_device = lm_head_padded_vocab_size // num_devices
         num_splits = math.ceil(size_per_device / max_columns_per_device_lm_head)
         split_sizes = [min(size_per_device, max_columns_per_device_lm_head)] * (num_splits - 1)
         split_sizes.append(size_per_device - sum(split_sizes))
 
         state_dict_prefix = get_state_dict_prefix("", None)
-        torch_output_weights = state_dict[f"{state_dict_prefix}output.weight"].permute(1, 0)
+        source_weight = state_dict[f"{state_dict_prefix}output.weight"]
+        if tuple(source_weight.shape) != (vocab_size, dim):
+            raise ValueError(
+                f"Llama 8B LM-head weight must have shape {(vocab_size, dim)}, got {tuple(source_weight.shape)}"
+            )
+        torch_output_weights = source_weight.permute(1, 0)
         if vocab_size < lm_head_padded_vocab_size:
             torch_output_weights = torch.cat(
                 [
@@ -1575,10 +1676,20 @@ def build_llama3_transformer_1d_config(
         weights_memcfgs = []
         for split_idx, split_size in enumerate(split_sizes):
             device_splits = []
+            physical_split_size = math.ceil(split_size / TILE_SIZE) * TILE_SIZE
             for device_idx in range(num_devices):
                 start = device_idx * size_per_device + sum(split_sizes[:split_idx])
                 end = start + split_size
-                device_splits.append(torch_output_weights[:, start:end])
+                device_split = torch_output_weights[:, start:end]
+                if split_size < physical_split_size:
+                    device_split = torch.cat(
+                        [
+                            device_split,
+                            torch.zeros(dim, physical_split_size - split_size, dtype=device_split.dtype),
+                        ],
+                        dim=-1,
+                    )
+                device_splits.append(device_split)
             combined_split = torch.cat(device_splits, dim=-1)
             mem_cfg = _create_dram_sharded_mem_config(
                 k=dim,
@@ -1597,7 +1708,12 @@ def build_llama3_transformer_1d_config(
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=mem_cfg,
                     cache_dir_weight_name=(
-                        (cache_dir, f"output_split_{split_idx}_{combined_split.shape[-1]}") if cache_dir else None
+                        (
+                            cache_dir,
+                            f"output_split_{split_idx}_logical_{split_size}_physical_{combined_split.shape[-1]}",
+                        )
+                        if cache_dir
+                        else None
                     ),
                 )
             )
@@ -1622,10 +1738,11 @@ def build_llama3_transformer_1d_config(
                 dram_matmul_config(lm_head_tile_padded_batch_rows, dim, split_size, lm_head_core_grid.num_cores)
                 for split_size in split_sizes
             ],
-            compute_kernel_config=_compute_kernel_config_hifi2(),
+            output_split_sizes=split_sizes,
             output_memcfg=ttnn.L1_MEMORY_CONFIG,
             input_memcfg=input_memcfg,
             weights_memcfgs=weights_memcfgs,
+            compute_kernel_config=_compute_kernel_config_hifi2(arch),
         )
 
     def make_sampling_config() -> Sampling1DConfig | None:
@@ -1655,6 +1772,42 @@ def build_llama3_transformer_1d_config(
     lm_head_norm_cfg = get_decode_norm_config("lm_head")
     activation_dtypes = [get_tensor_dtype(i, "activation") for i in range(n_layers)]
 
+    block_configs = []
+    for i in range(n_layers):
+        attention_norm_config = make_norm_config(
+            layer_num=i,
+            weight_key="attention_norm",
+            sharded_program_config=attn_norm_cfg.get("sharded_program_config"),
+            sharded_output_config=attn_norm_cfg.get("sharded_output_config"),
+        )
+        attention_config = make_attention_config(i, trans_mats_dict)
+        ff_norm_config = make_norm_config(
+            layer_num=i,
+            weight_key="ffn_norm",
+            sharded_program_config=ff_norm_cfg.get("sharded_program_config"),
+            sharded_output_config=ff_norm_cfg.get("sharded_output_config"),
+        )
+        mlp_config = make_mlp_config(i)
+        block_configs.append(
+            TransformerBlock1DConfig(
+                attention_norm_config=attention_norm_config,
+                attention_config=attention_config,
+                ff_norm_config=ff_norm_config,
+                mlp_config=mlp_config,
+                decode_residual_memcfg=model_config["DECODE_RESIDUAL_MEMCFG"],
+                activation_dtype=activation_dtypes[i],
+            )
+        )
+
+    norm_config = make_norm_config(
+        layer_num=None,
+        weight_key="norm",
+        state_dict_prefix=get_state_dict_prefix("", None),
+        sharded_program_config=lm_head_norm_cfg.get("sharded_program_config"),
+        sharded_output_config=lm_head_norm_cfg.get("sharded_output_config"),
+    )
+    lm_head_config = make_lm_head_config()
+
     return Llama3Transformer1DConfig(
         n_layers=n_layers,
         vocab_size=vocab_size,
@@ -1665,35 +1818,9 @@ def build_llama3_transformer_1d_config(
         mesh_device=mesh_device,
         embedding_config=make_embedding_config(),
         rope_config=rope_config,
-        block_configs=[
-            TransformerBlock1DConfig(
-                attention_norm_config=make_norm_config(
-                    layer_num=i,
-                    weight_key="attention_norm",
-                    sharded_program_config=attn_norm_cfg.get("sharded_program_config"),
-                    sharded_output_config=attn_norm_cfg.get("sharded_output_config"),
-                ),
-                attention_config=make_attention_config(i, trans_mats_dict),
-                ff_norm_config=make_norm_config(
-                    layer_num=i,
-                    weight_key="ffn_norm",
-                    sharded_program_config=ff_norm_cfg.get("sharded_program_config"),
-                    sharded_output_config=ff_norm_cfg.get("sharded_output_config"),
-                ),
-                mlp_config=make_mlp_config(i),
-                decode_residual_memcfg=model_config["DECODE_RESIDUAL_MEMCFG"],
-                activation_dtype=activation_dtypes[i],
-            )
-            for i in range(n_layers)
-        ],
-        norm_config=make_norm_config(
-            layer_num=None,
-            weight_key="norm",
-            state_dict_prefix=get_state_dict_prefix("", None),
-            sharded_program_config=lm_head_norm_cfg.get("sharded_program_config"),
-            sharded_output_config=lm_head_norm_cfg.get("sharded_output_config"),
-        ),
-        lm_head_config=make_lm_head_config(),
+        block_configs=block_configs,
+        norm_config=norm_config,
+        lm_head_config=lm_head_config,
         sampling_config=make_sampling_config(),
         decode_residual_memcfg=model_config["DECODE_RESIDUAL_MEMCFG"],
         activation_dtypes=activation_dtypes,

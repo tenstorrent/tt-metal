@@ -731,7 +731,8 @@ def run_eval_repeat_batch32(
     sampling_params=None,
     repeat_batches: int = 3,
     hf_model_id: str | None = None,
-) -> None:
+    first_repeat_profiler=None,
+) -> PerfBenchmarkResult:
     """Drive the ci-eval-32 determinism case, building a fresh traced executor per repeat.
 
     Each repeat builds its own traced executor (``make_executor()``) and its own zeroed KV
@@ -755,6 +756,8 @@ def run_eval_repeat_batch32(
         sampling_params: None -> host argmax (deterministic, mesh-agnostic default).
         repeat_batches: Number of rotated repeats (TTTv1 uses 3).
         hf_model_id: Optional, to enrich stop ids from generation_config.
+        first_repeat_profiler: Optional profiler passed only to the first repeat, allowing a caller
+            to emit perf telemetry without changing the three-repeat determinism geometry.
     """
     assert (
         len(prompts) == max_batch_size
@@ -770,6 +773,7 @@ def run_eval_repeat_batch32(
     )
 
     per_repeat: list[list[list[int]]] = []
+    first_result = None
     for i in range(repeat_batches):
         traced_executor = make_executor()
         try:
@@ -785,6 +789,7 @@ def run_eval_repeat_batch32(
                 max_batch_size=max_batch_size,
                 prompt_lens=prompt_lens,
                 sampling_params=sampling_params,
+                profiler=first_repeat_profiler if i == 0 else None,
             )
         finally:
             traced_executor.cleanup()
@@ -793,7 +798,11 @@ def run_eval_repeat_batch32(
             bad = set(ids) & garbage_ids
             assert not bad, f"ci-eval-32: user {u} produced special token(s) {sorted(bad)} mid-stream"
         per_repeat.append(truncated)
+        if i == 0:
+            first_result = result
         logger.info(f"ci-eval-32 repeat {i}: truncated lengths = {[len(t) for t in truncated]}")
 
     assert_cross_batch_consistency(per_repeat)
     logger.info(f"ci-eval-32: all {(repeat_batches - 1) * len(prompts)} cross-batch consistency checks passed")
+    assert first_result is not None
+    return first_result

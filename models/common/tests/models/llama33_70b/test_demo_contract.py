@@ -47,6 +47,26 @@ def test_demo_keeps_unmodified_trace_region_until_measured():
     assert '"trace_region_size": 50_000_000' in _DEMO_SOURCE
 
 
+def test_demo_collects_physical_p150x4_without_adding_unmeasured_perf_targets():
+    assignment = next(
+        node
+        for node in _DEMO_TREE.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "_MESH_DEVICE_TO_SHAPE"
+    )
+    mesh_map = ast.literal_eval(assignment.value)
+    assert mesh_map == {"T3K": (1, 8), "P150x4": (1, 4)}
+    assert "bh_hardware" not in _DEMO_SOURCE
+    assert '"P150x4": {"tok_s_u"' not in _DEMO_SOURCE
+
+
+def test_p150x4_token_accuracy_is_observational_until_a_floor_is_approved():
+    source = ast.unparse(_function("_run_token_accuracy"))
+    assert "device_name == 'P150x4'" in source
+    assert "token accuracy is observational" in source
+
+
 def test_demo_uses_model_owned_runtime_provider_and_shared_helpers():
     imports = [ast.unparse(node) for node in _DEMO_TREE.body if isinstance(node, (ast.Import, ast.ImportFrom))]
     assert any("models.common.models.llama33_70b.executor" in statement for statement in imports)

@@ -2,17 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-TTTv2 Qwen3-32B demo — accuracy and performance measurement on T3K.
+TTTv2 Qwen3-32B demo — accuracy and performance measurement on T3K and P150x4.
 
 Uses ``EagerQwen3_32BExecutor`` / ``TracedQwen3_32BExecutor`` directly (no vLLM adapter).
 
-**Mesh note — T3K only.** Qwen3-32B has 64 attention heads and 8 KV heads; both divide 8, and the
-32B weights need 8-way tensor parallelism to fit (a single/2-device mesh cannot hold the weights +
-KV cache). This matches TTTv1/PERF.md (T3K-only for this checkpoint). Consequently:
-  - **T3K (8 devices): the validated mesh.** ``from_pretrained`` rejects any non-8 mesh.
+**Mesh note.** Qwen3-32B has 64 attention heads and 8 KV heads. The TTTv2 composition supports
+physical Wormhole T3K (TP8) and physical BlackHole P150x4 (TP4), matching TTTv1's BH model support.
+The P150x4 path uses the 128-token prefill bucket and keeps batched prefill disabled until the
+plan's cross-cardinality experiment passes. Consequently:
+  - **T3K (8 devices): the established regression mesh.** Existing thresholds remain unchanged.
+  - **P150x4 (4 devices): the BH qualification mesh.** It uses Ring fabric and BH-specific module
+    wrappers; full-model runs require a physical P150_X4 cluster, not a device-count shortcut.
   - **ci-b1-DP-*: skipped** — every DP group is a single device, which cannot hold this 32B (same
-    memory limit); you cannot have both 1-device-per-user and 8-device TP. Genuine hardware-capacity
-    guard (like the qwen25_7b N150 skip), matching TTTv1 which also can't DP a 32B on T3K.
+    memory limit); you cannot have both 1-device-per-user and TP4/TP8. Genuine hardware-capacity
+    guard (like the qwen25_7b N150 skip), matching TTTv1's supported tensor-parallel deployments.
 
 CI cases (parity with TTTv1 ``simple_text_demo.py``):
     token-accuracy   - teacher-forcing top-1/top-5 vs the book ``.refpt``
@@ -20,6 +23,7 @@ CI cases (parity with TTTv1 ``simple_text_demo.py``):
     batch-32         - short-context throughput (seq1024 / 200 decode)
     batch-32-ci      - CI-faithful batch-32 (seq2048 / 1024 decode; TTTv1 ci-32)
     eval-32          - 32-user cross-batch determinism (TTTv1 ci-eval-32)
+    eval-32-perf-report - same three eval repeats; first repeat emits telemetry and enforces targets
     ci-b1-DP-{2..32} - single-user data-parallel scaling smoke (TTTv1 ci-b1-DP-*); all skip on T3K
 
 Usage:
@@ -46,6 +50,7 @@ from loguru import logger
 from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
+from models.common.device_utils import get_device_name
 from models.common.models.qwen3_32b.executor import EagerQwen3_32BExecutor, TracedQwen3_32BExecutor
 from models.common.models.qwen3_32b.model import QWEN3_32B_ACCURACY, QWEN3_32B_PERFORMANCE, Qwen3_32B
 from models.common.sampling.sampling_params import SamplingParams
@@ -57,7 +62,8 @@ from models.common.tests.demos.run_helpers import (
     run_teacher_forcing,
 )
 from models.demos.utils.llm_demo_utils import create_benchmark_data
-from models.demos.utils.model_targets import resolve_accuracy_targets
+from models.demos.utils.model_targets import resolve_accuracy_targets, resolve_metric_tolerance, resolve_perf_targets
+from models.demos.utils.trace_region_sizes import resolve_trace_region_size
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import encode_prompt_hf
 
@@ -182,11 +188,62 @@ _PERF_NUM_DECODE_TOKENS = int(os.environ.get("PERF_NUM_DECODE_TOKENS", "200"))
 
 PERF_TOLERANCE = 0.05
 
-# batch-32-ci per-SKU max_seq_len (TTTv1 ci-32 parity is seq2048). T3K-only; the 32B KV cache at
-# seq2048 × 32 users shards 8-ways and fits alongside the (sharded) weights. Qwen3-32B is capped at
-# 4096 anyway (TTTv1 reports a hang at 8192, model_config.py "Qwen3-32B hangs at 8192, cap at 4096").
+# Central target geometry for TTTv1 ``performance-ci-eval-32``. This is intentionally separate from
+# batch-32-ci: the perf-report node runs the exact three rotated eval repeats and gates its first repeat.
+_EVAL32_TARGET_SEQ_LEN = 686
+
+
+def _resolve_eval32_perf_targets(hf_model: str, device_name: str) -> dict:
+    expected = resolve_perf_targets(
+        hf_model,
+        device_name,
+        batch_size=32,
+        seq_len=_EVAL32_TARGET_SEQ_LEN,
+    )
+    if not expected:
+        raise ValueError(
+            f"No centralized eval-32 perf target for {hf_model} on {device_name} "
+            f"(batch_size=32, seq_len={_EVAL32_TARGET_SEQ_LEN}); qualification gates fail closed."
+        )
+    required = ("decode_t/s/u", "prefill_time_to_first_token")
+    missing = [metric for metric in required if metric not in expected]
+    if missing:
+        raise ValueError(
+            f"Incomplete centralized eval-32 perf target for {hf_model} on {device_name}: missing {missing}"
+        )
+    return expected
+
+
+def _assert_eval32_perf_target(result, expected: dict, *, case_name: str) -> None:
+    decode_target = float(expected["decode_t/s/u"])
+    ttft_target = float(expected["prefill_time_to_first_token"])
+    decode_tolerance = resolve_metric_tolerance("decode_t/s/u", expected, PERF_TOLERANCE)
+    ttft_tolerance = resolve_metric_tolerance("prefill_time_to_first_token", expected, PERF_TOLERANCE)
+    failures = []
+    if result.tok_s_u < decode_target * (1 - decode_tolerance):
+        failures.append(f"tok/s/u {result.tok_s_u:.1f} < target {decode_target}")
+    if result.ttft_ms > ttft_target * (1 + ttft_tolerance):
+        failures.append(f"ttft_ms {result.ttft_ms:.1f} > target {ttft_target}")
+    assert not failures, f"{case_name}: " + "; ".join(failures)
+
+
+def _require_p150x4_local_perf_target(device_name: str, expected: dict, *, case_name: str) -> None:
+    if device_name != "P150x4":
+        return
+    missing = [metric for metric in ("tok_s_u", "ttft_ms") if metric not in expected]
+    if missing:
+        raise ValueError(
+            f"{case_name}: missing frozen P150x4 perf target(s) {missing}; "
+            "characterization output must not silently become its own acceptance floor."
+        )
+
+
+# batch-32-ci per-SKU max_seq_len (TTTv1 ci-32 parity is seq2048). Qwen3-32B is capped at 4096
+# (TTTv1 reports a hang at 8192). P150x4 keeps the same CI geometry; physical memory feasibility is
+# an explicit first hardware milestone and must pass before the remaining P150x4 perf floors are frozen.
 _BATCH32_CI_MAX_SEQ_LEN: dict[str, int] = {
     "T3K": 2048,
+    "P150x4": 2048,
 }
 
 
@@ -197,12 +254,9 @@ def _sampling_bucket() -> str:
     return "host" if os.environ.get("SAMPLING_MODE", "on_device_topk").lower() == "host" else "on_device_topk"
 
 
-# Qwen3-32B needs at least this many devices of tensor parallelism: the 32B weights + KV cache require
-# 8-way sharding to fit (and 64/8 attn/KV heads divide 8). T3K (8 devices) is the minimum viable and
-# only validated mesh, matching TTTv1/PERF.md which publish this checkpoint T3K-only. Consequence: no
-# single-device config can run this model, so every ci-b1-DP factor (each DP group is a single device)
-# cleanly skips — a genuine hardware-capacity guard, not a masked failure.
-_MIN_TP_DEVICES = 8
+# Qwen3-32B needs at least TP4: TTTv1 supports the model on physical P150x4 and TTTv2 composes the
+# same BH geometry through explicit module wrappers. Single-device DP groups remain unsupported.
+_MIN_TP_DEVICES = 4
 
 
 def _skip_below_min_tp_devices(n_devices: int) -> None:
@@ -210,14 +264,15 @@ def _skip_below_min_tp_devices(n_devices: int) -> None:
     if n_devices < _MIN_TP_DEVICES:
         pytest.skip(
             f"Qwen3-32B requires >={_MIN_TP_DEVICES}-device tensor parallelism: the 32B weights + KV "
-            f"cache need 8-way sharding to fit. TTTv1/PERF.md publish this checkpoint T3K-only. Have "
-            f"{n_devices} device(s) — use MESH_DEVICE=T3K."
+            f"cache require T3K TP8 or P150x4 TP4. Have {n_devices} device(s) — use "
+            "MESH_DEVICE=T3K or MESH_DEVICE=P150x4."
         )
 
 
 # Mesh topology comes only from ``MESH_DEVICE`` (same naming as vLLM / other tt demos).
 _MESH_DEVICE_TO_SHAPE: dict[str, tuple[int, int]] = {
     "T3K": (1, 8),
+    "P150x4": (1, 4),
 }
 
 
@@ -225,26 +280,24 @@ def _ttnn_mesh_device_param_from_env() -> dict:
     env = os.environ.get("MESH_DEVICE", "").strip()
     if not env:
         pytest.skip(
-            "MESH_DEVICE must be set to T3K. See module docstring.",
+            "MESH_DEVICE must be set to T3K or P150x4. See module docstring.",
             allow_module_level=True,
         )
     shape = _MESH_DEVICE_TO_SHAPE.get(env)
     if shape is None:
         pytest.skip(
-            f"Unsupported MESH_DEVICE={env!r} for Qwen3-32B; "
-            f"only T3K is supported (64 attn heads / 8 KV heads ⇒ 8 devices).",
+            f"Unsupported MESH_DEVICE={env!r} for Qwen3-32B; use T3K or P150x4.",
             allow_module_level=True,
         )
     param = {
         "mesh_shape": shape,
-        "trace_region_size": 50_000_000,
+        "trace_region_size": resolve_trace_region_size("qwen3-32b", env),
         "num_command_queues": 1,
     }
-    # TTTv2 multi-device executor dispatch (and the on-device sampling all-gather) stalls without an
-    # explicit 1D fabric; the root conftest does not auto-enable it. Qwen3-32B is T3K-only (8 devices),
-    # so FABRIC_1D is always required here; guard on shape != (1, 1) for symmetry with the other ports.
+    # TTTv2 multi-device executor dispatch requires explicit fabric. Both approved overlays use Ring
+    # collectives, so the fixture fabric must match the model's construction-time topology choice.
     if shape != (1, 1):
-        param["fabric_config"] = ttnn.FabricConfig.FABRIC_1D
+        param["fabric_config"] = ttnn.FabricConfig.FABRIC_1D_RING
     return param
 
 
@@ -277,14 +330,6 @@ def _skip_unless_heads_divide_mesh(mesh_device: ttnn.MeshDevice, hf_model_id: st
         f"Incompatible mesh for {hf_model_id}: {n_dev} devices need "
         f"num_attention_heads ({n_h}) and num_key_value_heads ({n_kv}) each divisible by {n_dev}."
     )
-
-
-def get_device_name(mesh_device):
-    """Map mesh device count to a metrics bucket (T3K is the only supported SKU)."""
-    num_devices = mesh_device.get_num_devices()
-    if num_devices == 8:
-        return "T3K"
-    return f"{num_devices}dev"
 
 
 def lazy_weight_cache_dir_for_demo(mesh_device: ttnn.MeshDevice, hf_model_id: str) -> Path:
@@ -514,7 +559,7 @@ def create_model(
     max_batch_size: int = 32,
     max_seq_len: int | None = None,
 ):
-    """Build ``Qwen3_32B`` in executor (paged KV) mode on T3K.
+    """Build ``Qwen3_32B`` in executor (paged KV) mode on T3K or P150x4.
 
     Picks one of the two module-level precision recipes (``QWEN3_32B_ACCURACY`` /
     ``QWEN3_32B_PERFORMANCE``) — both defined in ``qwen3_32b/model.py`` and grounded in TTTv1's
@@ -552,6 +597,10 @@ def create_model(
             executor_mode=True,
         )
     except Exception as e:
+        # BH qualification nodes are required gates: construction failures must surface as failures,
+        # not be converted into environmental skips. Preserve the established T3K skip behavior.
+        if get_device_name(mesh_device) == "P150x4":
+            raise
         pytest.skip(f"Could not build Qwen3-32B model (weights / memory / mesh): {e}")
 
     return model
@@ -779,6 +828,7 @@ def _run_dp_smoke(
         pytest.param("batch-32", id="batch-32"),
         pytest.param("batch-32-ci", id="batch-32-ci"),
         pytest.param("eval-32", id="eval-32"),
+        pytest.param("eval-32-perf-report", id="eval-32-perf-report"),
         pytest.param("ci-b1-DP-2", id="ci-b1-DP-2"),
         pytest.param("ci-b1-DP-4", id="ci-b1-DP-4"),
         pytest.param("ci-b1-DP-8", id="ci-b1-DP-8"),
@@ -812,7 +862,7 @@ def test_qwen3_32b(test_config, mesh_device, optimizations):
             )
             return
 
-        if test_config in ("batch-32", "eval-32"):
+        if test_config in ("batch-32", "eval-32", "eval-32-perf-report"):
             # Short-context 32-user workload (seq1024). batch-32 is perf-gated; eval-32 is a determinism
             # check (not perf-gated).
             max_bs, max_seq_len = 32, 1024
@@ -867,9 +917,17 @@ def test_qwen3_32b(test_config, mesh_device, optimizations):
                 case_name=f"{optimizations}/batch-32-ci",
                 num_decode_tokens=1024,
             )
-        elif test_config == "eval-32":
+        elif test_config in ("eval-32", "eval-32-perf-report"):
             # 32-user cross-batch determinism (self-consistency under prompt rotation).
-            _run_eval_repeat_batch32(model, mesh_device)
+            perf_report = test_config == "eval-32-perf-report"
+            eval_expected = _resolve_eval32_perf_targets(hf_model, device_name) if perf_report else None
+            _run_eval_repeat_batch32(
+                model,
+                mesh_device,
+                expected=eval_expected,
+                case_name=f"{optimizations}/{test_config}",
+                perf_report=perf_report,
+            )
     finally:
         cleanup_model_case(model, mesh_device)
 
@@ -989,8 +1047,10 @@ def _run_token_accuracy(model, mesh_device, expected):
     #       (no ratio tolerance — TTTv1 applies none to accuracy).
     # Measured accuracy is rounded up with math.ceil before the compare, matching TTTv1 exactly
     # (simple_text_demo.py:1657-1658, ``math.ceil(acc[...] * 100)``).
-    use_centralized_targets = is_ci_env
     device_name = get_device_name(mesh_device)
+    # P150x4 is a qualification gate even outside CI; use the checked-in p300x2/bh_quietbox_2
+    # targets rather than silently accepting the absent local metric bucket.
+    use_centralized_targets = is_ci_env or device_name == "P150x4"
     if use_centralized_targets:
         central = resolve_accuracy_targets(hf_model, device_name, batch_size=1, seq_len=512)
         if not central or "top1" not in central or "top5" not in central:
@@ -1148,6 +1208,10 @@ def _run_perf_benchmark(
 
         assert_no_special_tokens(result.generated_token_ids, tokenizer, case_name=case_name)
 
+        # The BH plan requires every declared perf node to fail closed. Do this after telemetry and
+        # generated-output checks so an initial characterization run still leaves actionable evidence.
+        _require_p150x4_local_perf_target(get_device_name(mesh_device), expected, case_name=case_name)
+
         if expected:
             failures = []
             if "tok_s_u" in expected:
@@ -1168,7 +1232,14 @@ _EVAL_REPEAT_BATCHES = 3
 _EVAL_NUM_DECODE_TOKENS = _PERF_NUM_DECODE_TOKENS
 
 
-def _run_eval_repeat_batch32(model, mesh_device):
+def _run_eval_repeat_batch32(
+    model,
+    mesh_device,
+    *,
+    expected: dict | None = None,
+    case_name: str = "eval-32",
+    perf_report: bool = False,
+):
     """32-user cross-batch determinism (self-consistency under prompt rotation).
 
     Runs the batch-32 prefill+decode loop ``_EVAL_REPEAT_BATCHES`` times, rotating the prompt->slot
@@ -1226,7 +1297,10 @@ def _run_eval_repeat_batch32(model, mesh_device):
     def tokenize_fn(ps):
         return tokenize_prompts(ps, tokenizer)
 
-    sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
+    # Determinism-only eval defaults to host argmax. The perf-report parity leg defaults to TTTv1's
+    # on-device top-k path so its checked-in bh_quietbox_2 targets compare the same sampling topology.
+    default_sampling_mode = "on_device_topk" if perf_report else "host"
+    sampling_mode = os.environ.get("SAMPLING_MODE", default_sampling_mode).lower()
     _on_device_params = {
         "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
         "on_device_topk": SamplingParams(temperature=0.0, top_k=32, top_p=0.08),
@@ -1260,16 +1334,66 @@ def _run_eval_repeat_batch32(model, mesh_device):
         )
         return kv_cache
 
-    run_eval_repeat_batch32(
-        make_executor=make_executor,
-        allocate_kv_cache=allocate_kv_cache,
-        page_table=page_table,
-        prompts=prompts,
-        tokenizer=tokenizer,
-        tokenize_fn=tokenize_fn,
-        num_decode_tokens=_EVAL_NUM_DECODE_TOKENS,
-        max_batch_size=max_batch_size,
-        sampling_params=sampling_params,
-        repeat_batches=_EVAL_REPEAT_BATCHES,
-        hf_model_id=hf_model,
+    profiler = BenchmarkProfiler() if perf_report else None
+    if profiler is not None:
+        profiler.start("run")
+    try:
+        first_result = run_eval_repeat_batch32(
+            make_executor=make_executor,
+            allocate_kv_cache=allocate_kv_cache,
+            page_table=page_table,
+            prompts=prompts,
+            tokenizer=tokenizer,
+            tokenize_fn=tokenize_fn,
+            num_decode_tokens=_EVAL_NUM_DECODE_TOKENS,
+            max_batch_size=max_batch_size,
+            sampling_params=sampling_params,
+            repeat_batches=_EVAL_REPEAT_BATCHES,
+            hf_model_id=hf_model,
+            first_repeat_profiler=profiler,
+        )
+    finally:
+        if profiler is not None:
+            profiler.end("run")
+
+    if not perf_report:
+        return first_result
+
+    logger.info(
+        f"Performance [{case_name}, first of {_EVAL_REPEAT_BATCHES} repeats] — "
+        f"TTFT: {first_result.ttft_ms:.1f}ms, tok/s/u: {first_result.tok_s_u:.1f}, "
+        f"tok/s: {first_result.tok_s:.1f}"
     )
+    if os.environ.get("CI") == "true":
+        prefill_seq_len = int(representative_prefill[1].max())
+        measurements = {
+            "prefill_t/s": (
+                first_result.batch_size * prefill_seq_len / first_result.prefill_time_s
+                if first_result.prefill_time_s > 0
+                else 0.0
+            ),
+            "prefill_time_to_token": first_result.prefill_time_s / first_result.batch_size,
+            "decode_t/s": first_result.tok_s,
+            "decode_t/s/u": first_result.tok_s_u,
+        }
+        benchmark_data = create_benchmark_data(
+            profiler,
+            measurements,
+            {"inference_prefill": 0, "inference_decode": 1},
+            targets={},
+        )
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type="demo_perf",
+            ml_model_name=hf_model,
+            ml_model_type="llm",
+            device_name=get_device_name(mesh_device),
+            num_layers=ma.n_layers,
+            batch_size=first_result.batch_size,
+            input_sequence_length=prefill_seq_len,
+            output_sequence_length=_EVAL_NUM_DECODE_TOKENS,
+        )
+
+    assert expected is not None
+    _assert_eval32_perf_target(first_result, expected, case_name=case_name)
+    return first_result

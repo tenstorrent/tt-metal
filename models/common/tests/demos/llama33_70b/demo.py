@@ -6,9 +6,9 @@ TTTv2 Llama-3.3-70B-Instruct demo — accuracy and performance measurement.
 
 Uses the model-owned ``Llama33_70BExecutor`` directly (no vLLM adapter).
 
-**Mesh note:** Llama-3.3-70B-Instruct has 64 attention heads and 8 KV heads; both divide
-T3K (8). The port raises on any other mesh. T3K is the only SKU PERF.md publishes per-user
-TTFT for, so it is the primary (and only) bringup SKU here.
+**Mesh note:** Llama-3.3-70B-Instruct supports Wormhole T3K (8 devices) and
+BlackHole P150x4 (4 devices). P150x4 accuracy is observational until a reviewed
+BlackHole accuracy floor exists; existing T3K thresholds are unchanged.
 
 **Workload:** performance tests prefill each prompt at its natural length (TTTv1
 ``preprocess_inputs_prefill`` semantics; these sample prompts are ~90-125 tokens -> 128
@@ -28,6 +28,11 @@ Usage::
     # Batch-32 throughput test
     MESH_DEVICE=T3K HF_MODEL=meta-llama/Llama-3.3-70B-Instruct \\
       pytest models/common/tests/demos/llama33_70b/demo.py -k "batch-32" -v
+
+    # BlackHole observational accuracy gate (physical P150_X4 only; run serially)
+    MESH_DEVICE=P150x4 HF_MODEL=meta-llama/Llama-3.3-70B-Instruct \\
+      pytest models/common/tests/demos/llama33_70b/demo.py \\
+        -k "accuracy-token-accuracy-P150x4" -v
 
 LazyWeight tensor cache: ``TT_CACHE_PATH/<device_name>`` when set, otherwise
 ``model_cache/<HF_MODEL>/<device_name>`` under the current working directory.
@@ -176,6 +181,7 @@ def _sampling_bucket() -> str:
 
 _MESH_DEVICE_TO_SHAPE: dict[str, tuple[int, int]] = {
     "T3K": (1, 8),
+    "P150x4": (1, 4),
 }
 
 
@@ -183,14 +189,13 @@ def _ttnn_mesh_device_param_from_env() -> dict:
     env = os.environ.get("MESH_DEVICE", "").strip()
     if not env:
         pytest.skip(
-            "MESH_DEVICE must be set to T3K. See module docstring.",
+            "MESH_DEVICE must be set to T3K or P150x4. See module docstring.",
             allow_module_level=True,
         )
     shape = _MESH_DEVICE_TO_SHAPE.get(env)
     if shape is None:
         pytest.skip(
-            f"Unsupported MESH_DEVICE={env!r} for Llama-3.3-70B; only T3K is supported "
-            f"(64 attn heads / 8 KV heads ⇒ 8 devices).",
+            f"Unsupported MESH_DEVICE={env!r} for Llama-3.3-70B; use T3K or P150x4.",
             allow_module_level=True,
         )
     param = {
@@ -232,6 +237,8 @@ def _skip_unless_heads_divide_mesh(mesh_device: ttnn.MeshDevice) -> None:
 
 
 def get_device_name(mesh_device: ttnn.MeshDevice) -> str:
+    if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.P150_X4:
+        return "P150x4"
     n = mesh_device.get_num_devices()
     if n == 8:
         return "T3K"
@@ -722,6 +729,9 @@ def _run_token_accuracy(model: Llama33_70BTransformer1D, mesh_device, expected):
     # (simple_text_demo.py:1657-1658, ``math.ceil(acc[...] * 100)``).
     use_centralized_targets = is_ci_env
     device_name = get_device_name(mesh_device)
+    if device_name == "P150x4":
+        logger.warning("P150x4 token accuracy is observational: no reviewed BlackHole top1/top5 floor exists yet")
+        return
     if use_centralized_targets:
         central = resolve_accuracy_targets(hf_model, device_name, batch_size=1, seq_len=512)
         if not central or "top1" not in central or "top5" not in central:

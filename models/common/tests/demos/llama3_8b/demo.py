@@ -11,6 +11,11 @@ Usage:
     MESH_DEVICE=N150 HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     python_env/bin/pytest models/common/tests/demos/llama3_8b/demo.py -k "token-accuracy" -v
 
+    # Blackhole P150 token accuracy test
+    MESH_DEVICE=P150 HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
+    python_env/bin/pytest models/common/tests/demos/llama3_8b/demo.py \
+      -k "blackhole-performance-token-accuracy" -v
+
     # Batch-1 latency test
     MESH_DEVICE=N150 HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     python_env/bin/pytest models/common/tests/demos/llama3_8b/demo.py -k "batch-1" -v
@@ -63,6 +68,10 @@ from models.tt_transformers.tt.generator import create_submeshes
 # we have direct batch-32 wall-clock baselines.
 EXPECTED_METRICS = {
     "performance": {
+        "P150": {
+            "top1": 90,
+            "top5": 98,
+        },
         "N150": {
             "top1": 90,
             "top5": 97,
@@ -83,6 +92,10 @@ EXPECTED_METRICS = {
         },
     },
     "accuracy": {
+        "P150": {
+            "top1": 90,
+            "top5": 98,
+        },
         "N150": {
             "top1": 96,
             "top5": 100,
@@ -322,10 +335,10 @@ def create_llama3_for_causal_lm(mesh_device, optimizations="performance", max_ba
 
 
 mesh_device_name = os.environ.get("MESH_DEVICE", "").strip().upper()
-mesh_device_shape = {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (4, 8)}.get(mesh_device_name)
+mesh_device_shape = {"P150": (1, 1), "N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (4, 8)}.get(mesh_device_name)
 if mesh_device_shape is None:
     pytest.skip(
-        f"Unsupported MESH_DEVICE={mesh_device_name!r}; use N150, N300, T3K, or TG.",
+        f"Unsupported MESH_DEVICE={mesh_device_name!r}; use P150, N150, N300, T3K, or TG.",
         allow_module_level=True,
     )
 ttnn_mesh_device_params = {
@@ -349,7 +362,10 @@ pytestmark = pytest.mark.parametrize(
 @pytest.mark.parametrize(
     "test_config",
     [
-        pytest.param("token-accuracy", id="token-accuracy-repeat_batch-1-prefetcher-off"),
+        pytest.param(
+            "token-accuracy",
+            id="token-accuracy-repeat_batch-1-prefetcher-off",
+        ),
         "batch-1",
         pytest.param("batch-32", id="batch-32-repeat_batch-1-prefetcher-off"),
         "batch-32-ci",
