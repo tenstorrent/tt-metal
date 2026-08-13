@@ -581,16 +581,31 @@ with tempfile.TemporaryDirectory() as tmp:
 # workflow rather than reimplemented, exactly as the resolve check above is.
 PORT_OP = Path(__file__).resolve().parents[2] / "workflows" / "port-op.md"
 
+import shutil  # noqa: E402
+
+_harness_home = tempfile.mkdtemp()
+(Path(_harness_home) / ".port-harness").mkdir()
+shutil.copy2(
+    Path(__file__).resolve().parent / "dispatch.py",
+    Path(_harness_home) / ".port-harness" / "dispatch.py",
+)
+
 
 def _wait_guard(handle: str) -> int:
     frontmatter = yaml.safe_load(PORT_OP.read_text().split("---", 2)[1])
     script = frontmatter["mcp-scripts"]["wait"]["run"]
+    # The tools invoke the launcher out of `$HOME/.port-harness`, not the workspace, so that the agent
+    # cannot rewrite the thing that refuses to dispatch its edits to the pipeline. That means this test
+    # has to stand up the same layout, or a well-formed handle fails for the wrong reason -- which is
+    # exactly what it did when the path moved.
+    home = Path(_harness_home)
     return subprocess.run(
         ["bash", "-c", script],
         capture_output=True,
         text=True,
         env={
             **os.environ,
+            "HOME": str(home),
             "INPUT_HANDLE": handle,
             "GITHUB_WORKSPACE": str(Path(__file__).resolve().parents[3]),
             # So a developer's own dispatch credential cannot turn this into a live API call.
@@ -612,6 +627,30 @@ check(
     _wait_guard("31599281955-82f8157f") != 2,
     "a well-formed handle was rejected",
 )
+
+# Every tool must invoke the launcher from outside the sandbox. `dispatch.py` is what refuses to push
+# a snapshot touching `.github/`, and that refusal is the only thing keeping the `gate.py` that runs on
+# CIv2 from being one the agent wrote. Invoked out of the workspace, the guard is deletable by the
+# thing it guards against, and the write-path check that would notice runs inside the gate it would
+# have replaced. Asserted here because the failure is silent: everything works exactly as before.
+_frontmatter = yaml.safe_load(PORT_OP.read_text().split("---", 2)[1])
+for _tool, _spec in _frontmatter["mcp-scripts"].items():
+    check(
+        f"the {_tool} tool runs the launcher from outside the sandbox",
+        "$HOME/.port-harness/" in _spec["run"] and "GITHUB_WORKSPACE" not in _spec["run"],
+        "it runs the copy in the workspace, which the agent can rewrite",
+    )
+_placer = next(
+    (s for s in _frontmatter["steps"] if s.get("name") == "Place the launcher outside the sandbox"),
+    None,
+)
+check("and something puts it there", _placer is not None)
+if _placer:
+    check(
+        "the launcher copy is verified against the checkout",
+        "cmp" in _placer["run"],
+        "a silently truncated copy would grade the port",
+    )
 
 # --------------------------------------------------------------------------------------------
 # How an answer is *framed* decides what the agent does with it. gh-aw rejects the handler promise
@@ -813,6 +852,139 @@ if _flag:
             "baseline" not in str(_producer.get("if", "")),
             f"gated on {_producer.get('if')!r}",
         )
+
+# --------------------------------------------------------------------------------------------
+# Bounded chaining. Run 3 spent eleven verifies and a whole job ceiling re-running a tree that could
+# not improve, so every one of these is a loop that actually happened or one line away from it.
+
+
+class _ChainArgs:
+    def __init__(self, attempt=1, prev_failing=-1, max_attempts=6):
+        self.attempt = attempt
+        self.prev_failing = prev_failing
+        self.max_attempts = max_attempts
+
+
+check(
+    "a win stops the chain",
+    dispatch.should_chain("win", 0, _ChainArgs(attempt=2, prev_failing=5))[0] is False,
+)
+check(
+    "the attempt cap stops the chain",
+    dispatch.should_chain("back-to-translate", 3, _ChainArgs(attempt=6, prev_failing=9))[0] is False,
+    "a sixth attempt under a six-attempt cap chained again",
+)
+check(
+    "a blocked verdict stops the chain",
+    dispatch.should_chain("blocked", None, _ChainArgs(attempt=2))[0] is False,
+    "this is the exact loop run 3 died in",
+)
+check(
+    "a falling failing count chains",
+    dispatch.should_chain("back-to-translate", 4, _ChainArgs(attempt=2, prev_failing=9))[0] is True,
+)
+check(
+    "a flat failing count stops the chain",
+    dispatch.should_chain("back-to-translate", 9, _ChainArgs(attempt=2, prev_failing=9))[0] is False,
+    "no progress, so the next attempt knows nothing new",
+)
+check(
+    "a rising failing count stops the chain",
+    dispatch.should_chain("back-to-translate", 11, _ChainArgs(attempt=2, prev_failing=9))[0] is False,
+)
+check(
+    "a first attempt with nothing graded gets one more",
+    dispatch.should_chain("back-to-translate", None, _ChainArgs(attempt=1, prev_failing=-1))[0] is True,
+    "a fresh branch looks exactly like this and must be allowed to continue",
+)
+check(
+    "but an ungraded second attempt does not",
+    dispatch.should_chain("back-to-translate", None, _ChainArgs(attempt=2, prev_failing=4))[0] is False,
+    "two runs in a row without a graded band is a loop, not progress",
+)
+
+# The reason is reported, not just the decision: a chain that stopped silently is indistinguishable
+# from a chain that crashed, and that ambiguity cost a morning of reading logs.
+for _verdict, _failing, _args in [
+    ("win", 0, _ChainArgs()),
+    ("blocked", None, _ChainArgs()),
+    ("back-to-translate", 9, _ChainArgs(attempt=2, prev_failing=9)),
+]:
+    check(
+        f"the {_verdict} decision explains itself",
+        bool(dispatch.should_chain(_verdict, _failing, _args)[1]),
+    )
+
+# --------------------------------------------------------------------------------------------
+# Publish is a post-step, and the two properties that make it trustworthy are structural: it runs
+# where the agent cannot, and it runs whatever happened.
+
+_post = _frontmatter["post-steps"]
+_publish = next((s for s in _post if "--mode publish" in str(s.get("run", ""))), None)
+check("the run publishes its work back to the branch", _publish is not None)
+if _publish:
+    check(
+        "publishing does not depend on the verdict",
+        str(_publish.get("if")) == "always()",
+        f"gated on {_publish.get('if')!r}",
+    )
+    check(
+        "publishing runs the launcher from outside the sandbox",
+        "$HOME/.port-harness/" in _publish["run"],
+    )
+    # The last post-step destroys the credential publish authenticates with, so order is a
+    # correctness property rather than a preference.
+    _shredder = next(i for i, s in enumerate(_post) if "shred" in str(s.get("run", "")))
+    check(
+        "and before the step that shreds its credential",
+        _post.index(_publish) < _shredder,
+        "publish would have no token by the time it ran",
+    )
+check(
+    "publish is not offered to the agent as a tool",
+    not any("publish" in str(spec["run"]) for spec in _frontmatter["mcp-scripts"].values()),
+    "an agent that can publish can publish work it was told not to",
+)
+
+# --------------------------------------------------------------------------------------------
+# Resume keeps hand-written kernels. Overwriting them is a silent way to throw away a fix that a run
+# just spent forty minutes proving on a card.
+
+_resume_root = Path(tempfile.mkdtemp())
+_src = _resume_root / "gen" / "kernels"
+_src.mkdir(parents=True)
+(_src / "writer.cpp").write_text("// template\n")
+(_src / "reader.cpp").write_text("// template reader\n")
+_op_dir = _resume_root / "ttnn" / "ops" / "myop"
+(_op_dir / "codegen" / "kernels").mkdir(parents=True)
+_edited = _op_dir / "codegen" / "kernels" / "writer.cpp"
+_edited.write_text("// the fix a run spent forty minutes verifying\n")
+
+_manifest = {"kernel_paths": ["gen/kernels/writer.cpp", "gen/kernels/reader.cpp"]}
+_expected = scaffold.copy_kernels(_manifest, _resume_root, _op_dir, resume=True)
+check(
+    "resume keeps a kernel that was edited",
+    _edited.read_text().startswith("// the fix"),
+    "the previous attempt's work was overwritten by its template",
+)
+check(
+    "resume still copies a kernel the manifest gained",
+    (_op_dir / "codegen" / "kernels" / "reader.cpp").is_file(),
+    "this is how a missing header cost 112 cases",
+)
+check(
+    "and verify is still told about every kernel, not just the new ones",
+    {p.name for p in _expected} == {"writer.cpp", "reader.cpp"},
+    f"got {[p.name for p in _expected]}",
+)
+scaffold.copy_kernels(_manifest, _resume_root, _op_dir)
+check(
+    "without --resume a kernel is overwritten",
+    # Not an exact match: a fresh copy is stamped with an SPDX header, so "verbatim" here means the
+    # template's body replaced what was there, not that the bytes are identical.
+    "// template" in _edited.read_text() and "the fix" not in _edited.read_text(),
+    "the fresh-port path must keep taking the template",
+)
 
 print()
 print(f"{len(failures)} failure(s)" + (": " + ", ".join(failures) if failures else ""))
