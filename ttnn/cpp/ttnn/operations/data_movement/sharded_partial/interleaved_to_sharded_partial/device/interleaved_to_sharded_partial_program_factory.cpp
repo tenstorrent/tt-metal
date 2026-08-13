@@ -83,8 +83,6 @@ ProgramDescriptor InterleavedToShardedPartialProgramFactory::create_descriptor(
     auto* dst_buffer = output.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    // Quasar shares Blackhole's NoC alignment (DRAM read align 64, L1 16), which differs from Wormhole
-    // (DRAM align 32), so both take the same alignment-adjust path below.
     bool is_blackhole = (input.device()->arch() == tt::ARCH::BLACKHOLE);
     bool is_quasar = (input.device()->arch() == tt::ARCH::QUASAR);
 
