@@ -55,8 +55,28 @@ constexpr uint32_t cb_w_mask = 8;
 constexpr uint32_t cb_output_tiles = 9;
 constexpr uint32_t cb_rm_stage_in = 10;
 constexpr uint32_t cb_rm_stage_out = 11;
+constexpr uint32_t cb_thread_sync = 12;
 
 constexpr uint32_t NO_MASK_COL = 0xFFFFFFFFu;
+
+// PACK -> UNPACK ordering edge for an in-place handoff.
+//
+// Two consecutive chains that both address cb_input_tiles with caller-managed
+// (None, None) policies exchange NO CB handshake, so nothing orders chain N's
+// pack against chain N+1's unpack of the same tile.  The dst-sync window bounds
+// the skew to a couple of tiles, which is why the bug only bites when a block is
+// 1-2 tiles wide -- exactly the narrow-W / single-tile-row shapes.
+//
+// cb_reserve_back / cb_push_back compile to PACK-only ops and cb_wait_front /
+// cb_pop_front to UNPACK-only ops (api/compute/cb_api.h:44-136), so one push/wait
+// round trip on a private 1-page CB is precisely the missing edge -- and it moves
+// no data.  This is a synchronization op BETWEEN helper calls, never around one.
+ALWI void sync_pack_to_unpack() {
+    cb_reserve_back(cb_thread_sync, 1);
+    cb_push_back(cb_thread_sync, 1);
+    cb_wait_front(cb_thread_sync, 1);
+    cb_pop_front(cb_thread_sync, 1);
+}
 
 void kernel_main() {
     // ---- block knobs ----
@@ -166,6 +186,7 @@ void kernel_main() {
                     ckl::PackTile<ckl::output(
                         cb_input_tiles, ckl::ReservePolicy::None, ckl::PushPolicy::None, ckl::TileOffset::Strided)>{
                         window});
+                sync_pack_to_unpack();  // mask packed x in place; Sum(x^2) unpacks it next
             }
         }
 
@@ -239,6 +260,7 @@ void kernel_main() {
         //      column-shaped, so it broadcasts back across columns (Col).
         if constexpr (HAS_GAMMA || IS_ROW_MAJOR) {
             ckl::mul<x_held, rms_col, in_place>(block_shape);
+            sync_pack_to_unpack();  // x*r packed in place; the next stage unpacks it
         } else {
             ckl::mul<x_held, rms_col, to_output>(block_shape);
         }
@@ -247,6 +269,7 @@ void kernel_main() {
         if constexpr (HAS_GAMMA) {
             if constexpr (IS_ROW_MAJOR) {
                 ckl::mul<x_held, gamma_row, in_place>(block_shape);
+                sync_pack_to_unpack();  // x*r*gamma packed in place; untilize unpacks it
             } else {
                 ckl::mul<x_held, gamma_row, to_output>(block_shape);
             }

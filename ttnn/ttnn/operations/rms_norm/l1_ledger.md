@@ -33,6 +33,25 @@ Three block-sized buffers removed. Only after that is the fit predicate below in
 the **only** budget solve in the design — there is no safety fraction and no blocking search beyond
 "largest `B ≤ core_row_tiles` that fits".
 
+## Implementation deltas (recorded against the design's inventory)
+
+Four departures from the design's inventory, all forced by a mechanism and all
+verified on device:
+
+| Delta | Why | Footprint effect |
+|---|---|---|
+| **`cb_slice_stat` does not exist.** The per-slice within-tile collapse is FUSED into the root's combine: contributors ship the RAW `cb_sq_partials` tile (all 32 columns carry a partial sum) and the root runs ONE `reduce<SUM, REDUCE_ROW>` over the gathered `(B, s)` block. | `ReduceWithinTile::Skip` is unreachable through `compute_kernel_lib::reduce()`: its "Skip is AccumulateViaAdd-only" `static_assert` (`reduce_helpers_compute.inl:886-891`) sits AFTER the `if constexpr (AccumulateViaAdd) { … return; }` block, so it is not in a discarded statement and fires for the AccumulateViaAdd instantiation too. Sum-then-collapse == collapse-then-sum, so the fused form is arithmetically identical and ships the same `B` tiles per contributor. | **−`B` tiles** on every core with `s > 1`, and one whole compute phase removed from every non-root core. `cb_sq_partials`' consumer becomes the writer (still exactly one producer, one consumer). |
+| **`cb_thread_sync` added: 1 page, `bfloat16` tile.** Carries no data. One `cb_reserve_back`/`cb_push_back` (PACK-only) + `cb_wait_front`/`cb_pop_front` (UNPACK-only) round trip between two in-place stages. | Two consecutive chains addressing `cb_input_tiles` with caller-managed `(None, None)` policies exchange no CB handshake, so nothing orders chain *N*'s pack against chain *N+1*'s unpack of the same tile. The dst-sync window bounds the skew to a couple of tiles, so the race only bites at `B*S ≤ 2` — it passed under `--dev` and failed in production on exactly the narrow-W / single-tile-row shapes. | **+1 tile** (2 KB), constant — scales with nothing. |
+| **Every CB is declared on ONE common core-range set** (the union of the active row-group rects), so `cb_gathered_partials` and `cb_rms_bcast` are allocated on non-root cores too. | Both cross-core mechanisms need a peer's L1 address to be derivable from the local one: the gather's destination is the root's `cb_gathered_partials` base, and `mcast_pipe` *requires* `dst_l1` (the `cb_rms_recip` landing) to be identical on every receiver (`mcast_pipe.hpp:44-45`). A per-core-varying CB set would give per-core-varying addresses. | **+`(s+1)·B` tiles** on non-root cores when `s > 1`. The design already told the host to size on the union (`fits()` is evaluated with `is_root=True`), so the *budget* is unchanged — only the allocation is now literal rather than notional. |
+| **`cb_input_tiles` capacity is EXACTLY `B*S`, never more.** | The in-place rewrite needs `get_write_ptr() == get_read_ptr()`, which only holds when the CB is exactly full. A depth-2 `cb_input_tiles` would silently write `x·r` to the wrong half. This *reinforces* the design's `in_cb_depth = 1`; the overlap perf lamp must therefore be measured as "smaller `block_rows` + a second buffer", not "same block, deeper CB". | none (this is the design's value, now load-bearing) |
+
+Additionally the reader pays a **one-time** NoC zero-fill of the regions the
+per-block reads never touch — the tail tiles of a ragged hidden slice
+(`cb_input_tiles`) and the W-gap inside every `cb_rm_stage_in` stick. It is
+once-per-kernel and costs no capacity, because those bytes are inside buffers
+the ledger already accounts for and are never rewritten (capacity == live set,
+so every block reuses the same physical pages).
+
 ## The ledger
 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
@@ -70,11 +89,10 @@ footprint_tiles(B, S, s, layout, has_gamma, is_root)
   =            B * S                      # cb_input_tiles          scales with row × hidden
   + (has_gamma ? S : 0)                   # cb_gamma_tiles          scales with hidden
   +            B                          # cb_sq_partials          scales with row
-  + (s > 1 ? B : 0)                       # cb_slice_stat           scales with row
   + (is_root && s > 1 ? s * B : 0)        # cb_gathered_partials    scales with row × contributor
-  + (is_root && s > 1 ? B : 0)            # cb_rms_bcast            scales with row
+  + (s > 1 ? B : 0)                       # cb_rms_bcast            scales with row
   +            B                          # cb_rms_recip            scales with row
-  +            2                          # cb_scaler + cb_w_mask   scales with nothing
+  +            3                          # cb_scaler + cb_w_mask + cb_thread_sync (scales with nothing)
   + (layout == ROW_MAJOR                  # the two paths are exclusive:
        ? (rm_in_depth + rm_out_depth) * S #   rm staging            scales with hidden × depth
        : out_cb_depth * S)                #   cb_output_tiles       scales with hidden × depth

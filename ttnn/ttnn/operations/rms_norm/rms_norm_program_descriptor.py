@@ -60,6 +60,7 @@ CB_W_MASK = 8
 CB_OUTPUT_TILES = 9
 CB_RM_STAGE_IN = 10
 CB_RM_STAGE_OUT = 11
+CB_THREAD_SYNC = 12  # 1 page; carries no data, only the PACK->UNPACK edge for in-place handoffs
 
 # ---------------------------------------------------------------------------
 # Semaphore ids
@@ -129,7 +130,7 @@ def _footprint_bytes(block_rows, slice_tiles, num_slices, *, is_row_major, has_g
         total += s * b * bytes_["stat_tile"]  # cb_gathered_partials
         total += b * bytes_["stat_tile"]  # cb_rms_bcast
     total += b * bytes_["stat_tile"]  # cb_rms_recip
-    total += 2 * bytes_["bf16_tile"]  # cb_scaler + cb_w_mask
+    total += 3 * bytes_["bf16_tile"]  # cb_scaler + cb_w_mask + cb_thread_sync
     if is_row_major:
         total += RM_IN_DEPTH * s_ * bytes_["in_tile"]  # cb_rm_stage_in
         total += RM_OUT_DEPTH * s_ * bytes_["out_tile"]  # cb_rm_stage_out
@@ -349,6 +350,7 @@ def create_program_descriptor(
         _cb(CB_RMS_RECIP, B, stat_tile, ttnn.float32),
         _cb(CB_SCALER, 1, bf16_tile, ttnn.bfloat16),
         _cb(CB_W_MASK, 1, bf16_tile, ttnn.bfloat16),
+        _cb(CB_THREAD_SYNC, 1, bf16_tile, ttnn.bfloat16),
     ]
     if has_gamma:
         cbs.append(_cb(CB_GAMMA_TILES, S, gamma_tile, gamma.dtype))
