@@ -801,6 +801,38 @@ void PerfDebugProfiler::start(const std::shared_ptr<distributed::MeshDevice>& me
         if (auto it = self_zone_cores_.find(ctx.chip_id); it != self_zone_cores_.end() && !it->second.empty()) {
             tracy_->PreCreateContexts(ctx.chip_id, it->second);
         }
+        // Give each drainer's rows its ROLE, so a plot reads "DRISC 9-9 FILLER" instead of coordinates the
+        // reader has to map back to a job by hand. String literals: the role text is interned into a plot
+        // name whose pointer the SERVER dereferences, so it has to outlive everything.
+        if (tracy_ != nullptr) {
+            for (uint32_t d = 0; d < kMaxDrisc; d++) {
+                if (ctx.drain_program[d] == nullptr) {
+                    continue;
+                }
+                const char* role = ctx.role[d] == kRoleFiller ? "FILLER"
+                                   : ctx.role[d] == kRoleMover ? "MOVER"
+                                                               : "DRAINER";
+                // TRANSLATE: the handler keys on NOC0 coords (that is what a decoded event carries), while
+                // drisc_virtual is the VIRTUAL space. Registering the virtual pair would look up nothing and
+                // the label would silently fall back to bare coordinates -- the failure would have been an
+                // absent word, not an error. virt_to_noc0 exists for exactly this reason.
+                const auto nit = ctx.virt_to_noc0.find(
+                    (static_cast<uint64_t>(ctx.drisc_virtual[d].x) << 32) |
+                    static_cast<uint64_t>(ctx.drisc_virtual[d].y));
+                if (nit == ctx.virt_to_noc0.end()) {
+                    log_warning(
+                        tt::LogMetal,
+                        "[perf-debug profiler] DRISC {} at virtual ({},{}) has no NOC0 mapping -- its plot rows "
+                        "will be labelled by coordinate only, without {}",
+                        d,
+                        ctx.drisc_virtual[d].x,
+                        ctx.drisc_virtual[d].y,
+                        role);
+                    continue;
+                }
+                tracy_->SetDriscRole(ctx.chip_id, nit->second.first, nit->second.second, role);
+            }
+        }
         ctx.active = true;
         devices_.push_back(std::move(ctx));
     }
@@ -3316,6 +3348,19 @@ void PerfDebugProfiler::stop() {
             // number for both is the wrong-population trap this file has been burned by twice.
             if (res[128] != 0) {
                 const uint32_t wbytes = res[129];  // NOC_WORD_BYTES, from the device header -- never hardcoded
+                // The Tracy PLOT path cannot afford a per-sample lookup, so it carries kNocWordBytes = 64 as a
+                // constant -- the one assumed input in an otherwise measured chain. Cross-check it against the
+                // device's own value here and say so loudly on a mismatch, otherwise every NoC GB/s plot would
+                // be silently mis-scaled while this block stayed correct.
+                if (wbytes != 64u) {
+                    log_error(
+                        tt::LogMetal,
+                        "[perf-debug profiler] NOC_WORD_BYTES is {} on device but the Tracy plot path assumes 64 "
+                        "-- every NoC GB/s plot is scaled by {}x. Fix kNocWordBytes in "
+                        "perf_debug_profiler_tracy_handler.cpp.",
+                        wbytes,
+                        wbytes / 64.0);
+                }
                 auto q = [&](uint32_t base, uint32_t noc, uint32_t k) {
                     const uint32_t o = base + (noc * 4u + k) * 2u;
                     return (static_cast<uint64_t>(res[o + 1]) << 32) | res[o];

@@ -4,6 +4,9 @@
 
 #include "perf_debug_profiler_tracy_handler.hpp"
 
+#include <cmath>
+#include <cstring>
+
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
 
@@ -111,6 +114,10 @@ TracyTTCtx PerfDebugTracyHandler::GetOrCreateContext(
 #else
     return nullptr;
 #endif
+}
+
+void PerfDebugTracyHandler::SetDriscRole(uint32_t chip_id, uint32_t noc0_x, uint32_t noc0_y, const char* role) {
+    drisc_roles_[ContextKey(chip_id, noc0_x, noc0_y)] = role;
 }
 
 void PerfDebugTracyHandler::PreCreateContexts(
@@ -292,34 +299,108 @@ void PerfDebugTracyHandler::HandleWorkerEvent([[maybe_unused]] const perf_debug:
         const int64_t tsc =
             static_cast<int64_t>((dev_ns - anchor_ns) / timer_mul) + static_cast<int64_t>(a.host_start);
 
+        const uint64_t ck = ContextKey(event.chip_id, event.core_noc0_x, event.core_noc0_y);
         // Payload order is the shared contract in profiler_common.h (SpscNocFpWord). The consumer packed each
         // pair hi-word first, so values[0] = rd_words<<32 | rd_txns and values[1] = wr_words<<32 | wr_txns.
         const uint64_t rd_words = event.values[0] >> 32, rd_txns = event.values[0] & 0xFFFFFFFFu;
         const uint64_t wr_words = event.values[1] >> 32, wr_txns = event.values[1] & 0xFFFFFFFFu;
-        const double rd_kb = static_cast<double>(rd_words) * kNocWordBytes / 1024.0;
-        const double wr_kb = static_cast<double>(wr_words) * kNocWordBytes / 1024.0;
-
-        const uint64_t ck = ContextKey(event.chip_id, event.core_noc0_x, event.core_noc0_y);
-        const std::string who = fmt::format("DRISC {}-{}", event.core_noc0_x, event.core_noc0_y);
-        tracy::Profiler::PlotDataAt(intern_plot_name(ck * 8 + 0, who + " NoC rd KB/sweep"), rd_kb, tsc);
-        tracy::Profiler::PlotDataAt(intern_plot_name(ck * 8 + 1, who + " NoC wr KB/sweep"), wr_kb, tsc);
-        tracy::Profiler::PlotDataAt(
-            intern_plot_name(ck * 8 + 2, who + " NoC rd txns/sweep"), static_cast<int64_t>(rd_txns), tsc);
-        tracy::Profiler::PlotDataAt(
-            intern_plot_name(ck * 8 + 3, who + " NoC wr txns/sweep"), static_cast<int64_t>(wr_txns), tsc);
-
-        // DERIVED AGGREGATE: the sum over drainers of each one's most recent per-sweep bytes. Stated plainly
-        // because it is not a measurement -- the six drainers sweep independently, so there is no instant at
-        // which all six sampled together. It answers "roughly how much NoC is the profiler moving right now"
-        // and must not be read as a synchronous total.
+        // RATE, not per-sweep volume. The denominator is the SAMPLING INTERVAL -- exactly the window this
+        // counter delta accumulated over -- so it is the honest divisor. Per-sweep volume was not comparable
+        // across roles: a filler's ~307 KB lands over a ~17 us sweep and a mover's ~74 KB over ~1.4 us, so the
+        // row heights INVERTED the real bandwidths (~18 GB/s vs ~53 GB/s).
+        //
+        // bytes/ns IS GB/s with GB = 10^9 B, so no scale factor is needed. Decimal GB, not GiB.
+        double dt_ns = 0.0;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            nocfp_last_kb_[ck] = rd_kb + wr_kb;
-            double total = 0.0;
-            for (const auto& [k, v] : nocfp_last_kb_) {
-                total += v;
+            const auto pit = nocfp_last_ns_.find(ck);
+            if (pit != nocfp_last_ns_.end()) {
+                dt_ns = dev_ns - pit->second;
             }
-            tracy::Profiler::PlotDataAt(intern_plot_name(1, "DRISC all NoC KB/sweep (sum of latest)"), total, tsc);
+            nocfp_last_ns_[ck] = dev_ns;
+        }
+        if (dt_ns <= 0.0) {
+            return;  // first sample for this drainer (or a non-advancing clock): a rate needs an interval
+        }
+        // Two decimals. Tracy's ConfigurePlot exposes type/step/fill/colour but NO precision, so the only
+        // lever is the value itself -- quantise here and the GUI has nothing longer to print.
+        //
+        // The cost, stated because it is a floor-to-zero and this code has been bitten by silent zeros: any
+        // rate below 0.005 GB/s (5 MB/s) renders as 0.00 and becomes indistinguishable from "no traffic". The
+        // smallest real value here is a mover's idle sweep -- 8 B of head polling over ~1.3 us = 0.006 GB/s --
+        // which survives, but only just. If a future sampler runs at a longer interval, check this again.
+        const auto r2 = [](double v) { return std::round(v * 100.0) / 100.0; };
+        const double rd_gbps = r2(static_cast<double>(rd_words) * kNocWordBytes / dt_ns);
+        const double wr_gbps = r2(static_cast<double>(wr_words) * kNocWordBytes / dt_ns);
+        const double rd_mtxns = r2(static_cast<double>(rd_txns) * 1000.0 / dt_ns);  // txns/ns * 1e9 / 1e6
+        const double wr_mtxns = r2(static_cast<double>(wr_txns) * 1000.0 / dt_ns);
+
+        // Role in the label, because the two roles share plot NAMES but not meanings: a filler's rd is a
+        // 10,496 B span out of a worker's L1, a mover's is a frame run out of DRAM, and their write sides are
+        // DRAM versus the PCIe tile. Reading one row's scale onto the other is the mistake this prevents --
+        // the same reason the zone colours are per-role.
+        const auto rit = drisc_roles_.find(ck);
+        const std::string who = rit != drisc_roles_.end()
+                                    ? fmt::format("DRISC {}-{} {}", event.core_noc0_x, event.core_noc0_y, rit->second)
+                                    : fmt::format("DRISC {}-{}", event.core_noc0_x, event.core_noc0_y);
+        tracy::Profiler::PlotDataAt(intern_plot_name(ck * 8 + 0, who + " NoC rd GB/s"), rd_gbps, tsc);
+        tracy::Profiler::PlotDataAt(intern_plot_name(ck * 8 + 1, who + " NoC wr GB/s"), wr_gbps, tsc);
+        tracy::Profiler::PlotDataAt(intern_plot_name(ck * 8 + 2, who + " NoC rd Mtxn/s"), rd_mtxns, tsc);
+        tracy::Profiler::PlotDataAt(intern_plot_name(ck * 8 + 3, who + " NoC wr Mtxn/s"), wr_mtxns, tsc);
+
+        // DERIVED AGGREGATE, SPLIT BY ROLE. Sum over the drainers of one role of each one's most recent
+        // per-sweep bytes. Still not a measurement -- drainers sweep independently, so no instant exists at
+        // which all of them sampled together -- but split it is at least a sum of LIKE quantities.
+        //
+        // The single all-drainer total this replaces was actively misleading. It added ~307 kB/sweep from a
+        // filler to ~0.6 kB from an idle mover, so the row swung between roughly 2,000 and 124 depending on
+        // WHICH drainer's sample happened to arrive, and since it was emitted on every arrival from any of the
+        // six it produced pairs of points at one x with wildly different values. Same lesson as the per-role
+        // zone colours and the role in these plot names: the two roles share units but not meaning, and adding
+        // them together produces a number that describes neither.
+        //
+        // NOTE what this does NOT fix: two drainers of the SAME role can still quantise onto one TSC tick
+        // (the conversion divides by timer_mul and truncates), so a role row can carry two points at one x.
+        // Within a role those values are comparable, so it reads as sample noise rather than a 16x cliff.
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            nocfp_last_gbps_[ck] = rd_gbps + wr_gbps;
+            // Bucket by role rather than summing everything. A drainer whose role was never registered lands
+            // in its own "UNLABELLED" bucket instead of being folded into one of the real ones.
+            const char* my_role = rit != drisc_roles_.end() ? rit->second : "UNLABELLED";
+            double role_total = 0.0;
+            for (const auto& [k, v] : nocfp_last_gbps_) {
+                const auto krit = drisc_roles_.find(k);
+                const char* kr = krit != drisc_roles_.end() ? krit->second : "UNLABELLED";
+                if (std::strcmp(kr, my_role) == 0) {
+                    role_total += v;
+                }
+            }
+            // Core count for the LABEL comes from the registered roles, not from how many have sampled so far.
+            // nocfp_last_kb_ fills in as samples arrive, so counting it would put "(1 cores)" in the name that
+            // gets interned first and keep it forever -- the name must be stable from the first emission.
+            uint32_t role_n = 0;
+            for (const auto& [k, r] : drisc_roles_) {
+                if (std::strcmp(r, my_role) == 0) {
+                    role_n++;
+                }
+            }
+            // Intern keys for DERIVED rows live in a reserved high range, because the per-drainer keys are
+            // `ck * 8 + series` and ContextKey(chip 0, x 0, y 0) is ZERO -- so mover 0-0's four plots occupy
+            // keys 0..3. Small integers for derived rows therefore ALIAS them, and intern_plot_name keeps the
+            // first name seen for a key, so a row vanishes with no error. That is exactly what happened: the
+            // single all-drainer aggregate used key 1 and silently swallowed "DRISC 0-0 MOVER NoC wr KB/sweep",
+            // which read as an absent row rather than a fault.
+            constexpr uint64_t kDerivedKeyBase = 1ull << 60;
+            const uint64_t role_key = kDerivedKeyBase + (std::strcmp(my_role, "FILLER") == 0   ? 0u
+                                                         : std::strcmp(my_role, "MOVER") == 0 ? 1u
+                                                                                              : 2u);
+            role_total = std::round(role_total * 100.0) / 100.0;  // a sum of 2dp values can still carry fp dust
+            tracy::Profiler::PlotDataAt(
+                intern_plot_name(role_key, fmt::format("DRISC {} total NoC GB/s ({} cores, sum of latest)",
+                                                       my_role, role_n)),
+                role_total,
+                tsc);
         }
     }
 #endif
