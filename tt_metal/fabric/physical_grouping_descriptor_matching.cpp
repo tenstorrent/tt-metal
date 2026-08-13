@@ -785,19 +785,6 @@ void process_higher_layer_and_recurse(
 
 namespace {
 
-std::set<uint32_t> get_mesh_ids_for_mgd_instance_name(
-    const MeshGraphDescriptor& mesh_graph_descriptor, const std::string& instance_name) {
-    std::set<uint32_t> mesh_ids;
-    const auto& instance_ids = mesh_graph_descriptor.instances_by_name(instance_name);
-    for (const GlobalNodeId global_id : instance_ids) {
-        const auto& instance = mesh_graph_descriptor.get_instance(global_id);
-        if (instance.kind == NodeKind::Mesh || instance.kind == NodeKind::Switch) {
-            mesh_ids.insert(instance.local_id);
-        }
-    }
-    return mesh_ids;
-}
-
 std::set<uint32_t> find_pgd_nodes_at_asic_position(
     const GroupingInfo& pgd_grouping, const tt::tt_metal::ASICPosition& position) {
     std::set<uint32_t> pgd_nodes;
@@ -834,35 +821,10 @@ std::map<LogicalChipId, tt::tt_metal::ASICPosition> compose_mesh_node_to_asic_po
     return node_to_position;
 }
 
-std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>> filter_pinnings_for_mesh_ids(
-    const std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>>& pinnings,
-    const std::set<uint32_t>& applicable_mesh_ids) {
-    if (!pinnings.has_value()) {
-        return std::nullopt;
-    }
-    std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> filtered;
-    filtered.reserve(pinnings->size());
-    for (const auto& group : *pinnings) {
-        tt::tt_metal::experimental::tt_fabric::PinningConstraint filtered_group;
-        filtered_group.asic_positions = group.asic_positions;
-        for (const auto& fabric_node : group.fabric_nodes) {
-            if (applicable_mesh_ids.contains(fabric_node.mesh_id.get())) {
-                filtered_group.fabric_nodes.push_back(fabric_node);
-            }
-        }
-        if (!filtered_group.fabric_nodes.empty()) {
-            filtered.push_back(std::move(filtered_group));
-        }
-    }
-    if (filtered.empty()) {
-        return std::nullopt;
-    }
-    return filtered;
-}
-
 // Returns the number of required constraints added (one per many-to-many pinning group that resolved to >=1 PGD
-// node per side). May be 0 even when `pinnings` is non-empty (e.g. no pinned ASIC position maps to a PGD node in
-// this grouping); the caller skips that PGD variant when pinnings were required.
+// node per side). Can be fewer than `pinnings.size()` when a group's pinned ASIC positions map to no PGD node in
+// this grouping, or when a group is unsatisfiable here; the caller requires every group to land and skips the PGD
+// variant otherwise.
 std::size_t add_mgd_to_pgd_asic_position_pinning_constraints(
     MappingConstraints<uint32_t, uint32_t>& constraints,
     const GroupingInfo& pgd_grouping,
@@ -879,7 +841,9 @@ std::size_t add_mgd_to_pgd_asic_position_pinning_constraints(
             pgd_nodes.insert(found_pgd_nodes.begin(), found_pgd_nodes.end());
         }
         if (!mgd_nodes.empty() && !pgd_nodes.empty()) {
-            constraints.add_required_constraint(mgd_nodes, pgd_nodes);
+            if (!constraints.add_required_constraint(mgd_nodes, pgd_nodes)) {
+                return 0;
+            }
             ++constraints_added;
         }
     }
@@ -945,10 +909,6 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
         const std::string& instance_name = mgd_instance_key;  // Use unique instance key (includes mesh_id)
         const GroupingInfo& mgd_grouping_info = mgd_mesh_grouping;
         const std::string& instance_type = mgd_grouping_info.type;  // Should be "MESH"
-
-        const std::set<uint32_t> applicable_mesh_ids =
-            get_mesh_ids_for_mgd_instance_name(mesh_graph_descriptor, instance_name);
-        const auto applicable_pinnings = filter_pinnings_for_mesh_ids(pinnings, applicable_mesh_ids);
 
         // Required nodes from MGD adjacency graph (this represents the topology pattern to match)
         size_t required_nodes = mgd_grouping_info.adjacency_graph.get_nodes().size();
@@ -1049,11 +1009,12 @@ ValidGroupingsMap PhysicalGroupingDescriptor::get_valid_groupings_for_mgd(
                 }
 
                 MappingConstraints<uint32_t, uint32_t> constraints;
-                if (applicable_pinnings.has_value()) {
-                    const std::size_t pinning_constraints_added = add_mgd_to_pgd_asic_position_pinning_constraints(
-                        constraints, grouping_info, *applicable_pinnings);
-                    // Ok if no pinning constraints were added, means this grouping might not be best fit
-                    if (pinning_constraints_added == 0) {
+                if (pinnings.has_value() && !pinnings->empty()) {
+                    const std::size_t pinning_constraints_added =
+                        add_mgd_to_pgd_asic_position_pinning_constraints(constraints, grouping_info, *pinnings);
+                    // Every pinning group must be representable on this grouping; a partial application would
+                    // let the solve satisfy only some of the pins, so this grouping is not a fit.
+                    if (pinning_constraints_added != pinnings->size()) {
                         continue;
                     }
                 } else {

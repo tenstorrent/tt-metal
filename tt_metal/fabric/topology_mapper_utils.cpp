@@ -89,26 +89,17 @@ std::vector<PinningConstraint> get_galaxy_fixed_asic_position_pinnings_for_mesh(
 
 namespace {
 
-// Apply many-to-many pinning groups as a single required constraint per group. Each group is applied
-// independently, filtered down to what exists here: fabric nodes belonging to another logical mesh are
-// dropped, as are ASIC positions absent from this physical mesh. A group left with nothing to say is
-// skipped, so a group naming positions that only exist on some meshes constrains just those meshes. When
-// `require_present_positions` is true (map_mesh_to_physical), a group whose positions are ALL absent is an
-// error rather than a silent skip.
+// Apply many-to-many pinning groups as a single required constraint per group. Groups are applied as
+// written, without filtering to the mesh being mapped: every group must resolve to at least one ASIC
+// present in this physical mesh and must stay satisfiable alongside the constraints already added.
+// Otherwise an error is returned so the caller skips this mesh pairing and tries the next candidate.
 std::optional<std::string> apply_pinning_groups(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const std::vector<PinningConstraint>& pinning_groups,
     MeshId logical_mesh_id,
-    const std::map<AsicPosition, std::set<tt::tt_metal::AsicID>>& asic_positions_to_asic_ids,
-    bool require_present_positions) {
+    const std::map<AsicPosition, std::set<tt::tt_metal::AsicID>>& asic_positions_to_asic_ids) {
     for (const auto& group : pinning_groups) {
-        std::set<FabricNodeId> fabric_nodes;
-        for (const auto& fabric_node : group.fabric_nodes) {
-            if (fabric_node.mesh_id != logical_mesh_id) {
-                continue;
-            }
-            fabric_nodes.insert(fabric_node);
-        }
+        const std::set<FabricNodeId> fabric_nodes(group.fabric_nodes.begin(), group.fabric_nodes.end());
         if (fabric_nodes.empty()) {
             continue;
         }
@@ -128,13 +119,10 @@ std::optional<std::string> apply_pinning_groups(
         }
 
         if (asic_ids.empty()) {
-            if (require_present_positions) {
-                return fmt::format(
-                    "Pinned ASIC positions of a pinning group were not found among physical ASICs participating in "
-                    "mesh {}",
-                    logical_mesh_id.get());
-            }
-            continue;
+            return fmt::format(
+                "Pinned ASIC positions of a pinning group were not found among physical ASICs participating in "
+                "mesh {}",
+                logical_mesh_id.get());
         }
 
         if (!intra_mesh_constraints.add_required_constraint(fabric_nodes, asic_ids)) {
@@ -203,7 +191,7 @@ TopologyMappingResult map_mesh_to_physical(
         }
 
         if (auto pinning_error =
-                apply_pinning_groups(constraints, config.pinnings, mesh_id, asic_positions_to_asic_ids, true)) {
+                apply_pinning_groups(constraints, config.pinnings, mesh_id, asic_positions_to_asic_ids)) {
             result.success = false;
             result.error_message = *pinning_error;
             return result;
@@ -2897,15 +2885,14 @@ void add_rank_binding_constraints(
 }
 
 // Helper function to build pinning constraints.
-// Only applies pinnings whose ASIC positions exist on the current physical grouping; absent positions are
-// skipped. Returns an error if a present pinning conflicts with rank bindings (spill).
+// Returns an error if a pinning group cannot be placed on the current physical grouping (no pinned position
+// exists here) or conflicts with the constraints already added, e.g. rank bindings (spill).
 std::optional<std::string> add_pinning_constraints(
     ::tt::tt_fabric::MappingConstraints<FabricNodeId, tt::tt_metal::AsicID>& intra_mesh_constraints,
     const std::map<AsicPosition, std::set<tt::tt_metal::AsicID>>& asic_positions_to_asic_ids,
     const TopologyMappingConfig& config,
     MeshId logical_mesh_id) {
-    return apply_pinning_groups(
-        intra_mesh_constraints, config.pinnings, logical_mesh_id, asic_positions_to_asic_ids, false);
+    return apply_pinning_groups(intra_mesh_constraints, config.pinnings, logical_mesh_id, asic_positions_to_asic_ids);
 }
 
 // Add the PGD-derived layout as PREFERRED (soft) intra-mesh constraints. Must be called AFTER the hard
