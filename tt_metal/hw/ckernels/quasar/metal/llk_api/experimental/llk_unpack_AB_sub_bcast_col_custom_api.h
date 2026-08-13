@@ -17,7 +17,7 @@
 /**
  * @brief Init the unpacker for the SDPA blocked bcast-col SUB path.
  *
- * @param operandA: DFB id of srcA; its tile shape is validated (full 32x32 tiles only).
+ * @param operandA: DFB id of srcA; its tile shape is validated (32x32 or 16x32 tiles).
  * @note Run before @ref llk_unpack_AB_sub_bcast_col_custom on this thread.
  */
 inline void llk_unpack_AB_sub_bcast_col_init_custom(const std::uint32_t operandA) {

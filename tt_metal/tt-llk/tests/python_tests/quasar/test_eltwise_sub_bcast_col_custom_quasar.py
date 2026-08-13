@@ -56,33 +56,42 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
 )
-from helpers.tile_constants import FACE_C_DIM, get_tile_params
+from helpers.tile_constants import FACE_C_DIM, MAX_NUM_FACES, get_tile_params
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
 logger = logging.getLogger(__name__)
 
-# Full 32x32 tiles only: 4 faces of 16x16 in a 2x2 grid.
-TILE_DIMENSIONS = [32, 32]
-FACE_R_DIM, NUM_FACES_R, NUM_FACES_C = get_tile_params(TILE_DIMENSIONS)
-NUM_FACES_TOTAL = NUM_FACES_R * NUM_FACES_C
+# The two shapes the LLK supports: a full 32x32 tile (4 faces of 16x16 in a 2x2 grid) and the 16x32
+# tiny tile (1x2 faces). The math walk covers a face-row with four 8-row ops and reads the face-row's
+# first SrcB face twice, so it needs two full 16-row faces per face-row. This rules out narrow
+# (32x16) and short-face shapes by construction; see validate_tensor_shape_sub_bcast_col_custom_.
+TILE_DIMENSIONS = [[32, 32], [16, 32]]
 
 # (ct_dim, num_blocks), ascending by reuse depth so the first red variant is diagnostic.
-# ct_dim=8 fills a 16-bit half-dest exactly (MAX_TILES_IN_HALF_DEST); the 2-block case adds
-# dest-section switching and a per-block SrcB re-unpack. A 32-bit dest halves that capacity,
-# so the deepest shapes are filtered out per (dest_sync, dest_acc) below.
+# ct_dim=8 fills a 16-bit half-dest exactly at 32x32 (MAX_TILES_IN_HALF_DEST); the 2-block case adds
+# dest-section switching and a per-block SrcB re-unpack. A 32-bit dest halves that capacity and a
+# 2-face tile doubles it, so the deepest shapes are filtered per (dest_sync, dest_acc, tile) below.
 _BLOCK_SHAPES = [(1, 1), (2, 1), (4, 1), (8, 1), (8, 2)]
 
 
-def _block_shapes_fitting_dest(dest_sync: DestSync, dest_acc: DestAccumulation):
+def _block_shapes_fitting_dest(
+    dest_sync: DestSync, dest_acc: DestAccumulation, tile_dimensions: list
+):
     """Keep only the shapes whose ct_dim tiles all fit in one dest section.
 
     Math lands every tile of a block in its own dest slot starting at index 0, so ct_dim is
     bounded by the section capacity: 8 tiles for Half / 16 for Full on a 16-bit dest, halved
-    to 4 / 8 when ``dest_acc=Yes`` widens dest to 32 bits.
+    to 4 / 8 when ``dest_acc=Yes`` widens dest to 32 bits. A tile with fewer than the full 2x2
+    face grid owns proportionally fewer dest rows, so proportionally more of them fit.
     """
+    _, num_faces_r, num_faces_c = get_tile_params(tile_dimensions)
     capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
-    max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    max_tiles = (
+        DEST_SYNC_TILE_LIMITS[dest_sync]
+        * (MAX_NUM_FACES // (num_faces_r * num_faces_c))
+        // capacity_divisor
+    )
     return [shape for shape in _BLOCK_SHAPES if shape[0] <= max_tiles]
 
 
@@ -94,8 +103,9 @@ def _block_shapes_fitting_dest(dest_sync: DestSync, dest_acc: DestAccumulation):
     dest_acc=lambda formats: get_valid_dest_accumulation_modes(formats),
     implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     dest_sync=[DestSync.Half, DestSync.Full],
-    block_shape=lambda dest_sync, dest_acc: _block_shapes_fitting_dest(
-        dest_sync, dest_acc
+    tile_dimensions=TILE_DIMENSIONS,
+    block_shape=lambda dest_sync, dest_acc, tile_dimensions: _block_shapes_fitting_dest(
+        dest_sync, dest_acc, tile_dimensions
     ),
 )
 def test_eltwise_sub_bcast_col_custom_quasar(
@@ -103,18 +113,22 @@ def test_eltwise_sub_bcast_col_custom_quasar(
     dest_acc,
     implied_math_format,
     dest_sync,
+    tile_dimensions,
     block_shape,
     boot_mode=BootMode.DEFAULT,
 ):
     ct_dim, num_blocks = block_shape
     total_tiles = ct_dim * num_blocks
+    face_r_dim, num_faces_r, num_faces_c = get_tile_params(tile_dimensions)
+    num_faces_total = num_faces_r * num_faces_c
 
     # srcA is a single row of ct_dim*num_blocks column tiles; srcB is the one reused tile.
-    input_dimensions_A = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * total_tiles]
-    input_dimensions_B = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1]]
+    input_dimensions_A = [tile_dimensions[0], tile_dimensions[1] * total_tiles]
+    input_dimensions_B = [tile_dimensions[0], tile_dimensions[1]]
 
     logger.info(
-        "ct_dim=%d num_blocks=%d srcA=%s srcB=%s",
+        "tile=%s ct_dim=%d num_blocks=%d srcA=%s srcB=%s",
+        tile_dimensions,
         ct_dim,
         num_blocks,
         input_dimensions_A,
@@ -126,24 +140,24 @@ def test_eltwise_sub_bcast_col_custom_quasar(
         input_dimensions_A=input_dimensions_A,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions_B,
-        tile_dimensions=TILE_DIMENSIONS,
+        tile_dimensions=tile_dimensions,
     )
 
     src_A_tilized = tilize_block(
         src_A,
         dimensions=input_dimensions_A,
         stimuli_format=formats.input_format,
-        num_faces=NUM_FACES_TOTAL,
-        tile_dimensions=TILE_DIMENSIONS,
-        face_r_dim=FACE_R_DIM,
+        num_faces=num_faces_total,
+        tile_dimensions=tile_dimensions,
+        face_r_dim=face_r_dim,
     ).flatten()
     src_B_tilized = tilize_block(
         src_B,
         dimensions=input_dimensions_B,
         stimuli_format=formats.input_format,
-        num_faces=NUM_FACES_TOTAL,
-        tile_dimensions=TILE_DIMENSIONS,
-        face_r_dim=FACE_R_DIM,
+        num_faces=num_faces_total,
+        tile_dimensions=tile_dimensions,
+        face_r_dim=face_r_dim,
     ).flatten()
 
     # Column broadcast replicates column 0 of each face-row across the tile. Compute it in
@@ -153,17 +167,17 @@ def test_eltwise_sub_bcast_col_custom_quasar(
         BroadcastType.Column,
         src_B_tilized,
         formats.input_format,
-        num_faces=NUM_FACES_TOTAL,
+        num_faces=num_faces_total,
         tile_cnt=tile_cnt_B,
-        face_r_dim=FACE_R_DIM,
+        face_r_dim=face_r_dim,
     )
     src_B_golden = untilize_block(
         src_B_broadcasted_tilized,
         formats.input_format,
         input_dimensions_B,
-        num_faces=NUM_FACES_TOTAL,
-        tile_dimensions=TILE_DIMENSIONS,
-        face_r_dim=FACE_R_DIM,
+        num_faces=num_faces_total,
+        tile_dimensions=tile_dimensions,
+        face_r_dim=face_r_dim,
     ).flatten()
 
     # The same srcB tile is subtracted from every srcA column tile.
@@ -202,10 +216,10 @@ def test_eltwise_sub_bcast_col_custom_quasar(
                 input_num_blocks=num_blocks,
                 output_num_blocks=num_blocks,
             ),
-            NUM_FACES(NUM_FACES_TOTAL),
-            NUM_FACES_R_DIM(NUM_FACES_R, NUM_FACES_R),
-            NUM_FACES_C_DIM(NUM_FACES_C, NUM_FACES_C),
-            TEST_FACE_DIMS(face_r_dim=FACE_R_DIM, face_c_dim=FACE_C_DIM),
+            NUM_FACES(num_faces_total),
+            NUM_FACES_R_DIM(num_faces_r, num_faces_r),
+            NUM_FACES_C_DIM(num_faces_c, num_faces_c),
+            TEST_FACE_DIMS(face_r_dim=face_r_dim, face_c_dim=FACE_C_DIM),
         ],
         variant_stimuli=StimuliConfig(
             src_A_tilized,
@@ -216,9 +230,9 @@ def test_eltwise_sub_bcast_col_custom_quasar(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
-            num_faces=NUM_FACES_TOTAL,
-            face_r_dim=FACE_R_DIM,
-            tile_dimensions=TILE_DIMENSIONS,
+            num_faces=num_faces_total,
+            face_r_dim=face_r_dim,
+            tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
         unpack_to_dest=False,
@@ -232,9 +246,9 @@ def test_eltwise_sub_bcast_col_custom_quasar(
         res_from_L1,
         formats.output_format,
         input_dimensions_A,
-        num_faces=NUM_FACES_TOTAL,
-        tile_dimensions=TILE_DIMENSIONS,
-        face_r_dim=FACE_R_DIM,
+        num_faces=num_faces_total,
+        tile_dimensions=tile_dimensions,
+        face_r_dim=face_r_dim,
     ).flatten()
 
     assert len(res_from_L1) == len(

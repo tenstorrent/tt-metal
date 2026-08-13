@@ -916,6 +916,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixComputeBinaryBroadcastQuasarDfb)
 //   - rt_dim>1 is the only shape that exercises nonzero srcA/srcB tile indices and a nonzero dest
 //     base, so a failure there (with the rt_dim=1 cases green) points at the API wrappers' index
 //     arithmetic rather than the face walk.
+//   - the tiny-tile (16x32) cases come last and mostly repeat a full-tile shape, so a red tiny-tile
+//     case with its full-tile twin green isolates the shape-driven parts (face-row count, dest slot
+//     stride, per-face unpack, buffer-descriptor z_dim).
 TEST_F(QuasarMeshDeviceSingleCardFixture, ComputeSubBcastColCustom) {
     using unit_tests::compute::broadcast::SubBcastColCustomConfig;
 
@@ -930,9 +933,18 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, ComputeSubBcastColCustom) {
         // and srcB tile r and writes dest slots [r * ct_dim, (r + 1) * ct_dim), all inside one
         // acquire. rt_dim * ct_dim is capped by the same half-dest budget as ct_dim above.
         {.ct_dim = 4, .rt_dim = 2, .num_blocks = 1},
-        // No tiny-tile (16x32) cases: the op does not support that shape. Its srcB face traversal
-        // and dest walk assume a full 32-row tile, and the 16x32 case hangs the device. Both Quasar
-        // init LLKs now assert the full-tile shape, so an API caller gets an assert, not a hang.
+        // Tiny 16x32 tiles: one face-row, so the srcB walk runs its four-op face-row block once and
+        // dest slots are 32 rows apart instead of 64. The full-tile shapes above are mirrored one for
+        // one, because the tile shape changes the per-tile unpack (one UNPACR per face on Quasar), the
+        // dest slot stride and the pack granularity all at once. The one shape with no full-tile twin
+        // is ct_dim=16: a 32-row slot means twice as many tiles fit in a dest section, so this is the
+        // only case that reaches the tiny-tile dest budget (and the only one where dst_index + ct_dim
+        // lands exactly on the shape-derived max_dest_tiles bound).
+        {.ct_dim = 1, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 4, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 7, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 16, .num_blocks = 2, .tile_shape = TileShape::TINY_TILE_16x32},
+        {.ct_dim = 4, .rt_dim = 2, .num_blocks = 1, .tile_shape = TileShape::TINY_TILE_16x32},
     };
 
     for (const auto& cfg : cases) {
