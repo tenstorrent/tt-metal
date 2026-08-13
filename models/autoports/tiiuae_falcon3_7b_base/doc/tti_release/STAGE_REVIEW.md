@@ -118,3 +118,33 @@ Verdict: clean-pass
 - Parameter-level spec-test coverage remains unavailable for this custom model;
   the handoff correctly reports that limitation as NA rather than silently
   claiming coverage.
+
+## Runner-side verification remediation — 2026-08-13
+
+- Reproduced `.agents/prompts/model_bringup_multigoal/11-tti-release.check.sh`
+  with `MODEL_DIR=models/autoports/tiiuae_falcon3_7b_base` and
+  `HF_MODEL=tiiuae/Falcon3-7B-Base`; it exited 2 because the valid copied final
+  report was named `release_report_ci_nightly_pass.md`, while the handoff gate
+  requires the native TTI `report_*.md` naming contract.
+- Renamed only that final report to
+  `report_tiiuae__Falcon3-7B-Base_2026-08-13T105032+0000.md`, matching its
+  embedded `report_id`. No model, server, spec, context, raw result, acceptance
+  decision, or report content changed, so rerunning hardware workflows would
+  not add relevant evidence.
+- The first remediation rerun then exposed a second latent handoff-format
+  defect: `RUN_NOTES.md` lacked the gate's literal “Autoport implementation
+  check” label even though its provenance section contained the underlying
+  evidence. A second rerun showed that the gate requires the label and target
+  path on the same physical line; the PASS line was formatted accordingly.
+- The next rerun reached artifact provenance and showed that the gate accepts
+  `run_specs/*.json`, report data containing `code_path`, or a copied
+  `*model*spec*.json`; the canonical final runtime spec was present but named
+  `release_runtime_spec_ci_nightly.json`. Renamed it to
+  `runtime_model_spec_ci_nightly.json` so the unchanged embedded
+  `runtime_model_spec.impl.code_path` is discoverable by the independent gate.
+
+Fresh independent rereview verdict: `clean-pass` with no required work. The
+reviewer confirmed both renamed artifacts are byte-identical to their prior Git
+blobs, the native report filename matches its embedded report ID, the runtime
+spec preserves the autoport/no-Docker/32,768-token contract, the runner exits
+0, and no serving process or copied `.env` remains.

@@ -4,8 +4,9 @@
 
 Stage 11 has a context-preserving nightly-equivalent no-Docker release PASS
 against the generated autoport. The current passing report is
-`release_report_ci_nightly_pass.md`; the detailed final run is documented in
-the last section of this file. The first review's 2,047-token lm-eval adapter
+`report_tiiuae__Falcon3-7B-Base_2026-08-13T105032+0000.md`; the detailed final
+run is documented in the last section of this file. The first review's
+2,047-token lm-eval adapter
 finding was fixed: the regenerated release log records `Using max length 32768
 - 1` for both mandatory evals and ends with zero blockers. Final closure is
 subject only to the independent rereview recorded in `STAGE_REVIEW.md`.
@@ -25,6 +26,8 @@ release evidence.
   `impl.code_path=models/autoports/tiiuae_falcon3_7b_base`, the matching
   `code_link`, and the autoport generator path. No stock `models/tt_transformers`,
   `models/demos`, or packaged implementation was evaluated.
+- Autoport implementation check: PASS — `models/autoports/tiiuae_falcon3_7b_base` is selected.
+  Copied artifacts identify no stock or different autoport implementation.
 - Server mode: external, no Docker, no local TTI server; OpenAI-compatible
   autoport vLLM at `http://127.0.0.1:8000` inside reservation container
   `b30c965c728b`.
@@ -260,7 +263,7 @@ The embedded spec itself contains `workflow=release`,
 `limit_samples_mode=ci-nightly`, `docker_server=false`,
 `local_server=false`, `service_port=8000`, and the autoport implementation and
 context-contract paths. The loaded copy is
-`release_runtime_spec_ci_nightly.json`.
+`runtime_model_spec_ci_nightly.json`.
 
 Final result: PASS, exit code 0, zero blockers and zero waivers. Evals passed
 2/2. Benchmarks passed 1/13 graded rows with 12 explicitly NA coverage rows;
@@ -272,9 +275,9 @@ benchmark traffic provide the available API-path evidence.
 
 Final copied artifacts:
 
-- `release_report_ci_nightly_pass.md`
+- `report_tiiuae__Falcon3-7B-Base_2026-08-13T105032+0000.md`
 - `release_report_data_ci_nightly_pass.json`
-- `release_runtime_spec_ci_nightly.json`
+- `runtime_model_spec_ci_nightly.json`
 - `release_run_ci_nightly.log`
 - `release_target_benchmark_ci_nightly.json`
 - `hf_paired_ci_references.json`
