@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_unpack_binary_broadcast_operands.h"
 #include "llk_unpack_binary_operands.h"
 #include "llk_unpack_common_api.h"
@@ -59,6 +60,8 @@ inline void llk_unpack_AB(
     const std::uint32_t tile_index_b,
     [[maybe_unused]] const std::uint32_t bcast_row_idx = 0) {
     // TODO (tt-metal #42916): Once runtime asserts are added for Quasar, assert that bcast_row_idx is unused
+    LLK_TDMA_GUARD_NOTE_TDMA(operandA);  // TEN-4746: real unpack (UNPACR) disarms these dfbs
+    LLK_TDMA_GUARD_NOTE_TDMA(operandB);
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 

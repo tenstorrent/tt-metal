@@ -452,7 +452,9 @@ class TestConfig:
         TestConfig.OPTIONS_ALL = (
             f"{debug_flag}-O3 "
             "-std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit "
-            "-ffast-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit "
+            "-ffast-math "
+            "-fno-finite-math-only -fsigned-zeros -fno-associative-math "
+            "-fno-exceptions -fno-rtti -fno-use-cxa-atexit "
         )
         TestConfig.WITH_COVERAGE = with_coverage
         StimuliConfig.WITH_COVERAGE = with_coverage
@@ -464,16 +466,23 @@ class TestConfig:
                 "-I../../hw/inc/internal/tt-1xx/wormhole",
                 "-I../../hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines",
                 "-I../../hw/ckernels/wormhole_b0/metal/llk_api",
+                "-I../../hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu",
             ]
         if TestConfig.ARCH == ChipArchitecture.BLACKHOLE:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-1xx/blackhole",
                 "-I../../hw/ckernels/blackhole/metal/llk_api",
+                # Some SFPU kernels include their neighbours unqualified
+                # ("ckernel_sfpu_exp.h") rather than as "llk_sfpu/<name>.h", which only
+                # resolves with this on the path. Listed last so the tt-llk copy still
+                # wins the basenames that exist in both trees.
+                "-I../../hw/ckernels/blackhole/metal/llk_api/llk_sfpu",
             ]
         if TestConfig.ARCH == ChipArchitecture.QUASAR:
             hw_specific_includes = [
                 "-I../../hw/inc/internal/tt-2xx/quasar",
                 "-I../../hw/ckernels/quasar/metal/llk_api",
+                "-I../../hw/ckernels/quasar/metal/llk_api/llk_sfpu",
             ]
 
         if detailed_artefacts:
@@ -511,17 +520,24 @@ class TestConfig:
             f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DKERNEL_BUILD {llk_assert_define}{TestConfig.ARCH_DEFINE} "
             f"{'-DSPEED_OF_LIGHT' if TestConfig.SPEED_OF_LIGHT else ''}"
         )
-        TestConfig.INCLUDES = [
-            "-Isfpi/include",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/llk_lib",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc",
-            f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu",
-            "-I../common",
-            "-I../../hw/inc",
-            "-Ifirmware/riscv/common",
-            "-Ihelpers/include",
-            "-I../../hostdevcommon/api",
-        ] + hw_specific_includes
+        TestConfig.INCLUDES = (
+            [
+                "-Isfpi/include",
+                f"-I../{TestConfig.ARCH_LLK_ROOT}/llk_lib",
+                f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc",
+                f"-I../{TestConfig.ARCH_LLK_ROOT}/common/inc/sfpu",
+                "-I../common",
+                "-I../../hw/inc",
+                "-Ifirmware/riscv/common",
+                "-Ihelpers/include",
+                "-I../../hostdevcommon/api",
+            ]
+            + hw_specific_includes
+            + [
+                # TODO: remove this after kernels get moved into Metal experimental (#52837)
+                "-I../../../ttnn/cpp/ttnn/operations/experimental",
+            ]
+        )
 
     @staticmethod
     def setup_build(
@@ -599,8 +615,13 @@ class TestConfig:
             )
             golden_generators_module.get_golden_generator = get_golden_proxied
 
-        # Always have a fresh build when compiling
-        if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
+        # Always have a fresh build when compiling. Under xdist, only the
+        # controller may remove the shared artifact tree; workers can already
+        # be compiling variants under it.
+        if (
+            TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]
+            and worker_id == "master"
+        ):
             shutil.rmtree(TestConfig.ARTEFACTS_DIR.absolute(), ignore_errors=True)
 
     # === Instance fields and methods ===
@@ -622,6 +643,7 @@ class TestConfig:
         skip_build_header: bool = False,
         compile_time_formats: bool = False,
         requires_device_print: bool = False,
+        expected_nondeterministic: bool = False,
     ):
         self.coverage_build = (
             CoverageBuild.Yes if TestConfig.WITH_COVERAGE else CoverageBuild.No
@@ -654,6 +676,7 @@ class TestConfig:
         self.compile_time_formats = compile_time_formats
         self.dest_acc = dest_acc
         self.requires_device_print = requires_device_print
+        self.expected_nondeterministic = expected_nondeterministic
 
         TILE_SIZES = {
             DataFormat.Bfp8_b: 68,
@@ -873,6 +896,8 @@ class TestConfig:
             "passed_runtimes",
             "current_run_type",
             "temp_elfs",
+            # Host-side determinism-check opt-out; does not affect the compiled kernel.
+            "expected_nondeterministic",
         ]
 
         if not TestConfig.SPEED_OF_LIGHT:
@@ -1707,6 +1732,13 @@ class TestConfig:
             # accumulates onto the previous one. Re-runs are legitimately
             # expected to differ and comparing them would be meaningless.
             return "L1 accumulation makes every run add onto the previous result"
+        if self.expected_nondeterministic:
+            # Negative controls that deliberately run with a corrupt HW config
+            # (e.g. a zeroed addrmod) leave DEST addressing undefined, so the
+            # result is not bit-reproducible by contract. The functional check
+            # (expect_mismatch) still validates the single run; only the
+            # bit-exact re-run comparison is meaningless here.
+            return "variant intentionally exercises undefined hardware state"
         return None
 
     def _bit_exact_check_applies(self) -> bool:

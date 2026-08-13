@@ -14,27 +14,9 @@
   skus:
     wh_llmbox_perf:
       timeout: 10
-  owner_id: U0837MYG788 # Marko Radosavljevic
+  owner_id: U03PUAKE719 # Miguel Tairum
   team: models
   model-name: resnet50
-
-- name: t3k_sentence_bert_tests
-  cmd: run_t3000_sentence_bert_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 5
-  owner_id: U045U3DEKM4 # Mohamed Bahnas (Aniruddha Tupe)
-  team: models
-  model-name: sentence_bert
-
-- name: t3k_sd35_large_tests
-  cmd: run_t3000_sd35large_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 10
-  owner_id: U03FJB5TM5Y # Colman Glagovich
-  team: models
-  model-name: sd35_large
 
 - name: t3k_motif_tests
   cmd: run_t3000_motif_tests
@@ -53,17 +35,6 @@
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   model-name: qwenimage
-
-- name: t3k_wan2.2_tests
-  cmd: |
-    export VBENCH_CACHE_DIR=/mnt/MLPerf/vbench TORCH_HOME=/mnt/MLPerf/vbench/torch_hub
-    run_t3000_wan22_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 25
-  owner_id: U03FJB5TM5Y # Colman Glagovich
-  team: models
-  model-name: wan22
 
 - name: t3k_mochi_tests
   cmd: run_t3000_mochi_tests

@@ -83,6 +83,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     const uint32_t num_output_tiles = row_major ? ht * 2 : 2;
 
     std::vector<DataflowBufferSpec> dfbs;
+    dfbs.reserve(3);
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = CB_IN0,
         .entry_size = src0_single_tile_size,

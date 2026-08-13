@@ -105,9 +105,9 @@ class TopKRouter:
                 dtype=ttnn.bfloat16,
                 cache_file_name=bias_cache_file,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
-                if isinstance(mesh_device, ttnn.MeshDevice)
-                else None,
+                mesh_mapper=(
+                    ttnn.ReplicateTensorToMesh(mesh_device) if isinstance(mesh_device, ttnn.MeshDevice) else None
+                ),
             )
             if build_bias
             else None

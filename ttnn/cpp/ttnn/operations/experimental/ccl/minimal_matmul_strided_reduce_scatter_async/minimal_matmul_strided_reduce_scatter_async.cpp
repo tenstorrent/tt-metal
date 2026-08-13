@@ -33,7 +33,10 @@ std::vector<ttnn::Tensor> minimal_matmul_strided_reduce_scatter_async(
     std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
     const std::optional<const Tensor>& addcmul_input_tensor2,
-    std::optional<tt::tt_metal::DataType> dtype) {
+    std::optional<tt::tt_metal::DataType> dtype,
+    const std::optional<const Tensor>& mm_progress_counters,
+    std::optional<uint32_t> mm_window_blocks,
+    const std::optional<const Tensor>& mm_credit_counters) {
     auto all_outputs = ttnn::prim::minimal_matmul_strided_reduce_scatter_async(
         input_tensor,
         weight_tensor,
@@ -61,7 +64,10 @@ std::vector<ttnn::Tensor> minimal_matmul_strided_reduce_scatter_async(
         fused_ternary_scalar,
         addcmul_input_tensor1,
         addcmul_input_tensor2,
-        dtype);
+        dtype,
+        mm_progress_counters,
+        mm_window_blocks,
+        mm_credit_counters);
 
     return {std::move(all_outputs[0]), std::move(all_outputs[2])};
 }

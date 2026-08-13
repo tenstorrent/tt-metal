@@ -17,7 +17,7 @@
 #include "program_device_map.hpp"        // ProgramTransferInfo
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
-#include "tt-metalium/experimental/tensor/spec/tensor_spec.hpp"  // Metal 2.0 TensorParameter registry
+#include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
@@ -289,6 +289,8 @@ public:
 
     uint32_t add_dataflow_buffer(
         const CoreRangeSet& core_range_set, const experimental::dfb::DataflowBufferConfig& config);
+
+    uint32_t assign_dfb_device_slot(const experimental::dfb::detail::DataflowBufferImpl& dfb) const;
 
     // Declare an alias relationship: secondary shares primary's L1 address.
     void set_dfb_alias(uint32_t primary_id, uint32_t secondary_id);

@@ -20,7 +20,7 @@
   skus:
     wh_n150_civ2:
       timeout: 15
-  owner_id: U07J3K6KS1K # LLK team
+  owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_smoke_blackhole group 1/2
   split_group: 1
@@ -37,7 +37,7 @@
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
-  owner_id: U07J3K6KS1K # LLK team
+  owner_id: U09UC143684 # Nemanja Divnic
 
 - name: llk_smoke_blackhole group 2/2
   split_group: 2
@@ -54,4 +54,4 @@
   skus:
     bh_p150b_civ2_viommu:
       timeout: 15
-  owner_id: U07J3K6KS1K # LLK team
+  owner_id: U09UC143684 # Nemanja Divnic

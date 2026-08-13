@@ -588,6 +588,8 @@ ProgramArtifacts create_no_bcast_artifacts(
     const uint32_t c_entries = c_borrowed ? full_shard_tiles(c, *c.shard_spec()) : 2u;
 
     std::vector<m2::DataflowBufferSpec> dfbs;
+    constexpr uint32_t num_mandatory_dfbs = 3;  // in0, in1, out
+    dfbs.reserve(num_mandatory_dfbs + (has_lhs_act ? 1 : 0) + (has_rhs_act ? 1 : 0));
     dfbs.push_back(
         make_dfb(IN0, a_tile_bytes, a_entries, a_df, a_tile, a_borrowed ? std::optional{T_A} : std::nullopt));
     dfbs.push_back(

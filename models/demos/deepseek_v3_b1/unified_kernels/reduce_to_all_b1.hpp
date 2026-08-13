@@ -507,7 +507,7 @@ struct ReduceToAllB1 {
             pack_reconfig_data_format<true>(CTArgs::scratch_cb);
 
             // R1: local + received_R1
-            add_tiles_init(CTArgs::local_cb, CTArgs::received_cb, true);
+            add_init(CTArgs::local_cb, CTArgs::received_cb, true);
             cb_wait_front(CTArgs::local_cb, CTArgs::num_tiles);
             cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
 
@@ -528,7 +528,7 @@ struct ReduceToAllB1 {
             cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
 
             // R2: reload(R1 sum) + received_R2
-            add_tiles_init(CTArgs::reload_cb, CTArgs::received_cb, true);
+            add_init(CTArgs::reload_cb, CTArgs::received_cb, true);
             cb_wait_front(CTArgs::reload_cb, CTArgs::num_tiles);
             cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
 
@@ -549,7 +549,7 @@ struct ReduceToAllB1 {
             cb_push_back(CTArgs::scratch_cb, CTArgs::num_tiles);
 
             // R3: reload(column sum) + received_R3
-            add_tiles_init(CTArgs::reload_cb, CTArgs::received_cb, true);
+            add_init(CTArgs::reload_cb, CTArgs::received_cb, true);
             cb_wait_front(CTArgs::reload_cb, CTArgs::num_tiles);
             cb_wait_front(CTArgs::received_cb, CTArgs::num_tiles);
 

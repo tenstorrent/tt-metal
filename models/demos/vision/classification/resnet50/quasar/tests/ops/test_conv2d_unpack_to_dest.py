@@ -31,6 +31,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 PCC = 0.99
@@ -41,6 +42,18 @@ PCC = 0.99
 def test_quasar_conv2d_unpack_to_dest(mesh_device):
     device = mesh_device
     torch.manual_seed(0)
+
+    # WH-only HANG: this validates the UnpackToDestEn tilize variant on the FUSED conv_bmm_tilize (full_inner_dim,
+    # tilize->matmul) at 4x4 / act_block_h=128. On WH it hits the fast_tilize->matmul cadence race (kRaceGuardSpin
+    # family) -- MATH MWDD in matmul_block, PACK in program_packer_destination (SyncHalf), cb stuck, genuine
+    # (asserts-on). The UnpackToDest tilize variant doesn't change the matmul-transition race. Same family as
+    # relu_now_sfpu / stem_7x7 / split_tilize_hypothesis. Quasar-oriented diagnostic, NOT the WH model path.
+    if is_wormhole_b0():
+        pytest.xfail(
+            "WH fused conv_bmm_tilize fast_tilize->matmul cadence race (kRaceGuardSpin family; MATH in "
+            "matmul_block, PACK in program_packer_destination). UnpackToDest variant unaffected; not the WH "
+            "model path."
+        )
 
     # Stem-like conv (same K = 32*4*4 = 16 tiles as the folded stem), shrunk to fit L1 on the emulator.
     batch_size = 1

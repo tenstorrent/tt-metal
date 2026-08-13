@@ -98,6 +98,7 @@ ttnn::Tensor front_pack_per_core(
     ttsl::SmallVector<uint32_t> zshape(rank, 0);
 
     std::vector<ttnn::Tensor> pieces;
+    pieces.reserve(2 * num_cores);
     uint32_t cursor = 0;  // real tiles consumed so far (along `ax`)
     for (uint32_t c = 0; c < num_cores; ++c) {
         const uint32_t r = tp_map[c];
@@ -152,6 +153,7 @@ ttnn::Tensor prepare_w2_no_n_pad(
     const uint32_t w2_groups_per_core = ceil_div(Kt, num_cores * first_pair_sum);
 
     std::vector<ttnn::Tensor> each_shard;
+    each_shard.reserve(3 * num_cores);
     uint32_t start_col = 0;
     const uint32_t full_block_width = (w2_groups_per_core - 1) * 4 * TILE_SIZE;
     for (const auto& [last_group_tiles, last_group_pad_tiles] : w2_shard_map) {
@@ -542,6 +544,7 @@ ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
     }
 
     std::vector<ttnn::Tensor> each_shard;
+    each_shard.reserve(2 * shard_map.size());
     uint32_t start_tile = 0;
     for (uint32_t num_tiles : shard_map) {
         each_shard.push_back(slice_basic(
@@ -701,6 +704,7 @@ ttnn::Tensor prepare_w2_tensor_with_bias(
     pad_rows.deallocate(/*force=*/true);
 
     std::vector<ttnn::Tensor> b2_each_shard;
+    b2_each_shard.reserve(3 * num_cores);
     uint32_t start_col = 0;
     const uint32_t full_block_width = (w2_groups_per_core - 1) * 4 * TILE_SIZE;
     for (const auto& [last_group_tiles, last_group_pad_tiles] : w2_shard_map) {

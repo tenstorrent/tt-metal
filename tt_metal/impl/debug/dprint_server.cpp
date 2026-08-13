@@ -1093,6 +1093,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
 
     // Core range depends on whether dprint_all_cores flag is set.
     std::vector<umd::CoreDescriptor> print_cores_sanitized;
+    print_cores_sanitized.reserve(all_cores.size() + dispatch_cores.size());
     const auto& hal = env_.get_hal();
     std::vector<CoreType> core_types_to_check = {CoreType::WORKER, CoreType::ETH};
     if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {

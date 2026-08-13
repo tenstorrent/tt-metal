@@ -25,7 +25,7 @@ namespace ckernel {
 /**
  * Short init for scalar broadcast multiply (assumes hw already configured)
  */
-ALWI void deepseek_mul_tiles_bcast_scalar_init_short(
+ALWI void deepseek_mul_bcast_scalar_init(
     uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
     MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>(

@@ -114,6 +114,7 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_index) {
+    LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
     WAYPOINT("UPAW");
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
@@ -155,6 +156,7 @@ template <
     bool unpack_to_dest = false>
 inline void llk_unpack_A_block(
     const std::uint32_t operand, const std::uint32_t start_tile_index, const std::uint32_t ntiles) {
+    LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
     const std::uint32_t operand_id = get_operand_id(operand);
     const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(operand_id);
     const std::uint32_t rd_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].rd_entry_idx;

@@ -113,6 +113,7 @@ class Model:
         expert_weight_dtype=ttnn.bfloat4_b,
         sequence_parallel=False,
         first_layer_idx=0,
+        layer_indices=None,
         is_first_rank=True,
         is_last_rank=True,
     ):
@@ -127,6 +128,9 @@ class Model:
             dtype: Data type for tensors (default: bfloat16)
             tensor_cache_path: Path for tensor caching
             mesh_config: Mesh configuration for parallelization
+            layer_indices: explicit list of GLOBAL layer indices to build, overriding the contiguous
+                [first_layer_idx, first_layer_idx + num_hidden_layers) run. Profiling aid — see the
+                comment at the layer construction below.
             first_layer_idx: GLOBAL index of this instance's first decoder layer. Non-zero for a
                 pipeline-parallel rank owning a layer slice; drives weight-cache keys + the per-layer
                 dense/MoE/sparse selection (all keyed off the model-wide config lists). The KV-cache slot
@@ -190,17 +194,25 @@ class Model:
             )
         else:
             self.embedding = None
-        # Global layer index (first_layer_idx + local) drives weight-cache keys + dense/MoE/sparse
-        # selection; the local index drives the KV-cache slot. They coincide for single-rank.
+        # Global layer index drives weight-cache keys + dense/MoE/sparse selection; the local index
+        # drives the KV-cache slot. They coincide for single-rank. Normally the globals are the
+        # contiguous run [first_layer_idx, first_layer_idx + num_hidden_layers); `layer_indices`
+        # overrides that with an explicit list, which lets a profiling run build e.g. [0, 3] — one
+        # dense and one sparse layer — instead of the four it would take to reach the first sparse
+        # one. Only safe with a complete tilized weight cache (an arbitrary index may not be in the
+        # shards M3_LOAD_NLAYERS reads), and the layers no longer feed each other the activations
+        # they would in the real stack, so use it for op cost, not for accuracy.
+        n_layers = hf_config.num_hidden_layers
+        self.global_layer_indices = list(layer_indices or range(first_layer_idx, first_layer_idx + n_layers))
         self.layers = [
             DecoderLayer(
                 mesh_device,
                 hf_config,
-                substate(state_dict, f"model.layers.{first_layer_idx + local_idx}"),
-                first_layer_idx + local_idx,
+                substate(state_dict, f"model.layers.{global_idx}"),
+                global_idx,
                 ccl_manager,
                 dtype=dtype,
-                tensor_cache_path=get_cache_file_name(tensor_cache_path, f"model.layers.{first_layer_idx + local_idx}"),
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, f"model.layers.{global_idx}"),
                 mesh_config=self.mesh_config,
                 transformation_mats=self.transformation_mats,
                 max_local_batch_size=max_local_batch_size,
@@ -211,7 +223,7 @@ class Model:
                 sequence_parallel=sequence_parallel,
                 cache_layer_idx=local_idx,
             )
-            for local_idx in range(hf_config.num_hidden_layers)
+            for local_idx, global_idx in enumerate(self.global_layer_indices)
         ]
         # Final norm + LM head + sampling: last rank only (a non-last rank forwards its hidden state).
         if not is_last_rank:

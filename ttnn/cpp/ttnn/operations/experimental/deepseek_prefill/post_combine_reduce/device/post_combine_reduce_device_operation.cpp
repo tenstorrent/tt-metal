@@ -109,6 +109,7 @@ tt::tt_metal::TensorSpec PostCombineReduceDeviceOperation::compute_output_specs(
     // Input: [B, C, seq_len, num_experts, emb_dim]
     // Output: [B, C, seq_len, emb_dim]
     std::vector<uint32_t> output_shape_vec;
+    output_shape_vec.reserve(input_shape.rank());
     for (uint32_t i = 0; i < input_shape.rank(); ++i) {
         if (i != operation_attributes.expert_dim) {
             output_shape_vec.push_back(input_shape[i]);

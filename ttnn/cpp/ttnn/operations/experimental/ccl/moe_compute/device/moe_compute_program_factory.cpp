@@ -1311,6 +1311,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Set the runtime arguments for the kernels
     std::vector<uint32_t> matmul_runtime_args;
+    matmul_runtime_args.reserve(6 + matmul_tensors.size() + num_dram_banks);
     matmul_runtime_args.push_back(0);  // DRAM Bank ID placeholder
     matmul_runtime_args.push_back(0);  // VChannel placeholder
     for (const auto& tensor : matmul_tensors) {
@@ -1393,6 +1394,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     // matmul cores ordered by core ID, this will be used by selective combine to direct semaphore signaling
     std::vector<CoreCoord> ring_pos2core(matmul_num_cores);
     std::vector<uint32_t> vchannels;
+    vchannels.reserve(matmul_cores.size());
     uint32_t dram_bank = 0;
     for (auto core : matmul_cores) {
         uint32_t vchannel = dram_bank & 0x3;

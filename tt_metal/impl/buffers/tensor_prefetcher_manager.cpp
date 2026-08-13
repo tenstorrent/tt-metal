@@ -30,7 +30,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt_stl/assert.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -1172,6 +1172,7 @@ void TensorPrefetcherManager::worker_loop() {
         std::vector<TargetSocket> still_pending = std::move(remaining_target_sockets);
         while (!still_pending.empty()) {
             std::vector<TargetSocket> next_pending;
+            next_pending.reserve(still_pending.size());
             for (const TargetSocket& target : still_pending) {
                 std::vector<uint8_t>& page = req.sender_pages[target.page_index];
                 if (experimental::detail::try_write(*sockets_[target.socket_index], page.data(), 1)) {
@@ -1227,8 +1228,13 @@ void TensorPrefetcherManager::stop() {
     }
 
     // Wait for kernels to drain their request loop (they exit on the sentinel).
+    // read_device_profiler_results must be false: we hold the (non-recursive) MeshDevice api
+    // lock, and the profiler read reaches enqueue_read_shard_from_core, which takes that same
+    // lock. With the device profiler off the read is a no-op, so this only deadlocks under
+    // tracy. Nothing is lost by skipping it — the read covers worker/eth cores, not the DRAM
+    // cores this program runs on, and the profiler still drains on Finish and at device close.
     for (uint32_t d = 0; d < devices_.size(); ++d) {
-        ::tt::tt_metal::detail::WaitProgramDone(devices_[d], *programs_[d]);
+        ::tt::tt_metal::detail::WaitProgramDone(devices_[d], *programs_[d], /*read_device_profiler_results=*/false);
     }
 
     sockets_.clear();

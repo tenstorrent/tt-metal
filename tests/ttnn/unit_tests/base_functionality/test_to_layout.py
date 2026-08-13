@@ -459,6 +459,43 @@ def test_int_untilize(device, batch_size, sentence_size):
     assert_equal(torch_input_tensor, output_torch)
 
 
+@pytest.mark.parametrize("shape", [(32, 32), (64, 128), (9, 256)])
+def test_int8_to_layout_roundtrip_on_host(shape):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randint(-128, 128, shape, dtype=torch.int8)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.int8, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tiled = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+    assert tiled.layout == ttnn.TILE_LAYOUT
+    assert tiled.dtype == ttnn.int8
+
+    output_tensor = ttnn.to_layout(tiled, ttnn.ROW_MAJOR_LAYOUT)
+    assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert_equal(torch_input_tensor, ttnn.to_torch(output_tensor))
+
+
+@pytest.mark.parametrize("shape", [(30, 62), (17, 47), (65, 33)])
+@pytest.mark.parametrize("pad_value", [0, 5, -2, -128, 127])
+def test_int8_to_layout_pad_value_on_host(shape, pad_value):
+    torch.manual_seed(0)
+    torch_input_tensor = torch.randint(-128, 128, shape, dtype=torch.int8)
+
+    h, w = shape[-2], shape[-1]
+    pad_h = (ttnn.TILE_SIZE - h % ttnn.TILE_SIZE) % ttnn.TILE_SIZE
+    pad_w = (ttnn.TILE_SIZE - w % ttnn.TILE_SIZE) % ttnn.TILE_SIZE
+
+    torch_output_tensor = torch.nn.functional.pad(
+        torch_input_tensor, (0, pad_w, 0, pad_h), mode="constant", value=pad_value
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int8)
+    tiled = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, pad_value=pad_value)
+    output_tensor = tiled.to_torch_with_padded_shape()
+
+    assert output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, output_tensor.to(torch.int8))
+
+
 @pytest.mark.parametrize("shape", [[143], [64], [380]])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])

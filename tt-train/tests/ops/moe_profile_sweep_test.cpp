@@ -24,7 +24,6 @@
 #include <tools/profiler/op_profiler.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_metal_profiler.hpp>
 #include <ttnn/operations/core/core.hpp>
 #include <utility>
 #include <vector>

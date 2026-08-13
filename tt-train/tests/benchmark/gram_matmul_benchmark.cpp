@@ -76,6 +76,7 @@ void BM_GramMatmul(benchmark::State& state) {
         double gram_tf, minimal_tf, ttnn_tf;
     };
     std::vector<Result> results;
+    results.reserve(shapes.size());
 
     for (const auto& s : shapes) {
         const uint32_t seed = static_cast<uint32_t>(std::hash<std::string>{}(s.name));

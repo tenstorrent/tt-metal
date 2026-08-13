@@ -55,14 +55,18 @@ ttnn::Tensor conv3d(
     const std::string& padding_mode_,
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    // Default blocking: minimal spatial blocks, smallest valid C_in_block. The same
-    // default is used by prepare_conv3d_weights, so the prepared weight's K-row
-    // blocking always matches the conv compute -- no near-zero-PCC mismatch (#47316) --
-    // and the minimal block keeps large kernels within L1 (#42146). This holds for both
-    // a rank-5 (prepared here) and a rank-2 (pre-prepared with the same default) weight.
-    const uint32_t default_c_in_block = ttnn::operations::experimental::conv3d::default_c_in_block(
-        kernel_size_[0] * kernel_size_[1] * kernel_size_[2]);
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& halo_buffer,
+    uint32_t logical_h_mask,
+    uint32_t logical_w_mask,
+    const std::optional<ttnn::Tensor>& pad_offset_tensor,
+    uint32_t output_pad_h,
+    uint32_t output_pad_w) {
+    // Shared with prepare_conv3d_weights so the prepared weight's K-row blocking always matches the
+    // conv compute -- a mismatch is near-zero PCC (#47316) -- and the minimal block keeps large
+    // kernels within L1 (#42146).
+    const uint32_t default_c_in_block =
+        ttnn::operations::experimental::conv3d::default_c_in_block(kernel_size_[0] * kernel_size_[1] * kernel_size_[2]);
 
     auto config = config_opt.value_or(ttnn::experimental::prim::Conv3dConfig(
         tt::tt_metal::DataType::BFLOAT16,                        // weights_dtype
@@ -77,10 +81,8 @@ ttnn::Tensor conv3d(
         input_tensor.device()->compute_with_storage_grid_size()  // use full device grid
         ));
 
-    // An explicitly-provided config may still carry C_in_block == 0 ("auto"). Resolve it to the
-    // same default so prepare_conv3d_weights and the conv compute use one identical, non-zero
-    // block -- otherwise the internal prepare and the device op disagree on the K-row blocking
-    // (near-zero PCC, #47316). This mirrors prepare_conv3d_weights' own 0 handling.
+    // An explicitly-provided config may still carry C_in_block == 0 ("auto"); resolve it here so
+    // prepare_conv3d_weights and the device op cannot disagree on the K-row blocking (#47316).
     if (config.C_in_block == 0) {
         config.C_in_block = default_c_in_block;
     }
@@ -100,7 +102,13 @@ ttnn::Tensor conv3d(
         padding_mode_,
         groups_,
         memory_config,
-        compute_kernel_config);
+        compute_kernel_config,
+        halo_buffer,
+        logical_h_mask,
+        logical_w_mask,
+        pad_offset_tensor,
+        output_pad_h,
+        output_pad_w);
 }
 
 }  // namespace ttnn::experimental

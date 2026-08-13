@@ -11,11 +11,7 @@ on:
         options:
           - all
           - resnet50
-          - sentence_bert
-          - stable_diffusion_35_large
           - mochi
-          - wan22
-          - flux1-dev
           - motif
           - qwenimage
       platform:

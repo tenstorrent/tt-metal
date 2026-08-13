@@ -59,12 +59,19 @@ class TtPrefillRuntimeConfig:
     # is_first_rank gates the embedding + token input, is_last_rank marks the final stage. The defaults
     # make a single-rank runtime own the whole model.
     first_layer_idx: int = 0
+    # Explicit global layer indices to build, overriding the contiguous run. Profiling only: lets a
+    # 2-layer run cover one dense and one sparse layer ([0, 3]) instead of the four it takes to reach
+    # the first sparse one. Requires a complete tilized weight cache.
+    layer_indices: Optional[list] = None
     is_first_rank: bool = True
     is_last_rank: bool = True
     # Emb-axis sharding of the cross-rank D2D hidden state (must match the runner's D2D_MAPPER_CONFIG and
     # this model's residual layout): True => emb TP-sharded, False => emb replicated across TP. M3's SP
     # residual is emb-replicated, so its adapter passes False.
     pipeline_activation_emb_tp_sharded: bool = True
+    # The runner picks the per-layer ack transport from this: traced runs use the host callback, untraced
+    # ones the D2H service. M3 has no traced path, so it stays False.
+    use_trace: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -88,6 +95,13 @@ class TtPrefillRuntime:
         assert (
             config.max_seq_len % config.chunk_size == 0
         ), f"max_seq_len ({config.max_seq_len}) must be a multiple of chunk_size ({config.chunk_size})"
+        # The KV cache, its slot addressing and gather_layer are all sized by config.num_layers, while
+        # the model builds one layer per entry of layer_indices. If those disagree, a layer addresses
+        # past the per-user cache stride and silently corrupts another slot.
+        assert config.layer_indices is None or len(config.layer_indices) == config.num_layers, (
+            f"layer_indices has {len(config.layer_indices)} entries but num_layers is "
+            f"{config.num_layers}; they size the model and the KV cache respectively and must match"
+        )
 
         self.model_built = False
         self.compiled = False
@@ -137,6 +151,7 @@ class TtPrefillRuntime:
             ep_seq_len_per_chip=self.config.chunk_size // self.config.sp_factor,
             expert_weight_dtype=self.config.expert_weight_dtype,
             first_layer_idx=self.config.first_layer_idx,
+            layer_indices=self.config.layer_indices,
             is_first_rank=self.config.is_first_rank,
             is_last_rank=self.config.is_last_rank,
         )
@@ -252,6 +267,9 @@ class TtPrefillRuntime:
         slot_id: int,
         actual_start: int,
         actual_end: int,
+        request_id: int = 0,
+        d2h_service=None,
+        record_dev=None,
         *,
         skip_lm_head: bool = True,
         get_last_token: int = -1,
@@ -282,7 +300,21 @@ class TtPrefillRuntime:
             slot_id: cache user slot to fill, in [0, num_users).
             actual_start: absolute KV pos of the chunk's first token (the cache write offset).
             actual_end: absolute KV pos past the chunk's last real (non-pad) token.
+            request_id: the engine's chunk counter, part of the runner's call contract. Only the
+                pipelined layer-completion sink needs it (to build a globally-dense
+                seq = request_id * num_layers + layer_idx); this runtime's single-rank LayerAck
+                channel carries no payload, so it is accepted and ignored.
+            d2h_service: the device-side per-layer ack transport. This runtime emits acks only through
+                the host callback (set_layer_ack_channel), so a caller asking for the D2H path gets a
+                loud error rather than silently missing acks.
+            record_dev: the chunk's metadata tensor, passed on every call and unused here (it is the
+                record the D2H ack would carry).
         """
+        if d2h_service is not None:
+            raise NotImplementedError(
+                "MiniMax-M3 prefill emits layer acks via set_layer_ack_channel, not the D2H path; "
+                "run with PREFILL_ENABLE_LAYER_ACK=0 or wire the D2H ack into this runtime."
+            )
         assert self.model_built, "build the model before prefill_chunk()"
         assert 0 <= slot_id < self.config.num_users, f"slot_id {slot_id} out of range [0, {self.config.num_users})"
         assert (
@@ -362,12 +394,33 @@ class TtPrefillRuntime:
         index_k = gather(kv_cache.index_k, 0).unsqueeze(0).unsqueeze(0)
         return k, v, index_k
 
-    def build_kv_chunk_table(self, kv_cache, path: str) -> str:
+    def kv_migration_base_address(self, kv_cache) -> int:
+        """This stage's KV base DRAM address — the engine's per-rank anchor for the migration
+        all-gather (it holds the cache but must not introspect its layout). M3's cache is three
+        tensors; the K tensor is the anchor, and since the table build is single-rank the gathered
+        layout is never consumed."""
+        return int(kv_cache.k.buffer_address())
+
+    def build_kv_chunk_table(
+        self,
+        kv_cache,
+        path: str,
+        *,
+        first_layer_idx: int = 0,
+        num_my_layers: Optional[int] = None,
+        stage_layout=None,
+    ) -> str:
         """Build + serialize M3's multi-config KV chunk address table (k_h0..N, v_h0..N, index_k) to
         ``path`` and return it. The engine then PUBLISHES it to the migration worker (this issues no
         comms). Called by the runner when PREFILL_ENABLE_MIGRATION=1 / PREFILL_MOCK_MIGRATION=1.
-        Single-rank only — the runner disables migration for num_ranks>1 (pipelined migration is not
-        wired), so this describes the whole-model cache."""
+
+        Single-rank only: this describes the whole-model cache and has no cross-stage merge, so a
+        gathered layout spanning more than this rank's stage is rejected rather than silently dropped."""
+        if stage_layout is not None and len(stage_layout) > 1:
+            raise NotImplementedError(
+                f"MiniMax-M3 KV migration is single-rank only; got a {len(stage_layout)}-stage layout. "
+                "The multi-config (per head-shard) table has no cross-stage merge."
+            )
         from models.demos.minimax_m3.tt.runners.kv_chunk_table import build_and_serialize_kv_chunk_table
 
         c = self.config
