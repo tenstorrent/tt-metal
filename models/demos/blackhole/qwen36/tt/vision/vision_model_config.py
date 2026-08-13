@@ -75,6 +75,25 @@ class VisionModelArgs(ModelArgs):
         assert self.n_heads % tp == 0, f"vision n_heads ({self.n_heads}) must be divisible by TP={tp}"
         assert self.qkv_size % tp == 0, f"vision qkv_size ({self.qkv_size}) must be divisible by TP={tp}"
         assert self.dim % tp == 0, f"vision dim ({self.dim}) must be divisible by TP={tp}"
+        # Can the block I/O contract keep activations FRACTURED along dim=3? Only if dim splits into
+        # a whole number of TILES per device: the fracture is restored by tt_all_reduce(dim=3), a
+        # reduce_scatter over a TILE-layout tensor, and a tile cannot be split across devices.
+        # Unlike hidden_dim (padded to tile_size*num_devices above), dim comes straight from the HF
+        # config — Qwen3.6-27B's vision dim 1152 is 36 tiles, i.e. 9/device at TP=4 but 4.5 at TP=8.
+        #
+        # When it does not divide, run the tower with REPLICATED activations instead: the
+        # row-parallel out-projections all-reduce to a full-width replicated tensor rather than
+        # reduce-scattering to a fractured one (see vision_ccl.all_reduce_replicated). Weights stay
+        # sharded, so no TP compute is given up. The PatchMerger still fractures its OUTPUT for the
+        # LLM, which is safe because it splits out_hidden_size (5120 -> 20 tiles/device at TP=8),
+        # not dim.
+        self.vision_replicated_acts = (self.dim // tp) % self.tile_size != 0
+        if self.vision_replicated_acts:
+            logger.info(
+                f"vision dim {self.dim} is {self.dim / self.tile_size:g} tiles, which TP={tp} cannot "
+                f"split into whole tiles ({self.dim / tp / self.tile_size:g}/device) — keeping vision "
+                f"activations replicated (weights stay sharded)"
+            )
         assert self.hidden_dim % tp == 0, f"vision hidden_dim ({self.hidden_dim}) must be divisible by TP={tp}"
         # PatchMerger shards the merger MLP Megatron-style; its post-shuffle
         # inner dim (mlp_size = hidden * spatial_merge_size^2) and the final
@@ -95,15 +114,21 @@ class VisionModelArgs(ModelArgs):
 
         The vision blocks consume tensors fractured along the hidden dim
         (dim=3 of the 4D tensor), so we shard at load time across cluster
-        axis 1.
+        axis 1 — unless the tower runs with replicated activations
+        (``vision_replicated_acts``, when TP cannot split dim into whole
+        tiles), in which case every device gets the full hidden dim.
         """
 
         x_1BSH = x_bsh.unsqueeze(0)
 
-        mesh_mapper = ttnn.ShardTensor2dMesh(
-            self.mesh_device,
-            dims=(None, -1),
-            mesh_shape=self.cluster_shape,
+        mesh_mapper = (
+            ttnn.ReplicateTensorToMesh(self.mesh_device)
+            if self.vision_replicated_acts
+            else ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(None, -1),
+                mesh_shape=self.cluster_shape,
+            )
         )
 
         # input goes to DRAM

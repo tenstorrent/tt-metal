@@ -35,11 +35,16 @@ class DistributedLayerNorm(LightweightModule):
         weight_dtype=ttnn.bfloat8_b,
         eps: float = 1e-05,
         ccl_topology=ttnn.Topology.Linear,
+        replicated_input: bool = False,
     ):
         super().__init__()
         self.tt_ccl = tt_ccl
         self.ccl_topology = ccl_topology
         self.is_multichip = device.__class__.__name__ == "MeshDevice" and device.get_num_devices() > 1
+        # When the tower runs with replicated activations there is no fracture to gather: the input
+        # already carries the full hidden dim on every device, so this degrades to a plain LayerNorm
+        # (the same shortcut the single-device path takes). See vision_ccl.
+        self.replicated_input = replicated_input
 
         # Use the existing replicated-weight LayerNorm under the hood.
         self.norm = LayerNorm(
@@ -53,9 +58,9 @@ class DistributedLayerNorm(LightweightModule):
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # If we're not multi-chip there is nothing to gather; keep the
-        # behaviour identical to the existing replicated LayerNorm.
-        if not self.is_multichip:
+        # Nothing to gather if we're single-chip, or if the tower keeps activations replicated so the
+        # full hidden dim is already present on every device.
+        if not self.is_multichip or self.replicated_input:
             return self.norm(x)
 
         # Gather the fractured hidden dim back into a replicated tensor.
