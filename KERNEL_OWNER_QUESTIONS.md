@@ -19,9 +19,17 @@ that nobody re-derives.
 > `UnaryMin`); they pass as ordinary tests, and the xfails this document was about to request were
 > never written. See §3 for what is left of the question.
 >
+> **And not only for Blackhole.** `WormholeB0/…/SFPSWAP.md` carries the same `SignMagIsSmaller()` and the
+> same total-order comment, so the order is specified there too — and all seven ops have since been
+> measured green on a Wormhole n300. §3's item 2 used to say Wormhole had no total order; it was wrong.
+>
 > **That is the argument for this whole file.** Three questions were drafted against measured tables.
 > One dissolved on contact with the ISA, and had it been filed as a kernel bug — or worse, silently
 > xfailed — it would have left seven permanent, plausible-looking lies about documented hardware.
+>
+> It has since happened a second time, on Wormhole and again about the sign of a NaN — 49 failing
+> variants across 10 ops that read as a kernel divergence and are documented behaviour. See the last
+> section: **do not file it.**
 
 **What is left for an owner**, and it is now mostly one question:
 
@@ -29,14 +37,15 @@ that nobody re-derives.
 |---|---|---|---|
 | 1 | What should an approximation kernel do with an input outside its series' range? | **23** | **Open** — the ISA is silent by construction |
 | 2 | Why does `RsqrtCompat` saturate at the pole where `Rsqrt` does not? | 1 | **Open**, but narrowed — see the ISA note in §2 |
-| 3 | Are SFPU comparisons defined for a `NaN` operand? | 9 | **Answered and fixed** — 7 enrolled; 2 ops and the Wormhole gap remain |
+| 3 | Are SFPU comparisons defined for a `NaN` operand? | 9 | **Answered and fixed** — 7 enrolled; the Wormhole gap is now measured and closed, leaving 2 ops |
 
 Both remaining questions were originally written up as one-op curiosities (`Log`, `signbit`). Driving
 the full unary set showed each was a single behaviour with wide blast radius.
 
-**Sources.** Behaviour measured on a Blackhole p300a, `ApproximationMode.No`, Float32 input — the only
-specials-carrying input format reachable there. ISA text quoted from
-[tenstorrent/tt-isa-documentation](https://github.com/tenstorrent/tt-isa-documentation), files under
+**Sources.** The tables below are measured on a Blackhole p300a, `ApproximationMode.No`, Float32 input —
+the only specials-carrying input format reachable there. §3's Wormhole items are measured on a Wormhole
+n300; that record is [WORMHOLE_MEASUREMENT_RESULTS.md](WORMHOLE_MEASUREMENT_RESULTS.md). ISA text quoted
+from [tenstorrent/tt-isa-documentation](https://github.com/tenstorrent/tt-isa-documentation), files under
 `BlackholeA0/TensixTile/TensixCoprocessor/` and `WormholeB0/TensixTile/TensixCoprocessor/`. Reproduce
 the measurements with:
 
@@ -44,6 +53,7 @@ the measurements with:
 cd tt_metal/tt-llk
 .claude/scripts/run_test.sh run --worktree $PWD --arch blackhole \
     --test test_sfpu_unary.py --k test_eltwise_unary_sfpu_edges
+# and the same with --arch wormhole
 ```
 
 ---
@@ -229,22 +239,43 @@ inputs the rewritten goldens are bit-identical to the ones they replace; only th
    `VC == 0`"*. NaN is out of contract there, so their `1.0` at `NaN` is unspecified rather than
    documented — even though it is consistent with an `int32` test on a positive NaN's bit pattern.
    **Question: is `SFPSETCC` intended to be usable with a NaN operand, or must callers exclude it?**
-2. **Wormhole has no total order, because it has no `SFPGT`/`SFPLE`.** Neither appears in
-   `WormholeB0/TensixTile/TensixCoprocessor/VectorUnit.md`; `SFPSETCC` is the only comparison there,
-   with the same "neither negative zero nor any kind of NaN" proviso. So the guarantee this section
-   rests on is **Blackhole-only**, and the goldens may need arch-keying rather than one total-order
-   model. **Question: what is the intended `NaN` comparison behaviour on Wormhole?** Nothing in this
-   suite has been measured there.
-3. **The seven enrolled goldens are unverified on Wormhole.** They model a Blackhole-documented order.
-   If they fail there, the goldens need arch-keying rather than the model being wrong — but nobody has
-   run them to find out.
+2. ~~**Wormhole has no total order, because it has no `SFPGT`/`SFPLE`.**~~ **Withdrawn — the premise was
+   wrong.** Neither instruction appears in `WormholeB0/…/VectorUnit.md`, which is true, but the order
+   does not depend on them: `WormholeB0/…/SFPSWAP.md` carries the same `SignMagIsSmaller()` model as
+   Blackhole's, with the same comment word for word — *"using the total order where
+   `-NaN < -Inf < ... < -0 < +0 < ... < +Inf < +NaN`"*. So the min/max/clamp half of the seven is
+   **specified on Wormhole too**. For the four compare-shaped ops a two-vector `v_if (a > b)` must lower
+   to something other than `SFPGT` there; the expansion is in the sfpi compiler backend rather than the
+   headers, so which instruction it becomes is still unverified. **There is no question here for an
+   owner** — only a follow-up for whoever wants a guarantee rather than an observation: disassemble a
+   built `unary_gt` kernel and read the opcode.
+3. ~~**The seven enrolled goldens are unverified on Wormhole.**~~ **Now verified: all seven pass 8/8 edge
+   variants on a Wormhole n300, 0 xpassed**, and a direct probe over `+inf / -inf / NaN / ±0` reproduces
+   the Blackhole table in this section value for value. No arch-keying needed.
+
+   The same run also measured what item 1 above is about. **Wormhole answers identically to Blackhole:**
+   `Sign(NaN) = 1.0` against a golden `0.0`, `Heaviside(NaN) = 1.0` against `0.5`, and the same `-0`
+   divergence at `dest_acc=Yes`. So item 1 is one contract question about `SFPSETCC`, not two
+   measurements — and it is the only part of this section still open.
 
 ---
 
-## One question that was withdrawn — do not re-file it
+## Two questions that were withdrawn — do not re-file either
 
-An earlier revision listed a third question about `signbit(-0.0)`. It was read as a kernel-contract bug.
+**`signbit(-0.0)`.** An earlier revision listed this as a third question, read as a kernel-contract bug.
 The delivery measurement since showed that the `-0.0` probe **never arrives** on the six combinations
 where `Signbit` diverges: outside the unpack-to-dest path the datum goes through SrcA and the datacopy,
 and the LREG holds `+0.0`. There is no kernel contract to question — it was a stimulus limitation, and
 the suite now gates the probe out of those pipelines (`negative_zero_delivered()`).
+
+**The generated-NaN sign on Wormhole.** The first Wormhole run of the edge sweep fails 49 variants across
+10 ops (`Cos`, `Fmod`, `GeluAppx`, `Hardmish`, `Mish`, `Rsqrt`, `Silu`, `Sin`, `Softsign`, `Tan`), always
+`golden=+inf` against `hw=-inf`, and it looks exactly like a kernel divergence worth asking about. **It is
+not.** `SFPMAD.md` says the emitted NaN "is always the canonical NaN with bit pattern `0x7fc00000`" on
+Blackhole and, on Wormhole, that "the sign bit might or might not be set". The conversion that makes the
+sign visible is documented as well, and the ISA flags it itself — the packer's "NaN becomes infinity (this
+is a potentially surprising behaviour)" and `SFPSTORE`'s "software is advised to avoid NaN inputs for this
+conversion". So the kernels are behaving within spec and the goldens are asserting something the ISA
+declines to promise: it is suite work, tracked as
+[the expansion plan's §4](SFPU_EDGE_CASE_EXPANSION_PLAN.md). Filing it as a kernel bug would have been
+the fourth question this file dissolved by reading the ISA first, and the second on the sign of a NaN.

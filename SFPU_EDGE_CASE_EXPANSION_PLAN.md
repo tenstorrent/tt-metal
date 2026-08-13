@@ -7,22 +7,32 @@ audit, and the record of every finding to date
 **Scope:** Wormhole B0 and Blackhole. Quasar keeps its own inline stimulus definitions under
 `quasar/` and is tracked separately.
 
-**Revision 16 — 2026-08-13.** This document contains **only work that is not done**. Completed items
+**Revision 17 — 2026-08-13.** This document contains **only work that is not done**. Completed items
 are deleted rather than ticked off, because their results live in two places that cannot drift from the
 code: the code itself, and the coverage audit. For what a finished item established, read the audit —
 §5 has the findings, §4 has the per-op state.
 
-Deleted in this revision because they are finished: **cat E** (the unary shift amount now sweeps its
-full axis), **the scalar tensor-operand edges** (the five scalar binops are enrolled and the wrapper
-that was a comment is a live test), and **the CI gap** (the broad unary profile now runs in
-non-coverage companion groups instead of nowhere). Earlier revisions deleted the cat-B tranches the
-same way; 60 of the 97 unary ops are enrolled and green on Blackhole. What survived from all of it is
-not history but advice, and it is in §8.
+Deleted in this revision because it is finished: **the Wormhole re-measurement**. The suite has now run
+on a Wormhole n300, and both halves of that item came back clean —
+[WORMHOLE_MEASUREMENT_RESULTS.md](WORMHOLE_MEASUREMENT_RESULTS.md) has the full record.
+`specials_safe()`'s 7 cells are confirmed (250 variants, 85 failing — the recorded figures to the
+variant), so the table stays un-arch-keyed and `test_specials_safe_matches_measured_matrix` keeps its
+one verdict per cell; and the total order holds, so the seven enrolled goldens need no arch-keying.
+Earlier revisions deleted cat E, the scalar tensor-operand edges, the CI gap and the cat-B tranches the
+same way. What survived from all of it is not history but advice, and it is in §8.
 
-**Everything unblocked is done, so what remains is genuinely other people's.** 67 of the 97 unary ops
-are enrolled. Of the 30 still outside, **all 30 wait on the two questions in §3 or on a harness** —
-there is no cat-B op left that this document could simply fix. What is actionable here is cat F
-(large, unblocked) and one CI number to tune after the next nightly.
+**But the same run found something, and it is now the most urgent item here.** Driving the edge sweep on
+Wormhole for the first time fails **49 of 752 variants across 10 ops**, all one cause: the sign of a
+NaN the kernel generates. `SFPMAD.md` documents that sign as canonical-positive on Blackhole and
+**explicitly unspecified on Wormhole**, so it is golden work — see §4, which now holds that instead of
+the finished re-measurement. It matters on a schedule rather than eventually: `SPECIALS_READY_OPS` is
+empty on `main`, so no NaN is injected there today, and **this branch's enrolment is what turns the
+Wormhole e2e groups red.**
+
+**Of the rest, everything unblocked is done and what remains is genuinely other people's.** 67 of the 97
+unary ops are enrolled. Of the 30 still outside, **all 30 wait on the two questions in §3 or on a
+harness** — there is no cat-B op left that this document could simply fix. Beyond §4, what is actionable
+here is cat F (large, unblocked) and one CI number to tune after the next nightly.
 
 ---
 
@@ -30,15 +40,27 @@ there is no cat-B op left that this document could simply fix. What is actionabl
 
 | # | Item | Blocked on | Size | Where |
 |---|---|---|---|---|
-| 1 | **Two questions for kernel owners** — approximation contract, `RsqrtCompat(0)` (+ `SFPSETCC`/`NaN`) | judgement, not code | drafted, need sending | §3 |
-| 2 | **Cat B, the rest** — 26 ops blocked on item 1's answers | see §2 | small, once answered | §2 |
-| 3 | **Wormhole re-measurement** — `specials_safe()`'s four unreachable rows, and whether the total order holds there | Wormhole hardware | one sweep | §4 |
-| 4 | **Cat F** — harnesses for 11 kernels with no enum entry | new C++ source + golden each | large, per kernel | §5 |
-| 5 | **Tune the new non-coverage CI groups' timeouts** | one nightly run's data | one YAML edit | §6 |
+| 1 | **The generated-NaN sign on Wormhole** — 49 red edge variants across 10 ops, one shared comparator/cast fix | nothing | one shared change + a both-arch sweep | §4 |
+| 2 | **Two questions for kernel owners** — approximation contract, `RsqrtCompat(0)` (+ `SFPSETCC`/`NaN`) | judgement, not code | drafted, need sending | §3 |
+| 3 | **Cat B, the rest** — 26 ops blocked on item 2's answers | see §2 | small, once answered | §2 |
+| 4 | **Re-derive the two Wormhole arch gates** — each XPASSes on Wormhole, so each asserts nothing on either arch | a second Wormhole board (9.1); one bitwise compare (9.2) | small each | §9 |
+| 5 | **Cat F** — harnesses for 11 kernels with no enum entry | new C++ source + golden each | large, per kernel | §5 |
+| 6 | **Tune the new non-coverage CI groups' timeouts** | one nightly run's data | one YAML edit | §6 |
 
-**Start with item 1**: it is two emails and it decides 26 of the 30 remaining cat-B ops. Item 5 bounds
-the value of everything else — coverage that no job runs can regress silently — and item 4 is the only
-large build left.
+**Start with item 1**, and not because it is the most interesting: it is the only item with a deadline.
+The 49 failures are invisible on `main` — `SPECIALS_READY_OPS` is empty there, so nothing injects a NaN —
+and they appear the moment this branch lands. Both Wormhole e2e paths see them, so the group stops at the
+first one (`-x`):
+
+- the **non-coverage** groups (`split_group` 6–10) run all 10 ops;
+- the **coverage** groups still run 6 of them — `Fmod`, `GeluAppx`, `Hardmish`, `Mish`, `Softsign`, `Tan`
+  are standard-profile, so `_skip_coverage_unsupported`'s broad-profile skip does not reach them. Only
+  `Cos`, `Rsqrt`, `Silu`, `Sin` are hidden there.
+
+Then item 2: it is two emails and it decides 26 of the 30 remaining cat-B ops. Item 6 bounds the value of
+everything else — coverage that no job runs can regress silently — and item 5 is the only large build
+left. Item 4 is small and easy to skip, which is exactly why it is worth naming: an arch gate that always
+XPASSes is coverage that has already gone quiet.
 
 **And check the ISA before filing anything else.** The third question on this list was written as a
 kernel divergence, drafted with a measured table, and turned out to be documented behaviour with the
@@ -54,7 +76,8 @@ hardware.
 **67 of the 97 unary ops are enrolled and green**, plus all 5 scalar binops. The gate is two-sided and per op, so an op joins on its own:
 
 - `specials_safe(input, output, dest_acc)` — does the *pipeline* deliver a special intact. Measured;
-  7 cells of 50; pinned by `test_sfpu_domains.py`.
+  7 cells of 50; pinned by `test_sfpu_domains.py`; **re-measured on Wormhole and confirmed**, so it is
+  correctly not arch-keyed.
 - `SPECIALS_READY_OPS` — does the *golden* define a result for one, carrying the reason.
 
 There is now a third gate, and it is narrower than either: `negative_zero_delivered(input, dest_acc)`.
@@ -67,14 +90,14 @@ Both of the first two must pass. What follows is per-op golden work, not stimulu
 
 ### 2.1 The 30 that are left, and what each is waiting for
 
-Every one has been driven over the full specials set on every Blackhole-reachable triple, so this is a
-measured list, not a to-do list of unknowns. **All 30 that remain wait on someone else** — the seven
-the ISA settled have been done.
+Every one has been driven over the full specials set on every Blackhole-reachable triple — and now on
+every Wormhole-reachable one too — so this is a measured list, not a to-do list of unknowns. **All 30
+that remain wait on someone else**; the seven the ISA settled have been done.
 
 | Waiting on | Ops | Which |
 |---|---|---|
 | **§3 Q1** — approximation contract | 23 | `CastFp32ToFp16a`, `Digamma`, `Erf`, `Erfc`, `Erfinv`, `Expm1Cw`, `Frac`, `Gelu`, `GeluDerivative`, `I1`, `Lgamma`, `Log`, `LogWithBase`, `Polygamma`, `Rdiv`, `Rpow`, `Sigmoid`, `SigmoidAppx`, `SqrtCustom`, `Tanh`, `TanhDerivative`, `TanhDerivativeLut`, `UnaryPower` |
-| **§3 Q3** — `SFPSETCC` and `NaN`, plus the Wormhole gap | 2 | `Sign`, `Heaviside` |
+| **§3 Q3** — `SFPSETCC` and `NaN` (the Wormhole half is now measured, and agrees) | 2 | `Sign`, `Heaviside` |
 | §5 — no `MathOperation` golden at all | 3 | `TopKLocalSort`, `TopKMerge`, `TopKRebuild` (perf-only) |
 | tt-llk#1120 | 1 | `ReluMin` (skipped outright) |
 | §3 Q2 | 1 | `RsqrtCompat` |
@@ -87,12 +110,23 @@ is `v_if (result > threshold)` — a two-vector compare, so `SFPGT`, so the tota
 `_calculate_clamp_` has the same shape. `Hardsigmoid` turned out to *be* `_relu_max_body_(x/6 + 0.5,
 1.0)`, sharing the kernel helper outright, which is why the golden now shares one too.
 
-`Sign` and `Heaviside` stay out: they compare against zero via `SFPSETCC`, whose contract explicitly
-excludes a `NaN` operand.
+**The model now holds on Wormhole too, measured.** All seven pass 8/8 edge variants there, and a direct
+probe over `+inf / -inf / NaN / ±0` reproduces the Blackhole table value for value — so **no
+arch-keying**. Two corrections to what this section used to say:
 
-**The model is Blackhole-documented and Wormhole-unverified.** Wormhole has no `SFPGT`/`SFPLE` at all,
-so if these seven fail there, the goldens need arch-keying rather than the model being wrong. Nothing
-in this suite has been run on Wormhole.
+- *"Wormhole has no `SFPGT`/`SFPLE` at all"* is true, but *"so Wormhole has no total order"* does not
+  follow. `WormholeB0/…/SFPSWAP.md` carries the same `SignMagIsSmaller()` and the same
+  `-NaN < -Inf < … < +Inf < +NaN` comment, so **the order is specified on Wormhole too**.
+- What is *not* established is which instruction these kernels use there. The sources are two-vector
+  compares (`_relu_max_body_`, `_calculate_clamp_`), which is why the Blackhole mapping says `SFPGT` —
+  and `SFPGT` does not exist on Wormhole. sfpi lowers `operator>` through a compiler builtin whose
+  expansion is in the sfpi backend, not the headers. So on Wormhole the seven are **measured** green,
+  not ISA-guaranteed; a disassembly of a built `relu_max` / `unary_gt` would close that gap.
+
+`Sign` and `Heaviside` stay out on both arches: they compare against zero via `SFPSETCC`, whose contract
+explicitly excludes a `NaN` operand. Wormhole answers identically — `NaN -> 1.0` against a golden
+`0.0` / `0.5`, plus the same `-0` divergence at `dest_acc=Yes`, 2 xfailed each and **0 xpassed** — so §3's
+third question is one contract question rather than two measurements.
 
 **Neither blocked group needs per-op work — each needs one answer**, and the measured tables are in
 [KERNEL_OWNER_QUESTIONS.md](KERNEL_OWNER_QUESTIONS.md). Once answered, a group enrols together: as
@@ -188,8 +222,9 @@ ride along on the tail of the third question the ISA answered.
 
 **The third question — are SFPU comparisons defined for a `NaN` operand? — is answered**, by
 `SFPGT`/`SFPLE`/`SFPSWAP`'s documented total order. See §2.1: it turned 7 ops into golden work. What
-survives of it for an owner is narrow: `SFPSETCC` excludes a `NaN` operand by contract, which leaves
-`Sign` and `Heaviside`, and Wormhole has no `SFPGT`/`SFPLE` at all, so the guarantee is Blackhole-only.
+survives of it for an owner is narrow and no longer arch-shaped: `SFPSETCC` excludes a `NaN` operand by
+contract on **both** arches, which leaves `Sign` and `Heaviside` — and Wormhole has now been measured to
+behave exactly as Blackhole does on them, so it is one contract question rather than two measurements.
 
 **The `signbit(-0.0)` question that used to head this list is withdrawn.** It was read as a
 kernel-contract bug; the delivery measurement shows the probe never arrives on the six combinations
@@ -197,21 +232,52 @@ where it diverges, so there is no kernel contract to question. Do not re-file it
 
 ---
 
-## 4. Wormhole re-measurement of `specials_safe()`
+## 4. The generated-NaN sign on Wormhole — 49 red variants, one fix
 
-The table is a *measurement*, not a derivation, and every cat-B decision in §2 reads it. It was taken
-on Wormhole, and **only 3 of its 7 triples are reachable on Blackhole** — `_skip_bh_unless_fp32` allows
-just `Float32->Float32` at `dest_acc=No`, and the edge sweep's format axis omits `Float32->Float16`.
-Those 3 are confirmed. The other 4 involve a `Float16_b` input at `dest_acc=No` or a `Float16` output,
-which Blackhole's own architecture guards exclude.
+Measured on a Wormhole n300; the full record, with bit patterns and ISA quotations, is
+[WORMHOLE_MEASUREMENT_RESULTS.md](WORMHOLE_MEASUREMENT_RESULTS.md) §4.
 
-So the table is deliberately **not** arch-keyed. What would settle it is re-running the original
-instrument on Wormhole — the five `isinf` / `isposinf` / `isneginf` / `isnan` / `isfinite` predicates
-over the full 5×5 format matrix × both `dest_acc` with no skips, 250 variants — and either confirming
-the 7 cells or making the table arch-keyed.
+```
+test_eltwise_unary_sfpu_edges, Wormhole:  475 passed · 198 skipped · 49 failed · 30 xfailed · 0 xpassed
+```
 
-If it becomes arch-keyed, `test_sfpu_domains.py::test_specials_safe_matches_measured_matrix` has to be
-parametrized by arch too; it currently pins one verdict per cell.
+**Ten ops, one cause.** `Cos`, `Fmod`, `GeluAppx`, `Hardmish`, `Mish`, `Rsqrt`, `Silu`, `Sin`,
+`Softsign`, `Tan` — every one of them *generates* a NaN from the probe, and every failing cell is one
+where a NaN cannot survive as a NaN: the four format pairs at `dest_acc=No` (16-bit Dest) plus
+`Float32->Float16_b` at `dest_acc=Yes` (16-bit output pack). The divergence is always the same shape,
+`golden=+inf` against `hw=-inf`.
+
+**The ISA settles it, one sentence per arch.** `SFPMAD.md` — "if a NaN is emitted":
+
+| Blackhole | "it is always **the canonical NaN with bit pattern `0x7fc00000`**" |
+|---|---|
+| **Wormhole** | "the LSB of the mantissa is guaranteed to be set; other bits of the mantissa might or might not be set, and **the sign bit might or might not be set**" |
+
+`UnarySFPUGolden`'s canonicalisation rests on the sentence *"The SFPU emits a positive one"*, which is a
+documented Blackhole guarantee and explicitly unspecified on Wormhole. The conversion that makes the
+sign observable is documented too, and flagged: the packer's early conversion says "if the exponent is 8
+bits wide, NaN becomes infinity (**this is a potentially surprising behaviour**)", and `SFPSTORE`'s note
+adds "software is advised to avoid NaN inputs for this conversion" — with Blackhole alone carrying the
+clause "albeit canonical NaNs produced by arithmetic instructions do not suffer any truncation".
+
+**So the fix is in the comparator, not in ten goldens and not in an xfail.** Where a golden `NaN` is
+turned into `±inf` by a Dest write or a pack, accept **either** infinity; keep asserting the sign only
+for `_NAN_SIGN_TRANSPARENT_OPS` (`Neg`, `Abs`, `Identity`), where the kernel *moves* the sign bit — which
+the ISA backs directly: `SFPABS`'s summary is "-NaN is left as -NaN rather than becoming +NaN".
+
+**Do not arch-key the sign instead.** It is the tempting shape — measure Wormhole's sign per op and
+tabulate it — and the ISA contradicts it in advance: a bit that "might or might not be set" is not a
+fact, and `Cos(+inf)` already emits a positive NaN at a 32-bit Dest and a sign-set one at a 16-bit Dest.
+That table would be §8's permanent, plausible-looking lie, with an ISA sentence against it.
+
+**Acceptance.** The 49 go green on Wormhole with no new xfail; the Blackhole baseline is unchanged
+variant for variant (this touches shared machinery, so §8's diff-the-whole-op-set rule is not optional
+here); `0 xpassed` on both arches. Drive it as one sweep per §2.3, not op by op.
+
+**One residue it does not cover:** `Tan(NaN) -> 0.0` on the 16-bit-Dest path — a finite zero, not a
+substituted infinity, so neither the `SFPMAD` sentence nor the pack path explains it. `Tan` at
+`Float32->Float16_b`/`dest_acc=Yes` returns a NaN for the same probe, so the `0.0` belongs to the
+16-bit-Dest path specifically. Measure it before deciding whether it is golden work too.
 
 ---
 
@@ -285,8 +351,8 @@ u = sorted(sfpu_unary_ops(), key=lambda o: o.name)
 e = [o for o in u if edge_spec(o, F.Float32, F.Float32) is not None]
 print(len(_OP_SINGULARITIES), len(_OP_EDGE_POINTS), len(u), len(e), len(SPECIALS_READY_OPS))
 "
-# 21 43 97 50 65 — the last number counts the 5 scalar binops too, so it runs
-#                  ahead of the 60 *unary* ops enrolled; bump it as ops join
+# 21 43 97 50 72 — the last number counts the 5 scalar binops too, so it runs
+#                  ahead of the 67 *unary* ops enrolled; bump it as ops join
 ```
 
 **On hardware.** Never call `pytest` directly — use the repo's runner, which serialises silicon access
@@ -298,19 +364,33 @@ cd tt_metal/tt-llk
     --test test_sfpu_unary.py --k test_eltwise_unary_sfpu_edges
 ```
 
-Current baseline on a Blackhole p300a, all four suites green through the two-phase flow:
+Baselines for all four suites through the two-phase flow. Blackhole is green; Wormhole is green apart
+from §4's 49, which are the same cause in every suite that injects a NaN:
 
-| Suite | Result |
-|---|---|
-| `test_sfpu_unary.py` | 5030 passed · 1601 skipped · 21 xfailed |
-| `test_sfpu_binary.py` | 739 passed · 531 skipped · 36 xfailed · **0 xpassed** |
-| `test_sfpu_ternary.py` | 39 passed · 25 skipped |
-| `test_sfpu_binop_scalar.py` | 68 passed · 72 skipped |
+| Suite | Blackhole p300a | Wormhole n300 |
+|---|---|---|
+| `test_sfpu_unary.py` | 5030 passed · 1601 skipped · 21 xfailed · **0 xpassed** | 6034 passed · 533 skipped · **49 failed** · 30 xfailed · **6 xpassed** |
+| `test_sfpu_binary.py` | 739 passed · 531 skipped · 36 xfailed · **0 xpassed** | 865 passed · 392 skipped · 33 xfailed · **16 xpassed** |
+| `test_sfpu_ternary.py` | 39 passed · 25 skipped | 39 passed · 25 skipped |
+| `test_sfpu_binop_scalar.py` | 68 passed · 72 skipped | 67 passed · 72 skipped · **1 failed** |
+
+The 49 and the 1 are both §4 — the scalar failure is `ScalarRsub` at `Float16_b->Float16_b`/`dest_acc=No`,
+diverging `+inf` against `-inf` on the `NaN` probe, which is the same cause reaching a second suite. The
+6 and 16 xpassed are §9. The edge sweep alone, which is the part §4 is about:
+`475 passed · 198 skipped · 49 failed · 30 xfailed`.
+
+Note the skip counts, because they explain why this run found things: Wormhole collects the same 6652
+unary variants but skips 533 where Blackhole skips 1601, since `_skip_bh_unless_fp32` collapses the whole
+`dest_acc=No` row there. **Run both arches from now on** — every arch-keyed claim in this tree was written
+when only one of them had ever been exercised, and the first Wormhole run turned up a 10-op family and two
+dead arch gates in an afternoon.
 
 **A non-zero `xpassed` count is a signal, not noise.** Both arch-gates in this tree were derived from
 one: 16 XPASS in the binary suite became the signed-zero gate, 4 in the unary suite became the
 approximate-exp gate. If a run reports XPASS again, something the tables call arch-specific has
 changed, and that is worth more than most deliberate work.
+
+**It has just fired again — 6 XPASS on Wormhole, and they are the approximate-exp gate itself.** See §9.
 
 **Diff the whole op set against a baseline, not just the ops you touched.** Any change to a shared
 golden reaches every op that can produce the value it touches. Stash the change, run the sweep, unstash,
@@ -321,13 +401,37 @@ the change was about — and neither would have appeared in a run of the ops bei
 
 **Environment.** `tests/requirements.txt` pins `tt-exalens==0.3.29` and `run_test.sh` expects a venv at
 `tests/.venv`, which `setup_testing_env.sh` does **not** create — that script installs SFPI and
-pre-commit only.
+pre-commit only. From a bare checkout the whole setup is three commands:
+
+```bash
+cd tt_metal/tt-llk
+python3 -m venv tests/.venv && tests/.venv/bin/pip install -r tests/requirements.txt
+bash tests/setup_testing_env.sh          # SFPI, pinned in tests/sfpi-version (7.68.0), into tests/sfpi
+```
+
+A system SFPI (e.g. `/opt/tenstorrent/sfpi`) is **not** a substitute: `TestConfig.TOOL_PATH` is hardcoded
+to `tests/sfpi/compiler/bin`, and the version there was 7.35.3 against the tree's pinned 7.68.0.
 
 ---
 
 ## 8. Traps to know before starting
 
 Every one of these has already cost time once.
+
+- **A property of "the SFPU" is usually a property of *one* SFPU.** `SFPMAD.md` guarantees a canonical
+  `0x7fc00000` NaN on Blackhole and guarantees nothing about the sign on Wormhole; `SFPGT`/`SFPLE` exist
+  on one arch and not the other, while `SFPSWAP`'s total order exists on both. Before writing a fact
+  about the hardware into a golden, open **both** arch directories in tt-isa-documentation — the pages
+  have the same names and different sentences, and diffing the two is how §4 was diagnosed in minutes
+  rather than by bisecting ten ops.
+- **`run_test.sh count` ignores `--k`.** It reports the whole file's collection, so the edge sweep looks
+  like 6652 variants when the filter selects 752. Only `run`/`simulate` honour the filter — size a
+  `--maxfail` off the run's own `deselected` line, not off `count`.
+- **A failing variant's log defeats the obvious grep.** pytest writes `<nodeid> FAILED`, but loguru dumps
+  the golden and result tensors *between* the two, and those lines carry their own `| ERROR |` prefix. A
+  naïve scan attributes `ERROR` to the pending nodeid and invents outcomes — it reported 128 errors for a
+  run that had 49 failures and 30 xfails. Parse sequentially, anchor the outcome token to end of line,
+  and reconcile the totals against pytest's own summary line before believing any per-op table.
 
 - **Check the golden before blaming the kernel.** Of the seven divergences booked against the second
   tranche, four were the golden's and one of those was really the *test framework's*, shared by 24 ops.
@@ -408,3 +512,84 @@ Every one of these has already cost time once.
   (`CallstackEntry`, `ElfFile` — both *added* in later releases), which reads like a broken checkout. It
   is easy to misdiagnose as "the symbol moved in a newer release" and start writing shims; check the
   installed version against the pin first.
+
+---
+
+## 9. Re-derive both Wormhole arch gates — each XPASSes on Wormhole
+
+Two gates, one shape of problem: each is a **Wormhole-only** xfail whose entire content XPASSed on a
+Wormhole n300, so it now asserts nothing on either arch. Neither is urgent the way §4 is — a non-strict
+xfail keeps CI green — and both are the kind of signal the plan says is worth more than most deliberate
+work. Full data in [WORMHOLE_MEASUREMENT_RESULTS.md](WORMHOLE_MEASUREMENT_RESULTS.md) §6.
+
+### 9.1 Approximate exp — 6 XPASS, and the overshoot is ~5× smaller than recorded
+
+The unary suite's first Wormhole run reports **6 XPASS**, and they are not incidental: they are
+`_APPROX_EXP_ACCURACY_XFAIL`'s entire content — all three gated cells, at both tile shapes.
+
+```
+Exp · approx_mode=Yes · fast_mode=No
+  Float16 -> Float16_b   dest_acc=No    XPASS  ([64,64] and [128,256])
+  Float16 -> Float16_b   dest_acc=Yes   XPASS
+  Float32 -> Float16_b   dest_acc=Yes   XPASS
+```
+
+That gate records a **systematic ~5.7% overshoot (peak 6.75%) once approximate exp's argument passes
+~8, measured on Wormhole**, and `_APPROX_EXP_XFAIL_IS_WORMHOLE_ONLY` narrows it to Wormhole because
+Blackhole XPASSed it. So the arch it is *for* now XPASSes it too, which leaves the gate asserting
+nothing on either arch.
+
+**The direction reproduces; the magnitude does not.** Measured over the elements with `x > 8`
+(`test_sfpu_wh_approx_exp.py`): mean relative error **+0.75% to +1.05%**, peak **+3.5%**, and **not one
+element of any tile above 5%**. The gate expects ~5.7% mean and 6.75% peak. The overshoot is real and
+about five times smaller than recorded, which puts it inside the default rtol.
+
+**Three explanations were checked and eliminated before writing this down**, so nobody re-checks them:
+
+- **Not the stimulus.** The overshoot region is still being exercised: at these cells the drawn tile
+  reaches `x_max ≈ 9.98` (`Float16` input) and `≈ 15.98` (`Float32` input), with **6.4–10.4% of elements
+  above 8**. `_APPROX_ACCURACY_MAX[Exp]` is 16.0, well clear of the ~8 threshold.
+- **Not a loosened tolerance.** `CUSTOM_TOLERANCES` has no `Exp` entry, so the default 5% rtol applies,
+  and `passed_test` requires `torch.all(is_valid)` — *every* element within tolerance. A systematic 5.7%
+  overshoot on 6% of a tile cannot pass that.
+- **Not a softened golden.** `_exp` is plain `torch.exp`; it does not model the approximation.
+
+So on this Wormhole n300 the approximation holds 5% rtol where the recorded measurement found it
+breaching. Either the kernel's approximate-exp path has changed since the gate was written, or the
+overshoot varies across Wormhole boards — the recorded measurement does not name the card it was taken
+on, which is itself worth fixing in whatever replaces it.
+
+**What to do:** repeat the error measurement on a second Wormhole board. If ~1% holds there too,
+**delete the gate rather than leaving it** — a non-strict xfail that always XPASSes is a tolerated
+divergence for a divergence that is not there, and it hides a real regression if accuracy ever does drift.
+If 5.7% reproduces on another board, the gate needs the *board* in its reason string, not just the arch.
+Either way, name the card next time: the recorded measurement does not, which is why this cannot be
+settled from one host.
+
+**Also closed by the same probe:** `_APPROX_ACCURACY_MAX`'s comment flags the accurate path over (16, 80]
+as *"NOT YET MEASURED … it still wants a run of the Exp/Exp2 broad sweep at ApproximationMode.No"*. That
+run has happened on Wormhole — `Exp` 132 passed, `Exp2` 138 passed, 0 failed — and the probe puts the
+`approx_mode=No` error at **+0.00%** above 8 out to `x = 79.97` on the 32-bit-input cells. The restored
+`high=80` domain is sound on Wormhole; Blackhole still wants the same run.
+
+### 9.2 The signed-zero class — 16 XPASS, and the arch reading cannot survive it
+
+The binary suite reports **16 XPASS**, and they are `_WORMHOLE_ONLY_EDGE_CLASSES`'s entire content: the
+`negative_zero_golden` class for `SfpuElwdiv`, `SfpuXlogy`, `SfpuBinaryFmod` and `SfpuBinaryRemainder`,
+at all four `(format, dest_acc)` cells.
+
+That gate was derived from *"measured on a Blackhole p150b, the negative-zero class XPASSed on **all 16**
+cells"*, read as an arch difference: `SFPMAD` flushes a negative zero on Wormhole and preserves it on
+Blackhole. **A gate that XPASSes on both arches cannot mean that.** The likelier reading is already a trap
+in §8 — `passed_test` compares with `torch.isclose`, a both-NaN clause and PCC, and `-0.0 == +0.0` under
+all three — in which case these variants pass whatever the hardware does, and the Blackhole XPASS was
+evidence about the comparator rather than about Blackhole.
+
+**One cheap experiment settles it:** compare that class's output **bitwise** on Wormhole. If hardware gives
+`+0.0` where the golden says `-0.0`, the divergence is real but invisible — the class needs the bitwise
+comparator §8 already asks for, and the arch gate is spurious. If hardware gives `-0.0`, Wormhole is not
+flushing and the gate's premise is wrong on its own terms. Until then, do not treat
+`_WORMHOLE_ONLY_EDGE_CLASSES` as verified.
+
+**Do not fold either of these into §4.** They share an arch and nothing else: §4 is a documented ISA
+difference with a known fix; these are undocumented disagreements with recorded measurements.
