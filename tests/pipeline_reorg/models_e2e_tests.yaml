@@ -1019,6 +1019,100 @@
   owner_id: U088413NP0Q # Ashai Reddy Ginuga
   team: models
 
+- name: VGGNet e2e tests
+  cmd: |
+    pytest --timeout 180 models/demos/vision/classification/vgg/demo/demo.py
+  model: vggnet
+  model_family: VGGNet
+  skus:
+    wh_n150:
+      timeout: 4
+      tier: 3
+  owner_id: U06Q7ESTFEV # Borys Bradel
+  team: ttnn
+
+- name: BERT-Tiny e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 120 models/demos/wormhole/bert_tiny/demo/demo.py
+  model: bert-tiny
+  model_family: BERT
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+  owner_id: U024A4EFV6U # Brian Liu
+  team: ttnn
+
+- name: BERT-Large e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 210 models/demos/metal_BERT_large_11/demo/demo.py -k batch_8
+  model: bert-large
+  model_family: BERT
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 3
+  owner_id: U024A4EFV6U # Brian Liu
+  team: ttnn
+
+- name: DistilBERT e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 120 models/demos/wormhole/distilbert/demo/demo.py
+  model: distilbert
+  model_family: DistilBERT
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+  owner_id: U087S3K319A # Austin Ho (CODEOWNERS models/**/distilbert/ @tt-aho)
+  team: ttnn
+
+- name: SqueezeBERT e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 120 models/demos/squeezebert/demo/demo.py
+  model: squeezebert
+  model_family: SqueezeBERT
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+  owner_id: U07D5N7QL4U # Joseph Chu
+  team: ttnn
+
+- name: MNIST MLP e2e tests
+  cmd: |
+    pytest --timeout 120 models/demos/vision/classification/mnist/demo/demo.py
+  model: mnist-mlp
+  model_family: MNIST MLP
+  skus:
+    wh_n150:
+      timeout: 3
+      tier: 3
+  owner_id: U088DBNUKGR # Evan Smal
+  team: models
+
+- name: ResNet-50 e2e tests
+  cmd: |
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 300 models/demos/vision/classification/resnet50/wormhole/demo/demo.py
+    pytest --timeout 120 models/demos/vision/classification/resnet50/wormhole/tests/test_resnet50_stability.py -k "short"
+    pytest --timeout 300 models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_demo.py
+  model: resnet50
+  model_family: ResNet
+  skus:
+    wh_n150:
+      timeout: 8
+      tier: 1
+    wh_llmbox_perf:
+      timeout: 6
+      tier: 1
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  team: ttnn
+
 - name: TT-DiT Wan2.2-T2V-A14B e2e tests (BH QuietBox 2)
   cmd: |
     unset HF_HUB_OFFLINE
