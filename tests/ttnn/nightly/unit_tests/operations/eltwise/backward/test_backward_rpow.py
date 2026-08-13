@@ -96,3 +96,53 @@ def test_bw_rpow_base_two_agrees_with_exp2_bw(input_shapes, device):
     assert torch.allclose(rpow_out, exp2_out, rtol=0.05, atol=1e-6), (
         "rpow_bw(x, 2.0) and exp2_bw(x) differ, but exp2(x) and rpow(x, 2.0) are the same function"
     )
+@pytest.mark.parametrize("exponent", (-2.0, -0.5, -10.0))
+@pytest.mark.parametrize("input_value", (-3.0, 0.0, 1.5, 7.0))
+def test_bw_rpow_negative_base_is_nan_everywhere(exponent, input_value, device):
+    # A negative base is only defined on integer inputs, so exponent ** input has no
+    # derivative with respect to input and the op promises NaN for every element.
+    # torch agrees: torch.pow(-2.0, x).backward() is NaN for every x.
+    #
+    # This is checked element by element on purpose. compare_pcc cannot see it: get_pcc
+    # zeroes NaN and Inf on both sides before correlating, so an all-NaN tensor and an
+    # all-zero one correlate perfectly.
+    shape = torch.Size([1, 1, 32, 32])
+    torch_input = torch.full(shape, input_value, dtype=torch.float32)
+    torch_grad = torch.ones(shape, dtype=torch.float32)
+
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    grad_tensor = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_out = ttnn.to_torch(ttnn.rpow_bw(grad_tensor, input_tensor, exponent)[0]).float()
+
+    assert torch.isnan(tt_out).all(), (
+        f"rpow_bw with negative base {exponent} at input {input_value} returned "
+        f"{tt_out.flatten()[0].item()}, but a negative base has no real derivative"
+    )
+
+
+@pytest.mark.parametrize("input_value", (-4.0, -0.25, 0.5, 6.0))
+def test_bw_rpow_zero_base_splits_at_zero(input_value, device):
+    # 0 ** input is 0 above zero and +inf below it, so the derivative the op promises is
+    # 0 above zero and -inf below it. Both halves are exact values, not approximations,
+    # and -inf is precisely what compare_pcc would normalize away.
+    shape = torch.Size([1, 1, 32, 32])
+    torch_input = torch.full(shape, input_value, dtype=torch.float32)
+    torch_grad = torch.ones(shape, dtype=torch.float32)
+
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    grad_tensor = ttnn.from_torch(torch_grad, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    tt_out = ttnn.to_torch(ttnn.rpow_bw(grad_tensor, input_tensor, 0.0)[0]).float()
+
+    if input_value < 0.0:
+        expected = float("-inf")
+        assert torch.isinf(tt_out).all() and (tt_out < 0).all(), (
+            f"rpow_bw with base 0 at input {input_value} returned "
+            f"{tt_out.flatten()[0].item()}, expected {expected}"
+        )
+    else:
+        assert torch.equal(tt_out, torch.zeros_like(tt_out)), (
+            f"rpow_bw with base 0 at input {input_value} returned "
+            f"{tt_out.flatten()[0].item()}, expected 0"
+        )
