@@ -626,7 +626,6 @@ class TestTriage:
         return result
 
 
-
 @pytest.mark.parametrize(
     "cause_hang_with_app",
     [
