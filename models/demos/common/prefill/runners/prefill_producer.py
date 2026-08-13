@@ -633,7 +633,7 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
     """Read slot `slot_id`'s KV over [0, real_len) via the published table and PCC-check it against the
     golden trace. Dispatches on the model: MLA (single merged kvpe config), M3 (multi-config triple
     cache), or GPT-OSS (multi-config K/V heads, no index_k). Returns the min PCC across layers.
-    
+
     The reader is NOT adapter-pluggable — a new model whose cache is neither of those two layouts needs
     a branch here (and its own decode), not just an adapter."""
     if ADAPTER.name == "minimax_m3":
