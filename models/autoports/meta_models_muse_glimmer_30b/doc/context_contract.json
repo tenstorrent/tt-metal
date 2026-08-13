@@ -35,26 +35,6 @@
     "l1_small_note": "Holds the per-program CCL global semaphores (256 B each, released only by clear_program_cache()). The decode step leaves 7,296 B of L1 to give away. Measured ladder: 32768 fails the first 256-row prefill, 8192 is 896 B over the decode budget, 7168 passes with 128 B of margin, 6144 passes with 1,152 B, 4096 passes but makes the region itself the constraint, and 2048 fills the region mid-suite (\"Out of Memory: Not enough space to allocate 1760 B L1_SMALL buffer across 110 banks\"). 6144 ships: 24 distinct CCL programs with 1,152 B of margin. A stacked model needs two CCL shapes per layer kind, so 24 is not a bound it can reach.",
     "known_teardown_fault": "Closing the 1x4 FABRIC_1D_RING mesh has three times timed out returning ethernet core 29-25 to base firmware (\"Timed out while waiting for active ethernet core 29-25 to become active again\"), aborting the process after all work completed and wedging the next process until tt-smi -r. Seen only on watcher-instrumented runs; the 100-test acceptance suite, the A/B runs and the eight Tracy captures have not produced it. Recoverable with one bounded reset; see doc/multichip_decoder/work_log.md sections 9.2 and 9.4. Recovery is exercised end to end on the third occurrence: doc/multichip_decoder/logs/watcher_run.log (31 passed, all watcher counters 0, then SIGABRT at close) followed by one tt-smi -r and a passing doc/multichip_decoder/logs/smoke_after_reset.log."
   },
-  "implementation": {
-    "parallelism": "TP=4 over all four dies. Column-parallel wqkv / attention gate / MLP gate+up; row-parallel o_proj / mlp_down; replicated residual stream, so the layer's input and output are replicated and a stacked model needs no conversion between layers. Two reductions per layer, one per sublayer.",
-    "kv_head_mapping": "num_key_value_heads=2 < 4 devices, so each device takes 8 contiguous query heads and the one KV head those heads read under GQA (group size 16): devices 0,1 -> KV head 0; devices 2,3 -> KV head 1. The fused QKV weight therefore grows from 4608 to 4x1280 = 5120 columns and the per-device KV cache holds one head, i.e. it halves rather than quarters.",
-    "mlp_padding": "The per-device MLP intermediate is zero-padded 4992 -> 5120 (156 -> 160 tiles) so the width-sharded DRAM weight is exactly one shard per DRAM bank and one 16-core L1 grid can serve the whole decode step. Costs 2.6% of the MLP weight bytes; silu(0)*0 = 0 makes it numerically inert.",
-    "decode_layout": "Every width-sharded L1 decode tensor is on 16 cores -- the largest count that divides every matmul input width (208 hidden, 32 gated attention, 160 padded intermediate). The 40-tile QKV projection output is the one padded shard (3 tiles per core against 2.5); it is an output, never an in0.",
-    "decode_matmul": "All six decode projections are MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig dispatches with per-device-K in0_block_w: wqkv 13, attn_gate 13, o_proj 2, mlp_gate 13, mlp_up 13, mlp_down 10.",
-    "collectives": "Decode reduces with reduce_scatter(num_workers_per_link=1) + all_gather; prefill reduces with the fused ttnn.all_reduce. Both on ttnn.Topology.Ring. The worker count is per payload: 1 wins the 40 KB decode collective by 39% and loses the 107 MB prefill one by 2.4x (4 workers: 1814.9 -> 759.9 us), which is also why the prefill reducer choice is a wash (pair 1570.1 us vs fused 1563.7 us) and is made on dispatch count. The prefill collective payload is BFLOAT8_B (asked of the row-parallel matmul directly, so no extra op) and saves 29% of the collective; the decode payload stays BFLOAT16 because the BFP8 candidate clears the 0.995 real-weight bar by only 2.8e-6 against 1.05e-4 for BF16.",
-    "decode_sdpa": "paged_scaled_dot_product_attention_decode over the whole 11x10 grid, op-chosen q/k chunking, max_cores_per_head_batch=32. With one local KV head the op's default of 16 leaves most of the grid idle and costs 12% of the long-context decode step.",
-    "precision_policy": "Inherited unchanged from the optimized stage: BFLOAT16 activations/residual/norms, BFLOAT8_B attention weights, BFLOAT4_B MLP weights, BFLOAT8_B paged KV cache, LoFi projections.",
-    "page_block_size": 64,
-    "prefill_chunk_size": 8192,
-    "kv_cache_dtype": "BFLOAT8_B",
-    "kv_cache_sizing": "full max_seq_len per user, one local KV head per device",
-    "extra_persistent_buffers": {
-      "prefill_rope_tables_bytes_per_sliding_layer": 67108864,
-      "prefill_rope_tables_note": "Replicated on every device (2 tables x 131072 positions x 128 head_dim x 2 B). Unchanged by TP: the RoPE tables are indexed by position, not by head.",
-      "sliding_prefill_q_filler_bytes_per_sliding_layer": 4194304,
-      "sliding_prefill_q_filler_formula": "local_heads(8) * sliding_window(2048) * head_dim(128) * 2 B -- 4x smaller than the single-chip layer's 16,777,216 B because the filler is per local head."
-    }
-  },
   "byte_budget_at_full_context": {
     "per_device_layer_weight_bytes": 81043456,
     "per_device_layer_weight_formula": "wqkv 6656*1280*1.0625 = 9,052,160 + attn_gate 6656*1024*1.0625 = 7,241,728 + o_proj 1024*6656*1.0625 = 7,241,728 + 3 x MLP 6656*5120*0.5625 = 57,507,840",
@@ -187,100 +167,6 @@
       },
       "note": "Same population and bar as the single-chip stage (0.995). This stage adds no precision decision of its own to the weights; the one precision decision it does make -- the BFP8 prefill collective payload -- is inside this surface."
     }
-  },
-  "performance": {
-    "note": "'e2e' is warmed host wall time from bench/layer_ab.py, min of 3 rounds, no profiler attached; 'device' is the Device Time column of tt-perf-report over a warmed signposted Tracy window (decode divided by its 8 trace replays). Both multichip and baseline rows come from the same bench/run_evidence_chain.sh run of the final shipped code (logs/layer_ab_final.log, logs/layer_ab_single_baseline.log). Traced decode reproduces to 1e-4 across rounds and runs; warmed prefill spans 1.3-4.1% run to run, measured from the three committed runs of the identical shipped build (layer_ab_final, the tp4 rows of layer_ab_reducer_final and layer_ab_packet8192), so the prefill speedups are quoted from the final run rather than the best one.",
-    "traced_decode_ms_per_token_e2e": {
-      "sliding@2048": 0.4572,
-      "full@2048": 0.426
-    },
-    "traced_decode_ms_per_token_e2e_baseline": {
-      "sliding@2048": 1.0908,
-      "full@2048": 1.0602
-    },
-    "traced_decode_speedup": {
-      "sliding@2048": 2.386,
-      "full@2048": 2.489
-    },
-    "traced_decode_us_device": {
-      "sliding@2048": 441.5,
-      "full@2048": 419.0,
-      "sliding@131071": 440.5,
-      "full@131071": 522.7
-    },
-    "traced_decode_us_device_baseline": {
-      "sliding@2048": 1072.0,
-      "full@2048": 1049.0,
-      "sliding@131071": 1071.0,
-      "full@131071": 1255.0
-    },
-    "prefill_ms_e2e": {
-      "8192_sliding": 19.14,
-      "8192_full": 18.68
-    },
-    "prefill_ms_e2e_baseline": {
-      "8192_sliding": 44.12,
-      "8192_full": 43.59
-    },
-    "prefill_speedup": {
-      "8192_sliding": 2.305,
-      "8192_full": 2.333
-    },
-    "prefill_us_device": {
-      "128_sliding": 839.8,
-      "128_full": 814.6,
-      "8192_sliding": 18211.6,
-      "8192_full": 17925.2
-    },
-    "prefill_us_device_baseline": {
-      "128_sliding": 2140.0,
-      "128_full": 2096.0,
-      "8192_sliding": 37762.0,
-      "8192_full": 36606.0
-    },
-    "parallel_efficiency": {
-      "decode_sliding": 0.597,
-      "decode_full": 0.622,
-      "prefill_8192_sliding": 0.576,
-      "prefill_8192_full": 0.583
-    },
-    "efficiency_note": "Efficiency is speedup/4. The gap to linear is the part of a decoder layer that does not shrink with tensor parallelism: per replay at 2048 the two reductions are 53.2 us (12.0%) of new cost and the four hidden-size RMSNorms are 33.7 us (7.6%) that a replicated residual makes every device repeat. In the 8192-token prefill layer the same two groups are 18.9% and 19.0%.",
-    "device_ops_per_iteration": {
-      "decode_sliding": 46,
-      "decode_full": 36,
-      "prefill_8192_sliding": 30,
-      "prefill_8192_full": 28,
-      "prefill_128_sliding": 38,
-      "prefill_128_full": 36
-    },
-    "device_op_count_note": "Decode gains 4 collective ops (reduce_scatter + all_gather per sublayer) and loses the single-chip layer's 2 reshards, against 44 (sliding) / 34 (full) on one chip."
-  },
-  "tests": {
-    "total": 104,
-    "passed": 104,
-    "skipped": 0,
-    "asserted_pcc_checks": 298,
-    "vs_single_chip_checks": 20,
-    "min_pcc_vs_single_chip": 0.999183,
-    "real_weight_checks": 30,
-    "min_pcc_real_weights": 0.995105,
-    "synthetic_checks": 246,
-    "min_pcc_synthetic": 0.990516,
-    "two_layer_stack_checks": 2,
-    "min_pcc_two_layer_stack": 0.967946
-  },
-  "multichip_decoder_capacity_evidence": {
-    "question": "Does the advertised 131072-token context still fit and run once the layer is fractured over four dies?",
-    "answer": "Yes, with more headroom than before: per-device weights drop 3.88x and per-device KV cache 2x.",
-    "result": "10 full-context checks, all >= 0.990980 (see tested.prefill.pcc / tested.decode.pcc)",
-    "commands": [
-      "python models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/smoke.py --kind sliding --seq-len 2049",
-      "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_decoder.py -k 'full_context or per_device_weight_shapes'"
-    ],
-    "logs": [
-      "doc/multichip_decoder/logs/full_test_run.log",
-      "doc/multichip_decoder/logs/smoke_v1.log"
-    ]
   },
   "optimized_decoder": {
     "stage": "optimized_decoder",
@@ -885,6 +771,233 @@
       "notes": "No capability reduction was taken by the functional decoder stage. The advertised 131072-token context is supported and tested end to end (paged prefill fill + paged decode read) for both decoder-layer kinds. Measured fields in this block are regenerated by doc/functional_decoder/bench/refresh_context_contract.py from the committed junit, suite log and Tracy CSVs; --check turns staleness into a non-zero exit."
     }
   },
+  "multichip_decoder": {
+    "implementation": {
+      "parallelism": "TP=4 over all four dies. Column-parallel wqkv / attention gate / MLP gate+up; row-parallel o_proj / mlp_down; replicated residual stream, so the layer's input and output are replicated and a stacked model needs no conversion between layers. Two reductions per layer, one per sublayer.",
+      "kv_head_mapping": "num_key_value_heads=2 < 4 devices, so each device takes 8 contiguous query heads and the one KV head those heads read under GQA (group size 16): devices 0,1 -> KV head 0; devices 2,3 -> KV head 1. The fused QKV weight therefore grows from 4608 to 4x1280 = 5120 columns and the per-device KV cache holds one head, i.e. it halves rather than quarters.",
+      "mlp_padding": "The per-device MLP intermediate is zero-padded 4992 -> 5120 (156 -> 160 tiles) so the width-sharded DRAM weight is exactly one shard per DRAM bank and one 16-core L1 grid can serve the whole decode step. Costs 2.6% of the MLP weight bytes; silu(0)*0 = 0 makes it numerically inert.",
+      "decode_layout": "Every width-sharded L1 decode tensor is on 16 cores -- the largest count that divides every matmul input width (208 hidden, 32 gated attention, 160 padded intermediate). The 40-tile QKV projection output is the one padded shard (3 tiles per core against 2.5); it is an output, never an in0.",
+      "decode_matmul": "All six decode projections are MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig dispatches with per-device-K in0_block_w: wqkv 13, attn_gate 13, o_proj 2, mlp_gate 13, mlp_up 13, mlp_down 10.",
+      "collectives": "Decode reduces with reduce_scatter(num_workers_per_link=1) + all_gather; prefill reduces with the fused ttnn.all_reduce. Both on ttnn.Topology.Ring. The worker count is per payload: 1 wins the 40 KB decode collective by 39% and loses the 107 MB prefill one by 2.4x (4 workers: 1814.9 -> 759.9 us), which is also why the prefill reducer choice is a wash (pair 1570.1 us vs fused 1563.7 us) and is made on dispatch count. The prefill collective payload is BFLOAT8_B (asked of the row-parallel matmul directly, so no extra op) and saves 29% of the collective; the decode payload stays BFLOAT16 because the BFP8 candidate clears the 0.995 real-weight bar by only 2.8e-6 against 1.05e-4 for BF16.",
+      "decode_sdpa": "paged_scaled_dot_product_attention_decode over the whole 11x10 grid, op-chosen q/k chunking, max_cores_per_head_batch=32. With one local KV head the op's default of 16 leaves most of the grid idle and costs 12% of the long-context decode step.",
+      "precision_policy": "Inherited unchanged from the optimized stage: BFLOAT16 activations/residual/norms, BFLOAT8_B attention weights, BFLOAT4_B MLP weights, BFLOAT8_B paged KV cache, LoFi projections.",
+      "page_block_size": 64,
+      "prefill_chunk_size": 8192,
+      "kv_cache_dtype": "BFLOAT8_B",
+      "kv_cache_sizing": "full max_seq_len per user, one local KV head per device",
+      "extra_persistent_buffers": {
+        "prefill_rope_tables_bytes_per_sliding_layer": 67108864,
+        "prefill_rope_tables_note": "Replicated on every device (2 tables x 131072 positions x 128 head_dim x 2 B). Unchanged by TP: the RoPE tables are indexed by position, not by head.",
+        "sliding_prefill_q_filler_bytes_per_sliding_layer": 4194304,
+        "sliding_prefill_q_filler_formula": "local_heads(8) * sliding_window(2048) * head_dim(128) * 2 B -- 4x smaller than the single-chip layer's 16,777,216 B because the filler is per local head."
+      }
+    },
+    "performance": {
+      "note": "'e2e' is warmed host wall time from bench/layer_ab.py, min of 3 rounds, no profiler attached; 'device' is the Device Time column of tt-perf-report over a warmed signposted Tracy window (decode divided by its 8 trace replays). Both multichip and baseline rows come from the same bench/run_evidence_chain.sh run of the final shipped code (logs/layer_ab_final.log, logs/layer_ab_single_baseline.log). Traced decode reproduces to 1e-4 across rounds and runs; warmed prefill spans 1.3-4.1% run to run, measured from the three committed runs of the identical shipped build (layer_ab_final, the tp4 rows of layer_ab_reducer_final and layer_ab_packet8192), so the prefill speedups are quoted from the final run rather than the best one.",
+      "traced_decode_ms_per_token_e2e": {
+        "sliding@2048": 0.4572,
+        "full@2048": 0.426
+      },
+      "traced_decode_ms_per_token_e2e_baseline": {
+        "sliding@2048": 1.0908,
+        "full@2048": 1.0602
+      },
+      "traced_decode_speedup": {
+        "sliding@2048": 2.386,
+        "full@2048": 2.489
+      },
+      "traced_decode_us_device": {
+        "sliding@2048": 441.5,
+        "full@2048": 419.0,
+        "sliding@131071": 440.5,
+        "full@131071": 522.7
+      },
+      "traced_decode_us_device_baseline": {
+        "sliding@2048": 1072.0,
+        "full@2048": 1049.0,
+        "sliding@131071": 1071.0,
+        "full@131071": 1255.0
+      },
+      "prefill_ms_e2e": {
+        "8192_sliding": 19.14,
+        "8192_full": 18.68
+      },
+      "prefill_ms_e2e_baseline": {
+        "8192_sliding": 44.12,
+        "8192_full": 43.59
+      },
+      "prefill_speedup": {
+        "8192_sliding": 2.305,
+        "8192_full": 2.333
+      },
+      "prefill_us_device": {
+        "128_sliding": 839.8,
+        "128_full": 814.6,
+        "8192_sliding": 18211.6,
+        "8192_full": 17925.2
+      },
+      "prefill_us_device_baseline": {
+        "128_sliding": 2140.0,
+        "128_full": 2096.0,
+        "8192_sliding": 37762.0,
+        "8192_full": 36606.0
+      },
+      "parallel_efficiency": {
+        "decode_sliding": 0.597,
+        "decode_full": 0.622,
+        "prefill_8192_sliding": 0.576,
+        "prefill_8192_full": 0.583
+      },
+      "efficiency_note": "Efficiency is speedup/4. The gap to linear is the part of a decoder layer that does not shrink with tensor parallelism: per replay at 2048 the two reductions are 53.2 us (12.0%) of new cost and the four hidden-size RMSNorms are 33.7 us (7.6%) that a replicated residual makes every device repeat. In the 8192-token prefill layer the same two groups are 18.9% and 19.0%.",
+      "device_ops_per_iteration": {
+        "decode_sliding": 46,
+        "decode_full": 36,
+        "prefill_8192_sliding": 30,
+        "prefill_8192_full": 28,
+        "prefill_128_sliding": 38,
+        "prefill_128_full": 36
+      },
+      "device_op_count_note": "Decode gains 4 collective ops (reduce_scatter + all_gather per sublayer) and loses the single-chip layer's 2 reshards, against 44 (sliding) / 34 (full) on one chip."
+    },
+    "tests": {
+      "total": 104,
+      "passed": 104,
+      "skipped": 0,
+      "asserted_pcc_checks": 298,
+      "vs_single_chip_checks": 20,
+      "min_pcc_vs_single_chip": 0.999183,
+      "real_weight_checks": 30,
+      "min_pcc_real_weights": 0.995105,
+      "synthetic_checks": 246,
+      "min_pcc_synthetic": 0.990516,
+      "two_layer_stack_checks": 2,
+      "min_pcc_two_layer_stack": 0.967946
+    },
+    "multichip_decoder_capacity_evidence": {
+      "question": "Does the advertised 131072-token context still fit and run once the layer is fractured over four dies?",
+      "answer": "Yes, with more headroom than before: per-device weights drop 3.88x and per-device KV cache 2x.",
+      "result": "10 full-context checks, all >= 0.990980 (see tested.prefill.pcc / tested.decode.pcc)",
+      "commands": [
+        "python models/autoports/meta_models_muse_glimmer_30b/doc/multichip_decoder/bench/smoke.py --kind sliding --seq-len 2049",
+        "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_decoder.py -k 'full_context or per_device_weight_shapes'"
+      ],
+      "logs": [
+        "doc/multichip_decoder/logs/full_test_run.log",
+        "doc/multichip_decoder/logs/smoke_v1.log"
+      ]
+    },
+    "stage": "multichip_decoder",
+    "evidence_root": "doc/multichip_decoder/",
+    "note": "The stage this one optimizes in place. Its implementation description and performance figures are the *before* side of doc/optimized_multichip_decoder/README.md; they are kept here so a reader can see what moved, and they are no longer the current path."
+  },
+  "implementation": {
+    "parallelism": "TP=4 over all four dies. Column-parallel wqkv / attention gate / MLP gate+up; row-parallel o_proj / mlp_down; replicated residual stream, so the layer's input and output are replicated and a stacked model needs no conversion between layers. Two reductions per layer, one per sublayer.",
+    "kv_head_mapping": "num_key_value_heads=2 < 4 devices, so each device takes 8 contiguous query heads and the one KV head those heads read under GQA (group size 16): devices 0,1 -> KV head 0; devices 2,3 -> KV head 1. The fused QKV weight therefore grows from 4608 to 4x1280 = 5120 columns and the per-device KV cache holds one head, i.e. it halves rather than quarters.",
+    "mlp_padding": "The per-device MLP intermediate is zero-padded 4992 -> 5120 (156 -> 160 tiles) so the width-sharded DRAM weight is exactly one shard per DRAM bank and one 16-core L1 grid can serve the whole decode step. Costs 2.6% of the MLP weight bytes; silu(0)*0 = 0 makes it numerically inert.",
+    "decode_layout": "Every width-sharded L1 decode tensor is on 16 cores -- the largest count that divides every matmul input width (208 hidden, 32 gated attention, 160 padded intermediate). The 40-tile QKV projection output is the one padded shard (3 tiles per core against 2.5); it is an output, never an in0. The decode residual now also crosses the *layer boundary* in this layout rather than being written back to DRAM interleaved; see optimized_multichip_decoder.inter_layer_decode_residual_contract.",
+    "decode_matmul": "All six decode projections are MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig dispatches with per-device-K in0_block_w: wqkv 13, attn_gate 13, o_proj 2, mlp_gate 13, mlp_up 13, mlp_down 10.",
+    "collectives": "Two reductions per layer, one per sublayer, on ttnn.Topology.Ring, with the residual stream replicated. The implementation is split by payload: prefill uses ttnn.experimental.reduce_scatter_minimal_async + all_gather_async with seven layer-owned global semaphores in L1_SMALL, reduce-scatter at 4 workers, all-gather at the op default, and a barrier semaphore on both; decode uses the composite ttnn.reduce_scatter(num_workers_per_link=1, use_l1_small_for_semaphores=True) + ttnn.all_gather. See optimized_multichip_decoder.collective_implementation for why.",
+    "decode_sdpa": "paged_scaled_dot_product_attention_decode over the whole 11x10 grid, op-chosen q/k chunking, max_cores_per_head_batch=32. With one local KV head the op's default of 16 leaves most of the grid idle and costs 12% of the long-context decode step.",
+    "precision_policy": "Inherited unchanged from the optimized stage: BFLOAT16 activations/residual/norms, BFLOAT8_B attention weights, BFLOAT4_B MLP weights, BFLOAT8_B paged KV cache, LoFi projections.",
+    "page_block_size": 64,
+    "prefill_chunk_size": 8192,
+    "kv_cache_dtype": "BFLOAT8_B",
+    "kv_cache_sizing": "full max_seq_len per user, one local KV head per device",
+    "extra_persistent_buffers": {
+      "prefill_rope_tables_bytes_per_sliding_layer": 67108864,
+      "prefill_rope_tables_note": "Replicated on every device (2 tables x 131072 positions x 128 head_dim x 2 B). Unchanged by TP: the RoPE tables are indexed by position, not by head.",
+      "sliding_prefill_q_filler_bytes_per_sliding_layer": 4194304,
+      "sliding_prefill_q_filler_formula": "local_heads(8) * sliding_window(2048) * head_dim(128) * 2 B -- 4x smaller than the single-chip layer's 16,777,216 B because the filler is per local head."
+    }
+  },
+  "performance": {
+    "note": "'e2e' is warmed host wall time from bench/layer_ab.py, min of 3 rounds, no profiler attached, with before and after from the same invocation (logs/final_layer_ab.log); 'device' is the Device Time column of tt-perf-report over a warmed signposted Tracy window, decode divided by its 8 trace replays, recaptured against the final default path (tracy/).",
+    "traced_decode_ms_per_token_e2e": {
+      "sliding@2048": 0.4545,
+      "full@2048": 0.4238
+    },
+    "traced_decode_ms_per_token_e2e_before": {
+      "sliding@2048": 0.4574,
+      "full@2048": 0.4257
+    },
+    "traced_decode_us_device": {
+      "sliding@2048": 438.8,
+      "full@2048": 416.4,
+      "sliding@131071": 438.2,
+      "full@131071": 520.6
+    },
+    "traced_decode_us_device_before": {
+      "sliding@2048": 441.5,
+      "full@2048": 419.0,
+      "sliding@131071": 440.5,
+      "full@131071": 522.7
+    },
+    "prefill_us_device": {
+      "8192_sliding": 17687.1,
+      "8192_full": 17272.0,
+      "128_sliding": 840.1,
+      "128_full": 812.5
+    },
+    "prefill_us_device_before": {
+      "8192_sliding": 18211.6,
+      "8192_full": 17925.2,
+      "128_sliding": 839.8,
+      "128_full": 814.6
+    },
+    "prefill_ms_e2e": {
+      "8192_sliding": 18.98,
+      "8192_full": 18.28
+    },
+    "prefill_ms_e2e_before": {
+      "8192_sliding": 19.31,
+      "8192_full": 18.89
+    },
+    "prefill_e2e_note": "Not a claim: the same configuration spans 3.4-4.1 % across three runs in one process, which is larger than the effect. The prefill result is the op-level collective (15.2 %) and the device-time window (-2.88 / -3.64 %).",
+    "single_chip_baseline_e2e": {
+      "traced_decode_sliding@2048": 1.0909,
+      "traced_decode_full@2048": 1.0604,
+      "prefill_8192_sliding": 44.21,
+      "prefill_8192_full": 44.37
+    },
+    "traced_decode_speedup_vs_single_chip": {
+      "sliding@2048": 2.4,
+      "full@2048": 2.502
+    },
+    "device_ops_per_iteration": {
+      "decode_sliding": 45,
+      "decode_full": 35
+    },
+    "device_ops_per_iteration_before": {
+      "decode_sliding": 46,
+      "decode_full": 36
+    },
+    "device_op_count_note": "One fewer op per decode step: the layer-exit sharded_to_interleaved the boundary contract removes. The decode collectives are unchanged (ReduceScatter 29.36 + AllGather 24.09 us/replay), because decode keeps the composite wrappers."
+  },
+  "tests": {
+    "total": 108,
+    "passed": 108,
+    "note": "104 in tests/test_multichip_decoder.py (the multichip stage's 100 plus 2 new contract tests x 2 layer kinds) and 4 in tests/test_multichip_vs_single_chip.py.",
+    "junit": [
+      "doc/optimized_multichip_decoder/test_results.xml",
+      "doc/optimized_multichip_decoder/test_results_vs_single_chip.xml"
+    ],
+    "log": "doc/optimized_multichip_decoder/logs/full_test_run.log",
+    "vs_single_chip_bar": 0.999,
+    "vs_single_chip_pcc": {
+      "prefill_sliding": 0.999721,
+      "prefill_full": 0.999609,
+      "decode_sliding": 0.999843,
+      "decode_full": 0.999183
+    },
+    "vs_single_chip_note": "Identical to the multichip stage's committed values to six decimals.",
+    "real_weight_pcc_at_2049": {
+      "prefill_sliding": 0.997755,
+      "prefill_full": 0.997067,
+      "decode_sliding": 0.998429,
+      "decode_full": 0.997342
+    },
+    "acceptance_bar_pcc_real_weights": 0.995
+  },
   "optimized_multichip_decoder": {
     "stage": "optimized_multichip_decoder",
     "evidence_root": "doc/optimized_multichip_decoder/",
@@ -932,24 +1045,24 @@
     "collective_implementation": {
       "prefill": "ttnn.experimental.reduce_scatter_minimal_async + all_gather_async, rs 4 workers, all-gather op default, barrier semaphore on both",
       "decode": "ttnn.reduce_scatter(num_workers_per_link=1, use_l1_small_for_semaphores=True) + ttnn.all_gather",
-      "why_split": "The all-gather's barrier semaphore is mandatory -- without it the watcher stops the device with 'subordinate_erisc detected invalid NOC command buffer state' in fabric_erisc_router.cpp -- and it costs 0.4 % at the 107 MB prefill payload against 1.2 % at the 40 KB decode payload. With it, the async pair is 14.7 % faster than ttnn.all_reduce on prefill (1351.4 vs 1583.9 us) and 0.15 % slower than the wrappers on decode (0.4553 vs 0.4546 ms/token).",
+      "why_split": "With the all-gather's barrier semaphore present -- which is what ships -- the async pair is 15.2 % faster than ttnn.all_reduce at the 107 MB prefill payload (1348.0 vs 1588.7 us) and 0.2 % slower than the wrappers at the 40 KB decode payload (0.4555 / 0.4244 vs 0.4545 / 0.4238 ms/token, three non-overlapping rounds each). A watcher trip in fabric_erisc_router.cpp was observed once on a pre-fix build that also carried the rejected persistent buffers; it has not reproduced with the barrier removed alone (logs/watcher_no_ag_barrier.log is watcher-clean), so the barrier is kept as op-contract practice and the split rests on the measurement.",
       "persistent_buffers": "rejected: 0.3 % faster, intermittently wrong on the first decode step; see README"
     },
     "performance": {
       "note": "'e2e' is warmed host wall time from bench/layer_ab.py, min of 3 rounds, no profiler attached, with before and after from the same invocation (logs/final_layer_ab.log); 'device' is the Device Time column of tt-perf-report over a warmed signposted Tracy window, decode divided by its 8 trace replays, recaptured against the final default path (tracy/).",
       "traced_decode_ms_per_token_e2e": {
-        "sliding@2048": 0.4548,
+        "sliding@2048": 0.4545,
         "full@2048": 0.4238
       },
       "traced_decode_ms_per_token_e2e_before": {
-        "sliding@2048": 0.4573,
+        "sliding@2048": 0.4574,
         "full@2048": 0.4257
       },
       "traced_decode_us_device": {
-        "sliding@2048": 438.3,
-        "full@2048": 416.0,
-        "sliding@131071": 438.1,
-        "full@131071": 520.3
+        "sliding@2048": 438.8,
+        "full@2048": 416.4,
+        "sliding@131071": 438.2,
+        "full@131071": 520.6
       },
       "traced_decode_us_device_before": {
         "sliding@2048": 441.5,
@@ -958,10 +1071,10 @@
         "full@131071": 522.7
       },
       "prefill_us_device": {
-        "8192_sliding": 17596.8,
-        "8192_full": 17177.7,
+        "8192_sliding": 17687.1,
+        "8192_full": 17272.0,
         "128_sliding": 840.1,
-        "128_full": 815.0
+        "128_full": 812.5
       },
       "prefill_us_device_before": {
         "8192_sliding": 18211.6,
@@ -970,18 +1083,23 @@
         "128_full": 814.6
       },
       "prefill_ms_e2e": {
-        "8192_sliding": 18.47,
-        "8192_full": 18.17
+        "8192_sliding": 18.98,
+        "8192_full": 18.28
       },
+      "prefill_ms_e2e_before": {
+        "8192_sliding": 19.31,
+        "8192_full": 18.89
+      },
+      "prefill_e2e_note": "Not a claim: the same configuration spans 3.4-4.1 % across three runs in one process, which is larger than the effect. The prefill result is the op-level collective (15.2 %) and the device-time window (-2.88 / -3.64 %).",
       "single_chip_baseline_e2e": {
-        "traced_decode_sliding@2048": 1.091,
-        "traced_decode_full@2048": 1.06,
-        "prefill_8192_sliding": 44.22,
-        "prefill_8192_full": 44.24
+        "traced_decode_sliding@2048": 1.0909,
+        "traced_decode_full@2048": 1.0604,
+        "prefill_8192_sliding": 44.21,
+        "prefill_8192_full": 44.37
       },
       "traced_decode_speedup_vs_single_chip": {
-        "sliding@2048": 2.399,
-        "full@2048": 2.501
+        "sliding@2048": 2.4,
+        "full@2048": 2.502
       },
       "device_ops_per_iteration": {
         "decode_sliding": 45,
@@ -991,11 +1109,7 @@
         "decode_sliding": 46,
         "decode_full": 36
       },
-      "device_op_count_note": "One fewer op per decode step: the layer-exit sharded_to_interleaved the boundary contract removes.",
-      "prefill_ms_e2e_before": {
-        "8192_sliding": 19.16,
-        "8192_full": 18.53
-      }
+      "device_op_count_note": "One fewer op per decode step: the layer-exit sharded_to_interleaved the boundary contract removes. The decode collectives are unchanged (ReduceScatter 29.36 + AllGather 24.09 us/replay), because decode keeps the composite wrappers."
     },
     "tests": {
       "total": 108,
@@ -1027,7 +1141,7 @@
       "tests": 35,
       "result": "clean: 35 passed, every counter 0 in both the dump (24,136 lines, 21 dumps) and the console",
       "log": "doc/optimized_multichip_decoder/logs/watcher_run.log",
-      "found_and_fixed": "The first watcher run stopped the device: 'subordinate_erisc detected invalid NOC command buffer state before starting the next kernel' in fabric_erisc_router.cpp, because all_gather_async was called without its barrier semaphore. A pre-stage control run did not trip. Fixed by giving each async collective its own barrier semaphore.",
+      "found_and_fixed": "The first watcher run stopped the device: 'subordinate_erisc detected invalid NOC command buffer state before starting the next kernel' in fabric_erisc_router.cpp. That build called all_gather_async without its barrier semaphore and also carried the persistent staging buffers this stage rejects. The barrier was added. The trip has NOT reproduced with the barrier removed on its own (logs/watcher_no_ag_barrier.log, every counter 0), so the cause is not established; the shipped path is watcher-clean either way.",
       "known_teardown_fault": "unchanged from the multichip stage: closing the 1x4 FABRIC_1D_RING mesh can time out returning ethernet core 29-25 to base firmware, after every test has reported; recoverable with one bounded tt-smi -r."
     },
     "non_aligned_sequence_lengths": "unchanged: the layer owns its padding, masking, cache fill and output slicing; nine prefill lengths including 1, 100, 2049, 4097, 8193, 12345 and 130073 still pass."

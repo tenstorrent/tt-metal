@@ -277,6 +277,22 @@ MULTICHIP_BOUNDARY_CORES = 16
 MULTICHIP_DECODE_MATMUL: dict[tuple[str, ttnn.DataType], tuple[int, int]] = {
     ("wqkv", ttnn.bfloat8_b): (MULTICHIP_BOUNDARY_CORES, 13),
     ("attn_gate", ttnn.bfloat8_b): (MULTICHIP_BOUNDARY_CORES, 13),
+    # $optimize OPT-011 was tried here and **not** taken, on a shipped-path
+    # measurement rather than an inherited assumption.  ``o_proj``'s per-device K
+    # is 1024 = 32 tiles, i.e. 2 tiles per core on the 16-core grid, which caps
+    # ``in0_block_w`` at 2 and is why ``tt-perf-report`` marks this row SLOW at
+    # 62 % of peak DRAM.  A narrower working shard is the only way to widen it,
+    # its in0 is the gated attention output rather than the residual, and
+    # ``decode_forward`` reshards for it -- so the candidate is real and cheap.
+    # Measured against the shipped default (``logs/ab_oproj_workshard_final.log``):
+    # 8 cores / ``in0_block_w=4`` gives 0.4542 / 0.4236 against 0.4546 / 0.4238,
+    # with the three rounds of each non-overlapping.  It is 0.11 % / 0.05 %, and
+    # it costs an extra reshard op, the single-grid invariant three structural
+    # tests assert, and 13 % of the multichip-vs-single-chip PCC headroom
+    # (0.999183 -> 0.999159 against a 0.999 bar).  For a layer whose job is to be
+    # a stacking baseline that is not a good trade.  4 cores is neutral or worse
+    # and 2 and 1 fail L1; see ``logs/ab_oproj_workshard.log`` for the exact
+    # circular-buffer errors.
     ("o_proj", ttnn.bfloat8_b): (MULTICHIP_BOUNDARY_CORES, 2),
     ("mlp_gate", ttnn.bfloat8_b): (MULTICHIP_BOUNDARY_CORES, 13),
     ("mlp_up", ttnn.bfloat8_b): (MULTICHIP_BOUNDARY_CORES, 13),
@@ -862,6 +878,7 @@ class MultichipDecoder(OptimizedDecoder):
         ccl_chunks_per_sync: int | None = None,
         ccl_buffers_per_channel: int | None = None,
         ccl_num_links: int | None = None,
+        ccl_ag_barrier: bool = True,
         **kwargs,
     ) -> None:
         kwargs.setdefault("decode_matmul", MULTICHIP_DECODE_MATMUL)
@@ -890,6 +907,13 @@ class MultichipDecoder(OptimizedDecoder):
         self.ccl_chunks_per_sync = ccl_chunks_per_sync
         self.ccl_buffers_per_channel = ccl_buffers_per_channel
         self.ccl_num_links = ccl_num_links
+        #: Pass ``all_gather_async`` its barrier semaphore.  **Always true in any
+        #: shipped configuration**; the knob exists only so the unsafe arm can be
+        #: reproduced from committed code.  ``False`` is 1.2 % faster on the decode
+        #: payload and makes the watcher stop the device -- see
+        #: :data:`DEFAULT_DECODE_CCL_IMPL` and
+        #: ``doc/optimized_multichip_decoder/logs/watcher_no_ag_barrier.log``.
+        self.ccl_ag_barrier = ccl_ag_barrier
         self._ccl_sems = None
         self._ccl_slot = 0
         decode_sdpa = kwargs.pop("decode_sdpa", None) or MULTICHIP_DECODE_SDPA
@@ -982,6 +1006,7 @@ class MultichipDecoder(OptimizedDecoder):
         ccl_chunks_per_sync: int | None = None,
         ccl_buffers_per_channel: int | None = None,
         ccl_num_links: int | None = None,
+        ccl_ag_barrier: bool = True,
         **kwargs,
     ) -> "MultichipDecoder":
         """Same contract as ``OptimizedDecoder.from_state_dict`` on a mesh.
@@ -1185,6 +1210,7 @@ class MultichipDecoder(OptimizedDecoder):
             ccl_chunks_per_sync=ccl_chunks_per_sync,
             ccl_buffers_per_channel=ccl_buffers_per_channel,
             ccl_num_links=ccl_num_links,
+            ccl_ag_barrier=ccl_ag_barrier,
             sharded_decode_io=sharded_decode_io,
             **({} if decode_fused_activation is None else {"decode_fused_activation": decode_fused_activation}),
         )
@@ -1265,18 +1291,21 @@ class MultichipDecoder(OptimizedDecoder):
     def _ccl_semaphores(self) -> dict:
         """Global semaphores for the async collectives, shared across the mesh.
 
-        The composite wrappers create a semaphore per *program* and leave it in
-        ``L1_SMALL`` for the life of the program cache, which is what bounds a
-        mesh to 24 distinct CCL programs (:data:`DEFAULT_L1_SMALL_SIZE`).  These
-        are created once per mesh, live in the main L1 pool of a fixed core range
-        and are reused by every shape and every layer, so the async path does not
-        consume that budget at all -- a stacked model pays for **one** set, not
-        one per layer.
+        Seven of them, created **once per mesh** and reused by every shape and
+        every layer (``_CCL_SEMAPHORES``, dropped by ``close_multichip_mesh``), in
+        the mesh's ``L1_SMALL`` region.  The composite wrappers instead create one
+        per *program* and leave it there for the life of the program cache, which
+        is what bounds a mesh to 24 distinct CCL programs
+        (:data:`DEFAULT_L1_SMALL_SIZE`); these are a fixed 1,792 B rather than a
+        per-program cost, but they are not free -- they are 7 fewer wrapper CCL
+        program slots, which is why the suite's clearing floor had to move.  See
+        ``doc/optimized_multichip_decoder/README.md``.
 
-        Two sets are cycled so the two collectives of one decode step cannot alias
-        a semaphore.  ``close_multichip_mesh`` drops the registry, because a
-        semaphore outlives neither the mesh that allocated it nor the address it
-        was allocated at.
+        They must be in ``L1_SMALL``.  Twelve of them in the main L1 pool -- the
+        first implementation here -- sit at the top of it for the life of the mesh,
+        and the decode step has only 7,296 B of headroom there; that made the next
+        sharded-norm program fail with *"Statically allocated circular buffers in
+        program 8764 clash with L1 buffers"* in 7 of the 104 acceptance tests.
         """
         key = id(self.mesh_device)
         sems = _CCL_SEMAPHORES.get(key)
@@ -1284,16 +1313,6 @@ class MultichipDecoder(OptimizedDecoder):
             grid = self.mesh_device.compute_with_storage_grid_size()
             crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
 
-            # In L1_SMALL, for the same reason the wrapper reduce-scatter is asked
-            # to put its own there: a semaphore in the main L1 pool sits at the
-            # top of it for the life of the mesh, and the decode step has only
-            # 7,296 B of headroom (:data:`DEFAULT_L1_SMALL_SIZE`).  Twelve of them
-            # in the main pool overruns that and the *next* sharded-norm program
-            # fails with "Statically allocated circular buffers ... clash with L1
-            # buffers"; in L1_SMALL they are 12 x 256 B = 3,072 B of a 6,144 B
-            # region, and -- unlike the wrapper's per-program semaphores -- that
-            # is a *fixed* cost, not one that grows with the number of distinct
-            # CCL programs.
             def sem():
                 return ttnn.create_global_semaphore(self.mesh_device, crs, 0, ttnn.BufferType.L1_SMALL)
 
@@ -1449,7 +1468,7 @@ class MultichipDecoder(OptimizedDecoder):
             persistent_output_buffer=None,
             dim=3,
             multi_device_global_semaphore=sems["ag"],
-            barrier_semaphore=sems["ag_barrier"],
+            barrier_semaphore=sems["ag_barrier"] if self.ccl_ag_barrier else None,
             memory_config=memory_config,
             topology=CCL_TOPOLOGY,
             **({} if ag_workers is None else {"num_workers_per_link": ag_workers}),

@@ -30,11 +30,14 @@
 set -uo pipefail
 cd "$(dirname "$0")/../../../../../.."          # repo root
 D=$PWD/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_multichip_decoder
+# ``TAG`` names this run's artifacts, so a deliberately-unsafe arm cannot
+# overwrite the clean one.  ``rm -rf "$D/watcher"`` below is why that matters.
+TAG=${WATCHER_TAG:-}
 T=models/autoports/meta_models_muse_glimmer_30b/tests/test_multichip_decoder.py
-rm -rf "$D/watcher"; mkdir -p "$D/watcher"
+rm -rf "$D/watcher$TAG"; mkdir -p "$D/watcher$TAG"
 
 export TT_METAL_WATCHER=10 TT_METAL_WATCHER_APPEND=0 TT_METAL_WATCHER_NOINLINE=1
-export TT_METAL_LOGS_PATH=$D/watcher
+export TT_METAL_LOGS_PATH=$D/watcher$TAG
 python -m pytest \
   "$T::test_prefill_pcc[12345-sliding]" "$T::test_prefill_pcc[12345-full]" \
   "$T::test_prefill_pcc[1-sliding]" "$T::test_prefill_pcc[100-full]" \
@@ -64,7 +67,7 @@ python -m pytest \
   "$T::test_collective_implementation_is_split_by_payload[full]" \
   "$T::test_decode_boundary_layout_is_a_fixed_point[sliding]" \
   "$T::test_decode_boundary_layout_is_a_fixed_point[full]" \
-  -q --no-header -p no:randomly -rA 2>&1 | tee "$D/logs/watcher_pytest.log"
+  -q --no-header -p no:randomly -rA 2>&1 | tee "$D/logs/watcher_pytest$TAG.log"
 watcher_exit=${PIPESTATUS[0]}
 echo "pytest exit code: $watcher_exit (0 = clean; 134 = SIGABRT, see the teardown note above)"
 
@@ -77,9 +80,9 @@ echo "pytest exit code: $watcher_exit (0 = clean; 134 = SIGABRT, see the teardow
 
 # The repo-root .gitignore excludes any path component named "generated", and the
 # check-large-files hook rejects anything over 500 KB.
-if [ -f "$D/watcher/generated/watcher/watcher.log" ]; then
-  mv "$D/watcher/generated/watcher/watcher.log" "$D/watcher/generated/watcher/kernel_names.txt" "$D/watcher/"
-  rm -rf "$D/watcher/generated"
+if [ -f "$D/watcher$TAG/generated/watcher/watcher.log" ]; then
+  mv "$D/watcher$TAG/generated/watcher/watcher.log" "$D/watcher$TAG/generated/watcher/kernel_names.txt" "$D/watcher$TAG/"
+  rm -rf "$D/watcher$TAG/generated"
 else
   echo "NO WATCHER DUMP -- the run did not reach the layer; this is not evidence"
 fi
@@ -88,9 +91,9 @@ fi
 # assert" / "Watcher detected tripped assert and stopped device" -- and does not
 # necessarily appear in watcher.log at all.  Counting only the dump file reports
 # a clean run when the device was in fact stopped; this stage hit exactly that.
-CONSOLE=${WATCHER_CONSOLE_LOG:-$D/logs/watcher_pytest.log}
+CONSOLE=${WATCHER_CONSOLE_LOG:-$D/logs/watcher_pytest$TAG.log}
 for pat in "Watcher detected" tripped sanitize TT_ASSERT DEBUG_ASSERT "out of bounds" fault Error; do
-  dump=$(grep -ci "$pat" "$D/watcher/watcher.log" 2>/dev/null || true)
+  dump=$(grep -ci "$pat" "$D/watcher$TAG/watcher.log" 2>/dev/null || true)
   console=0
   [ -n "$CONSOLE" ] && [ -f "$CONSOLE" ] && console=$(grep -aci "$pat" "$CONSOLE" || true)
   printf '%-18s dump=%-6s console=%s\n' "$pat" "$dump" "$console"
@@ -98,12 +101,17 @@ done
 # Each dump writes a "Dump #N" line and a "Dump #N completed" line, so the raw
 # grep count is double the number of dumps.  Review round 4 caught the README
 # quoting the doubled figure.
-printf 'lines %s, dumps %s\n' "$(wc -l < "$D/watcher/watcher.log" 2>/dev/null || echo 0)" \
-  "$(grep -c 'Dump #[0-9]* completed' "$D/watcher/watcher.log" 2>/dev/null || true)"
+printf 'lines %s, dumps %s\n' "$(wc -l < "$D/watcher$TAG/watcher.log" 2>/dev/null || echo 0)" \
+  "$(grep -c 'Dump #[0-9]* completed' "$D/watcher$TAG/watcher.log" 2>/dev/null || true)"
 # A run that never reached the layer is not a clean run.  The multichip stage's
 # teardown fault wedges the *next* process, so this guard is what stops an
 # aborted-at-startup run from being read as evidence.
-printf 'tests reported: %s\n' "$(grep -ac '^PASSED\|^FAILED' "$CONSOLE" 2>/dev/null || echo 0)"
-[ -f "$D/watcher/watcher.log" ] && gzip -9 -f "$D/watcher/watcher.log" "$D/watcher/kernel_names.txt"
+# pytest colours its short-summary lines, so "PASSED" is preceded by an ANSI
+# escape and an anchored grep matches nothing -- which is the *same* class of
+# mistake this guard exists to catch, and it reported 0 for a fully passing run
+# until it was fixed.  Parse the summary line instead, and print it verbatim.
+printf 'tests reported: %s\n' \
+  "$(sed 's/\x1b\[[0-9;]*m//g' "$CONSOLE" 2>/dev/null | grep -aoE '[0-9]+ (passed|failed)' | paste -sd' ' || echo NONE)"
+[ -f "$D/watcher$TAG/watcher.log" ] && gzip -9 -f "$D/watcher$TAG/watcher.log" "$D/watcher$TAG/kernel_names.txt"
 echo "WATCHER_EXIT=$watcher_exit"
 exit "$watcher_exit"

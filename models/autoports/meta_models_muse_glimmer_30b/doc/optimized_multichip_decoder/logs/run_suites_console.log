@@ -1,2 +1,6 @@
-2026-08-13 01:26:10.995 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
-2026-08-13 01:26:50.498 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+104 passed[0m, [33m[1m3 warnings[0m[33m in 526.52s (0:08:46)[0m[33m ==================[0m
+4 passed[0m, [33m[1m3 warnings[0m[33m in 34.93s[0m[33m ========================[0m
+worst[sliding seq_len=2049 batch=1]: 0.999839 on prefill
+worst[full seq_len=2049 batch=1]: 0.999807 on prefill
+worst[sliding seq_len=12345 batch=4]: 0.999721 on prefill
+worst[full seq_len=12345 batch=4]: 0.999183 on decode2

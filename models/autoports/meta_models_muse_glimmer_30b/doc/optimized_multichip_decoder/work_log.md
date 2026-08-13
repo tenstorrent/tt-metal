@@ -136,7 +136,7 @@ what it should be: same algebra, same bytes, same dtype.
 **Every number in that table is superseded**, by a correctness finding rather than
 a re-measurement: the all-gather call had no `barrier_semaphore`, and §10.1 shows
 the watcher stopping the device because of it. With the barrier present the async
-decode step measures **0.4553 / 0.4244** against the wrappers' **0.4546 /
+decode step measures **0.4555 / 0.4244** against the wrappers' **0.4545 /
 0.4238**, so the async implementation is rejected for decode and kept for prefill
 (§8). The table is retained because it is the evidence for the *shape* of the
 worker-count curve, and that shape is what the prefill choice rests on; it is not
@@ -156,45 +156,57 @@ both collectives and without persistent staging.
 
 ## 3. `o_proj` working shard (OPT-011)
 
-`o_proj` is the row `tt-perf-report` marks SLOW at 62.50 % of peak DRAM against
-74.69 % for `wqkv`, and the reason is in the multichip README: its per-device K is
+`o_proj` is the row `tt-perf-report` marks SLOW at 62.4 % of peak DRAM against
+73-77 % for `wqkv`, and the reason is in the multichip README: its per-device K is
 1024 = 32 tiles, which on the 16-core boundary grid is 2 tiles per core, so
-`in0_block_w <= 2`. The stage measured 1 against 2 and stopped, because a *wider*
+`in0_block_w <= 2`. That stage measured 1 against 2 and stopped, because a *wider*
 grid is illegal (32 tiles must divide the core count).
 
 The **narrower** direction was never tried, and it is the direction OPT-011 is
-about: fewer cores, wider shards, a larger legal K block. `o_proj`'s `in0` is the
-gated attention output, not the residual, so a narrower working shard costs one
-`ttnn.reshard` of a 32-tile tensor and touches nothing else. The layer refused to
-build it — `attn_gate`/`o_proj`/`wqkv` were pinned to the boundary grid by an
-assertion — so the assertion was narrowed to `wqkv`/`attn_gate` (which do feed
-residual-shaped tensors) and `decode_forward` now reshards `gated` onto
-`o_proj`'s grid, a pass-through at the default.
+about. `o_proj`'s `in0` is the gated attention output, not the residual, so a
+narrower working shard costs one `ttnn.reshard` of a 32-tile tensor and touches
+nothing else. The layer refused to build it — an assertion pinned
+`wqkv`/`attn_gate`/`o_proj` to the boundary grid — so the assertion was narrowed to
+the two roles that do feed residual-shaped tensors, and `decode_forward` now
+reshards `gated` onto `o_proj`'s grid, a pass-through at the default.
 
-`logs/ab_oproj_workshard.log`, traced ms/token:
+The ladder, walked to the L1 wall in both directions
+(`logs/ab_oproj_workshard.log`, traced ms/token):
 
 | cores | K-tiles/core | `in0_block_w` | sliding | full |
 | --- | --- | --- | --- | --- |
 | 16 (shipped) | 2 | 2 | 0.4572 | 0.4258 |
-| **8** | 4 | **4** | **0.4563** | 0.4259 |
+| 8 | 4 | **4** | **0.4563** | 0.4259 |
 | 4 | 8 | 4 | 0.4567 | 0.4262 |
 | 4 | 8 | 8 | 0.4583 | 0.4275 |
 | 2 | 16 | 16 | L1 CB overflow | L1 CB overflow |
 | 1 | 32 | 32 | L1 CB clash | L1 CB clash |
 
-The two failures are exact and recorded rather than paraphrased: at 2 cores
+The two failures are quoted exactly rather than paraphrased: at 2 cores
 *"Statically allocated circular buffers on core range [0-0 - 7-9] grow to 1592192 B
 which is beyond max L1 size of 1572864 B"*; at 1 core *"Statically allocated
 circular buffers in program 246 clash with L1 buffers ... L1 buffer allocated at
-1039872 and static circular buffer region ends at 1139584"*. So the block-geometry
-ladder is walked to the L1 wall in both directions, which is what OPT-004 asks
-for.
+1039872 and static circular buffer region ends at 1139584"*.
 
-8 cores at `in0_block_w=4` is worth **0.20 %** on `sliding` and nothing on `full`.
-Re-measured on top of the §2 collective it reads 0.4512 against 0.4509
-(`logs/ab_ccl_async_tuning.log`), i.e. the win does not survive the faster
-collective. **Not kept**, with both measurements recorded; the enabling code
-change is kept because it is what makes the candidate expressible at all.
+**It wins, and it is still not taken.** Re-measured against the *final* default
+(`logs/ab_oproj_workshard_final.log`) — an earlier version of this section rejected
+it against a configuration this stage later withdrew, which was not a valid
+comparison — 8 cores at `in0_block_w=4` reads **0.4542 / 0.4236** against
+**0.4546 / 0.4238**, with the three rounds of each non-overlapping. That is
+0.11 % / 0.05 %, and it is real.
+
+Against it: an extra reshard op in every decode step; the single-grid invariant
+that three structural tests assert and that the multichip stage established by
+measurement (`test_decode_uses_dram_sharded_matmuls` x2 and
+`test_geometry_table_is_legal` fail with *"the whole multichip decode step shares
+one 16-core grid"*); and 13 % of the multichip-vs-single-chip PCC headroom —
+shipping it moved the worst check from **0.999183 to 0.999159** against a 0.999
+bar. For a layer whose job is to be a stacking baseline that 1.1e-4 of headroom is
+worth more than 0.1 % of decode.
+
+**Not kept.** The enabling code is kept, because it is what makes the candidate
+expressible at all and the next stage may weigh it differently; the two
+measurements and the L1 wall are recorded so it does not have to be rediscovered.
 
 ## 4. The inter-layer residual contract
 
@@ -335,25 +347,31 @@ is made on the collective itself (`bench/prefill_ccl_probe.py`,
 Re-run after §10.1 with the mandatory all-gather barrier semaphore, and with the
 unsafe no-barrier arm kept alongside so its cost is on the record:
 
+Every arm carries the all-gather barrier semaphore that ships, and the no-barrier
+arm is measured once so its cost is on the record:
+
 | implementation | μs |
 | --- | --- |
-| `ttnn.all_reduce` (the multichip stage's choice) | 1583.9 |
-| `ttnn.reduce_scatter(w=4)` + `ttnn.all_gather` | 1585.1 |
-| **async pair, rs_w=4, ag default, +ag_barrier (shipped)** | **1351.4** |
-| async pair, rs_w=4, ag default, no ag_barrier (unsafe) | 1345.7 |
-| async pair, rs_w=4, ag 4 workers, +ag_barrier | 1347.3 |
-| async pair, rs_w=4, ag 2 workers, +ag_barrier | 1657.8 |
+| `ttnn.all_reduce` (the multichip stage's choice) | 1588.7 |
+| `ttnn.reduce_scatter(w=4)` + `ttnn.all_gather` | 1587.3 |
+| **async pair, rs_w=4, ag default (shipped)** | **1348.0** |
+| async pair, rs_w=4, ag 4 workers | 1351.7 |
+| async pair, rs_w=4, ag 2 workers | 1661.5 |
+| async pair, rs_w=4, ag 1 worker | 2606.3 |
+| async pair, rs_w=2, ag 4 workers | 1667.5 |
+| async pair, rs_w=1, ag 4 workers | 2086.6 |
+| async pair, rs_w=4, ag default, **no** ag_barrier | 1346.3 |
 
-**14.7 %** off the collective, twice per layer: 465 μs of an 18,200 μs chunk. The
+**15.2 %** off the collective, twice per layer: 481 μs of an 18,200 μs chunk. The
 profiler agrees and is more sensitive than the whole-layer harness: the 8192-token
-prefill window drops **3.38 %** (`sliding`) / **4.17 %** (`full`) of device time
+prefill window drops **2.88 %** (`sliding`) / **3.64 %** (`full`) of device time
 (§10.4).
 
-The barrier costs **0.4 %** here (1351.4 against 1345.7) against **1.2 %** on the
-decode payload, which is the whole reason the two modes end up on different
-implementations: at 107 MB the collective is bandwidth-bound and a synchronization
-round is noise; at 40 KB it is pure fixed cost and a synchronization round is the
-budget.
+The barrier costs **0.13 %** here (1348.0 against 1346.3) against **0.2 %** of the
+whole decode step, which is why the two modes end up on different
+implementations: at 107 MB the collective is bandwidth-bound and the async op's
+tuning surface is worth 15 %; at 40 KB it is pure fixed cost and the async op is
+0.2 % slower than the wrapper it replaces.
 
 **Kept** for prefill: async pair, reduce-scatter 4 workers, all-gather op default,
 barrier semaphores on both.
@@ -373,9 +391,18 @@ priced rather than deferred — see §11.
 kinds, one invocation (`logs/real_weight_precision.log`).  PCC is against the HF
 reference layer; the acceptance bar is the functional stage's **0.995**.
 
+**A note on the latency column.** This run was taken before §10.1 changed the
+default, so its baseline row is 0.4501 / 0.4192 rather than the shipped
+0.4545 / 0.4238 — the collective implementation moved underneath it. That does not
+affect a single conclusion here, because the collective is *identical arithmetic*
+in every arm: decode PCC is 0.993488 / 0.992188 in every A/B row regardless of
+implementation, and each precision candidate is compared against the baseline
+measured **in its own invocation**. The latencies are therefore ratios against a
+0.4501 / 0.4192 baseline, not absolute shipped numbers.
+
 | candidate | decode ms/token (sliding / full) | prefill PCC | decode PCC | verdict |
 | --- | --- | --- | --- | --- |
-| **shipped** | **0.4501 / 0.4192** | 0.997755 / 0.997067 | 0.998429 / 0.997342 | — |
+| baseline **for this run** | 0.4501 / 0.4192 | 0.997755 / 0.997067 | 0.998429 / 0.997342 | — |
 | BFP4 attention weights | 0.4479 / 0.4167 | **0.969548 / 0.973237** | **0.981820 / 0.974829** | rejected |
 | BF16 attention weights | 0.7083 / 0.6772 | 0.997820 / 0.997121 | 0.998335 / 0.997067 | rejected |
 | HiFi2 decode fidelity | 0.6381 / 0.6070 | 0.997755 / 0.997067 | 0.998294 / 0.997507 | rejected |
@@ -421,9 +448,10 @@ BF16 activations in and out.  The claimed policy is the executed one.
 
 ## 10. Correctness, watcher and profiles
 
-### 10.1 A watcher trip, and the bug behind it
+### 10.1 A watcher trip, an evidence-handling failure, and what is actually known
 
-The first watcher run of the optimized default **stopped the device**:
+The first watcher run of an early optimized build **stopped the device** after 22
+of 35 node ids:
 
 ```
 Device 0 acteth core(x= 0,y= 9) virtual(x=29,y=25): subordinate_erisc detected
@@ -434,39 +462,54 @@ tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
 TT_THROW: Watcher detected tripped assert and stopped device.
 ```
 
-after 22 of 35 node ids, mid-run rather than at teardown.  Two things about how it
-was found and what it was:
+That build called `all_gather_async` **without a `barrier_semaphore`** and also
+carried the persistent staging buffers §2 rejects. A barrier was added to both
+async collectives, and the path has been watcher-clean since.
 
-* **The inherited evidence script would have called this run clean.**  It greps
-  `watcher/watcher.log` for `Watcher detected` / `tripped` / `sanitize` / ..., and
-  a tripped assert is reported by the watcher *server* on stderr; it need not
-  appear in the dump at all.  Every counter read 0 while the device had been
-  stopped.  `bench/run_watcher.sh` now tees pytest's output and greps that too,
-  and additionally refuses to report a run that never reached the layer.
-* **A control says it is this stage's.**  Re-running the same 35 node ids with
-  `MG_MULTICHIP_CCL_IMPL=wrapper MG_MULTICHIP_SHARDED_DECODE_IO=0` -- the
-  pre-stage configuration, forced from committed code rather than a source edit --
-  produced **no** trip (`logs/watcher_run_wrapper_control.log`; its 4 failures are
-  this stage's two new contract tests, which correctly refuse a forced-old
-  configuration).
+Three things have to be recorded honestly here, and two of them are this stage's
+own mistakes.
 
-The bug: `_all_reduce_async` passed a `barrier_semaphore` to
-`reduce_scatter_minimal_async` and **not** to `all_gather_async`, which also takes
-one.  Without it the next op can start against a fabric router that has not
-drained -- which is precisely what the assert describes.  `models/tt_transformers/tt/ccl.py`
-passes a barrier to both; this layer now gives each collective its own
-(`rs_barrier` / `ag_barrier`, two slots each) rather than sharing one.
+**1. The inherited evidence script would have called that run clean.** It greps
+`watcher/watcher.log` for `Watcher detected` / `tripped` / `sanitize` / ..., and
+a tripped assert is reported by the watcher *server* on stderr; it need not appear
+in the dump at all. Every counter read 0 while the device had been stopped.
+`bench/run_watcher.sh` now tees pytest's output and greps that too.
 
-After the fix: **35 passed, every watcher counter 0** in both the dump (24,132
-lines, 21 dumps) and the console (`logs/watcher_run.log`,
-`logs/watcher_pytest.log`).  The residual `fault` / `Error` console hits are
-`Unable to set process priority to 0, error code: -1`, the word *error* inside
-`std::runtime_error`, and a test *name*.
+**2. The guard added for that was itself broken, in the same way.** It printed
+`tests reported: <count>` from `grep -c '^PASSED\|^FAILED'` — but pytest colours
+those lines, so the anchor never matched and it printed `0` for a fully passing
+run. A committed artifact therefore displayed the exact signature the guard exists
+to detect. It now strips ANSI and parses the summary line, and prints
+`tests reported: 35 passed`.
 
-This is the case `$optimize` has a rule for -- *"always test with watcher when
-using async CCLs, it's easy to make mistakes that end up in data corruption or
-hangs"* -- and it is the second of the two defects this stage found in its own
-work, the first being §2's persistent buffers.
+**3. The tripping run's artifacts were overwritten**, because the script wrote to
+fixed paths and `rm -rf`s its watcher directory on every run. It now takes a
+`WATCHER_TAG`. That is why the quotation above is a quotation and not a committed
+log, and it is a real gap.
+
+**What is actually established.** The missing barrier is a genuine defect: both
+primitives take one, `models/tt_transformers/tt/ccl.py` passes one to both, and
+without it the next op can start against a fabric router that has not drained —
+which is what the assert describes. What is **not** established is that it caused
+this trip. Re-running the same 35 node ids with the barrier deliberately removed,
+from committed code
+(`MG_MULTICHIP_CCL_IMPL=async MG_MULTICHIP_CCL_AG_BARRIER=0 WATCHER_TAG=_no_ag_barrier`),
+is **watcher-clean**: `logs/watcher_no_ag_barrier.log`, every counter 0, 33 passed
+and 2 expected assertion failures (the split-payload contract test correctly
+refusing a forced-async decode).
+
+So the barrier is kept because it is what the op contract and every other model in
+the tree do, and because it costs 0.13 % where it ships — not because this stage
+can show it was the cause. **The decode/prefill split does not depend on it**: the
+async decode step is 0.2 % slower than the wrappers *with* the barrier
+(0.4555 / 0.4244 against 0.4545 / 0.4238, three non-overlapping rounds each), and
+that measurement alone decides it. A pre-stage control run
+(`logs/watcher_run_wrapper_control.log`) is also clean, so nothing here indicts the
+inherited path either.
+
+The lesson worth carrying forward: a watcher run's evidence is the console plus
+the dump plus a positive count of tests that actually ran, and each of those three
+had to fail once before all three were checked.
 
 ### 10.2 Hardware recovery
 
@@ -508,12 +551,12 @@ shipped path's numbers and not an earlier candidate's:
 
 | window | before | after | delta | ops/iter |
 | --- | --- | --- | --- | --- |
-| decode sliding @2048 | 441.5 | **438.3** | −0.73 % | 46 → 45 |
-| decode sliding @131071 | 440.5 | **438.1** | −0.55 % | 46 → 45 |
-| decode full @2048 | 419.0 | **416.0** | −0.71 % | 36 → 35 |
-| decode full @131071 | 522.7 | **520.3** | −0.46 % | 36 → 35 |
-| prefill 128 sliding / full | 839.8 / 814.6 | 840.1 / 815.0 | +0.04 / +0.05 % | 38 / 36 |
-| prefill 8192 sliding / full | 18211.6 / 17925.2 | **17596.8 / 17177.7** | **−3.38 / −4.17 %** | 30 / 28 |
+| decode sliding @2048 | 441.5 | **438.8** | −0.62 % | 46 → 45 |
+| decode sliding @131071 | 440.5 | **438.2** | −0.53 % | 46 → 45 |
+| decode full @2048 | 419.0 | **416.4** | −0.62 % | 36 → 35 |
+| decode full @131071 | 522.7 | **520.6** | −0.39 % | 36 → 35 |
+| prefill 128 sliding / full | 839.8 / 814.6 | 840.1 / 812.5 | +0.03 / −0.26 % | 38 / 36 |
+| prefill 8192 sliding / full | 18211.6 / 17925.2 | **17687.1 / 17272.0** | **−2.88 / −3.64 %** | 30 / 28 |
 
 The prefill row is the important one: whole-layer end-to-end could not resolve the
 prefill change at all (§8), and device time shows it plainly at 3.7-5.1 %, which
@@ -525,13 +568,13 @@ Per-op, `sliding` decode @2048, μs per replay:
 
 | op | before | after |
 | --- | --- | --- |
-| both reductions | 53.24 | 53.16 — **unchanged**, decode keeps the wrappers |
-| `ShardedToInterleaved` | 5.85 (x5) | **3.97** (x4) — the layer-exit one is gone |
+| both reductions | 53.24 | 53.45 — **unchanged**, decode keeps the wrappers |
+| `ShardedToInterleaved` | 5.85 (x5) | **3.98** (x4) — the layer-exit one is gone |
 | six matmuls, norms, SDPA, elementwise | unchanged to <1 % | unchanged |
 
 The whole decode delta is one removed layout conversion, which is exactly what the
-end-to-end A/B attributes to it (`no_sharded_io` measures 0.4572 / 0.4259 against
-the default's 0.4546 / 0.4239).
+end-to-end A/B attributes to it (`no_sharded_io` measures 0.4573 / 0.4260 against
+the default's 0.4545 / 0.4238).
 
 ### 10.5 `tt-perf-report` advice
 

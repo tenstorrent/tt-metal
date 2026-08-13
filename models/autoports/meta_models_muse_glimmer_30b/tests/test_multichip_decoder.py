@@ -433,6 +433,15 @@ def build_multichip(
     sharded_io = os.environ.get("MG_MULTICHIP_SHARDED_DECODE_IO")
     if sharded_io is not None and "sharded_decode_io" not in build_kwargs:
         build_kwargs["sharded_decode_io"] = sharded_io not in ("0", "false", "no")
+    # ``MG_MULTICHIP_CCL_AG_BARRIER=0`` drops the all-gather's barrier semaphore.
+    # It is never a shipped configuration -- it makes the watcher stop the device
+    # -- and it exists so that rejection is reproducible from committed code:
+    # ``MG_MULTICHIP_CCL_IMPL=async MG_MULTICHIP_CCL_AG_BARRIER=0 bash
+    # doc/optimized_multichip_decoder/bench/run_watcher.sh`` is what produced
+    # ``logs/watcher_no_ag_barrier.log``.
+    ag_barrier = os.environ.get("MG_MULTICHIP_CCL_AG_BARRIER")
+    if ag_barrier is not None and "ccl_ag_barrier" not in build_kwargs:
+        build_kwargs["ccl_ag_barrier"] = ag_barrier not in ("0", "false", "no")
     # Values, not just names: keying on the kwarg names alone would let two builds
     # that differ only in a value (e.g. ``ccl_dtype``) share a cached decoder.
     key = (

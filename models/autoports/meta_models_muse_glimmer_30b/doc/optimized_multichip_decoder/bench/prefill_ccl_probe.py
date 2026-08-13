@@ -133,10 +133,16 @@ def main():
 
             return fn
 
-        arms = [("wrapper all_reduce (shipped)", wrapper_all_reduce), ("wrapper rs+ag w=4", wrapper_rs_ag(4))]
-        for agw in (None, 2, 4):
-            arms.append((f"async +ag_barrier rs_w=4 ag_w={agw}", async_rs_ag(4, agw)))
-            arms.append((f"async NO ag_barrier rs_w=4 ag_w={agw}", async_rs_ag(4, agw, ag_barrier_on=False)))
+        arms = [("wrapper all_reduce", wrapper_all_reduce), ("wrapper rs+ag w=4", wrapper_rs_ag(4))]
+        # Every arm carries the all-gather barrier semaphore, which is what the
+        # layer ships; the no-barrier arm is measured once, at the shipped worker
+        # count, so its cost is on the record without being spread through the
+        # table as if it were a candidate.
+        for agw in (None, 1, 2, 4):
+            arms.append((f"async rs_w=4 ag_w={agw}", async_rs_ag(4, agw)))
+        for rsw in (1, 2):
+            arms.append((f"async rs_w={rsw} ag_w=4", async_rs_ag(rsw, 4)))
+        arms.append(("async rs_w=4 ag_w=None NO ag_barrier", async_rs_ag(4, None, ag_barrier_on=False)))
 
         for name, fn in arms:
             try:

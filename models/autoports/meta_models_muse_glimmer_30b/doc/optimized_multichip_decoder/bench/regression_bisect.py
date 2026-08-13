@@ -143,6 +143,11 @@ def main():
             layer_idx = idxs[kind]
             state_dict = R.synthetic_state_dict(layer_idx)
             base = None
+            # Reset per kind: the decode-only arms are scored against each other,
+            # and leaking one kind's baseline into the next makes the second kind's
+            # rows meaningless (it is why an earlier run reported 0.4476 for both
+            # `sliding` decode-only arms -- a cross-kind comparison, not a fault).
+            globals().pop("decode-only base", None)
             for name, cfg in list(CONFIGS.items()) + list(DECODE_ONLY.items()):
                 try:
                     result = run(mesh, kind, layer_idx, state_dict, cfg, args, prefill=name not in DECODE_ONLY)

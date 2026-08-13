@@ -3,7 +3,7 @@
 An optimization pass over the [multichip decoder](../multichip_decoder/README.md),
 in place, on the same four Blackhole dies. Same public contract, same paged
 semantics, same 131072-token capability, the **same correctness floor to the sixth
-decimal** — and **0.52–0.53 % faster traced decode** plus **3.4–4.2 % faster
+decimal** — and **0.53–0.55 % faster traced decode** plus **2.9–3.6 % faster
 prefill device time**, taking the decode speedup against one chip from
 2.39x/2.49x to **2.40x/2.50x**.
 
@@ -31,46 +31,47 @@ two or three times in that same process as its own repeat control.
 
 | window | before | after | delta |
 | --- | --- | --- | --- |
-| traced decode, sliding @2048 | 0.4573 / 0.4570 | **0.4548 / 0.4547 / 0.4545** | **−0.53 %** |
-| traced decode, full @2048 | 0.4257 / 0.4261 | **0.4238 / 0.4237 / 0.4239** | **−0.52 %** |
-| prefill 8192, sliding | 19.16 / 19.29 ms | **18.47 / 18.53 / 18.81 ms** | **−3.2 %** |
-| prefill 8192, full | 18.53 / 18.80 ms | **18.17 / 18.67 / 18.10 ms** | **−2.1 %** |
+| traced decode, sliding @2048 | 0.4574 / 0.4571 | **0.4547 / 0.4545 / 0.4547** | **−0.55 %** |
+| traced decode, full @2048 | 0.4257 / 0.4264 | **0.4238 / 0.4239 / 0.4240** | **−0.53 %** |
+| prefill 8192, sliding | 19.31 / 19.09 ms | 19.64 / 18.98 / 19.20 ms | inside the spread |
+| prefill 8192, full | 18.89 / 18.88 ms | 18.28 / 18.43 / 19.06 ms | inside the spread |
 
 Traced decode reproduces to 1e-4 within a run and across runs, so 0.52 % is an
 order of magnitude above the noise.
 
 Warmed prefill is much noisier — the same configuration measured three times in
-one process spans 1.8 % (`sliding`) and 3.1 % (`full`) — so the prefill row is
-**not** decided by this table. It is decided at the op level, where the collective
-itself is **14.7 % faster** (§[Collectives](#collectives)), and confirmed by
-device time, which drops **3.38 % (`sliding`) / 4.17 % (`full`)** on the
-8192-token window. The whole-layer rows above agree in sign and roughly in
-magnitude, which is the most that harness can be asked for.
+one process spans 3.4 % (`sliding`) and 4.1 % (`full`), which is larger than the
+effect — so the prefill row is **not** decided by this table and is not claimed
+from it. It is decided at the op level, where the collective itself is **15.2 %
+faster** (§[Collectives](#collectives)), and confirmed by device time, which drops
+**2.88 % (`sliding`) / 3.64 % (`full`)** on the 8192-token window.
 
 Against one chip, both measured in the same harness on the same host
 (`logs/final_layer_ab_single.log`):
 
 | window | 1 chip | 4 chips | speedup | was |
 | --- | --- | --- | --- | --- |
-| traced decode, sliding @2048 | 1.0910 | **0.4546 ms/token** | **2.40x** | 2.39x |
-| traced decode, full @2048 | 1.0600 | **0.4239 ms/token** | **2.50x** | 2.49x |
-| prefill 8192, sliding | 44.22 | **18.99 ms** | 2.33x | 2.30x |
-| prefill 8192, full | 44.24 | **18.10 ms** | 2.44x | 2.33x |
+| traced decode, sliding @2048 | 1.0909 | **0.4545 ms/token** | **2.40x** | 2.39x |
+| traced decode, full @2048 | 1.0604 | **0.4238 ms/token** | **2.50x** | 2.49x |
+| prefill 8192, sliding | 44.21 | 18.98 ms | 2.33x | 2.30x |
+| prefill 8192, full | 44.37 | 18.28 ms | 2.43x | 2.33x |
 
 Device time from the eight committed Tracy windows, decode divided by its 8
 replays, against the multichip stage's tables captured the same way:
 
 | window | before | after | delta | ops/iter |
 | --- | --- | --- | --- | --- |
-| decode sliding / full @2048 | 441.5 / 419.0 | **438.3 / 416.0** | −0.73 / −0.71 % | 46→45 / 36→35 |
-| decode sliding / full @131071 | 440.5 / 522.7 | **438.1 / 520.3** | −0.55 / −0.46 % | 46→45 / 36→35 |
-| prefill 8192 sliding / full | 18211.6 / 17925.2 | **17596.8 / 17177.7** | **−3.38 / −4.17 %** | unchanged |
-| prefill 128 sliding / full | 839.8 / 814.6 | 840.1 / 815.0 | +0.04 / +0.05 % | unchanged |
+| decode sliding / full @2048 | 441.5 / 419.0 | **438.8 / 416.4** | −0.62 / −0.62 % | 46→45 / 36→35 |
+| decode sliding / full @131071 | 440.5 / 522.7 | **438.2 / 520.6** | −0.53 / −0.39 % | 46→45 / 36→35 |
+| prefill 8192 sliding / full | 18211.6 / 17925.2 | **17687.1 / 17272.0** | **−2.88 / −3.64 %** | unchanged |
+| prefill 128 sliding / full | 839.8 / 814.6 | 840.1 / 812.5 | +0.03 / −0.26 % | unchanged |
 
 The decode op count drops by exactly one — the `sharded_to_interleaved` the
-boundary contract removes — and `ShardedToInterleaved` falls from 5.85 to
-3.97 μs per replay. The decode collectives are unchanged (53.24 → 53.16 μs), which
-is the point: decode keeps the wrappers.
+boundary contract removes — and `ShardedToInterleaved` falls from 5.85 μs over 5
+instances to **3.98 μs over 4**. The decode collectives are unchanged
+(`ReduceScatter` 29.36 + `AllGather` 24.09 = 53.45 μs against 53.24), which is the
+point: decode keeps the wrappers, so the whole device-time delta is the removed
+conversion.
 
 ### Where the win comes from
 
@@ -78,9 +79,9 @@ Each knob measured on its own, in the same invocation, by turning exactly one of
 
 | change | sliding | full | worth |
 | --- | --- | --- | --- |
-| **sharded layer boundary** (`no_sharded_io` turns it off) | 0.4572 → 0.4546 | 0.4259 → 0.4239 | **0.57 % / 0.47 %** |
-| **async prefill collective** | not visible in decode | not visible in decode | **14.7 % of the prefill collective**, −3.4 / −4.2 % of prefill device time |
-| async collective on *decode* too (`ccl_async`) | 0.4553 | 0.4244 | **0.15 % / 0.12 % slower** — rejected, below |
+| **sharded layer boundary** (`no_sharded_io` turns it off) | 0.4573 → 0.4545 | 0.4260 → 0.4238 | **0.61 % / 0.52 %** |
+| **async prefill collective** | not visible in decode | not visible in decode | **15.2 % of the prefill collective**, −2.9 / −3.6 % of prefill device time |
+| async collective on *decode* too (`ccl_async`) | 0.4555 | 0.4244 | **0.22 % / 0.14 % slower** — rejected, below |
 | persistent CCL staging buffers | 0.31 % faster | 0.29 % faster | **rejected on correctness**, below |
 
 So the decode win is the boundary contract, essentially all of it, and the prefill
@@ -102,11 +103,11 @@ layer owns and the all-gather's worker count set explicitly.
 **It ships for prefill and not for decode**, and the number that decides the split
 is not a worker count — it is a barrier semaphore.
 
-### The barrier semaphore is not optional, and not free
+### The barrier semaphore, and a watcher trip
 
 Both primitives take a `barrier_semaphore`. The first implementation here passed
-one to the reduce-scatter and left the all-gather's at its `None` default, which
-is 1.2 % faster and **wrong**: the watcher stopped the device with
+one to the reduce-scatter and left the all-gather's at its `None` default. The
+first watcher run of that build **stopped the device**:
 
 ```
 Device 0 acteth core(x= 0,y= 9) virtual(x=29,y=25): subordinate_erisc detected
@@ -115,28 +116,43 @@ NOC packet tags must be zero so implicit transaction ID users start with
 transaction ID 0).  Current kernel: fabric_erisc_router.cpp
 ```
 
-after 22 of 35 node ids. Without the barrier the next op can start against a
-fabric router that has not drained. A control run of the same 35 node ids on the
-pre-stage configuration (`MG_MULTICHIP_CCL_IMPL=wrapper
-MG_MULTICHIP_SHARDED_DECODE_IO=0`, forced from committed code) does **not** trip,
-so it is this stage's, not inherited. `models/tt_transformers/tt/ccl.py` passes a
-barrier to both collectives; this layer now does too.
+Two things have to be said about that, and the second is uncomfortable:
 
-With the barrier in place the payloads disagree, and they disagree for the reason
-every other per-payload split in this layer exists — a 40 KB collective is pure
-fixed cost, a 107 MB one is bandwidth-bound:
+* the missing barrier is a real defect and it is fixed. Without it the next op can
+  start against a fabric router that has not drained, which is what the assert
+  describes; `models/tt_transformers/tt/ccl.py` passes a barrier to both
+  collectives and this layer now does too;
+* **the trip is not reproduced.** The build that tripped also carried the
+  persistent staging buffers that §"Persistent staging buffers" rejects, and the
+  run's artifacts were overwritten by a later one (a mistake, now prevented — the
+  watcher script takes a `WATCHER_TAG`). Re-running the same 35 node ids with the
+  barrier deliberately removed, from committed code
+  (`MG_MULTICHIP_CCL_IMPL=async MG_MULTICHIP_CCL_AG_BARRIER=0`), is **watcher-clean**:
+  `logs/watcher_no_ag_barrier.log`, every counter 0.
 
-| payload | without AG barrier | **with AG barrier** | wrapper |
-| --- | --- | --- | --- |
-| prefill, 8192 rows, BFP8 (op level) | 1345.7 μs | **1351.4 μs** | 1583.9 (`all_reduce`) |
-| decode, 40 KB (traced whole layer, sliding / full) | 0.4501 / 0.4194 | **0.4553 / 0.4244** | **0.4546 / 0.4238** |
+So the honest statement is: a fabric-level watcher trip was observed once on a
+build with two defects in it, one of which (persistent buffers) is independently
+and reproducibly wrong, and it has not recurred since either was fixed. The
+barrier is kept because it is what the op contract and every other model in the
+tree do, and because it costs 0.4 % where it ships — **not** because this stage
+can show it was the cause.
 
-So **prefill takes the async pair** — 14.7 % off the collective, twice per layer,
-which the profiler sees as −3.38 % / −4.17 % of the 8192-token prefill window —
-and **decode keeps the wrappers**, because one more synchronization round costs
-more than the async op's tuning surface buys at that size. The 1.2 % the async
-decode step appeared to win is recorded, not shipped: it is the configuration the
-watcher stopped the device on.
+The decode/prefill split therefore rests on the measurement, which is sufficient
+on its own:
+
+| payload | async, with AG barrier | wrapper |
+| --- | --- | --- |
+| prefill, 8192 rows, BFP8 (op level) | **1348.0 μs** | 1588.7 (`all_reduce`) |
+| decode, 40 KB (traced whole layer, sliding / full) | 0.4555 / 0.4244 | **0.4545 / 0.4238** |
+
+The decode rows do not overlap across their three rounds
+(`logs/final_layer_ab.log`), so 0.2 % is a real ordering, not noise. **Prefill
+takes the async pair** — 15.2 % off the collective, twice per layer, which the
+profiler sees as −2.9 % / −3.6 % of the 8192-token prefill window — and **decode
+keeps the wrappers**, because at 40 KB the collective is pure fixed cost and one
+more synchronization round costs more than the async op's tuning surface buys.
+Removing the barrier would buy 0.13 % of the prefill collective (1346.3 against
+1348.0) and is not worth reopening the question.
 
 `test_collective_implementation_is_split_by_payload` asserts both halves at
 dispatch level, because either one flipping silently still computes the right
@@ -144,19 +160,30 @@ answer.
 
 ### The all-gather worker count is per payload too
 
-| `num_workers_per_link` | decode (40 KB, traced whole layer) | prefill (107 MB, op level) |
-| --- | --- | --- |
-| op default | 0.4549 | **1343.6 μs** |
-| 1 | **0.4523** | 2602.4 μs |
-| 2 | 0.4548 | 1654.7 |
-| 4 | 0.4606 | 1347.4 |
+All rows below are from the committed post-barrier probe
+(`logs/prefill_ccl_probe.log`), at the shipped prefill payload:
 
-The same latency-versus-bandwidth split the multichip stage found for the
-reduce-scatter: one worker wins the decode payload by 1.1 % and loses the prefill
-payload by 94 %. (The decode column is from the pre-barrier measurement, i.e. the
-configuration that is not shipped; it is kept because it is the evidence for the
-*shape* of the curve, and the shape is what the prefill choice rests on.) Prefill
-ships the op default; the knob remains for decode should the barrier cost change.
+| all-gather `num_workers_per_link` | prefill (107 MB, op level) |
+| --- | --- |
+| **op default (shipped)** | **1348.0 μs** |
+| 1 | 2606.3 (+93 %) |
+| 2 | 1661.5 (+23 %) |
+| 4 | 1351.7 (+0.3 %) |
+
+and the reduce-scatter's, holding the all-gather at 4:
+
+| reduce-scatter `num_workers_per_link` | prefill |
+| --- | --- |
+| **4 (shipped)** | **1351.7 μs** |
+| 2 | 1667.5 |
+| 1 | 2086.6 |
+
+This is the same latency-versus-bandwidth split the multichip stage found for the
+decode reduce-scatter, with the sign reversed by the payload: one worker wins the
+40 KB decode collective and loses the 107 MB prefill one by 93 %. The decode-side
+worker sweep was measured on the pre-barrier build and is not repeated here,
+because decode does not ship the async op; it is in `logs/ab_ccl_async.log` and is
+marked superseded in [work log §2](work_log.md).
 
 ### Semaphores, and what they cost
 
@@ -291,15 +318,15 @@ Every row is a candidate this stage ran on this mesh, not a quotation.
 
 | candidate | verdict | evidence |
 | --- | --- | --- |
-| async collective on the **decode** payload | rejected: 0.4553 / 0.4244 against the wrappers' **0.4546 / 0.4238** once the all-gather's barrier semaphore is present, which the watcher proves it must be | `logs/final_layer_ab.log`, `logs/watcher_run.log` |
-| omitting the all-gather barrier semaphore (1.2 % faster) | rejected: the watcher **stopped the device** -- `subordinate_erisc detected invalid NOC command buffer state` in `fabric_erisc_router.cpp`; a pre-stage control run does not trip | `logs/watcher_run.log`, `logs/watcher_run_wrapper_control.log` |
+| async collective on the **decode** payload | rejected: **0.4555 / 0.4244** against the wrappers' **0.4545 / 0.4238**, three non-overlapping rounds each | `logs/final_layer_ab.log` |
+| omitting the all-gather barrier semaphore | not taken: worth 0.13 % of the prefill collective (1346.3 vs 1348.0); a watcher trip was observed once on a build that also carried the rejected persistent buffers and has **not** reproduced since | `logs/prefill_ccl_probe.log`, `logs/watcher_no_ag_barrier.log` |
 | persistent CCL staging buffers | rejected: 0.31 % faster, intermittently wrong on the **first** decode step (PCC 0.7395 / 0.7749); two fixes moved the fault instead of removing it | `logs/regression_bisect.log`, `logs/regression_bisect_fixed.log` |
 | fused `matmul_reduce_scatter_async`, DRAM-sharded config | blocked, exact contract: *"Unsupported MatmulProgramConfig type for MatmulReduceScatterAsync. Needs to be 2D Multicast."* | `logs/fused_ccl_probe.log` |
 | fused `matmul_reduce_scatter_async`, 2D-multicast config | rejected **on measurement**: the fusion is worth +2.2 % / −2.6 % against its own unfused control, but the 2D-multicast matmul the op requires costs **38 %** (`o_proj`) / **103 %** (`mlp_down`) against the shipped DRAM-sharded form | `logs/fused_ccl_probe.log` |
 | `all_gather_matmul_async` (gathered-input `o_proj`, OPT-008) | rejected: 64.74 μs fused / 65.84 unfused against **44.91** for the shipped decomposition — 44 % slower *with* the fusion | `logs/fused_ccl_gathered_input.log` |
 | packed `wqkv`+`attn_gate` (OPT-001) | rejected: 41.05 vs **40.50** μs. `in0_block_w=13` is legal here, unlike on one chip, so this rejection is about the split cost, not the block size | `logs/packing_probe.log` |
 | packed MLP gate/up (OPT-010) | rejected: 145.66 vs **142.96** μs at `in0_block_w=13`; 4 and 2 are illegal (`(shard_shape[1]/tile_width) % in0_block_w == 0`), 1 costs 87 % | `logs/packing_probe.log` |
-| `o_proj` working shard at 8 cores, `in0_block_w=4` (OPT-011) | rejected: 0.20 % on `sliding` against the wrapper collective, **0.07 % slower** once the collective is faster (0.4512 vs 0.4509) | `logs/ab_oproj_workshard.log`, `logs/ab_ccl_async_tuning.log` |
+| `o_proj` working shard at 8 cores, `in0_block_w=4` (OPT-011) | rejected **on the shipped path**: it *wins*, 0.4542 / 0.4236 against 0.4546 / 0.4238 (0.11 % / 0.05 %, rounds non-overlapping) -- and costs an extra reshard op, the single-grid invariant three structural tests assert, and 13 % of the multichip-vs-single-chip PCC headroom (0.999183 -> 0.999159 against a 0.999 bar). Not a good trade for a stacking baseline | `logs/ab_oproj_workshard_final.log`, `logs/ab_oproj_workshard.log` |
 | `o_proj` at 4 / 2 / 1 cores | rejected: 4 cores slower; 2 and 1 fail L1 with the exact circular-buffer messages | `logs/ab_oproj_workshard.log` |
 | BFP4 attention weights (OPT-007) | rejected on the **released checkpoint, on this topology**: 0.49 % faster decode, prefill PCC 0.9695 / 0.9732 and decode PCC 0.9818 / 0.9748 against a 0.995 bar | `logs/real_weight_precision.log` |
 | BF16 attention weights | rejected: 57 % / 61 % slower decode, no PCC gain | `logs/real_weight_precision.log` |
@@ -307,13 +334,9 @@ Every row is a candidate this stage ran on this mesh, not a quotation.
 | BFP8 activations | blocked, exact contract: `nlp_create_qkv_heads_decode` takes FLOAT32 or BFLOAT16 only | `logs/real_weight_precision.log` |
 | BFP4 KV cache | rejected: no speed change, decode PCC 0.9781 / 0.9733 against 0.995 | `logs/real_weight_precision.log` |
 | BF16 KV cache | rejected: no speed change, 2x the cache bytes, +8e-5 of PCC — BFP8 re-confirmed | `logs/real_weight_precision.log` |
-| async all-gather at 2 / 4 workers (decode) | rejected: 0.4548 / 0.4606 against **0.4523** | `logs/ab_ccl_async.log` |
-| async all-gather at 1 / 2 workers (prefill) | rejected: 2602.4 / 1654.7 μs against **1343.6** | `logs/prefill_ccl_probe.log` |
-| async reduce-scatter at 1 / 2 workers (prefill) | rejected: 2086.2 / 1664.2 μs | `logs/prefill_ccl_probe.log` |
-| `chunks_per_sync` 2 / 10 / 20 | rejected: 0.4553 / 0.4576 / 0.4573 against **0.4509** at the op default | `logs/ab_ccl_async_tuning.log` |
-| `num_buffers_per_channel` 2 / 8 | rejected: inside the noise (0.4510 / 0.4511) | `logs/ab_ccl_async_tuning.log` |
-| `num_links=1` | rejected: +6.1 % | `logs/ab_ccl_async_tuning.log` |
-| decode reduce-scatter at 2 workers | rejected: 0.4546 against 0.4509 — the multichip stage's 1-worker choice re-confirmed under the async op | `logs/ab_ccl_async_tuning.log` |
+| async all-gather at 1 / 2 / 4 workers (prefill) | rejected: 2606.3 / 1661.5 / 1351.7 μs against **1348.0** at the op default | `logs/prefill_ccl_probe.log` |
+| async reduce-scatter at 1 / 2 workers (prefill) | rejected: 2086.6 / 1667.5 μs against **1351.7** at 4 | `logs/prefill_ccl_probe.log` |
+| `chunks_per_sync` 2 / 10 / 20, `num_buffers_per_channel` 2 / 8, `num_links=1`, decode reduce-scatter at 2 workers | rejected. **Measured on a base this stage later withdrew** (async decode with persistent buffers), so they are evidence about knobs that are not live in the shipped path, not about it: 0.4553 / 0.4576 / 0.4573 and 0.4510 / 0.4511 and +6.1 % and 0.4546, against that base's 0.4509 | `logs/ab_ccl_async_tuning.log` |
 
 ## Correctness
 
@@ -346,10 +369,10 @@ Real-checkpoint PCC at 2049 tokens (`logs/real_weight_precision.log`): prefill
 
 New tests:
 
-* `test_default_collectives_are_the_async_primitives` — the default dispatches the
-  async ops and **no** wrapper, both phases. Only a dispatch-level assertion
-  catches a silent fallback, because the layer would still compute the right
-  answer.
+* `test_collective_implementation_is_split_by_payload` — prefill dispatches the
+  async primitives and no wrapper; decode dispatches the wrappers and no async
+  primitive. Only a dispatch-level assertion catches a silent flip, because
+  either one still computes the right answer.
 * `test_decode_boundary_layout_is_a_fixed_point` — the boundary contract above:
   sharded in gives sharded out, interleaved in still works, the layer does not
   free a caller's tensor, and both paths produce bit-identical output.
@@ -412,13 +435,18 @@ D=models/autoports/meta_models_muse_glimmer_30b/doc/optimized_multichip_decoder
 bash $D/bench/run_suites.sh
 # the before/after A/B, the single-chip baseline, and the real-weight precision run
 python $D/bench/layer_ab.py --mesh 1x4 \
-  --candidates before,tp4,tp4b,beforeb,tp4c,ccl_wrapper,no_sharded_io,ccl_async_persist
+  --candidates before,tp4,tp4b,beforeb,tp4c,no_sharded_io,ccl_wrapper,ccl_async
 python $D/bench/layer_ab.py --mesh 1x1 --candidates single
 python $D/bench/layer_ab.py --mesh 1x4 --real-weights --pcc-seq-len 2049 \
   --candidates tp4,attn_bfp4,attn_bf16,fid_hifi2,act_bfp8,kv_bfp4,kv_bf16
 # device-time profiles (no watcher in this run) and the watcher run (no profiler)
 bash $D/bench/run_tracy.sh
 bash $D/bench/run_watcher.sh
+# the deliberately-unsafe arm, which is why run_watcher.sh takes a WATCHER_TAG
+MG_MULTICHIP_CCL_IMPL=async MG_MULTICHIP_CCL_AG_BARRIER=0 WATCHER_TAG=_no_ag_barrier \
+  bash $D/bench/run_watcher.sh
+# the pre-stage control: the multichip stage's collectives and layer boundary
+MG_MULTICHIP_CCL_IMPL=wrapper MG_MULTICHIP_SHARDED_DECODE_IO=0 bash $D/bench/run_suites.sh
 python $D/bench/layer_ab.py --list
 ```
 
