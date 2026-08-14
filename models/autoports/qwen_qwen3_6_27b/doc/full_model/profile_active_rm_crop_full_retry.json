@@ -1,0 +1,26 @@
+{
+  "prompt_tokens": 64,
+  "measured_decode_replays": 2,
+  "ttft_seconds": 3.155276966281235,
+  "ttft_ms": 3155.276966281235,
+  "trace_capture_seconds": 0.7837532693520188,
+  "token_out_seconds": 0.11509153805673122,
+  "token_out_t_s_u": 17.377472173620227,
+  "trace_counters": {
+    "replays": 2,
+    "token_host_refreshes": 0,
+    "position_host_refreshes": 0,
+    "page_table_refreshes": 0,
+    "readbacks": 3
+  },
+  "canonical_split_sampling": true,
+  "model_trace_id": "MeshTraceId(0)",
+  "sampler_trace_live": true,
+  "feedback_overwrite_probe": null,
+  "token_ids": [
+    1292,
+    21780,
+    506
+  ],
+  "text": " she walks at"
+}

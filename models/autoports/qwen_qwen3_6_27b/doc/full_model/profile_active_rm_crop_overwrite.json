@@ -1,0 +1,30 @@
+{
+  "prompt_tokens": 64,
+  "measured_decode_replays": 2,
+  "ttft_seconds": 0.19402861595153809,
+  "ttft_ms": 194.0286159515381,
+  "trace_capture_seconds": 0.09876527544111013,
+  "token_out_seconds": 0.008757153525948524,
+  "token_out_t_s_u": 228.38471360285664,
+  "trace_counters": {
+    "replays": 2,
+    "token_host_refreshes": 0,
+    "position_host_refreshes": 0,
+    "page_table_refreshes": 0,
+    "readbacks": 5
+  },
+  "canonical_split_sampling": true,
+  "model_trace_id": "MeshTraceId(0)",
+  "sampler_trace_live": true,
+  "feedback_overwrite_probe": {
+    "seeded": 123,
+    "sampled": 220,
+    "overwritten": true
+  },
+  "token_ids": [
+    220,
+    220,
+    220
+  ],
+  "text": "   "
+}

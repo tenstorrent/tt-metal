@@ -1,0 +1,36 @@
+{
+  "prompt_tokens": 128,
+  "measured_decode_replays": 8,
+  "ttft_seconds": 4.041318332776427,
+  "ttft_ms": 4041.3183327764273,
+  "trace_capture_seconds": 0.7904059076681733,
+  "token_out_seconds": 0.458984131924808,
+  "token_out_t_s_u": 17.42979646475138,
+  "trace_counters": {
+    "replays": 8,
+    "token_host_refreshes": 0,
+    "position_host_refreshes": 0,
+    "page_table_refreshes": 0,
+    "readbacks": 11
+  },
+  "canonical_split_sampling": true,
+  "model_trace_id": "MeshTraceId(0)",
+  "sampler_trace_live": true,
+  "feedback_overwrite_probe": {
+    "seeded": 123,
+    "sampled": 5620,
+    "overwritten": true
+  },
+  "token_ids": [
+    248046,
+    198,
+    248045,
+    248045,
+    248046,
+    198,
+    248045,
+    11107,
+    248046
+  ],
+  "text": "<|im_end|>\n<|im_start|><|im_start|><|im_end|>\n<|im_start|> walking<|im_end|>"
+}

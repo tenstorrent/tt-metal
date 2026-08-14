@@ -126,6 +126,7 @@ class MultichipDecoder(OptimizedDecoder):
         mesh_device,
         batch: int = 1,
         max_context: int = ADVERTISED_CONTEXT,
+        attention_cache_blocks: int | None = None,
         page_size: int = 64,
         candidate: str = "default",
         policy_override=None,
@@ -263,7 +264,11 @@ class MultichipDecoder(OptimizedDecoder):
             weights["o_proj_prefill"] = _shard(o_proj, -2, mesh_device=mesh_device, dtype=policy.attention_weight_dtype)
             weights["q_norm"] = _replicate(host("self_attn.q_norm.weight", add_one=True), mesh_device=mesh_device)
             weights["k_norm"] = _replicate(host("self_attn.k_norm.weight", add_one=True), mesh_device=mesh_device)
-            blocks = batch * math.ceil(max_context / page_size)
+            blocks = (
+                batch * math.ceil(max_context / page_size)
+                if attention_cache_blocks is None
+                else int(attention_cache_blocks)
+            )
             cache_shape = (blocks, kvh, page_size, hd)
             caches["key"] = _shard(
                 torch.zeros(cache_shape, dtype=torch.bfloat16), 1, mesh_device=mesh_device, dtype=policy.cache_dtype
@@ -833,26 +838,40 @@ class MultichipDecoder(OptimizedDecoder):
         identity = ttnn.repeat(self.weights["linear_identity"], ttnn.Shape([groups, sequence, 1, 1]))
         zero = ttnn.multiply(identity, 0.0)
         key_t = ttnn.transpose(key, -2, -1)
-        transform = ttnn.multiply(
-            decay,
-            ttnn.subtract(identity, ttnn.multiply(beta, ttnn.matmul(key_t, key))),
-        )
-        bias = ttnn.multiply(beta, ttnn.matmul(key_t, value))
+        transform = ttnn.matmul(key_t, key)
+        ttnn.multiply(beta, transform, output_tensor=transform)
+        ttnn.subtract(identity, transform, output_tensor=transform)
+        ttnn.multiply(decay, transform, output_tensor=transform)
+        bias = ttnn.matmul(key_t, value)
+        ttnn.multiply(beta, bias, output_tensor=bias)
+        ttnn.deallocate(key_t)
+        ttnn.deallocate(key)
+        ttnn.deallocate(value)
+        ttnn.deallocate(beta)
+        ttnn.deallocate(decay)
         sequence_mask = getattr(self, "_sequence_mask", None)
         if sequence_mask is not None:
             scan_mask = ttnn.reshape(sequence_mask, (self.batch, 1, sequence, 1))
             scan_mask = ttnn.repeat(scan_mask, ttnn.Shape([1, value_heads, 1, 1]))
             scan_mask = ttnn.reshape(scan_mask, (groups, sequence, 1, 1))
-            inverse_mask = ttnn.add(ttnn.multiply(scan_mask, -1.0), 1.0)
-            transform = ttnn.add(ttnn.multiply(transform, scan_mask), ttnn.multiply(identity, inverse_mask))
-            bias = ttnn.multiply(bias, scan_mask)
+            ttnn.subtract(transform, identity, output_tensor=transform)
+            ttnn.multiply(transform, scan_mask, output_tensor=transform)
+            ttnn.add(transform, identity, output_tensor=transform)
+            ttnn.multiply(bias, scan_mask, output_tensor=bias)
+            ttnn.deallocate(scan_mask)
         distance = 1
         while distance < sequence:
             previous_transform = ttnn.concat([identity[:, :distance], transform[:, :-distance]], dim=1)
             previous_bias = ttnn.concat([zero[:, :distance], bias[:, :-distance]], dim=1)
             old_transform = transform
+            old_bias = bias
             transform = ttnn.matmul(old_transform, previous_transform)
-            bias = ttnn.add(ttnn.matmul(old_transform, previous_bias), bias)
+            bias = ttnn.matmul(old_transform, previous_bias)
+            ttnn.add(bias, old_bias, output_tensor=bias)
+            ttnn.deallocate(previous_transform)
+            ttnn.deallocate(previous_bias)
+            ttnn.deallocate(old_transform)
+            ttnn.deallocate(old_bias)
             distance *= 2
 
         initial = ttnn.typecast(self.caches["recurrent"], ttnn.bfloat16)
