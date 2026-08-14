@@ -48,6 +48,27 @@ CB_OUTPUT_TILES = 16  # compute -> writer (tiled pages)
 R_ALIGNED = 0
 R_PAD = 1
 
+# --- placement regime selector, per side (op_design.md §5.2) ----------------
+# P_LOCAL_SHARD: the CB is ALIASED on the resident L1 shard
+# (ttnn.cb_descriptor_from_sharded_tensor) so tilize unpacks straight out of /
+# packs straight into the shard — ZERO NoC traffic on that side. The reader
+# then only publishes pages it did not fetch, and the writer only drains pages
+# it did not send (the drain is kept so the CB still has exactly one consumer).
+# P_ACCESSOR: TensorAccessor over interleaved DRAM/L1, or over a NON-local
+# L1-sharded tensor (the cross-core L1 gather).
+P_ACCESSOR = 0
+P_LOCAL_SHARD = 1
+
+# --- work-assignment mode (how a core's block index maps to geometry) -------
+# W_BLOCKS: the interleaved split — a contiguous range of the global,
+#           W-chunk-major block index (`wc = b // NT_H`, `row = b % NT_H`).
+# W_REGION: the sharded split — the core owns the rectangular tile region of
+#           its own shard, walked tile-row-major with the W chunk INNERMOST so
+#           the push order matches the shard's own linear tile order (which is
+#           what lets an aliased output CB take `WT_CHUNK < shard_wt`).
+W_BLOCKS = 0
+W_REGION = 1
+
 # --- lever counterfactual switches ------------------------------------------
 # Each applied perf lever gets an OFF arm here so its payoff can be MEASURED
 # (see _bench_tilize.py `levers=dict(...)` arms and lever_ledger.json). Production
@@ -120,6 +141,32 @@ def cb_bytes(cb_depth, wt_chunk, in_tile_bytes, out_tile_bytes):
     return cb_pages(cb_depth, wt_chunk) * (in_tile_bytes + out_tile_bytes)
 
 
+def wt_cap(cb_depth, in_tile_bytes, out_tile_bytes):
+    """L1 ceiling on the W block factor — THE single source for that cap.
+
+    ``in_tile_bytes`` / ``out_tile_bytes`` are the *streaming* page sizes: pass 0
+    for a side whose CB is aliased on a resident shard, since that side costs no
+    extra L1 (it IS the tensor). When neither side streams, only the library's
+    fast-tilize width bound remains.
+    """
+    per_chunk_tile = cb_bytes(cb_depth, 1, in_tile_bytes, out_tile_bytes)
+    if per_chunk_tile == 0:
+        return FAST_TILIZE_MAX_W
+    return max(1, min(FAST_TILIZE_MAX_W, CB_L1_BUDGET // per_chunk_tile))
+
+
+def derive_shard_blocking(shard_wt, cap):
+    """``WT_CHUNK`` for a core whose W extent is one shard (op_design.md §1.4).
+
+    Same rule as ``derive_blocking()``: the COARSEST exact divisor of the width
+    that fits the L1 cap — never the minimal unit. Returns
+    ``(wt_chunk, n_chunks)`` with ``n_chunks * wt_chunk == shard_wt``, so every
+    block is the same width and one compute kernel covers the core.
+    """
+    n_chunks = next(c for c in range(1, shard_wt + 1) if shard_wt % c == 0 and shard_wt // c <= cap)
+    return shard_wt // n_chunks, n_chunks
+
+
 def derive_blocking(nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, cb_depth):
     """The three block knobs — single source of truth (op_design.md §1.4).
 
@@ -133,18 +180,104 @@ def derive_blocking(nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, cb_depth
       machinery is inert on tall shapes (byte-identical to a pure height split).
     """
     # Bytes both CBs hold per tile-column of chunk width — read from cb_bytes()
-    # so the ceiling can never drift from the CB sizing below (it carries the
-    # NT_BLK factor too, which a hand-written formula here would have dropped).
-    per_chunk_tile = cb_bytes(cb_depth, 1, in_tile_bytes, out_tile_bytes)
-    wt_cap = max(1, min(FAST_TILIZE_MAX_W, CB_L1_BUDGET // per_chunk_tile))
+    # via wt_cap() so the ceiling can never drift from the CB sizing below (it
+    # carries the NT_BLK factor too, which a hand-written formula here would have
+    # dropped) and the sharded path shares the same cap.
+    cap = wt_cap(cb_depth, in_tile_bytes, out_tile_bytes)
 
     n_want = max(1, _div_up(num_cores, nt_h))  # grid-fill floor
-    n_want = max(n_want, _div_up(wt, wt_cap))  # L1 ceiling
+    n_want = max(n_want, _div_up(wt, cap))  # L1 ceiling
     n_want = min(n_want, wt)  # can never split W finer than one tile-column
 
     n_chunks = next(c for c in range(n_want, wt + 1) if wt % c == 0)
     wt_chunk = wt // n_chunks
     return wt_chunk, n_chunks, nt_h * n_chunks
+
+
+def shard_side_plan(tensor, padded_shape, tile_h, tile_w):
+    """The per-core tile region of an L1-sharded tensor — or None when the shard
+    cannot back a zero-copy CB (op_design.md §5.2 ``side_regime``).
+
+    Returns ``{"cores", "shard_ht", "shard_wt", "regions"}`` where ``regions[i]``
+    is shard *i*'s ``(tile_row0, tile_col0)`` in the folded (tile-row, tile-col)
+    grid and ``cores[i]`` is the core that holds it. Both legacy 2-D and ND
+    specs go through the SAME derivation: a legacy ShardSpec is exactly an ND
+    spec whose shard shape has rank 2 over the folded 2-D view of the tensor,
+    which ``memory_config.nd_shard_spec`` already reports.
+
+    None (→ the accessor path) whenever the shard is not a whole number of tiles,
+    does not divide the tensor evenly, or does not fold to a CONTIGUOUS band of
+    tile-rows. Those are the uneven / padded shard grids a later refinement owns.
+    """
+    memory_config = tensor.memory_config()
+    if not memory_config.is_sharded():
+        return None
+    if memory_config.buffer_type != ttnn.BufferType.L1:
+        return None  # a DRAM shard is not resident in any core's L1
+    nd_spec = getattr(memory_config, "nd_shard_spec", None)
+    if nd_spec is None:
+        return None
+
+    shard = [int(d) for d in nd_spec.shard_shape]
+    padded = [int(d) for d in padded_shape]
+    if len(padded) < 2 or len(shard) < 2:
+        return None
+    if len(shard) == len(padded):
+        ref = padded
+    elif len(shard) == 2:
+        ref = [_prod(padded[:-1]), padded[-1]]  # the folded 2-D view legacy specs describe
+    else:
+        return None
+
+    # whole tiles, and an even split on every dim
+    if shard[-2] % tile_h or shard[-1] % tile_w:
+        return None
+    if any(s <= 0 or r % s for r, s in zip(ref, shard)):
+        return None
+    chunks = [r // s for r, s in zip(ref, shard)]
+
+    # A shard's folded row range must be contiguous: once a leading dim is split,
+    # every inner ROW dim has to be whole (the W dim may always split).
+    for d in range(len(ref) - 2):
+        if chunks[d] > 1 and any(chunks[e] > 1 for e in range(d + 1, len(ref) - 1)):
+            return None
+
+    n_shards = _prod(chunks)
+    regions = []
+    for shard_index in range(n_shards):
+        # shard index -> chunk multi-index, row-major over `chunks`
+        idx, rem = [], shard_index
+        for c in reversed(chunks):
+            idx.append(rem % c)
+            rem //= c
+        idx.reverse()
+        rows = 0
+        for d in range(len(ref) - 1):  # every ROW dim (0 .. N-2)
+            rows += idx[d] * shard[d] * _prod(ref[d + 1 : len(ref) - 1])
+        if rows % tile_h:
+            return None
+        regions.append((rows // tile_h, (idx[-1] * shard[-1]) // tile_w))
+
+    cores = list(ttnn.get_optimal_worker_cores_for_sharded_tensor(tensor))  # shard order
+    if len(cores) != n_shards:
+        return None
+
+    return {
+        "cores": cores,
+        "shard_ht": _prod(shard[:-1]) // tile_h,
+        "shard_wt": shard[-1] // tile_w,
+        "regions": regions,
+    }
+
+
+def _same_placement(a, b):
+    """True when two shard plans put the same tile region on the same core."""
+    return (
+        a["shard_ht"] == b["shard_ht"]
+        and a["shard_wt"] == b["shard_wt"]
+        and a["regions"] == b["regions"]
+        and [(c.x, c.y) for c in a["cores"]] == [(c.x, c.y) for c in b["cores"]]
+    )
 
 
 def _pack_pad_word(value, dtype):
@@ -195,63 +328,145 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         full_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
     num_cores_available = full_grid.num_cores()
 
-    if LEVERS["w_split"]:
-        wt_chunk, n_chunks, num_blocks_total = derive_blocking(
-            nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores_available, cb_depth
-        )
+    # ---- 2a. placement regime, per side (op_design.md §5.2) ---------------
+    # A resident L1 shard IS the per-core block: it pins the cores, the per-core
+    # tile-row range and the W extent. Padding materializes the fill INTO the
+    # input CB, so a padded call can never alias the input tensor; single-core is
+    # refused for a sharded call by validate() (a shard is inherently multi-core)
+    # and the A0 off-arm forces one core, so both fall back to the accessor path.
+    shard_eligible = plan.use_multicore and bool(LEVERS["multicore"]) and not plan.has_pad_region
+    in_shard = shard_side_plan(input_tensor, plan.in_padded, tile_h, tile_w) if shard_eligible else None
+    out_shard = shard_side_plan(output_tensor, target, tile_h, tile_w) if shard_eligible else None
+
+    if in_shard is not None and out_shard is not None and _same_placement(in_shard, out_shard):
+        in_placement, out_placement, shard = P_LOCAL_SHARD, P_LOCAL_SHARD, in_shard
+    elif out_shard is not None:
+        # Output-local: pack straight into the destination shard, read the source
+        # (interleaved, or another core's L1 shard) through the accessor.
+        in_placement, out_placement, shard = P_ACCESSOR, P_LOCAL_SHARD, out_shard
+    elif in_shard is not None:
+        in_placement, out_placement, shard = P_LOCAL_SHARD, P_ACCESSOR, in_shard
     else:
-        # w_split OFF — the pure height split (op_design.md §1.3 candidate 2).
-        wt_chunk, n_chunks, num_blocks_total = wt, 1, nt_h
+        in_placement, out_placement, shard = P_ACCESSOR, P_ACCESSOR, None
 
-    # never OOM: fall back to depth-1 rather than exceed the L1 budget
-    # (same cb_bytes() source as derive_blocking's ceiling and the CBs below)
-    while cb_depth > 1 and cb_bytes(cb_depth, wt_chunk, in_tile_bytes, out_tile_bytes) > CB_L1_BUDGET:
-        cb_depth -= 1
+    # ---- 2b. knobs + work distribution -----------------------------------
+    # An aliased CB costs no extra L1 (it IS the tensor), so only the STREAMING
+    # sides enter the L1 budget — that is what keeps a wide-W sharded crossover
+    # bounded in W.
+    def _streaming_bytes(in_p, out_p):
+        return (0 if in_p == P_LOCAL_SHARD else in_tile_bytes), (0 if out_p == P_LOCAL_SHARD else out_tile_bytes)
 
-    (
-        num_cores,
-        all_cores,
-        core_group_1,
-        core_group_2,
-        blocks_per_core_1,
-        blocks_per_core_2,
-    ) = ttnn.split_work_to_cores(
-        full_grid, num_blocks_total, bool(LEVERS["row_wise"])
-    )  # row_wise=True (master.md A1)
+    if shard is not None:
+        work_mode = W_REGION
+        stream_in, stream_out = _streaming_bytes(in_placement, out_placement)
+        if in_placement == P_LOCAL_SHARD:
+            # The aliased RM shard's own geometry pins the block width: a block of
+            # WT_CHUNK pages must be one tile_h x (WT_CHUNK*32) row-major region,
+            # which is the full shard width and nothing else.
+            wt_chunk, n_chunks = shard["shard_wt"], 1
+        else:
+            wt_chunk, n_chunks = derive_shard_blocking(shard["shard_wt"], wt_cap(cb_depth, stream_in, stream_out))
+        while cb_depth > 1 and cb_bytes(cb_depth, wt_chunk, stream_in, stream_out) > CB_L1_BUDGET:
+            cb_depth -= 1
+        if cb_bytes(1, wt_chunk, stream_in, stream_out) > CB_L1_BUDGET:
+            # The one shape zero-copy cannot buy: the shard pins a block width
+            # whose streaming partner CB will not fit. Take the accessor path on
+            # both sides so WT_CHUNK is free to shrink again.
+            in_placement, out_placement, shard, work_mode = P_ACCESSOR, P_ACCESSOR, None, W_BLOCKS
 
-    cores = ttnn.corerange_to_cores(all_cores, num_cores, bool(LEVERS["row_wise"]))
+    if shard is None:
+        work_mode = W_BLOCKS
+        if LEVERS["w_split"]:
+            wt_chunk, n_chunks, num_blocks_total = derive_blocking(
+                nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores_available, cb_depth
+            )
+        else:
+            # w_split OFF — the pure height split (op_design.md §1.3 candidate 2).
+            wt_chunk, n_chunks, num_blocks_total = wt, 1, nt_h
+
+        # never OOM: fall back to depth-1 rather than exceed the L1 budget
+        # (same cb_bytes() source as derive_blocking's ceiling and the CBs below)
+        while cb_depth > 1 and cb_bytes(cb_depth, wt_chunk, in_tile_bytes, out_tile_bytes) > CB_L1_BUDGET:
+            cb_depth -= 1
+
+        (
+            num_cores,
+            all_cores,
+            core_group_1,
+            core_group_2,
+            blocks_per_core_1,
+            blocks_per_core_2,
+        ) = ttnn.split_work_to_cores(
+            full_grid, num_blocks_total, bool(LEVERS["row_wise"])
+        )  # row_wise=True (master.md A1)
+
+        cores = ttnn.corerange_to_cores(all_cores, num_cores, bool(LEVERS["row_wise"]))
+    else:
+        # Cores are the cores that HOLD the shards, in shard order (master.md A2:
+        # launch only where the data is). Each owns its own shard's tile region.
+        cores = shard["cores"]
+        all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in cores})
+        blocks_per_core_shard = shard["shard_ht"] * n_chunks
+        num_blocks_total = blocks_per_core_shard * len(cores)
 
     # ========== 3. CIRCULAR BUFFERS =======================================
-    # Both CBs are sized CB_DEPTH * NT_BLK * WT_CHUNK pages — a function of the
+    # A streaming CB is CB_DEPTH * NT_BLK * WT_CHUNK pages — a function of the
     # knobs only, never of WT / NT_H / any tensor dimension. cb_pages() is the
-    # one place that formula lives.
+    # one place that formula lives. An aliased CB is the shard itself.
     pages_per_cb = cb_pages(cb_depth, wt_chunk)
     tile_descriptor = ttnn.TileDescriptor(tile_h, tile_w)
 
-    cb_input_sticks_descriptor = ttnn.CBDescriptor(
-        total_size=pages_per_cb * in_tile_bytes,
-        core_ranges=all_cores,
-        format_descriptors=[
+    def _aliased_cb(cb_index, tensor, page_bytes, dtype):
+        """CB placed ON the resident L1 shard (design lamp L1, master.md C14).
+
+        ``cb_descriptor_from_sharded_tensor`` carries the buffer pointer (that is
+        what makes it zero-copy); the format is then restated in TILE-page terms
+        because tilize counts pages in tiles on both sides, while an RM shard's
+        own page is one stick.
+        """
+        descriptor = ttnn.cb_descriptor_from_sharded_tensor(cb_index, tensor, core_ranges=all_cores)
+        descriptor.total_size = shard["shard_ht"] * shard["shard_wt"] * page_bytes
+        descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
-                buffer_index=CB_INPUT_STICKS,
-                data_format=input_tensor.dtype,
-                page_size=in_tile_bytes,
+                buffer_index=cb_index,
+                data_format=dtype,
+                page_size=page_bytes,
                 tile=tile_descriptor,
             )
-        ],
-    )
-    cb_output_tiles_descriptor = ttnn.CBDescriptor(
-        total_size=pages_per_cb * out_tile_bytes,
-        core_ranges=all_cores,
-        format_descriptors=[
-            ttnn.CBFormatDescriptor(
-                buffer_index=CB_OUTPUT_TILES,
-                data_format=output_tensor.dtype,
-                page_size=out_tile_bytes,
-                tile=tile_descriptor,
-            )
-        ],
-    )
+        ]
+        return descriptor
+
+    if in_placement == P_LOCAL_SHARD:
+        cb_input_sticks_descriptor = _aliased_cb(CB_INPUT_STICKS, input_tensor, in_tile_bytes, input_tensor.dtype)
+    else:
+        cb_input_sticks_descriptor = ttnn.CBDescriptor(
+            total_size=pages_per_cb * in_tile_bytes,
+            core_ranges=all_cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=CB_INPUT_STICKS,
+                    data_format=input_tensor.dtype,
+                    page_size=in_tile_bytes,
+                    tile=tile_descriptor,
+                )
+            ],
+        )
+
+    if out_placement == P_LOCAL_SHARD:
+        cb_output_tiles_descriptor = _aliased_cb(CB_OUTPUT_TILES, output_tensor, out_tile_bytes, output_tensor.dtype)
+    else:
+        cb_output_tiles_descriptor = ttnn.CBDescriptor(
+            total_size=pages_per_cb * out_tile_bytes,
+            core_ranges=all_cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=CB_OUTPUT_TILES,
+                    data_format=output_tensor.dtype,
+                    page_size=out_tile_bytes,
+                    tile=tile_descriptor,
+                )
+            ],
+        )
 
     # ========== 4. KERNELS =================================================
     regime = R_PAD if (plan.has_pad_region or not LEVERS["regime_select"]) else R_ALIGNED
@@ -266,9 +481,12 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # -- reader (NCRISC / NOC0) --
     reader_ct_args = [
         regime,
+        in_placement,
+        work_mode,
         tile_h,
         wt_chunk,
         nt_h,
+        n_chunks,  # W chunks per shard row (W_REGION); 1 collapses the inner loop
         nth_per_img,
         h_in,
         n_img_in,
@@ -280,9 +498,12 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
 
     # -- writer (BRISC / NOC1) --
     writer_ct_args = [
+        out_placement,
+        work_mode,
         wt_chunk,
         nt_h,
         wt,
+        n_chunks,
         out_tile_bytes,
         LEVERS["block_write"],
         ABLATE["dm"],
@@ -300,18 +521,35 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     src_addr = input_tensor.buffer_address()
     dst_addr = output_tensor.buffer_address()
 
+    # Two work assignments, one runtime-arg shape. W_BLOCKS hands each core a
+    # contiguous range of the global W-chunk-major block index (tile_row0 /
+    # tile_col0 unused); W_REGION hands it the origin of its own shard's tile
+    # region and walks it tile-row-major, W chunk innermost.
     start_block = 0
-    for core in cores:
-        if core_group_1.contains(core):
-            blocks_this_core = blocks_per_core_1
-        elif core_group_2.contains(core):
-            blocks_this_core = blocks_per_core_2
+    for shard_index, core in enumerate(cores):
+        if work_mode == W_REGION:
+            blocks_this_core = blocks_per_core_shard
+            tile_row0, tile_col0 = shard["regions"][shard_index]
         else:
-            blocks_this_core = 0
-        reader_rt_args[core.x][core.y] = [src_addr, start_block, blocks_this_core, pad_word]
-        writer_rt_args[core.x][core.y] = [dst_addr, start_block, blocks_this_core]
+            if core_group_1.contains(core):
+                blocks_this_core = blocks_per_core_1
+            elif core_group_2.contains(core):
+                blocks_this_core = blocks_per_core_2
+            else:
+                blocks_this_core = 0
+            tile_row0, tile_col0 = 0, 0
+        reader_rt_args[core.x][core.y] = [
+            src_addr,
+            start_block,
+            blocks_this_core,
+            pad_word,
+            tile_row0,
+            tile_col0 * tile_w * elem_in,  # the region's byte offset within a stick
+        ]
+        writer_rt_args[core.x][core.y] = [dst_addr, start_block, blocks_this_core, tile_row0, tile_col0]
         compute_rt_args[core.x][core.y] = [blocks_this_core]
-        start_block += blocks_this_core
+        if work_mode == W_BLOCKS:
+            start_block += blocks_this_core
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "tilize_reader.cpp"),

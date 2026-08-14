@@ -23,6 +23,24 @@
 //               pad branch therefore uses raw dataflow (TensorAccessor +
 //               noc_async_read + an L1 fill), keeping the helper's block
 //               structure and one-barrier-per-block policy.
+//
+// Orthogonal to the fill regime, two PLACEMENT regimes (op_design.md §5.2):
+//
+//   P_ACCESSOR    — TensorAccessor over interleaved DRAM/L1 (or a non-local L1
+//                   shard). Issues the reads described above.
+//   P_LOCAL_SHARD — cb_input_sticks is ALIASED on this core's resident RM shard,
+//                   so the block is already in L1 at exactly the layout tilize
+//                   wants (tile_h sticks x WT_CHUNK*32 elements, WT_CHUNK being
+//                   the whole shard width). The reader issues NO NoC read at
+//                   all: it only publishes the pages. Re-reading them through a
+//                   TensorAccessor would re-fetch data already resident in L1.
+//
+// ... and two work assignments (see the host's W_BLOCKS / W_REGION):
+//
+//   W_BLOCKS — a contiguous range of the global W-chunk-major block index.
+//   W_REGION — the core's own shard tile region, walked tile-row-major with the
+//              W chunk INNERMOST (that order is the shard's own linear tile
+//              order, which is what lets an aliased output CB chunk its width).
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
@@ -82,18 +100,21 @@ void kernel_main() {
     constexpr uint32_t TILE_W = 32;  // a tile is always 32 wide (hardware fact, not a knob)
 
     constexpr uint32_t regime = get_compile_time_arg_val(0);
-    constexpr uint32_t tile_h = get_compile_time_arg_val(1);
-    constexpr uint32_t wt_chunk = get_compile_time_arg_val(2);  // the W block factor
-    constexpr uint32_t nt_h = get_compile_time_arg_val(3);
-    constexpr uint32_t nth_per_img = get_compile_time_arg_val(4);
-    constexpr uint32_t h_in = get_compile_time_arg_val(5);
-    constexpr uint32_t n_img_in = get_compile_time_arg_val(6);
-    constexpr uint32_t w_in_bytes = get_compile_time_arg_val(7);
-    constexpr uint32_t elem_bytes = get_compile_time_arg_val(8);
+    constexpr uint32_t placement = get_compile_time_arg_val(1);  // P_ACCESSOR / P_LOCAL_SHARD
+    constexpr uint32_t work_mode = get_compile_time_arg_val(2);  // W_BLOCKS / W_REGION
+    constexpr uint32_t tile_h = get_compile_time_arg_val(3);
+    constexpr uint32_t wt_chunk = get_compile_time_arg_val(4);  // the W block factor
+    constexpr uint32_t nt_h = get_compile_time_arg_val(5);
+    constexpr uint32_t n_chunks = get_compile_time_arg_val(6);  // W chunks per shard row (W_REGION)
+    constexpr uint32_t nth_per_img = get_compile_time_arg_val(7);
+    constexpr uint32_t h_in = get_compile_time_arg_val(8);
+    constexpr uint32_t n_img_in = get_compile_time_arg_val(9);
+    constexpr uint32_t w_in_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t elem_bytes = get_compile_time_arg_val(11);
     // Classification ablation (op_design.md §9.1): drop the NoC payload, keep
     // every CB reserve/push and the loop trip counts. Always 0 in production.
-    constexpr uint32_t ablate_dm = get_compile_time_arg_val(9);
-    constexpr auto src_args = TensorAccessorArgs<10>();
+    constexpr uint32_t ablate_dm = get_compile_time_arg_val(12);
+    constexpr auto src_args = TensorAccessorArgs<13>();
 
     // Every byte quantity below derives from the WT_CHUNK knob — one source.
     constexpr uint32_t row_bytes = wt_chunk * TILE_W * elem_bytes;
@@ -102,8 +123,21 @@ void kernel_main() {
     const uint32_t start_block = get_arg_val<uint32_t>(1);
     const uint32_t num_blocks = get_arg_val<uint32_t>(2);
     const uint32_t pad_word = get_arg_val<uint32_t>(3);
+    const uint32_t tile_row0 = get_arg_val<uint32_t>(4);     // W_REGION: region origin
+    const uint32_t col_off_base = get_arg_val<uint32_t>(5);  // W_REGION: byte offset in a stick
 
     if (num_blocks == 0) {
+        return;
+    }
+
+    if constexpr (placement == 1 /* P_LOCAL_SHARD */) {
+        // ── ZERO-COPY ────────────────────────────────────────────────────
+        // The CB *is* the resident shard: the data is already in L1 in exactly
+        // the layout tilize consumes. Publish the pages, issue no NoC traffic.
+        for (uint32_t i = 0; i < num_blocks; ++i) {
+            cb_reserve_back(cb_input_sticks, wt_chunk);
+            cb_push_back(cb_input_sticks, wt_chunk);
+        }
         return;
     }
 
@@ -124,35 +158,71 @@ void kernel_main() {
 
     if constexpr (regime == 0) {
         // ── R_ALIGNED ────────────────────────────────────────────────────
-        // Blocks are W-chunk-major, so a run of consecutive blocks that shares
-        // one W chunk is one helper call over run*TILE_H contiguous sticks.
-        uint32_t block = start_block;
-        uint32_t remaining = num_blocks;
-        while (remaining > 0) {
-            const uint32_t wc = block / nt_h;
-            const uint32_t row = block % nt_h;
-            uint32_t run = nt_h - row;
-            if (run > remaining) {
-                run = remaining;
+        if constexpr (work_mode == 1 /* W_REGION */) {
+            // The core's own shard region. With one W chunk per row (the common
+            // case — a shard whose width fits the CB budget) the whole region is
+            // ONE helper call over num_blocks*TILE_H contiguous sticks, so the
+            // batched read of the interleaved path is preserved.
+            if constexpr (n_chunks == 1) {
+                dataflow_kernel_lib::
+                    read_sticks_for_tilize<cb_input_sticks, dataflow_kernel_lib::TilizeGranularity::TILE>(
+                        accessor,
+                        /*total_num_rows=*/num_blocks * tile_h,
+                        /*row_bytes=*/row_bytes,
+                        /*start_page=*/tile_row0 * tile_h,
+                        /*byte_offset_within_page=*/col_off_base);
+            } else {
+                for (uint32_t i = 0; i < num_blocks; ++i) {
+                    const uint32_t r = i / n_chunks;
+                    const uint32_t c = i - r * n_chunks;
+                    dataflow_kernel_lib::
+                        read_sticks_for_tilize<cb_input_sticks, dataflow_kernel_lib::TilizeGranularity::TILE>(
+                            accessor,
+                            /*total_num_rows=*/tile_h,
+                            /*row_bytes=*/row_bytes,
+                            /*start_page=*/(tile_row0 + r) * tile_h,
+                            /*byte_offset_within_page=*/col_off_base + c * row_bytes);
+                }
             }
-            dataflow_kernel_lib::read_sticks_for_tilize<cb_input_sticks, dataflow_kernel_lib::TilizeGranularity::TILE>(
-                accessor,
-                /*total_num_rows=*/run * tile_h,
-                /*row_bytes=*/row_bytes,
-                /*start_page=*/row * tile_h,
-                /*byte_offset_within_page=*/wc * row_bytes);
-            block += run;
-            remaining -= run;
+        } else {
+            // Blocks are W-chunk-major, so a run of consecutive blocks that shares
+            // one W chunk is one helper call over run*TILE_H contiguous sticks.
+            uint32_t block = start_block;
+            uint32_t remaining = num_blocks;
+            while (remaining > 0) {
+                const uint32_t wc = block / nt_h;
+                const uint32_t row = block % nt_h;
+                uint32_t run = nt_h - row;
+                if (run > remaining) {
+                    run = remaining;
+                }
+                dataflow_kernel_lib::
+                    read_sticks_for_tilize<cb_input_sticks, dataflow_kernel_lib::TilizeGranularity::TILE>(
+                        accessor,
+                        /*total_num_rows=*/run * tile_h,
+                        /*row_bytes=*/row_bytes,
+                        /*start_page=*/row * tile_h,
+                        /*byte_offset_within_page=*/wc * row_bytes);
+                block += run;
+                remaining -= run;
+            }
         }
     } else {
         // ── R_PAD ────────────────────────────────────────────────────────
         for (uint32_t i = 0; i < num_blocks; ++i) {
-            const uint32_t block = start_block + i;
-            const uint32_t wc = block / nt_h;
-            const uint32_t row = block % nt_h;
+            // block -> (tile-row, byte offset), per work assignment
+            uint32_t row, col_off;
+            if constexpr (work_mode == 1 /* W_REGION */) {
+                const uint32_t r = i / n_chunks;
+                row = tile_row0 + r;
+                col_off = col_off_base + (i - r * n_chunks) * row_bytes;
+            } else {
+                const uint32_t block = start_block + i;
+                row = block % nt_h;
+                col_off = (block / nt_h) * row_bytes;
+            }
             const uint32_t img = row / nth_per_img;
             const uint32_t row_in_img = (row % nth_per_img) * tile_h;
-            const uint32_t col_off = wc * row_bytes;
 
             // Bytes of real data this block's rows carry (W tail beyond it).
             uint32_t valid_bytes = 0;

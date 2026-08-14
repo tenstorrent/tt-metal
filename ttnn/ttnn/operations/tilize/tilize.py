@@ -152,7 +152,9 @@ INPUT_TAGGERS = {
 #
 # Phase 0: the whole INTERLEAVED surface (DRAM/L1, both directions), single- and
 # multi-core, both CB depths, bf16/fp32 in, bf16/fp32/bf8b out, rank 2..5, and
-# the three pad modes. Sharded placement, tiny tiles, retile and the integer
+# the three pad modes.
+# Refinement 1: the SHARDED placement surface — both sharding APIs, all three
+# legacy schemes plus nd, both orientations. Tiny tiles, retile and the integer
 # dtype family are not built yet and are refused (xfail) by the axis gate.
 
 SUPPORTED = {
@@ -160,11 +162,17 @@ SUPPORTED = {
     "output_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "use_multicore": [False, True],
     "double_buffer": [False, True],
-    "shard_api": ["none"],
-    "out_scheme": ["interleaved"],
+    "shard_api": ["none", "legacy_2d", "nd"],
+    "out_scheme": [
+        "interleaved",
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        "nd",
+    ],
     "buffer": ["dram_to_dram", "dram_to_l1", "l1_to_l1", "l1_to_dram"],
     "rank": [2, 3, 4, 5],
-    "orientation": ["none"],
+    "orientation": ["none", ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
     "tile_height": [32],
     "in_layout": [ttnn.ROW_MAJOR_LAYOUT],
     "in_tile_height": ["none"],
@@ -195,6 +203,22 @@ EXCLUSIONS = [
     {"dtype": ttnn.bfloat16, "output_dtype": ttnn.float32, "pad_value": "positive"},
     {"dtype": ttnn.bfloat16, "output_dtype": ttnn.float32, "pad_value": "negative"},
 ]
+
+# --- Refinement 1 (sharded placement) ---------------------------------------
+# A sharded tensor is inherently MULTI-CORE: the shards pin both the core set and
+# the per-core work, so there is no single-core realization of a sharded call.
+for _api in ("legacy_2d", "nd"):
+    EXCLUSIONS.append({"use_multicore": False, "shard_api": _api})
+# Padding on top of a sharded placement is the NEXT refinement. The fill is
+# materialized into the input CB, which the zero-copy path aliases on the input
+# tensor itself, and a padded shard grid is uneven by construction (the last
+# shard is partly pad) — both need work beyond this refinement's placement
+# change. Keyed on shard_api so it fires for either sharding API and for a
+# crossover in either direction.
+for _api in ("legacy_2d", "nd"):
+    for _mode in ("auto", "explicit"):
+        EXCLUSIONS.append({"pad_mode": _mode, "shard_api": _api})
+del _api, _mode
 
 
 # ---------------------------------------------------------------------------
