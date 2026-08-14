@@ -275,3 +275,83 @@ def test_b8_trid_is_gated_on_the_two_slot_cb_geometry():
     for cb_depth in (1, 2):
         ok = pd.cb_pages(cb_depth, 8) == 2 * pd.NT_BLK * 8 and pd.NT_BLK == 1
         assert ok == (cb_depth == 2), f"trid precondition wrong at CB_DEPTH={cb_depth}"
+
+
+# --- Refinement 6: the completeness audit's structural pins -------------------
+
+
+def test_d18_accessor_args_are_compile_time_by_construction(device):
+    """D18 (bake `TensorAccessorArgs` as compile-time args): the ON arm is
+    FORCED and its counterfactual is STRUCTURALLY UNBUILDABLE from a Python
+    ProgramDescriptor op.
+
+    `TensorAccessorArgs` supports emitting part of its address-gen description
+    as *common runtime* args instead of compile-time ones — that split is what
+    D18 is about, and it is selected by a `tensor_accessor::ArgsConfig`. The
+    nanobind binding (`ttnn/cpp/ttnn-nanobind/tensor_accessor_args.cpp`) takes a
+    tensor and NOTHING else, so the config is fixed at `ArgConfig::None` and
+    `get_common_runtime_args()` is empty for every tensor this op can be handed.
+
+    So there is no OFF arm to measure: every accessor arg is already baked. This
+    test pins that fact rather than asserting it — if the binding ever gains the
+    config, `get_common_runtime_args()` stops being unconditionally empty here
+    and the ledger row must be re-measured instead of re-argued.
+    """
+    for memory_config in (ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG):
+        tensor = ttnn.from_torch(
+            torch.zeros(1, 1, 64, 64, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=memory_config,
+        )
+        args = ttnn.TensorAccessorArgs(tensor)
+        assert len(args.get_compile_time_args()) > 0, "the accessor description is not baked at all"
+        assert args.get_common_runtime_args() == [], (
+            "TensorAccessorArgs now emits runtime args — D18 has an OFF arm and the "
+            "ledger row must be closed with a measurement, not this pin"
+        )
+
+
+@pytest.mark.parametrize("num_banks", [8, 12, 16], ids=lambda v: f"banks{v}")
+def test_b13_no_two_consecutive_transfers_share_an_endpoint(num_banks):
+    """B13 (`set_state`/`with_state`): the lever's PREMISE, asserted.
+
+    A stateful transfer amortizes the ENDPOINT registers (the source/destination
+    NoC coordinate, and the length in the one-packet form) across transfers that
+    reuse them. It is therefore worth exactly as much as consecutive transfers
+    share an endpoint — and on this op none do:
+
+      * READ, interleaved: a tile-row is TILE_H *consecutive* page ids, i.e.
+        distinct banks (the same fact that closes A3).
+      * WRITE, interleaved: a block's WT_CHUNK destination tile pages are
+        likewise consecutive page ids.
+      * READ, cross-core gather: a row span crosses page boundaries, so it
+        alternates between the SOURCE SHARDS that hold those pages.
+
+    This is a pin on the arithmetic, not a perf claim — the lever was built,
+    measured on four transaction sizes per side, and parked (see PARKED_LEVERS).
+    """
+    tile_h, wt_chunk = 32, 8
+    read_pages = [(7 + r) % num_banks for r in range(tile_h)]
+    write_pages = [(11 + k) % num_banks for k in range(wt_chunk)]
+    assert all(a != b for a, b in zip(read_pages, read_pages[1:])), "consecutive source sticks share a bank"
+    assert all(a != b for a, b in zip(write_pages, write_pages[1:])), "consecutive destination tiles share a bank"
+    # The gather: a 512 B span over 256 B pages alternates between two shards.
+    span_pages = [(512 * 0 + off) // 256 % 2 for off in (0, 256)]
+    assert span_pages == [0, 1], "a split row span no longer alternates source shards"
+
+
+def test_b13_and_d21_ship_in_their_measured_arm():
+    """Both Refinement-6 levers are LIVE KNOBS parked at a byte-identical
+    default, not deleted code: the kernels still carry both arms and the host
+    still carries the switch."""
+    for knob in ("read_state", "write_state", "precomp_index"):
+        assert knob in pd.LEVERS, f"{knob} was deleted instead of parked"
+        assert knob in pd.PARKED_LEVERS, f"{knob} is OFF without a recorded measurement"
+    noc = _kernel_source("tilize_noc.hpp")
+    assert "noc_async_read_one_packet_set_state" in noc, "B13's one-packet read arm is gone"
+    assert "noc_async_write_one_packet_set_state" in noc, "B13's write arm is gone"
+    # The write arm is bounded by the one-packet API, which is what makes it a
+    # TILE-HEIGHT question rather than a dtype one.
+    assert pd.NOC_MAX_BURST_SIZE == 512

@@ -796,3 +796,197 @@ def test_bench_retile(device, in_tile_h, tile_height):
         in_tile_h=in_tile_h,
         label=f"retile/{in_tile_h}to{tile_height}",
     )
+
+
+# --- Refinement 6: the completeness audit's own levers ------------------------
+# master.md B13 (`read_state` / `write_state`) and D21 (`precomp_index`). All
+# three ship PARKED at 0 (their OFF arm is the Refinement-5 kernel byte for
+# byte), so every test below that turns one to 1 is the lever's ON arm and the
+# matching `=0` test is the shipped baseline. B13 is a per-transaction issue
+# lever, so it is priced across TRANSACTION SIZE, not at one point:
+#
+#   read  — (a) 1024 B per source row, (b) 512 B, (d) 128 B, and the cross-core
+#           gather's 256 B page slices (the ONLY path where consecutive
+#           transfers share a NoC endpoint, which is the whole premise).
+#   write — the output TILE page, which is a TILE-HEIGHT question: 512 B at
+#           tile_h=8, 256 B at 4, 64 B at 1. Above 512 B there is no
+#           any-length stateful write in the API at all, so the lever is
+#           compile-time inert on the default 32-row geometry.
+#
+# The write arms pin `write_trid=0` on BOTH sides: B8's write-side double-issue
+# owns the same command buffer, so leaving it on would measure the pair rather
+# than the lever.
+
+
+@pytest.mark.parametrize("regime", list(SHAPES))
+@pytest.mark.parametrize("dtype_name", list(_DTYPES))
+def test_bench_lever_read_state_on(device, regime, dtype_name):
+    """master.md B13 READ side ON (set_state/with_state, endpoint cached)."""
+    _measure(
+        device,
+        SHAPES[regime],
+        _DTYPES[dtype_name],
+        levers=dict(read_state=1),
+        label=f"read_state=1/{regime}/{dtype_name}",
+    )
+
+
+@pytest.mark.parametrize("regime", list(SHAPES))
+@pytest.mark.parametrize("dtype_name", list(_DTYPES))
+def test_bench_lever_read_state_off(device, regime, dtype_name):
+    """The shipped arm: one plain noc_async_read per source row."""
+    _measure(
+        device,
+        SHAPES[regime],
+        _DTYPES[dtype_name],
+        levers=dict(read_state=0),
+        label=f"read_state=0/{regime}/{dtype_name}",
+    )
+
+
+@pytest.mark.parametrize("read_state", [1, 0], ids=["on", "off"])
+def test_bench_lever_read_state_gather(device, read_state):
+    """B13 on the ONE path whose consecutive transfers share a source core: the
+    cross-core L1 gather (a source shard lives on one core, and a block's TILE_H
+    rows all come out of it). If the lever pays anywhere on this op, here."""
+    shape, src_cores, dst_cores = RESHARD_SHAPE
+    _measure(
+        device,
+        shape,
+        ttnn.bfloat16,
+        in_mem_config=_width_shard(shape, src_cores),
+        out_mem_config=_height_shard(shape, dst_cores),
+        levers=dict(read_state=read_state),
+        label=f"read_state={read_state}/reshard_gather",
+    )
+
+
+@pytest.mark.parametrize("tile_height", [8, 4, 1])
+def test_bench_lever_write_state_on(device, tile_height):
+    """master.md B13 WRITE side ON, swept across the output page size."""
+    _measure(
+        device,
+        SHAPES["a_square"],
+        ttnn.bfloat16,
+        tile_h=tile_height,
+        levers=dict(write_state=1, write_trid=0),
+        label=f"write_state=1/tile_h={tile_height}",
+    )
+
+
+@pytest.mark.parametrize("tile_height", [8, 4, 1])
+def test_bench_lever_write_state_off(device, tile_height):
+    """The shipped arm at the same geometry (B8's write twin off on both sides)."""
+    _measure(
+        device,
+        SHAPES["a_square"],
+        ttnn.bfloat16,
+        tile_h=tile_height,
+        levers=dict(write_state=0, write_trid=0),
+        label=f"write_state=0/tile_h={tile_height}",
+    )
+
+
+@pytest.mark.parametrize("tile_height", [8, 1])
+def test_bench_lever_write_state_smallest_on(device, tile_height):
+    """master.md B0: the per-core-overhead regime, where a fixed per-transfer
+    setup cost is most likely to show as a LOSS."""
+    _measure(
+        device,
+        SHAPES["d_smallest"],
+        ttnn.bfloat16,
+        tile_h=tile_height,
+        levers=dict(write_state=1, write_trid=0),
+        label=f"write_state=1/d_smallest/tile_h={tile_height}",
+    )
+
+
+@pytest.mark.parametrize("tile_height", [8, 1])
+def test_bench_lever_write_state_smallest_off(device, tile_height):
+    """The B0 check's OFF arm."""
+    _measure(
+        device,
+        SHAPES["d_smallest"],
+        ttnn.bfloat16,
+        tile_h=tile_height,
+        levers=dict(write_state=0, write_trid=0),
+        label=f"write_state=0/d_smallest/tile_h={tile_height}",
+    )
+
+
+@pytest.mark.parametrize("regime", ["d_smallest"])
+@pytest.mark.parametrize("rep", range(3))
+def test_bench_lever_read_state_smallest_repeat(device, regime, rep):
+    """master.md B0 for the READ side, repeated: the smallest regime is where a
+    per-transfer setup cost dominates, and it is the row whose verdict the
+    parked default rests on, so it is measured more than once."""
+    _measure(device, SHAPES[regime], ttnn.bfloat16, levers=dict(read_state=1), label=f"read_state=1/{regime}/r{rep}")
+    _measure(device, SHAPES[regime], ttnn.bfloat16, levers=dict(read_state=0), label=f"read_state=0/{regime}/r{rep}")
+
+
+@pytest.mark.parametrize("regime", list(SHAPES))
+def test_bench_lever_precomp_index_on(device, regime):
+    """master.md D21 ON: the (tile-row, W chunk) origin comes from the host and
+    the loop steps it, instead of a div/mod per block."""
+    _measure(
+        device,
+        SHAPES[regime],
+        ttnn.bfloat16,
+        levers=dict(precomp_index=1),
+        label=f"precomp_index=1/{regime}",
+    )
+
+
+@pytest.mark.parametrize("regime", list(SHAPES))
+def test_bench_lever_precomp_index_off(device, regime):
+    """The shipped arm: the kernel recomputes b % nt_h / b / nt_h per block."""
+    _measure(
+        device,
+        SHAPES[regime],
+        ttnn.bfloat16,
+        levers=dict(precomp_index=0),
+        label=f"precomp_index=0/{regime}",
+    )
+
+
+# --- Refinement 6: pricing the ONE unbuilt lever (design lamp L4) -------------
+# `split_reader` on a destination-local plan. The writer issues NO NoC traffic
+# there, so BRISC is idle and could take half the reads — the recorded ~1.7x
+# candidate. It is a scheme change (a second input CB, so the CB keeps one
+# producer each), not a knob, so this phase PRICES it instead of building it:
+# the split-DM ablation says how much of that wall is the read half, which is
+# the ceiling on what moving half of it to a second RISC could buy.
+@pytest.mark.parametrize(
+    "ablate,name",
+    [({}, "full"), ({"dm_read": 1}, "no_read"), ({"dm_write": 1}, "no_write"), ({"compute": 1}, "no_compute")],
+)
+def test_bench_l4_split_reader_headroom(device, ablate, name):
+    shape, src_cores, dst_cores = RESHARD_SHAPE
+    _measure(
+        device,
+        shape,
+        ttnn.bfloat16,
+        in_mem_config=_width_shard(shape, src_cores),
+        out_mem_config=_height_shard(shape, dst_cores),
+        ablate=ablate,
+        label=f"l4_headroom/{name}",
+    )
+
+
+@pytest.mark.parametrize(
+    "ablate,name",
+    [({}, "full"), ({"dm_read": 1}, "no_read"), ({"dm_write": 1}, "no_write")],
+)
+def test_bench_l4_split_reader_headroom_crossover(device, ablate, name):
+    """The same question on the DRAM -> local-shard crossover, where the read leg
+    is a DRAM read rather than an L1 gather."""
+    shape = SHARDED_SHAPES["e_shard_same_wide"][0]
+    cores = SHARDED_SHAPES["e_shard_same_wide"][1]
+    _measure(
+        device,
+        shape,
+        ttnn.bfloat16,
+        out_mem_config=_height_shard(shape, cores),
+        ablate=ablate,
+        label=f"l4_headroom_crossover/{name}",
+    )

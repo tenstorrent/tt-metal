@@ -38,6 +38,10 @@ KERNEL_DIR = Path(__file__).parent / "kernels"
 DEFAULT_TILE_WIDTH = 32  # a tile is always 32 wide
 NUM_CIRCULAR_BUFFERS = 32
 NOC_ALIGN_BYTES = 32  # transfer granularity a split gather has to keep
+# noc_parameters.h: the largest single-packet NoC transfer. The one-packet
+# stateful WRITE API (master.md B13) is defined only up to this size, which is
+# what bounds that lever to small output tile pages.
+NOC_MAX_BURST_SIZE = 512
 
 # Dtypes whose DATUM is one byte. Not the same question as `element_size() == 1`:
 # bfloat8_b also reports one byte per element but is a block-float format with a
@@ -183,6 +187,16 @@ W_REGION = 1
 #                      pre-Refinement-4 behaviour: exact everywhere EXCEPT a
 #                      widening cast whose fill the input format cannot hold,
 #                      which is precisely what Phase 0 put in EXCLUSIONS).
+#   read_state    1 -> issue accessor reads through the set_state/with_state
+#                      pair, caching the NoC endpoint (master.md B13, READ side).
+#                      Ships PARKED at 0 — see PARKED_LEVERS.
+#   write_state   1 -> issue each output tile page through the one-packet
+#                      set_state/with_state pair (master.md B13, WRITE side).
+#                      Only expressible when a page fits ONE packet, which is a
+#                      TILE-HEIGHT question. Ships PARKED at 0.
+#   precomp_index 1 -> take this core's (tile-row, W chunk) origin from the host
+#                      and step it, instead of a div/mod per block
+#                      (master.md D21). Ships PARKED at 0.
 #   zero_copy     0 -> never alias a CB on a resident L1 shard: take the
 #                     TensorAccessor path on both sides and the generic block
 #                     split over the whole grid, i.e. re-read/re-write the local
@@ -215,6 +229,12 @@ LEVERS = {
     "read_one_packet": 1,
     "out_fill": 1,
     "pack_fast": 1,
+    # master.md B13 (Refinement 6), both halves. Ship PARKED at their
+    # byte-identical default — see PARKED_LEVERS for the measurements.
+    "read_state": 0,
+    "write_state": 0,
+    # master.md D21 (Refinement 6). Ships PARKED at 0 — see PARKED_LEVERS.
+    "precomp_index": 0,
 }
 
 # Levers deliberately SHIPPED in their 0 arm, with the measurement that put them
@@ -227,6 +247,34 @@ PARKED_LEVERS = {
     "read_vc": "master.md B10: neutral on (a) 86,136 vs 85,720 ns, -2.6% on (b) "
     "13,478 vs 13,131 ns (5-sample medians). 64 readers over 12 round-robin DRAM "
     "banks have no first-come-first-serve route to break up.",
+    # master.md B13, READ side. Null on every real-work regime (a 87,537 vs
+    # 86,187 ns, b 13,651 vs 13,578, c 171,404 vs 174,206) and a consistent LOSS
+    # on the smallest one — 3,292 vs 2,935 ns, +12.2%, medians of 3 with
+    # non-overlapping samples — plus +5.0% on the cross-core gather (19,374 vs
+    # 18,453 ns). The premise does not hold on this op: state pays only while
+    # consecutive transfers SHARE a NoC endpoint, and every path here advances
+    # it (an interleaved tile-row is TILE_H consecutive pages, i.e. distinct
+    # banks; the gather's row span alternates source shards). With no reuse the
+    # pair costs one extra command-buffer poll per transfer, which is exactly
+    # what the low-work regimes show.
+    "read_state": "master.md B13 READ: null on (a)/(b)/(c) (87,537 vs 86,187 ns; "
+    "13,651 vs 13,578; 171,404 vs 174,206) and +12.2% on the smallest regime "
+    "(3,292 vs 2,935 ns, medians of 3), +5.0% on the gather (19,374 vs 18,453 ns). "
+    "No two consecutive transfers on this op share a NoC endpoint, so the state is "
+    "reprogrammed every transfer and only the extra poll survives.",
+    # master.md B13, WRITE side. Only expressible at an output page <= 512 B, and
+    # a MONOTONE loss as the transaction shrinks — the signature of a fixed
+    # per-transfer cost with nothing to amortize it against.
+    "write_state": "master.md B13 WRITE: +3.0% at a 512 B page (94,497 vs 91,703 ns), "
+    "+2.8% at 256 B (104,718 vs 101,907), +4.2% at 64 B (234,007 vs 224,669); B0 "
+    "smallest-regime 1,916 vs 1,827 ns. Interleaved destination pages rotate banks, "
+    "so the endpoint state is never reused.",
+    # master.md D21. Inside the +-3% noise band on every regime, in both
+    # directions — a core owns ~4 blocks, so the div/mod this removes is four
+    # instructions against a DM-bound wall.
+    "precomp_index": "master.md D21: (a) 88,463 vs 86,724 ns, (b) 13,359 vs 13,544, "
+    "(c) 170,072 vs 170,404, (d) 2,850 vs 2,899 — all inside the +-3% band, both "
+    "signs. A core owns ~4 blocks, so this removes 4 divisions from a DM-bound wall.",
 }
 
 # --- B10: how many read-request VCs the readers spread over ------------------
@@ -886,6 +934,39 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         and not (ABLATE["dm"] or ABLATE["dm_write"])
     )
 
+    # -- Refinement 6: master.md B13 (stateful transfers), both halves --------
+    # READ side. The stateful API carries no request-VC parameter, so it is
+    # mutually exclusive with B10 (`read_vc`, which ships parked). It applies
+    # wherever this kernel issues its OWN reads — the custom aligned loop, the
+    # R_PAD / gather loop and the retile staging — but never on the library-reader
+    # branch, whose contract owns its issue path.
+    read_state = int(
+        in_placement == P_ACCESSOR
+        and LEVERS["read_state"]
+        and not LEVERS["read_vc"]
+        and not (ABLATE["dm"] or ABLATE["dm_read"])
+        and (regime != R_ALIGNED or aligned_accessor_read)
+    )
+    # WRITE side. There is no ANY-LENGTH stateful write in the dataflow API —
+    # only the one-packet form — so the lever is expressible exactly while an
+    # output TILE page fits one packet. That is a tile-GEOMETRY bound (a 32-row
+    # bf16 page is 2048 B; an 8-row one is 512 B), which is why it has to be
+    # priced across tile height rather than argued from the default geometry.
+    write_state = int(
+        out_placement == P_ACCESSOR
+        and LEVERS["write_state"]
+        and LEVERS["page_write"]
+        and not write_trid
+        and not (ABLATE["dm"] or ABLATE["dm_write"])
+        and out_tile_bytes <= NOC_MAX_BURST_SIZE
+    )
+    # -- Refinement 6: master.md D21 (host-precomputed per-core indexing) -----
+    # Only the W_BLOCKS index is decomposed here (a W_REGION core already gets
+    # its region origin from the host); `blocks_per_core` is small, so this is a
+    # handful of divisions per core — which is exactly what the counterfactual
+    # has to price rather than assume.
+    precomp_index = int(work_mode == W_BLOCKS and LEVERS["precomp_index"])
+
     # -- reader (NCRISC / NOC0) --
     reader_ct_args = [
         regime,
@@ -915,6 +996,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # count the source page id `tile_row * wt + tile_col` needs.
         in_tile_h,
         wt,
+        # Refinement 6 (master.md B13 / D21); both 0 ships the Refinement-5 kernel.
+        read_state,
+        precomp_index,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -940,6 +1024,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         in_shape[-1],  # valid columns inside the padded target
         nth_per_img,
         n_img_in,
+        # Refinement 6 (master.md B13 / D21); both 0 ships the Refinement-5 kernel.
+        write_state,
+        precomp_index,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
@@ -970,6 +1057,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             else:
                 blocks_this_core = 0
             tile_row0, tile_col0 = 0, 0
+        # D21: the host's decomposition of this core's first W_BLOCKS block.
+        # Both kernels take the SAME two values, so the index has one source.
+        block_row0, block_wc0 = start_block % nt_h, start_block // nt_h
         reader_rt_args[core.x][core.y] = [
             src_addr,
             start_block,
@@ -979,6 +1069,8 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             tile_col0 * tile_w * elem_in,  # the region's byte offset within a stick
             shard_index % NUM_READ_VCS,  # B10: this core's read-request VC
             tile_col0,  # W_REGION origin in TILE columns (R_RETILE pages are tiles)
+            block_row0,
+            block_wc0,
         ]
         writer_rt_args[core.x][core.y] = [
             dst_addr,
@@ -987,6 +1079,8 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             tile_row0,
             tile_col0,
             pad_word_out,  # the fill in the OUTPUT element format (0 when unused)
+            block_row0,
+            block_wc0,
         ]
         compute_rt_args[core.x][core.y] = [blocks_this_core]
         if work_mode == W_BLOCKS:

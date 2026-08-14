@@ -34,6 +34,10 @@
 // pad region in the INPUT element format on the way in). See the header for why
 // the fill is materialized twice.
 #include "ttnn/ttnn/operations/tilize/kernels/tilize_fill.hpp"
+// StatefulWrite (master.md B13) and BlockIndex (master.md D21) — shared with the
+// reader so each lever has exactly one implementation. Both OFF by default and
+// byte-identical to the pre-Refinement-6 kernel in that arm.
+#include "ttnn/ttnn/operations/tilize/kernels/tilize_noc.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_output_tiles = 16;
@@ -79,7 +83,17 @@ void kernel_main() {
     constexpr uint32_t w_in_elems = get_compile_time_arg_val(15);
     constexpr uint32_t nth_per_img = get_compile_time_arg_val(16);
     constexpr uint32_t n_img_in = get_compile_time_arg_val(17);
-    constexpr auto dst_args = TensorAccessorArgs<18>();
+    // --- Refinement 6 levers (master.md B13 / D21) ---------------------------
+    // `write_state`: issue each tile page through the one-packet
+    // set_state/with_state pair, caching the destination NoC endpoint. The host
+    // only sets it when a page fits ONE packet (out_tile_bytes <=
+    // NOC_MAX_BURST_SIZE) — there is no any-length stateful write in the API,
+    // which is exactly why this lever has to be priced across TILE HEIGHT.
+    // `precomp_index`: take this core's (tile-row, W chunk) origin from the host
+    // instead of paying a div/mod per block.
+    constexpr uint32_t write_state = get_compile_time_arg_val(18);
+    constexpr uint32_t precomp_index = get_compile_time_arg_val(19);
+    constexpr auto dst_args = TensorAccessorArgs<20>();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_block = get_arg_val<uint32_t>(1);
@@ -87,6 +101,10 @@ void kernel_main() {
     const uint32_t tile_row0 = get_arg_val<uint32_t>(3);  // W_REGION: region origin
     const uint32_t tile_col0 = get_arg_val<uint32_t>(4);
     const uint32_t pad_word_out = get_arg_val<uint32_t>(5);  // fill, in the OUTPUT format
+    // D21: the host's decomposition of `start_block` (W_BLOCKS only; 0 off the
+    // lever, where BlockIndex recomputes it per block instead).
+    const uint32_t block_row0 = get_arg_val<uint32_t>(6);
+    const uint32_t block_wc0 = get_arg_val<uint32_t>(7);
 
     if (num_blocks == 0) {
         return;
@@ -94,12 +112,17 @@ void kernel_main() {
 
     // block index -> (tile-row, first tile-column) of the block, per work
     // assignment. THE single source for both the destination page ids and the pad
-    // stamp's geometry.
+    // stamp's geometry. On W_BLOCKS the pair comes from `idx`, which every loop
+    // below `seek`s at the top of its body and `advance`s at the bottom — the two
+    // D21 arms differ only in which of those two calls does the work.
+    tilize_kernels::BlockIndex<precomp_index != 0, nt_h> idx;
+    idx.init(start_block, block_row0, block_wc0);
+
     auto tile_row_of = [&](uint32_t i) -> uint32_t {
         if constexpr (work_mode == 1 /* W_REGION */) {
             return tile_row0 + i / n_chunks;
         } else {
-            return (start_block + i) % nt_h;
+            return idx.row;
         }
     };
     auto tile_col_of = [&](uint32_t i) -> uint32_t {
@@ -107,7 +130,7 @@ void kernel_main() {
             const uint32_t r = i / n_chunks;
             return tile_col0 + (i - r * n_chunks) * wt_chunk;
         } else {
-            return ((start_block + i) / nt_h) * wt_chunk;  // W-chunk-major ordering
+            return idx.wc * wt_chunk;  // W-chunk-major ordering
         }
     };
     auto first_page_of = [&](uint32_t i) -> uint32_t { return tile_row_of(i) * wt + tile_col_of(i); };
@@ -150,14 +173,19 @@ void kernel_main() {
         // no NoC write, and the CB keeps exactly one consumer. The pad stamp still
         // runs: the CB *is* the output tensor, so it edits the shard in place.
         for (uint32_t i = 0; i < num_blocks; ++i) {
+            idx.seek(i);
             cb_wait_front(cb_output_tiles, wt_chunk);
             stamp_pad(i, get_read_ptr(cb_output_tiles));
             cb_pop_front(cb_output_tiles, wt_chunk);
+            idx.advance();
         }
         return;
     }
 
     const auto accessor = TensorAccessor(dst_args, dst_addr);
+    // B13 state — one per kernel; every write below shares the write command
+    // buffer, so they share the endpoint the state programs.
+    tilize_kernels::StatefulWrite<write_state != 0, out_tile_bytes> put;
 
     if constexpr (write_trid) {
         // ── B8 WRITE-side double-issue ───────────────────────────────────
@@ -174,6 +202,7 @@ void kernel_main() {
         bool in_flight = false;
 
         for (uint32_t i = 0; i < num_blocks; ++i) {
+            idx.seek(i);
             const uint32_t first_page = first_page_of(i);
             // The still-unbarriered in-flight block AND this one.
             cb_wait_front(cb_output_tiles, in_flight ? 2 * wt_chunk : wt_chunk);
@@ -194,6 +223,7 @@ void kernel_main() {
                 trid_wait ^= 3;
             }
             in_flight = true;
+            idx.advance();
         }
         noc_async_write_barrier_with_trid(trid_wait);  // drain the last block
         cb_pop_front(cb_output_tiles, wt_chunk);
@@ -209,6 +239,7 @@ void kernel_main() {
     }
 
     for (uint32_t i = 0; i < num_blocks; ++i) {
+        idx.seek(i);
         const uint32_t first_page = first_page_of(i);
 
         cb_wait_front(cb_output_tiles, wt_chunk);
@@ -219,7 +250,8 @@ void kernel_main() {
         for (uint32_t k = 0; k < wt_chunk; ++k) {
             if constexpr (!ablate_dm) {
                 if constexpr (page_write) {
-                    noc_async_write(l1_addr, accessor.get_noc_addr(first_page + k), out_tile_bytes);
+                    // B13 OFF (the default) is exactly `noc_async_write(...)`.
+                    put.write(l1_addr, accessor.get_noc_addr(first_page + k));
                 } else {
                     // OFF arm: the same bytes split into two sub-page transactions.
                     constexpr uint32_t half = out_tile_bytes / 2;
@@ -235,5 +267,6 @@ void kernel_main() {
 
         noc_async_write_barrier();
         cb_pop_front(cb_output_tiles, wt_chunk);
+        idx.advance();
     }
 }

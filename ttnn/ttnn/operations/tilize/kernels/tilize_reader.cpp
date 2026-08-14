@@ -71,11 +71,17 @@
 // the cast). copy_l1_words: the retile path's local face-row move. One source for
 // both L1 primitives.
 #include "ttnn/ttnn/operations/tilize/kernels/tilize_fill.hpp"
+// StatefulRead (master.md B13) and BlockIndex (master.md D21) — shared with the
+// writer so each lever has exactly one implementation. Both are OFF-by-default
+// arms that compile to the prior code.
+#include "ttnn/ttnn/operations/tilize/kernels/tilize_noc.hpp"
 
 namespace {
 
+using tilize_kernels::BlockIndex;
 using tilize_kernels::copy_l1_words;
 using tilize_kernels::fill_l1_with_val;
+using tilize_kernels::StatefulRead;
 
 // Read `n_bytes` of ONE row-major source row, starting `byte_off` bytes into it,
 // into L1 at `l1_addr` — the single source for source addressing on the accessor
@@ -88,11 +94,22 @@ using tilize_kernels::fill_l1_with_val;
 // row, so a row is `row_pages` pages of `page_bytes` and a span may cross page
 // boundaries — issued as one transfer per page slice. Both cases keep the
 // caller's one-barrier-per-block policy (master.md B7); nothing is barriered here.
-template <uint32_t page_bytes, uint32_t row_pages, typename Accessor>
+//
+// `issue` is the B13 stateful-read state (master.md B13): it carries the last
+// programmed NoC endpoint across calls, so a run of transfers that share a
+// source core costs one command-buffer register write less each. That run
+// exists on the cross-core L1 gather (a source shard lives on ONE core, and a
+// block's TILE_H rows all come from it) and never on an interleaved source.
+template <uint32_t page_bytes, uint32_t row_pages, bool stateful, uint32_t packet_bytes, typename Accessor>
 FORCE_INLINE void read_row_span(
-    const Accessor& accessor, uint32_t row, uint32_t byte_off, uint32_t n_bytes, uint32_t l1_addr) {
+    const Accessor& accessor,
+    StatefulRead<stateful, packet_bytes>& issue,
+    uint32_t row,
+    uint32_t byte_off,
+    uint32_t n_bytes,
+    uint32_t l1_addr) {
     if constexpr (row_pages == 1) {
-        noc_async_read(accessor.get_noc_addr(row, byte_off), l1_addr, n_bytes);
+        issue.read(accessor.get_noc_addr(row, byte_off), l1_addr, n_bytes);
     } else {
         uint32_t page_in_row = byte_off / page_bytes;
         uint32_t page = row * row_pages + page_in_row;
@@ -102,7 +119,7 @@ FORCE_INLINE void read_row_span(
             if (n > n_bytes) {
                 n = n_bytes;
             }
-            noc_async_read(accessor.get_noc_addr(page, off), l1_addr, n);
+            issue.read(accessor.get_noc_addr(page, off), l1_addr, n);
             l1_addr += n;
             n_bytes -= n;
             ++page;
@@ -120,12 +137,22 @@ FORCE_INLINE void read_row_span(
 // `vc` (master.md B10): the read-REQUEST virtual channel. Readers that share a
 // route serialize first-come-first-serve on one VC; spreading requests over the
 // unicast VCs is the documented way to break that.
-template <uint32_t row_bytes, uint32_t tile_h, bool one_packet, typename Accessor>
+// `stateful` (master.md B13): route the issue through the set_state/with_state
+// pair instead. The stateful API carries no VC parameter, so the host never
+// turns B13 and B10 on together (B10 ships parked anyway).
+template <uint32_t row_bytes, uint32_t tile_h, bool one_packet, bool stateful, uint32_t packet_bytes, typename Accessor>
 FORCE_INLINE void issue_tile_row(
-    const Accessor& accessor, uint32_t first_row, uint32_t byte_off, uint32_t l1_addr, uint32_t vc) {
+    const Accessor& accessor,
+    StatefulRead<stateful, packet_bytes>& issue,
+    uint32_t first_row,
+    uint32_t byte_off,
+    uint32_t l1_addr,
+    uint32_t vc) {
     for (uint32_t r = 0; r < tile_h; ++r) {
         const uint64_t src = accessor.get_noc_addr(first_row + r, byte_off);
-        if constexpr (one_packet) {
+        if constexpr (stateful) {
+            issue.read(src, l1_addr, row_bytes);
+        } else if constexpr (one_packet) {
             noc_async_read_one_packet(src, l1_addr, row_bytes, noc_index, vc);
         } else {
             noc_async_read(src, l1_addr, row_bytes, noc_index, vc);
@@ -183,7 +210,14 @@ void kernel_main() {
     // reader's pages are sticks and never need it. Both are 0/unused elsewhere.
     constexpr uint32_t in_tile_h = get_compile_time_arg_val(19);
     constexpr uint32_t wt = get_compile_time_arg_val(20);
-    constexpr auto src_args = TensorAccessorArgs<21>();
+    // --- Refinement 6 levers (master.md B13 / D21) ---------------------------
+    // `read_state`: issue reads through set_state/with_state, caching the NoC
+    // endpoint (see tilize_noc.hpp). `precomp_index`: take this core's
+    // (tile-row, W chunk) origin from the host and step it, instead of paying a
+    // div/mod per block. Both 0 => this kernel is byte-identical to Refinement 5.
+    constexpr uint32_t read_state = get_compile_time_arg_val(21);
+    constexpr uint32_t precomp_index = get_compile_time_arg_val(22);
+    constexpr auto src_args = TensorAccessorArgs<23>();
 
     // Every byte quantity below derives from the WT_CHUNK knob — one source.
     constexpr uint32_t row_bytes = wt_chunk * TILE_W * elem_bytes;
@@ -196,6 +230,10 @@ void kernel_main() {
     const uint32_t col_off_base = get_arg_val<uint32_t>(5);  // W_REGION: byte offset in a stick
     const uint32_t read_vc = get_arg_val<uint32_t>(6);       // B10: this core's read-request VC
     const uint32_t tile_col0 = get_arg_val<uint32_t>(7);     // W_REGION origin, in TILE columns (R_RETILE)
+    // D21: the host's decomposition of `start_block` (W_BLOCKS only; 0 off the
+    // lever, where BlockIndex recomputes it per block instead).
+    const uint32_t block_row0 = get_arg_val<uint32_t>(8);
+    const uint32_t block_wc0 = get_arg_val<uint32_t>(9);
 
     if (num_blocks == 0) {
         return;
@@ -213,6 +251,9 @@ void kernel_main() {
     }
 
     const auto accessor = TensorAccessor(src_args, src_addr);
+    // B13 state (one per kernel: every read below shares the read command
+    // buffer, so they share the endpoint the state programs).
+    StatefulRead<read_state != 0> issue;
 
     if constexpr (ablate_dm) {
         // Payload removed, synchronization intact: same block count, same CB
@@ -255,7 +296,7 @@ void kernel_main() {
                             /*byte_offset_within_page=*/col_off_base + c * row_bytes);
                 }
             }
-        } else if constexpr (read_one_packet || read_trid || read_vc_enable) {
+        } else if constexpr (read_one_packet || read_trid || read_vc_enable || read_state) {
             // ── custom aligned loop (master.md B6 / B8 / B10) ─────────────
             // HELPER SUBSTITUTION, justified and MEASURED. read_sticks_for_tilize
             // issues a plain noc_async_read per row and one plain
@@ -271,6 +312,10 @@ void kernel_main() {
             constexpr uint32_t slot_bytes = wt_chunk * in_tile_bytes;
             constexpr bool one_packet = read_one_packet && (row_bytes <= NOC_MAX_BURST_SIZE);
             const uint32_t vc = read_vc_enable ? read_vc : NOC_UNICAST_WRITE_VC;
+            // B13 on the aligned path: every transfer here is exactly row_bytes,
+            // so when it fits one packet the LENGTH goes into the state as well
+            // and the lever composes with B6 rather than replacing it.
+            StatefulRead<read_state != 0, (one_packet ? row_bytes : 0)> issue_rows;
 
             if constexpr (read_trid) {
                 // B8 double-issue: block i's reads are issued BEFORE block i-1's
@@ -285,16 +330,19 @@ void kernel_main() {
                 uint32_t slot = 0;
                 uint32_t trid_issue = 1, trid_wait = 1;
                 bool in_flight = false;
+                BlockIndex<precomp_index != 0, nt_h> idx;
+                idx.init(start_block, block_row0, block_wc0);
                 for (uint32_t i = 0; i < num_blocks; ++i) {
-                    const uint32_t block = start_block + i;
-                    const uint32_t wc = block / nt_h;
-                    const uint32_t row = block % nt_h;
+                    idx.seek(i);
+                    const uint32_t wc = idx.wc;
+                    const uint32_t row = idx.row;
+                    idx.advance();
 
                     // Room for the still-unpushed in-flight block AND this one.
                     cb_reserve_back(cb_input_sticks, in_flight ? 2 * wt_chunk : wt_chunk);
                     noc_async_read_set_trid(trid_issue);
-                    issue_tile_row<row_bytes, tile_h, one_packet>(
-                        accessor, row * tile_h, wc * row_bytes, slot_base + slot * slot_bytes, vc);
+                    issue_tile_row<row_bytes, tile_h, one_packet, read_state != 0>(
+                        accessor, issue_rows, row * tile_h, wc * row_bytes, slot_base + slot * slot_bytes, vc);
                     slot ^= 1;
                     trid_issue ^= 3;  // alternate 1 <-> 2
 
@@ -313,14 +361,17 @@ void kernel_main() {
                 // check, but the hygiene is the same).
                 noc_async_read_set_trid(0);
             } else {
+                BlockIndex<precomp_index != 0, nt_h> idx;
+                idx.init(start_block, block_row0, block_wc0);
                 for (uint32_t i = 0; i < num_blocks; ++i) {
-                    const uint32_t block = start_block + i;
-                    const uint32_t wc = block / nt_h;
-                    const uint32_t row = block % nt_h;
+                    idx.seek(i);
+                    const uint32_t wc = idx.wc;
+                    const uint32_t row = idx.row;
+                    idx.advance();
 
                     cb_reserve_back(cb_input_sticks, wt_chunk);
-                    issue_tile_row<row_bytes, tile_h, one_packet>(
-                        accessor, row * tile_h, wc * row_bytes, get_write_ptr(cb_input_sticks), vc);
+                    issue_tile_row<row_bytes, tile_h, one_packet, read_state != 0>(
+                        accessor, issue_rows, row * tile_h, wc * row_bytes, get_write_ptr(cb_input_sticks), vc);
                     noc_async_read_barrier();
                     cb_push_back(cb_input_sticks, wt_chunk);
                 }
@@ -378,6 +429,8 @@ void kernel_main() {
         // each source page 32 times.
         uint32_t staged_row = 0xFFFFFFFFu, staged_col = 0xFFFFFFFFu;
 
+        BlockIndex<precomp_index != 0, nt_h> idx;
+        idx.init(start_block, block_row0, block_wc0);
         for (uint32_t i = 0; i < num_blocks; ++i) {
             uint32_t row, col;  // OUTPUT tile-row, first source tile-column
             if constexpr (work_mode == 1 /* W_REGION */) {
@@ -385,9 +438,10 @@ void kernel_main() {
                 row = tile_row0 + r;
                 col = tile_col0 + (i - r * n_chunks) * wt_chunk;
             } else {
-                const uint32_t block = start_block + i;
-                row = block % nt_h;
-                col = (block / nt_h) * wt_chunk;
+                idx.seek(i);
+                row = idx.row;
+                col = idx.wc * wt_chunk;
+                idx.advance();
             }
             const uint32_t src_row0 = (row * tile_h) / src_tile_h;
 
@@ -397,7 +451,7 @@ void kernel_main() {
                     for (uint32_t k = 0; k < wt_chunk; ++k) {
                         // A whole tile PAGE, so the transfer is page-aligned on
                         // every arch (master.md B5 as a side effect).
-                        noc_async_read(accessor.get_noc_addr((src_row0 + t) * wt + col + k), addr, src_tile_bytes);
+                        issue.read(accessor.get_noc_addr((src_row0 + t) * wt + col + k), addr, src_tile_bytes);
                         addr += src_tile_bytes;
                     }
                 }
@@ -427,6 +481,8 @@ void kernel_main() {
         }
     } else {
         // ── R_PAD ────────────────────────────────────────────────────────
+        BlockIndex<precomp_index != 0, nt_h> idx;
+        idx.init(start_block, block_row0, block_wc0);
         for (uint32_t i = 0; i < num_blocks; ++i) {
             // block -> (tile-row, byte offset), per work assignment
             uint32_t row, col_off;
@@ -435,9 +491,10 @@ void kernel_main() {
                 row = tile_row0 + r;
                 col_off = col_off_base + (i - r * n_chunks) * row_bytes;
             } else {
-                const uint32_t block = start_block + i;
-                row = block % nt_h;
-                col_off = (block / nt_h) * row_bytes;
+                idx.seek(i);
+                row = idx.row;
+                col_off = idx.wc * row_bytes;
+                idx.advance();
             }
             const uint32_t img = row / nth_per_img;
             const uint32_t row_in_img = (row % nth_per_img) * tile_h;
@@ -459,8 +516,8 @@ void kernel_main() {
                 // H tail and whole pad tiles: no source row at all.
                 const uint32_t n_read = (img < n_img_in && src_row < h_in) ? valid_bytes : 0;
                 if (n_read > 0) {
-                    read_row_span<src_page_bytes, src_row_pages>(
-                        accessor, img * h_in + src_row, col_off, n_read, l1_addr);
+                    read_row_span<src_page_bytes, src_row_pages, read_state != 0>(
+                        accessor, issue, img * h_in + src_row, col_off, n_read, l1_addr);
                 }
                 if constexpr (!skip_pad_fill) {
                     if (n_read < row_bytes) {
