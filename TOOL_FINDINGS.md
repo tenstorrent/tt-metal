@@ -737,12 +737,14 @@ section is the credit half of the ledger and is the material for the comparison 
 | after fusing Q/K/V into one decode projection (O4c) | 273.6 | 15.976 | 0.9708 |
 | after fusing RoPE into one op (O4d) | 271.9 | 15.212 | 0.9903 |
 | run 2 — Q+K rotated in one call (O4f) | 269.5 | 14.909 | 0.9903 |
-| run 2 — decode-native Q/K/V layout (O4g) | 261.9 | **13.975** | 0.9903 |
+| run 2 — decode-native Q/K/V layout (O4g) | 261.9 | 13.975 | 0.9903 |
+| run 2 — head creation fed the projection's shard (O4h) | 254.5 | **13.277** | 0.9903 |
 | tool's own roofline target | 338.541 | — | gate 0.95 |
 | **hand-port, for reference** | — | **15.907** | — |
 
-**13.975 against 15.907 — the tool is 12.1% AHEAD of 74 human experiments**, autonomously, with
-PCC bit-identical across its last three wins (0.990347151783074, unchanged to every decimal).
+**13.277 against 15.907 — the tool is 16.5% AHEAD of 74 human experiments**, autonomously, with
+PCC bit-identical across its last four wins (0.990347151783074, unchanged to every decimal). Every
+one of those four was a layout or dispatch result. None spent accuracy.
 
 State this with the accuracy bar attached, every time it is quoted: the tool is at e2e PCC 0.9708
 against its 0.95 gate; the hand-port's p150 decode holds 0.981 (`STATUS.md`, and 0.99991 on the
@@ -1113,6 +1115,53 @@ Two different arguments, same verdict, on hardware where the intuitive answer is
 `_V_SHARD`: *"RoPE on a core whose cos/sin table lives elsewhere returns 3.4e38 from uninitialised
 L1."* That is precisely the hazard waiting for anyone sharding a 40-head rotation per O4f — the
 hand-port's own notes already document the trap.
+
+### O4h — the bottleneck the previous fix created, and the loop catching it
+
+Immediately after O4g, head creation became the largest open gap — an op producing **12 tiles** was
+costing **33 µs**. The diagnosis:
+
+> *`nlp_create_qkv_heads_decode` is batch-parallel, so at batch 1 its outputs live on ONE core — and
+> handed an interleaved operand, that one core had to pull the whole fused row, 192 tiles, out of
+> DRAM by itself.*
+
+The projection had just written that row across 32 cores' L1, and the op's sharded program factory
+reads a width-sharded operand from exactly there. Feeding it directly turns a single-core DRAM read
+into a fan-in over L1:
+
+```
+head creation   33 -> 5.9 us/call   (8.44 -> 1.50 ms)
+rotation         7.35 -> 3.14 ms    (follows onto the same shard)
+datamove        26.8 -> 14.6 ms
+                13.975 -> 13.277 ms/token (-5.0%)   PCC bit-identical
+```
+
+This is the measure → attack → re-measure loop doing exactly what it is supposed to: the previous
+win moved the bottleneck, and the next round found where it went.
+
+---
+
+## ★ THE PATTERN — one pathology, found three times, and the best thing to take from this experiment
+
+Three of the tool's largest wins are the same underlying bug wearing different clothes. **Ops
+written for a batch or sequence dimension degenerate when decode gives them neither.** Each profiles
+as "this op is slow", never as "this op is doing nothing", which is why all three survived a human
+pass:
+
+| where | what decode gave it | what it did | cost |
+|---|---|---|---|
+| **O4** `ttnn.argmax` | a TILE row | took the **single-core** path (dispatch keys off input LAYOUT) and read the row padded to 32 | 51.3% of device time |
+| **O4g** RoPE / rotation | a TILE row | processed **160 tiles where 4 had data** — 31 of every 32 rows were padding | part of −6.3% |
+| **O4h** `nlp_create_qkv_heads_decode` | batch 1 | **batch-parallel** op collapsed to ONE core, which then pulled 192 tiles from DRAM alone | 33 µs for a 12-tile op |
+
+The unifying rule: **at batch 1, seq 1, a "parallel" op may be running on one core, and a "small"
+tensor may be 32× its logical size.** Neither is visible in the source — both are properties of what
+the op does with the shape it is handed.
+
+**Recommended action on the hand-port:** a systematic decode-path audit against this rule. For every
+op in the decode step, ask (a) does its parallel path key off layout or batch, and does decode
+satisfy that? and (b) is its input a padded tile row? The tool found three instances in one model;
+there is no reason to think a hand-written port has zero.
 
 ### O5 — the ladder's escalation is real, and it gives up in the right place
 
