@@ -33,6 +33,7 @@ stale dump is detected rather than silently compared against.
 from __future__ import annotations
 
 import os
+import pathlib
 import time
 from pathlib import Path
 
@@ -48,67 +49,116 @@ REFERENCE_CHUNK = 4096
 # artifact of eager attention, not of the model: sdpa computes the same values in
 # O(n) memory, verified bit-identical to eager at 8k (max abs diff 0.0).
 LONG_REFERENCE_CONTEXTS = [8192, 16384, 32768, 65536, 131072, 262144]
-FILLER_SEED = 1234
 
 # Bumped when the dump's contents or semantics change, so an old file on disk is
 # rejected instead of being compared against.
-_FORMAT_VERSION = 1
+_FORMAT_VERSION = 2
 
 
 def _model_path() -> str:
     return os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "google/gemma-4-31B-it")
 
 
-def _cached_prompt_chunk(model_path, chunk):
-    """Chunk 0's tokens from any reference already on disk, or None.
+def _cached_tokens(model_path, num_tokens):
+    """``num_tokens`` tokens from any long reference already on disk, or None.
 
-    Exists to keep the generator off the ttnn import path. ``_prompt_tokens`` lives in
-    the demo module, and importing that opens the UMD cluster and takes the PCIe chip
-    lock — for the entire run, which is pure CPU work. At 30 minutes that was merely
-    untidy; at ~17 h for 256k it would block every device test on the machine for the
-    better part of a day.
+    Exists to keep the generator off the ttnn import path. The tokenizer is reached
+    through the demo module, and importing that opens the UMD cluster and takes the PCIe
+    chip lock -- for the whole run, which is pure CPU work. At 30 minutes that was merely
+    untidy; at ~5 h for 128k it would block every device test on the machine for most of a
+    day. Every dump stores its tokens and the sequences are prefix-consistent, so once any
+    reference at least this long exists the tokenizer is not needed again.
 
-    Chunk 0 is the same real prompt at every context length, and every dump stores its
-    tokens, so once any reference exists the tokenizer is no longer needed. Callers
-    still fall back to ``_prompt_tokens`` when nothing is cached.
+    Only reads dumps at the current _FORMAT_VERSION. v1 dumps carry the old
+    prompt-plus-random-filler sequence; slicing those here would silently rebuild the old
+    sequence under the new scheme.
     """
     for ctx in sorted(LONG_REFERENCE_CONTEXTS):
+        if ctx < num_tokens:
+            continue
         path = long_reference_path(model_path, ctx)
         if not path.exists():
             continue
         payload = torch.load(path, map_location="cpu", weights_only=False)
-        if int(payload.get("chunk", 0)) == chunk and payload["tokens"].shape[-1] >= chunk:
-            return payload["tokens"][:, :chunk].clone(), int(payload["prompt_len"])
+        if payload["tokens"].shape[-1] >= num_tokens:
+            return payload["tokens"][:, :num_tokens].clone()
     return None
 
 
-def build_token_sequence(model_path, chunk, context_len, vocab_size):
+def _long_context_text():
+    """The long-context source text, read without importing the demo module.
+
+    Deliberately does NOT go through ``text_demo.load_demo_prompt``. Importing that module
+    opens the UMD cluster and takes the PCIe chip lock for the lifetime of the process --
+    which for a reference generation is hours of pure CPU work with a device held hostage,
+    blocking every device test on the machine. The demo's loader is 15 lines of JSON read
+    plus an md5-named cache file, so it is reproduced here instead, reading the same cache
+    the demo populates.
+    """
+    import hashlib
+    import json
+
+    prompts_dir = pathlib.Path("models/tt_transformers/demo/sample_prompts")
+    cache_dir = pathlib.Path("models/tt_transformers/demo/context_cache")
+    # The largest source file, unclipped: every smaller bucket clips the same text to fewer
+    # characters, so this is the stream all of them are prefixes of.
+    entry = json.loads((prompts_dir / "input_data_long_256k.json").read_text())[0]
+    url = entry["context"]
+    cache_file = cache_dir / hashlib.md5(url.encode()).hexdigest()
+    if cache_file.exists():
+        return cache_file.read_text()
+
+    import requests
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    resp = requests.get(url, timeout=60)
+    resp.raise_for_status()
+    cache_file.write_text(resp.text)
+    return resp.text
+
+
+def _real_token_stream(model_path, num_tokens):
+    """``num_tokens`` tokens of real text, tiling the source when it runs short.
+
+    No chat template: it would append the question after the context, so a 32k and a 128k
+    sequence would diverge at their tails and stop being prefixes of one another.
+
+    pg84 tokenizes to 100,680 tokens, so anything past ~100k repeats it. Repetition is still
+    language -- the point is that attention sees real token statistics rather than
+    uniform-random ids, not that the text is novel.
+    """
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    ids = torch.tensor(tokenizer.encode(_long_context_text()), dtype=torch.int32).unsqueeze(0)
+    if ids.shape[-1] < num_tokens:
+        ids = ids.repeat(1, -(-num_tokens // ids.shape[-1]))
+    return ids[:, :num_tokens].clone(), tokenizer
+
+
+def build_token_sequence(model_path, chunk, context_len, vocab_size=None):
     """The exact token sequence a chunked prefill run consumes.
 
-    Chunk 0 carries the real prompt; later chunks are deterministic filler. Shared
-    by the reference generator and the device test so the two cannot drift — a PCC
+    Real text end to end. Every chunk is language, not uniform-random ids, so a per-chunk
+    PCC means the same thing for chunk 0 as for chunk 7 -- under the old scheme chunk 0
+    held the real prompt and the rest was seeded filler, which sat ~0.045 higher and made
+    chunk 0 the only chunk the accuracy gate ever tripped on.
+
+    Shared by the reference generator and the device test so the two cannot drift; a PCC
     comparison against a differently-tokenized reference would be worse than none.
 
-    The filler comes off one seeded stream in fixed-size chunks, which makes the
-    sequences prefix-consistent: the first N tokens of a 256k sequence are the whole
-    of an N-token sequence. ``test_prefill_long_context_prefix_pcc`` depends on that
-    and verifies it by hash rather than trusting this comment.
+    Prefix-consistent by construction, since the sequence is a slice of one token stream:
+    the first N tokens of a 256k sequence are the whole of an N-token sequence.
+    ``test_prefill_long_context_prefix_pcc`` depends on that and verifies it by hash rather
+    than trusting this comment.
+
+    ``vocab_size`` is unused now that nothing is sampled; kept so existing callers work.
     """
-    import torch as _torch
-
-    cached = _cached_prompt_chunk(model_path, chunk)
+    cached = _cached_tokens(model_path, context_len)
     if cached is not None:
-        tokens_first, prompt_len, tokenizer = cached[0], cached[1], None
-    else:
-        from models.demos.gemma4.demo.text_demo_prefill import _prompt_tokens
-
-        tokens_first, tokenizer, prompt_len = _prompt_tokens(model_path, chunk)
-
-    parts = [tokens_first]
-    _torch.manual_seed(FILLER_SEED)
-    for _ in range(context_len // chunk - 1):
-        parts.append(_torch.randint(0, vocab_size, (1, chunk), dtype=_torch.int32))
-    return _torch.cat(parts, dim=-1), tokenizer, prompt_len
+        return cached, None, context_len
+    tokens, tokenizer = _real_token_stream(model_path, context_len)
+    return tokens, tokenizer, context_len
 
 
 def reference_path(model_path: str | None = None, chunk: int = REFERENCE_CHUNK) -> Path:
