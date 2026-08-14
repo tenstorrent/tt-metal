@@ -91,15 +91,11 @@ jobs:
     secrets: inherit
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      build-wheel: true
+      build-inplace-wheel: true
       tracy: true
-      wheel-ref: ${{ format('refs/tags/{0}', inputs.tag-version) }}
       fetch-depth: 0
       skip-tt-train: false
       enable-lto: false
-      # Released packages must be self-contained (bundle the SFPI JIT toolchain) since
-      # they're installed on machines with no /opt/tenstorrent/sfpi to fall back to.
-      use-system-sfpi: false
 
   build-artifact-release:
     name: "Build artifact for release (without tracy)"
