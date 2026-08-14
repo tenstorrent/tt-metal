@@ -226,3 +226,70 @@ def test_rejects_a_site_past_the_batch_on_a_cache_hit(mesh_device, device_params
 
     with expect_error(RuntimeError, f"site {sites} is past partial's dim 0 of {sites}"):
         read(sites)
+
+
+@pytest.mark.parametrize("mesh_device, device_params", [pytest.param((2, 4), FABRIC, id="mesh-2x4")], indirect=True)
+@pytest.mark.parametrize(
+    "bad, message",
+    [
+        ("rows_same_tile_bucket", "requires an unbatched running_sum matching partial's plane"),
+        ("unaligned_width", "requires tile-aligned inner dims"),
+    ],
+    ids=["rows_same_tile_bucket", "unaligned_width"],
+)
+def test_rejects_shapes_that_only_agree_once_padded(mesh_device, device_params, expect_error, bad, message):
+    """Padding is not guaranteed zero, and both arms below would read it as data.
+
+    Row counts inside one tile bucket compare equal padded while the output is labelled
+    with the logical count, so the shorter operand's padding lands in rows the caller
+    reads back. An unaligned width is worse: the statistics reduce runs the whole padded
+    row, so the padding sets the score for every row rather than for some of them."""
+    torch.manual_seed(2026)
+
+    mesh_shape = tuple(mesh_device.shape)
+    tp_factor, sp_factor = mesh_shape[TP_AXIS], mesh_shape[SP_AXIS]
+    num_tokens = 64 * sp_factor
+    # 40 columns per chip, which pads to 64 — the only arm that needs an unaligned shard.
+    hidden = (40 if bad == "unaligned_width" else 32) * tp_factor
+    # 50 rows per chip against partial's 64: the same two tiles, a different row count.
+    prefix_tokens = 50 * sp_factor if bad == "rows_same_tile_bucket" else num_tokens
+
+    stream_dims, vector_dims, scalar_dims = [None, None], [None, None], [None, None]
+    stream_dims[SP_AXIS], stream_dims[TP_AXIS] = 2, 3
+    vector_dims[TP_AXIS] = 3
+    scalar_dims[SP_AXIS] = 2
+
+    to_dev = lambda t, dims, dtype=ttnn.bfloat16: ttnn.from_torch(
+        t,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=mesh_shape),
+    )
+    tt_partial = to_dev(torch.randn([1, 1, num_tokens, hidden], dtype=torch.bfloat16), stream_dims)
+    tt_prefix = to_dev(torch.randn([1, 1, prefix_tokens, hidden], dtype=torch.bfloat16), stream_dims)
+    tt_query = to_dev(torch.randn([1, 1, 1, hidden], dtype=torch.bfloat16), vector_dims)
+    tt_shift = to_dev(torch.randn([1, 1, num_tokens, 1]), scalar_dims, ttnn.float32)
+    tt_mass = to_dev(torch.rand([1, 1, num_tokens, 1]) + 1.0, scalar_dims, ttnn.float32)
+    tt_stats = to_dev(torch.zeros([1, 2 * tp_factor, num_tokens, 1]), scalar_dims, ttnn.float32)
+
+    grid = mesh_device.compute_with_storage_grid_size()
+    semaphore = ttnn.create_global_semaphore(
+        mesh_device,
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))]),
+        0,
+    )
+
+    with expect_error(RuntimeError, message):
+        ttnn.experimental.attn_res_gather_softmax(
+            tt_partial,
+            tt_prefix,
+            tt_shift,
+            tt_mass,
+            tt_query,
+            tt_stats,
+            semaphore,
+            cluster_axis=TP_AXIS,
+            inv_hidden_size=INV_HIDDEN_SIZE,
+            eps=EPS,
+        )

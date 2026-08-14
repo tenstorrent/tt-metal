@@ -119,40 +119,62 @@ void AttnResGatherSoftmaxDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!args.output_mem_config.is_sharded(), "AttnResGatherSoftmax supports an interleaved output only");
 
     const auto& partial_shape = partial.padded_shape();
+    const auto& partial_logical = partial.logical_shape();
     const auto& running_sum_shape = running_sum.padded_shape();
+    const auto& running_sum_logical = running_sum.logical_shape();
+    // Logical as well as padded, here and in every cross-operand check below. The inner
+    // dims are tile-padded, so two different row counts in one tile bucket — 100 and 120,
+    // both padding to 128 — compare equal padded. The output is built from partial's
+    // logical shape, so the shorter operand's padding would be folded into rows the op
+    // still returns as data.
     TT_FATAL(
         running_sum_shape[0] == 1 && running_sum_shape[1] == partial_shape[1] &&
-            running_sum_shape[2] == partial_shape[2] && running_sum_shape[3] == partial_shape[3],
-        "AttnResGatherSoftmax requires an unbatched running_sum matching partial's plane, got {} against {}",
+            running_sum_shape[2] == partial_shape[2] && running_sum_shape[3] == partial_shape[3] &&
+            running_sum_logical[1] == partial_logical[1] && running_sum_logical[2] == partial_logical[2] &&
+            running_sum_logical[3] == partial_logical[3],
+        "AttnResGatherSoftmax requires an unbatched running_sum matching partial's plane, got {} ({} padded) against "
+        "{} ({} padded)",
+        running_sum_logical,
         running_sum_shape,
+        partial_logical,
         partial_shape);
     if (tensor_args.pending.has_value()) {
         // The settled stream replaces `running_sum` everywhere the op uses it, so it has
         // to be the same tensor shape, and it shares the fold's unpacker configuration
         // with `partial` like `running_sum` does.
         TT_FATAL(
-            tensor_args.pending->padded_shape() == running_sum_shape,
-            "AttnResGatherSoftmax pending is {} but settles into running_sum's {}",
+            tensor_args.pending->padded_shape() == running_sum_shape &&
+                tensor_args.pending->logical_shape() == running_sum_logical,
+            "AttnResGatherSoftmax pending is {} ({} padded) but settles into running_sum's {} ({} padded)",
+            tensor_args.pending->logical_shape(),
             tensor_args.pending->padded_shape(),
+            running_sum_logical,
             running_sum_shape);
     }
     TT_FATAL(partial_shape[1] == 1, "AttnResGatherSoftmax requires a candidate dim of 1, got {}", partial_shape[1]);
     validate_site(args, tensor_args);
+    // The logical inner dims, not the padded ones. The statistics reduce runs the whole
+    // padded row, so a logically narrower row folds its own padding into both the sum of
+    // squares and the dot product that set the live score.
     TT_FATAL(
-        partial_shape[-1] % TILE_WIDTH == 0 && partial_shape[-2] % TILE_HEIGHT == 0,
+        partial_logical[-1] % TILE_WIDTH == 0 && partial_logical[-2] % TILE_HEIGHT == 0,
         "AttnResGatherSoftmax requires tile-aligned inner dims, got {} x {}",
-        partial_shape[-2],
-        partial_shape[-1]);
+        partial_logical[-2],
+        partial_logical[-1]);
 
     // The logical height, not the padded one: the reader fetches pages 0..Wt-1 and stops,
     // so a query taller than the tile it pads into would be silently truncated to its
     // first row rather than rejected.
     const auto& q_shape = tensor_args.q.padded_shape();
+    const auto& q_logical = tensor_args.q.logical_shape();
     TT_FATAL(
-        q_shape[0] == 1 && q_shape[1] == 1 && tensor_args.q.logical_shape()[-2] == 1 &&
-            q_shape[-1] == partial_shape[-1],
-        "AttnResGatherSoftmax takes the statistics against a single query row of partial's width, got {} against {}",
-        tensor_args.q.logical_shape(),
+        q_shape[0] == 1 && q_shape[1] == 1 && q_logical[-2] == 1 && q_shape[-1] == partial_shape[-1] &&
+            q_logical[-1] == partial_logical[-1],
+        "AttnResGatherSoftmax takes the statistics against a single query row of partial's width, got {} ({} padded) "
+        "against {} ({} padded)",
+        q_logical,
+        q_shape,
+        partial_logical,
         partial_shape);
 
     for (const auto* tensor : {&tensor_args.shift, &tensor_args.mass}) {
@@ -162,10 +184,12 @@ void AttnResGatherSoftmaxDeviceOperation::validate_on_program_cache_miss(
             tensor->logical_shape()[-1]);
         for (int i = 1; i < 3; ++i) {
             TT_FATAL(
-                tensor->padded_shape()[i] == partial_shape[i],
-                "AttnResGatherSoftmax shift and mass dim {} is {} but partial's is {}",
+                tensor->padded_shape()[i] == partial_shape[i] && tensor->logical_shape()[i] == partial_logical[i],
+                "AttnResGatherSoftmax shift and mass dim {} is {} ({} padded) but partial's is {} ({} padded)",
                 i,
+                tensor->logical_shape()[i],
                 tensor->padded_shape()[i],
+                partial_logical[i],
                 partial_shape[i]);
         }
     }
@@ -177,11 +201,12 @@ void AttnResGatherSoftmaxDeviceOperation::validate_on_program_cache_miss(
     const auto& stats_shape = stats.padded_shape();
     TT_FATAL(
         stats_shape[0] == 1 && stats_shape[1] == 2 * args.ring_size && stats_shape[2] == partial_shape[2] &&
-            stats.logical_shape()[-1] == 1,
-        "AttnResGatherSoftmax at ring size {} needs stats shaped [1, {}, {}, 1], got {}",
+            stats.logical_shape()[2] == partial_logical[2] && stats.logical_shape()[-1] == 1,
+        "AttnResGatherSoftmax at ring size {} needs stats shaped [1, {}, {}, 1], got {} ({} padded)",
         args.ring_size,
         2 * args.ring_size,
-        partial_shape[2],
+        partial_logical[2],
+        stats.logical_shape(),
         stats_shape);
 
     TT_FATAL(
