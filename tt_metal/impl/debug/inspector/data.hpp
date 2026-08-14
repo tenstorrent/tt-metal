@@ -12,6 +12,7 @@
 #include <atomic>
 #include <cstddef>
 #include <optional>
+#include <unordered_set>
 
 namespace tt::tt_metal::inspector {
 
@@ -57,6 +58,7 @@ private:
     inspector::Logger logger;
     RpcServerController rpc_server_controller;
     std::mutex programs_mutex;
+    std::mutex mesh_buffers_mutex;
     std::mutex mesh_devices_mutex;
     std::mutex mesh_workloads_mutex;
     std::mutex runtime_entries_mutex;
@@ -68,6 +70,7 @@ private:
     std::mutex prefetcher_core_info_mutex;
     std::unordered_map<uint64_t, inspector::ProgramData> programs_data;
     std::unordered_map<int, uint64_t> kernel_id_to_program_id;
+    std::unordered_set<const distributed::MeshBuffer*> mesh_buffers_data;
     std::unordered_map<int, inspector::MeshDeviceData> mesh_devices_data;
     std::unordered_map<uint64_t, inspector::MeshWorkloadData> mesh_workloads_data;
     static constexpr size_t kRuntimeEntriesCapacity = 8192;

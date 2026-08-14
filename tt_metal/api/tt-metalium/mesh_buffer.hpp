@@ -151,14 +151,7 @@ private:
         const DeviceLocalBufferConfig& device_local_config,
         DeviceAddr device_local_size,
         MeshDevice* mesh_device,
-        std::shared_ptr<Buffer> backing_buffer) :
-        config_(config),
-        device_local_config_(device_local_config),
-        mesh_device_(mesh_device->shared_from_this()),
-        address_(backing_buffer->address()),
-        device_local_size_(device_local_size),
-        buffers_(MeshShape(mesh_device->shape())),
-        state_(OwnedBufferState{std::move(backing_buffer)}) {}
+        std::shared_ptr<Buffer> backing_buffer);
 
     // Creates a non-owning `MeshBuffer` as "view" over an existing `address`.
     MeshBuffer(
@@ -166,14 +159,7 @@ private:
         const DeviceLocalBufferConfig& device_local_config,
         DeviceAddr address,
         DeviceAddr device_local_size,
-        MeshDevice* mesh_device) :
-        config_(config),
-        device_local_config_(device_local_config),
-        mesh_device_(mesh_device->shared_from_this()),
-        address_(address),
-        device_local_size_(device_local_size),
-        buffers_(MeshShape(mesh_device->shape())),
-        state_(ExternallyOwnedState{}) {}
+        MeshDevice* mesh_device);
 
     void initialize_device_buffers();
     MeshBufferConfig config_;

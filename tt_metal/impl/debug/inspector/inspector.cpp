@@ -295,6 +295,41 @@ void Inspector::mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_
     }
 }
 
+void Inspector::mesh_buffer_created(const distributed::MeshBuffer* mesh_buffer) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize, no need to print failure message again.
+        return;
+    }
+    try {
+        // A move-assigned buffer is already present, and there is no value to refresh, so the insert
+        // is simply a no-op in that case.
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->mesh_buffers_data.insert(mesh_buffer);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh buffer created: {}", e.what());
+    }
+}
+
+void Inspector::mesh_buffer_destroyed(const distributed::MeshBuffer* mesh_buffer) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        return;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
+        data->mesh_buffers_data.erase(mesh_buffer);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh buffer destroyed: {}", e.what());
+    }
+}
+
 void Inspector::mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept {
     if (!is_enabled()) {
         return;

@@ -17,6 +17,7 @@
 #include "impl/allocator/allocator.hpp"
 #include "mesh_device_impl.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/debug/inspector/inspector.hpp"
 
 namespace per_core_allocation = tt::tt_metal::experimental::per_core_allocation;
 
@@ -229,7 +230,42 @@ bool MeshBuffer::is_allocated() const {
     return true;
 }
 
-MeshBuffer::~MeshBuffer() { deallocate(); }
+MeshBuffer::MeshBuffer(
+    const MeshBufferConfig& config,
+    const DeviceLocalBufferConfig& device_local_config,
+    DeviceAddr device_local_size,
+    MeshDevice* mesh_device,
+    std::shared_ptr<Buffer> backing_buffer) :
+    config_(config),
+    device_local_config_(device_local_config),
+    mesh_device_(mesh_device->shared_from_this()),
+    address_(backing_buffer->address()),
+    device_local_size_(device_local_size),
+    buffers_(MeshShape(mesh_device->shape())),
+    state_(OwnedBufferState{std::move(backing_buffer)}) {
+    Inspector::mesh_buffer_created(this);
+}
+
+MeshBuffer::MeshBuffer(
+    const MeshBufferConfig& config,
+    const DeviceLocalBufferConfig& device_local_config,
+    DeviceAddr address,
+    DeviceAddr device_local_size,
+    MeshDevice* mesh_device) :
+    config_(config),
+    device_local_config_(device_local_config),
+    mesh_device_(mesh_device->shared_from_this()),
+    address_(address),
+    device_local_size_(device_local_size),
+    buffers_(MeshShape(mesh_device->shape())),
+    state_(ExternallyOwnedState{}) {
+    Inspector::mesh_buffer_created(this);
+}
+
+MeshBuffer::~MeshBuffer() {
+    Inspector::mesh_buffer_destroyed(this);
+    deallocate();
+}
 
 MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     config_(other.config_),
@@ -242,6 +278,7 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     other.state_ = DeallocatedState{};
     other.address_ = 0;
     other.device_local_size_ = 0;
+    Inspector::mesh_buffer_created(this);
 }
 
 MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
@@ -258,6 +295,7 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         other.state_ = DeallocatedState{};
         other.address_ = 0;
         other.device_local_size_ = 0;
+        Inspector::mesh_buffer_created(this);
     }
     return *this;
 }
