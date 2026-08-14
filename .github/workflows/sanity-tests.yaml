@@ -208,15 +208,15 @@ permissions:
   checks: write
 
 run-name: >-
-  Sanity tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)'
-  || (github.event_name == 'schedule') && ' (Blackhole)'
-  || '' }}${{ (github.event_name == 'workflow_dispatch') && format(' SKUs[{0}{1}{2}{3}{4}]',
-  inputs.run-wormhole && 'WH' || '',
-  inputs.run-wormhole && inputs.run-blackhole && ',' || '',
-  inputs.run-blackhole && 'BH' || '',
-  (inputs.run-wormhole || inputs.run-blackhole) && inputs.run-sim && ',' || '',
-  inputs.run-sim && 'Sim' || '')
-  || '' }}
+  Sanity tests${{ (github.event_name == 'schedule' && ' (scheduled)')
+  || (github.event_name == 'push' && ' (push)')
+  || '' }}${{ inputs.with-retries && ' (with retries)' || '' }}${{
+  format(' SKUs[{0}{1}{2}{3}{4}]',
+  (inputs.run-wormhole || github.event_name == 'push') && 'WH' || '',
+  (inputs.run-wormhole || github.event_name == 'push') && (inputs.run-blackhole || github.event_name == 'schedule') && ',' || '',
+  (inputs.run-blackhole || github.event_name == 'schedule') && 'BH' || '',
+  (inputs.run-wormhole || inputs.run-blackhole || github.event_name == 'push' || github.event_name == 'schedule') && (inputs.run-sim || github.event_name == 'push') && ',' || '',
+  (inputs.run-sim || github.event_name == 'push') && 'Sim' || '') }}
 jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml

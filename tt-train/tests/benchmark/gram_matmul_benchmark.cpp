@@ -51,12 +51,12 @@ ttnn::Tensor make_random_tensor(uint32_t M, uint32_t K, ttnn::distributed::MeshD
 double bench_op(auto fn, ttnn::distributed::MeshDevice* device) {
     for (int i = 0; i < num_warmup; ++i) {
         fn();
-        tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+        tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
     }
     auto t0 = std::chrono::high_resolution_clock::now();
     for (int i = 0; i < num_iters; ++i) {
         fn();
-        tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+        tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
     }
     auto t1 = std::chrono::high_resolution_clock::now();
     return std::chrono::duration<double, std::micro>(t1 - t0).count() / num_iters;
