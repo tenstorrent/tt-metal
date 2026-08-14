@@ -82,34 +82,67 @@ FORCE_INLINE void fill_l1_with_val(uint32_t start_addr, uint32_t n_bytes, uint32
 // pad tile is `valid_rows == 0` (or `valid_cols == 0`), and an untouched tile is
 // `valid_rows == tile_h && valid_cols == tile_w`, which costs nothing.
 //
-// Tiled layout: FACE_H x FACE_W faces, face-row-major over the tile, row-major
-// inside a face. A run of columns inside one tile row is therefore contiguous
-// *within its face*, so a row's pad tail is at most `tile_w / FACE_W` contiguous
-// L1 runs — which is what the inner loop walks.
+// Tiled layout: FACE_H x FACE_W faces stored one after another (face-row-major
+// over the tile), row-major inside a face. The loop is written FACE-FIRST rather
+// than row-first so it fills the LARGEST contiguous runs the geometry allows —
+// which is what makes the stamp affordable:
+//
+//   * a whole pad TILE   -> ONE run of tile_h*tile_w elements
+//   * a whole pad FACE   -> one run of 256 elements
+//   * the rows below the data inside a partly-valid face -> one run
+//   * only a W tail on a valid row costs a per-row run
+//
+// Measured (test_bench_lever_out_fill, worst-case geometry: half the output tiles
+// are whole pad tiles): the face-first form is FLAT against a row-at-a-time one.
+// The cost is the raw STORE COUNT, not the loop overhead — an rv32 volatile L1
+// word store is ~10 cycles, and the pad region here is 2 M fp32 elements. Fewer,
+// bigger runs is still the right shape (strictly fewer instructions, and it is
+// what lets the reader's now-redundant fill be skipped), but do not expect the
+// run length itself to buy anything.
 template <uint32_t tile_h, uint32_t tile_w, uint32_t elem_bytes>
 FORCE_INLINE void fill_tile_pad(uint32_t tile_addr, uint32_t valid_rows, uint32_t valid_cols, uint32_t word) {
     constexpr uint32_t FACE_H = 16;
     constexpr uint32_t FACE_W = 16;
     static_assert(tile_h % FACE_H == 0 && tile_w % FACE_W == 0, "fill_tile_pad needs whole 16x16 faces");
     constexpr uint32_t FACES_PER_ROW = tile_w / FACE_W;
+    constexpr uint32_t FACE_ROWS = tile_h / FACE_H;
     constexpr uint32_t FACE_ELEMS = FACE_H * FACE_W;
 
-    for (uint32_t r = 0; r < tile_h; ++r) {
-        const uint32_t vc = (r < valid_rows) ? valid_cols : 0;
-        if (vc >= tile_w) {
-            continue;
+    if (valid_rows == 0 || valid_cols == 0) {
+        // A WHOLE pad tile — the dominant case whenever the pad target exceeds the
+        // tile-rounded shape. Faces are contiguous, so this is a single run.
+        fill_l1_with_val<elem_bytes>(tile_addr, tile_h * tile_w * elem_bytes, word);
+        return;
+    }
+    if (valid_rows >= tile_h && valid_cols >= tile_w) {
+        return;  // fully inside the data region — nothing to stamp
+    }
+
+    for (uint32_t fr = 0; fr < FACE_ROWS; ++fr) {
+        uint32_t vr = (valid_rows > fr * FACE_H) ? (valid_rows - fr * FACE_H) : 0;  // valid rows in this face
+        if (vr > FACE_H) {
+            vr = FACE_H;
         }
-        const uint32_t face_row = r / FACE_H;
-        const uint32_t row_in_face = r - face_row * FACE_H;
-        uint32_t c = vc;
-        while (c < tile_w) {
-            const uint32_t face_col = c / FACE_W;
-            const uint32_t col_in_face = c - face_col * FACE_W;
-            const uint32_t n = FACE_W - col_in_face;  // to the end of this face row
-            const uint32_t face = face_row * FACES_PER_ROW + face_col;
-            const uint32_t offset = (face * FACE_ELEMS + row_in_face * FACE_W + col_in_face) * elem_bytes;
-            fill_l1_with_val<elem_bytes>(tile_addr + offset, n * elem_bytes, word);
-            c += n;
+        for (uint32_t fc = 0; fc < FACES_PER_ROW; ++fc) {
+            uint32_t vc = (valid_cols > fc * FACE_W) ? (valid_cols - fc * FACE_W) : 0;  // valid cols in this face
+            if (vc > FACE_W) {
+                vc = FACE_W;
+            }
+            const uint32_t face_addr = tile_addr + (fr * FACES_PER_ROW + fc) * FACE_ELEMS * elem_bytes;
+            if (vr == 0 || vc == 0) {
+                fill_l1_with_val<elem_bytes>(face_addr, FACE_ELEMS * elem_bytes, word);  // whole face is pad
+                continue;
+            }
+            if (vc < FACE_W) {  // W tail of each valid row (the only per-row cost)
+                for (uint32_t rr = 0; rr < vr; ++rr) {
+                    fill_l1_with_val<elem_bytes>(
+                        face_addr + (rr * FACE_W + vc) * elem_bytes, (FACE_W - vc) * elem_bytes, word);
+                }
+            }
+            if (vr < FACE_H) {  // every row below the data, in one contiguous run
+                fill_l1_with_val<elem_bytes>(
+                    face_addr + vr * FACE_W * elem_bytes, (FACE_H - vr) * FACE_W * elem_bytes, word);
+            }
         }
     }
 }

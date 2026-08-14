@@ -147,7 +147,14 @@ void kernel_main() {
     constexpr uint32_t read_one_packet = get_compile_time_arg_val(15);
     constexpr uint32_t read_trid = get_compile_time_arg_val(16);
     constexpr uint32_t read_vc_enable = get_compile_time_arg_val(17);
-    constexpr auto src_args = TensorAccessorArgs<18>();
+    // Refinement 4: 1 = the WRITER re-stamps every pad position in the output
+    // element format (the widening-cast path), which makes this reader's own
+    // input-format fill dead work — the two fill regions are the same set, derived
+    // from the same h_in / w_in / image geometry. Skipping it leaves stale bytes in
+    // the input CB's pad positions, which the tilize permutes into output positions
+    // the writer overwrites before the tile leaves L1. Host gate: `out_fill`.
+    constexpr uint32_t skip_pad_fill = get_compile_time_arg_val(18);
+    constexpr auto src_args = TensorAccessorArgs<19>();
 
     // Every byte quantity below derives from the WT_CHUNK knob — one source.
     constexpr uint32_t row_bytes = wt_chunk * TILE_W * elem_bytes;
@@ -348,8 +355,10 @@ void kernel_main() {
                     read_row_span<src_page_bytes, src_row_pages>(
                         accessor, img * h_in + src_row, col_off, n_read, l1_addr);
                 }
-                if (n_read < row_bytes) {
-                    fill_l1_with_val<elem_bytes>(l1_addr + n_read, row_bytes - n_read, pad_word);
+                if constexpr (!skip_pad_fill) {
+                    if (n_read < row_bytes) {
+                        fill_l1_with_val<elem_bytes>(l1_addr + n_read, row_bytes - n_read, pad_word);
+                    }
                 }
                 l1_addr += row_bytes;
             }

@@ -815,6 +815,11 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         read_one_packet,
         read_trid,
         read_vc_enable,
+        # The reader's input-format fill is DEAD WORK when the writer re-stamps
+        # every pad position (Refinement 4): identical regions, and the writer's
+        # word is the exact one. Measured on the worst-case padded widening shape:
+        # the fill is most of the R_PAD reader's cost.
+        out_fill,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
