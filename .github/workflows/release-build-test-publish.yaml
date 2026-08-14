@@ -62,6 +62,9 @@ jobs:
 
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
+  # One manylinux wheel: tests, Docker, docs, and PyPI all consume it.
+  # Dry-run does not create/move the version tag, so build from github.sha.
+  # A real release tags that SHA first; the wheel is then built from the tag.
   build-artifact:
     needs: [check-harbor, parse-platform]
     uses: ./.github/workflows/build-artifact.yaml
@@ -77,7 +80,7 @@ jobs:
       fetch-depth: 0
       skip-tt-train: false
       enable-lto: false
-      wheel-ref: ${{ format('refs/tags/{0}', inputs.tag-version) }}
+      wheel-ref: ${{ inputs.dry-run && github.sha || format('refs/tags/{0}', inputs.tag-version) }}
       # Released packages must be self-contained (bundle the SFPI JIT toolchain) since
       # they're installed on machines with no /opt/tenstorrent/sfpi to fall back to.
       use-system-sfpi: false
