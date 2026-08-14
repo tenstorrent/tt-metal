@@ -4959,3 +4959,37 @@ needs a 12-column compute grid. **p100a's `compute_with_storage_grid_size()` is 
 **5,501,100**, which is exactly what drained. An earlier attempt reached the same "unreachable" conclusion from
 the harness's `gx=2, gy=2` DEFAULTS (`400 x iters + 40`), i.e. the right answer for the wrong reason — the grid
 was explicitly passed here and the part is still the binding constraint. **6,001,200 is a p150/bh-26 number.**
+
+### CONFIRMED: the fix does NOT regress bh-26, the card where the bug is invisible
+
+A per-core anchor replaces a worker anchor on **every** part, including the one that never needed it, so the
+obvious risk is making a healthy capture worse. Bounded analytically first — the two anchors differ by 3.6–5.5 us
+on bh-26, so rows can move at most ~5 us on a multi-hundred-ms window — then measured. Synthetic harness,
+`--gx 12 --gy 10 --iters 500` (clamps to 11x10 on p100a), zones + footprint on, under `tracy-capture`:
+
+| | bh-26 WITH the fix |
+|---|---|
+| worker window | 242.139 ms |
+| DRISC window open vs worker open | **−0.073 ms** (per-DRISC −0.073 … +0.040 ms) |
+| DRISC close past worker close | +0.399 … +1.338 ms — the drain tail |
+| **plot containment, all 9 series** | **99.7%** (fillers *and* movers) |
+| CONTROL: Tracy's own CPU `Frame` plot | **2.0%** |
+| producer stalls / dropped / ts regressions | **0 / 0 / 0** |
+
+**Do NOT read the mover containment as an improvement over §N+43's 33–35%.** That figure came from a 1.9 ms
+worker window against a 2.5–2.9 ms drain tail, where most mover samples legitimately fall outside; here the
+window is 242 ms so the ~1.3 ms tail is negligible. Different run length, not a different quality. The claim
+supported by this table is only the one that matters: **bh-26 still aligns, so the fix is safe where it is a
+no-op.**
+
+One artifact worth knowing when reading the new log line: on bh-26 the reported per-DRISC "offset vs worker
+anchor" is a monotonic ladder, **+0.207 / 0.388 / 0.560 / 0.732 / 0.895 / 1.049 ms**. That is not a clock
+difference — it is the **sequential measurement lag**, since each `sync_device_clock` is 100 reads (~0.36 ms) and
+the six run in order after the worker's. It **cancels in the mapping**, because each anchor is a self-consistent
+(host_anchor, device_at_anchor) pair measured together. On bh-05 the same ladder is buried under a 10–25 minute
+offset and is invisible. So: **sub-millisecond ladder = this part is fine; minutes = the bug is present.**
+
+Housekeeping: bh-26's `build_Release` was **entirely root-owned (5,038 files)** from `docker exec` pollution,
+which made `ninja` fail with `Error writing to build log: Permission denied`. Repaired with
+`sudo chown -R mmemarian:mmemarian build_Release`. The read-only probe earlier in this section was deliberately
+compiled to `/tmp` to avoid touching the tree before that was understood.
