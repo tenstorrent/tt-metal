@@ -25,7 +25,6 @@
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "llrt/hal_types.hpp"
 
 namespace tt::tt_fabric::bench {
 

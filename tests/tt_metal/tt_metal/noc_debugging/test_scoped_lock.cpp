@@ -13,7 +13,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include "llrt/hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_context.hpp"
 

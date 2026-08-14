@@ -24,7 +24,6 @@
 #include <impl/debug/watcher_server.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "hal_types.hpp"
-#include <llrt/hal_types.hpp>
 #include "llrt.hpp"
 #include <umd/device/driver_atomics.hpp>
 #include <umd/device/types/core_coordinates.hpp>

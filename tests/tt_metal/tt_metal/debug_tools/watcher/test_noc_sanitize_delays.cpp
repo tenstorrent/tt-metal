@@ -25,7 +25,6 @@
 #include "debug_tools_fixture.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include "llrt/hal_types.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>

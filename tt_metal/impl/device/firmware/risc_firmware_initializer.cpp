@@ -21,7 +21,6 @@
 #include "core_coord.hpp"
 #include "hal.hpp"
 #include "hal_types.hpp"
-#include "llrt/hal_types.hpp"
 #include "allocator/l1_banking_allocator.hpp"
 #include "debug/noc_logging.hpp"
 #include "dispatch/dispatch_core_common.hpp"

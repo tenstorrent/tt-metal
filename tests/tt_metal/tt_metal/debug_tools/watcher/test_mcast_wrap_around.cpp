@@ -21,7 +21,6 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "llrt/hal_types.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

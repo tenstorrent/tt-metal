@@ -10,7 +10,6 @@
 #include "impl/kernels/kernel.hpp"
 #include "sub_device.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
-#include "llrt/hal_types.hpp"
 
 namespace tt::tt_metal {
 

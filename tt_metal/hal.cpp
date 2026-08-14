@@ -10,7 +10,7 @@
 #include <string>
 
 #include "impl/hal/hal.hpp"
-#include "llrt/hal_types.hpp"
+#include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 
 // NOLINTBEGIN(misc-unused-using-decls)

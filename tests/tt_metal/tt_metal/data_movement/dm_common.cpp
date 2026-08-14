@@ -5,7 +5,6 @@
 #include "dm_common.hpp"
 #include "device_fixture.hpp"
 #include "hal_types.hpp"
-#include "llrt/hal_types.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tuple>
 #include <distributed/mesh_device_impl.hpp>

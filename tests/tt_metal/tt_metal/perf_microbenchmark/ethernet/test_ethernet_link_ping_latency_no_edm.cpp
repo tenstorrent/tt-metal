@@ -38,7 +38,6 @@
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 #include "tt_metal/impl/kernels/kernel.hpp"
-#include <llrt/hal_types.hpp>
 
 using namespace tt;
 using namespace tt::test_utils;

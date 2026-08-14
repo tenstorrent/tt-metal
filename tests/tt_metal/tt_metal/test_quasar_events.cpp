@@ -14,7 +14,6 @@
 
 #include <cstdint>
 #include <vector>
-#include "llrt/hal_types.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
