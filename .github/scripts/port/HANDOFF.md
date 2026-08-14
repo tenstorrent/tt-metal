@@ -391,6 +391,35 @@ frontmatter for every reader of that file. The first symptom was `selftest.py` l
 key three hundred lines from anything related. They are `=== ... ===` now, and a check asserts no line
 inside that frontmatter can be mistaken for its end.
 
+### What the fixed resume actually did, and what it found
+
+Run [31832493570](https://github.com/tenstorrent/tt-metal/actions/runs/31832493570), the first resume
+after the deadlock fix, is the proof the loop works and the first graded verdict `tilize` has ever had.
+
+The baseline build failed exactly as it had for attempt 2 -- same two errors, same step. This time the
+step reported success, the agent started, read the errors out of `port-brief.md`, fixed them, and its
+first build passed. Roughly fifteen minutes from job start to a compiling port, on the branch that
+forty minutes earlier could not be resumed at all. It then ran three builds and two verifies inside its
+budget, which is the throughput the round trip allows.
+
+Both verifies graded 170 of 170 in-scope cases failing, with zero prototype gaps -- the count did not
+move between them. Two causes, and both are host-side translation, not kernels:
+
+- **Nineteen cases: the kernels want *named* compile-time args and the program factory passes
+  positional ones.** `reader_stick_interleaved_unified.cpp` calls
+  `get_named_compile_time_arg_val("elem_size")`, `"tile_height"` and more, so `get_named_ct_arg`
+  reaches `__builtin_unreachable()` during constexpr evaluation and the ncrisc build fails with
+  `Failed to generate binaries`. This is the argument-contract lesson again in a new costume: named CT
+  args are a newer generator API than anything merged `untilize` used, so there is no shipped port to
+  copy the shape from and the builder under `.codegen/ops/tilize/spec.py` is the only source.
+- **Six cases: `supported_by_codegen()` rejects configurations it has to accept.** `tilize.yaml`
+  carries no `port_scope`, so port scope equals codegen scope and *every* ledger case is in scope. A
+  `TT_FATAL` at `tilize.cpp:103` on an in-scope case is the gate being stricter than the manifest.
+
+Worth noting what this unlocks procedurally: a graded count now exists on this branch, so the
+no-progress stop can finally engage. Until this run every attempt published `-1` and the chain's only
+bound was the six-attempt cap.
+
 ### What is still expensive, and the number to beat
 
 The binding constraint is that a compile error costs a round trip to CIv2: fourteen minutes measured,
