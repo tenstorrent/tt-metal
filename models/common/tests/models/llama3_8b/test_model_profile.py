@@ -16,6 +16,7 @@ from models.common.models.llama3_8b.model import (
     TransformerBlock1DConfig,
     _make_llama31_8b_rope_config,
     _resolve_llama31_8b_architecture_profile,
+    _use_distributed_prefill_rmsnorm,
     build_llama3_transformer_1d_config,
 )
 from models.common.modules.rope.rope_1d import RotarySetup1D
@@ -62,7 +63,10 @@ def test_blackhole_p150x4_profile_semantic_snapshot():
     )
 
     assert profile.rms_packer_l1_acc is True
-    assert profile.rms_distributed_at_dim_4096 is False
+    # Multi-device Llama-8B receives 4096 / num_devices hidden slices from
+    # the sharded embedding; using local RMSNorm would pair those slices with
+    # a replicated 4096-element gamma and fail device validation.
+    assert profile.rms_distributed_at_dim_4096 is True
     assert profile.mlp_prefill_len_cutoff == 512
     assert profile.mlp_prefill_dram_shard_grid_width == 8
     assert profile.mlp_prefill_ff1_ff3_grid == (8, 8)
@@ -79,6 +83,35 @@ def test_blackhole_p150x4_profile_semantic_snapshot():
     assert profile.enable_minimal_qkv is True
     assert profile.enable_minimal_ff2 is True
     assert profile.lm_head_max_columns_per_device == 4008
+
+
+@pytest.mark.parametrize(
+    ("arch", "cluster_type", "device_name", "num_devices", "expected"),
+    [
+        (ttnn.device.Arch.BLACKHOLE, ttnn.cluster.ClusterType.P150_X4, "P150", 1, False),
+        (ttnn.device.Arch.BLACKHOLE, ttnn.cluster.ClusterType.P150_X2, "P300", 2, True),
+        (ttnn.device.Arch.BLACKHOLE, ttnn.cluster.ClusterType.P150_X4, "P150x4", 4, True),
+        (ttnn.device.Arch.WORMHOLE_B0, ttnn.cluster.ClusterType.T3K, "N150", 1, False),
+        (ttnn.device.Arch.WORMHOLE_B0, ttnn.cluster.ClusterType.T3K, "N300", 2, True),
+    ],
+)
+def test_effective_prefill_rmsnorm_policy(arch, cluster_type, device_name, num_devices, expected):
+    profile = _resolve_llama31_8b_architecture_profile(
+        arch=arch,
+        cluster_type=cluster_type,
+        device_name=device_name,
+        model_name="Llama-3.1-8B-Instruct",
+        dram_grid_width=8,
+    )
+
+    assert (
+        _use_distributed_prefill_rmsnorm(
+            num_devices=num_devices,
+            dim=4096,
+            architecture_profile=profile,
+        )
+        is expected
+    )
 
 
 def test_blackhole_batch32_rope_uses_attention_decode_grid():

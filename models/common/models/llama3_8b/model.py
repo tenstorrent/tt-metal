@@ -242,7 +242,11 @@ def _resolve_llama31_8b_architecture_profile(
     if arch == ttnn.device.Arch.BLACKHOLE:
         return _Llama31_8BArchitectureProfile(
             rms_packer_l1_acc=True,
-            rms_distributed_at_dim_4096=False,
+            # The embedding shards the 4096-wide hidden dimension across a
+            # multi-device mesh, so prefill RMSNorm must all-gather statistics
+            # for the local slices before the model gathers normalized hidden
+            # slices.
+            rms_distributed_at_dim_4096=True,
             mlp_prefill_len_cutoff=512,
             mlp_prefill_dram_shard_grid_width=dram_grid_width,
             mlp_prefill_ff1_ff3_grid=(8, 8),
@@ -261,6 +265,14 @@ def _resolve_llama31_8b_architecture_profile(
             }.get(device_name),
         )
     raise ValueError(f"Unsupported Llama 3.1 8B architecture: {arch}")
+
+
+def _use_distributed_prefill_rmsnorm(
+    *, num_devices: int, dim: int, architecture_profile: _Llama31_8BArchitectureProfile
+) -> bool:
+    """Resolve the effective model/SKU prefill RMSNorm policy."""
+    threshold = 4096 if architecture_profile.rms_distributed_at_dim_4096 else 4097
+    return num_devices > 1 and dim >= threshold
 
 
 def _make_llama31_8b_rope_config(
@@ -1420,8 +1432,10 @@ def build_llama3_transformer_1d_config(
             mesh_device=mesh_device,
             tt_ccl=tt_ccl_inst,
             max_batch_size=max_batch_size,
-            prefill_distributed=(
-                num_devices > 1 and (dim >= 4096 if architecture_profile.rms_distributed_at_dim_4096 else dim > 4096)
+            prefill_distributed=_use_distributed_prefill_rmsnorm(
+                num_devices=num_devices,
+                dim=dim,
+                architecture_profile=architecture_profile,
             ),
             decode_program_config=sharded_program_config,
             decode_memory_config=sharded_output_config,

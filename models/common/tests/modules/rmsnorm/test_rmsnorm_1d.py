@@ -835,6 +835,14 @@ def test_rmsnorm_1d_vs_reference(
         pytest.param(
             {"mesh_shape": (1, 4), "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
             "prefill",
+            4096,
+            (1, 1, 128, 4096),
+            True,
+            id="p150x4-distributed-prefill-dim4096",
+        ),
+        pytest.param(
+            {"mesh_shape": (1, 4), "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            "prefill",
             8192,
             (1, 1, 128, 8192),
             True,
