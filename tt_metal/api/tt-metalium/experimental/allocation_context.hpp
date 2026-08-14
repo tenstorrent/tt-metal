@@ -14,7 +14,7 @@ namespace tt::tt_metal {
 // Guards push a context string (e.g. op name + compile args) before dispatching;
 // the allocator records whatever context is on top of the stack at allocation time.
 //
-// Process-start configuration, cached when tt-metal is loaded.
+// Process-start configuration, cached during RunTimeOptions initialization.
 bool trace_allocation_tracking_enabled();
 bool trace_allocation_diagnostics_enabled();
 bool trace_allocation_skip_program_cache_enabled();

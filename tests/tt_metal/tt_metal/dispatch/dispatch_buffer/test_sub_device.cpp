@@ -193,7 +193,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerCoversSubDeviceAllocat
         .sub_device_id = SubDeviceId{0}};
 
     constexpr distributed::MeshTraceId trace_id{0x1234};
-    distributed::trace_allocation_tracker::mark_allocations_unsafe(mesh_device.get(), trace_id);
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), trace_id);
 
     auto tracked = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
     auto tracked_id = tracked->get_backing_buffer()->unique_id();
@@ -223,8 +223,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerCoversSubDeviceAllocat
     program_cache_allocation->deallocate();
     EXPECT_FALSE(distributed::trace_allocation_tracker::get_unsafe_tracked_ids(mesh_device.get(), trace_id)
                      .contains(program_cache_allocation_id));
-    distributed::trace_allocation_tracker::clear_unsafe_tracked_ids(mesh_device.get(), trace_id);
-    distributed::trace_allocation_tracker::mark_allocations_safe(mesh_device.get());
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), trace_id);
 }
 
 TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerTagsLazyProgramBuffersAtAllocationSite) {
@@ -235,7 +234,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerTagsLazyProgramBuffers
     auto mesh_device = devices_[0];
     auto buffers_before = mesh_device->allocator()->get_allocated_buffers();
     constexpr distributed::MeshTraceId trace_id{0x1235};
-    distributed::trace_allocation_tracker::mark_allocations_unsafe(mesh_device.get(), trace_id);
+    distributed::trace_allocation_tracker::register_active_trace(mesh_device.get(), trace_id);
 
     distributed::MeshWorkload workload;
     Program program = CreateProgram();
@@ -270,7 +269,6 @@ TEST_F(UnitMeshCQSingleCardFixture, TraceAllocationTrackerTagsLazyProgramBuffers
         }));
     }
 
-    distributed::trace_allocation_tracker::clear_unsafe_tracked_ids(mesh_device.get(), trace_id);
-    distributed::trace_allocation_tracker::mark_allocations_safe(mesh_device.get());
+    distributed::trace_allocation_tracker::unregister_active_trace(mesh_device.get(), trace_id);
 }
 }  // namespace tt::tt_metal

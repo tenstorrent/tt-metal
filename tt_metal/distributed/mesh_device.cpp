@@ -289,22 +289,17 @@ std::vector<AllocatorImpl*> MeshDeviceImpl::trace_allocators() const {
 }
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
-void MeshDeviceImpl::mark_allocations_unsafe(const MeshTraceId& trace_id) {
+void MeshDeviceImpl::register_active_trace(const MeshTraceId& trace_id) {
     for (auto* allocator : this->trace_allocators()) {
-        allocator->mark_allocations_unsafe(*trace_id);
+        allocator->register_active_trace(*trace_id);
     }
 }
 
 // NOLINTNEXTLINE(readability-make-member-function-const)
-void MeshDeviceImpl::mark_allocations_safe() {
+void MeshDeviceImpl::unregister_active_trace(const MeshTraceId& trace_id) {
     for (auto* allocator : this->trace_allocators()) {
-        allocator->mark_allocations_safe();
+        allocator->unregister_active_trace(*trace_id);
     }
-}
-bool MeshDeviceImpl::allocations_unsafe() const {
-    const auto allocators = this->trace_allocators();
-    return std::any_of(
-        allocators.begin(), allocators.end(), [](const auto* allocator) { return allocator->allocations_unsafe(); });
 }
 
 std::unordered_map<size_t, std::string> MeshDeviceImpl::get_unsafe_tracked_ids(const MeshTraceId& trace_id) const {
@@ -320,12 +315,6 @@ void MeshDeviceImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
         allocator->remove_unsafe_tracked_id(buffer_unique_id);
     }
 }
-// NOLINTNEXTLINE(readability-make-member-function-const)
-void MeshDeviceImpl::clear_unsafe_tracked_ids(const MeshTraceId& trace_id) {
-    for (auto* allocator : this->trace_allocators()) {
-        allocator->clear_unsafe_tracked_ids(*trace_id);
-    }
-}
 std::vector<size_t> MeshDeviceImpl::drain_pending_traceback_ids() {
     return AllocatorImpl::drain_pending_traceback_ids();
 }
@@ -339,19 +328,17 @@ void MeshDeviceImpl::pop_corruptible_allocation_scope() { AllocatorImpl::pop_cor
 
 namespace trace_allocation_tracker {
 
-void mark_allocations_safe(MeshDevice* device) { device->impl().mark_allocations_safe(); }
-void mark_allocations_unsafe(MeshDevice* device, const MeshTraceId& trace_id) {
-    device->impl().mark_allocations_unsafe(trace_id);
+void register_active_trace(MeshDevice* device, const MeshTraceId& trace_id) {
+    device->impl().register_active_trace(trace_id);
 }
-bool allocations_unsafe(const MeshDevice* device) { return device->impl().allocations_unsafe(); }
+void unregister_active_trace(MeshDevice* device, const MeshTraceId& trace_id) {
+    device->impl().unregister_active_trace(trace_id);
+}
 std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshDevice* device, const MeshTraceId& trace_id) {
     return device->impl().get_unsafe_tracked_ids(trace_id);
 }
 void remove_unsafe_tracked_id(MeshDevice* device, size_t buffer_unique_id) {
     device->impl().remove_unsafe_tracked_id(buffer_unique_id);
-}
-void clear_unsafe_tracked_ids(MeshDevice* device, const MeshTraceId& trace_id) {
-    device->impl().clear_unsafe_tracked_ids(trace_id);
 }
 std::vector<size_t> drain_pending_traceback_ids() { return MeshDeviceImpl::drain_pending_traceback_ids(); }
 std::vector<size_t> drain_retired_traceback_ids() { return MeshDeviceImpl::drain_retired_traceback_ids(); }
@@ -1397,12 +1384,7 @@ void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
 
     tt::tt_metal::experimental::inspector::ReleaseTraceDebugEntries(trace_id);
 
-    this->clear_unsafe_tracked_ids(trace_id);
-
-    // Only enable allocations once all captured traces are released
-    if (this->trace_buffers_size_ == 0) {
-        this->mark_allocations_safe();
-    }
+    this->unregister_active_trace(trace_id);
 }
 
 std::shared_ptr<MeshTraceBuffer> MeshDeviceImpl::get_mesh_trace(const MeshTraceId& trace_id) {
@@ -1444,8 +1426,10 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
 void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     TracyTTMetalEndMeshTrace(this->get_device_ids(), *trace_id);
 
-    // Ensure allocations are marked unsafe on any exit, including thrown exceptions
-    auto mark_unsafe_on_exit = ttsl::make_cleanup([this, trace_id]() { this->mark_allocations_unsafe(trace_id); });
+    // Register the trace on any exit, including thrown exceptions, so subsequent allocations are treated
+    // conservatively until the trace is released.
+    auto register_trace_on_exit =
+        ttsl::make_cleanup([this, trace_id]() { this->register_active_trace(trace_id); });
 
     TT_FATAL(
         this->mesh_command_queues_[cq_id]->trace_id() == trace_id,

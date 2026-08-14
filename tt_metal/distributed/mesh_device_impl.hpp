@@ -220,17 +220,15 @@ public:
         destroy_metal_context_instance_on_close_ = destroy;
     }
 
-    // Exposed for trace allocation safety control from higher-level APIs.
+    // Trace allocation safety lifecycle.
     // NOLINTNEXTLINE(readability-make-member-function-const)
-    void mark_allocations_unsafe(const MeshTraceId& trace_id);
+    void register_active_trace(const MeshTraceId& trace_id);
     // NOLINTNEXTLINE(readability-make-member-function-const)
-    void mark_allocations_safe();
-    bool allocations_unsafe() const;
+    void unregister_active_trace(const MeshTraceId& trace_id);
 
     // Unsafe allocation tracking
     std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(const MeshTraceId& trace_id) const;
     void remove_unsafe_tracked_id(size_t buffer_unique_id);
-    void clear_unsafe_tracked_ids(const MeshTraceId& trace_id);
     static std::vector<size_t> drain_pending_traceback_ids();
     static std::vector<size_t> drain_retired_traceback_ids();
     void push_corruptible_allocation_scope();

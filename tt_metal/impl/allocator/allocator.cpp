@@ -120,12 +120,14 @@ void AllocatorImpl::verify_safe_allocation() const {
         return;
     }
 
+    // Keep the warning low-noise across allocators while still warning allocation threads independently.
     thread_local static bool warning_generated = false;
     if (!warning_generated) {
         log_warning(
             tt::LogMetal,
-            "Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be "
-            "corrupted once a trace is executed.");
+            "Allocating device buffers is potentially unsafe due to the existence of an active trace. These buffers "
+            "may be corrupted once a trace is executed if they are not released before then. Use the trace allocation "
+            "tracker to verify.");
         warning_generated = true;
     }
 }
@@ -472,22 +474,6 @@ void AllocatorImpl::reset_allocator_size(const BufferType& buffer_type) {
             TT_THROW("Unsupported buffer type!");
         }
     }
-}
-
-void AllocatorImpl::mark_allocations_unsafe(std::uint32_t trace_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (tracking_enabled_) {
-        tracked_allocations_unsafe_ = true;
-        unsafe_tracked_ids_by_trace_.try_emplace(trace_id);
-    } else {
-        allocations_unsafe_ = true;
-    }
-}
-
-void AllocatorImpl::mark_allocations_safe() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    allocations_unsafe_ = false;
-    tracked_allocations_unsafe_ = false;
 }
 
 void AllocatorImpl::begin_dram_high_water_mark_tracking() {

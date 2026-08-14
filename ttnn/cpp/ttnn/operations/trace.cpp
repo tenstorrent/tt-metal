@@ -37,29 +37,11 @@ void release_trace(MeshDevice* device, MeshTraceId trace_id) {
     device->release_mesh_trace(trace_id);
 }
 
-void mark_allocations_safe(MeshDevice* device) {
-    ZoneScoped;
-    tracker::mark_allocations_safe(device);
-}
-
-void mark_allocations_unsafe(MeshDevice* device, MeshTraceId trace_id) {
-    ZoneScoped;
-    tracker::mark_allocations_unsafe(device, trace_id);
-}
-
-bool allocations_unsafe(MeshDevice* device) {
-    ZoneScoped;
-    return tracker::allocations_unsafe(device);
-}
-
 std::unordered_map<size_t, std::string> get_unsafe_tracked_ids(MeshDevice* device, MeshTraceId trace_id) {
     return tracker::get_unsafe_tracked_ids(device, trace_id);
 }
 void remove_unsafe_tracked_id(MeshDevice* device, size_t buffer_unique_id) {
     tracker::remove_unsafe_tracked_id(device, buffer_unique_id);
-}
-void clear_unsafe_tracked_ids(MeshDevice* device, MeshTraceId trace_id) {
-    tracker::clear_unsafe_tracked_ids(device, trace_id);
 }
 std::vector<size_t> drain_pending_traceback_ids() { return tracker::drain_pending_traceback_ids(); }
 std::vector<size_t> drain_retired_traceback_ids() { return tracker::drain_retired_traceback_ids(); }

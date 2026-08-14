@@ -5,10 +5,8 @@
 #include "impl/allocator/allocator.hpp"
 
 #include <algorithm>
-#include <cstdlib>
 #include <mutex>
 #include <string>
-#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -17,21 +15,11 @@
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt_stl/assert.hpp>
 
+#include "llrt/rtoptions.hpp"
+
 namespace tt::tt_metal {
 
 namespace {
-
-bool env_var_enabled(const char* name) {
-    const char* value = std::getenv(name);
-    return value != nullptr && std::string_view(value) == "1";
-}
-
-// Read once when tt-metal is loaded. Runtime hot paths only read these cached values.
-const bool trace_alloc_tracking_enabled = env_var_enabled("TT_METAL_TRACE_ALLOC_TRACKING");
-const bool trace_alloc_diagnostics_enabled =
-    trace_alloc_tracking_enabled && env_var_enabled("TT_METAL_TRACE_ALLOC_TRACEBACKS");
-const bool trace_alloc_skip_program_cache_enabled =
-    trace_alloc_tracking_enabled && env_var_enabled("TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE");
 
 thread_local std::vector<size_t> pending_traceback_ids;
 thread_local std::vector<size_t> retired_traceback_ids;
@@ -41,11 +29,13 @@ const std::string empty_context;
 
 }  // namespace
 
-bool trace_allocation_tracking_enabled() { return trace_alloc_tracking_enabled; }
+bool trace_allocation_tracking_enabled() { return llrt::RunTimeOptions::get_trace_allocation_tracking_enabled(); }
 
-bool trace_allocation_diagnostics_enabled() { return trace_alloc_diagnostics_enabled; }
+bool trace_allocation_diagnostics_enabled() { return llrt::RunTimeOptions::get_trace_allocation_diagnostics_enabled(); }
 
-bool trace_allocation_skip_program_cache_enabled() { return trace_alloc_skip_program_cache_enabled; }
+bool trace_allocation_skip_program_cache_enabled() {
+    return llrt::RunTimeOptions::get_trace_allocation_skip_program_cache_enabled();
+}
 
 void push_allocation_context(std::string_view ctx) {
     allocation_context_stack.emplace_back(ctx);
@@ -83,10 +73,48 @@ bool AllocatorImpl::in_corruptible_allocation_scope() const {
         [this](const auto& allocators) { return allocators.contains(this); });
 }
 
-void AllocatorImpl::record_allocation_if_unsafe(Buffer* buffer) {
-    if (!tracked_allocations_unsafe_) {
+void AllocatorImpl::register_active_trace(std::uint32_t trace_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    ++active_trace_count_;
+    if (tracking_enabled_) {
+        unsafe_tracked_ids_by_trace_.try_emplace(trace_id);
+    } else {
+        allocations_unsafe_ = true;
+    }
+}
+
+void AllocatorImpl::unregister_active_trace(std::uint32_t trace_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TT_FATAL(active_trace_count_ > 0, "Cannot unregister trace {}: no active traces are registered", trace_id);
+    if (!tracking_enabled_) {
+        --active_trace_count_;
+        allocations_unsafe_ = active_trace_count_ > 0;
         return;
     }
+
+    auto trace_it = unsafe_tracked_ids_by_trace_.find(trace_id);
+    TT_FATAL(
+        trace_it != unsafe_tracked_ids_by_trace_.end(),
+        "Cannot unregister trace {}: the trace is not registered",
+        trace_id);
+    --active_trace_count_;
+    auto removed_buffer_ids = std::move(trace_it->second);
+    unsafe_tracked_ids_by_trace_.erase(trace_it);
+    for (size_t buffer_unique_id : removed_buffer_ids) {
+        bool tracked_by_another_trace = std::any_of(
+            unsafe_tracked_ids_by_trace_.begin(),
+            unsafe_tracked_ids_by_trace_.end(),
+            [buffer_unique_id](const auto& entry) { return entry.second.contains(buffer_unique_id); });
+        if (!tracked_by_another_trace) {
+            bool was_tracked = unsafe_allocation_contexts_.erase(buffer_unique_id) > 0;
+            if (was_tracked && traceback_capture_enabled_) {
+                retired_traceback_ids.push_back(buffer_unique_id);
+            }
+        }
+    }
+}
+
+void AllocatorImpl::record_allocation_if_unsafe(Buffer* buffer) {
     if (buffer->buffer_type() == BufferType::TRACE || unsafe_tracked_ids_by_trace_.empty()) {
         return;
     }
@@ -105,11 +133,6 @@ void AllocatorImpl::record_allocation_if_unsafe(Buffer* buffer) {
     if (traceback_capture_enabled_) {
         pending_traceback_ids.push_back(buffer->unique_id());
     }
-}
-
-bool AllocatorImpl::allocations_unsafe() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return allocations_unsafe_ || tracked_allocations_unsafe_;
 }
 
 std::unordered_map<size_t, std::string> AllocatorImpl::get_unsafe_tracked_ids(std::uint32_t trace_id) {
@@ -159,28 +182,6 @@ void AllocatorImpl::remove_unsafe_tracked_id(size_t buffer_unique_id) {
     bool was_tracked = unsafe_allocation_contexts_.erase(buffer_unique_id) > 0;
     if (was_tracked && traceback_capture_enabled_) {
         retired_traceback_ids.push_back(buffer_unique_id);
-    }
-}
-
-void AllocatorImpl::clear_unsafe_tracked_ids(std::uint32_t trace_id) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto trace_it = unsafe_tracked_ids_by_trace_.find(trace_id);
-    if (trace_it == unsafe_tracked_ids_by_trace_.end()) {
-        return;
-    }
-    auto removed_buffer_ids = std::move(trace_it->second);
-    unsafe_tracked_ids_by_trace_.erase(trace_it);
-    for (size_t buffer_unique_id : removed_buffer_ids) {
-        bool tracked_by_another_trace = std::any_of(
-            unsafe_tracked_ids_by_trace_.begin(),
-            unsafe_tracked_ids_by_trace_.end(),
-            [buffer_unique_id](const auto& entry) { return entry.second.contains(buffer_unique_id); });
-        if (!tracked_by_another_trace) {
-            bool was_tracked = unsafe_allocation_contexts_.erase(buffer_unique_id) > 0;
-            if (was_tracked && traceback_capture_enabled_) {
-                retired_traceback_ids.push_back(buffer_unique_id);
-            }
-        }
     }
 }
 

@@ -913,15 +913,6 @@ void Device::disable_and_clear_program_cache() {
 }
 std::size_t Device::num_program_cache_entries() { return program_cache_.num_entries(); }
 
-// NOLINTNEXTLINE(readability-make-member-function-const)
-void Device::mark_allocations_unsafe() {
-    // Legacy single-device tracing has no public trace ID at this layer.
-    this->allocator_impl()->mark_allocations_unsafe(/*trace_id=*/0);
-}
-
-// NOLINTNEXTLINE(readability-make-member-function-const)
-void Device::mark_allocations_safe() { this->allocator_impl()->mark_allocations_safe(); }
-
 CoreCoord Device::virtual_program_dispatch_core(uint8_t cq_id) const {
     if (cq_id >= this->command_queues_.size() || !this->command_queues_[cq_id]) {
         return CoreCoord{0, 0};  // Return default for mock devices
