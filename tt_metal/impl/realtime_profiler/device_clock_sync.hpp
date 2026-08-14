@@ -85,7 +85,8 @@ public:
     // Requires probe host/device times strictly after the previous retained probe.
     void add_probe(const Anchor& probe);
 
-    // Nullopt only when no retained probe precedes either timestamp.
+    // Nullopt only while fewer than two probes are retained (no rate knowledge yet); records
+    // predating the retained history ride back from its oldest probe at the practical rate band.
     [[nodiscard]] std::optional<RecordMapping> map_record(
         uint64_t start_device_timestamp, uint64_t end_device_timestamp);
 
@@ -339,13 +340,24 @@ public:
     // peak-gap counter is the only state both sides touch.
 
     // Takes one bracketed clock probe (best of up to kResyncProbes reads). Sync thread only.
-    [[nodiscard]] Anchor read_probe();
+    // Nullopt when the read fails the plausibility check below even after a hardware re-read:
+    // the cycle is skipped and the mapping simply sees a longer chord.
+    [[nodiscard]] std::optional<Anchor> read_probe();
+
+    // True when the rate implied between two probes lies inside [rate_lo, rate_hi] (cycles/ns).
+    // A corrupted PCIe read moves the 64-bit timestamp by ~2^32 cycles (~11,000 GHz over one
+    // probe interval) or freezes/reverses it, so any envelope near the silicon's range separates
+    // garbage from every legitimate reading, DVFS steps and multi-second gaps included.
+    [[nodiscard]] static bool plausible_probe_step(
+        const Anchor& previous, const Anchor& next, double rate_lo, double rate_hi);
+
+    [[nodiscard]] uint64_t num_rejected_probes() const { return num_rejected_probes_.load(std::memory_order_relaxed); }
 
     // Feeds a probe from read_probe() into the mapping. Receiver thread only; probes must arrive
     // in the order they were taken.
     void ingest_probe(const Anchor& probe) { mapping_.add_probe(probe); }
 
-    // Nullopt only when no retained probe precedes either timestamp.
+    // See ClockSyncMapping::map_record().
     [[nodiscard]] std::optional<RecordMapping> map_record(
         uint64_t start_device_timestamp, uint64_t end_device_timestamp) {
         return mapping_.map_record(start_device_timestamp, end_device_timestamp);
@@ -368,8 +380,9 @@ public:
 
 private:
     void configure_clock_read_path();
+    void configure_plausible_rate_band();
 
-    Anchor probe();
+    Anchor probe(bool force_read_hi);
 
     ContextId context_id_;
     uint32_t chip_id_ = 0;
@@ -389,6 +402,17 @@ private:
     uint32_t last_clock_lo_ = 0;
     std::chrono::steady_clock::time_point last_probe_at_;
     std::atomic<int64_t> peak_probe_gap_ns_{0};
+
+    // Plausibility envelope for the rate between consecutive accepted probes; defaults hold when
+    // the AICLK range query is unavailable (mock/simulated paths).
+    double plausible_rate_lo_ = 0.05;
+    double plausible_rate_hi_ = 8.0;
+    Anchor last_accepted_{};
+    bool has_last_accepted_ = false;
+    bool force_hi_read_ = false;
+    int consecutive_rejections_ = 0;
+    std::chrono::steady_clock::time_point last_reject_warn_;
+    std::atomic<uint64_t> num_rejected_probes_{0};
 
     ClockSyncMapping mapping_;
 };

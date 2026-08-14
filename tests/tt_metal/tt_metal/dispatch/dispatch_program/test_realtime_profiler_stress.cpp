@@ -413,7 +413,7 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
                 "[RT profiler stress] t={}s replays={} published={} mean_publish_batch={:.1f} peak_fifo={} this "
                 "window, {} all-time of {} pages, sync error mean={:.0f}ns max={}ns this window ({}ns all-time), "
                 "frequency min/mean/max={:.4f}/{:.4f}/{:.4f} GHz, probe gap max={:.0f}us this window, chords "
-                "certified={:.1f}%, fallback-tier records={}",
+                "certified={:.1f}%, fallback-tier records={}, probe rejects={}",
                 std::chrono::duration_cast<std::chrono::seconds>(now - replay_start).count(),
                 num_replays,
                 rt->num_published_records(),
@@ -432,7 +432,8 @@ TEST(RealtimeProfilerStress, PeakLoadPreservesRecords) {
                 rt->num_chords_finalized() ? 100.0 * static_cast<double>(rt->num_chords_certified()) /
                                                  static_cast<double>(rt->num_chords_finalized())
                                            : 0.0,
-                rt->num_records_on_uncertified_chords());
+                rt->num_records_on_uncertified_chords(),
+                rt->num_rejected_probes());
             last_report = now;
         }
         if (now >= replay_deadline) {
@@ -630,7 +631,7 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
                 "[RT profiler stress] t={}s replays={} published={} mean_publish_batch={:.1f} peak_fifo={} this "
                 "window, {} all-time of {} pages, sync error mean={:.0f}ns max={}ns this window ({}ns all-time), "
                 "frequency min/mean/max={:.4f}/{:.4f}/{:.4f} GHz, probe gap max={:.0f}us this window, chords "
-                "certified={:.1f}%, loop max={}us mean={}us, fallback-tier records={}",
+                "certified={:.1f}%, loop max={}us mean={}us, fallback-tier records={}, probe rejects={}",
                 std::chrono::duration_cast<std::chrono::seconds>(now - run_start).count(),
                 num_replays,
                 rt->num_published_records(),
@@ -653,7 +654,8 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
                 loop_stats[1] ? std::chrono::duration_cast<std::chrono::microseconds>(kStressReportInterval).count() /
                                     loop_stats[1]
                               : 0,
-                rt->num_records_on_uncertified_chords());
+                rt->num_records_on_uncertified_chords(),
+                rt->num_rejected_probes());
             last_report = now;
         }
         if (now >= run_deadline) {

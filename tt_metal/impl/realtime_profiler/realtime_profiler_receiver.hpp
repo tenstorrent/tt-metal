@@ -66,7 +66,7 @@ public:
     uint64_t num_inverted_timestamp_records() const {
         return num_inverted_timestamp_records_.load(std::memory_order_relaxed);
     }
-    // map_record failed: timestamps predate every retained probe (sync/history problem).
+    // map_record failed: the record drained before two clock probes existed (bring-up window).
     uint64_t num_unmappable_records() const { return num_unmappable_records_.load(std::memory_order_relaxed); }
     uint32_t read_ring_full_wait_count();
     size_t num_active_devices() const { return devices_.size(); }
@@ -78,6 +78,8 @@ public:
     // Records published with a fallback-tier bound (uncertified chord or history envelope). Never
     // dropped; tests bound this to a tiny fraction of published records.
     uint64_t num_records_on_uncertified_chords() const;
+    // Clock probes rejected as implausible (garbage PCIe reads); each costs one probe cycle.
+    uint64_t num_rejected_probes() const;
     // Worst full receiver-loop iteration and iteration count since the previous call; reading
     // clears them. The loop period is what FIFO occupancy scales with.
     std::array<uint64_t, 2> take_loop_stats() {

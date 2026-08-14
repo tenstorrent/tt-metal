@@ -160,10 +160,10 @@ size_t RealtimeProfilerReceiver::publish_pages(
         const uint64_t total = num_unmappable_records_.fetch_add(unmappable, std::memory_order_relaxed) + unmappable;
         if (const auto now = std::chrono::steady_clock::now(); now - last_unmappable_warn_ >= kWarnInterval) {
             last_unmappable_warn_ = now;
-            log_error(
+            log_warning(
                 tt::LogMetal,
-                "[Real-time profiler] Device {} dropped {} unmappable record(s): no retained clock probe precedes "
-                "their timestamps ({} in total).",
+                "[Real-time profiler] Device {} dropped {} record(s) that drained before clock sync had two probes "
+                "({} in total).",
                 dev_state.chip_id,
                 unmappable,
                 total);
@@ -215,7 +215,9 @@ RealtimeProfilerReceiver::RealtimeProfilerReceiver(ContextId context_id, std::ve
         }
         for (RealtimeProfilerDevice& dev_state : devices_) {
             if (dev_state.clock_sync->has_direct_clock_read()) {
-                dev_state.clock_sync->ingest_probe(dev_state.clock_sync->read_probe());
+                if (const auto probe = dev_state.clock_sync->read_probe()) {
+                    dev_state.clock_sync->ingest_probe(*probe);
+                }
             }
         }
     }
@@ -294,6 +296,14 @@ uint64_t RealtimeProfilerReceiver::num_records_on_uncertified_chords() const {
     return total;
 }
 
+uint64_t RealtimeProfilerReceiver::num_rejected_probes() const {
+    uint64_t total = 0;
+    for (const auto& dev_state : devices_) {
+        total += dev_state.clock_sync->num_rejected_probes();
+    }
+    return total;
+}
+
 void RealtimeProfilerReceiver::ingest_probes(RealtimeProfilerDevice& dev_state) {
     std::array<DeviceClockSync::Anchor, 64> buf;
     for (;;) {
@@ -312,7 +322,9 @@ std::chrono::steady_clock::time_point RealtimeProfilerReceiver::probe_due_device
     auto earliest = now + kDeviceClockSyncInterval;
     for (size_t i = 0; i < devices_.size(); ++i) {
         if (now >= probe_next_due_[i]) {
-            devices_[i].probe_ring->writer().publish(devices_[i].clock_sync->read_probe());
+            if (const auto probe = devices_[i].clock_sync->read_probe()) {
+                devices_[i].probe_ring->writer().publish(*probe);
+            }
             // Absolute schedule: a late probe is followed by a correspondingly early one, so an
             // adjacent chord pair absorbs the lateness instead of compounding it — the
             // certificate budget cares about pair sums, not single gaps.

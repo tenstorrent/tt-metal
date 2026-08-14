@@ -675,6 +675,52 @@ TEST(RealtimeProfilerSync, MappingQuietClockIsTightAndCovered) {
     }
 }
 
+TEST(RealtimeProfilerSync, MappingRidesRecordsOlderThanRetainedHistory) {
+    SyntheticDeviceClock clock(1.0);
+    ClockSyncMapping mapping;
+    SyntheticProbeFeed feed{mapping, clock};
+
+    EXPECT_FALSE(mapping.map_record(100, 200).has_value()) << "no probes: nothing to price with";
+    feed.feed(0.0, 0.0);
+    EXPECT_FALSE(mapping.map_record(100, 200).has_value()) << "one probe: still no rate knowledge";
+
+    // Slide retention well past the run's start, then map records from the evicted era: both
+    // endpoints predate the oldest retained probe, the pre-ring-buffer drop case.
+    const double span_ns = 1.25 * static_cast<double>(ClockSyncMapping::kProbeHistoryCapacity) * kSpacingNs;
+    feed.feed(kSpacingNs, span_ns);
+    const double evicted_era_ns = 0.02 * span_ns;
+    const auto record =
+        map_and_expect_covered(mapping, clock, evicted_era_ns, evicted_era_ns + 180e3, "evicted-era record");
+    EXPECT_NEAR(record.frequency, 1.0, 0.01) << "ride frequency should come from the observed band";
+    EXPECT_LT(record.error, 100us) << "quiet-clock ride bound should stay band-scale, not span-scale";
+}
+
+TEST(RealtimeProfilerSync, ProbeStepPlausibilityRejectsGarbageReads) {
+    const auto at = [](double host_ns, uint64_t device_timestamp) {
+        return ClockSyncMapping::Anchor{
+            .host_timestamp = std::chrono::steady_clock::time_point(std::chrono::nanoseconds(std::llround(host_ns))),
+            .device_timestamp = device_timestamp,
+            .error = std::chrono::nanoseconds(200)};
+    };
+    // The Wormhole envelope with the read path's margins: [idle/4, busy*2].
+    constexpr double kLo = 0.125;
+    constexpr double kHi = 2.0;
+    const auto prev = at(0.0, 1'000'000'000ull);
+
+    EXPECT_TRUE(DeviceClockSync::plausible_probe_step(prev, at(375e3, 1'000'375'000ull), kLo, kHi));
+    EXPECT_TRUE(DeviceClockSync::plausible_probe_step(prev, at(375e3, 1'000'187'500ull), kLo, kHi))
+        << "idle-clock rate must pass";
+    EXPECT_TRUE(DeviceClockSync::plausible_probe_step(prev, at(3e9, 4'000'000'000ull), kLo, kHi))
+        << "a multi-second probe outage at a legitimate rate must pass";
+
+    EXPECT_FALSE(DeviceClockSync::plausible_probe_step(prev, at(375e3, 1'000'375'000ull + (1ull << 32)), kLo, kHi))
+        << "a corrupted high word / rollover carry moves the timestamp by ~2^32";
+    EXPECT_FALSE(DeviceClockSync::plausible_probe_step(prev, at(375e3, 1'000'000'000ull), kLo, kHi))
+        << "a frozen counter is not a clock";
+    EXPECT_FALSE(DeviceClockSync::plausible_probe_step(prev, at(375e3, 999'000'000ull), kLo, kHi))
+        << "the counter never runs backward";
+}
+
 // Head-to-head with the retired init sync (syncDeviceHost's 249-sample OLS), granted the same
 // per-sample noise as our probes — strictly more charitable than its real one-way write jitter.
 // Both estimate a known exact rate on a quiet clock; the window regression must not lose.

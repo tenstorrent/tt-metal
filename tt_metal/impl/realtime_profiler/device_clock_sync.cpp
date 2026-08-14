@@ -19,6 +19,7 @@
 #include <umd/device/chip_helpers/tlb_manager.hpp>
 #include <umd/device/cluster.hpp>
 #include <umd/device/driver_atomics.hpp>
+#include <umd/device/tt_device/tt_device.hpp>
 #include <umd/device/pcie/tlb_handle.hpp>
 #include <umd/device/pcie/tlb_window.hpp>
 #include <umd/device/types/tlb.hpp>
@@ -103,6 +104,9 @@ void ClockSyncMapping::set_fallback_step_bound(Chord& chord, double span_ns) con
 }
 
 void ClockSyncMapping::add_probe(const Anchor& probe) {
+    TT_ASSERT(
+        probes_end_ == 0 || (probe.device_timestamp > probe_at(probes_end_ - 1).device_timestamp &&
+                             probe.host_timestamp > probe_at(probes_end_ - 1).host_timestamp));
     const uint64_t close_index = probes_end_;
     const size_t slot = close_index & (kProbeHistoryCapacity - 1);
     probe_history_[slot] = probe;
@@ -354,7 +358,34 @@ std::optional<ClockSyncMapping::RecordMapping> ClockSyncMapping::map_record(
         // Start is older than our probe history.
         const std::optional<uint64_t> end_index = chord_index_around(end_device_timestamp);
         if (!end_index.has_value()) {
-            return std::nullopt;
+            // The whole record predates the retained history; with any rate knowledge at all,
+            // ride both endpoints back from the oldest retained probe rather than drop. Sound for
+            // the same reason the partial ride is — probe ingest validation keeps the retained
+            // timeline honest, so the band brackets the rates the ride crosses.
+            if (probes_end_ - begin < 2) {
+                return std::nullopt;
+            }
+            num_records_on_uncertified_chords_.fetch_add(1, std::memory_order_relaxed);
+            double ride_lo = smoothed_frequency_min_;
+            double ride_hi = smoothed_frequency_max_;
+            if (!(ride_lo > 0.0)) {
+                const Chord& oldest_chord = chord_at(begin + 1);
+                ride_lo = oldest_chord.frequency;
+                ride_hi = oldest_chord.frequency;
+            }
+            const Anchor& ring_oldest = probe_at(begin);
+            const double inv_mid = (1.0 / ride_lo + 1.0 / ride_hi) * 0.5;
+            const double inv_half_spread = (1.0 / ride_lo - 1.0 / ride_hi) * 0.5;
+            const double start_uncovered = static_cast<double>(ring_oldest.device_timestamp - start_device_timestamp);
+            const double end_uncovered = static_cast<double>(ring_oldest.device_timestamp - end_device_timestamp);
+            const double end_host_ns = host_ns(ring_oldest) - end_uncovered * inv_mid;
+            const int64_t start_error_ns = std::llround(start_uncovered * inv_half_spread) + ring_oldest.error.count();
+            const double frequency = 1.0 / inv_mid;
+            return RecordMapping{
+                .device_cycle_offset =
+                    std::llround(static_cast<double>(end_device_timestamp) - frequency * end_host_ns),
+                .error = std::chrono::nanoseconds(start_error_ns),
+                .frequency = frequency};
         }
         const Chord& end_chord = chord_at(*end_index);
         const double end_host_ns = host_ns_on(end_chord, end_device_timestamp);
@@ -426,9 +457,10 @@ DeviceClockSync::DeviceClockSync(ContextId context_id, IDevice* device, CoreCoor
     wall_clock_addr_hi_ = hal.get_tensix_wall_clock_reg_addr_hi();
     configure_clock_read_path();
     if (mapped_clock_lo_ != nullptr) {
+        configure_plausible_rate_band();
         // Throwaway cold read; the receiver warms the mapping up right before probing starts, so
         // no gap opens between warm-up and the steady cadence while other devices initialize.
-        (void)probe();
+        (void)probe(false);
     }
 }
 
@@ -468,9 +500,43 @@ void DeviceClockSync::configure_clock_read_path() {
     }
 }
 
-DeviceClockSync::Anchor DeviceClockSync::probe() {
+void DeviceClockSync::configure_plausible_rate_band() {
+    try {
+        auto* tt_device =
+            MetalContext::instance(context_id_).get_cluster().get_driver()->get_chip(chip_id_)->get_tt_device();
+        const double min_ghz = static_cast<double>(tt_device->get_min_clock_freq()) * 1e-3;
+        const double max_ghz = static_cast<double>(tt_device->get_max_clock_freq()) * 1e-3;
+        // 4x/2x margins keep thermal floors and host-forced clock operations inside the band;
+        // the garbage this rejects sits orders of magnitude outside any margin (see
+        // plausible_probe_step).
+        if (min_ghz > 0.0 && max_ghz >= min_ghz) {
+            plausible_rate_lo_ = min_ghz / 4.0;
+            plausible_rate_hi_ = max_ghz * 2.0;
+        }
+    } catch (const std::exception& e) {
+        log_debug(
+            tt::LogMetal,
+            "[DeviceClockSync] Device {}: AICLK range unavailable ({}); using the default probe "
+            "plausibility band",
+            chip_id_,
+            e.what());
+    }
+}
+
+bool DeviceClockSync::plausible_probe_step(const Anchor& previous, const Anchor& next, double rate_lo, double rate_hi) {
+    const double span_ns =
+        ns_count(std::chrono::duration_cast<std::chrono::nanoseconds>(next.host_timestamp - previous.host_timestamp));
+    if (span_ns <= 0.0) {
+        return false;
+    }
+    const double rate =
+        static_cast<double>(static_cast<int64_t>(next.device_timestamp - previous.device_timestamp)) / span_ns;
+    return rate >= rate_lo && rate <= rate_hi;
+}
+
+DeviceClockSync::Anchor DeviceClockSync::probe(bool force_read_hi) {
     TTZoneScopedDN(RT_PROFILER, "Probe");
-    const bool must_read_hi = last_probe_at_ == std::chrono::steady_clock::time_point{} ||
+    const bool must_read_hi = force_read_hi || last_probe_at_ == std::chrono::steady_clock::time_point{} ||
                               std::chrono::steady_clock::now() - last_probe_at_ > kMaxProbeGapBeforeRereadingHi;
 
     std::chrono::steady_clock::time_point host_before;
@@ -502,7 +568,7 @@ DeviceClockSync::Anchor DeviceClockSync::probe() {
         .error = error};
 }
 
-DeviceClockSync::Anchor DeviceClockSync::read_probe() {
+std::optional<DeviceClockSync::Anchor> DeviceClockSync::read_probe() {
     TTZoneScopedDN(RT_PROFILER, "Resync");
     if (last_probe_at_ != std::chrono::steady_clock::time_point{}) {
         const int64_t gap_ns =
@@ -514,18 +580,54 @@ DeviceClockSync::Anchor DeviceClockSync::read_probe() {
     }
     // Best-of-N censors brackets an interrupt landed inside (host noise: a no-MMIO control
     // reproduces the same >100 us outliers); the EMA break self-quiets it when every read is slow.
-    Anchor best = probe();
+    Anchor best = probe(force_hi_read_);
+    force_hi_read_ = false;
     for (int i = 1; i < kResyncProbes; i++) {
         if (typical_error_ > std::chrono::nanoseconds::zero() && best.error <= typical_error_ + typical_error_ / 2) {
             break;
         }
-        const Anchor p = probe();
+        const Anchor p = probe(false);
         if (p.error < best.error) {
             best = p;
         }
     }
     typical_error_ =
         typical_error_ == std::chrono::nanoseconds::zero() ? best.error : (typical_error_ * 7 + best.error) / 8;
+
+    const auto plausible = [&](const Anchor& a) {
+        return !has_last_accepted_ || plausible_probe_step(last_accepted_, a, plausible_rate_lo_, plausible_rate_hi_);
+    };
+    if (!plausible(best)) {
+        // A garbage low read also corrupts the software rollover carry (a fresh lo below the
+        // garbage value spuriously increments hi), so recovery must re-read the hardware high
+        // word behind a fresh low read — not just retry.
+        best = probe(true);
+        if (!plausible(best)) {
+            force_hi_read_ = true;
+            num_rejected_probes_.fetch_add(1, std::memory_order_relaxed);
+            // After repeated rejections the reference itself is the suspect side (e.g. garbage
+            // slipped in as the first accepted probe); re-arm from scratch rather than reject
+            // good readings forever.
+            constexpr int kMaxConsecutiveRejections = 3;
+            if (++consecutive_rejections_ >= kMaxConsecutiveRejections) {
+                has_last_accepted_ = false;
+                consecutive_rejections_ = 0;
+            }
+            if (const auto now = std::chrono::steady_clock::now();
+                now - last_reject_warn_ >= std::chrono::seconds(10)) {
+                last_reject_warn_ = now;
+                log_warning(
+                    tt::LogMetal,
+                    "[DeviceClockSync] Device {}: rejected implausible clock probe ({} rejected in total)",
+                    chip_id_,
+                    num_rejected_probes_.load(std::memory_order_relaxed));
+            }
+            return std::nullopt;
+        }
+    }
+    consecutive_rejections_ = 0;
+    last_accepted_ = best;
+    has_last_accepted_ = true;
     return best;
 }
 
