@@ -286,12 +286,6 @@ extern "C" void __emule_fiber_note_publish(unsigned pages) {
     efib::FiberScheduler::instance().note_publish(pages);
 }
 
-// Worker L1 slot size + mask: a worker's L1 field is a 0-based in-slot offset (< 2 MB), so masking the low
-// bits is an idempotent guard. Applied ONLY for WORKER cores (DRAM banks are GB-scale — see the
-// per-resolver comments). Used by every NOC-address resolver.
-static constexpr uint32_t L1_SLOT_SIZE = 2u * 1024 * 1024;  // 2 MB per worker L1 slot
-static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
-
 // Resolve a NOC address (encoded 64-bit) to a host pointer.
 // Real firmware encoding: y in bits [47:42], x in bits [41:36], addr in bits [35:0]
 //
@@ -356,8 +350,9 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
         if (auto* host_ptr = static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr))) {
             return host_ptr;
         }
-        // Miss: decode as on-chip. A real host-facing miss finds no core either and still
-        // returns nullptr, which noc_semaphore_set_remote relies on.
+        // Miss: decode as on-chip. The bounds check below is what keeps an unmapped
+        // host-window address from landing on a core — it decodes to a real coord (the
+        // window carries no coordinates) but with an offset no core is that big.
     }
 
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
@@ -368,10 +363,13 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
         uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
         auto it = __emule_self->core_map->find(key);
         if (it != __emule_self->core_map->end()) {
-            uint32_t offset = (it->second->role() == tt_emule::CoreRole::WORKER)
-                                  ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
-                                  : static_cast<uint32_t>(local_addr);
-            return it->second->l1_ptr(offset);
+            // An offset the target cannot hold is not an address on that core, so it is a
+            // resolve miss like any other. Bounding it by the core's own size, rather than
+            // masking it into range, is what keeps a bad address from silently landing on
+            // real memory.
+            if (local_addr < it->second->l1_size()) {
+                return it->second->l1_ptr(local_addr);
+            }
         }
     }
     return nullptr;
@@ -427,11 +425,10 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     uint32_t y_start = (mcast_addr >> (NOC_LOCAL_BITS + 3 * NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint64_t l1_offset = mcast_addr & NOC_LOCAL_MASK;
 
-    // The L1 offset is a 0-based in-slot offset (< 2 MB, from get_write_ptr() etc.), so masking
-    // with SLOT_MASK is an idempotent guard on the local field.
-    // Multicast targets only WORKER cores (DRAM cores are skipped by the role
-    // check in the delivery loop below), so the mask is L1-correct here.
-    l1_offset &= L1_SLOT_MASK;
+    // Left raw: the offset is a 0-based in-slot L1 offset (get_write_ptr() etc.), and an
+    // out-of-range one is a kernel bug, so Core::l1_ptr's bounds check should surface it
+    // rather than a mask hiding it. Multicast targets only WORKER cores; the delivery loop
+    // below skips the rest.
 
     emule_require_self(__func__);
     if (!__emule_self->core_map) {
@@ -480,7 +477,7 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
             uint64_t key = (uint64_t(x) << 32) | y;
             auto it = __emule_self->core_map->find(key);
             if (it != __emule_self->core_map->end() && it->second->role() == tt_emule::CoreRole::WORKER) {
-                uint8_t* dst = it->second->l1_ptr(static_cast<uint32_t>(l1_offset));
+                uint8_t* dst = it->second->l1_ptr(l1_offset);
                 if (size == sizeof(uint32_t)) {
                     TT_FATAL(
                         reinterpret_cast<uintptr_t>(dst) % alignof(std::atomic<uint32_t>) == 0,
@@ -2328,10 +2325,12 @@ extern "C" uint8_t* __emule_fabric_resolve_remote(uint32_t dst_chip, uint64_t no
         }
         return nullptr;
     }
-    uint32_t offset = (cit->second->role() == tt_emule::CoreRole::WORKER)
-                          ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
-                          : static_cast<uint32_t>(local_addr);
-    return cit->second->l1_ptr(offset);
+    // Bounded by the target's own size, as in __emule_resolve_noc_addr: an offset it cannot
+    // hold is a miss, not something to mask into range.
+    if (local_addr >= cit->second->l1_size()) {
+        return nullptr;
+    }
+    return cit->second->l1_ptr(local_addr);
 }
 
 // Destination chip for a fabric send from src_chip: the single ethernet-connected neighbor of a
