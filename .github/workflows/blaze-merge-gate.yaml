@@ -77,7 +77,8 @@ jobs:
     runs-on: ubuntu-latest
     # The poll loop must outlive its own deadline so it can report WHY it gave up;
     # if the runner killed it first, the failure would read as an infra timeout.
-    timeout-minutes: ${{ inputs.wait-timeout-minutes + 15 }}
+    # Update with the actual timeout needed
+    timeout-minutes: 360
     outputs:
       blaze-run-url: ${{ steps.dispatch.outputs.blaze-run-url }}
     env:
@@ -100,6 +101,20 @@ jobs:
           # A dispatched run is not immediately visible to `gh run list`. Until this
           # is up, "no matching run" means "not indexed yet", not "dispatch failed".
           GRACE_SECONDS=300
+          # Below this job's fixed 360-minute cap, with room for the loop to report
+          # a timeout instead of the runner killing it mid-wait.
+          MAX_WAIT_MINUTES=345
+
+          # `number` inputs are not integer inputs -- 1.5 reaches the arithmetic
+          # below and fails there as a bare bash syntax error naming nothing.
+          if [[ ! "${TIMEOUT_MINUTES:-}" =~ ^[0-9]+$ ]] || [ "$TIMEOUT_MINUTES" -lt 1 ]; then
+            echo "::error::wait-timeout-minutes must be a positive whole number of minutes (got '${TIMEOUT_MINUTES:-}')."
+            exit 1
+          fi
+          if [ "$TIMEOUT_MINUTES" -gt "$MAX_WAIT_MINUTES" ]; then
+            echo "::error::wait-timeout-minutes=${TIMEOUT_MINUTES} exceeds ${MAX_WAIT_MINUTES}. This job is capped at 360 min by GitHub, so a longer deadline would be cut short by the runner instead of reported here."
+            exit 1
+          fi
 
           # Unique per run AND per re-run of that run, so a re-run never latches
           # onto the blaze run its previous attempt started.
