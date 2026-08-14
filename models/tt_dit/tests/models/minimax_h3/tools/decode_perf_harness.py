@@ -93,8 +93,7 @@ MODES = {
     "uint8": {"pixel_denorm": (PIXEL_MEAN, PIXEL_STD), "readback_uint8": True},
     # Stitch, clamp and colour-convert on device; read one planar canvas at 1.5 bytes/pixel.
     "yuv420": {"pixel_denorm": (PIXEL_MEAN, PIXEL_STD), "device_stitch": True},
-    # Same, with the per-chunk device graph captured once and replayed. Isolates host dispatch,
-    # measured at 3.025 s of the 6.934 s stage at 768P/15s.
+    # Same, with the per-chunk device graph captured once and replayed. Isolates host dispatch.
     "traced": {"pixel_denorm": (PIXEL_MEAN, PIXEL_STD), "device_stitch": True, "trace_device_stitch": True},
 }
 
