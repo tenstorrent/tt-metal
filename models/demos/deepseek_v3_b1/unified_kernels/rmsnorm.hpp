@@ -22,8 +22,8 @@
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/experimental/mul_reduce_scalar.h"
 #include "api/compute/experimental/pack_block.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/add_rsqrt.h"
-#include "../kernel_includes/tt_metal/include/compute_kernel_api/rmsnorm.h"
+#include "api/compute/experimental/add_rsqrt.h"
+#include "api/compute/experimental/rmsnorm.h"
 #endif
 
 namespace deepseek_b1_ops {

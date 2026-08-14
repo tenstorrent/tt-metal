@@ -110,6 +110,7 @@ it is classified differently on different systems.
 | BEVFormer | BH P150 |
 | Mistral-Small-3.1-24B | WH LLMBox, BH QuietBox 2 |
 | Stable Diffusion 3.5 Large | WH LLMBox |
+| Mochi-1-preview | WH LLMBox, WH Galaxy |
 | VGGNet | WH N150 |
 | BERT-Tiny | WH N150 |
 | BERT-Large | WH N150 |

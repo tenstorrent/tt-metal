@@ -18,6 +18,10 @@
 
 namespace ckernel {
 
+// Blackhole-only: the HiFi dest-reuse init workaround below calls the Blackhole
+// LLK primitive directly, and all current consumers are Blackhole kernels.
+#if defined(ARCH_BLACKHOLE)
+
 // ============================================================================
 // Scalar broadcast multiply
 // ============================================================================
@@ -25,11 +29,9 @@ namespace ckernel {
 /**
  * Short init for scalar broadcast multiply (assumes hw already configured)
  */
-ALWI void deepseek_mul_bcast_scalar_init(
-    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+ALWI void deepseek_mul_bcast_scalar_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, icb1, call_line);
-    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>(
-        icb0, icb1)));
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::SCALAR, MATH_FIDELITY>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::SCALAR>(icb0, icb1)));
 }
 
@@ -59,9 +61,31 @@ template <EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestT
 ALWI void deepseek_binary_dest_reuse_tiles_init(uint32_t icb0, uint32_t call_line = __builtin_LINE()) {
     state_configure(icb0, call_line);
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, true, binary_reuse_dest>(false, false, icb0)));
-    MATH(
-        (llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, MATH_FIDELITY, binary_reuse_dest>(
-            icb0, icb0, false /*acc_to_dest*/)));
+    // HiFi-only workaround (tt-blaze #1760). The shorthand
+    // llk_math_eltwise_binary_init<...>(icb0, icb0) mis-specializes the tile
+    // shape and corrupts silu(gate)*up on the HiFi path (fixed M2 MoE HiFi4
+    // 0.70->0.9996). At HiFi, use the general init instead; LoFi keeps the
+    // original shorthand so its codegen is byte-identical.
+    //
+    // The fidelity gate MUST stay INSIDE MATH(): MATH_FIDELITY is only defined for
+    // the math thread (trisc1); referencing it on the unpack/pack threads
+    // (trisc0/trisc2) fails to compile. The immediately-invoked lambda keeps every
+    // MATH_FIDELITY use within the MATH()-elided math-thread build.
+    MATH(([&]() {
+        if constexpr (MATH_FIDELITY != MathFidelity::LoFi) {
+            _llk_math_eltwise_binary_init_<
+                EltwiseBinaryType::ELWMUL,
+                BroadcastType::NONE,
+                MATH_FIDELITY,
+                binary_reuse_dest>(ckernel::DEFAULT_TENSOR_SHAPE, 0 /*acc_to_dest*/);
+        } else {
+            llk_math_eltwise_binary_init<
+                EltwiseBinaryType::ELWMUL,
+                BroadcastType::NONE,
+                MATH_FIDELITY,
+                binary_reuse_dest>(icb0, icb0, false /*acc_to_dest*/);
+        }
+    }()));
 }
 
 /**
@@ -80,5 +104,7 @@ ALWI void deepseek_binary_dest_reuse_tiles(uint32_t icb, uint32_t in_tile_index,
           MATH_FIDELITY,
           binary_reuse_dest>(icb, icb, idst, true /*clear_fp32_dst_acc*/)));
 }
+
+#endif  // ARCH_BLACKHOLE
 
 }  // namespace ckernel
