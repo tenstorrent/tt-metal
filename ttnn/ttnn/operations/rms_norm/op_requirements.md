@@ -134,7 +134,7 @@ rather than an `EXCLUSIONS` entry.
 
 ---
 
-### [ ] Refinement 3 — Speed up the perf-flagged decode profile
+### [x] Refinement 3 — Speed up the perf-flagged decode profile
 
 **Type**: perf
 
@@ -168,6 +168,46 @@ toward the ≤14894 ns clock-scaled goal, the other three interleaved decode cas
 0.9995 soft PCC gate holds, the golden suite is green, and there is no regression across a
 config-spanning guard set (one representative per distinct kernel path × layout × placement:
 TILE/ROW_MAJOR × `s == 1`/`s > 1` × gamma/no-gamma, interleaved).
+
+**Outcome**: **`(1,1,32,7168)` at its exact `extras` config: 11340 → 9657 ns (−14.8 %)**, against a
+clock-scaled goal of ≤14894 ns. Siblings: `W=5120` 9428 → 8441 (−10.5 %), `W=2304` 6615 → 6535,
+`W=1024` 5609 → 5587; PCC 0.99998 vs the 0.9995 gate; golden `perf` 13/13, `pad_poison` 24/24, unit
+directory 322 passed / 36 skipped. At the Phase 0 config every row of `test_rms_norm_perf.py` is at
+or below its recorded baseline (decode −7.8…−11.6 %, prefill −0.4 %, batch4d −3.0 %).
+
+*The verifier's premise was wrong and that was the finding.* "Two knob sweeps are already done and
+came back flat within 1–2 %, so do not re-spend the phase there" rested on an A/B whose
+`monkeypatch.setattr(pd, KNOB, v)` patched a **second import** of the descriptor module — the op
+executed a different module dict, so both sweeps measured the shipped configuration four times over.
+Patched at `create_program_descriptor.__globals__` instead, the hidden-split knob is not flat at all:
+it is the decode regime's **dominant** cost, worth up to 25 %. Fixed in both harnesses.
+
+*What actually binds.* Ablation (payload stubbed, sync scaffolding kept) puts ~87 % of the
+above-floor decode cost in the cross-core combine, and it scales ~linearly in the fan-in `s`. Three
+levers landed: (1) the hidden split is now bounded from *above* — combine ≈ c1·s vs transfer ≈ c2·Wt/s
+gives `s* ∝ √Wt`, measured k ≈ 2.13 (`FANIN_BALANCE_K`); this is the −14.8 %, and a *constant* cap
+was tried first and rejected because it costs tall-and-wide shapes the occupancy they need (+5.5 % on
+`(1,1,64,12288)`). (2) A TILE-layout gamma is a [W] vector padded to a tile-row, so the reader now
+reads its two row-0 face segments instead of the 2 KB page — **32× fewer gamma bytes**, which in
+decode was a full third of DRAM traffic. (3) The mcast pre-handshake is dropped when there is only
+one broadcast (`num_blocks == 1`, the whole decode regime), where it bought nothing.
+
+*Two measured nulls, both kept as findings.* The mcast pre-handshake removal is −1 % (correct, kept —
+it cannot help what it does not bind). Switching the root's combine to `ReduceAlgorithm::AccumulateViaAdd`
+is 9770 vs 9732 ns at s=32, i.e. inside noise, and *below* its ~4-tile crossover it is a real
+regression (the prefill geometry lands at s=2 and paid 2.5 %) — so it ships as master.md prescribes,
+a **dispatch** on reduce width rather than a replacement. That null is the useful part: the combine is
+NoC-bound, not math-bound, so the remaining cost is the gather **incast** — s stat tiles (4 KB each)
+converging on one core's L1 port.
+
+*What I would do next, and why I did not.* A **two-level tree combine** (reduce along the rect's x
+axis to row-leaders, then y to the root, then broadcast — master.md `tensix_all_reduce`, 1.45–1.60×
+over a flat root on 2-D groups). On the shipped 8×4 rect it cuts the serial incast from 32 tiles
+(131 KB) to 8 + 4, and the model puts it at roughly another −20 %. I stopped short of it because it is
+a genuine topology change to a combine shared by the interleaved *and* all three sharded schemes, and
+the disciplined trade with the budget left was to bank a measured, regression-free 14.8 % rather than
+risk that surface. Also retired here: the **GammaBroadcast** lamp — lever (2) shrank the DRAM term it
+was designed to remove from 11 % to 0.4 %, so it should be struck, not built (see `l1_ledger.md`).
 
 ---
 

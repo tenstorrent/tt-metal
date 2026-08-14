@@ -181,3 +181,87 @@
   `test_rms_norm_sharded_is_zero_copy`, a **structural** check that the input/output CBs carry the
   tensors' buffers — because a `TensorAccessor` re-read of a core's own shard is numerically correct
   and so is invisible to every value-based test.
+
+## Refinement 3 — Speed up the perf-flagged decode profile
+
+- **Date**: 2026-08-14
+- **What was done**: three levers on the interleaved decode profile, plus one methodology fix that
+  had to come first. **Reused, not rebuilt**: every lever is a knob or a branch on a path that
+  already existed — the hidden-split search, `McastConfig.handshake`, the reader's gamma load, and
+  the compute kernel's combine reduce. Added: one derived cap, one CT flag, one algorithm dispatch.
+  No new CB, no new kernel file, no second program-descriptor branch.
+
+  0. **The premise had to be re-measured first.** The queue said the two knob sweeps were "already
+     done and came back flat within 1-2 %, so do not re-spend the phase there". Both were void: the
+     fixture did `monkeypatch.setattr(pd, KNOB, v)` on the module imported as
+     `ttnn.operations.rms_norm.rms_norm_program_descriptor`, but the op executes in a **second import
+     of that same file** with a different `__dict__` — so every "sweep" re-measured the shipped
+     configuration. Caught by disbelief at the data, not by inspection: a floor of 32 puts
+     `(1,1,32,1024)` on a *single* core with no combine at all, and it cannot cost the same 5.6 us as
+     the 8-core plan. Both harnesses now patch `create_program_descriptor.__globals__`, the dict the
+     op really reads. Re-measured honestly the knob is worth up to 25 %.
+  1. **A fan-in bound on the hidden split** (`FANIN_BALANCE_K`, with `_fanin_slice_cap`). Splitting
+     the hidden axis `s` ways cuts the per-core transfer (~c2·Wt/s) but grows the cross-core combine
+     (~c1·s: `s` stat tiles incast into one root, `s` gather atomics, a root reduce over `s` tiles, a
+     barrier across `s` cores). `HIDDEN_TILES_PER_CORE_FLOOR` bounded only `S`; nothing bounded `s`,
+     so the search maximized occupancy and ran the combine off the end (`s = 56` at W=7168).
+     Minimizing the sum puts the optimum at `s* ∝ √Wt` — measured k ≈ 2.13, which reproduces the
+     measured optimum at Wt = 224/160/72/32. **This is the bulk of the win.**
+  2. **TILE-layout gamma is read row-0-only.** gamma is a [W] vector, so a TILE gamma is padded to a
+     whole tile-row: only row 0 of each of its `Wt` tiles carries data and `BroadcastDim::Row` is the
+     only consumer. The reader now issues two 16-element face-row reads per tile (both offsets are
+     multiples of 64, so both start on legal DRAM boundaries) instead of the 2 KB page — **32× fewer
+     gamma bytes**, which in the decode regime (Rt = 1) was a full *third* of the op's DRAM traffic.
+     Gated off for block-float gamma, whose faces share an exponent header.
+  3. **The mcast pre-handshake is dropped when there is only one broadcast** (`num_blocks == 1` — the
+     whole decode regime). It costs the root `s-1` inbound remote atomics and buys exactly one thing,
+     that broadcast n+1 not overwrite a landing still holding broadcast n. The safety argument that
+     survives: every receiver constructs its `ReceiverPipe` (initing its own data-ready flag) at
+     kernel boot, and the root cannot send until it has gathered all `s` partials — which is strictly
+     after every contributor's reader passed that ctor.
+- **Accuracy achieved**: PCC **0.99998** on `(1,1,32,7168)` at the perf group's exact config
+  (bf16 / HiFi2 / `fp32_dest_acc_en=False` / TILE / bf16 TILE gamma / INTERLEAVED) against its 0.9995
+  soft gate; unchanged elsewhere (the levers move bytes and geometry, not arithmetic, except the
+  combine-reduce dispatch, whose accumulate datapath is equal-or-better in fp32).
+- **Performance** (Blackhole p150b, 11×10 grid, one fresh-cache run per point, device kernel ns):
+
+  | shape (target config) | before | after | |
+  |---|---|---|---|
+  | `(1,1,32,7168)` — the decisive case | 11340 | **9657** | **−14.8 %** (goal ≤14894) |
+  | `(1,1,32,5120)` | 9428 | 8441 | −10.5 % |
+  | `(1,1,32,2304)` | 6615 | 6535 | −1.2 % |
+  | `(1,1,32,1024)` | 5609 | 5587 | −0.4 % |
+
+  At the Phase 0 config (`test_rms_norm_perf.py`, incl. prefill) every row is at or below its
+  recorded baseline: decode −7.8…−11.6 %, `prefill_2048x1024` −0.4 %, `batch4d` −3.0 %, floor −1.5 %.
+- **Golden test progress**: `perf` group **13/13** (8 interleaved + 5 sharded); `pad_poison`
+  **24/24**; a 4-shape full-cartesian slice (`2x1x128x100`, `4x1x512x512`, `1x1x224x3072`,
+  `1x1x160x11008`) 296 passed / 78 xfailed / **2 failed** — and those 2 are exactly the wide-W
+  `HEIGHT_SHARDED` cells Refinement 2 left failing on purpose (`_plan_sharded` does not use the
+  fan-in cap, so this refinement cannot have touched them).
+- **Issues encountered**: two, both caught as regressions and both fixed rather than accepted.
+  (1) A **constant** fan-in cap (32) was the first thing measured and is the wrong shape: tuned to
+  the wide single-row decode shapes it costs tall-and-wide ones the occupancy they need
+  (`(1,1,64,12288)` +5.5 %). Replaced by the √Wt rule, which the cost model predicts and which fixes
+  it (−1.9 %). (2) `ReduceAlgorithm::AccumulateViaAdd` on the root's combine is a null above its
+  crossover (9770 vs 9732 ns at s=32, inside noise) and a real **regression below** it (the prefill
+  geometry lands at s=2 and paid 2.5 %), so it ships as master.md prescribes — a *dispatch* on reduce
+  width, never slower than the library. That null is the informative part: the combine is NoC-bound,
+  not math-bound, so the residual cost is the gather **incast**. Separately, the compute kernel's
+  recorded claim that `ReduceWithinTile::Skip` is unreachable is now **stale** — the `static_assert`
+  has been moved after the `AccumulateViaAdd` early-return upstream.
+- **Left on the table (a finding, not a task)**: a **two-level tree combine** (reduce along the
+  rect's x axis to row-leaders, then y to the root — master.md `tensix_all_reduce`, 1.45–1.60× over a
+  flat root on 2-D groups). On the shipped 8×4 rect it cuts the serial incast from 32 tiles (131 KB)
+  to 8 + 4; the model puts it near another −20 %. Not attempted: it is a real topology change to a
+  combine shared by the interleaved path *and* all three sharded schemes, and banking a measured,
+  regression-free 14.8 % was the better trade with the budget left. Also **retired**: the
+  `GammaBroadcast` scheme lamp — lever 2 shrank the DRAM term it exists to remove from 11 % to 0.4 %,
+  so it should be struck, not built (`l1_ledger.md` updated, incl. the corrected gamma crossing
+  `g·W·elem` in the data-movement budget).
+- **Tests added**: `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_perf_decode.py` — the
+  decode harness at the perf target's *exact* config (the pre-existing harness measures a ROW_MAJOR
+  gamma at HiFi4 / fp32-acc-on, a materially cheaper cell), with file-based selectors for the ablation
+  and for both hidden-split knobs, and the measured before/after table in its docstring.
+  `test_rms_norm_perf.py` keeps its per-shape numbers but its two A/B tables are annotated VOID with
+  the reason, and its patch target is fixed.

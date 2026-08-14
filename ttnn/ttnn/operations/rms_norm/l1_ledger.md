@@ -142,7 +142,7 @@ Named memory boundary: **DRAM**. Minimum = *each input crosses once, each output
 | Tensor | DRAM crossings | Why that many | Cross-core traffic added |
 |--------|----------------|---------------|--------------------------|
 | `input_tensor` (x) | **1** (`Rt·Wt·T` bytes) interleaved; **0** when the input is *_SHARDED | `cb_input_tiles` holds the whole block resident across `square_accumulate_block`, `scale_block` and `apply_gamma_block`. The residency is bought by the hidden split, which shrinks each core's reduced extent — this is the residency half of the dependent-axis split, not just its parallelism half. **A physical shard is already in L1**, so Refinement 2 binds the CB to the caller's buffer and x crosses DRAM *zero* times (ROW_MAJOR sharded moves it core-locally, L1→L1, into the tilize staging the layout needs anyway). | none |
-| `gamma` | **`g`** (`g·Wt·T` bytes) | Each row-group's line of cores collectively reads all of gamma exactly once (slices partition the hidden axis), but the `g` row-groups do not share — gamma is invariant along the row axis, so it is reuse-shared *by construction of the row split*. `g = 1` in the wide/decode regime ⇒ minimum; `g = grid_y`-divisor in the row-heavy regime ⇒ the excess. | none (the **GammaBroadcast** scheme lamp would move this term onto the NoC and reach the minimum) |
+| `gamma` | **`g`** (`g·W·elem` bytes — **not** `g·Wt·T`) | Each row-group's line of cores collectively reads all of gamma exactly once (slices partition the hidden axis), but the `g` row-groups do not share — gamma is invariant along the row axis, so it is reuse-shared *by construction of the row split*. `g = 1` in the wide/decode regime ⇒ minimum; `g = grid_y`-divisor in the row-heavy regime ⇒ the excess. **gamma is a [W] VECTOR, so the crossing is one element per column, never one tile per tile-column.** ROW_MAJOR gamma was always read that way; Refinement 3 made the TILE-layout gamma match it — a TILE gamma is a (1,…,1,W) tensor padded to a whole tile-row, so only ROW 0 of each of its `Wt` tiles holds data and `BroadcastDim::Row` is the only consumer. The reader now fetches the two row-0 face segments (2 × 16 elements, both on 64 B DRAM boundaries) instead of the 2 KB page: **32× fewer gamma bytes** at bf16. Block-float gamma keeps the whole-page read (its faces share an exponent header, so a row-slice of the page is not a decodable tile). | none (the **GammaBroadcast** scheme lamp would move this term onto the NoC; with the row-0 read the term it removes is now 32× smaller, so that lamp is correspondingly less attractive) |
 | `output` | **1** (`Rt·Wt·T` bytes) interleaved; **0** when the output is *_SHARDED | `cb_output_tiles` is drained by the writer as compute packs; nothing is re-read or read-modify-written. **A sharded output is produced straight into its resident L1 CB**, so `store_block` moves no bytes at all on the TILE path (the writer's pop *is* the store) and only core-local L1 sticks on the ROW_MAJOR path. | none |
 | partial Σx² (intermediate, never in DRAM) | **0** | Lives entirely in L1 and on the NoC. | gather `Rt·(s−1)·T` bytes (unicast, `B` single-tile writes per contributor per block, stride `s` pages); mcast `Rt·T` bytes with fan-out `s−1`; `g · num_blocks_this_core` semaphore round-trips |
 
@@ -150,7 +150,7 @@ Named memory boundary: **DRAM**. Minimum = *each input crosses once, each output
 
 | Tier | Bytes |
 |------|-------|
-| DRAM (most expensive) | `(2·Rt·Wt + g·Wt) · T` interleaved; **`g·Wt·T` (gamma only)** at any sharded placement — x and out never leave L1 |
+| DRAM (most expensive) | `2·Rt·Wt·T + g·W·elem` interleaved; **`g·W·elem` (gamma only)** at any sharded placement — x and out never leave L1. (Block-float gamma: the gamma term is `g·Wt·T` instead.) |
 | Cross-core NoC (moderate, latency-dominated) | `Rt·s·T` payload + `g · num_blocks_this_core` handshakes |
 | Core-local L1 (free) | the two in-place rewrites of `cb_input_tiles` (`mask_tail_block`, `scale_block`) and the root's copy of its own partial into `cb_gathered_partials` |
 
@@ -158,9 +158,19 @@ Worked, bf16 (`T = 2 KB`), for the two decisive `feature_spec.py` perf shapes:
 
 | Shape | `Rt`, `Wt` | Chosen `g`, `s` | DRAM | NoC |
 |---|---|---|---|---|
-| decode `(1,1,32,7168)` | 1, 224 | 1, 56 | `2·224·2K + 1·224·2K` = **1.34 MB** = the minimum | `1·56·2K` = 112 KB payload, 1 handshake |
-| prefill `(1,1,8192,1024)` | 256, 32 | 8, 8 | `2·256·32·2K + 8·32·2K` = 32.0 + 0.5 = **32.5 MB** | `256·8·2K` = 4.0 MB payload, 8 handshakes |
-| prefill, `s = 1` corner (pure row-parallel) | 256, 32 | 64, 1 | `32.0 + 4.0` = **36.0 MB** (+11 %) | 0 |
+| decode `(1,1,32,7168)` | 1, 224 | 1, **32** | `2·224·2K + 1·7168·2` = 0.92 MB + 14 KB = **0.93 MB** = the minimum | `1·32·4K` = 128 KB payload, 1 handshake |
+| prefill `(1,1,8192,1024)` | 256, 32 | 8, 8 | `2·256·32·2K + 8·1024·2` = 32.0 MB + 16 KB = **32.0 MB** | `256·8·4K` = 8.0 MB payload, 8 handshakes |
+| prefill, `s = 1` corner (pure row-parallel) | 256, 32 | 64, 1 | `32.0 MB + 128 KB` = **32.1 MB** (+0.4 %) | 0 |
+
+Refinement 3 moved two numbers here. (a) The decode row's `s` fell 56 → 32: the
+hidden split is now bounded from *above* by `FANIN_BALANCE_K` as well as from
+below by `HIDDEN_TILES_PER_CORE_FLOOR`, because the combine costs ~O(s) and the
+per-core transfer ~O(Wt/s), so the wall is U-shaped with its minimum at
+`s* ∝ √Wt`. That *raises* the NoC payload row slightly (fewer, but the gather
+payload is per-contributor) and lowers the wall by 14.8 %. (b) The gamma DRAM
+term collapsed 32× (row-0-only TILE read), which is why the `s = 1` prefill
+corner is no longer +11 % but +0.4 % — **the GammaBroadcast lamp's entire
+motivating delta has evaporated**, and it should not be built.
 
 > **Cheapest-traffic split considered:** `num_row_groups = 1`, `num_hidden_slices = min(Wt, grid_x·grid_y)`
 > — gamma partitions across one group, so DRAM reaches the minimum `(2·Rt·Wt + Wt)·T` exactly.
@@ -172,11 +182,13 @@ Worked, bf16 (`T = 2 KB`), for the two decisive `feature_spec.py` perf shapes:
 > tier is counted, and the implemented `g = 8` is the cheapest point on the combined budget.
 > **Implemented:** the 2D partition (`g` = the largest divisor of `grid_y` that is `≤ Rt` and leaves
 > `≥ hidden_tiles_per_core_floor` hidden tiles per core).
-> **Lamped, with its delta:** (a) **GammaBroadcast** — removes the residual `(g−1)·Wt·T` DRAM term
-> (0.44 MB / 1.4 % for prefill at `g=8`; **3.5 MB / 11 %** against the `s=1` corner a floor-of-1
-> heuristic would pick), at the cost of a second `Mcast1D(PerColumn)` family on disjoint semaphore
-> ids; unmeasured because the catalog's mcast entries show the device win landing well below the
-> read-count reduction (`mcast_topology/report.md:8-10`: 1.91× device for 8× fewer reads).
+> **Lamped, with its delta:** (a) **GammaBroadcast** — ~~removes the residual `(g−1)·Wt·T` DRAM
+> term~~ **RETIRED by Refinement 3.** The term it removes is `(g−1)·W·elem`, not `(g−1)·Wt·T`: once
+> the reader stopped pulling a whole 2 KB page to read 32 gamma values, the residual fell from
+> 0.44 MB to **14 KB** for prefill at `g=8` (1.4 % → **0.04 %** of DRAM), and from 3.5 MB / 11 % to
+> 128 KB / **0.4 %** against the `s=1` corner. A second `Mcast1D(PerColumn)` family on disjoint
+> semaphore ids cannot pay for itself against a 0.04 % term — the cheap fix landed instead, and this
+> lamp should be struck rather than built.
 > (b) **Reduce-scatter the contributor axis** — same bytes, redistributes the root's
 > `B·(s−1)` add_tiles across the rect; unmeasured because at our 1–8-tile payload the measured latency
 > floor favours root/tree (`tensix_all_reduce/report.md:85-99`).
