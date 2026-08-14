@@ -56,16 +56,11 @@ CoreCoord get_physical_core_from_logical_core(
     IDevice* device, const CoreCoord& logical_core, const tt::CoreType& core_type) {
     TT_FATAL(device != nullptr, "Device pointer cannot be null");
 
-    if (auto* mesh = dynamic_cast<distributed::MeshDevice*>(device)) {
-        TT_FATAL(
-            mesh->num_devices() == 1,
-            "get_physical_core_from_logical_core() on a MeshDevice is only supported for a unit MeshDevice; physical "
-            "coordinates are per-chip (harvesting differs), so pass the specific IDevice instead.");
-        return get_physical_core_from_logical_core(mesh->get_devices().front(), logical_core, core_type);
-    }
-
     auto* dev = dynamic_cast<tt::tt_metal::Device*>(device);
-    TT_FATAL(dev != nullptr, "Device pointer must be a valid Device or MeshDevice");
+    TT_FATAL(
+        dev != nullptr,
+        "get_physical_core_from_logical_core() takes a single-chip device; physical coordinates are per-chip because "
+        "harvesting differs, so a MeshDevice has no answer to give.");
     return dev->physical_core_from_logical_core(logical_core, core_type);
 }
 

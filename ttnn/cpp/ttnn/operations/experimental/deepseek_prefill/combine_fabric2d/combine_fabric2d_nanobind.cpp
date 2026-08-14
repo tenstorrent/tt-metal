@@ -35,7 +35,8 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         Returns the combined output, (1, 1, seq_len_per_chip, num_experts_per_tok, emb_dim) BFLOAT16
         ROW_MAJOR per device.
 
-        BFLOAT16 ROW_MAJOR input only, and `init_zeros` must be false.
+        BFLOAT16 ROW_MAJOR input only, and `init_zeros` must be false. There is no fp8 output path: fp8
+        comes out of the packer during untilize and this op has no untilize stage.
         )doc",
         &combine_fabric2d,
         nb::arg("dispatched_buffer"),
@@ -47,12 +48,11 @@ void bind_experimental_combine_fabric2d_operation(nb::module_& mod) {
         nb::arg("experts_per_chip"),
         nb::arg("num_experts_per_tok"),
         nb::arg("seq_len_per_chip"),
-        nb::arg("cluster_axis") = 0,
-        nb::arg("num_links") = 2,
-        nb::arg("topology") = nb::none(),
-        nb::arg("memory_config") = nb::none(),
-        nb::arg("init_zeros") = false,
-        nb::arg("use_fp8_combine") = false);
+        nb::arg("cluster_axis"),
+        nb::arg("num_links"),
+        nb::arg("topology"),
+        nb::arg("memory_config"),
+        nb::arg("init_zeros"));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d::detail

@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "combine_fabric2d_program_factory.hpp"
+#include "combine_fabric2d_placement.hpp"
+#include "kernels/dataflow/combine_fabric2d_kernel_protocol.hpp"
 
 #include <algorithm>
 #include <map>
@@ -21,13 +23,9 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
-// pipeline_get_forwarding_direction: which way the fabric routes src -> dst. The assignment of movements
-// to producers must agree with it, because a producer can only inject on its own cable.
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-// create_device_tensor: allocates device memory from a TensorSpec with no host data, which is what the
-// op-internal forwarding buffer wants (never initialised, never read back).
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt_stl/assert.hpp>
 #include "ttnn/distributed/types.hpp"
@@ -45,15 +43,6 @@ constexpr uint32_t PKT_HDR_DRAIN_OFF = 0x0000;
 constexpr uint32_t DRAIN_SINK_OFF = 0x0400;
 constexpr uint32_t PROD_BUF_OFF = 0x1000;
 constexpr uint32_t L1_SLACK = 0x1000;
-// Ring slot = token + metadata tail. 64 rather than the 32 in use keeps the slot stride DRAM-aligned
-// (14336 + 64 = 64 * 225), which lets a fabric write target a (token_size + 64)-byte forwarding page
-// directly. Tail layout, all uint64_t so the producer needs no sub-word loads:
-//   [ 0.. 7] final destination DRAM address, on the final destination chip
-//   [ 8..15] final destination chip id
-//   [16..23] command: 1 = write to the address at [24..31], 2 = forward
-//   [24..31] the address this hop writes to
-//   [32..63] reserved
-constexpr uint32_t CMBF2D_SLOT_TAIL_BYTES = 64;
 // Depth of the reader -> producer L1 ring, in tokens. Slots move in half-ring batches so one half can be
 // refilled while the other drains.
 constexpr uint32_t CMBF2D_NUM_L1_SLOTS = 8;
@@ -116,222 +105,6 @@ uint32_t fwd_pages_per_chunk(
     return 4 * mean + 1;
 }
 
-// ---------------------------------------------------------------------------------------------
-// Physical-column geometry
-//
-// A worker and the eth core it drives must share a PHYSICAL (noc0) x. That is the only coordinate
-// space in which cores of different types are comparable: logical coords are per-core-type dense
-// indices, and virtual/translated coords put eth and tensix in disjoint ranges (on Blackhole an eth
-// core's translated coord is literally (20 + eth_channel, 25)). Match on physical x; convert back to
-// logical only for kernel placement and to virtual only for NoC addressing.
-// ---------------------------------------------------------------------------------------------
-struct DeviceGeometry {
-    // physical worker x -> (physical worker y -> logical worker core), restricted to cores this op may
-    // program (inside compute_with_storage_grid_size — the dispatch column is NOT in here).
-    std::map<uint32_t, std::map<uint32_t, CoreCoord>> columns;
-};
-
-DeviceGeometry build_device_geometry(tt::tt_metal::IDevice* dev, const CoreCoord& compute_grid) {
-    DeviceGeometry geom;
-    for (uint32_t ly = 0; ly < compute_grid.y; ly++) {
-        for (uint32_t lx = 0; lx < compute_grid.x; lx++) {
-            const CoreCoord logical{lx, ly};
-            const auto phys = tt::tt_metal::experimental::Device::get_physical_core_from_logical_core(
-                dev, logical, tt::CoreType::WORKER);
-            geom.columns[static_cast<uint32_t>(phys.x)][static_cast<uint32_t>(phys.y)] = logical;
-        }
-    }
-    return geom;
-}
-
-// The worker in `phys_x` adjacent to the eth row (smallest physical y — eth sits at the low-y edge of
-// the grid). nullopt if that column has no programmable worker at all: it may be harvested (differs
-// per chip within one mesh) or host the dispatch cores.
-std::optional<CoreCoord> adjacent_worker_in_column(const DeviceGeometry& geom, uint32_t phys_x) {
-    auto it = geom.columns.find(phys_x);
-    if (it == geom.columns.end() || it->second.empty()) {
-        return std::nullopt;
-    }
-    return it->second.begin()->second;
-}
-
-struct WorkerPlacement {
-    CoreCoord eth_logical;    // the fabric router this worker drives
-    uint32_t eth_phys_x = 0;  // its physical column
-    uint32_t link_idx = 0;    // link index (routing plane) to open the connection on
-    tt::tt_fabric::FabricNodeId peer_node{tt::tt_fabric::MeshId{0}, 0};  // chip across the cable
-    CoreCoord worker_logical;                                            // where the producer goes
-    CoreCoord worker_physical;  // noc0 coords; x == eth_phys_x unless relocated
-    CoreCoord worker_virtual;   // what a remote producer must address
-    bool in_eth_column = true;  // false => relocated, no longer adjacent to its router
-};
-
-// Every worker this device will host, keyed by the eth core it serves.
-struct DevicePlacement {
-    std::map<CoreCoord, WorkerPlacement> by_eth_logical;
-};
-
-// Decide where this device puts a worker for each of its fabric eth cores.
-//
-// Depends ONLY on this device's own eth set and its own harvesting, so the answer is stable no matter
-// who asks — which is what lets a neighbor rely on it. Deliberately decides for the WHOLE device at
-// once: a producer's args need the peer worker's coords on the neighbor chip, and those are NOT simply
-// (neighbor_eth.x, y_min) because the neighbor's eth column may itself be tensix-unfriendly.
-DevicePlacement decide_placement(
-    ttnn::MeshDevice* mesh,
-    const ttnn::MeshCoordinate& coord,
-    uint32_t axis,
-    uint32_t num_links,
-    const CoreCoord& compute_grid) {
-    auto* dev = mesh->get_device(coord);
-    const auto self_node = mesh->get_fabric_node_id(coord);
-    const auto geom = build_device_geometry(dev, compute_grid);
-    const auto mesh_shape = mesh->shape();
-
-    // This device's fabric eth cores: num_links toward the forward axis neighbor and num_links toward
-    // the backward one. Every one is full duplex, so every one gets a producer.
-    struct EthEntry {
-        CoreCoord eth_logical;
-        uint32_t eth_phys_x;
-        uint32_t link_idx;
-        tt::tt_fabric::FabricNodeId peer_node;
-    };
-    std::vector<EthEntry> eths;
-    for (int delta : {1, -1}) {
-        const auto nbr =
-            coord.get_neighbor(mesh_shape, delta, static_cast<int32_t>(axis), ttnn::MeshCoordinate::BoundaryMode::WRAP);
-        TT_FATAL(nbr.has_value(), "combine_fabric2d: no axis-{} neighbor of {} at delta {}", axis, coord, delta);
-        if (*nbr == coord) {
-            continue;  // degenerate axis; nothing to talk to
-        }
-        const auto nbr_node = mesh->get_fabric_node_id(*nbr);
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(self_node, nbr_node);
-        const uint32_t n = std::min<uint32_t>(num_links, links.size());
-        TT_FATAL(n > 0, "combine_fabric2d: no forwarding links from {} to {}", self_node, nbr_node);
-        for (uint32_t k = 0; k < n; k++) {
-            const CoreCoord eth_logical =
-                tt::tt_fabric::get_forwarding_link_logical_eth_core(self_node, nbr_node, links[k]);
-            const auto eth_phys = tt::tt_metal::experimental::Device::get_physical_core_from_logical_core(
-                dev, eth_logical, tt::CoreType::ETH);
-            eths.push_back(EthEntry{eth_logical, static_cast<uint32_t>(eth_phys.x), links[k], nbr_node});
-        }
-        if (n < num_links) {
-            log_warning(
-                tt::LogOp,
-                "combine_fabric2d {}: only {} of {} requested links toward {}",
-                self_node,
-                n,
-                num_links,
-                nbr_node);
-        }
-    }
-    // Deterministic order so the relocation fallback is reproducible.
-    std::sort(
-        eths.begin(), eths.end(), [](const EthEntry& a, const EthEntry& b) { return a.eth_phys_x < b.eth_phys_x; });
-
-    // Columns that must stay free for a co-located worker: any column holding one of OUR eth cores.
-    // Taking one for a relocated worker could displace the worker that belongs there.
-    std::set<uint32_t> eth_columns;
-    for (const auto& e : eths) {
-        eth_columns.insert(e.eth_phys_x);
-    }
-    std::set<uint32_t> used_columns;
-
-    auto make_placement = [&](const EthEntry& e, const CoreCoord& worker, bool in_eth_column) {
-        WorkerPlacement wp;
-        wp.eth_logical = e.eth_logical;
-        wp.eth_phys_x = e.eth_phys_x;
-        wp.link_idx = e.link_idx;
-        wp.peer_node = e.peer_node;
-        wp.worker_logical = worker;
-        wp.worker_physical =
-            tt::tt_metal::experimental::Device::get_physical_core_from_logical_core(dev, worker, tt::CoreType::WORKER);
-        wp.worker_virtual = dev->virtual_core_from_logical_core(worker, tt::CoreType::WORKER);
-        wp.in_eth_column = in_eth_column;
-        return wp;
-    };
-
-    DevicePlacement placement;
-    // Pass 1: everyone who can sit in their own eth column does.
-    for (const auto& e : eths) {
-        const auto w = adjacent_worker_in_column(geom, e.eth_phys_x);
-        if (!w.has_value()) {
-            continue;
-        }
-        auto wp = make_placement(e, *w, /*in_eth_column=*/true);
-        TT_FATAL(
-            wp.worker_physical.x == e.eth_phys_x,
-            "combine_fabric2d: worker/eth column mismatch ({} vs {})",
-            wp.worker_physical.x,
-            e.eth_phys_x);
-        used_columns.insert(e.eth_phys_x);
-        placement.by_eth_logical.emplace(e.eth_logical, wp);
-    }
-    // Pass 2: relocate the rest to the leftmost column that is neither one of our eth columns nor
-    // already taken. Runs after pass 1 so a relocated worker can never steal a co-located worker's
-    // column, whatever order the eth cores come in.
-    for (const auto& e : eths) {
-        if (placement.by_eth_logical.count(e.eth_logical)) {
-            continue;
-        }
-        std::optional<CoreCoord> chosen;
-        uint32_t chosen_x = 0;
-        for (const auto& [phys_x, rows] : geom.columns) {  // std::map => ascending x, i.e. leftmost first
-            if (eth_columns.count(phys_x) || used_columns.count(phys_x) || rows.empty()) {
-                continue;
-            }
-            chosen = rows.begin()->second;
-            chosen_x = phys_x;
-            break;
-        }
-        TT_FATAL(
-            chosen.has_value(),
-            "combine_fabric2d {}: eth core ({},{}) is in physical column x={} with no programmable worker, and no "
-            "unoccupied column is left to relocate its worker to.",
-            self_node,
-            e.eth_logical.x,
-            e.eth_logical.y,
-            e.eth_phys_x);
-        used_columns.insert(chosen_x);
-        placement.by_eth_logical.emplace(e.eth_logical, make_placement(e, *chosen, /*in_eth_column=*/false));
-        log_warning(
-            tt::LogOp,
-            "combine_fabric2d {}: eth core ({},{}) physical column x={} has no programmable worker (harvested or "
-            "dispatch); relocated its worker to column x={}, adding {} NoC hop(s) to its router.",
-            self_node,
-            e.eth_logical.x,
-            e.eth_logical.y,
-            e.eth_phys_x,
-            chosen_x,
-            chosen_x > e.eth_phys_x ? chosen_x - e.eth_phys_x : e.eth_phys_x - chosen_x);
-    }
-    return placement;
-}
-
-// Lazy device -> placement cache. A device's placement must be decided before that device can serve as
-// anyone's neighbor, so building the op for D also forces placement for D's cable neighbors — but NOT
-// their programs, which are built on their own create call.
-class PlacementCache {
-public:
-    PlacementCache(ttnn::MeshDevice* mesh, uint32_t axis, uint32_t num_links, const CoreCoord& compute_grid) :
-        mesh_(mesh), axis_(axis), num_links_(num_links), compute_grid_(compute_grid) {}
-
-    const DevicePlacement& get(const ttnn::MeshCoordinate& coord) {
-        auto it = cache_.find(coord);
-        if (it == cache_.end()) {
-            it = cache_.emplace(coord, decide_placement(mesh_, coord, axis_, num_links_, compute_grid_)).first;
-        }
-        return it->second;
-    }
-
-private:
-    ttnn::MeshDevice* mesh_;
-    uint32_t axis_;
-    uint32_t num_links_;
-    CoreCoord compute_grid_;
-    std::map<ttnn::MeshCoordinate, DevicePlacement> cache_;
-};
-
 struct L1Layout {
     uint32_t pkt_hdr_drain;
     uint32_t drain_sink;
@@ -357,7 +130,7 @@ L1Layout compute_l1_layout(
     l.drain_sink = base + DRAIN_SINK_OFF;
     l.ring = base + PROD_BUF_OFF;
     // One prebuilt header per ring slot, past the ring itself. A slot is the token plus its metadata tail.
-    l.pkt_hdr_ring = l.ring + num_l1_slots * (token_size_bytes + CMBF2D_SLOT_TAIL_BYTES);
+    l.pkt_hdr_ring = l.ring + num_l1_slots * (token_size_bytes + cmbf2d::SLOT_TAIL_BYTES);
     const uint32_t hdr_ring_bytes =
         num_l1_slots * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
     // 64-byte aligned: DRAM reads need a DRAM_ALIGNMENT-aligned L1 destination on Blackhole
@@ -534,7 +307,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     // Cable truth, not plane-index arithmetic: our producer writes into this eth core's EDM, so a
     // single-hop packet physically emerges at the far end of THIS cable.
     std::map<CoreCoord, ttnn::MeshCoordinate> far_coord_by_eth;
-    std::map<CoreCoord, CoreCoord> peer_virtual_by_eth;
     for (const auto& [eth_logical, wp] : self_placement.by_eth_logical) {
         const auto far = dev->get_connected_ethernet_core(eth_logical);
         const uint32_t far_chip = static_cast<uint32_t>(std::get<0>(far));
@@ -550,9 +322,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         // Forces the neighbor's placement if not yet decided. We only READ it; the neighbor's programs
         // are built on its own create call.
         const auto& peer_placement = placements.get(cit->second);
-        auto pit = peer_placement.by_eth_logical.find(far_eth_logical);
         TT_FATAL(
-            pit != peer_placement.by_eth_logical.end(),
+            peer_placement.by_eth_logical.count(far_eth_logical) > 0,
             "combine_fabric2d {}: our eth core ({},{}) cables to eth core ({},{}) on {}, but that core is not in the "
             "neighbor's fabric eth set, so it has no worker. Link selection disagrees across the cable.",
             self_node,
@@ -562,7 +333,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             far_eth_logical.y,
             mesh->get_fabric_node_id(cit->second));
         far_coord_by_eth.emplace(eth_logical, cit->second);
-        peer_virtual_by_eth.emplace(eth_logical, pit->second.worker_virtual);
     }
 
     // Find, on chip `nbr`, the worker whose cable points the same way (`step`) on the same plane. That is
@@ -659,10 +429,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     for (const auto& [eth_logical, wp] : self_placement.by_eth_logical) {
         const ttnn::MeshCoordinate& far_coord = far_coord_by_eth.at(eth_logical);
-        const CoreCoord peer_virtual = peer_virtual_by_eth.at(eth_logical);
         const auto& my_assignments = assignments.at(eth_logical);
 
-        // Phase-9 forwarding geometry for this producer. m = how many destinations it serves (distances
+        // Forwarding geometry for this producer. m = how many destinations it serves (distances
         // 1..m in its direction), and everything else follows:
         //   incoming chunks   = m(m-1)/2   (a chunk per (source, destination) pair passing through us)
         //   own forwarding    = m-1        (distances 2..m)
@@ -688,7 +457,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         // "own assignment k". Forwarding chunks MUST appear in increasing order whatever the ordering, since
         // the upstream writer fills a quarter's chunks in order and we read them the same way.
         std::vector<uint32_t> schedule;
-        constexpr uint32_t SCHED_FWD = 0x80000000u;
         // Furthest destination first with forwarding interleaved, so downstream cores get work as early as
         // possible. After the j-th own assignment (1-based) the cumulative number of forwarding chunks
         // emitted is the triangular number T(j-2) = (j-2)(j-1)/2, which for m=4 gives
@@ -698,11 +466,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             schedule.push_back(m - j);
             const uint32_t want = (j >= 2) ? (j - 2) * (j - 1) / 2 : 0;
             for (; emitted_fwd < want && emitted_fwd < num_incoming_chunks; emitted_fwd++) {
-                schedule.push_back(SCHED_FWD | emitted_fwd);
+                schedule.push_back(cmbf2d::SCHED_FWD | emitted_fwd);
             }
         }
         for (; emitted_fwd < num_incoming_chunks; emitted_fwd++) {
-            schedule.push_back(SCHED_FWD | emitted_fwd);
+            schedule.push_back(cmbf2d::SCHED_FWD | emitted_fwd);
         }
         TT_FATAL(
             schedule.size() == m + num_incoming_chunks,
@@ -719,31 +487,26 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             "producer_combine_fabric2d.cpp";
         prod.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         prod.core_ranges = CoreRangeSet(CoreRange(wp.worker_logical));
-        prod.compile_time_args = {
-            CMBF2D_NUM_L1_SLOTS,
-            token_size_bytes,
-            CMBF2D_SLOT_TAIL_BYTES,
-            static_cast<uint32_t>(wp.peer_node.chip_id),
-            *wp.peer_node.mesh_id,
-            static_cast<uint32_t>(peer_virtual.x),
-            static_cast<uint32_t>(peer_virtual.y),
-            l1.ring,
-            l1.pkt_hdr_ring,
-            l1.pkt_hdr_drain,
-            l1.drain_sink,
-            dram_out_addr,
-            CMBF2D_BATCH,
-            ring_filled_addr,
-            ring_freed_addr,
-            static_cast<uint32_t>(wp.worker_virtual.x),
-            static_cast<uint32_t>(wp.worker_virtual.y),
-            // The downstream chip's worker that continues in OUR direction on OUR plane: the reader that
-            // drains the forwarding quarter we write. Distinct from `peer_virtual`, whose cable points back.
-            static_cast<uint32_t>(fwd_worker.x),
-            static_cast<uint32_t>(fwd_worker.y),
-            fwd_arrived_addr,
-        };
-        tt::tt_metal::TensorAccessorArgs(dram_out_buf).append_to(prod.compile_time_args);
+        cmbf2d::ProducerCtArgPacker prod_args;
+        prod_args[cmbf2d::ProducerCtArg::NumL1Slots] = CMBF2D_NUM_L1_SLOTS;
+        prod_args[cmbf2d::ProducerCtArg::TokenSizeBytes] = token_size_bytes;
+        prod_args[cmbf2d::ProducerCtArg::SlotTailBytes] = cmbf2d::SLOT_TAIL_BYTES;
+        prod_args[cmbf2d::ProducerCtArg::PeerChipId] = static_cast<uint32_t>(wp.peer_node.chip_id);
+        prod_args[cmbf2d::ProducerCtArg::PeerMeshId] = *wp.peer_node.mesh_id;
+        prod_args[cmbf2d::ProducerCtArg::RingAddr] = l1.ring;
+        prod_args[cmbf2d::ProducerCtArg::PktHdrRingAddr] = l1.pkt_hdr_ring;
+        prod_args[cmbf2d::ProducerCtArg::PktHdrDrainAddr] = l1.pkt_hdr_drain;
+        prod_args[cmbf2d::ProducerCtArg::DrainSinkAddr] = l1.drain_sink;
+        prod_args[cmbf2d::ProducerCtArg::Batch] = CMBF2D_BATCH;
+        prod_args[cmbf2d::ProducerCtArg::FilledAddr] = ring_filled_addr;
+        prod_args[cmbf2d::ProducerCtArg::FreedAddr] = ring_freed_addr;
+        // The kernel needs the placement of its peer downstream worker because it sends the
+        // forwarded-token-count semaphore bumps to it, addressed in the fabric packet header. This is also
+        // why every worker placement on the mesh is decided before any kernel is built.
+        prod_args[cmbf2d::ProducerCtArg::FwdSemNocX] = static_cast<uint32_t>(fwd_worker.x);
+        prod_args[cmbf2d::ProducerCtArg::FwdSemNocY] = static_cast<uint32_t>(fwd_worker.y);
+        prod_args[cmbf2d::ProducerCtArg::FwdSemAddr] = fwd_arrived_addr;
+        prod_args.append_to(prod.compile_time_args);
         prod.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             // NOC_1 routes -Y first, so worker (eth row + 1) -> eth core is a single hop.
@@ -760,49 +523,42 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             "reader_combine_fabric2d.cpp";
         rdr.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         rdr.core_ranges = CoreRangeSet(CoreRange(wp.worker_logical));
-        rdr.compile_time_args = {
-            CMBF2D_NUM_L1_SLOTS,
-            token_size_bytes,
-            CMBF2D_SLOT_TAIL_BYTES,
-            CMBF2D_BATCH,
-            l1.ring,
-            ring_filled_addr,
-            ring_freed_addr,
-            static_cast<uint32_t>(wp.worker_virtual.x),
-            static_cast<uint32_t>(wp.worker_virtual.y),
-            dram_in_addr,
-            dram_out_addr,
-            dram_fwd_addr,
-            fwd_chunks_per_quarter(extent),
-            pages_per_chunk,
-            my_quarter,
-            num_incoming_chunks,
-            fwd_arrived_addr,
-            static_cast<uint32_t>(wp.peer_node.chip_id),  // the chip one hop away, across our own cable
-            static_cast<uint32_t>(my_assignments.size()),
-            static_cast<uint32_t>(schedule.size()),
-            // ---- What to move is in the control tensors, so the reader needs their addresses and
-            // the shape constants to index them with.
-            dram_meta_addr,
-            dram_counts_addr,
-            dram_region_addr,
-            dram_expert_offsets_addr,
-            num_routed_experts,
-            args.experts_per_chip,
-            // First of the `experts_per_chip` columns this chip hosts. Same derivation the production reader
-            // does (reader_combine.cpp): group * experts_per_chip * dispatch_group_size + row *
-            // experts_per_chip, where the group is this device's column and the row its index along `axis`.
-            my_expert_base,
-            args.num_experts_per_tok,
-            args.dispatch_group_size,
-            // Our quarter of the same-chip run, executed after the fabric work. Every core takes a slice so
-            // the local copy is not one core's serial tail.
-            my_quarter,
-            args.num_links * 2,
-            static_cast<uint32_t>(my_row),
-            l1.control,
-            CMBF2D_META_PREFETCH,
-        };
+        cmbf2d::ReaderCtArgPacker rdr_args;
+        rdr_args[cmbf2d::ReaderCtArg::NumL1Slots] = CMBF2D_NUM_L1_SLOTS;
+        rdr_args[cmbf2d::ReaderCtArg::TokenSizeBytes] = token_size_bytes;
+        rdr_args[cmbf2d::ReaderCtArg::SlotTailBytes] = cmbf2d::SLOT_TAIL_BYTES;
+        rdr_args[cmbf2d::ReaderCtArg::Batch] = CMBF2D_BATCH;
+        rdr_args[cmbf2d::ReaderCtArg::RingAddr] = l1.ring;
+        rdr_args[cmbf2d::ReaderCtArg::FilledAddr] = ring_filled_addr;
+        rdr_args[cmbf2d::ReaderCtArg::FreedAddr] = ring_freed_addr;
+        rdr_args[cmbf2d::ReaderCtArg::DramInBaseAddr] = dram_in_addr;
+        rdr_args[cmbf2d::ReaderCtArg::DramOutBaseAddr] = dram_out_addr;
+        rdr_args[cmbf2d::ReaderCtArg::DramFwdBaseAddr] = dram_fwd_addr;
+        rdr_args[cmbf2d::ReaderCtArg::FwdChunksPerQuarter] = fwd_chunks_per_quarter(extent);
+        rdr_args[cmbf2d::ReaderCtArg::FwdPagesPerChunk] = pages_per_chunk;
+        // Also this core's slice of the same-chip run, which it does after the fabric work.
+        rdr_args[cmbf2d::ReaderCtArg::MyQuarter] = my_quarter;
+        rdr_args[cmbf2d::ReaderCtArg::NumIncomingChunks] = num_incoming_chunks;
+        rdr_args[cmbf2d::ReaderCtArg::FwdSemAddr] = fwd_arrived_addr;
+        rdr_args[cmbf2d::ReaderCtArg::NbrChipId] = static_cast<uint32_t>(wp.peer_node.chip_id);
+        rdr_args[cmbf2d::ReaderCtArg::NumAssignments] = static_cast<uint32_t>(my_assignments.size());
+        rdr_args[cmbf2d::ReaderCtArg::ScheduleLen] = static_cast<uint32_t>(schedule.size());
+        rdr_args[cmbf2d::ReaderCtArg::DramMetaBaseAddr] = dram_meta_addr;
+        rdr_args[cmbf2d::ReaderCtArg::DramCountsBaseAddr] = dram_counts_addr;
+        rdr_args[cmbf2d::ReaderCtArg::DramRegionBaseAddr] = dram_region_addr;
+        rdr_args[cmbf2d::ReaderCtArg::DramExpertOffsetsBaseAddr] = dram_expert_offsets_addr;
+        rdr_args[cmbf2d::ReaderCtArg::NumRoutedExperts] = num_routed_experts;
+        rdr_args[cmbf2d::ReaderCtArg::ExpertsPerChip] = args.experts_per_chip;
+        // First of the `experts_per_chip` columns this chip hosts. Same derivation the production reader
+        // does: group * experts_per_chip * dispatch_group_size + row * experts_per_chip.
+        rdr_args[cmbf2d::ReaderCtArg::MyExpertBase] = my_expert_base;
+        rdr_args[cmbf2d::ReaderCtArg::NumExpertsPerTok] = args.num_experts_per_tok;
+        rdr_args[cmbf2d::ReaderCtArg::DispatchGroupSize] = args.dispatch_group_size;
+        rdr_args[cmbf2d::ReaderCtArg::LocalSplitCount] = args.num_links * 2;
+        rdr_args[cmbf2d::ReaderCtArg::MyRow] = static_cast<uint32_t>(my_row);
+        rdr_args[cmbf2d::ReaderCtArg::ControlAddr] = l1.control;
+        rdr_args[cmbf2d::ReaderCtArg::MetaPrefetchCap] = CMBF2D_META_PREFETCH;
+        rdr_args.append_to(rdr.compile_time_args);
         // Schedule block, then the per-assignment block. The schedule says WHEN each own assignment and each
         // relayed forwarding chunk is worked on; the assignment block says WHICH destination each own
         // assignment serves and which slice of its runs this producer owns.
@@ -887,11 +643,11 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     // A forwarded packet carries the token PLUS its routing tail, so the payload the fabric
     // must accept is token + tail, not just token.
     TT_FATAL(
-        token_size_bytes + CMBF2D_SLOT_TAIL_BYTES <= fabric_max_payload,
+        token_size_bytes + cmbf2d::SLOT_TAIL_BYTES <= fabric_max_payload,
         "combine_fabric2d: token page {} B + {} B routing tail exceeds the fabric max payload {}. Raise "
         "max_payload_size in the device's fabric_router_config.",
         token_size_bytes,
-        CMBF2D_SLOT_TAIL_BYTES,
+        cmbf2d::SLOT_TAIL_BYTES,
         fabric_max_payload);
 
     const auto grid = mesh_device->compute_with_storage_grid_size();
@@ -997,7 +753,7 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
     // would let DeviceStorage::deallocate free the memory when the local Tensor dies at the end of this
     // function (workload_descriptor.hpp:19-36). Being a mesh tensor, its device-local address is uniform
     // across the mesh by construction, which is what lets a producer address the NEXT chip's buffer.
-    const uint32_t fwd_page_bytes = token_size_bytes + CMBF2D_SLOT_TAIL_BYTES;
+    const uint32_t fwd_page_bytes = token_size_bytes + cmbf2d::SLOT_TAIL_BYTES;
     TT_FATAL(
         fwd_page_bytes % sizeof(uint32_t) == 0,
         "combine_fabric2d: forwarding page {} B must be a multiple of 4",
@@ -1026,7 +782,7 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
         "The token page + {} must be a multiple of the DRAM alignment.",
         dram_fwd_buf->aligned_page_size(),
         fwd_page_bytes,
-        CMBF2D_SLOT_TAIL_BYTES);
+        cmbf2d::SLOT_TAIL_BYTES);
     workload_descriptor.buffers.push_back({fwd_owner, dram_fwd_buf});
 
     for (const auto& coord : tensor_coords.coords()) {
