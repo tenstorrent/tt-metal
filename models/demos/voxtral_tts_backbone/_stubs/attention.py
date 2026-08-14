@@ -506,7 +506,11 @@ class TtAttention:
         merged = ttnn.reshape(
             attn, (1, 1, self.n_heads * self.head_dim), memory_config=self.o_plan.input_memory_config
         )
-        return self.o_plan.run_presharded(merged, self.wo, self.compute_kernel_config)
+        # RAW: the residual add downstream takes this shard as-is. ttnn's
+        # eltwise accepts operands on DIFFERENT shard grids, so o_proj does
+        # not have to agree with the residual stream's 48 cores to skip the
+        # sharded->interleaved it would otherwise pay on the way out.
+        return self.o_plan.run_presharded_raw(merged, self.wo, self.compute_kernel_config)
 
     def _write_kv(self, k_cache, key, v_cache, value, cache_pos_tensor):
         """Write this token's K and V into the resident caches.

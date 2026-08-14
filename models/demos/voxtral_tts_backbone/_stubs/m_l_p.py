@@ -114,7 +114,10 @@ class TtMLP:
             # STRAIGHT into the layout down_proj wants. Producing it interleaved
             # and converting after is the same bytes plus a whole extra op.
             hidden = ttnn.multiply(gate, up, memory_config=self.down_plan.input_memory_config, **swiglu)
-            return self.down_plan.run_presharded(hidden, self.w_down, self.compute_kernel_config)
+            # RAW, for the same reason as o_proj: the residual add takes a
+            # differently-sharded operand directly, so the conversion out of
+            # down_proj's 24-core shard is not needed at all.
+            return self.down_plan.run_presharded_raw(hidden, self.w_down, self.compute_kernel_config)
         hidden = ttnn.multiply(gate, up, **swiglu)
         if self.down_plan is not None and self.down_plan.matches(hidden):
             return self.down_plan(hidden, self.w_down, self.compute_kernel_config)
