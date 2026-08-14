@@ -74,6 +74,7 @@ tolerances = {
     DataFormat.Float16: Tolerance(atol=0.05, rtol=0.05),
     DataFormat.Float16_b: Tolerance(atol=0.05, rtol=0.05),
     DataFormat.Float32: Tolerance(atol=0.05, rtol=0.05),
+    DataFormat.Tf32: Tolerance(atol=0.05, rtol=0.05),
     DataFormat.Int32: Tolerance(atol=0, rtol=0),
     DataFormat.UInt32: Tolerance(atol=0, rtol=0),
     DataFormat.Int16: Tolerance(atol=0, rtol=0),

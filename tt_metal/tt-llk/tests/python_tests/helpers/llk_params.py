@@ -643,7 +643,7 @@ format_tile_sizes = {
     DataFormat.Float16_b: 2048,
     DataFormat.Float32: 4096,
     DataFormat.Int32: 4096,
-    DataFormat.Tf32: 3072,  # 3 bytes * 1024 elements
+    DataFormat.Tf32: 4096,  # 32-bit L1 container * 1024 elements
     DataFormat.UInt32: 4096,
     DataFormat.Int16: 2048,
     DataFormat.UInt16: 2048,

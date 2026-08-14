@@ -6,15 +6,16 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "cmath_common.h"
+#include "ckernel_sfpu_exp.h"
+#include "ckernel_sfpu_log.h"
+#include "ckernel_sfpu_log1p.h"
+#include "ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
 #include "ckernel_sfpu_sqrt.h"
 #include "ckernel_sfpu_sqrt_custom.h"
-#include "ckernel_sfpu_exp.h"
-#include "ckernel_sfpu_log1p.h"
-#include "ckernel_sfpu_log.h"
-#include "ckernel_sfpu_polyval.h"
+#include "cmath_common.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_compat.h"
 
 namespace ckernel::sfpu {
 
@@ -342,7 +343,7 @@ sfpi_inline sfpi::vFloat sfpu_atan_bf16(sfpi::vFloat val) {
     v_else {
         sfpi::vFloat absval_minus_1 = t0 - 1.0f;
 
-        v_if(absval_minus_1 >= 0.0f) { t0 = _sfpu_reciprocal_<2>(t0); }
+        v_if(compat::fp_ge(absval_minus_1, 0.0f)) { t0 = _sfpu_reciprocal_<2>(t0); }
         v_endif;
 
         sfpi::vFloat t1 = t0 * t0;
@@ -358,7 +359,7 @@ sfpi_inline sfpi::vFloat sfpu_atan_bf16(sfpi::vFloat val) {
 
         t1 = t1 * t0;
 
-        v_if(absval_minus_1 >= 0.0f) { t1 = PI_2 - t1; }
+        v_if(compat::fp_ge(absval_minus_1, 0.0f)) { t1 = PI_2 - t1; }
         v_endif;
 
         result = sfpi::copysgn(t1, val);
@@ -463,12 +464,12 @@ sfpi_inline sfpi::vFloat sfpu_asin_range_reduced_bf16(sfpi::vFloat val) {
     sfpi::vFloat endpoint = abs_v - 0.625f;
     sfpi::vFloat z = sfpu_sqrt_custom<APPROXIMATION_MODE>((1.0f - abs_v) * 0.5f);
 
-    v_if(endpoint < 0.0f) { z = abs_v; }
+    v_if(compat::fp_lt(endpoint, 0.0f)) { z = abs_v; }
     v_endif;
 
     sfpi::vFloat asin_abs = sfpu_asin_poly_bf16<APPROXIMATION_MODE>(z);
 
-    v_if(endpoint >= 0.0f) { asin_abs = PI_2 - 2.0f * asin_abs; }
+    v_if(compat::fp_ge(endpoint, 0.0f)) { asin_abs = PI_2 - 2.0f * asin_abs; }
     v_endif;
 
     return sfpi::copysgn(asin_abs, val);
@@ -501,7 +502,7 @@ sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
     // Reduce the endpoint region using asin(|x|) = pi/2 - 2*asin(sqrt((1 - |x|)/2)).
     sfpi::vFloat z = _sfpu_sqrt_endpoint_(half_d);
 
-    v_if(t < 0.0f) { z = ax; }
+    v_if(compat::fp_lt(t, 0.0f)) { z = ax; }
     v_endif;
 
     // Minimax approximation of asin(z) on [0, 0.5625].
@@ -521,13 +522,13 @@ sfpi_inline sfpi::vFloat sfpu_asin_fp32(sfpi::vFloat x) {
     r = __builtin_rvtt_sfpmad(p.get(), z.get(), z.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
     // Undo the endpoint reduction and restore the input sign.
-    v_if(t >= 0.0f) { r = pio2 + neg_two * r; }
+    v_if(compat::fp_ge(t, 0.0f)) { r = pio2 + neg_two * r; }
     v_endif;
 
     r = sfpi::copysgn(r, x);
 
     // Domain error for |x| > 1.
-    v_if(half_d < 0.0f) { r = std::numeric_limits<float>::quiet_NaN(); }
+    v_if(compat::fp_lt(half_d, 0.0f)) { r = std::numeric_limits<float>::quiet_NaN(); }
     v_endif;
 
     return r;
@@ -545,7 +546,7 @@ sfpi_inline sfpi::vFloat sfpu_acos_fp32(sfpi::vFloat x) {
     // reconstructs acos(x) for both signs of x.
     sfpi::vFloat z = _sfpu_sqrt_endpoint_(half_d);
 
-    v_if(t < 0.0f) { z = ax; }
+    v_if(compat::fp_lt(t, 0.0f)) { z = ax; }
     v_endif;
 
     // Minimax approximation of asin(z) on [0, 0.5625].
@@ -574,15 +575,15 @@ sfpi_inline sfpi::vFloat sfpu_acos_fp32(sfpi::vFloat x) {
     sfpi::vUInt pio2_bits = sfpi::as<sfpi::vUInt>(z);
     pio2_bits |= t_bits;
     sfpi::vFloat pio2_pred = sfpi::as<sfpi::vFloat>(pio2_bits);
-    v_if(pio2_pred < 0.0f) { r += PI_2; }
+    v_if(compat::fp_lt(pio2_pred, 0.0f)) { r += PI_2; }
     v_endif;
 
     // Endpoint reconstruction.
-    v_if(t >= 0.0f) { r += r; }
+    v_if(compat::fp_ge(t, 0.0f)) { r += r; }
     v_endif;
 
     // Domain error for |x| > 1.
-    v_if(half_d < 0.0f) { r = std::numeric_limits<float>::quiet_NaN(); }
+    v_if(compat::fp_lt(half_d, 0.0f)) { r = std::numeric_limits<float>::quiet_NaN(); }
     v_endif;
 
     return r;
@@ -649,7 +650,6 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
         i += 125;
         r = r * f + sfpi::vConstFloatPrgm2;
         r = r * f + 0.999963462f;
-
     } else {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)_hi
         f = j * -1.42860677e-6f + f;         // f = f - j * ln(2)_lo
@@ -721,7 +721,6 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_expm1_abs_(sfpi::vFloat x) {
         r = r * f + sfpi::vConstFloatPrgm2;
         c0 = 0.5f;
         r = __builtin_rvtt_sfpmad(r.get(), f.get(), c0.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
-
     } else {
         f = j * sfpi::vConstFloatPrgm1 + a;  // f = a - j * ln(2)_hi
         f = j * -1.42860677e-6f + f;         // f = f - j * ln(2)_lo
@@ -990,7 +989,7 @@ sfpi_inline sfpi::vFloat _sfpu_sqrt_ge0_(sfpi::vFloat x) {
     a = a + 0.5f * (x - a * a) * y;
 
     // sqrt(0) must be exactly 0; the reciprocal seed produces inf*0 = NaN there.
-    v_if(x == 0.0f) { a = 0.0f; }
+    v_if(compat::fp_eq(x, 0.0f)) { a = 0.0f; }
     v_endif;
     return a;
 }
@@ -1025,7 +1024,7 @@ inline void calculate_acosh() {
         //                                                    x^2-1 cancellation)
         // The large region falls through the predicated block and keeps arg = x-1.
         sfpi::vFloat arg = inp - 1.0f;
-        v_if(inp < LOG1P_LARGE) { arg = arg + _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>((inp + 1.0f) * arg); }
+        v_if(compat::fp_lt(inp, LOG1P_LARGE)) { arg = arg + _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>((inp + 1.0f) * arg); }
         v_endif;
 
         // [FIX] Pass arg directly to log1p. The prior code round-tripped through
@@ -1034,12 +1033,12 @@ inline void calculate_acosh() {
         // original input instead of the reduced arg (acosh collapsed to ~ln(1+x)).
         sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(arg);
         // Large region carries the extra ln(2) from acosh(x) ~= LN2 + ln(x).
-        v_if(inp >= LOG1P_LARGE) { res = res + LN2; }
+        v_if(compat::fp_ge(inp, LOG1P_LARGE)) { res = res + LN2; }
         v_endif;
 
         // Domain fix-ups: x == 1 -> +0, x < 1 -> NaN.
-        v_if(inp == 1.0f) { res = 0.0f; }
-        v_elseif(inp < 1.0f) { res = std::numeric_limits<float>::quiet_NaN(); }
+        v_if(compat::fp_eq(inp, 1.0f)) { res = 0.0f; }
+        v_elseif(compat::fp_lt(inp, 1.0f)) { res = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
@@ -1086,8 +1085,8 @@ inline void calculate_asinh() {
         // near the crossover. Lanes below 0.75 are clamped here and overwritten by
         // the polynomial after log1p.
         sfpi::vFloat arg = 0.0f;
-        v_if(sfpi::abs(inp) >= LOG1P_LARGE) { arg = sfpi::abs(inp) - 1.0f; }
-        v_elseif(sfpi::abs(inp) >= 0.75f) {
+        v_if(compat::fp_ge(sfpi::abs(inp), LOG1P_LARGE)) { arg = sfpi::abs(inp) - 1.0f; }
+        v_elseif(compat::fp_ge(sfpi::abs(inp), 0.75f)) {
             sfpi::vFloat root = _sfpu_sqrt_ge0_<is_fp32_dest_acc_en>(inp * inp + 1.0f);
             arg = sfpi::abs(inp) + (inp * inp) * _sfpu_reciprocal_gt0_<is_fp32_dest_acc_en>(1.0f + root);
         }
@@ -1096,12 +1095,12 @@ inline void calculate_asinh() {
         // [FIX] Pass arg directly to log1p (see acosh): the Quasar mid-kernel Dest
         // store->reload returns the stale pre-store value.
         sfpi::vFloat res = calculate_log1p_fp32<is_fp32_dest_acc_en>(arg);
-        v_if(sfpi::abs(inp) >= LOG1P_LARGE) { res = res + LN2; }
+        v_if(compat::fp_ge(sfpi::abs(inp), LOG1P_LARGE)) { res = res + LN2; }
         v_endif;
 
         // Small region (|x| < 0.75): asinh(|x|) = |x| * P(x^2), a degree-6 (in x^2)
         // minimax fit (<=1 ulp on [0, 0.75]). No sqrt/reciprocal/log1p here.
-        v_if(sfpi::abs(inp) < 0.75f) {
+        v_if(compat::fp_lt(sfpi::abs(inp), 0.75f)) {
             sfpi::vFloat s = inp * inp;
             sfpi::vFloat p = 4.375355784e-03f;
             p = p * s + -1.484858524e-02f;
@@ -1142,7 +1141,7 @@ inline void calculate_atanh() {
 
         // Clamp |x| >= 1 lanes to 0 so the interior formula stays finite there;
         // those lanes are overwritten by the boundary fix-up below.
-        v_if(a >= 1.0f) { a = 0.0f; }
+        v_if(compat::fp_ge(a, 1.0f)) { a = 0.0f; }
         v_endif;
 
         // Build the log1p argument. The boundary lanes are restored from `inp`
@@ -1159,7 +1158,7 @@ inline void calculate_atanh() {
         // recomputed inline here rather than cached in a register; a cached
         // |x| - 1 variant pushed the allocator past the reload budget.
         v_if(sfpi::abs(inp) > 1.0f) { res = std::numeric_limits<float>::quiet_NaN(); }
-        v_elseif(sfpi::abs(inp) == 1.0f) {
+        v_elseif(compat::fp_eq(sfpi::abs(inp), 1.0f)) {
             sfpi::vFloat inf = std::numeric_limits<float>::infinity();
             res = sfpi::copysgn(inf, inp);
         }

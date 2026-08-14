@@ -10,6 +10,7 @@
 #include "llk_defs.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
 #include "quasar_sfpu_test_operations.h"
+#include "sfpu/ckernel_sfpu_compat.h"
 
 // To add a new Quasar unary SFPU operation:
 // 1. Include its `ckernel_sfpu_<op>.h` below.
@@ -17,21 +18,54 @@
 //    call_unary_sfpu_operation_quasar() (and to init_unary_sfpu_operation_quasar()
 //    if the op needs an init step).
 #include "experimental/ckernel_sfpu_abs.h"
+#include "llk_sfpu/ckernel_sfpu_activations.h"
+#include "llk_sfpu/ckernel_sfpu_add1.h"
+#include "llk_sfpu/ckernel_sfpu_cast_fp32_to_fp16a.h"
+#include "llk_sfpu/ckernel_sfpu_cbrt.h"
+#include "llk_sfpu/ckernel_sfpu_celu.h"
 #include "llk_sfpu/ckernel_sfpu_clamp.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
+#include "llk_sfpu/ckernel_sfpu_digamma.h"
+#include "llk_sfpu/ckernel_sfpu_elu.h"
+#include "llk_sfpu/ckernel_sfpu_erf.h"
+#include "llk_sfpu/ckernel_sfpu_erfc.h"
+#include "llk_sfpu/ckernel_sfpu_erfinv.h"
 #include "llk_sfpu/ckernel_sfpu_exp.h"
+#include "llk_sfpu/ckernel_sfpu_exp2.h"
+#include "llk_sfpu/ckernel_sfpu_expm1.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
+#include "llk_sfpu/ckernel_sfpu_hardmish.h"
+#include "llk_sfpu/ckernel_sfpu_hardshrink.h"
+#include "llk_sfpu/ckernel_sfpu_hardtanh.h"
+#include "llk_sfpu/ckernel_sfpu_heaviside.h"
+#include "llk_sfpu/ckernel_sfpu_i0.h"
+#include "llk_sfpu/ckernel_sfpu_i1.h"
+#include "llk_sfpu/ckernel_sfpu_identity.h"
+#include "llk_sfpu/ckernel_sfpu_lgamma.h"
 #include "llk_sfpu/ckernel_sfpu_log.h"
 #include "llk_sfpu/ckernel_sfpu_log1p.h"
 #include "llk_sfpu/ckernel_sfpu_negative.h"
+#include "llk_sfpu/ckernel_sfpu_polygamma.h"
+#include "llk_sfpu/ckernel_sfpu_prelu.h"
+#include "llk_sfpu/ckernel_sfpu_rdiv.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
+#include "llk_sfpu/ckernel_sfpu_rpow.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
+#include "llk_sfpu/ckernel_sfpu_selu.h"
+#include "llk_sfpu/ckernel_sfpu_sign.h"
 #include "llk_sfpu/ckernel_sfpu_softplus.h"
+#include "llk_sfpu/ckernel_sfpu_softshrink.h"
+#include "llk_sfpu/ckernel_sfpu_softsign.h"
 #include "llk_sfpu/ckernel_sfpu_sqrt_custom.h"
 #include "llk_sfpu/ckernel_sfpu_square.h"
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
+#include "llk_sfpu/ckernel_sfpu_tanhshrink.h"
 #include "llk_sfpu/ckernel_sfpu_trigonometry.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
+#include "llk_sfpu/ckernel_sfpu_unary_comp.h"
+#include "llk_sfpu/ckernel_sfpu_unary_power.h"
+#include "llk_sfpu/ckernel_sfpu_unary_shift.h"
+#include "llk_sfpu/ckernel_sfpu_xielu.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_sigmoid.h"
 #include "sfpu/ckernel_sfpu_silu.h"
@@ -46,9 +80,18 @@
 // 2. Add the enumerator to ckernel::BinaryOp (llk_defs.h) if it is not there.
 // 3. Add the `if constexpr` branch in call_binary_sfpu_operation_quasar()
 //    (and init_binary_sfpu_operation_quasar() if it needs an init step).
-#include "llk_sfpu/ckernel_sfpu_binary.h"         // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
+#include "llk_sfpu/ckernel_sfpu_atan2.h"
+#include "llk_sfpu/ckernel_sfpu_binary.h" // calculate_sfpu_binary / sfpu_binary_init (float mul/div)
+#include "llk_sfpu/ckernel_sfpu_binary_fmod.h"
 #include "llk_sfpu/ckernel_sfpu_binary_max_min.h" // calculate_binary_max_min / _init_binary_max_min_
-#include "llk_sfpu/ckernel_sfpu_quant.h"          // quant_family / quant_family_init (quant/requant/dequant)
+#include "llk_sfpu/ckernel_sfpu_binary_pow.h"
+#include "llk_sfpu/ckernel_sfpu_binary_remainder.h"
+#include "llk_sfpu/ckernel_sfpu_div_int32.h"
+#include "llk_sfpu/ckernel_sfpu_div_int32_floor.h"
+#include "llk_sfpu/ckernel_sfpu_isclose.h"
+#include "llk_sfpu/ckernel_sfpu_logsigmoid.h"
+#include "llk_sfpu/ckernel_sfpu_mask.h"
+#include "llk_sfpu/ckernel_sfpu_quant.h" // quant_family / quant_family_init (quant/requant/dequant)
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
 #include "sfpu/ckernel_sfpu_add.h"         // _add_int_ (int add)
 #include "sfpu/ckernel_sfpu_binary_comp.h" // calculate_binary_comp_int32 (int gt/lt/le/ge)
@@ -65,6 +108,16 @@ inline void calculate_sqrt_custom()
         sfpi::dst_reg[0] = sfpu_sqrt_custom<APPROXIMATION_MODE>(sfpi::dst_reg[0]);
         sfpi::dst_reg++;
     }
+}
+
+// The production mask entry point uses the canonical Dest[0]/Dest[1] layout.
+// Adapt its signature to the binary test wrapper while preserving the exact
+// production implementation; parity mask tests intentionally use (0, 1, 0).
+template <bool APPROXIMATION_MODE, int ITERATIONS = SFPU_ITERATIONS>
+inline void calculate_mask_binary_quasar(
+    [[maybe_unused]] std::uint32_t dst_index_in0, [[maybe_unused]] std::uint32_t dst_index_in1, [[maybe_unused]] std::uint32_t dst_index_out)
+{
+    calculate_mask<APPROXIMATION_MODE, ITERATIONS>();
 }
 } // namespace ckernel::sfpu
 
@@ -216,6 +269,151 @@ void init_unary_sfpu_operation_quasar()
     else if constexpr (OPERATION == QuasarSfpuTestOperation::atanh)
     {
         init_atanh<APPROX, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::hardsigmoid)
+    {
+        hardsigmoid_init<APPROX>();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::cbrt)
+    {
+        cube_root_init<APPROX>();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::celu)
+    {
+        celu_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::digamma)
+    {
+        digamma_init<APPROX>();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::elu)
+    {
+        elu_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::erf)
+    {
+        erf_init<APPROX>();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::erfc)
+    {
+        erfc_init<APPROX>();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::erfinv)
+    {
+        erfinv_init<APPROX>();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::exp2)
+    {
+        exp2_init<APPROX, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::expm1)
+    {
+        expm1_init<APPROX, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::hardmish)
+    {
+        hardmish_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::hardshrink)
+    {
+        hardshrink_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::hardtanh)
+    {
+        hardtanh_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::heaviside)
+    {
+        heaviside_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::i0)
+    {
+        i0_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::i1)
+    {
+        i1_init<APPROX>();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::lgamma)
+    {
+        lgamma_stirling_init<APPROX, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::polygamma)
+    {
+        polygamma_init<APPROX, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::prelu)
+    {
+        prelu_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::rdiv)
+    {
+        rdiv_init<APPROX>();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::rpow)
+    {
+        sfpu_binary_pow_init<APPROX>();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::selu)
+    {
+        selu_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::sign)
+    {
+        sign_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::softshrink)
+    {
+        softshrink_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::softsign)
+    {
+        init_softsign<APPROX>();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::tanhshrink)
+    {
+        tanhshrink_init<APPROX, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::unary_ne)
+    {
+        unary_ne_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::unary_eq)
+    {
+        unary_eq_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::unary_gt)
+    {
+        unary_gt_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::unary_lt)
+    {
+        unary_lt_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::unary_ge)
+    {
+        unary_ge_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::unary_le)
+    {
+        unary_le_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::power)
+    {
+        power_init();
+        sfpu_unary_pow_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::left_shift)
+    {
+        left_shift_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::right_shift)
+    {
+        right_shift_init();
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::xielu)
+    {
+        xielu_init<APPROX>();
     }
 }
 
@@ -464,6 +662,167 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     {
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_typecast, (TYPECAST_IN_FORMAT, TYPECAST_OUT_FORMAT, ITERATIONS), dst_index, vector_mode);
     }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::hardsigmoid)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_activation, (APPROX, ActivationType::Hardsigmoid, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::add1)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_add1, (APPROX, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::cast_fp32_to_fp16a)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, cast_fp32_to_fp16a, (APPROX, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::cbrt)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_cube_root, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::celu)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_celu, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode, 0x3f800000u, 0x3f800000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::digamma)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_digamma, (APPROX, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::elu)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_elu, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode, 0x3f800000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::erf)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_erf, (APPROX, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::erfc)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_erfc, (ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::erfinv)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_erfinv, (APPROX), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::exp2)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_exp2, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::expm1)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_expm1, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::hardmish)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, hardmish, (APPROX, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::hardshrink)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_hardshrink, (APPROX, ITERATIONS), dst_index, vector_mode, 0x3f000000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::hardtanh)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_hardtanh, (APPROX, ITERATIONS), dst_index, vector_mode, 0xbf800000u, 0x3f800000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::heaviside)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_heaviside, (APPROX, ITERATIONS), dst_index, vector_mode, 0x3f000000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::i0)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_i0, (APPROX, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::i1)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_i1, (APPROX, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::identity)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_identity, (APPROX, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::lgamma)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_lgamma_stirling, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::polygamma)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_polygamma, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode, 0x3f800000u, 0x3f800000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::prelu)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_prelu, (APPROX, ITERATIONS), dst_index, vector_mode, 0x3e800000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::rdiv)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_rdiv, (APPROX, is_fp32_dest_acc_en, RoundingMode::None, ITERATIONS), dst_index, vector_mode, 0x40000000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::rpow)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_rpow, (APPROX, ITERATIONS, is_fp32_dest_acc_en), dst_index, vector_mode, 0x40000000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::selu)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_selu, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode, 0x3f867d5fu, 0x3fd62d7du);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::sign)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_sign, (APPROX, ITERATIONS), dst_index, vector_mode, 0u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::softshrink)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_softshrink, (APPROX, ITERATIONS), dst_index, vector_mode, 0x3f000000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::softsign)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_softsign, (APPROX, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::tanhshrink)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_tanhshrink, (is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::unary_ne)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_unary_ne, (APPROX, ITERATIONS), dst_index, vector_mode, 0x3f000000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::unary_eq)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_unary_eq, (APPROX, ITERATIONS), dst_index, vector_mode, 0x3f000000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::unary_gt)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_unary_gt, (APPROX, ITERATIONS), dst_index, vector_mode, 0x3f000000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::unary_lt)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_unary_lt, (APPROX, ITERATIONS), dst_index, vector_mode, 0x3f000000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::unary_ge)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_unary_ge, (APPROX, ITERATIONS), dst_index, vector_mode, 0x3f000000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::unary_le)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_unary_le, (APPROX, ITERATIONS), dst_index, vector_mode, 0x3f000000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::power)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_unary_power, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode, 0x40000000u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::left_shift)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_left_shift, (APPROX, DataFormat::Int32, ITERATIONS), dst_index, vector_mode, 3u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::right_shift)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_right_shift, (APPROX, DataFormat::Int32, ITERATIONS), dst_index, vector_mode, 3u);
+    }
+    else if constexpr (OPERATION == QuasarSfpuTestOperation::xielu)
+    {
+        SFPU_UNARY_CALL(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_xielu, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode, 0x3f800000u, 0x3f800000u);
+    }
     else
     {
         static_assert(unhandled_op<OPERATION>, "call_unary_sfpu_operation_quasar: unhandled Quasar unary SFPU operation");
@@ -513,7 +872,7 @@ constexpr ckernel::sfpu::QuantVariant quant_variant_of()
  *        other ops, which have no runtime init argument.
  * @note Pair with @ref call_binary_sfpu_operation_quasar for the calculate step.
  */
-template <ckernel::BinaryOp OP, bool SIGN_MAGNITUDE_FORMAT = false>
+template <ckernel::BinaryOp OP, bool SIGN_MAGNITUDE_FORMAT = false, bool is_fp32_dest_acc_en = false>
 void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point = 0)
 {
     if constexpr (OP == BinaryOp::MUL)
@@ -532,6 +891,42 @@ void init_binary_sfpu_operation_quasar([[maybe_unused]] std::uint32_t zero_point
     {
         // One op-templated quant kernel; DEQUANT's caller passes bits of -zero_point.
         quant_family_init<quant_variant_of<OP>(), SIGN_MAGNITUDE_FORMAT>(zero_point);
+    }
+    else if constexpr (OP == BinaryOp::POW)
+    {
+        sfpu_binary_pow_init<false>();
+    }
+    else if constexpr (OP == BinaryOp::FMOD)
+    {
+        fmod_binary_init<false>();
+    }
+    else if constexpr (OP == BinaryOp::REMAINDER)
+    {
+        remainder_binary_init<false, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OP == BinaryOp::DIV_INT32)
+    {
+        div_trunc_init<false>();
+    }
+    else if constexpr (OP == BinaryOp::DIV_INT32_FLOOR)
+    {
+        div_floor_init<false>();
+    }
+    else if constexpr (OP == BinaryOp::ATAN2)
+    {
+        calculate_sfpu_atan2_init<false, is_fp32_dest_acc_en>();
+    }
+    else if constexpr (OP == BinaryOp::ISCLOSE)
+    {
+        isclose_init();
+    }
+    else if constexpr (OP == BinaryOp::MASK)
+    {
+        mask_init();
+    }
+    else if constexpr (OP == BinaryOp::LOGSIGMOID)
+    {
+        logsigmoid_init<false>();
     }
     // ADD / SUB / GT / LT / LE / GE are stateless — no init.
 }
@@ -559,14 +954,15 @@ template <
     ckernel::DstRoundingMode dst_rounding_mode = ckernel::DstRoundingMode::Default,
     int ITERATIONS                             = SFPU_ITERATIONS,
     bool SIGN_MAGNITUDE_FORMAT                 = false>
-void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t src1_tile, std::uint32_t dst_tile, [[maybe_unused]] DataFormat math_format)
+void call_binary_sfpu_operation_quasar(
+    std::uint32_t src0_tile, std::uint32_t src1_tile, std::uint32_t dst_tile, [[maybe_unused]] DataFormat math_format, VectorMode vector_mode = VectorMode::RC)
 {
     if constexpr (OP == BinaryOp::ADD)
     {
         if (math_format == DataFormat::Int32)
         {
             SFPU_BINARY_CALL(
-                DST_SYNC, is_fp32_dest_acc_en, _add_int_, (false, ITERATIONS, DataFormat::Int32, 0, false), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+                DST_SYNC, is_fp32_dest_acc_en, _add_int_, (false, ITERATIONS, DataFormat::Int32, 0, false), src0_tile, src1_tile, dst_tile, vector_mode);
         }
         else
         {
@@ -578,7 +974,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
                 src0_tile,
                 src1_tile,
                 dst_tile,
-                VectorMode::RC);
+                vector_mode);
         }
     }
     else if constexpr (OP == BinaryOp::SUB)
@@ -592,33 +988,33 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             src0_tile,
             src1_tile,
             dst_tile,
-            VectorMode::RC);
+            vector_mode);
     }
     else if constexpr (OP == BinaryOp::GT)
     {
         SFPU_BINARY_CALL(
-            DST_SYNC, is_fp32_dest_acc_en, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::gt), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+            DST_SYNC, is_fp32_dest_acc_en, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::gt), src0_tile, src1_tile, dst_tile, vector_mode);
     }
     else if constexpr (OP == BinaryOp::LT)
     {
         SFPU_BINARY_CALL(
-            DST_SYNC, is_fp32_dest_acc_en, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::lt), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+            DST_SYNC, is_fp32_dest_acc_en, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::lt), src0_tile, src1_tile, dst_tile, vector_mode);
     }
     else if constexpr (OP == BinaryOp::LE)
     {
         SFPU_BINARY_CALL(
-            DST_SYNC, is_fp32_dest_acc_en, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::le), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+            DST_SYNC, is_fp32_dest_acc_en, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::le), src0_tile, src1_tile, dst_tile, vector_mode);
     }
     else if constexpr (OP == BinaryOp::GE)
     {
         SFPU_BINARY_CALL(
-            DST_SYNC, is_fp32_dest_acc_en, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::ge), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+            DST_SYNC, is_fp32_dest_acc_en, calculate_binary_comp_int32, (false, ITERATIONS, SfpuType::ge), src0_tile, src1_tile, dst_tile, vector_mode);
     }
     else if constexpr (OP == BinaryOp::MUL)
     {
         if (math_format == DataFormat::Int32)
         {
-            SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _mul_int32_, (false, ITERATIONS), src0_tile, src1_tile, dst_tile, VectorMode::RC);
+            SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _mul_int32_, (false, ITERATIONS), src0_tile, src1_tile, dst_tile, vector_mode);
         }
         else
         {
@@ -630,7 +1026,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
                 src0_tile,
                 src1_tile,
                 dst_tile,
-                VectorMode::RC);
+                vector_mode);
         }
     }
     else if constexpr (OP == BinaryOp::DIV)
@@ -643,7 +1039,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             src0_tile,
             src1_tile,
             dst_tile,
-            VectorMode::RC);
+            vector_mode);
     }
     else if constexpr (quasar_binary_op_is_quant(OP))
     {
@@ -655,7 +1051,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
             src0_tile,
             src1_tile,
             dst_tile,
-            VectorMode::RC);
+            vector_mode);
     }
     else if constexpr (quasar_binary_op_is_max_min(OP))
     {
@@ -664,14 +1060,7 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
         if (math_format == DataFormat::Int32)
         {
             SFPU_BINARY_CALL(
-                DST_SYNC,
-                is_fp32_dest_acc_en,
-                calculate_binary_max_min,
-                (DataFormat::Int32, IS_MAX, ITERATIONS),
-                src0_tile,
-                src1_tile,
-                dst_tile,
-                VectorMode::RC);
+                DST_SYNC, is_fp32_dest_acc_en, calculate_binary_max_min, (DataFormat::Int32, IS_MAX, ITERATIONS), src0_tile, src1_tile, dst_tile, vector_mode);
         }
         else
         {
@@ -683,8 +1072,65 @@ void call_binary_sfpu_operation_quasar(std::uint32_t src0_tile, std::uint32_t sr
                 src0_tile,
                 src1_tile,
                 dst_tile,
-                VectorMode::RC);
+                vector_mode);
         }
+    }
+    else if constexpr (OP == BinaryOp::POW)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_sfpu_binary_pow, (false, ITERATIONS, is_fp32_dest_acc_en), src0_tile, src1_tile, dst_tile, vector_mode);
+    }
+    else if constexpr (OP == BinaryOp::FMOD)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_sfpu_binary_fmod, (false, ITERATIONS, is_fp32_dest_acc_en), src0_tile, src1_tile, dst_tile, vector_mode);
+    }
+    else if constexpr (OP == BinaryOp::REMAINDER)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_sfpu_binary_remainder,
+            (false, ITERATIONS, is_fp32_dest_acc_en),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            vector_mode);
+    }
+    else if constexpr (OP == BinaryOp::DIV_INT32)
+    {
+        SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_div_int32_trunc, (false, ITERATIONS), src0_tile, src1_tile, dst_tile, vector_mode);
+    }
+    else if constexpr (OP == BinaryOp::DIV_INT32_FLOOR)
+    {
+        SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_div_int32_floor, (false, ITERATIONS), src0_tile, src1_tile, dst_tile, vector_mode);
+    }
+    else if constexpr (OP == BinaryOp::ATAN2)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC, is_fp32_dest_acc_en, calculate_sfpu_atan2, (false, ITERATIONS, is_fp32_dest_acc_en), src0_tile, src1_tile, dst_tile, vector_mode);
+    }
+    else if constexpr (OP == BinaryOp::ISCLOSE)
+    {
+        SFPU_BINARY_CALL(
+            DST_SYNC,
+            is_fp32_dest_acc_en,
+            calculate_sfpu_isclose,
+            (false, ITERATIONS, false),
+            src0_tile,
+            src1_tile,
+            dst_tile,
+            vector_mode,
+            0x3727c5acu,
+            0x322bcc77u);
+    }
+    else if constexpr (OP == BinaryOp::MASK)
+    {
+        SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_mask_binary_quasar, (false, ITERATIONS), src0_tile, src1_tile, dst_tile, vector_mode);
+    }
+    else if constexpr (OP == BinaryOp::LOGSIGMOID)
+    {
+        SFPU_BINARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_logsigmoid, (false, ITERATIONS), src0_tile, src1_tile, dst_tile, vector_mode);
     }
     else
     {

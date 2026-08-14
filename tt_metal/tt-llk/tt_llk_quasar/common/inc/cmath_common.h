@@ -123,6 +123,14 @@ inline void _reset_counters_()
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, SETRWC);
 }
 
+// Blackhole SFPU headers historically pass the SETRWC selector as a function
+// argument.  Keep that source-level API for architecture-neutral kernels while
+// retaining Quasar's native template form above for new code.
+inline void reset_counters(const std::uint32_t setrwc)
+{
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, setrwc);
+}
+
 /**
  * @brief Inc dest counter using carriage return (why use the CR?)
  * @tparam NUM_ROWS: number of 16 datum rows to increment dest by, value must be <=255

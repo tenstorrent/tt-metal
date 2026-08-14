@@ -16,6 +16,7 @@
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
 #include "sfpi.h"
+#include "sfpu/ckernel_sfpu_compat.h"
 
 namespace ckernel::sfpu {
 
@@ -278,7 +279,7 @@ inline void calculate_gelu() {
             sfpi::vFloat result = 0.0f;  // default 0 for x <= GELU_SAT
             v_if(x > GELU_SAT) {
                 sfpi::vFloat scaled = x * INV_SQRT2;
-                scaled = sfpi::min(scaled, 10.0f);
+                scaled = compat::fp_min(scaled, 10.0f);
                 sfpi::vFloat x2 = scaled * scaled;
                 sfpi::vFloat erf_n, erf_d;
                 piecewise_rational_eval_parity_numer_denom<16, 16>(
@@ -298,8 +299,8 @@ inline void calculate_gelu() {
                 // min/max non-negative.
                 constexpr float HALF_ULP_AT_1 = 2.9802322387695313e-08f;  // 2^-25
                 sfpi::vFloat phi = 0.5f + 0.5f * erf_val;
-                phi = sfpi::max(phi, HALF_ULP_AT_1);  // erf_val <= -1, incl. the stuck level
-                phi = sfpi::min(phi, 1.0f);           // erf_val >= 1
+                phi = compat::fp_max(phi, HALF_ULP_AT_1);  // erf_val <= -1, incl. the stuck level
+                phi = compat::fp_min(phi, 1.0f);           // erf_val >= 1
                 result = x * phi;
             }
             v_endif;

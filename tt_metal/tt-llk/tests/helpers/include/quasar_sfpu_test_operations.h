@@ -4,10 +4,9 @@
 
 #pragma once
 
-// Test-local operation selector. Some SFPI kernels already exist on Quasar but
-// do not yet have a corresponding entry in Quasar's production SfpuType enum.
-// Keeping the selector in the test tree lets those kernels be exercised without
-// changing production kernel interfaces merely to support a test harness.
+// Test-local operation selector.  Keeping the test harness independent of the
+// production SfpuType dispatch lets parity tests name every public SFPI entry
+// without changing a production call site's selector type.
 enum class QuasarSfpuTestOperation
 {
     abs,
@@ -45,4 +44,43 @@ enum class QuasarSfpuTestOperation
     greater_than_zero,
     less_than_equal_zero,
     greater_than_equal_zero,
+    hardsigmoid,
+    add1,
+    cast_fp32_to_fp16a,
+    cbrt,
+    celu,
+    digamma,
+    elu,
+    erf,
+    erfc,
+    erfinv,
+    exp2,
+    expm1,
+    hardmish,
+    hardshrink,
+    hardtanh,
+    heaviside,
+    i0,
+    i1,
+    identity,
+    lgamma,
+    polygamma,
+    prelu,
+    rdiv,
+    rpow,
+    selu,
+    sign,
+    softshrink,
+    softsign,
+    tanhshrink,
+    unary_ne,
+    unary_eq,
+    unary_gt,
+    unary_lt,
+    unary_ge,
+    unary_le,
+    power,
+    left_shift,
+    right_shift,
+    xielu,
 };

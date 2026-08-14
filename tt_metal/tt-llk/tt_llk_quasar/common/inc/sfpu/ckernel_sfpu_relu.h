@@ -13,6 +13,10 @@ namespace ckernel
 {
 namespace sfpu
 {
+// Quasar SFPSETCC Imm12[11] selects FP32 comparison.  Leaving it clear
+// interprets the LReg payload as INT32 and misclassifies negative floats.
+inline constexpr std::uint32_t SFPSETCC_FP32_SIGN = 0x800;
+
 // Calculates RELU for number of rows of output SFPU ops (Quasar = 2 rows)
 inline void _calculate_relu_sfp_rows_()
 {
@@ -42,7 +46,7 @@ inline void _calculate_lrelu_sfp_rows_()
 {
     TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0); // load from dest into lreg[0], uses ADDR_MOD_7 (set to all zeroes)
 
-    TTI_SFPSETCC(0, p_sfpu::LREG0, 0); // condition - if value in LREG0 is negative //will set cc result reg
+    TTI_SFPSETCC(SFPSETCC_FP32_SIGN, p_sfpu::LREG0, 0); // condition - if value in LREG0 is negative
 
     TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG2, p_sfpu::LCONST_0, p_sfpu::LREG0, 0); // Multiply and add - LREG0 * LREG2 + LCONST_0 (x * slope + 0)
 
@@ -57,7 +61,7 @@ template <int ITERATIONS = SFPU_ITERATIONS>
 inline void _calculate_lrelu_(const std::uint32_t slope)
 {
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, (slope >> 16)); // store slope in LREG2 (runtime imm)
-    TTI_SFPENCC(1, 2);                                           // enable cc
+    TTI_SFPENCC(1, 2);                                                     // enable cc
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
@@ -89,7 +93,7 @@ template <int ITERATIONS = SFPU_ITERATIONS>
 inline void _relu_min_(const std::uint32_t threshold)
 {
     TT_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store threshold in LREG2 (runtime imm)
-    TTI_SFPENCC(1, 2);                                               // enable cc
+    TTI_SFPENCC(1, 2);                                              // enable cc
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
@@ -110,7 +114,7 @@ inline void _calculate_relu_max_sfp_rows_()
     TTI_SFPMOV(p_sfpu::LREG2 /*src*/, p_sfpu::LREG0 /*dest*/, 0); // copy threshold value into LREG0 where LREG0 > threshold
 
     // Classic Relu: Max(x, 0)
-    TTI_SFPSETCC(0, p_sfpu::LREG0, 0); // condition - if value in LREG0 is negative
+    TTI_SFPSETCC(SFPSETCC_FP32_SIGN, p_sfpu::LREG0, 0); // condition - if value in LREG0 is negative
 
     TTI_SFPLOADI(p_sfpu::LREG0, 0, 0); // Load 0 into lreg0[x]
 
@@ -125,7 +129,7 @@ template <int ITERATIONS = SFPU_ITERATIONS>
 inline void _relu_max_(const std::uint32_t threshold)
 {
     TT_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store threshold in LREG2 (runtime imm)
-    TTI_SFPENCC(1, 2);                                               // enable cc
+    TTI_SFPENCC(1, 2);                                              // enable cc
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {

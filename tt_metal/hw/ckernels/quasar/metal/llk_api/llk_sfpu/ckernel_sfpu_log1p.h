@@ -36,6 +36,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_log.h"
 #include "cmath_common.h"
+#include "sfpu/ckernel_sfpu_compat.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -53,7 +54,7 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat a) {
     sfpi::vFloat u = a + 1.0f;
     sfpi::vFloat r = std::numeric_limits<float>::quiet_NaN();
 
-    v_if(u >= 0.0f) {
+    v_if(compat::fp_ge(u, 0.0f)) {
         sfpi::vFloat three_quarters = 0.75f;
         sfpi::vInt e = sfpi::as<sfpi::vInt>(three_quarters);
         sfpi::vFloat e_float;

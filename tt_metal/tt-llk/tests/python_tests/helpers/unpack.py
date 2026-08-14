@@ -40,6 +40,11 @@ def unpack_fp32(packed_list):
     return np.frombuffer(bytes(packed_list), dtype=np.float32).tolist()
 
 
+def unpack_tf32(packed_list):
+    """Decode TF32 values from their 32-bit Tensix L1 containers."""
+    return np.frombuffer(bytes(packed_list), dtype=np.float32).tolist()
+
+
 def unpack_int32(packed_list, twos_complement=False):
     if twos_complement:
         return np.frombuffer(bytes(packed_list), dtype=np.int32).tolist()
@@ -615,6 +620,7 @@ _UNPACKERS = {
     DataFormat.Float16: unpack_fp16,
     DataFormat.Float16_b: unpack_bfp16,
     DataFormat.Float32: unpack_fp32,
+    DataFormat.Tf32: unpack_tf32,
     DataFormat.Int32: unpack_int32,
     DataFormat.UInt32: unpack_uint32,
     DataFormat.Int16: unpack_int16,
