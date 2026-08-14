@@ -39,15 +39,24 @@
 // zone displays ~CYC/2500 us in Tracy: at the ~1.35 GHz boosted aiclk the profiler records ~0.55 timestamp
 // tick per spin-count and the context period is ~0.741 ns/tick, so displayed_ns ~= CYC * 0.41. LOW-register-
 // only read with unsigned-wrap subtraction is tear-free for spins << 2^32.
-#define ZONE_WALL(NAME, CYC)                                                                       \
-    {                                                                                              \
-        DeviceZoneScopedN(NAME);                                                                   \
-        volatile tt_reg_ptr uint32_t* _zwc =                                                       \
-            reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);         \
-        uint32_t _zt0 = _zwc[kernel_profiler::WALL_CLOCK_LOW_INDEX];                               \
-        while ((uint32_t)(_zwc[kernel_profiler::WALL_CLOCK_LOW_INDEX] - _zt0) < (uint32_t)(CYC)) { \
-            asm volatile("nop");                                                                   \
-        }                                                                                          \
+// _zwc points AT the wall-clock LOW register (RISCV_DEBUG_REG_WALL_CLOCK_L), so the low word is index 0.
+// Deliberately NOT kernel_profiler::WALL_CLOCK_LOW_INDEX: that constant is declared inside the
+// `#if defined(PROFILE_KERNEL) && ...` block of kernel_profiler.hpp, i.e. it is internal state of the
+// STREAMING backend and does not exist when the profiler is compiled out. Referencing it made this kernel
+// fail to COMPILE in the unprofiled build ("'WALL_CLOCK_LOW_INDEX' is not a member of 'kernel_profiler'")
+// even though DeviceZoneScopedN() expands to nothing there -- and that build failure looks exactly like a
+// card wedge from the host side. The spin must work with or without the profiler compiled in.
+static constexpr int kWallClockLowIdx = 0;
+
+#define ZONE_WALL(NAME, CYC)                                                               \
+    {                                                                                      \
+        DeviceZoneScopedN(NAME);                                                           \
+        volatile tt_reg_ptr uint32_t* _zwc =                                               \
+            reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); \
+        uint32_t _zt0 = _zwc[kWallClockLowIdx];                                            \
+        while ((uint32_t)(_zwc[kWallClockLowIdx] - _zt0) < (uint32_t)(CYC)) {              \
+            asm volatile("nop");                                                           \
+        }                                                                                  \
     }
 
 // KNEE body (ZONE_MODE == 1): byte-identical to the standalone drain harness's producer loop (realprof_dm.cpp,
