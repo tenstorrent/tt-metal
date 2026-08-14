@@ -36,6 +36,7 @@ import json
 import math
 import os
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 import torch
@@ -95,12 +96,6 @@ class MiniMaxH3VaeConfig:
         cfg = json.loads((Path(path) / "config.json").read_text())
         return cls(**{k: v for k, v in cfg.items() if not k.startswith("_")})
 
-
-# How many mesh-sized waves' worth of *chunks* to decode before stitching and releasing them.
-#
-# 1, measured: larger groups pile decoded tiles on host and degrade readback ~2.5x (allocator
-# pressure, not transfer); stage 4.3 -> 3.8 s at one chunk per group.
-_DECODE_WAVES_IN_FLIGHT = 1
 
 # Decode is host-bound (stitching, unpatchify, readback), so it raises torch's thread count from the
 # single thread a server worker pins for the denoise loop; 8 measured as the knee.
@@ -198,6 +193,7 @@ class MiniMaxH3Vae(Module):
         device_stitch: bool = False,
         profile: bool = False,
         ccl_manager=None,
+        pixel_denorm: tuple[Sequence[float], Sequence[float]] | None = None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -220,6 +216,11 @@ class MiniMaxH3Vae(Module):
         # Unproven, so it defaults to the host path. The projection put the stage at 4.3 -> ~2.9 s
         # from this; `device_stitch=True` is the A/B.
         self.device_stitch = device_stitch
+        # `(mean, std)` of the ImageNet normalization the decoder's pixels are still in. Set it and
+        # the de-normalization is folded into `proj_out`, so `decode` emits `[-1, 1]` pixels and the
+        # caller keeps no copy of the constants. Left unset the decoder emits reference-space values,
+        # which is what the numerics tests compare against.
+        self.pixel_denorm = pixel_denorm
         # Synchronize after each decode forward so `device` and `readback` are separable in the
         # profile -- which also serializes them, so it is opt-in.
         self.profile = profile
@@ -513,7 +514,38 @@ class MiniMaxH3Vae(Module):
             post_2d = post_weight.reshape(post_weight.shape[0], post_weight.shape[1])
             decoder_state["proj_in.bias"] = decoder_state["proj_in.weight"] @ post_bias + decoder_state["proj_in.bias"]
             decoder_state["proj_in.weight"] = decoder_state["proj_in.weight"] @ post_2d
+        if self.pixel_denorm is not None:
+            self._fold_pixel_denorm(decoder_state)
         self._decoder_state = decoder_state
+
+    def _fold_pixel_denorm(self, decoder_state: dict[str, torch.Tensor]) -> None:
+        """Fold the ImageNet de-normalization into ``proj_out``, landing pixels in ``[-1, 1]``.
+
+        ``proj_out`` emits a patch's pixels flattened as ``(C, pt, p, p)`` with ``C`` outermost --
+        the order :func:`decoder_minimax_h3.unpatchify` reshapes to -- so a per-channel affine is a
+        row scale plus a bias shift, the same move this class already makes for ``post_quant_conv``.
+        The reference's ``x*std + mean`` lands in ``[0, 1]``; the extra ``2x - 1`` is the range
+        ``rgb_to_yuv`` and ``float_to_uint8`` both take.
+
+        Exact, not approximate: the tile cross-fade is a convex combination and this is affine, so
+        it commutes with the blend. The reference's ``clamp`` is *not* affine and therefore stays
+        after the stitch rather than being folded in here.
+        """
+        pixel_mean, pixel_std = self.pixel_denorm
+        weight = decoder_state["proj_out.weight"]
+        out_features = weight.shape[0]
+        channels = self.config.out_channels
+        assert out_features % channels == 0, f"proj_out emits {out_features}, not a multiple of {channels}"
+        per_channel = out_features // channels
+
+        mean = torch.tensor(pixel_mean, dtype=weight.dtype)
+        std = torch.tensor(pixel_std, dtype=weight.dtype)
+        assert mean.numel() == channels and std.numel() == channels, "pixel_denorm must be per output channel"
+        scale = (2.0 * std).repeat_interleave(per_channel)
+        shift = (2.0 * mean - 1.0).repeat_interleave(per_channel)
+
+        decoder_state["proj_out.weight"] = weight * scale.view(-1, 1)
+        decoder_state["proj_out.bias"] = decoder_state["proj_out.bias"] * scale + shift
 
     def _decoder_for(self, num_frames: int, height: int, width: int):
         from .decoder_minimax_h3 import MiniMaxH3ViTDecoder3d
@@ -548,13 +580,21 @@ class MiniMaxH3Vae(Module):
         return self._run_decoder_units([latent_BCTHW])[0]
 
     def _run_decoder_units(self, units: list[torch.Tensor]) -> list[torch.Tensor]:
-        """Decode independent ``(chunk, tile)`` units, one per device, in mesh-sized waves.
+        return list(self._stream_decoder_units(units))
+
+    def _stream_decoder_units(self, units: list[torch.Tensor]):
+        """Yield decoded pixel tiles in ``units`` order, running the mesh a wave at a time.
 
         Same argument as :meth:`_run_encoder_units`: the reference decodes each spatial
         tile of each temporal chunk on its own and only cross-fades afterwards, and the ViT
         decoder holds no CCL, so one device per unit is exact SPMD. The temporal blend in
         :meth:`decode` still runs in order on the host -- it is the *decodes* that are
         independent, not the stitching.
+
+        A generator, not a list, because the read of wave ``k`` is deferred until wave ``k+1``
+        is enqueued: that only buys anything when the caller hands over every unit at once, and
+        a caller given a list would have to hold the whole video to do so. Streaming lets it
+        stitch and release each chunk while later waves are still in flight.
         """
         from .decoder_minimax_h3 import unpatchify
 
@@ -602,7 +642,6 @@ class MiniMaxH3Vae(Module):
             profile["unpatchify"] += time.perf_counter() - mark
             return tiles
 
-        results: list[torch.Tensor] = []
         pending: tuple | None = None  # (decoded_device_tensor, count) for the wave in flight
         for start in range(0, len(units), wave_size):
             mark = time.perf_counter()
@@ -637,14 +676,13 @@ class MiniMaxH3Vae(Module):
             # overlaps this wave's ~178 ms of compute instead of following it. Two waves' device
             # output are live at once, which is one extra tile per device.
             if pending is not None:
-                results.extend(read_wave(*pending))
+                yield from read_wave(*pending)
             pending = (decoded, count)
             profile["waves"] += 1
             profile["units"] += count
 
         if pending is not None:
-            results.extend(read_wave(*pending))
-        return results
+            yield from read_wave(*pending)
 
     def _decode_clip_device_stitched(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
         """One clip, decoded and stitched entirely on device, read back as the assembled canvas.
@@ -854,29 +892,29 @@ class MiniMaxH3Vae(Module):
             clips = [self._decode_clip_device_stitched(latents) for latents in chunk_latents]
         elif self.use_tiling and chunk_latents:
             latent_height, latent_width = chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
-            tiles_per_chunk = len(self._latent_tiles(chunk_latents[0]))
-            wave_size = self.mesh_device.get_num_devices()
-            # Decoded tiles are 22 MB each, so decoding all 308 units of a 768P/5s video
-            # before stitching any of them would hold 6.8 GB (and ~29 GB at 1440P/10s).
-            # Group chunks into a few waves' worth, stitch, release. Groups are whole chunks
-            # so a group never straddles a stitch boundary.
-            # keeps the held pile at one chunk's worth (see `_DECODE_WAVES_IN_FLIGHT`).
-            chunks_per_group = max(1, _DECODE_WAVES_IN_FLIGHT * wave_size // tiles_per_chunk)
+            mark = time.perf_counter()
+            # Every (chunk, tile) unit in one stream. Handing the wave loop one chunk at a time
+            # gives it a single wave per call, so it can never overlap a read with the next
+            # wave's compute -- and one chunk is all a group ever holds at 768P, since
+            # 32 devices // 28 tiles == 1. Flattening also stops every wave but the last from
+            # being padded out to the mesh: 588 units is 19 full waves, not 21 partial ones.
+            all_units = [unit for latents in chunk_latents for unit in self._latent_tiles(latents)]
+            self._profile["tiling"] += time.perf_counter() - mark
+            tiles_per_chunk = len(all_units) // num_chunks
+
             clips = []
-            for group_start in range(0, num_chunks, chunks_per_group):
-                group = chunk_latents[group_start : group_start + chunks_per_group]
-                mark = time.perf_counter()
-                group_units = [unit for latents in group for unit in self._latent_tiles(latents)]
-                self._profile["tiling"] += time.perf_counter() - mark
-                flat = self._run_decoder_units(group_units)
-                mark = time.perf_counter()
-                clips.extend(
-                    self._stitch_decoded(
-                        flat[i * tiles_per_chunk : (i + 1) * tiles_per_chunk], latent_height, latent_width
-                    )
-                    for i in range(len(group))
-                )
-                self._profile["stitch"] += time.perf_counter() - mark
+            # Decoded tiles are 22 MB, so holding the whole video would be 6.8 GB at 768P/5s
+            # (~29 GB at 1440P/10s). Stitching a chunk the moment its last tile lands caps the
+            # pile at one chunk plus the wave in flight.
+            buffered: list[torch.Tensor] = []
+            for tile in self._stream_decoder_units(all_units):
+                buffered.append(tile)
+                while len(buffered) >= tiles_per_chunk:
+                    mark = time.perf_counter()
+                    clips.append(self._stitch_decoded(buffered[:tiles_per_chunk], latent_height, latent_width))
+                    self._profile["stitch"] += time.perf_counter() - mark
+                    del buffered[:tiles_per_chunk]
+            assert not buffered, f"{len(buffered)} tiles left over for a {tiles_per_chunk}-tile chunk grid"
         else:
             clips = self._run_decoder_units(chunk_latents) if chunk_latents else []
 
