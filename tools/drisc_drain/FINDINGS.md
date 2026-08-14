@@ -4498,3 +4498,224 @@ nothing worth describing for at least 500 us. On this model a filler traced 16,3
 `resnet50_hold50ms.tracy` has continuous filler lanes with truncated movers. `resnet50_trace2cq_nocfp.tracy`
 (movers cut at 20%) and `resnet50_roleaware.tracy` (contains the mover cold-start regression) are superseded
 and misleading -- delete them.
+
+## §N+45 — e2e overhead across FOUR real models, and the LLM decode regime (bh-05 / **p100a**, 2026-08-14)
+
+§N+44 measured one model (ResNet-50) on one part (bh-26, p150) and got **+2%**. This widens that to four
+models on a **different part -- bh-05 is a p100a**, not a p150 -- and adds the regime that actually stresses the
+host sink: **LLM decode, which emits ~46x ResNet's marker volume** (73.6 M records vs 1.58 M).
+
+Two comparability warnings before any number is read:
+
+- **Everything here is p100a**; §N+44 is p150. Overhead *ratios* are within-box and sound; absolute times are not
+  cross-box comparable.
+- The 5-model set this task inherited (Llama / Mistral / BERT-large / ResNet-50 / DistilBERT) was originally a
+  **wh-09 n150 WORMHOLE** study of *device kernel time* under `tracy -p -r`. **Nothing here is comparable to it** --
+  that was not e2e, not Blackhole, and not this profiler. Only the model names carry over.
+
+### Method
+
+Three configs per model, **4 reps each with rep 1 DISCARDED** -- rep 1 pays DRISC-firmware JIT and, for the LLMs,
+the one-time HF -> tt weight-cache conversion. Those runs are 1.3-8x the warm time (ResNet 39 s vs 10 s; Mistral
+150 s vs 18 s) and would wreck any mean.
+
+| config | env |
+|---|---|
+| `base` | nothing |
+| `drisc` | `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PERF_DEBUG_PROFILER=1 TT_METAL_PERF_DEBUG_ROLE_SPLIT=1 TT_METAL_PERF_DEBUG_RING_RECS=67108864` |
+| `driscz` | `drisc` + `TT_METAL_PERF_DEBUG_DRISC_ZONES=1 TT_METAL_PERF_DEBUG_NOC_FOOTPRINT=1` |
+
+No `tracy-capture` attached for the timing numbers -- it starves the decoder and would change the workload being
+timed. Interpreter: **`python_env/bin/python` (3.10.18, torch 2.11.0+cpu)** from `create_venv.sh`; `/opt/venv`
+exists in the container but has no `ttnn`. Harness + raw logs live OUTSIDE the repo at
+`/localdev/mmemarian/e2e_ovh/`.
+
+### The headline: overhead falls as per-iteration work grows
+
+| model | test | metric | no profiler | + DRISC profiler | overhead | + instrument | overhead |
+|---|---|---|---|---|---|---|---|
+| ResNet-50 b16 trace+2cq | `test_perf_e2e_resnet50.py::test_perf_trace_2cqs[16-0.0018-30-device_params0]` | inference s | 0.0015495 | 0.0016443 | **+6.1%** | 0.0016338 | **+5.4%** |
+| DistilBERT b8 seq384 | `test_perf_distilbert.py::test_performance_distilbert_for_qa` | inference s | 0.0165536 | 0.0175138 | **+5.8%** | 0.0175479 | **+6.0%** |
+| Mistral-7B b1 decode | `simple_text_demo.py::test_demo_text -k "performance and batch-1"` | ms/token | 26.33 | 27.30 | **+3.7%** | 27.21 | **+3.4%** |
+| Llama-3.1-8B b1 decode | `simple_text_demo.py::test_demo_text -k "performance and batch-1"` | ms/token | 48.03 | 49.21 | **+2.5%** | 49.18 | **+2.4%** |
+
+Baseline run-to-run spread is **0.09-0.19%** in every model, so a +2.4% effect is ~13x the noise floor -- these
+overheads are real, not scatter. The ordering is the point: **the cost is close to fixed per unit of device work,
+so it dilutes as the op gets bigger.** ResNet at 1.55 ms/inference pays 6.1%; Llama at 48 ms/token pays 2.5%
+*while emitting 46x more markers*. Marker volume is NOT what sets e2e overhead.
+
+**The instrument (self-zones + NoC footprint) is free**: -0.7%, +0.2%, -0.3%, -0.1% against the profiler-only arm,
+i.e. inside noise in all four, and *negative* in three. Consistent with §N+44's +0.3%. It can stay on by default.
+
+### Capture integrity -- every profiled rep
+
+| model | records taken | dropped | ts regressions publish / consume | producer stalls |
+|---|---|---|---|---|
+| ResNet-50 | 1,581,952 | **0** | **0** of 1,581,952 / **0** of 1,581,952 | **0** of 110 cores |
+| ResNet-50 +instr | 1,820,769 | **0** | **0** of 1,714,278 / **0** of 1,714,278 | **0** of 110 |
+| DistilBERT | 495,324 | **0** | **0** of 495,324 / **0** of 495,324 | **0** of 110 |
+| DistilBERT +instr | 635,176 | **0** | **0** of 571,912 / **0** of 571,912 | **0** of 110 |
+| Mistral-7B | 70,755,924 | **0** | **0** of 70,755,924 / **0** of 70,755,924 | **0** of 110 |
+| Mistral-7B +instr | 72,788,482 | **0** | **0** of 71,859,760 / **0** of 71,859,760 | **0** of 110 |
+| Llama-3.1-8B | 73,551,420 | **0** | **0** of 73,551,420 / **0** of 73,551,420 | **0** of 110 |
+| Llama-3.1-8B +instr | 75,557,854 | **0** | **0** of 74,647,408 / **0** of 74,647,408 | **0** of 110 |
+
+Checked on every profiled run, not sampled: **zero `FAILED TO LOAD`, zero `overflows region`** across all 26
+profiled runs, and every one carries a full drainer report (94 log lines; 126 with the instrument). A profiled
+run with no report lines would be a run with no drainer and a meaningless time -- that trap did not fire here.
+
+`consumer took` exceeding `RING_RECS` (70.8 M of a 67.1 M cap) is not a defect: the cap is ring *capacity*, the
+count is cumulative throughput. **The sink absorbed 73.6 M records with 0 dropped** -- so the §N+39 worry that a
+real model would saturate the ring does not materialise even on LLM decode, at 64 Mi records of ring. Where
+`took` exceeds `order-checked` (driscz only) the difference is the DRISC self-zone series, which has no per-lane
+order invariant -- both regression counts are still 0.
+
+Host-writer cost at the LLM extreme (Llama, one rep): 647,387 reads, 37,288 MB, **sock-read 19.41 GB/s**,
+**decode 20.8 ns/marker**, publish 237.6 ms, ack 97 ns/read.
+
+### THE LLM REGIME IS THE EDGE, and it is the ack path that frays first
+
+Two events, both **only in Llama**, both in the **4th consecutive profiled rep**, never in ResNet/DistilBERT/Mistral:
+
+1. `drisc` rep4: **`CREDIT WAIT TIMED OUT 1x` twice, dropping 7 + 3 = 10 frames**, with **3 producer stalls across
+   3 of 110 cores**. The cause is printed: `writer: first data 2977 ms after thread start [large => the FIFO sat
+   unserviced and producers will have stalled once]`. The host consumer stopped acking long enough to trip the
+   credit wait; the drainer dropped frames **rather than block the workload**, which is the designed trade.
+   Order invariants stayed 0 -- the survivors are not scrambled.
+2. `driscz` rep4: **stalled mid-decode at iteration 42 of 200** and made no progress for minutes at ~113% CPU;
+   reaped by the harness `timeout`. Reps 1-3 were clean and identical (49.18 ms/token), so the driscz Llama mean
+   above is over **n=2** warm reps, not 3 -- stated because it is a weaker mean than every other cell here.
+
+So at ~74 M records the profiler is at the edge of the **host ack path**, not of bandwidth or of the ring: 0
+dropped records, 0 regressions, ring high-water untouched, but the writer thread can go unserviced for seconds.
+**The failure mode is scheduling/servicing latency on the host, and it appears as lost frames, not as corruption.**
+That both events landed on the 4th rep of a series is suggestive of accumulation across device opens (cf. the
+periodic-teardown result) and is NOT explained here -- it needs a dedicated repeat-count sweep.
+
+
+### THE HANG: Llama + driscz wedges the CARD, and the wedge outlives the process
+
+The `driscz` Llama rep4 above is worth its own subsection, because the failure is **not** confined to the run
+that caused it.
+
+**What was observed, in order:**
+
+1. Reps 1-3 of `llama driscz` were clean and near-identical (49.18 / 49.18 ms/token, 75.5 M records, 0 dropped,
+   0 regressions, 0 producer stalls).
+2. Rep 4 logged decode iterations up to **42 of 200** (last line 14:19:33), then a pair of drainer
+   `socket N drained: 86,023,575 pages, 9,342,747 markers (94,611 reads); producer stall zones: 0` lines at
+   14:21:33 -- and then **nothing at all for 36 minutes**, at a steady ~113% CPU, until the harness reaped it.
+   The workload stopped advancing; the process did not crash and did not print an error.
+3. **After that run, the CARD was wedged.** A `base` (no profiler, no DRISC, nothing) ResNet-50 e2e run --
+   the exact invocation that had completed in 9.0 s a hundred times that afternoon -- hung within one second of
+   entering the model, last line `==== Running conv2` in the warmup, and had to be killed.
+
+So the state left behind is a device-level wedge, not a Python-level one: **the next victim is an innocent
+unprofiled run, and it fails at a completely unrelated place (first conv).** Anyone bisecting from that symptom
+will chase ResNet and find nothing. Recovery is a chip reset (`tt-smi -r`); nothing softer was tried and no host
+reboot is warranted or was performed.
+
+This is consistent with the resident-drainer/NIU-restore contract: the DRISC drainers are launched to outlive
+user programs and restore NIU state on a host handshake. If the run dies between "drainers resident" and "NIU
+restored", the DRAM cores are left in the drainer's NoC configuration and the next program's traffic wedges.
+**That makes the safety property clear: any path that can abandon a resident drainer must be treated as a
+card-corrupting path, not merely a lost capture.**
+
+**Repro procedure** (bh-05, p100a, `mo/drisc_drain_fast` @ a8e56fbdc4f; n=1 so far, so treat as a candidate, not
+a recipe with a known hit rate):
+
+```
+ssh -p 42756 yyzo-bh-05                        # container as mmemarian; `tt run bh-05` is the HOST, not this
+cd /localdev/mmemarian/tt-metal
+export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
+export HF_HOME=/localdev/mmemarian/hf_cache TT_CACHE_PATH=/localdev/mmemarian/tt_cache
+export HF_MODEL=unsloth/Llama-3.1-8B-Instruct  # ungated mirror; base_model_name -> Llama-3.1-8B
+
+# run this FOUR TIMES IN A ROW in the same shell, fresh process each time.
+# Reps 1-3 are expected to pass in ~34 s; the failure showed up on rep 4.
+env TT_METAL_DEVICE_PROFILER=1 TT_METAL_PERF_DEBUG_PROFILER=1 \
+    TT_METAL_PERF_DEBUG_ROLE_SPLIT=1 TT_METAL_PERF_DEBUG_RING_RECS=67108864 \
+    TT_METAL_PERF_DEBUG_DRISC_ZONES=1 TT_METAL_PERF_DEBUG_NOC_FOOTPRINT=1 \
+    python_env/bin/python -m pytest -s -q \
+    models/tt_transformers/demo/simple_text_demo.py::test_demo_text -k 'performance and batch-1'
+
+# WEDGE CHECK -- the point of the exercise. After the run that hangs, with NO profiler env at all:
+python_env/bin/python -m pytest -s -q \
+  'models/demos/vision/classification/resnet50/blackhole/tests/test_perf_e2e_resnet50.py::test_perf_trace_2cqs[16-0.0018-30-device_params0]'
+# healthy: ~9 s, "inference time (avg): 0.00155".  wedged: hangs at "==== Running conv2".
+```
+
+Or via the harness (same thing, logs + rep accounting for free):
+`/localdev/mmemarian/e2e_ovh/run_ovh.sh llama driscz 4`
+
+**Signals to collect when it fires**, in priority order: whether the last log line is a `socket N drained`
+report (drain accounting) or a decode iteration; the `writer: first data N ms after thread start` value; whether
+`CREDIT WAIT TIMED OUT` appears at all (in the `drisc` rep4 it did -- 2 timeouts, 10 frames dropped, 3 producer
+stalls -- and that run *survived*; the driscz rep4 that hung shows the safety valve is not sufficient in every
+path); and `py-spy dump` on the live process to separate "host thread blocked on device" from "spinning".
+
+**Two adjacent facts that will mislead a bisect, recorded so they do not:**
+
+- `TT_METAL_PERF_DEBUG_DRISC_ZONES` + `NOC_FOOTPRINT` were on in the run that hung, and the profiler-only
+  (`drisc`) arm survived the same rep-4 position with dropped frames instead. That is **suggestive, not
+  established** -- one hang is one hang, and the drisc arm's rep4 anomaly says the underlying pressure exists
+  without the instrument.
+- **`test_perf_debug_zones` is NOT a usable card-health probe at this commit.** Run with no profiler env it
+  aborts in `sync_build_steps` with a *source* error, `'WALL_CLOCK_LOW_INDEX' is not a member of
+  'kernel_profiler'` (`programming_examples/profiler/test_perf_debug_zones/kernels/zones_dm.cpp:46`), because
+  the unprofiled variant of that kernel does not compile. It builds and runs fine *with* the profiler env, so
+  the example's non-profiled path is simply broken here. It looks exactly like a wedge and is not one. Use an
+  unprofiled ResNet e2e rep as the health probe instead.
+
+### The NoC footprint: LLM decode is a different animal again
+
+Per-role bytes/txns in the workload window (4 fillers + 2 movers, driscz rep 2):
+
+| model | filler bytes each | filler mean B/txn | mover bytes each | mover mean B/txn |
+|---|---|---|---|---|
+| ResNet-50 | 1.84-2.15 GB | 10,243-10,310 | 0.27-0.29 GB | 1,693-1,822 |
+| DistilBERT | 1.80-2.55 GB | 10,261-10,329 | 0.26-0.27 GB | 1,411-1,427 |
+| Mistral-7B | 26.9-39.8 GB | 8,680-9,207 | 34.7-35.1 GB | 6,274-6,378 |
+| Llama-3.1-8B | 37.0-53.2 GB | 9,007-9,425 | 37.6-37.8 GB | 5,566-5,638 |
+
+**A mover transaction is 3.3-4.5x fuller on LLM decode than on ResNet** (5.6-6.4 kB vs 1.4-1.8 kB). §N+44's
+"under-full span" complaint -- real ops leave the L1 rings nearly empty, so a sweep hauls a mostly-empty
+10,496 B span -- is therefore **a ResNet-shaped artifact, not a general property**. On LLM decode the frames
+arrive full and the two-phase-read argument loses most of its force. Filler mean B/txn stays pinned at ~9-10 kB
+in all four because a filler reads the WHOLE span regardless of fill, so that column measures span size, not
+occupancy; the mover column is the one that measures occupancy.
+
+Mover bytes go from ~4% of filler bytes (ResNet) to **~90-100%** (LLMs): with full frames, the egress side stops
+being a rounding error and becomes half the traffic.
+
+### Model availability on this part -- what is measurable and what is not
+
+- **BERT-large: NOT MEASURABLE on Blackhole.** Both e2e perf tests hard-skip on BH:
+  `models/demos/metal_BERT_large_11/tests/test_perf_bert11.py::test_perf_bare_metal_wh` is
+  `@pytest.mark.skipif(is_blackhole(), reason="Not functional on BH")` plus `@run_for_wormhole_b0`, and
+  `tests/ttnn/integration_tests/bert/test_performance.py` is `skipif(is_wormhole_b0() or is_blackhole())`.
+  Its CI entry is commented out (issue #48191). There is no `blackhole/` BERT-large variant. **4 models, not 5** --
+  reported rather than substituted with a device-perf test (which needs the profiler and so cannot measure
+  profiler overhead).
+- **LLM weights came from UNGATED MIRRORS.** bh-05 has no HF token, no `/mnt/MLPerf`, and no local checkpoints;
+  `meta-llama/Llama-3.1-8B-Instruct` is `gated=manual` and cannot be fetched. Used
+  **`unsloth/Llama-3.1-8B-Instruct`**, chosen deliberately: `get_base_model_name` maps its leaf name to
+  **`Llama-3.1-8B`**, the exact key the tree's config branches use, whereas a `Meta-Llama-*` mirror maps to
+  `Meta-Llama-3.1-8B` and would take a different config path. Mistral needed no mirror --
+  `mistralai/Mistral-7B-Instruct-v0.3` is ungated. **These are community mirrors, not verified byte-identical to
+  the originals**; the config path is identical, the weights are equal only by reputation.
+- **Mistral-7B is not BH-validated upstream**: no `bh_p150` entry in `models/model_targets.yaml`, WH-only SKUs in
+  `models_e2e_tests.yaml`, `tt_transformers/README.md` lists n150 only. It runs unguarded and its numbers above
+  are self-consistent, but it is not a supported BH config.
+- **Perf gates**: ResNet **passes its 0.0018 s target in every config** including profiled (0.00163-0.00166) --
+  the §N+44 result holds on p100a. DistilBERT **fails its 0.0165 s target in ALL THREE configs, baseline
+  included** (0.016554 s, a 0.3% miss): that is the p150-tuned threshold meeting a p100a, **not** a profiler
+  effect. Llama/Mistral have no BH target, so no gate fires.
+
+### Reproducing
+
+```
+# container on bh-05 is reached as mmemarian via: ssh -p 42756 yyzo-bh-05
+/localdev/mmemarian/e2e_ovh/run_ovh.sh <resnet|distilbert|mistral|llama> <base|drisc|driscz> 4
+/localdev/mmemarian/e2e_ovh/gen_findings.py     # regenerates every table above from the rep logs
+```
