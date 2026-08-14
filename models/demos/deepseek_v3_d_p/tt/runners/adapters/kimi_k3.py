@@ -37,7 +37,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapt
 # from it (bf16 weight + fp32 bias, ~12.8 MB via a prefix-filtered safe_open); one MoE layer's whole
 # weight set lives in a single shard, e.g. layer 3 -> model-00004-of-000096.safetensors.
 # NOT wired to ``shared_path`` -- see the note on that attribute for why that would be a trap.
-KIMI_K3_CHECKPOINT = Path("/mnt/models/moonshotai/Kimi-K3")
+KIMI_K3_CHECKPOINT = Path("/mnt/models/blaze/moonshotai/Kimi-K3")
 
 
 class KimiK3Adapter(MLAPrefillAdapter):
