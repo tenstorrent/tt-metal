@@ -67,14 +67,7 @@ def test_compute_constants_reserves_local_expert_tile_padding():
         pytest.param(32, 224, 64, 256, 8, 4, 8, True, None, None, None, None, id="random-weights-gate"),
         pytest.param(32,DeepSeekV3Config.EMB_SIZE,DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,DeepSeekV3Config.NUM_ROUTED_EXPERTS,DeepSeekV3Config.NUM_EXPERTS_PER_TOKEN,4,8,False,"deepseek-ai/DeepSeek-V3",3,None,None,id="hf-weights",marks=pytest.mark.slow,
         ),
-        # Kimi-K3 LatentMoE, scaled down: routed side at half the embedding width, shared expert at
-        # 2x the MoE intermediate (K3's num_shared_experts=2 collapses into one wider MLP), top-16.
-        # use_gate=False deliberately -- routing is supplied externally so this case stays a pure
-        # dataflow/shape test. Gate-driven latent routing is covered by
-        # test_moe_reference_comparison.py::test_kimi_k3_latent_moe_reference_pcc, which drives the
-        # real KimiMoEGate. Capacity 16 (not 8) because 16 local experts each pad their region up to
-        # a 32-token tile: ~512 dispatched + ~496 padding needs more than dgs*seq*8 = 1024 slots.
-        pytest.param(32, 256, 64, 64, 16, 4, 16, False, None, None, 128, 128, id="k3-latent-moe"),
+        pytest.param(32, 256, 96, 64, 16, 4, 16, False, None, None, 128, 192, id="k3-latent-moe"),
         # fmt: on
     ],
 )
