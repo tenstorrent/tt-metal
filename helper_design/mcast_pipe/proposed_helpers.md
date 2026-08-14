@@ -222,10 +222,9 @@ llama worker_receiver, gn_v2 receiver. `(EXCLUDE or INCLUDE, Flag, flush, pre_ha
 - gn / welford senders — `McastDestSet` multi-rect (R1).
 - ln sharded (C3) — `Staging::Counter` + phase-granular calls (R3); two-phase streaming.
 - gn interleaved (C4) — double-flag-per-exchange (two `send_signal`/`receive` per iter).
-- conv activation multicast — INCLUDE_SRC loopback (F3, handled). Width-sharded Conv is migrated.
-  API v11 now exposes `SenderPipe::send_from_cb`, which preserves the block-sharded reader's
-  producer-overlapped per-burst broadcast. That reader and its host binding are integrated in source
-  and remain pending only for apply validation and ledger write-back.
+- conv 2d-act / width-sharded — INCLUDE_SRC loopback (F3, handled). **Their streaming chunked
+  send (R4) is DEFERRED** — these kernels migrate the loopback/handshake but keep their
+  `mcast_block_chunked` (producer-overlapped per-burst broadcast) on raw API this round.
 - sdpa read_k — `can_link=false` path (unlinked + barrier-between); deepseek_prefill — `Staging::Counter`.
 - move — **legacy raw API → port to `Noc`/`Semaphore` first**, then migrate.
 - sort-single-row — **migrated at API v9 (`7337302b564`)**: coordinator + reader are the
@@ -240,9 +239,11 @@ llama worker_receiver, gn_v2 receiver. `(EXCLUDE or INCLUDE, Flag, flush, pre_ha
 - Ring/unicast (matmul in0_ring, sdpa ring legs, sort cross-core) — not rectangle-mcast.
 - Fabric / cross-chip CCL legs — intent exclusion.
 - Preprogram-state perf optimization (deepseek mcast.hpp) — no mcast set-state in object API; future.
-- **Streaming chunked send (R4) — resolved in source:** `SenderPipe::send_from_cb` interleaves
-  `wait_front` with per-burst multicast while preserving loopback and degenerate behavior. The
-  block-sharded Conv2D activation unit uses it; only apply validation and ledger write-back remain.
+- **Streaming chunked send (R4)** — broadcasting a not-yet-complete block by interleaving
+  `wait_front` with per-burst mcasts (conv `mcast_block_chunked`), to overlap producer with NoC.
+  **Deferred this round.** The Pipe handles only fully-ready blocks (object API auto-chunks a ready
+  block larger than the burst limit transparently). Source polymorphism (CB / raw-L1 / self-CB) is
+  retained because `send` and `send_signal` take plain L1 addresses.
 
 ## Hand-off
 Sign-off on this file **is Gate 1 of `build-helper`**. The bake-off kernels at

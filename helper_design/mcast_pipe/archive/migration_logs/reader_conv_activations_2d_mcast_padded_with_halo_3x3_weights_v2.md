@@ -1,6 +1,11 @@
-# block-sharded Conv2D activation multicast — source integrated, validation pending
+# block-sharded Conv2D activation multicast — reverted experiment
 
-## Current verdict
+> **Historical only (reverted 2026-08-14).** The experimental `f3361f57596`,
+> `ccd7b597e92`, `8ae4604379e`, and `9686814ea22` feature chain was reverted.
+> This file preserves the attempted design and is not current rollout evidence
+> or instructions.
+
+## Experimental verdict at the time
 
 The former R4 design gap is resolved in source. Commit `f3361f57596` added
 `SenderPipe::send_from_cb`, migrated the block-sharded Conv2D activation reader,
@@ -13,15 +18,14 @@ monotonically growing CB frontier and multicasts that burst before the complete
 tilized block is ready. The helper also owns loopback, degenerate local copy,
 handshake, semaphore, and sender/receiver geometry behavior.
 
-## Rollout state
+## Attempted rollout state
 
 - Kernel: `reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp`
 - Host binding: `activation-mcast:conv2d-block-sharded:rotating-lines`
 - Atomic unit: `conv2d-activation-block-sharded`
-- Ledger status: `pending`
+- Ledger status at the time: `pending`
 - Required inventory: `CONV-BLOCK`, including exact post-integration JIT proof
   and the mapped performance gate
 
-Do not mark this unit migrated from source inspection or helper-only tests. The
-host binding and kernel must be validated and written back together when the
-user resumes the apply workflow.
+The attempt required the host binding and kernel to be validated and written
+back together. It was reverted before that apply validation and write-back.

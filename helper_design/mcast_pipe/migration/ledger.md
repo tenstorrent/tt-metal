@@ -1,10 +1,10 @@
-# `mcast_pipe` migration ledger — reconciled 2026-08-14
+# `mcast_pipe` migration ledger — reconciled after experimental rollback 2026-08-14
 
 Machine source of truth: `ledger.json`. Test dispatch is in `test_map.json`; per-unit evidence is in
-`log/`; the latest static audit is archived at
-`../archive/reconciliation/reconcile_2026-08-14.md`.
+`log/`. The last pre-rollback static audit is archived at
+`../archive/reconciliation/reconcile_2026-08-14.md`; Round 29 of `../changelog.md` records the rollback.
 
-- Branch: `sjovic/mcast-migration` at `9686814ea22` during reconciliation.
+- Branch: `sjovic/mcast-migration` at `9d870bf2da9` after rollback.
 - Baseline: `origin/llk_helper_library` at `4a1d6a97ca9`.
 - Ledger API: v10.
 - Materialized helper API: v11.
@@ -18,12 +18,12 @@ owned by `apply-dm-helper`.
 | State | Kernels | Host bindings |
 |---|---:|---:|
 | migrated at ledger API v10 | 17 | 14 |
-| pending | 4 | 10 |
-| deferred | 70 | 0 |
+| pending | 3 | 9 |
+| deferred | 71 | 0 |
 | quarantined | 0 | 0 |
 
 All 91 inventoried kernel paths exist. Before the separate text inventory was removed, its path set
-matched these entries exactly. No migrated kernel was removed, renamed, or clobbered. Three migrated
+matched these entries exactly. No migrated kernel was removed, renamed, or clobbered. Two migrated
 kernels were edited after the last ledger write-back and carry `needs_recheck`.
 
 ## Migrated units awaiting API-v11 re-entry
@@ -47,7 +47,6 @@ These rows remain stamped v10 until the API-v11 apply gate is green.
 |---|---|
 | `reader_bmm_tile_layout_in1_sender_writer_padding.cpp` | Matmul remediation and multicast naming cleanup changed the migrated source |
 | `reader_bmm_tile_layout_in1_receiver_writer_padding.cpp` | Multicast naming cleanup changed the migrated source |
-| `activation_reader_width_sharded.cpp` | Streaming-overlap optimization and measured-win gate changed the migrated source |
 
 `apply-dm-helper` must run their mapped verify-only coverage and clear the flags when green. API-v11
 Tier-0 coverage may satisfy both obligations when it exercises the same complete inventories.
@@ -58,15 +57,14 @@ Tier-0 coverage may satisfy both obligations when it exercises the same complete
 |---|---|---|
 | Matmul in0 interleaved | sender and receiver; five host bindings | API-v11 validation, exact fresh-JIT evidence, complete mapped inventories, performance evidence, ledger write-back |
 | Matmul in0 block-sharded | hybrid reader; four legacy/descriptor 1D/2D bindings | Validate rotating sender topology and the exact block-sharded routes, then write back atomically |
-| Conv2D block activation | streaming activation reader; one host binding | Validate helper streaming semantics, complete Conv coverage, and performance; write back the unit |
-
-The Matmul API-007 and block-sharded topology blockers are resolved in source. The Conv R4 blocker is
-also resolved in source by `SenderPipe::send_from_cb`. Pending status is retained because reconciliation
-does not substitute source inspection for build/device evidence.
+The Matmul API-007 and block-sharded topology blockers are resolved in source. Pending status is
+retained because reconciliation does not substitute source inspection for build/device evidence.
+Block-sharded Conv activation is deferred: its producer-overlapped streaming multicast remains the R4
+design gap and continues to use the established raw primitive path.
 
 ## Deferred backlog
 
-Seventy entries remain deferred. Their exact reasons and flags are authoritative in `ledger.json`.
+Seventy-one entries remain deferred. Their exact reasons and flags are authoritative in `ledger.json`.
 The major classes are:
 
 - genuine capability gaps such as chain relay, runtime role/count, and multi-phase protocols;
@@ -83,8 +81,7 @@ factory, ABI, channel split, or data flow.
 Run `apply-dm-helper` from the reconciled state:
 
 1. validate and stamp the v10 fleet at API v11;
-2. clear the three `needs_recheck` flags through mapped verify-only coverage;
+2. clear the two `needs_recheck` flags through mapped verify-only coverage;
 3. validate and write back the two interleaved Matmul kernels and five bindings;
 4. validate and write back the block-sharded Matmul kernel and four bindings;
-5. validate and write back the block-sharded Conv activation kernel and binding;
-6. update logs and the live report after each atomic unit completes.
+5. update logs and the live report after each atomic unit completes.

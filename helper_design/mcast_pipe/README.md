@@ -5,7 +5,7 @@ kernel `mcast_pipe` helper and its paired host helper. The rollout is paused; do
 not start migration or change ledger status unless the user explicitly resumes it.
 
 - Reviewed: 2026-08-14
-- Branch/head at reconciliation: `sjovic/mcast-migration` / `9686814ea22`
+- Branch/head after experimental rollback: `sjovic/mcast-migration` / `9d870bf2da9`
 - Baseline: `origin/llk_helper_library` at `4a1d6a97ca9`
 - Materialized helper API: v11
 - Ledger write-back API: v10
@@ -30,26 +30,28 @@ text inventory matched the ledger exactly and has now been folded into it:
 | State | Kernels | Host bindings |
 |---|---:|---:|
 | migrated, recorded at v10 | 17 | 14 |
-| pending | 4 | 10 |
-| deferred | 70 | 0 |
+| pending | 3 | 9 |
+| deferred | 71 | 0 |
 | quarantined | 0 | 0 |
 
 The migrated fleet is paper-stale because the helper is v11; this does not mean
-the current source is known broken. The current host build, 32 host-helper tests,
-and all 80 helper device/wire tests passed on 2026-08-14. Those intake checks do
-not replace the mapped per-operation validation required for ledger write-back.
+the current source is known broken. The 2026-08-14 intake host build, 32
+host-helper tests, and 80 helper device/wire tests passed before the experimental
+Conv rollback. Current rollback validation is recorded in the changelog. These
+checks do not replace mapped per-operation validation required for write-back.
 
-Four pending kernels are already integrated in source: Matmul in0 sender,
-receiver, and block-sharded hybrid, plus block-sharded Conv2D activation. Their
-ten required factory bindings are now represented explicitly in the ledger and
-test map. Three migrated kernels also carry `needs_recheck`; see
+Three pending kernels are already integrated in source: Matmul in0 sender,
+receiver, and block-sharded hybrid. Their nine required factory bindings are
+represented explicitly in the ledger and test map. Two migrated kernels also
+carry `needs_recheck`; see
 [`migration/ledger.md`](migration/ledger.md).
 
 ## Next logical action — only when migration resumes
 
 Re-enter the apply workflow from the reconciled v11 state. First verify/stamp the
-v10 fleet and clear the three `needs_recheck` flags, then validate the pending
-Matmul and Conv units under their mapped inventories. No apply run is currently
+v10 fleet and clear the two `needs_recheck` flags, then validate the pending
+Matmul units under their mapped inventories. The block-sharded Conv activation
+reader remains deferred on the R4 streaming design gap. No apply run is currently
 approved and no run mode has been selected.
 
 Current human views:

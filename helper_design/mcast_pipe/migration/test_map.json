@@ -276,15 +276,6 @@
       "migration_unit": "matmul-in0-mcast-block-sharded",
       "inventory": ["MM-BLOCK-SHARDED-HYBRID"],
       "coverage": "high; source integration has matched correctness and performance evidence, but apply write-back remains pending"
-    },
-    {
-      "id": "activation-mcast:conv2d-block-sharded:rotating-lines",
-      "classification": "required",
-      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp",
-      "dispatch": "block-sharded non-depthwise Conv2D activation multicast with rotating input-shard senders",
-      "migration_unit": "conv2d-activation-block-sharded",
-      "inventory": ["CONV-BLOCK"],
-      "coverage": "mapped from the existing Conv block inventory; exact post-integration JIT and full apply validation remain pending"
     }
   ],
   "inventory_definitions": {

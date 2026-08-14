@@ -6,6 +6,25 @@ feedback round lands.
 
 ---
 
+## Round 29 — revert experimental Conv streaming send (2026-08-14)
+
+- Reverted the complete experimental chain with commits `f003c5c3687`,
+  `12d2548d4e1`, `d1277247931`, and `9d870bf2da9`. This removes
+  `SenderPipe::send_from_cb`, restores block-sharded Conv activation's raw
+  producer-overlapped multicast, and restores the established width-sharded
+  path and gate.
+- The five affected source files are byte-identical to the parent of
+  `f3361f57596`. The helper remains API v11 because the experiment had not
+  changed `MCAST_PIPE_API_VERSION`.
+- Restored the block-sharded Conv activation ledger row to deferred R4,
+  removed its no-longer-valid pending host binding, and cleared the
+  width-sharded kernel's experiment-only `needs_recheck` flag. The attempted
+  migration log is archived as historical evidence.
+- Validation passed: `./build_metal.sh`; one exact block-sharded Conv node under
+  `--dev`; complete block- and width-sharded feature inventories at 48 passed /
+  16 expected skips each; all 80 helper device/wire tests under `--dev`; and all
+  32 `McastHostFixture` tests.
+
 ## Round 28 — single ledger inventory and design-evidence layout (2026-08-14)
 
 - Folded the separate 91-path text inventory into `migration/ledger.json`. Each

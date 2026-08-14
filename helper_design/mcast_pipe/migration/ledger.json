@@ -587,22 +587,6 @@
       "coverage_confidence": "high",
       "last_verified": "2026-08-07",
       "flags": ["source-integrated", "apply-verification-pending"]
-    },
-    {
-      "id": "activation-mcast:conv2d-block-sharded:rotating-lines",
-      "factory": "ttnn/cpp/ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.cpp",
-      "dispatch": "block-sharded non-depthwise Conv2D activation multicast with rotating input-shard senders",
-      "kernels": [
-        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp"
-      ],
-      "migration_unit": "conv2d-activation-block-sharded",
-      "status": "pending",
-      "migrated_api_version": null,
-      "commit": null,
-      "validation_set": ["CONV-BLOCK"],
-      "coverage_confidence": "high",
-      "last_verified": null,
-      "flags": ["source-integrated", "apply-verification-pending"]
     }
   ],
   "entries": [
@@ -975,8 +959,7 @@
         "atomic-unit:conv2d-activation-width-sharded",
         "fully-end-to-end",
         "rotating-sender",
-        "loopback-completion-verified",
-        "needs_recheck"
+        "loopback-completion-verified"
       ],
       "migration_unit": "conv2d-activation-width-sharded",
       "note": "API-v9 Mcast2D/McastArgs port removes the raw multicast, semaphore, and X/Y lookup wire. consumer_ack_count=max(input_num_cores,output_num_cores)-1 remains distinct from the full-rectangle fan-out."
@@ -986,7 +969,7 @@
       "op_family": "conv",
       "role": "hybrid",
       "tag": "refactor",
-      "status": "pending",
+      "status": "deferred",
       "migrated_api_version": null,
       "commit": null,
       "validation_set": [
@@ -994,11 +977,10 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-06-20",
-      "inventory_note": "Source integrated with API-v11 streaming send_from_cb and helper-owned rotating line topology; apply verification, host-binding mapping, and ledger write-back remain pending.",
+      "inventory_note": "all 3 F3 sub-cases; CHUNKED send > NOC_MAX_BURST_SIZE | DEFER-DESIGN-GAP (R4): mcast_block_chunked is a producer-overlapped STREAMING chunked send (wait_front per growing tile count interleaved with per-burst mcast). v7 send() handles only fully-ready blocks (auto-chunks a ready region); cannot express the per-burst wait_front streaming. R4 explicitly deferred this round (proposed_helpers.md). Out of scope.",
       "flags": [
-        "source-integrated",
-        "apply-verification-pending",
-        "host-binding-map-pending"
+        "tier:2b",
+        "design-gap"
       ]
     },
     {
@@ -2474,6 +2456,30 @@
       ],
       "recall_sweep": "All 91 ledger kernel paths exist and exactly match census.txt. The primitive recognition-family path set changed by zero additions since fae7eb9ed6f; one raw-pattern hit disappeared because the block-sharded Matmul kernel now uses mcast_pipe. No source file was added or renamed. The four source-integrated pending kernels were already census entries.",
       "follow_up": "When the user resumes migration, run apply-dm-helper: Tier-0 validate/stamp the v10 fleet at API v11; verify-only the three needs_recheck kernels; then verify and write back the four source-integrated pending kernels and their ten mapped required host bindings."
+    },
+    {
+      "date": "2026-08-14",
+      "report": "changelog.md (Round 29)",
+      "base_from": "95d01474cb0 (pre-rollback helper-design handoff)",
+      "base_to": "9d870bf2da9 (send_from_cb feature chain reverted)",
+      "api_version": "helper 11; ledger 10 (unchanged)",
+      "buckets": {
+        "reverted_commits": 4,
+        "restored_deferred": 1,
+        "removed_host_bindings": 1,
+        "cleared_needs_recheck": 1
+      },
+      "restored_deferred": [
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp"
+      ],
+      "removed_host_bindings": [
+        "activation-mcast:conv2d-block-sharded:rotating-lines"
+      ],
+      "cleared_needs_recheck": [
+        "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp"
+      ],
+      "source_equivalence": "The five affected source files are byte-identical to f3361f57596^.",
+      "validation": "./build_metal.sh passed; exact block-sharded Conv --dev node passed; CONV-BLOCK and CONV-WIDTH feature inventories each passed 48 with 16 expected skips; test_mcast_pipe.py passed 80/80 under --dev; McastHostFixture passed 32/32."
     }
   ]
 }
