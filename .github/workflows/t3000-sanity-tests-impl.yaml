@@ -41,12 +41,17 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
+      test-names:
+        required: false
+        type: string
+        default: ""
+        description: "Comma-separated test names from t3000_sanity_tests.yaml to run (default: all)."
 
 jobs:
   load-test-matrix:
     runs-on: ubuntu-slim
     outputs:
-      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.filter-matrix.outputs.matrix }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/t3000_sanity_tests.yaml
     steps:
@@ -75,6 +80,28 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
+      - name: Restrict matrix to requested test names
+        id: filter-matrix
+        env:
+          MATRIX_JSON: ${{ steps.build-matrix.outputs.matrix }}
+          TEST_NAMES: ${{ inputs.test-names }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, sys
+
+          matrix = json.loads(os.environ["MATRIX_JSON"])
+          names = [n.strip() for n in os.environ["TEST_NAMES"].split(",") if n.strip()]
+          if names:
+              # prepare_test_matrix.py appends " [<sku>]" to each name; match on the base name.
+              base = lambda entry: entry["name"].split(" [")[0]
+              unknown = sorted(set(names) - {base(t) for t in matrix})
+              if unknown:
+                  print(f"::error::test-names not present in the matrix: {', '.join(unknown)}")
+                  sys.exit(1)
+              matrix = [t for t in matrix if base(t) in names]
+              print(f"Restricted matrix to: {', '.join(t['name'] for t in matrix)}", file=sys.stderr)
+          print("matrix=" + json.dumps(matrix, separators=(",", ":")))
+          PY
 
   t3000-sanity-tests:
     needs: load-test-matrix

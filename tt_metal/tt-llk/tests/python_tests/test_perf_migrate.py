@@ -9,13 +9,13 @@ from dataclasses import replace
 
 import pandas as pd
 import pyarrow.parquet as pq
-from helpers.perf_migrate import (
+from helpers.perf.migrate import (
     MigrationRun,
     discover_runs,
     migrate_runs,
     summarize_coverage,
 )
-from helpers.perf_wide_schema import DB_SCHEMA
+from helpers.perf.wide_schema import DB_SCHEMA
 
 
 def _csv(dir_, name, df):

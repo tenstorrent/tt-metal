@@ -14,9 +14,11 @@ from models.common.utility_functions import skip_for_blackhole
 from tracy import signpost
 
 
-def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
-    # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
+def create_global_semaphores(mesh_device, num_devices, cores, initial_value, num_extra=0):
+    # 2 out-ready semaphores (one per direction), plus num_extra aggregator per-worker semaphores
+    ccl_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2 + num_extra)
+    ]
     return ccl_semaphore_handles
 
 
@@ -49,7 +51,10 @@ def run_strided_all_gather_minimal_matmul_impl(
     skip_check=False,
     num_l1_banks=64,
     use_bias=False,
+    use_ternary=False,
+    ternary_scalar=0.5,
     activation=None,
+    chunks=1,
     math_fidelity=ttnn.MathFidelity.HiFi2,
     fp32_acc=True,
     mm_core_grid=None,
@@ -57,6 +62,7 @@ def run_strided_all_gather_minimal_matmul_impl(
     shard_weights=False,
     ag_core_grid_offset=(0, 6),
     read_local_slice_from_input=False,
+    mm_signal_aggregator_mode=ttnn.MMSignalAggregatorMode.Auto,
 ):
     torch.manual_seed(0)
 
@@ -89,7 +95,12 @@ def run_strided_all_gather_minimal_matmul_impl(
     )
 
     # create global semaphore handles
-    ccl_semaphore_handles = [create_global_semaphores(mesh_device, num_devices, all_cores, 0) for _ in range(num_iters)]
+    # For the writer-signals-matmul path, the aggregator needs 2 directions x
+    num_agg_sems = 2 * num_links * (num_workers_per_link or 0)
+    ccl_semaphore_handles = [
+        create_global_semaphores(mesh_device, num_devices, all_cores, 0, num_extra=num_agg_sems)
+        for _ in range(num_iters)
+    ]
 
     ##### All gather input setup #####
     logger.info(f"All gather output shape: {ag_output_shape}")
@@ -98,10 +109,19 @@ def run_strided_all_gather_minimal_matmul_impl(
     input_tensor_mesh_list = []
     weight_tensor_mesh_list = []
     bias_tensor_mesh_list = []
+    ternary_a_tensor_mesh_list = []
+    ternary_b_tensor_mesh_list = []
     ag_output_tensor_goldens_list = []
     torch_matmul_output_list = []
 
     shard_dims = [other_dim, dim]
+    if use_ternary:
+        assert (
+            not use_non_fused
+        ), "ternary (addcmul) is only wired into the fused strided_all_gather_minimal_matmul path"
+    if chunks > 1:
+        assert not use_non_fused, "chunks > 1 is only wired into the fused strided_all_gather_minimal_matmul path"
+        assert N % chunks == 0, f"N ({N}) must be divisible by chunks ({chunks})"
     for i in range(num_iters):
         torch_dtype = torch.float32
         ag_output_tensor = torch.randn(ag_output_shape, dtype=torch_dtype)
@@ -112,6 +132,8 @@ def run_strided_all_gather_minimal_matmul_impl(
         activation_fn = None
         if activation == "gelu":
             activation_fn = (ttnn.UnaryOpType.GELU, False)
+        elif activation == "gelu_tanh":
+            activation_fn = ttnn.UnaryOpType.GELU_TANH
         else:
             assert activation is None, f"Unsupported activation: {activation}"
 
@@ -151,12 +173,47 @@ def run_strided_all_gather_minimal_matmul_impl(
         weight_tensor_mesh_list.append(weight_tensor_mesh)
         bias_tensor_mesh_list.append(bias_tensor_mesh)
 
-        if use_bias:
-            matmul_output = torch.nn.functional.linear(
-                ag_output_tensor_goldens_list[i], weight_input.T.contiguous(), bias_input
+        if use_ternary:
+            # addcmul: out = ternary_a + scalar * matmul_out * ternary_b
+            ternary_a_input = torch.randn((1, 1, M, N), dtype=torch_dtype)
+            ternary_b_input = torch.randn((1, 1, 1, N), dtype=torch_dtype)
+            ternary_a_tensor_mesh = ttnn.from_torch(
+                ternary_a_input,
+                device=mesh_device,
+                layout=layout,
+                dtype=ag_input_dtype,
+                memory_config=mem_config_input,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, dims=[other_dim, dim if shard_weights else None], mesh_shape=tuple(mesh_device.shape)
+                ),
+            )
+            ternary_b_tensor_mesh = ttnn.from_torch(
+                ternary_b_input,
+                device=mesh_device,
+                layout=layout,
+                dtype=ag_input_dtype,
+                memory_config=mem_config_input,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device, dims=[None, dim if shard_weights else None], mesh_shape=tuple(mesh_device.shape)
+                ),
             )
         else:
-            matmul_output = torch.matmul(ag_output_tensor_goldens_list[i], weight_input)
+            ternary_a_tensor_mesh = None
+            ternary_b_tensor_mesh = None
+        ternary_a_tensor_mesh_list.append(ternary_a_tensor_mesh)
+        ternary_b_tensor_mesh_list.append(ternary_b_tensor_mesh)
+
+        matmul_output = torch.matmul(ag_output_tensor_goldens_list[i], weight_input)
+        if use_bias:
+            # Row-broadcast bias: bias_input is [1, N] and broadcasts over the M rows, matching add_bias_block.
+            matmul_output = matmul_output + bias_input
+        if use_ternary:
+            matmul_output = ternary_a_input + ternary_scalar * matmul_output * ternary_b_input
+        # fused_activation is applied last (mutually exclusive with ternary; see the op's validate).
+        if activation == "gelu":
+            matmul_output = torch.nn.functional.gelu(matmul_output)
+        elif activation == "gelu_tanh":
+            matmul_output = torch.nn.functional.gelu(matmul_output, approximate="tanh")
         torch_matmul_output_list.append(matmul_output)
 
     ### Create persistent output buffers
@@ -223,8 +280,10 @@ def run_strided_all_gather_minimal_matmul_impl(
                 compute_kernel_config=compute_config,
                 config=matmul_config,
             )
+            # Uniform list-of-chunks interface (single output for the non-fused path).
+            tt_matmul_out_tensors = [tt_matmul_out_tensor]
         else:
-            tt_all_gather_out_tensor, tt_matmul_out_tensor = ttnn.experimental.strided_all_gather_minimal_matmul_async(
+            fused_outputs = ttnn.experimental.strided_all_gather_minimal_matmul_async(
                 input_tensor_mesh_list[i],
                 weight_tensor_mesh_list[i],
                 persistent_output_buffer=persistent_output_buffers[i],
@@ -243,8 +302,16 @@ def run_strided_all_gather_minimal_matmul_impl(
                 num_workers_per_link=num_workers_per_link,
                 num_buffers_per_channel=num_buffers_per_channel,
                 read_local_slice_from_input=read_local_slice_from_input,
+                fused_ternary_input_a=ternary_a_tensor_mesh_list[i] if use_ternary else None,
+                fused_ternary_input_b=ternary_b_tensor_mesh_list[i] if use_ternary else None,
+                fused_ternary_scalar=ternary_scalar if use_ternary else None,
+                chunks=chunks,
+                mm_signal_aggregator_mode=mm_signal_aggregator_mode,
             )
-        return tt_all_gather_out_tensor, tt_matmul_out_tensor
+            # Op returns [all_gather_output, matmul_chunk_0, ..., matmul_chunk_{chunks-1}].
+            tt_all_gather_out_tensor = fused_outputs[0]
+            tt_matmul_out_tensors = list(fused_outputs[1:])
+        return tt_all_gather_out_tensor, tt_matmul_out_tensors
 
     if enable_trace:
         # Compile the op
@@ -307,26 +374,31 @@ def run_strided_all_gather_minimal_matmul_impl(
                 logger.info(f"{output}, iteration {i}")
                 assert eq, f"iter {i} AG FAILED ag: {output}"
 
-            tt_mm_out_tensor = tt_matmul_out_tensor_list[i]
+            # Matmul output is a list of chunk tensors (one for chunks=1)
+            tt_mm_out_tensors = tt_matmul_out_tensor_list[i]
             torch_mm_out_tensor = torch_matmul_output_list[i if not enable_trace else 0]
+            torch_mm_chunks = torch.chunk(torch_mm_out_tensor, len(tt_mm_out_tensors), dim=-1)
 
-            tt_mm_out = ttnn.from_device(tt_mm_out_tensor)
-            tt_mm_out = ttnn.to_torch(
-                tt_mm_out,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims if shard_weights else concat_dims
-                ),
-            )
-            if not shard_weights:
-                for d in range(mesh_device.shape[1]):
-                    tt_mm_out_slice = tt_mm_out[d : d + 1, :, :, :]
-                    eq, output = comp_pcc(tt_mm_out_slice, torch_mm_out_tensor)
-                logger.info(f"{output}, iteration {i}")
-                assert eq, f"iter {i} MM FAILED ag: {output}"
-            else:
-                eq, output = comp_pcc(tt_mm_out, torch_mm_out_tensor)
-                logger.info(f"{output}, iteration {i}")
-                assert eq, f"iter {i} MM FAILED ag: {output}"
+            for c, tt_mm_chunk_tensor in enumerate(tt_mm_out_tensors):
+                tt_mm_out = ttnn.from_device(tt_mm_chunk_tensor)
+                tt_mm_out = ttnn.to_torch(
+                    tt_mm_out,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device,
+                        mesh_shape=tuple(mesh_device.shape),
+                        dims=shard_dims if shard_weights else concat_dims,
+                    ),
+                )
+                if not shard_weights:
+                    for d in range(mesh_device.shape[1]):
+                        tt_mm_out_slice = tt_mm_out[d : d + 1, :, :, :]
+                        eq, output = comp_pcc(tt_mm_out_slice, torch_mm_chunks[c])
+                    logger.info(f"{output}, iteration {i} chunk {c}")
+                    assert eq, f"iter {i} chunk {c} MM FAILED ag: {output}"
+                else:
+                    eq, output = comp_pcc(tt_mm_out, torch_mm_chunks[c])
+                    logger.info(f"{output}, iteration {i} chunk {c}")
+                    assert eq, f"iter {i} chunk {c} MM FAILED ag: {output}"
 
 
 # tiles_per_chunk needs to be divisible by num_workers_per_link

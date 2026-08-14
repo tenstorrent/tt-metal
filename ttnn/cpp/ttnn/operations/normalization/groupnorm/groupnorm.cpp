@@ -4,6 +4,7 @@
 
 #include "groupnorm.hpp"
 #include "device/groupnorm_device_operation.hpp"
+#include "device/groupnorm_program_utils.hpp"
 #include "groupnorm_grid_utils.hpp"
 #include "groupnorm_input_mask.hpp"
 
@@ -12,6 +13,9 @@
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
 
 namespace {
 
@@ -109,7 +113,8 @@ ttnn::Tensor get_mask_tensor(
     const std::optional<ttnn::Tensor>& input_mask,
     const std::optional<ttnn::Tensor>& negative_mask,
     const CoreGrid& core_grid,
-    const int num_groups) {
+    const int num_groups,
+    const int64_t rows_in_last_tile) {
     ttnn::Tensor mask = input_mask.value_or(ttnn::Tensor());
     if (!input_mask.has_value() and !negative_mask.has_value()) {
         // create input mask
@@ -136,13 +141,16 @@ ttnn::Tensor get_mask_tensor(
                 num_channel);
             num_cores_across_channel = static_cast<int64_t>(num_virtual_cols);
         }
+        // rows_in_last_tile != 0 builds the doubled mask; free here, since the mask is assembled
+        // on host and uploaded once either way.
         mask = create_group_norm_input_mask(
             num_channel,
             num_groups,
             num_cores_across_channel,
             tt::tt_metal::DataType::BFLOAT16,
             input_tensor.tensor_spec().tile().get_height(),
-            input_tensor.tensor_spec().tile().get_width());
+            input_tensor.tensor_spec().tile().get_width(),
+            rows_in_last_tile);
         mask = mask.to_device(input_tensor.device());
     }
     return mask;
@@ -190,21 +198,6 @@ Tensor group_norm(
     TT_FATAL(
         input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout: Input tensor cannot be width-sharded.");
-
-    // The non-sharded (interleaved) group_norm only has a correct TILE-input /
-    // TILE-output compute path. See #47972 and #48142
-    if (!input_tensor.is_sharded()) {
-        TT_FATAL(
-            input_tensor.layout() == Layout::TILE,
-            "group_norm: interleaved (non-sharded) input must be in TILE layout, got ROW_MAJOR. "
-            "Convert the input with ttnn.to_layout(input, ttnn.TILE_LAYOUT) before calling group_norm. "
-            "ROW_MAJOR is supported only for sharded inputs.");
-        TT_FATAL(
-            output_layout.value_or(Layout::TILE) == Layout::TILE,
-            "group_norm: interleaved (non-sharded) output must be in TILE layout, got ROW_MAJOR output_layout. "
-            "Request TILE output and convert it yourself with ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT). "
-            "ROW_MAJOR output is supported only for sharded inputs.");
-    }
 
     const auto& input_shape = input_tensor.logical_shape();
     TT_FATAL(
@@ -283,6 +276,21 @@ Tensor group_norm(
         out_dtype);
 
     const auto arch = input_tensor.device()->arch();
+
+    // Interleaved (non-sharded) ROW_MAJOR is Wormhole-only: it is a perf regression on Blackhole; see #52279.
+    if (!input_tensor.is_sharded() && arch != tt::ARCH::WORMHOLE_B0) {
+        TT_FATAL(
+            input_tensor.layout() == Layout::TILE,
+            "group_norm: interleaved (non-sharded) input must be in TILE layout, got ROW_MAJOR. "
+            "Convert the input with ttnn.to_layout(input, ttnn.TILE_LAYOUT) before calling group_norm. "
+            "ROW_MAJOR is supported only for sharded inputs, or on Wormhole.");
+        TT_FATAL(
+            output_layout.value_or(Layout::TILE) == Layout::TILE,
+            "group_norm: interleaved (non-sharded) output must be in TILE layout, got ROW_MAJOR output_layout. "
+            "Request TILE output and convert it yourself with ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT). "
+            "ROW_MAJOR output is supported only for sharded inputs, or on Wormhole.");
+    }
+
     const auto math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     const auto approx_mode = true;
     // fp32 input accumulates in the fp32 DEST (like LayerNorm); welford already forces it. A
@@ -402,9 +410,34 @@ Tensor group_norm(
         validate_dram_grid(core_grid.value(), W, Ht, num_groups, input_padded_shape[0]);
     }
 
+    // Non-tile-aligned H*W: the tile-padding rows are not guaranteed to hold zeros (reshape, slice
+    // and exp all leave non-zero bytes there), so they must be excluded from both accumulation
+    // passes. The input mask is already multiplied into both, so carry a second set of mask tiles
+    // with those rows zeroed; the kernels select it on the final row-tile of each batch. Nothing
+    // writes to the input tensor, which is what makes this work for sharded too. See #52685.
+    // Welford is unaffected: non-tile-aligned H*W already fell back to the two-pass path above.
+    const uint32_t rows_in_last_tile =
+        (input_padded_shape[2] != input_shape[2] && !use_welford) ? (input_shape[2] % tile_height_align) : 0;
+
     // auto generate mask tensor if both input_mask and negative_mask are not provided
     ttnn::Tensor mask = operations::normalization::get_mask_tensor(
-        input_tensor, input_mask, negative_mask, core_grid.value(), num_groups);
+        input_tensor, input_mask, negative_mask, core_grid.value(), num_groups, rows_in_last_tile);
+
+    // Fallback for a caller-supplied mask not built with rows_in_last_tile: derive the second set
+    // here. Costs a host build, an upload, a multiply and a concat per call, so prefer passing
+    // rows_in_last_tile to create_group_norm_input_mask instead.
+    if (rows_in_last_tile != 0 && input_mask.has_value() &&
+        mask.padded_shape()[1] == static_cast<uint32_t>(num_groups)) {
+        const auto row_mask = operations::normalization::create_group_norm_row_mask(
+                                  rows_in_last_tile,
+                                  mask.padded_shape()[1],
+                                  mask.padded_shape()[3],
+                                  mask.dtype(),
+                                  tile_height_align)
+                                  .to_device(mask.device());
+        const auto row_masked = ttnn::multiply(mask, row_mask, mask.dtype());
+        mask = ttnn::concat({mask, row_masked}, 1);
+    }
 
     if (input_tensor.is_sharded()) {
         const ttnn::prim::GroupNormShardedMultiCoreProgramConfig program_config = {
@@ -427,6 +460,71 @@ Tensor group_norm(
             negative_mask,
             effective_reciprocals);
     }
+
+    const uint32_t per_batch_hw = input_padded_shape[1] * input_padded_shape[2];
+    const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
+    const bool per_batch_hw_tile_aligned = per_batch_hw % tile_h == 0;
+    const Layout requested_out_layout = output_layout.value_or(input_tensor.layout());
+
+    // L1-fit estimate shared by the input and output decisions below.
+    const uint32_t Ht = nhw / ttnn::types::TILE_SIZE;
+    const uint32_t tile_w = input_tensor.tensor_spec().tile().get_width();
+    const uint64_t base_l1 = input_tensor.device()->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint64_t available_l1 = input_tensor.device()->l1_size_per_core() - base_l1;
+    const auto legacy_rm_fits_l1 = [&](bool tilize_in, bool untilize_out) {
+        return ttnn::prim::groupnorm_legacy_rm_input_fits_l1(
+            Ht,
+            input_padded_shape[3],
+            per_batch_hw,
+            input_padded_shape[0],
+            core_grid->x,
+            core_grid->y,
+            static_cast<uint32_t>(num_groups),
+            core_grid_auto_selected ? -1 : num_out_blocks.value_or(1),
+            tile_w,
+            tile_h * tile_w * input_tensor.element_size(),
+            gamma.has_value(),
+            beta.has_value(),
+            tilize_in,
+            untilize_out,
+            available_l1);
+    };
+
+    // Composite fallback: L1 does not fit, or fused RM is expected to be slower.
+    Tensor gn_input = input_tensor;
+    if (!use_welford && input_tensor.layout() == Layout::ROW_MAJOR && per_batch_hw_tile_aligned) {
+        const bool fits_l1 =
+            legacy_rm_fits_l1(/*tilize_in=*/true, /*untilize_out=*/requested_out_layout == Layout::ROW_MAJOR);
+        const uint32_t num_virtual_cols = compute_num_virtual_cols(core_grid->x, num_groups, input_padded_shape[3]);
+        const uint32_t num_virtual_rows = num_virtual_cols == 0 ? 0 : (core_grid->x / num_virtual_cols) * core_grid->y;
+        const uint32_t num_cores = num_virtual_cols * num_virtual_rows;
+        const bool prefer_composite = ttnn::prim::groupnorm_legacy_rm_prefer_composite_for_perf(
+            num_cores, num_virtual_rows, input_padded_shape[0]);
+        if (!fits_l1 || prefer_composite) {
+            log_debug(
+                tt::LogOp,
+                "group_norm: tilizing ROW_MAJOR input on host and running the TILE path (composite) -- "
+                "reason: {}.",
+                !fits_l1 ? "resident tilized group does not fit L1" : "composite preferred for perf");
+            // Keep the input's memory config; output_mem_config may well be different.
+            gn_input = ttnn::tilize_with_zero_padding(input_tensor, input_tensor.memory_config());
+        }
+    }
+
+    // Likewise for the output: the fused untilize needs extra CBs, so fall back to untilizing on host.
+    Layout device_out_layout = requested_out_layout;
+    bool untilize_out_on_host = false;
+    if (!use_welford && requested_out_layout == Layout::ROW_MAJOR && per_batch_hw_tile_aligned) {
+        if (!legacy_rm_fits_l1(/*tilize_in=*/gn_input.layout() == Layout::ROW_MAJOR, /*untilize_out=*/true)) {
+            log_debug(
+                tt::LogOp,
+                "group_norm: running the TILE-output path and untilizing on host (composite output) -- "
+                "the fused ROW_MAJOR-output CBs do not fit L1.");
+            device_out_layout = Layout::TILE;
+            untilize_out_on_host = true;
+        }
+    }
+
     // When the user did not pin a core grid, defer num_out_blocks to the program
     // factory's heuristic via the -1 sentinel (see GroupNormMultiCoreProgramConfig).
     // Otherwise honor the explicit num_out_blocks (defaulting to 1 = no chunking).
@@ -435,10 +533,10 @@ Tensor group_norm(
         .im_data_format = group_norm_im_data_format(input_tensor.dtype()),
         .out_data_format = out_dtype,
         .inplace = inplace.value_or(false),
-        .output_layout = output_layout.value_or(input_tensor.layout()),
+        .output_layout = device_out_layout,
         .num_out_blocks = core_grid_auto_selected ? -1 : num_out_blocks.value_or(1)};
-    return ttnn::prim::group_norm(
-        input_tensor,
+    Tensor output = ttnn::prim::group_norm(
+        gn_input,
         epsilon,
         static_cast<uint32_t>(num_groups),
         output_mem_config,
@@ -450,6 +548,10 @@ Tensor group_norm(
         mask,
         negative_mask,
         effective_reciprocals);
+    if (untilize_out_on_host) {
+        output = ttnn::to_layout(output, Layout::ROW_MAJOR);
+    }
+    return output;
 }
 
 }  // namespace ttnn

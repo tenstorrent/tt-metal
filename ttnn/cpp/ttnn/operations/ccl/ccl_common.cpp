@@ -403,7 +403,7 @@ std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& ten
     return devices;
 }
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+WorkerCoreSelection try_choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
     IDevice* device,
@@ -411,12 +411,12 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     const CoreCoord core_grid_offset,
     const std::optional<CoreRangeSet>& sub_core_grid,
     CoreAllocationStrategy strategy) {
-    std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
-    auto available_cores = device->worker_cores(
+    const auto worker_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
         sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    auto available_cores = worker_cores;
     if (sub_core_grid.has_value()) {
         available_cores = available_cores.intersection(sub_core_grid.value());
     }
@@ -471,7 +471,38 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
             break;
         }
     }
-    return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
+
+    // The loops above shift each candidate by core_grid_offset without re-checking it, so an offset near the grid
+    // edge can push cores off the worker grid entirely (onto dispatch cores).
+    WorkerCoreSelection selection{
+        sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true), {}};
+    for (const auto& core : selection.cores) {
+        if (!worker_cores.contains(core)) {
+            selection.unplaceable_cores.push_back(core);
+        }
+    }
+    return selection;
+}
+
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links,
+    size_t num_workers_per_link,
+    IDevice* device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    const CoreCoord core_grid_offset,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    CoreAllocationStrategy strategy) {
+    auto selection = try_choose_worker_cores(
+        num_links, num_workers_per_link, device, sub_device_id, core_grid_offset, sub_core_grid, strategy);
+    TT_FATAL(
+        selection.all_placeable(),
+        "Core grid offset {} pushed {} of the {} selected worker cores (first: {}) off the worker grid; kernels "
+        "cannot be placed there. Request fewer cores or use a smaller offset.",
+        core_grid_offset.str(),
+        selection.unplaceable_cores.size(),
+        selection.cores.size(),
+        selection.unplaceable_cores.front().str());
+    return {std::move(selection.core_range_set), std::move(selection.cores)};
 }
 
 std::vector<ttnn::Tensor> unpad_output_tensor(
