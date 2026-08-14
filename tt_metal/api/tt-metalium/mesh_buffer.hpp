@@ -74,19 +74,6 @@ using MeshBufferConfig = std::variant<ReplicatedBufferConfig, ShardedBufferConfi
 
 class MeshBuffer;
 
-}  // namespace tt::tt_metal::distributed
-
-// Forward declaration for experimental per-core allocation friend
-namespace tt::tt_metal::experimental::per_core_allocation {
-std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
-    const tt::tt_metal::distributed::MeshBufferConfig& mesh_buffer_config,
-    const tt::tt_metal::distributed::DeviceLocalBufferConfig& device_local_config,
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
-    const tt::tt_metal::distributed::MeshCoordinate& coord);
-}  // namespace tt::tt_metal::experimental::per_core_allocation
-
-namespace tt::tt_metal::distributed {
-
 // Internal state and implementation of `MeshBuffer`; defined in `tt_metal/distributed/mesh_buffer_impl.hpp`.
 class MeshBufferImpl;
 
@@ -140,12 +127,6 @@ public:
 
 private:
     std::unique_ptr<MeshBufferImpl> impl_;
-
-    friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
-        const tt::tt_metal::distributed::MeshBufferConfig&,
-        const tt::tt_metal::distributed::DeviceLocalBufferConfig&,
-        tt::tt_metal::distributed::MeshDevice*,
-        const tt::tt_metal::distributed::MeshCoordinate&);
 };
 
 class AnyBuffer {
