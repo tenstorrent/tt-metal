@@ -120,7 +120,7 @@ void AllocatorImpl::verify_safe_allocation() const {
         return;
     }
 
-    // Keep the warning low-noise across allocators while still warning allocation threads independently.
+    // Emit at most once per host thread for the process lifetime, shared across all allocator instances.
     thread_local static bool warning_generated = false;
     if (!warning_generated) {
         log_warning(
