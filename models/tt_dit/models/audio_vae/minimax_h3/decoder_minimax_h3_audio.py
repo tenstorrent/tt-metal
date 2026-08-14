@@ -146,13 +146,6 @@ class MiniMaxH3AudioDecoder(Module):
 
         x_device = ttnn.from_torch(x, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
         projected_device = self.dec_in_proj(x_device)
-        # The upload replicates, and dec_in_proj is a k1 conv, so every device holds the same
-        # result: read back one. A bare ``ttnn.to_torch`` asserts ``buffers.size() == 1`` and
-        # so only works on a single-device mesh. Same shape as the vocoder's own
-        # ``_device_to_host``.
-        # `local_device_to_torch`, not `ttnn.to_torch(get_device_tensors(t)[0])`: slicing one coordinate
-        # keeps the parent's distribution metadata, which the converter rejects on a multi-host mesh.
-        # The helper reads a shard this host already owns, so it needs no collective at all.
         projected = local_device_to_torch(projected_device).float()
         if t_pad:
             # Crop the alignment padding back off before handing T to the vocoder, which

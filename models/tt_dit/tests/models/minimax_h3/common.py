@@ -103,27 +103,22 @@ def create_fractal_image(width: int, height: int) -> Image.Image:
     return Image.fromarray(np.dstack((img, np.roll(img, width // 10, 1), np.roll(img, height // 10, 0))), "RGB")
 
 
-# The mesh shapes MiniMax-H3 is tuned for, in one list rather than at every call site.
-#
-# Both rows carry `require_exact_physical_num_devices`, so exactly one runs on any given cluster and
-# the other skips -- the same mechanism Wan2.2 uses to cover every shape from a Quiet Box to the quad.
+# The mesh shapes MiniMax-H3 is tuned for, named individually and composed into a list -- the shape
+# `ltx_mesh_params.py` uses. Both carry `require_exact_physical_num_devices`, so exactly one runs on
+# any given cluster and the other skips.
 #
 # The fabric must be FABRIC_1D_RING: `CCLManager` runs ring collectives, and on a line fabric one
 # cannot resolve a forwarding direction (`TT_FATAL fabric.cpp:174 forwarding_direction.has_value()`).
 # 4x32 additionally takes the 8 KB router payload, matching Wan's 4x32 rows, and a trace region for
 # the quad's `trace_denoise`; the region is only reserved, so 4x8 pays nothing but address space.
-_MESH_PARAMS_BY_SHAPE = {
-    (4, 8): ring_params_req_exact_devices,
-    (4, 32): {**ring_params_8k_req_exact_devices, "trace_region_size": 150000000},
-}
+_L1_SMALL = 65536
+_ring = {**ring_params_req_exact_devices, "l1_small_size": _L1_SMALL}
+_ring_8k_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 150_000_000, "l1_small_size": _L1_SMALL}
 
+MESH_4X8_RING = pytest.param((4, 8), _ring, id="4x8")
+MESH_4X32_RING = pytest.param((4, 32), _ring_8k_trace, id="4x32")
 
-def mesh_params(*, l1_small_size: int = 65536) -> list:
-    """`(mesh_device, device_params)` params for every tuned MiniMax-H3 mesh shape."""
-    return [
-        pytest.param(shape, {**params, "l1_small_size": l1_small_size}, id=f"{shape[0]}x{shape[1]}")
-        for shape, params in _MESH_PARAMS_BY_SHAPE.items()
-    ]
+GALAXY_MESHES = [MESH_4X8_RING, MESH_4X32_RING]
 
 
 def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> torch.nn.Module:
@@ -140,13 +135,15 @@ def randomize_norm_weights(module: torch.nn.Module, *, scale: float = 0.5) -> to
 # rest, so 4x8 -> 4x32 moves only `sp_factor`, which every test body derives from `mesh_device.shape`.
 # `device_params` travels inside the tuple because the router payload differs per shape; crossing them
 # independently would pair a 4x8 mesh with the 4x32 router config.
+# The transformer tests take the axes explicitly: TP stays on axis 0 at factor 4 and SP absorbs the
+# rest, so 4x8 -> 4x32 moves only `sp_factor`, which every test body derives from `mesh_device.shape`.
+# `device_params` travels inside the tuple because the router payload differs per shape; crossing them
+# independently would pair a 4x8 mesh with the 4x32 router config.
 GALAXY_RING = pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        pytest.param(
-            shape, 1, 0, 2, params, ttnn.Topology.Ring, False, id=f"{shape[0]}x{shape[1]}sp1tp0nl2_ring_is_fsdp0"
-        )
-        for shape, params in _MESH_PARAMS_BY_SHAPE.items()
+        pytest.param((4, 8), 1, 0, 2, _ring, ttnn.Topology.Ring, False, id="4x8sp1tp0nl2_ring_is_fsdp0"),
+        pytest.param((4, 32), 1, 0, 2, _ring_8k_trace, ttnn.Topology.Ring, False, id="4x32sp1tp0nl2_ring_is_fsdp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )

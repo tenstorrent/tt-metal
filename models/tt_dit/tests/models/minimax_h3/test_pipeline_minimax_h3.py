@@ -22,7 +22,7 @@ import ttnn
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ..wan2_2.common import check_output_sanity
-from .common import mesh_params
+from .common import GALAXY_MESHES
 from .common_av import (
     CALIBRATED_FOX_PROMPT,
     artifact_dir,
@@ -56,7 +56,7 @@ DURATIONS_S = [5, 10, 15]
 # factor measured at 16:9 / 5 s.
 EXPECTED_S_PER_VIDEO_SECOND = 77.0
 
-MESHES = mesh_params()
+MESHES = GALAXY_MESHES
 
 # calibrated 2026-08-04, fox prompt, seed 0 (single sample; margins are generous)
 VBENCH_THRESHOLDS = {

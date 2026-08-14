@@ -830,9 +830,6 @@ class MiniMaxH3Pipeline:
             pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
             **vision_kwargs,
         )
-        # Replicated: read one replica instead of composing all of them. Not
-        # `ttnn.to_torch(get_device_tensors(t)[0])` -- slicing one coordinate keeps the parent's
-        # distribution metadata, which fails the converter on a 4x32 mesh.
         embeds = local_device_to_torch(taps[0]).float()
 
         return embeds, tags
@@ -1881,12 +1878,8 @@ class MiniMaxH3Pipeline:
                     adaln_cache=adaln_cache,
                 )
 
-            # Replicated after the model's SP gather: read one replica. The model returns the *target*
-            # rows only, so reshape to the row width rather than to `video_rows.shape`, which still
-            # counts the condition rows.
-            # `local_device_to_torch`, not `utils.tensor.to_torch`: the latter composes, and a composer
-            # on a multi-host mesh runs `host_ccl::all_gather` -- an MPI collective in the per-step hot
-            # path. The tensor is replicated after the model's SP gather, so one local shard suffices.
+            # The model returns the *target* rows only, so reshape to the row width rather than to
+            # `video_rows.shape`, which still counts the condition rows.
             v = local_device_to_torch(video_velocity).reshape(-1, video_rows.shape[-1]).float()
             a = local_device_to_torch(audio_velocity).reshape(-1, audio_rows.shape[-1]).float()
 

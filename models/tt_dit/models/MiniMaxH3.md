@@ -373,6 +373,15 @@ Where the time goes, from Tracy captures:
 Op-to-op gap is 32.1 % of window wall for the video unit and 25.5 % for audio. No tuning has been done
 on either.
 
+**The decode stage is device-bound, not dispatch-bound.** Tracing the device-stitched per-chunk graph
+(which removes per-op host dispatch entirely) measured 6.887 s against 6.934 s untraced at 768P/15s.
+Replay costs 223 ms/chunk and issues no per-op host work, so that is real device execution, and the
+~144 ms/chunk of eager dispatch was already hiding underneath it. `MINIMAX_H3_TIME_DISPATCH` reports
+enqueue and post-synchronize time separately, but note the second number is only the tail the
+synchronize still waits for -- reading it as total device time understates device work and makes the
+stage look dispatch-bound when it is not. Do not re-derive this; the tracing experiment is not worth
+repeating.
+
 **Always warm up before quoting a number.** A first call reports ~1.4x the total (denoise 104.7 s
 against 61.7 s in an earlier measurement), and the mp4 write and every weight load are excluded from the
 rows by design. `warmup()` must be given the **real prompt and the real keyframes** — every program in

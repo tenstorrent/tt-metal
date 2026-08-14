@@ -32,7 +32,6 @@ conv fails its ``Parameter`` shape check.
 
 from __future__ import annotations
 
-import functools
 import json
 import math
 import os
@@ -103,14 +102,6 @@ class MiniMaxH3VaeConfig:
 # Decode does substantial host work (stitching, unpatchify, readback), so it raises torch's thread
 # count above the single thread a server worker pins for the denoise loop.
 _DECODE_TORCH_THREADS = 8
-
-# Report `dispatch` (enqueue) and `compute` (post-synchronize) separately. Off by default: the
-# synchronize serializes the stage.
-#
-# `compute` is only the tail the synchronize still waits for, not total device time -- ttnn ops
-# begin executing as they are enqueued, so a small `compute` means the device kept pace with
-# dispatch, not that it was idle. Reading it as total device time understates device work.
-_TIME_DISPATCH = os.environ.get("MINIMAX_H3_TIME_DISPATCH", "0") != "0"
 
 
 def split_tiles(length: int, tile_size: int, min_overlap: int, ratio: int) -> tuple[list[int], list[int], list[int]]:
@@ -245,7 +236,6 @@ class MiniMaxH3Vae(Module):
         ccl_manager=None,
         pixel_denorm: tuple[Sequence[float], Sequence[float]] | None = None,
         readback_uint8: bool = False,
-        trace_device_stitch: bool = False,
     ) -> None:
         super().__init__()
         self.config = config
@@ -277,11 +267,6 @@ class MiniMaxH3Vae(Module):
         # host path only: `device_stitch` reads back a canvas and never calls `_read_wave_units`,
         # so the two are alternatives, not a combination.
         self.readback_uint8 = readback_uint8
-        # Capture the per-chunk device graph once and replay it rather than dispatching it op by op.
-        # Needs a `trace_region_size` on the mesh device. Off by default: the stage is device-bound,
-        # so removing dispatch does not shorten it, and the first replay carries a large one-off.
-        self.trace_device_stitch = trace_device_stitch
-        self._stitch_tracer = None
         # Synchronize after each decode forward so `device` and `readback` are separable in the
         # profile -- which also serializes them, so it is opt-in.
         self.profile = profile
@@ -766,8 +751,8 @@ class MiniMaxH3Vae(Module):
         if pending is not None:
             yield from read_wave(*pending)
 
-    def _enqueue_clip_device_stitched(self, z_BCTHW: torch.Tensor):
-        """One clip, decoded and stitched entirely on device; returns the canvas *without* reading it.
+    def _decode_clip_device_stitched(self, z_BCTHW: torch.Tensor, output_type: str = "float"):
+        """One clip, decoded and stitched entirely on device, read back as the assembled canvas.
 
         The win is transfer volume, not compute. The host path reads back **overlapping** tiles --
         28 of 256x256 against a 768x1344 canvas, 2.51 GB over the whole video -- and then blends them
@@ -828,66 +813,6 @@ class MiniMaxH3Vae(Module):
         profile["upload"] += time.perf_counter() - mark
 
         mark = time.perf_counter()
-        graph = functools.partial(
-            self._stitch_graph,
-            decoder=decoder,
-            num_frames=num_frames,
-            height=height,
-            width=width,
-            mesh_rows=mesh_rows,
-            mesh_cols=mesh_cols,
-            grid_rows=grid_rows,
-            grid_cols=grid_cols,
-            y_overlaps=y_overlaps,
-            x_overlaps=x_overlaps,
-        )
-        if self.trace_device_stitch:
-            # Every chunk runs this identical graph on identically shaped tokens, which is exactly
-            # the shape a ttnn trace wants: capture once, then replay with the input buffer refreshed
-            # in place. ~1270 ops per chunk (the decoder is ~940 of them, the stitcher ~320) over 21
-            # chunks. Removing that dispatch turns out not to help -- see `trace_device_stitch`.
-            if self._stitch_tracer is None:
-                from ....utils.tracing import Tracer
-
-                self._stitch_tracer = Tracer(graph, device=self.mesh_device)
-            canvas = self._stitch_tracer(tokens)
-        else:
-            canvas = graph(tokens)
-        elapsed = time.perf_counter() - mark
-        if _TIME_DISPATCH:
-            # Everything above is enqueue; whatever the sync then waits for is real device time.
-            profile["dispatch"] = profile.get("dispatch", 0.0) + elapsed
-            sync_mark = time.perf_counter()
-            ttnn.synchronize_device(self.mesh_device)
-            profile["compute"] = profile.get("compute", 0.0) + (time.perf_counter() - sync_mark)
-            elapsed = time.perf_counter() - mark
-        profile["device"] += elapsed
-        profile["device_each"].append(elapsed)
-        profile["waves"] += 1
-        profile["units"] += len(units)
-        return canvas
-
-    def _stitch_graph(
-        self,
-        tokens: ttnn.Tensor,
-        *,
-        decoder,
-        num_frames: int,
-        height: int,
-        width: int,
-        mesh_rows: int,
-        mesh_cols: int,
-        grid_rows: int,
-        grid_cols: int,
-        y_overlaps: list[int],
-        x_overlaps: list[int],
-    ) -> ttnn.Tensor:
-        """Tokens to assembled canvas, entirely on device -- the traceable half of a chunk.
-
-        Pulled out of :meth:`_enqueue_clip_device_stitched` so it can be handed to a `Tracer`
-        verbatim. Everything here is shape-invariant across chunks and touches no host memory, which
-        is what makes it capturable; the upload before it and the readback after it are not.
-        """
         from .stitch_device_minimax_h3 import DeviceTileStitcher, unpatchify_device
 
         decoded = decoder(tokens)
@@ -922,16 +847,13 @@ class MiniMaxH3Vae(Module):
             return ttnn.slice(gathered, [index, 0, 0, 0, 0], [index + 1, *gathered_shape[1:]])
 
         rows = [[tile_at(i, j) for j in range(grid_cols)] for i in range(grid_rows)]
-        return self._stitcher.stitch(rows, y_overlaps, x_overlaps)
+        canvas = self._stitcher.stitch(rows, y_overlaps, x_overlaps)
+        elapsed = time.perf_counter() - mark
+        profile["device"] += elapsed
+        profile["device_each"].append(elapsed)
+        profile["waves"] += 1
+        profile["units"] += len(units)
 
-    def _read_stitched_canvas(self, canvas: ttnn.Tensor, output_type: str):
-        """Pull one assembled canvas back to host. The blocking half of the device-stitched path.
-
-        Split out from :meth:`_enqueue_clip_device_stitched` so the caller can defer it until the
-        *next* chunk is enqueued -- the same trick `_stream_decoder_units` plays with `pending`.
-        Fused, `device` and `readback` were strictly serial and summed to 5.1 s of a 6.9 s stage.
-        """
-        profile = self._profile
         mark = time.perf_counter()
         canvas_shape = tuple(canvas.shape)
         canvas_dtype = str(canvas.dtype)
@@ -939,9 +861,6 @@ class MiniMaxH3Vae(Module):
             out = self._read_canvas_yuv(canvas)
             read_bytes = out.size
         else:
-            # One replica: the gathers above made every device identical (the stitch-device test
-            # asserts this), so this is the replicated case `local_device_to_torch` is for -- a
-            # single-shard read with no collective.
             out = local_device_to_torch(canvas).float()
             read_bytes = out.numel() * out.element_size()
         elapsed = time.perf_counter() - mark
@@ -951,11 +870,6 @@ class MiniMaxH3Vae(Module):
         profile["dtype"] = canvas_dtype
         profile["readback_mb"] += read_bytes / 1e6
         return out
-
-    def _decode_clip_device_stitched(self, z_BCTHW: torch.Tensor, output_type: str = "float"):
-        """Enqueue and immediately read one clip -- the unpipelined form, for single-clip callers."""
-        canvas = self._enqueue_clip_device_stitched(z_BCTHW)
-        return self._read_stitched_canvas(canvas, output_type)
 
     def _read_canvas_yuv(self, canvas: ttnn.Tensor) -> np.ndarray:
         """Convert the replicated canvas to YUV 4:2:0 on device and read it back as planar uint8.
