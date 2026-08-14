@@ -216,17 +216,25 @@ inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t 
                     3 /*Dst_Face_Idx*/, 3 /*Src_Face_Idx*/, 0 /*Dst_Tile_Offset_Idx_Inc*/, 0 /*Src_Tile_Offset_Idx_Inc*/, buf_desc_id, 1 /*SetDatValid*/);
             }
         });
-    ckernel_template temp(
-        MOP_OUTER_LOOP,
-        MOP_INNER_LOOP,
-        TT_OP_REPLAY(0 /*start_idx*/, replay_buf_len, 1 /*last*/, 1 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/),
-        TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 1 /*Value*/)); // Inc Src by 1 tile, because above UNPACR0/1_FACE do not inc counters
+    constexpr std::uint32_t replay_execute_op =
+        TT_OP_REPLAY(0 /*start_idx*/, replay_buf_len, 0 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
+    constexpr std::uint32_t replay_execute_last_op =
+        TT_OP_REPLAY(0 /*start_idx*/, replay_buf_len, 1 /*last*/, 0 /*set_mutex*/, 0 /*execute_while_loading*/, 0 /*load_mode*/);
+
+    ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, replay_execute_op);
+    temp.set_last_outer_loop_instr(replay_execute_last_op);
+
+    constexpr std::uint32_t tile_inc_op = TT_OP_INC_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, UNP_SEL, 1 /*Value*/);
 
     // 32-bit datacopy uses ELWADD, which requires datavalid from both SrcA and SrcB
     if constexpr (IS_32b_DEST_EN)
     {
         const std::uint32_t clr_unused_unpacr_engine = nop_insn_for_unused_unpacker_engine<UNP_SEL>();
-        temp.set_end_op(clr_unused_unpacr_engine);
+        temp.set_end_ops(tile_inc_op, clr_unused_unpacr_engine);
+    }
+    else
+    {
+        temp.set_end_op(tile_inc_op);
     }
 
     _mop_bank_program_(temp, instrn_buffer);
