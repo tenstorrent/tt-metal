@@ -575,7 +575,78 @@ None of this can be obtained on QB2.
    own merits. It was not the cause here — the consumer wait is correct (§0) — but it would have
    made this class of producer/consumer disagreement unrepresentable.
 
-## 16. Environment and iteration notes (QB2)
+## 16. Reproducing the failures — run this and nothing else
+
+Branch `rsalman/sdpa-split-fwd-qb2-debug` (pushed). One-time setup on a fresh QB2 checkout:
+
+```bash
+export TT_METAL_HOME=$PWD ARCH_NAME=blackhole
+unset PYTHONPATH                 # MUST be unset -- see §17
+./build_metal.sh                 # ~40 s incremental, a few min cold
+uv pip install -e . --no-deps    # ttnn is built but NOT installed by the build
+uv pip install graphviz
+python3 -c "import ttnn"         # sanity check
+```
+
+### The four stable failures — ~20 s, reproduce 4/4 every run
+
+```bash
+export CI=true TT_METAL_OPERATION_TIMEOUT_SECONDS=300
+T=tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py
+python3 -m pytest \
+  "$T::test_ring_mla_chunked_kv_actual_isl_indexed_reuse_max_accuracy_and_determinism" \
+  "$T::test_ring_mla_chunked_nd_sharded_indexed_kv_cache_accuracy_and_determinism" \
+  "$T::test_ring_mla_nd_sharded_indexed_kv_cache_accuracy" \
+  "$T::test_ring_mla_metadata_trace_replay_matches_scalar[chunks4]" \
+  -v
+```
+
+Expected: **4 failed** — confirmed identical across repeated runs.
+
+| Test | Expected failure |
+|---|---|
+| `..._kv_actual_isl_indexed_reuse_max_..._determinism` | determinism, iter 1 chunk 4: 3957 diffs, max=0.287109375 |
+| `..._chunked_nd_sharded_indexed_kv_cache_..._determinism` | PCC 0.9869915393793343, RMSE 0.063101 |
+| `..._nd_sharded_indexed_kv_cache_accuracy` | RMSE 0.096537 > 0.05 |
+| `..._metadata_trace_replay_matches_scalar[chunks4]` | max abs diff 5.625 |
+
+Explicit node IDs are used deliberately rather than `-k`: `-k` substring matching is a known trap in
+this file (§12). Verify with `--collect-only -q` — it must report exactly the tests you asked for.
+
+### The fifth failure is order-dependent — do not chase it standalone
+
+`test_ring_mla_metadata_matches_scalar_rotation[kv320]` fails in the full nightly but its outcome
+depends on what ran before it:
+
+| How it is run | Result |
+|---|---|
+| Alone (x2) | FAIL |
+| Together with its `kv64` + `kv256` siblings | **PASS** (3 passed) |
+| Inside the 4-test group above | **PASS** |
+| Full nightly | FAIL |
+
+Treat it as flaky/state-dependent, not a reproducer. To see it fail as the nightly does, run the
+whole suite: `CI=true pytest tests/nightly/blackhole/sdpa/ -svv` (~16 min, expect 5 failed / 119
+passed / 99 skipped).
+
+### The control that proves these are the feature's fault
+
+```bash
+git checkout 03c00524c3a -- \
+  ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_all_gather_reader.cpp \
+  ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_all_gather_writer.cpp \
+  ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_receiver.hpp \
+  ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_fusion.cpp \
+  ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_fusion.hpp \
+  ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.cpp
+./build_metal.sh   # ~40 s
+# rerun the command above -> all pass in ~16 s
+git checkout HEAD -- ttnn/ && ./build_metal.sh   # restore
+```
+
+Reset the devices with `tt-smi -r` if a run leaves them wedged.
+
+## 17. Environment and iteration notes (QB2)
 
 - **`ttnn` is built but not installed.** `uv pip install -e . --no-deps` into the active venv; also
   needs `graphviz`. Do **not** put the repo root on `PYTHONPATH` — it shadows the installed package
