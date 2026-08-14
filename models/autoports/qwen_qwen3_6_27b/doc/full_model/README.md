@@ -1,10 +1,10 @@
 # Qwen3.6-27B TP4 full model
 
-Status: **final review pending**. On four Blackhole p300c devices, the full
+Status: **complete — independent stage-review clean-pass**. On four Blackhole p300c devices, the full
 64-layer model reports AIME24 prefill top-1/top-5/top-100 of
 **92% / 100% / 100%** and traced teacher-forcing decode of
-**97% / 100% / 100%**. At B1/S128, final full-model TTFT is **4.420 s** and canonical
-split-trace token-out is **17.52 t/s/u** over 128 replays. Teacher-forcing
+**97% / 100% / 100%**. At B1/S128, final full-model TTFT is **4.037 s** and canonical
+split-trace token-out is **17.467 t/s/u** over 128 measured replays. Teacher-forcing
 compatibility decode is **6.96 t/s/u**; it is reported separately because it
 reads logits and refreshes teacher inputs on host.
 
@@ -37,6 +37,16 @@ claimed. The reduced full wrapper (embedding, layers 0--3, terminal, sampler)
 passes mixed S65/S63 at B2 with public non-greedy top-k=5/top-p=0.9 and an
 inactive row (`logs/full_model_mixed_slots_lm_head_fix_v4.log`).
 
+Prompts above 32,768 tokens use bounded full-stack streaming: each chunk
+crosses all 64 TP4 layers before its residual is released, while every layer's
+linear state or paged K/V persists into the next chunk. Linear masks and four
+conv-state selectors are uploaded per 64-token mixer chunk and released after
+the request. The rejected packed-metadata experiment did not satisfy the
+established TTNN layout contract and is not used. The normal API returns only
+each prompt's terminal logits.
+`return_all_logits=True` is explicitly limited to 32,768 tokens because a
+sequence-by-vocabulary result is inherently non-streaming.
+
 ## Sampling and tracing
 
 The optimized greedy path uses common `SamplingGenerator`/`TTSampling` and
@@ -50,8 +60,12 @@ small sampled token is read for API output.
 The alternative common local-top-k path produced the same reduced token
 sequence but was slower: its fixed TopK costs 9.697 ms in the matched reduced
 profile. It is rejected. The selected force-argmax path slices to active rows;
-its remaining sampler all-gather is 0.830 ms (24.4% of named device time),
-below the 1.198 ms LM head and not dominant. `Sampling1D` is also rejected because it lacks the common wrapper's
+after full-vocabulary all-gather it untilizes, crops to materialized active
+row-major rows, and argmaxes into the persistent 32-slot feedback tensor. The
+final reduced profile reports a 3.605 ms median model-replay critical path and
+1.024 ms sampler-replay critical path (22.1% of their combined device time),
+with argmax itself only 59.6 us. Sampling therefore does not dominate.
+`Sampling1D` is also rejected because it lacks the common wrapper's
 trace/state contract. A named `host_sampling_compatibility=True` mode retains
 traced logits readback for readiness teacher forcing; it is not the measured
 token-out path.
@@ -68,6 +82,12 @@ refreshes, a changed table causing exactly one refresh, and zero host token or
 position refreshes. Repeated reset/capture lifecycles preserve the canonical
 greedy token sequence.
 
+Three representative linear+full-attention setup/replay/release cycles return
+identical allocated/free/largest-contiguous DRAM values and clear every trace
+alias (`artifacts/full_model_trace_lifecycle.json`). Generator-owned persistent
+trace inputs are deallocated after synchronized trace release; caller-owned
+page tables and trace-owned outputs are only unbound.
+
 ## Correctness and qualitative evidence
 
 The fresh reference is `readiness_aime24_chat.refpt`, generated with the exact
@@ -79,18 +99,24 @@ template, 161 prompt tokens, 100 continuation tokens, and top-100 logits.
 | Full prefill | 92% | 100% | 100% | `logs/run_prefill_check_split_lm_head_v2.log` |
 | Traced teacher forcing | 97% | 100% | 100% | `logs/run_teacher_forcing_final.log` |
 
-The standard 100-token autoregressive run saved both completions under
-`autoregressive_final/`. HF and TT are coherent English, non-repetitive, and
+The final repaired-sampler 100-token autoregressive run saved both completions
+under `autoregressive_active_rm_final/`. Its HF reference is reused only after
+metadata proves the exact revision, 161 prompt-token IDs, and 100-token budget
+match. HF and TT are coherent English, non-repetitive, and
 follow the same algebraic setup; neither reaches the numerical answer inside
 100 tokens. TT diverges stylistically after token 3 but does not drift language
 or fail semantically. The machine checker reports zero adjacent duplication,
-5.26% trigram overlap, and no degeneracy (`artifacts/degenerate_output.json`).
+5.26% trigram overlap, and no degeneracy.
 
-The six-prompt shared suite is complete in
-`artifacts/qualitative/shared_suite.json`. All prompts use the exact chat
-template. Manual review found six coherent, prompt-relevant TT outputs matching
-the HF control style, with no repetition, language drift, prompt echo,
-control-token leakage, or suspicious early divergence.
+The final-code six-prompt shared suite is
+`artifacts/full_model_qualitative_200_final.json` (the earlier 50-token control
+is retained as `artifacts/full_model_qualitative_final.json`). All prompts use
+the exact chat template and revision. Manual review found six coherent,
+prompt-relevant TT outputs matching HF over 200 tokens, with no repetition,
+language drift, prompt echo, or control-token leakage. This checkpoint emits a
+long visible reasoning preamble: both HF and TT remain in it at 200 tokens but
+cover the same task-specific facts and plans, including the same correct French
+translation, so this is control-matched behavior rather than TT degradation.
 
 ## Capacity and audit
 
@@ -101,6 +127,17 @@ The corrected physical probe passes B1 C262,144 and brackets B32 at C72,192
 pass / C72,256 fail when terminal weights are resident. A second B1 C262,144
 probe also passes while reserving the full token-out trace snapshot copy of
 every KV/recurrent/conv state (`artifacts/capacity_trace/`).
+
+The public all-64-layer wrapper passes both non-aligned S192,511 prefill plus
+decode and the exact S262,144 maximum prompt through bounded 32,768-token
+full-stack streaming chunks. Results are finite and all per-request
+mask/selector/page-table aliases are cleared
+(`artifacts/full_model_long_prefill_s192511_final.json` and
+`artifacts/full_model_long_prefill_s262144_final.json`). Exact-maximum prefill
+returns terminal logits but cannot legally perform a subsequent decode at
+position 262,144. This replaces
+the former sequence-sized layer-output allocation that failed from DRAM
+fragmentation without changing TP4 policy, cache ownership, or residual layout.
 
 The runtime fallback audit is `artifacts/runtime_fallback_audit.txt`. Host
 logits occur only at public prefill results, low-level compatibility decode,
@@ -114,11 +151,8 @@ matmul→reduce-scatter, and TP4 all-gather→matmul were not re-enabled.
 
 ## Limitations
 
-- Public prompt/context capacity is 192,511 at B1, the largest physically
-  demonstrated full-layer prefill before the measured contiguous-allocation
-  limit. Decode cache allocation and absolute positions extend to 262,144 for
-  generation after a supported prompt; that separate cache capability is not
-  advertised as prompt capacity.
+- A prompt occupying all 262,144 context positions can return terminal logits;
+  generation requires at least one remaining context position.
 - High-level `generate` is B1. Mixed prompts/fixed slots use the explicit
   low-level serving API.
 - Host compatibility sampling is for tests, not performance claims.

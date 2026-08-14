@@ -201,6 +201,19 @@ class TTSampling(LightweightModule):
         # Round up to the next tile boundary (32) — device tensors must be tile-aligned.
         raw_batch = getattr(args, "max_batch_size", 32)
         self.max_batch_size = max(32, ((raw_batch + 31) // 32) * 32)
+        self.force_argmax_active_rows = getattr(args, "force_argmax_active_rows", None)
+        # Inspection-only hook used by full-model AutoDebug probes.  Holding
+        # this reference makes the real CCL output observable without changing
+        # the reduction or copying logits through a different path.
+        self.debug_preserve_force_argmax_gather = False
+        self.debug_force_argmax_gather = None
+        if self.force_argmax_active_rows is not None:
+            self.force_argmax_active_rows = int(self.force_argmax_active_rows)
+            if not 1 <= self.force_argmax_active_rows <= self.max_batch_size:
+                raise ValueError(
+                    "force_argmax_active_rows must be in "
+                    f"[1, {self.max_batch_size}], got {self.force_argmax_active_rows}"
+                )
         self.max_top_k = getattr(args, "max_top_k", 32)
         self.cluster_shape = args.cluster_shape
 

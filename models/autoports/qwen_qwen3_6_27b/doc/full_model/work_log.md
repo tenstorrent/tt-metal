@@ -314,3 +314,191 @@ the hardware kernel-config buffer limit 25,600. No single-chip/no-fabric
 fallback was used. The final wrapper is covered by overflow-free named device
 profiling and clean traced execution; inherited decoder Watcher evidence covers
 the unchanged layer kernels.
+
+### 2026-08-13 resumed inactive-slot hardware proof
+
+Four p300c devices enumerated and a fresh `MeshShape(1,4)`
+`FABRIC_1D_RING` open/close returned `MESH_SMOKE_OK`.  The official-weight B2
+one-layer control passed for both `active=[1,1]` and `active=[1,0]`; the latter
+proved inactive K/V bitwise unchanged on every rank and active K/V changed.
+Evidence is `/tmp/qwen_full_attention_b2_all_active.log` and
+`logs/full_attention_inactive_kv_final.log`.
+
+The reduced real full-wrapper lifecycle then passed mixed S65/S63 prefill,
+public top-k=5/top-p=0.9 sampling, traced feedback, inactive K/V exactness,
+selective linear-state reset, decode rejection before refill, and slot refill
+and reuse without disturbing the live peer:
+
+```text
+FULL_MODEL_MIXED_SLOTS_OK [198, 220] [68, 63]
+INACTIVE_KV_EXACT RESET_REUSE_OK
+```
+
+Evidence: `logs/full_model_mixed_slots_reset_final.log`.  This closes the first
+P1 finding in `STAGE_REREVIEW.md`; maximum-length public prefill and fresh
+post-sampler qualitative evidence remain active gates.
+
+### Greedy feedback regression and repair
+
+Fresh post-active-row autoregressive evidence exposed a real regression: TT
+returned newline token 198 for all 100 steps and the degeneracy checker marked
+the completion near-empty.  Focused overwrite probes proved the sliced-logits
+force-argmax trace did not update persistent `tt_out_tok`; the reduced profile's
+natural repeated token had hidden the stale feedback.
+
+Restoring the common sampler's shape-exact 32-row logits/32-slot output contract
+changes a deliberately seeded token 123 to sampled token 220 after one replay
+(`logs/feedback_overwrite_shape_exact_probe.log`).  The all-layer 8-token AIME
+control now produces changing, coherent TT tokens
+`[198,760,3377,16561,364,279,2702,854]`, decoded as “The problem asks for the
+total time ...”; see `autoregressive_feedback_shape_exact_smoke/`.
+
+This closes the correctness regression but reopens terminal performance work:
+the previously measured 32-row force-argmax path is material.  Completion still
+requires a faster semantically greedy contract that demonstrably overwrites
+feedback, plus fresh 100-token/shared-suite evidence on that final contract.
+
+### Active-row argmax root cause and repair
+
+Source inspection identified why the prior tile-logit slice went stale.  The
+multi-core argmax derives its inner row extent from the padded input shape but
+its outer work from logical volume.  Slicing the tile tensor to B1 therefore
+left a physical 32-row extent and produced zero outer work after untilization.
+The selected repair crops only after full-vocabulary all-gather and untilize,
+so argmax receives a materialized row-major B1 tensor while still writing into
+the canonical 32-slot persistent feedback buffer.
+
+The reduced overwrite probe now passes (`123 -> 220`) and reaches 228.38
+t/s/u.  A complete all-64-layer S128 run reports TTFT 4.041 s and 17.43 traced
+t/s/u over eight replays, with zero host token, position, or page-table
+refreshes (`profile_active_rm_crop_full_smoke.json`).  Its deliberately
+truncated prompt makes the emitted control tokens unsuitable as qualitative
+evidence.  AutoFix reviewed the repair and required stricter exact-argmax and
+B2 mapping checks; those were added to `tests/full_model_perf.py` and
+`tests/greedy_sampler_active_rows.py`.  Fresh final qualitative evidence and
+the isolated B2 sampler gate remain required.
+
+The strengthened gates subsequently passed.  The isolated traced B2 sampler
+returned distinct exact tokens `[17,118]` on every rank
+(`logs/greedy_sampler_active_rows_b2_final.log`).  The model-integrated reduced
+gate matched sampled token 220 to the gathered full-vocabulary torch argmax
+220 while overwriting seed 123 (`logs/exact_argmax_reduced.log`).  The aligned
+row-major writer may modify padding words outside the configured fixed-slot
+prefix; those words are neither returned nor consumed by model decode.
+
+The final AIME24 run generated TT output fresh on the repaired sampler while
+reusing the existing HF completion only after proving an exact revision,
+161-token prompt-ID, and 100-token generation-budget match.  Both completions
+coherently restate the nine-kilometer setup and begin enumerating the two
+scenarios.  TT diverges after token 3 but remains relevant English with no
+repetition or wrong-language drift.  The standard checker reports zero
+adjacent duplication, 5.26% trigram-loop fraction, and no degeneracy.  Exact
+artifacts are under `autoregressive_active_rm_final/` and the command log is
+`logs/autoregressive_active_rm_final.log`.
+
+### Final full-context, profiler, and qualitative closure
+
+The all-64-layer public wrapper passed non-aligned S192,511 prefill followed by
+one decode after the full-stack streaming repair. Both results were finite and
+all request-owned metadata aliases were cleared. Exact artifact:
+`artifacts/full_model_long_prefill_s192511_final.json`; command log:
+`logs/full_model_long_prefill_s192511_final.log`. The run uses six ordered
+32,768-token-or-smaller chunks through the unchanged TP4 stack and preserves
+the selected dtype/fidelity/cache/CCL and replicated residual policies.
+
+The final repaired-sampler reduced Tracy run passed its seeded semantic-greedy
+probe (`123 -> exact global argmax 220`) and measured 230.166 t/s/u over 16
+replays with zero token, position, or page-table host refreshes. Tracy captured
+raw device data but its host/device correlation postprocessor asserted on a
+missing device op after capture. Direct analysis of the preserved raw CSV gives
+median critical paths of 3.605 ms for model trace 0 and 1.024 ms for sampler
+trace 1; sampler share is 22.1% of their combined device time and argmax is
+59.6 us. Artifacts are under `artifacts/profile_active_rm_crop_final/`; the
+postprocessor assertion is in `logs/profile_active_rm_crop_final.log`.
+
+The exact-revision matched shared qualitative suite was rerun on final code:
+
+```bash
+python models/autoports/qwen_qwen3_6_27b/tests/full_model_qualitative.py \
+  --output models/autoports/qwen_qwen3_6_27b/doc/full_model/artifacts/full_model_qualitative_final.json \
+  --max-new-tokens 50
+```
+
+All six TT outputs are coherent English, prompt-relevant, and non-repetitive,
+with no wrong-language drift or control-token leakage. Three match HF for all
+50 tokens; the remaining first divergences are at tokens 1, 4, and 28 and stay
+semantically appropriate. Log: `logs/full_model_qualitative_final.log`.
+
+### Stage-review remediation and semantic-greedy closure
+
+Forced-streaming overlap at S65 now compares the ordinary and streaming paths
+on the same reduced official-weight model. A linear-only run is exact across
+terminal logits, subsequent decode, and eight cache/state tensors. The `[0,3]`
+linear+full-attention run reports prefill PCC 0.999896, decode PCC 0.999980,
+minimum PCC 0.999968 across 20 cache/state tensors, and identical greedy token.
+Artifacts: `artifacts/streaming_overlap_linear_s65_final.json` and
+`artifacts/streaming_overlap_linear_full_s65_final.json`.
+
+The apparent all-layer semantic-greedy failures were a test-oracle defect.
+Trace capture records the graph but does not execute it, while the probe read
+`_trace_logits` immediately after capture. Executing and synchronizing the
+captured model trace before reading its logits makes the reduced populated
+probe exact (`expected_global_argmax=sampled=220`, seed overwrite true) in
+`artifacts/semantic_probe_populated_reduced.json`.
+
+An off-by-default gather diagnostic then compared host-composed input shards,
+the captured post-all-gather tensor on every rank, and an eager gather. All
+four ranks had identical top-eight values/indices and the same argmax 248046;
+captured and eager sampling also returned 248046. Evidence:
+`artifacts/full_model_gather_debug.json` and
+`triage/SAMPLER_GATHER_AUTODEBUG.md`. The speculative top-k=1 alternative was
+therefore refuted and removed.
+
+The corrected all-64-layer S128 gate passed 128 trace replays with exact
+semantic greedy (`expected=sampled=248046`), feedback overwrite, zero host
+token/position/page-table refreshes, TTFT 4.036888 s, and 17.466620 t/s/u.
+Artifact: `artifacts/full_model_perf_active_rm_final_128.json`; log:
+`logs/full_model_perf_active_rm_final_128.log`.
+
+### Maximum-context execution gate
+
+The first S262,144 attempt was terminated externally after about 56 minutes
+without a Python/TT exception or artifact. Cgroup OOM, OOM-kill, and memory
+limit counters were zero, RSS was 4.19 GiB with 109 GiB host memory available,
+and all devices were healthy. The proven S192,511 run took 107m34s, so linear
+scaling predicts roughly 146 minutes at S262,144; the early termination is an
+execution-session lifetime failure, not physical-capacity evidence. AutoFix
+added unbuffered elapsed/peak-RSS heartbeats. The original process had in fact
+survived its detached parent shell and completed after about 144 minutes. The
+all-64-layer S262,144 result has finite `[1,1,248320]` terminal logits, greedy
+token 248046, and complete request-state cleanup. Exact artifact:
+`artifacts/full_model_long_prefill_s262144_final.json`; command log:
+`logs/full_model_long_prefill_s262144_final.log`. Decode is deliberately skipped
+at the exact maximum because the next position, 262,144, is outside the context.
+
+### Final-review lifecycle and qualitative remediation
+
+Fresh stage review found six generator-owned persistent trace inputs were
+nulled but not deallocated. AutoFix added synchronized, identity-deduplicated
+deallocation after all model/compatibility/sampler traces release. The
+three-cycle representative TP4 regression reports byte-identical post-warmup
+allocated/free/largest-contiguous DRAM values and all aliases cleared in
+`artifacts/full_model_trace_lifecycle.json`.
+
+The shared suite was extended to 200 tokens with the same exact revision,
+tokenizer, chat template, prompts, and greedy settings. All six HF and TT
+outputs remain coherent and task-specific with no repetition, wrong-language
+drift, prompt echo, or control-token leakage. Both controls remain inside this
+checkpoint's long visible reasoning preamble, while matching task facts and
+plans (including the same correct French translation). Artifact:
+`artifacts/full_model_qualitative_200_final.json`.
+
+The leading chat controls in `full_model_perf_active_rm_final_128.json` are not
+qualitative output: that benchmark deliberately truncates the 161-token
+reference prompt to S128 inside its chat-template controls before timing.
+
+### Independent final rereview
+
+A fresh read-only `$stage-review` inspected implementation ownership, context,
+accuracy, semantic-greedy tracing, allocator lifecycle, profiler, and every
+HF/TT qualitative output. Verdict: `clean-pass`; required work: none.

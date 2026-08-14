@@ -1,0 +1,7 @@
+
+The problem asks for the total time Aya takes to complete a 9-kilometer walk and spend $t$ minutes at a coffee shop, given her walking speed is $s + \frac{1}{2}$ km/h.
+
+Let's break down the information given:
+1.  **Distance of the walk**: $d = 9$ km.
+2.  **Scenario 1**:
+    *   Walking speed: $s$ km/h.

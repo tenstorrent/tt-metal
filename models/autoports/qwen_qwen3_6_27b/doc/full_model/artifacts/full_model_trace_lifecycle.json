@@ -1,0 +1,53 @@
+{
+  "iterations": 3,
+  "layer_indices": [
+    0,
+    3
+  ],
+  "cycles": [
+    {
+      "iteration": 0,
+      "live": {
+        "allocated_bytes": 3304832512,
+        "free_bytes": 28473898496,
+        "largest_contiguous_bytes_free_per_bank": 3556893568
+      },
+      "released": {
+        "allocated_bytes": 3302208000,
+        "free_bytes": 28476523008,
+        "largest_contiguous_bytes_free_per_bank": 3556893568
+      },
+      "aliases_cleared": true
+    },
+    {
+      "iteration": 1,
+      "live": {
+        "allocated_bytes": 3304832512,
+        "free_bytes": 28473898496,
+        "largest_contiguous_bytes_free_per_bank": 3556893568
+      },
+      "released": {
+        "allocated_bytes": 3302208000,
+        "free_bytes": 28476523008,
+        "largest_contiguous_bytes_free_per_bank": 3556893568
+      },
+      "aliases_cleared": true
+    },
+    {
+      "iteration": 2,
+      "live": {
+        "allocated_bytes": 3304832512,
+        "free_bytes": 28473898496,
+        "largest_contiguous_bytes_free_per_bank": 3556893568
+      },
+      "released": {
+        "allocated_bytes": 3302208000,
+        "free_bytes": 28476523008,
+        "largest_contiguous_bytes_free_per_bank": 3556893568
+      },
+      "aliases_cleared": true
+    }
+  ],
+  "post_warmup_allocator_stable": true,
+  "all_aliases_cleared": true
+}

@@ -1,0 +1,17 @@
+{
+  "source": "cpp_device_perf_report.csv",
+  "captured_replay_sessions": 11,
+  "model_trace_id": 0,
+  "sampler_trace_id": 1,
+  "model_median_critical_path_ms": 3.605011,
+  "sampler_median_critical_path_ms": 1.024343,
+  "sampler_fraction_of_combined_device_time": 0.221287,
+  "sampler_median_operation_us": {
+    "all_gather_async": 831.3225,
+    "untilize": 875.173,
+    "slice": 59.602,
+    "argmax": 59.603
+  },
+  "sampling_dominates": false,
+  "note": "Raw device analysis used because Tracy host/device correlation asserted after successful capture; see the stage log."
+}

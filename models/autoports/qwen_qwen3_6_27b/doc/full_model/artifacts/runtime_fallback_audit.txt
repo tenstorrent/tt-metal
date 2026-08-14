@@ -115,3 +115,35 @@ models/autoports/qwen_qwen3_6_27b/tt/generator.py:437:    host_sampling_compatib
 models/autoports/qwen_qwen3_6_27b/tt/generator.py:438:    force_argmax_greedy = kwargs.pop("force_argmax_greedy", True)
 models/autoports/qwen_qwen3_6_27b/tt/generator.py:443:        host_sampling_compatibility=host_sampling_compatibility,
 models/autoports/qwen_qwen3_6_27b/tt/generator.py:444:        force_argmax_greedy=force_argmax_greedy,
+Final runtime fallback audit (2026-08-14)
+=========================================
+
+- Model path: `Qwen36Model` always builds the optimized 64-layer TP4
+  `MultichipDecoder` stack on a 1x4 mesh. There is no single-chip, host-layer,
+  replicated-weight, or alternate lower-precision runtime branch.
+- Long prefill: prompts above 32,768 tokens traverse bounded chunks through the
+  complete TP4 stack. Full-attention K/V suffixes are filled into the same
+  paged cache with global positions; linear layers retain their device conv and
+  recurrent state. Residuals remain replicated BF16 between layers.
+- Cache ownership: low-level APIs accept explicit caller cache/page table;
+  generator-owned state is used only when callers select it. Inactive rows use
+  an ephemeral masked cache page table and do not mutate inactive K/V.
+- Host-logit boundaries: public prefill returns terminal logits by contract;
+  low-level compatibility decode and teacher forcing may read logits. Optimized
+  token-out decode never reads full logits or performs host argmax.
+- Sampling: canonical greedy is two device traces. The common sampler performs
+  full-vocabulary all-gather, row-major active-row crop, and semantic argmax
+  directly into persistent token feedback. The explicit
+  `host_sampling_compatibility` mode is test-only and is excluded from measured
+  token-out performance.
+- Token/position/page-table feedback: traced greedy replays rebuild none of
+  these on host. A changed page table is copied exactly once at the serving API
+  boundary; an unchanged table causes no refresh.
+- Reset: trace execution is fenced before trace/snapshot release or cache
+  clearing. Whole reset zeros all KV, convolution, and recurrent state. Slot
+  reset clears only the requested fixed rows and blocks decode until refill.
+- Request cleanup: generator-owned token, position, mask, selector, and
+  temporary page-table tensors are fenced and deallocated after prefill; every
+  decoder alias is cleared. The S192,511 all-layer artifact proves cleanup.
+
+Source search evidence follows.

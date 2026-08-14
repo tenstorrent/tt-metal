@@ -932,6 +932,11 @@ class MultichipDecoder(OptimizedDecoder):
 
     def _full_attention_prefill(self, hidden_states, page_table, current_positions):
         sequence = hidden_states.shape[2]
+        chunk_start = int(getattr(self, "_prefill_chunk_start", None) or 0)
+        if chunk_start:
+            return self._full_attention_prefill_stream_chunk(
+                hidden_states, page_table, current_positions, chunk_start=chunk_start
+            )
         if sequence > 32768:
             return self._full_attention_prefill_long(hidden_states, page_table, current_positions)
         packed = self._tp_linear(
@@ -976,6 +981,84 @@ class MultichipDecoder(OptimizedDecoder):
         )
         attention = ttnn.experimental.nlp_concat_heads(attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         attention = ttnn.permute(attention, (1, 0, 2, 3))
+        return self._tp_linear(
+            ttnn.multiply(attention, ttnn.sigmoid(gate)),
+            "o_proj_prefill",
+            k=1536,
+            n=5120,
+            decode=False,
+            row=True,
+            compute_kernel_config=self.o_compute_kernel_config,
+        )
+
+    def _full_attention_prefill_stream_chunk(self, hidden_states, page_table, current_positions, *, chunk_start):
+        """Process one full-stack prefill chunk against previously filled paged K/V."""
+        sequence = hidden_states.shape[2]
+        page_size = self.caches["key"].shape[2]
+        if chunk_start % page_size:
+            raise ValueError("streaming prefill chunks must start on a KV page boundary")
+        cache_page_table = getattr(self, "_cache_page_table", page_table)
+        pages = ttnn.slice(
+            cache_page_table,
+            (0, chunk_start // page_size),
+            (self.batch, math.ceil((chunk_start + sequence) / page_size)),
+        )
+        for name in ("k", "v"):
+            value = self._tp_linear(
+                hidden_states,
+                f"{name}_prefill_long",
+                k=5120,
+                n=256,
+                decode=False,
+                compute_kernel_config=self.qkv_compute_kernel_config,
+            )
+            value = ttnn.permute(ttnn.reshape(value, (self.batch, sequence, 1, 256)), (0, 2, 1, 3))
+            if name == "k":
+                value = self._partial_rope_prefill(self._per_head_norm_prefill(value, "k_norm"), current_positions)
+            cache_value = ttnn.typecast(value, self.policy.cache_dtype)
+            ttnn.experimental.paged_fill_cache(
+                self.caches["key" if name == "k" else "value"],
+                cache_value,
+                pages,
+                batch_idx_tensor=self.caches["batch_indices"],
+            )
+            ttnn.deallocate(cache_value)
+            ttnn.deallocate(value)
+        q = self._tp_linear(
+            hidden_states,
+            "q_prefill_long",
+            k=5120,
+            n=1536,
+            decode=False,
+            compute_kernel_config=self.qkv_compute_kernel_config,
+        )
+        q = ttnn.permute(ttnn.reshape(q, (self.batch, sequence, 6, 256)), (0, 2, 1, 3))
+        q = self._partial_rope_prefill(self._per_head_norm_prefill(q, "q_norm"), current_positions)
+        padding = (-sequence) % ttnn.TILE_SIZE
+        if padding:
+            q = ttnn.pad(q, ((0, 0), (0, 0), (0, padding), (0, 0)), value=0.0)
+        attention = ttnn.transformer.chunked_scaled_dot_product_attention(
+            q,
+            self.caches["key"],
+            self.caches["value"],
+            page_table,
+            chunk_start_idx=chunk_start,
+            scale=256**-0.5,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if padding:
+            attention = ttnn.slice(attention, (0, 0, 0, 0), (self.batch, 6, sequence, 256))
+        attention = ttnn.permute(
+            ttnn.experimental.nlp_concat_heads(attention, memory_config=ttnn.DRAM_MEMORY_CONFIG), (1, 0, 2, 3)
+        )
+        gate = self._tp_linear(
+            hidden_states,
+            "gate_prefill_long",
+            k=5120,
+            n=1536,
+            decode=False,
+            compute_kernel_config=self.qkv_compute_kernel_config,
+        )
         return self._tp_linear(
             ttnn.multiply(attention, ttnn.sigmoid(gate)),
             "o_proj_prefill",
