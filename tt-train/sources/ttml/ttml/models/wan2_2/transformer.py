@@ -23,16 +23,15 @@ from .attention import WanAttention
 _MOD_CHUNKS = 6
 
 
+# TODO: Delete this Function once ttml.ops.unary.gelu takes a variant (bmijanovicTT)
+# Issue: #
+# ttml hardcodes the erf form both ways: ttnn::gelu with no variant forward, gelu_bw with
+# approx_mode "none" backward.
 class GeluTanh(Function):
-    """gelu with the tanh approximation, the variant Wan's feedforward was trained with.
-
-    ttml.ops.unary.gelu is the exact erf form in both directions, hence the ttnn kernels.
-    """
-
     @staticmethod
     def forward(ctx, x):
         ctx.save_for_backward(x)
-        return ttnn.gelu(x.get_value(), fast_and_approximate_mode=True)
+        return ttnn.gelu(x.get_value(), variant=ttnn.GeluVariant.Tanh)
 
     @staticmethod
     def backward(ctx, grad_output):

@@ -33,9 +33,12 @@ def timestep_features(
     return np.ascontiguousarray(out, dtype=np.float32)
 
 
+# TODO: Use ttml.ops.unary.gelu once it takes a variant (bmijanovicTT)
+# Issue: #
+# ttml hardcodes the exact erf form, so tanh is only reachable through raw ttnn.
 def _gelu_tanh_nograd(x):
     """ttml's gelu is the exact erf form, so route to the tanh kernel."""
-    value = ttnn.gelu(x.get_value(), fast_and_approximate_mode=True)
+    value = ttnn.gelu(x.get_value(), variant=ttnn.GeluVariant.Tanh)
     return ttml.autograd.create_tensor(value, False)
 
 

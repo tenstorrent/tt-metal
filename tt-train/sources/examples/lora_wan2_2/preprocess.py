@@ -2,8 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage 1 -- OmniConsistency <style>/tar + caption -> local dataset."""
-
 from __future__ import annotations
 
 import json
