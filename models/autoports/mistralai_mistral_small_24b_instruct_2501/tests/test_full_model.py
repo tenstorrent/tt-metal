@@ -20,6 +20,7 @@ from models.autoports.mistralai_mistral_small_24b_instruct_2501.tt.generator imp
     SafetensorStateDict,
     _first_device_to_torch,
 )
+from models.autoports.mistralai_mistral_small_24b_instruct_2501.tt.generator_vllm import TTMistralSmall24BForCausalLM
 from models.autoports.mistralai_mistral_small_24b_instruct_2501.tt.model import (
     HF_CONTEXT_LENGTH,
     HF_VOCAB_SIZE,
@@ -236,6 +237,29 @@ def test_optimized_generate_has_no_host_argmax_or_full_logit_feedback():
     assert "_sampled_tokens_to_torch" not in window_source
     assert "_copy_trace_state" not in window_source
     assert window_source.count("_synchronize()") == 1
+
+
+def test_decode_warmup_compiles_cache_clear_before_trace_capture():
+    events = []
+    cache = object()
+    adapter = object.__new__(TTMistralSmall24BForCausalLM)
+    adapter.generator = SimpleNamespace(
+        model=SimpleNamespace(reset_kv_cache=lambda actual: events.append(("reset", actual))),
+        prepare_decode_trace=lambda *args, **kwargs: events.append(("capture", kwargs["kv_cache"])),
+        _trace_page_table_snapshot="stale",
+    )
+
+    kwargs = dict(
+        kv_cache=cache,
+        max_batch_size=1,
+        num_blocks=1,
+        can_sample_on_device=True,
+    )
+    adapter.warmup_model_decode(enable_trace=False, **kwargs)
+    adapter.warmup_model_decode(enable_trace=True, **kwargs)
+
+    assert events == [("reset", cache), ("capture", cache), ("reset", cache)]
+    assert adapter.generator._trace_page_table_snapshot is None
 
 
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)

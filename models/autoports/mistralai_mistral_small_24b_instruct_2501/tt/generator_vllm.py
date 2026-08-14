@@ -312,8 +312,11 @@ class TTMistralSmall24BForCausalLM:
         if not can_sample_on_device:
             raise ValueError("production warmup requires on-device decode sampling")
         if not enable_trace:
-            # Trace capture performs its own eager compile/warmup before the
-            # capture, preserving the generator's single canonical path.
+            # Compile the in-place cache clear before any trace exists.  The
+            # traced phase must clear the cache again after capture, but that
+            # call must be a program-cache hit: compiling ``ttnn.fill`` while
+            # traces are live can allocate buffers that overlap trace memory.
+            self.generator.model.reset_kv_cache(kv_cache)
             return
         batch = int(max_batch_size)
         page_table = torch.zeros((batch, int(num_blocks)), dtype=torch.int32)
