@@ -1,11 +1,12 @@
 # SPDX-FileCopyrightText: Copyright 2025-2026 The Moonshot AI Team, DeepSeek-AI, and HuggingFace Inc. team.
-# SPDX-License-Identifier: LicenseRef-LICENSE-FILE
+# SPDX-License-Identifier: MIT
 # All rights reserved.
 #
-# This source code is licensed under the terms described in LICENSE-Kimi-K3 in
-# this folder. The header below is reproduced verbatim from the HuggingFace file;
-# `_apply_attn_res` is not part of the DeepSeek-V3-adapted code, so it falls under
-# the Kimi K3 License arm rather than the Apache-2.0 arm.
+# The governing terms are LICENSE-Kimi-K3 in this folder — MIT plus a Model-as-a-Service
+# and an attribution condition — which has no SPDX identifier of its own, so the tag above
+# names the license it extends. The header below is reproduced verbatim from the
+# HuggingFace file; `_apply_attn_res` is not part of the DeepSeek-V3-adapted code, so it
+# falls under the Kimi K3 License arm rather than the Apache-2.0 arm.
 #
 # coding=utf-8
 # Copyright 2025-2026 The Moonshot AI Team, DeepSeek-AI, and HuggingFace Inc. team. All rights reserved.
