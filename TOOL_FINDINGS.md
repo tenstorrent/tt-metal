@@ -1485,6 +1485,46 @@ exchange rate explicitly — *w2 costs 77% of the precision stack's accuracy for
 and handed back 2.5 ms. That reasoning has no place to live in the current design. Together with O1
 (no per-weight dtype axis) this is the clearest gap between the tool and a careful human pass.
 
+### F13 — the generated stubs swallow fast-path exceptions, so a perf regression passes the PCC gate
+
+**Status: found by the agent itself, 2026-08-14** · severity: a broken optimization reports as
+correct · reported: not yet
+
+The emitted `tt/pipeline.py` guards its fast paths like this:
+
+```python
+try:
+    ...fast matmul plan...
+except Exception:
+    self.lm_head_dram = None      # then fall through to plain ttnn.linear
+```
+
+The fallback computes **the same math**, so `check_pcc` passes. What is lost is only speed — and
+PCC cannot see a performance-only failure. The guard converts an exception into a **silent policy
+change** rather than an error.
+
+**Measured instance.** Setting the LM head's output dtype to `bfloat4_b` made
+`ttnn.to_layout(part, ROW_MAJOR_LAYOUT)` throw — block-float formats require TILE layout, and while
+`bfloat8_b` is accepted, `bfloat4_b` is not. PCC still reported **ok at 0.9774**, while all 128
+decode tokens ran the interleaved fallback: **device_ms 223.65 → 244.64**, and the op table showed
+`32 x 3072 x 131072` at n=128 where `32 x 3072 x 32768` at n=512 should have been.
+
+**Why it matters here specifically:** this tool's entire design premise is that *the AI proposes and
+the harness verifies*. A guard that turns a failed optimization into a passing test defeats that
+premise inside the generated code itself — the harness is verifying honestly, but it is being handed
+a program that lies about which path it took.
+
+**Fix, two options:** (a) do not emit bare `except Exception` around fast paths — let the failure be
+loud during bring-up, and gate the fallback on an explicit capability check instead; or (b) if the
+guard must stay (the RoPE commit's latched fallback exists for a real reason — an exception inside a
+captured trace is fatal), then have `measure_candidate` assert the **expected op signature and call
+count** are present in the profile, not just that the run was faster. The tool already parses that
+table.
+
+**Credit where due: the agent caught this itself**, diagnosed it from a collapsed call count in the
+per-op table, recorded the general rule (*"never trust `check_pcc` alone after touching a guarded
+fast path"*), and settled on `bfloat8_b`, which does not trip the guard.
+
 ### O5 — the ladder's escalation is real, and it gives up in the right place
 
 On the LM head matmul it climbed `grid → dtype → shard → fidelity → structural → cpp` across 11
