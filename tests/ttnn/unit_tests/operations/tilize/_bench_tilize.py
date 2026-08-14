@@ -484,3 +484,61 @@ def test_bench_sweep_pipeline_min_read(device, min_read, monkeypatch):
         ttnn.bfloat16,
         label=f"sweep_min_read={min_read}/b_wide_short/bf16",
     )
+
+
+@pytest.mark.parametrize("regime", list(SHAPES))
+@pytest.mark.parametrize("dtype_name", list(_DTYPES))
+def test_bench_lever_read_trid_off(device, regime, dtype_name):
+    """master.md B8 OFF: one plain read barrier per block, so the NoC drains at
+    every block boundary instead of block i+1's reads already being in flight.
+    Only measurable where a core owns >1 block — (a) (4/core after the pipeline
+    knob) and (c) (4/core) — and B0-checked on the smallest regime (d)."""
+    _measure(
+        device,
+        SHAPES[regime],
+        _DTYPES[dtype_name],
+        levers=dict(read_trid=0),
+        label=f"read_trid=0/{regime}/{dtype_name}",
+    )
+
+
+@pytest.mark.parametrize("regime", list(SHAPES))
+@pytest.mark.parametrize("dtype_name", list(_DTYPES))
+def test_bench_lever_read_vc_on(device, regime, dtype_name):
+    """master.md B10 ON arm: spread read requests over NUM_READ_VCS unicast VCs.
+    B10 ships PARKED OFF (see LEVERS) — this is the arm that measured the loss."""
+    _measure(
+        device,
+        SHAPES[regime],
+        _DTYPES[dtype_name],
+        levers=dict(read_vc=1),
+        label=f"read_vc=1/{regime}/{dtype_name}",
+    )
+
+
+@pytest.mark.parametrize("regime", list(SHAPES))
+@pytest.mark.parametrize("dtype_name", list(_DTYPES))
+def test_bench_lever_read_one_packet_off(device, regime, dtype_name):
+    """master.md B6 OFF: the any-length issue path even when the transfer fits
+    NOC_MAX_BURST_SIZE (512 B) — (b)'s read is exactly 512 B."""
+    _measure(
+        device,
+        SHAPES[regime],
+        _DTYPES[dtype_name],
+        levers=dict(read_one_packet=0),
+        label=f"read_one_packet=0/{regime}/{dtype_name}",
+    )
+
+
+@pytest.mark.parametrize("regime", list(SHAPES))
+@pytest.mark.parametrize("dtype_name", list(_DTYPES))
+def test_bench_lever_custom_reader_off(device, regime, dtype_name):
+    """All three read levers off => the reader compiles to the library-helper
+    call verbatim. This is the OFF arm of the helper SUBSTITUTION itself."""
+    _measure(
+        device,
+        SHAPES[regime],
+        _DTYPES[dtype_name],
+        levers=dict(read_trid=0, read_vc=0, read_one_packet=0),  # -> library helper
+        label=f"library_reader/{regime}/{dtype_name}",
+    )

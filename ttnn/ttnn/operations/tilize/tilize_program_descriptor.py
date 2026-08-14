@@ -161,8 +161,35 @@ LEVERS = {
     "xfer_gate": 1,
     "pipeline": 1,
     "read_trid": 1,
-    "read_vc": 1,
+    # master.md B10 ships PARKED at its byte-identical default (every reader on
+    # the default request VC). Measured over 5-sample medians on Wormhole B0 it
+    # is neutral on the grid-filling square (86,136 vs 85,720 ns) and a 2.6% LOSS
+    # on the wide/short shape (13,478 with vs 13,131 without): spreading requests
+    # over 4 VCs does not help an op whose readers are already spread over 64
+    # cores and whose source pages round-robin over every DRAM bank. Kept as a
+    # live knob (turning it to 1 is the ON arm the bench measures) rather than
+    # deleted — the mechanism is correct, it just has nothing to break up here.
+    "read_vc": 0,
+    "read_one_packet": 1,
 }
+
+# Levers deliberately SHIPPED in their 0 arm, with the measurement that put them
+# there. A lever lands here (rather than being deleted) when the mechanism is
+# correct and still a live knob, but its ON arm measured neutral-or-worse on this
+# op's shapes — the ledger's `measured-no-payoff` disposition. Anything OFF that
+# is NOT listed here is a bench arm that leaked into production
+# (test_production_switches_ship_in_their_optimal_state pins exactly that).
+PARKED_LEVERS = {
+    "read_vc": "master.md B10: neutral on (a) 86,136 vs 85,720 ns, -2.6% on (b) "
+    "13,478 vs 13,131 ns (5-sample medians). 64 readers over 12 round-robin DRAM "
+    "banks have no first-come-first-serve route to break up.",
+}
+
+# --- B10: how many read-request VCs the readers spread over ------------------
+# Unicast VCs are 0-3 (dataflow_api.h read/write `vc` parameter). Core i issues
+# its read requests on `i % NUM_READ_VCS`, so cores sharing a NoC route do not
+# all queue behind one another on the single default VC.
+NUM_READ_VCS = 4
 
 # --- classification ablation (perf-only; op_design.md §9.1) ------------------
 # Stub a stage's PAYLOAD while keeping every CB reserve/push/wait/pop, barrier
@@ -656,6 +683,19 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     nth_per_img = _div_up(target[-2], tile_h)
     pad_word = _pack_pad_word(plan.pad_value, input_tensor.dtype)
 
+    # -- Refinement-3 read levers (interleaved aligned path only) ------------
+    # All three need the custom reader loop; with all three off the reader
+    # compiles to the library-helper call verbatim (the Phase-0 hot path).
+    # They apply only where that loop lives: the aligned W_BLOCKS accessor read.
+    aligned_accessor_read = regime == R_ALIGNED and work_mode == W_BLOCKS and in_placement == P_ACCESSOR
+    # B8 needs the input CB to be EXACTLY two blocks deep, so the reader's two
+    # slot addresses are fixed and it can hold one block in flight while the
+    # next is issued. cb_pages() is the single source for that geometry.
+    trid_ok = cb_pages(cb_depth, wt_chunk) == 2 * NT_BLK * wt_chunk and NT_BLK == 1
+    read_one_packet = int(aligned_accessor_read and LEVERS["read_one_packet"])
+    read_trid = int(aligned_accessor_read and trid_ok and LEVERS["read_trid"])
+    read_vc_enable = int(aligned_accessor_read and LEVERS["read_vc"])
+
     # -- reader (NCRISC / NOC0) --
     reader_ct_args = [
         regime,
@@ -673,6 +713,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         ABLATE["dm"],
         src_page_bytes,
         src_row_pages,
+        read_one_packet,
+        read_trid,
+        read_vc_enable,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -725,6 +768,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             pad_word,
             tile_row0,
             tile_col0 * tile_w * elem_in,  # the region's byte offset within a stick
+            shard_index % NUM_READ_VCS,  # B10: this core's read-request VC
         ]
         writer_rt_args[core.x][core.y] = [dst_addr, start_block, blocks_this_core, tile_row0, tile_col0]
         compute_rt_args[core.x][core.y] = [blocks_this_core]

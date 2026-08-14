@@ -132,6 +132,29 @@ FORCE_INLINE void read_row_span(
     }
 }
 
+// Issue ONE tile-row's worth of source rows (tile_h transfers of `row_bytes`)
+// into consecutive L1 slots. Nothing is barriered here — the caller owns the
+// barrier policy (master.md B7), which is what lets the trid loop below defer it.
+//
+// `one_packet` (master.md B6): a transfer that fits NOC_MAX_BURST_SIZE can skip
+// the any-length loop and take the cheap single-packet issue path.
+// `vc` (master.md B10): the read-REQUEST virtual channel. Readers that share a
+// route serialize first-come-first-serve on one VC; spreading requests over the
+// unicast VCs is the documented way to break that.
+template <uint32_t row_bytes, uint32_t tile_h, bool one_packet, typename Accessor>
+FORCE_INLINE void issue_tile_row(
+    const Accessor& accessor, uint32_t first_row, uint32_t byte_off, uint32_t l1_addr, uint32_t vc) {
+    for (uint32_t r = 0; r < tile_h; ++r) {
+        const uint64_t src = accessor.get_noc_addr(first_row + r, byte_off);
+        if constexpr (one_packet) {
+            noc_async_read_one_packet(src, l1_addr, row_bytes, noc_index, vc);
+        } else {
+            noc_async_read(src, l1_addr, row_bytes, noc_index, vc);
+        }
+        l1_addr += row_bytes;  // aligned path: the L1 stride IS row_bytes
+    }
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -159,7 +182,12 @@ void kernel_main() {
     // shard is NARROWER than a row, so a row is src_row_pages pages.
     constexpr uint32_t src_page_bytes = get_compile_time_arg_val(13);
     constexpr uint32_t src_row_pages = get_compile_time_arg_val(14);
-    constexpr auto src_args = TensorAccessorArgs<15>();
+    // Refinement-3 levers on the interleaved aligned path (see the custom-loop
+    // note below): B6 one-packet issue, B8 trid double-issue, B10 per-reader VC.
+    constexpr uint32_t read_one_packet = get_compile_time_arg_val(15);
+    constexpr uint32_t read_trid = get_compile_time_arg_val(16);
+    constexpr uint32_t read_vc_enable = get_compile_time_arg_val(17);
+    constexpr auto src_args = TensorAccessorArgs<18>();
 
     // Every byte quantity below derives from the WT_CHUNK knob — one source.
     constexpr uint32_t row_bytes = wt_chunk * TILE_W * elem_bytes;
@@ -170,6 +198,7 @@ void kernel_main() {
     const uint32_t pad_word = get_arg_val<uint32_t>(3);
     const uint32_t tile_row0 = get_arg_val<uint32_t>(4);     // W_REGION: region origin
     const uint32_t col_off_base = get_arg_val<uint32_t>(5);  // W_REGION: byte offset in a stick
+    const uint32_t read_vc = get_arg_val<uint32_t>(6);       // B10: this core's read-request VC
 
     if (num_blocks == 0) {
         return;
@@ -227,6 +256,71 @@ void kernel_main() {
                             /*row_bytes=*/row_bytes,
                             /*start_page=*/(tile_row0 + r) * tile_h,
                             /*byte_offset_within_page=*/col_off_base + c * row_bytes);
+                }
+            }
+        } else if constexpr (read_one_packet || read_trid || read_vc_enable) {
+            // ── custom aligned loop (master.md B6 / B8 / B10) ─────────────
+            // HELPER SUBSTITUTION, justified and MEASURED. read_sticks_for_tilize
+            // issues a plain noc_async_read per row and one plain
+            // noc_async_read_barrier per block; its contract exposes NO
+            // transaction id (B8), NO request VC (B10) and NO one-packet
+            // selector (B6), so none of the three levers this refinement prices
+            // can be expressed through it. The helper stays the DEFAULT arm —
+            // with all three levers off this branch is compiled out entirely and
+            // the kernel takes the helper call below verbatim, so the OFF arm is
+            // literally the Phase-0 code and the substitution itself is what the
+            // bench measures.
+            constexpr uint32_t in_tile_bytes = get_tile_size(cb_input_sticks);
+            constexpr uint32_t slot_bytes = wt_chunk * in_tile_bytes;
+            constexpr bool one_packet = read_one_packet && (row_bytes <= NOC_MAX_BURST_SIZE);
+            const uint32_t vc = read_vc_enable ? read_vc : NOC_UNICAST_WRITE_VC;
+
+            if constexpr (read_trid) {
+                // B8 double-issue: block i's reads are issued BEFORE block i-1's
+                // barrier, so a request is always in flight across the block
+                // boundary instead of the NoC draining at every barrier.
+                //
+                // The host only sets this lever when the input CB is EXACTLY two
+                // blocks deep (CB_DEPTH == 2, NT_BLK == 1), so the write pointer
+                // alternates between two fixed slots and no wrap arithmetic is
+                // needed — cb_reserve_back still provides all the flow control.
+                const uint32_t slot_base = get_write_ptr(cb_input_sticks);
+                uint32_t slot = 0;
+                uint32_t trid_issue = 1, trid_wait = 1;
+                bool in_flight = false;
+                for (uint32_t i = 0; i < num_blocks; ++i) {
+                    const uint32_t block = start_block + i;
+                    const uint32_t wc = block / nt_h;
+                    const uint32_t row = block % nt_h;
+
+                    // Room for the still-unpushed in-flight block AND this one.
+                    cb_reserve_back(cb_input_sticks, in_flight ? 2 * wt_chunk : wt_chunk);
+                    noc_async_read_set_trid(trid_issue);
+                    issue_tile_row<row_bytes, tile_h, one_packet>(
+                        accessor, row * tile_h, wc * row_bytes, slot_base + slot * slot_bytes, vc);
+                    slot ^= 1;
+                    trid_issue ^= 3;  // alternate 1 <-> 2
+
+                    if (in_flight) {
+                        noc_async_read_barrier_with_trid(trid_wait);
+                        cb_push_back(cb_input_sticks, wt_chunk);
+                        trid_wait ^= 3;
+                    }
+                    in_flight = true;
+                }
+                noc_async_read_barrier_with_trid(trid_wait);  // drain the last block
+                cb_push_back(cb_input_sticks, wt_chunk);
+            } else {
+                for (uint32_t i = 0; i < num_blocks; ++i) {
+                    const uint32_t block = start_block + i;
+                    const uint32_t wc = block / nt_h;
+                    const uint32_t row = block % nt_h;
+
+                    cb_reserve_back(cb_input_sticks, wt_chunk);
+                    issue_tile_row<row_bytes, tile_h, one_packet>(
+                        accessor, row * tile_h, wc * row_bytes, get_write_ptr(cb_input_sticks), vc);
+                    noc_async_read_barrier();
+                    cb_push_back(cb_input_sticks, wt_chunk);
                 }
             }
         } else {

@@ -13,3 +13,4 @@
 {"event":"test_run","status":"pass","test":"eval/golden_tests/tilize/test_golden.py","result":"190 passed / 158 xfail / 0 failed / 0 xpass (was 168/180)","note":"+22 = padded x sharded cells","ts":"2026-08-14T14:23:27+00:00"}
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/tilize/ + bench","result":"166 unit passed; bench 73 passed; verify_levers phase 2 = 0 blocking","note":"xfer_gate lever measured 1.66x/3.21x; padded-into-shard 1.35x","ts":"2026-08-14T14:28:56+00:00"}
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/tilize/","result":"166 passed","note":"pipeline blocks-per-core knob landed; no regression on the unit suite","ts":"2026-08-14T14:42:06+00:00"}
+{"event":"test_run","status":"pass","test":"test_tilize_levers.py","result":"32 passed","note":"A3 structural pin + pipeline/B8 pins added","ts":"2026-08-14T14:54:32+00:00"}
