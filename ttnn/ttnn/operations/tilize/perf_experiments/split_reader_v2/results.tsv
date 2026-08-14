@@ -1,0 +1,173 @@
+# split_reader_v2 — measured DEVICE KERNEL DURATION [ns], Wormhole B0
+# box: bgd-lab-16-special-dstoiljkovic (12 DRAM banks, 64 L1 banks), profiler ON.
+# One fresh-cache measured launch per (plan, arm); launch 1 of each pair is the
+# compile warm-up AND the bit-exact correctness gate (torch.equal). EVERY arm
+# listed here was bit-exact; L1_OOM rows never ran (the CBs do not fit).
+# Repeat sessions of the same cell are listed as `a/b/c` (session spread <= 1.5%).
+#
+# arm legend
+#   op_baseline        NCRISC reads all blocks (library read_sticks_for_tilize),
+#                      compute = ONE helper call for the core, BRISC drains.
+#                      == today's op scheme (pinned by test_anchor.py).
+#   nodrain            as op_baseline, nobody drains the aliased output CB.
+#   alt_tax            ONE reader, ONE CB, but compute in the per-block
+#                      back-to-back helper form the split forces on it.
+#   cdrain             as op_baseline, COMPUTE drains.
+#   raw_baseline       ONE reader, raw noc_async_read instead of the helper.
+#   split_il           dedicated dual-NoC, stride-2 interleave 50/50, no drain.
+#   split_il_cdrain    ditto, COMPUTE drains  <-- L1-SOURCE INTEGRATION FORM
+#   split_il_bdrain    ditto, BRISC reads AND drains.
+#   split_p57/60/67/75 dedicated dual-NoC, PERIODIC weighted interleave, NCRISC's
+#                      share = 4/7, 3/5, 2/3, 3/4. Bounded CB depth.
+#   split_w75          Perf-1's CONTIGUOUS 3:1 split (CB depth = half the core's
+#                      blocks -> L1 scales with the tensor; not integrable).
+#   split_trid         BOTH DM RISCs on NOC_0 (DM_DYNAMIC_NOC) + per-RISC read
+#                      transaction id, 50/50 interleave, no drain.
+#   split_trid_cdrain  ditto, COMPUTE drains   <-- DRAM-SOURCE INTEGRATION FORM
+#   split_rw / _p88    interleaved destination: BRISC keeps the WRITES and takes
+#                      1/2 resp. 1/8 of the reads.
+#
+plan	shape	src	dst	blocks/core	wt_chunk	read_B/stick	arm	ns	ratio_vs_baseline	in_cb_L1_B
+# ---------- FOCUS PLAN 1: DRAM -> HEIGHT-sharded L1, 8 cores ----------
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	real_op_anchor	14919	-	-
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	op_baseline	14780/14908/14707/14875	1.00	32768
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	nodrain	14759/14798	1.00	32768
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	alt_tax	14768/14727	1.00	32768
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	cdrain	14860/14755	1.00	32768
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	raw_baseline	14954/14983	0.99	32768
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	split_il	17174/16896/16889	0.87	65536
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	split_il_bdrain	19756/19714	0.75	65536
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	split_il_cdrain	17009/17102/17048	0.87	65536
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	split_p57	13651/13662	1.08	114688
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	split_p60	11380/11502	1.29	81920
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	split_p67	11552/11394	1.29	81920
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	split_p75	11845/11884/11904	1.25	98304
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	split_w75	12413/12388	1.19	131072
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	split_trid	9633/9857	1.51	65536
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	split_trid_cdrain	9919	1.50	65536
+crossover	[1,1,2048,256] bf16	DRAM	H x8	8	8	512	split_trid_p75	13217/13157	1.12	98304
+# ---------- FOCUS PLAN 2: WIDTH-sharded L1 (2 cores) -> HEIGHT-sharded L1 (8) ----------
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512 (2x256B pages)	real_op_anchor	19666	-	-
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512	op_baseline	18406/18613/18645/18109	1.00	32768
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512	nodrain	18345/18443	1.00	32768
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512	alt_tax	18281/18142	1.01	32768
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512	cdrain	18338/18318	1.01	32768
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512	raw_baseline	18503/18262	1.00	32768
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512	split_il	10291/10264/10134	1.81	65536
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512	split_il_bdrain	11224/10957	1.67	65536
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512	split_il_cdrain	10817/10687/10814	1.72	65536
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512	split_p57	18214/18281	1.02	114688
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512	split_p60	14629/14449	1.27	81920
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512	split_p67	13975/14320	1.31	81920
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512	split_p75	14764/14797/14791	1.26	98304
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512	split_w75	14276/14786	1.28	65536
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512	split_trid	19163/19212	0.97	65536
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512	split_trid_cdrain	19584	0.94	65536
+reshard	[1,1,1024,256] bf16	W x2 L1	H x8	4	8	512	split_trid_p75	20884/20893	0.89	98304
+# ---------- DOMAIN: DRAM source, destination-local. Read-transfer ladder. ----------
+crossover_big	[1,1,4096,256] bf16	DRAM	H x8	16	8	512	real_op_anchor	28524	-	-
+crossover_big	[1,1,4096,256] bf16	DRAM	H x8	16	8	512	op_baseline	28195/28337	1.00	32768
+crossover_big	[1,1,4096,256] bf16	DRAM	H x8	16	8	512	split_il	32519	0.87	65536
+crossover_big	[1,1,4096,256] bf16	DRAM	H x8	16	8	512	split_il_cdrain	33045	0.86	65536
+crossover_big	[1,1,4096,256] bf16	DRAM	H x8	16	8	512	split_p67	21163	1.34	81920
+crossover_big	[1,1,4096,256] bf16	DRAM	H x8	16	8	512	split_trid	17934	1.58	65536
+crossover_big	[1,1,4096,256] bf16	DRAM	H x8	16	8	512	split_trid_cdrain	18286	1.55	65536
+crossover_tall	[1,1,8192,256] bf16	DRAM	H x8	32	8	512	real_op_anchor	55364	-	-
+crossover_tall	[1,1,8192,256] bf16	DRAM	H x8	32	8	512	op_baseline	55064/55182	1.00	32768
+crossover_tall	[1,1,8192,256] bf16	DRAM	H x8	32	8	512	split_il	63611	0.87	65536
+crossover_tall	[1,1,8192,256] bf16	DRAM	H x8	32	8	512	split_il_cdrain	63963	0.86	65536
+crossover_tall	[1,1,8192,256] bf16	DRAM	H x8	32	8	512	split_p67	39978	1.38	81920
+crossover_tall	[1,1,8192,256] bf16	DRAM	H x8	32	8	512	split_trid	33631	1.64	65536
+crossover_tall	[1,1,8192,256] bf16	DRAM	H x8	32	8	512	split_trid_cdrain	33543	1.65	65536
+small_wide	[1,1,512,256] bf16	DRAM	H x4	4	8	512	real_op_anchor	8045	-	-
+small_wide	[1,1,512,256] bf16	DRAM	H x4	4	8	512	op_baseline	8161	1.00	32768
+small_wide	[1,1,512,256] bf16	DRAM	H x4	4	8	512	split_il	6327	1.29	65536
+small_wide	[1,1,512,256] bf16	DRAM	H x4	4	8	512	split_p67	6209	1.31	81920
+small_wide	[1,1,512,256] bf16	DRAM	H x4	4	8	512	split_trid	5788	1.41	65536
+crossover_1blk	[1,1,256,256] bf16	DRAM	H x8	1	8	512	real_op_anchor	3251	-	-
+crossover_1blk	[1,1,256,256] bf16	DRAM	H x8	1	8	512	op_baseline	3032	1.00	16384
+crossover_1blk	[1,1,256,256] bf16	DRAM	H x8	1	8	512	split_il	3071	0.99	32768
+crossover_1blk	[1,1,256,256] bf16	DRAM	H x8	1	8	512	split_p67	2923	1.04	32768
+crossover_1blk	[1,1,256,256] bf16	DRAM	H x8	1	8	512	split_trid	3346	0.91	32768
+crossover_512	[1,1,2048,512] bf16	DRAM	H x8	8	16	1024	real_op_anchor	16722/16729	-	-
+crossover_512	[1,1,2048,512] bf16	DRAM	H x8	8	16	1024	op_baseline	16577/16630	1.00	65536
+crossover_512	[1,1,2048,512] bf16	DRAM	H x8	8	16	1024	split_il	32836	0.50	131072
+crossover_512	[1,1,2048,512] bf16	DRAM	H x8	8	16	1024	split_il_cdrain	33218	0.50	131072
+crossover_512	[1,1,2048,512] bf16	DRAM	H x8	8	16	1024	split_p67	18853	0.88	163840
+crossover_512	[1,1,2048,512] bf16	DRAM	H x8	8	16	1024	split_trid	15512	1.07	131072
+crossover_512	[1,1,2048,512] bf16	DRAM	H x8	8	16	1024	split_trid_cdrain	15513	1.07	131072
+crossover_fp32	[1,1,2048,256] fp32	DRAM	H x8	8	8	1024	real_op_anchor	16949	-	-
+crossover_fp32	[1,1,2048,256] fp32	DRAM	H x8	8	8	1024	op_baseline	16799	1.00	65536
+crossover_fp32	[1,1,2048,256] fp32	DRAM	H x8	8	8	1024	split_il	32539	0.52	131072
+crossover_fp32	[1,1,2048,256] fp32	DRAM	H x8	8	8	1024	split_p67	19873	0.85	163840
+crossover_fp32	[1,1,2048,256] fp32	DRAM	H x8	8	8	1024	split_trid	15987	1.05	131072
+crossover_wide	[1,1,2048,1024] bf16	DRAM	H x8	8	32	2048	real_op_anchor	28577	-	-
+crossover_wide	[1,1,2048,1024] bf16	DRAM	H x8	8	32	2048	op_baseline	27499	1.00	131072
+crossover_wide	[1,1,2048,1024] bf16	DRAM	H x8	8	32	2048	split_il	65547	0.42	262144
+crossover_wide	[1,1,2048,1024] bf16	DRAM	H x8	8	32	2048	split_p67	38158	0.72	327680
+crossover_wide	[1,1,2048,1024] bf16	DRAM	H x8	8	32	2048	split_trid	32114	0.86	262144
+crossover_2048	[1,1,2048,2048] bf16	DRAM	H x8	8	64	4096	real_op_anchor	60257/65021	-	-
+crossover_2048	[1,1,2048,2048] bf16	DRAM	H x8	8	64	4096	op_baseline	58384	1.00	262144
+crossover_2048	[1,1,2048,2048] bf16	DRAM	H x8	8	64	4096	split_il	L1_OOM	-	524288
+crossover_2048	[1,1,2048,2048] bf16	DRAM	H x8	8	64	4096	split_p67	L1_OOM	-	655360
+crossover_2048	[1,1,2048,2048] bf16	DRAM	H x8	8	64	4096	split_trid	L1_OOM	-	524288
+# ---------- DOMAIN: L1 source (any regime), destination-local ----------
+reshard_fp32	[1,1,1024,256] fp32	W x2 L1	H x8	4	8	1024	real_op_anchor	34334	-	-
+reshard_fp32	[1,1,1024,256] fp32	W x2 L1	H x8	4	8	1024	op_baseline	34238/33919	1.00	65536
+reshard_fp32	[1,1,1024,256] fp32	W x2 L1	H x8	4	8	1024	split_il	18520	1.85	131072
+reshard_fp32	[1,1,1024,256] fp32	W x2 L1	H x8	4	8	1024	split_il_cdrain	19119	1.77	131072
+reshard_fp32	[1,1,1024,256] fp32	W x2 L1	H x8	4	8	1024	split_p67	25577	1.34	163840
+reshard_fp32	[1,1,1024,256] fp32	W x2 L1	H x8	4	8	1024	split_trid	34103	1.00	131072
+reshard_fp32	[1,1,1024,256] fp32	W x2 L1	H x8	4	8	1024	split_trid_cdrain	34601	0.98	131072
+reshard_wide	[1,1,512,1024] bf16	W x2 L1	H x8	2	32	2048 (2x1KB pages)	real_op_anchor	31816	-	-
+reshard_wide	[1,1,512,1024] bf16	W x2 L1	H x8	2	32	2048	op_baseline	31713/31801	1.00	131072
+reshard_wide	[1,1,512,1024] bf16	W x2 L1	H x8	2	32	2048	split_il	19583	1.62	262144
+reshard_wide	[1,1,512,1024] bf16	W x2 L1	H x8	2	32	2048	split_il_cdrain	19937	1.60	262144
+reshard_wide	[1,1,512,1024] bf16	W x2 L1	H x8	2	32	2048	split_p67	31699	1.00	262144
+reshard_wide	[1,1,512,1024] bf16	W x2 L1	H x8	2	32	2048	split_trid	33934	0.93	262144
+reshard_wide	[1,1,512,1024] bf16	W x2 L1	H x8	2	32	2048	split_trid_cdrain	34519	0.92	262144
+gather_h	[1,1,2048,256] bf16	H x4 L1	H x8	8	8	512 (1 page/row)	real_op_anchor	21481	-	-
+gather_h	[1,1,2048,256] bf16	H x4 L1	H x8	8	8	512	op_baseline	21330/20900	1.00	32768
+gather_h	[1,1,2048,256] bf16	H x4 L1	H x8	8	8	512	split_il	16876	1.25	65536
+gather_h	[1,1,2048,256] bf16	H x4 L1	H x8	8	8	512	split_il_cdrain	16981	1.24	65536
+gather_h	[1,1,2048,256] bf16	H x4 L1	H x8	8	8	512	split_p67	16758	1.26	81920
+gather_h	[1,1,2048,256] bf16	H x4 L1	H x8	8	8	512	split_trid	25534/25700	0.82	65536
+# ---------- plans the REAL OP does NOT route destination-local (xfer_gate) ----------
+# The bench forces the destination-local path; the op's MIN_STREAM_READ_BYTES gate
+# sends both of these to the 64-core interleaved split instead (which is why the
+# anchor is much faster than the bench baseline). Recorded, but NOT domain evidence.
+small	[1,1,512,64] bf16	DRAM	H x4	4	2	128	real_op_anchor	5477	-	-
+small	[1,1,512,64] bf16	DRAM	H x4	4	2	128	op_baseline	7435	1.00	8192
+small	[1,1,512,64] bf16	DRAM	H x4	4	2	128	split_il	4192	1.77	16384
+small	[1,1,512,64] bf16	DRAM	H x4	4	2	128	split_p67	5625	1.32	20480
+small	[1,1,512,64] bf16	DRAM	H x4	4	2	128	split_trid	4827	1.54	16384
+reshard_w4	[1,1,1024,256] bf16	W x4 L1	H x8	4	8	512 (4x128B)	real_op_anchor	21053	-	-
+reshard_w4	[1,1,1024,256] bf16	W x4 L1	H x8	4	8	512	op_baseline	30725	1.00	32768
+reshard_w4	[1,1,1024,256] bf16	W x4 L1	H x8	4	8	512	split_il	17080	1.80	65536
+reshard_w4	[1,1,1024,256] bf16	W x4 L1	H x8	4	8	512	split_p67	26054	1.18	81920
+reshard_w4	[1,1,1024,256] bf16	W x4 L1	H x8	4	8	512	split_trid	18192	1.69	65536
+# ---------- THE EXCLUSION: interleaved DESTINATION (BRISC issues the writes) ----------
+dram	[1,1,2048,2048] bf16	DRAM	DRAM	4	16	1024	real_op_anchor	86801	-	-
+dram	[1,1,2048,2048] bf16	DRAM	DRAM	4	16	1024	op_baseline	85940	1.00	65536
+dram	[1,1,2048,2048] bf16	DRAM	DRAM	4	16	1024	split_rw	107073	0.80	131072
+dram	[1,1,2048,2048] bf16	DRAM	DRAM	4	16	1024	split_rw_p88	88014	0.98	196608
+dram_small	[1,1,2048,256] bf16	DRAM	DRAM	1	8	512	real_op_anchor	12409	-	-
+dram_small	[1,1,2048,256] bf16	DRAM	DRAM	1	8	512	op_baseline	13430	1.00	16384
+dram_small	[1,1,2048,256] bf16	DRAM	DRAM	1	8	512	split_rw	12561	1.07	32768
+dram_small	[1,1,2048,256] bf16	DRAM	DRAM	1	8	512	split_rw_p88	13017	1.03	32768
+#
+# ---------- derived: achieved READ bandwidth (tensor bytes / ns, 8 cores) ------
+# The mechanism, not an argument. The split only pays where the baseline read is
+# ISSUE-bound; it never beats the fabric.
+# plan            baseline GB/s   best-split GB/s
+# crossover              71.3            106.3   (split_trid)
+# crossover_big          74.4            116.9
+# crossover_tall         76.2            124.9
+# gather_h               50.1             62.1   (split_il)
+# reshard                56.3            103.5   (split_il)
+# reshard_fp32           61.3            113.3   (split_il)
+# reshard_wide           66.1            107.1   (split_il)
+# crossover_512         126.6            135.2   <- already at the ceiling: FLAT
+# crossover_fp32        124.9            131.1   <- already at the ceiling: FLAT
+# crossover_wide        152.5            130.6   <- above it: the split LOSES
+# crossover_2048        143.6              -     <- above it, and CBs do not fit

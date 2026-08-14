@@ -77,6 +77,24 @@ def test_peel_retile(device, ablate, name):
 
 
 @pytest.mark.parametrize("ablate,name", _PEEL, ids=[n for _a, n in _PEEL])
+def test_peel_widening_pad(device, ablate, name):
+    """Perf 2 addition. After Perf 1 graduated the pre-stamped scratch tile, the
+    hottest stage on this plan moved from `writer_stamp` (172 us) to `writer_issue`
+    (82.6 us of a 141.8 us wall). The peel is what says whether that issue cost is
+    the DRAM write itself (payload) or back-pressure charged to the issue zone."""
+    shape, target = B._OUT_FILL_SHAPE
+    B._measure(
+        device,
+        shape,
+        ttnn.bfloat16,
+        out_dtype=ttnn.float32,
+        pad=dict(output_padded_shape=target, pad_value=10.2),
+        ablate=ablate,
+        label=f"peel_widening_pad/{name}",
+    )
+
+
+@pytest.mark.parametrize("ablate,name", _PEEL, ids=[n for _a, n in _PEEL])
 def test_peel_wide_short(device, ablate, name):
     """(b) [1,1,32,16384]: ONE block per core, so read/compute/write cannot overlap
     at all. The cumulative peel is what separates "no overlap" from "DRAM-bound"."""

@@ -1,0 +1,163 @@
+gather_strip — INTEGRATION SKETCH (not applied; the coordinator owns integration)
+================================================================================
+
+MEASURED CONCLUSION FIRST, because it changes the shape of the patch:
+
+The strip form's COMPUTE-SIDE CONTRACT is "block_width_tiles = SRC_PAGE_TILES"
+(the source shard's width in tiles). That is forced no matter how the reader
+groups its CB pushes -- strip s of a block holds tile-columns
+[s*page_tiles, (s+1)*page_tiles), so the library tilize helper has to be called
+at page_tiles width over `slices` x more blocks.
+
+Given that, "strip-major layout at the op's current WT_CHUNK" and "just set
+WT_CHUNK = SRC_PAGE_TILES" differ ONLY in the reader's CB-reserve / barrier
+granularity, and they MEASURE FLAT against each other:
+
+    focus reshard [1,1,1024,256] bf16 W2 -> H8, end-to-end device kernel ns
+      op today                                    19,488
+      strip-major, WT_CHUNK 8, slices 2           15,365   1.27x
+      WT_CHUNK 4 == page_tiles, slices 1          15,456   1.26x   <- FLAT
+
+and their PRECONDITIONS are identical (strip needs page_tiles | WT_CHUNK, and
+WT_CHUNK | SHARD_WT, hence page_tiles | SHARD_WT -- which is exactly what the
+re-block needs).
+
+So there are two integration forms. Form A is strictly simpler and buys the same
+number on every W_REGION plan; Form B is only needed where the host is not free
+to choose WT_CHUNK (the generic W_BLOCKS grid split, where WT_CHUNK is picked for
+grid fill and pipeline depth).
+
+
+--------------------------------------------------------------------------------
+FORM A -- "coalesce the block": prefer WT_CHUNK == SRC_PAGE_TILES
+--------------------------------------------------------------------------------
+NO compute-kernel change. NO writer change. NO CB-layout change. One reader
+branch + one host blocking preference.
+
+--- ttnn/ttnn/operations/tilize/tilize_program_descriptor.py
+
+ 1) after src_page_bytes / src_row_pages are derived (section 1):
+
++    # Tiles per SOURCE shard row. Whole by construction: the op already refuses a
++    # paged source whose page is not NOC_ALIGN_BYTES-aligned, and a TILE-width
++    # aligned shard makes the page a whole number of tile-columns.
++    src_page_tiles = src_page_bytes // (tile_w * elem_in) if src_row_pages > 1 else 0
+
+ 2) in the `if shard is not None:` blocking branch, the `else` that calls
+    derive_shard_blocking:
+
+     else:
+-        wt_chunk, n_chunks = derive_shard_blocking(
+-            shard["shard_wt"], wt_cap(cb_depth, stream_in, stream_out, stage_per_chunk_tile)
+-        )
++        cap = wt_cap(cb_depth, stream_in, stream_out, stage_per_chunk_tile)
++        # CROSS-CORE GATHER: a block whose width IS one source shard is
++        # CONTIGUOUS at the source (its tile_h rows are tile_h consecutive pages
++        # of one shard) AND contiguous at the destination, so it is ONE NoC
++        # transfer instead of tile_h * slices. Measured 1.27x / 1.54x / 2.91x
++        # end-to-end -- see perf_experiments/gather_strip.
++        if src_page_tiles and shard["shard_wt"] % src_page_tiles == 0 and src_page_tiles <= cap:
++            wt_chunk, n_chunks = src_page_tiles, shard["shard_wt"] // src_page_tiles
++        else:
++            wt_chunk, n_chunks = derive_shard_blocking(shard["shard_wt"], cap)
+
+ 3) the read-transfer gate (`xfer_gate`) -- its premise is gone on this path.
+    The gate exists because an aliased destination pins the reader to a small
+    PER-ROW transfer; a coalesced block transfers tile_h * src_page_bytes.
+
+     if in_placement == P_ACCESSOR and LEVERS["xfer_gate"]:
+         read_bytes = src_page_bytes if retile else min(wt_chunk * tile_w * elem_in, src_page_bytes)
++        if src_page_tiles and wt_chunk == src_page_tiles:
++            read_bytes = tile_h * src_page_bytes  # ONE contiguous block transfer
+         if read_bytes < MIN_STREAM_READ_BYTES:
+             ...
+    MEASURED: the gated plan (W x4 -> H x8, 128 B page) is 20,828 ns with the
+    gate firing today and 13,512 ns with the coalesced block kept local -- 1.54x.
+    The gate should NOT fire once the transfer is the whole block.
+
+ 4) pass the flag to the reader (new compile-time arg, appended before
+    TensorAccessorArgs so the accessor index shifts by one):
+
++    gather_coalesce = int(src_row_pages > 1 and wt_chunk * tile_w * elem_in == src_page_bytes)
+
+--- ttnn/ttnn/operations/tilize/kernels/tilize_reader.cpp     (R_PAD branch only)
+
+     {
+         MaybeDeviceZoneScope("reader_issue");
++        // CROSS-CORE GATHER, whole block: the block's tile_h source rows are
++        // tile_h CONSECUTIVE pages of ONE source shard (page p -> shard
++        // p % row_pages, local row p / row_pages), hence contiguous in that
++        // core's L1; the CB slot is contiguous too because the block width IS
++        // the page. So the whole block is ONE transfer.
++        //
++        // RAW DATAFLOW, same justification as the surrounding loop:
++        // dataflow_kernel_lib::read_sticks_for_tilize walks CONSECUTIVE PAGE IDS
++        // as consecutive sticks, which is precisely the identity a
++        // narrower-than-a-row shard breaks, so neither form is expressible
++        // through it. (capability gap, not ergonomics -- see notes at the end.)
++        if constexpr (gather_coalesce) {
++            if (img < n_img_in && row_in_img + tile_h <= h_in && valid_bytes == row_bytes) {
++                noc_async_read(
++                    accessor.get_noc_addr((img * h_in + row_in_img) * src_row_pages + col_off / src_page_bytes, 0),
++                    l1_addr,
++                    tile_h * row_bytes);
++                goto block_issued;   // (or hoist the existing loop into an else)
++            }
++        }
+         for (uint32_t r = 0; r < tile_h; ++r) {
+             ... existing per-row read + fill, unchanged ...
+         }
++    block_issued:;
+     }
+
+    The guard is the PAD guard, not a new one: a block all of whose rows are real
+    and full-width takes the single transfer; a ragged block keeps today's
+    per-row read + fill verbatim. Raggedness is per block, so at most ONE
+    tile-row per core ever falls back.
+    MEASURED with padding: [1,1,2048,256] target / 2040 real rows, W2 -> H8,
+    39,832 -> 32,730 ns (1.22x) -- the same win as the unpadded plan.
+
+
+--------------------------------------------------------------------------------
+FORM B -- the strip-major layout (only where WT_CHUNK is not the host's to pick)
+--------------------------------------------------------------------------------
+Needed on the generic W_BLOCKS split, where WT_CHUNK is chosen for grid fill /
+pipeline depth and cannot be pinned to SRC_PAGE_TILES.
+
+Reader: as in experiment_kernels/strip_reader.cpp mode 1 -- per block,
+`slices` transfers of tile_h * src_page_bytes into
+`dst + s * tile_h * src_page_bytes` (STRIP-MAJOR), plus the ragged fallback
+which MUST write the same strip-major addresses (mode 1's `else` branch).
+
+Compute: tilize_compute.cpp needs NO source change. Only its args move:
+    compile_time_args[0]:  wt_chunk        ->  src_page_tiles
+    runtime_args[0]:       num_blocks      ->  num_blocks * slices
+The library helper `compute_kernel_lib::tilize` consumes the strip layout as-is,
+because strip s IS a row-major tile_h x (src_page_tiles*32) block holding
+tile-columns [s*page_tiles, (s+1)*page_tiles) -- the emitted TILE SEQUENCE is
+byte-identical to one tilize<wt_chunk> over the row-major block. NO helper
+change, NO raw LLK on the compute side.
+
+Writer: same two-line arg move (block width src_page_tiles, block count x slices).
+On P_LOCAL_SHARD that is all. On P_ACCESSOR, `first_page_of` already derives the
+destination page from (tile_row, tile_col) and both stay correct under the finer
+block width, provided n_chunks is scaled with it.
+
+Host: keep TWO derived pairs -- the READER's (wt_chunk, n_chunks) and the
+COMPUTE/WRITER's (src_page_tiles, n_chunks * slices). That divergence is the
+whole cost of Form B, and it is why Form A is preferred wherever it applies.
+
+
+--------------------------------------------------------------------------------
+HELPER-BYPASS NOTES (for the verifier's helper-usage check)
+--------------------------------------------------------------------------------
+* dataflow_kernel_lib::read_sticks_for_tilize -- BYPASSED, capability gap, and
+  the op already bypasses it here: its contract walks CONSECUTIVE PAGE IDS as
+  consecutive sticks, which is exactly the identity a narrower-than-a-row shard
+  breaks (page p -> shard p % row_pages, local row p / row_pages). Neither the
+  existing per-row gather nor either form above is expressible through it. What
+  is missing: a stick reader whose page id is a function of (row, column-slice)
+  rather than of the row alone -- i.e. a source-page-stride parameter.
+* compute_kernel_lib::tilize -- NOT bypassed. Used verbatim in every arm; the
+  strip layout is consumed by changing two numbers, not the helper.
+* tilize_kernels::fill_l1_with_val -- reused verbatim for the ragged fallback.

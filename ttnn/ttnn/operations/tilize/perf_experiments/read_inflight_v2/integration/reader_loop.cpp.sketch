@@ -1,0 +1,130 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+// SPDX-License-Identifier: Apache-2.0
+//
+// INTEGRATION SKETCH — the ONE R_ALIGNED reader loop for tilize_reader.cpp.
+//
+// It REPLACES all five of these, which today are separate code paths:
+//   1. R_ALIGNED / W_REGION / n_chunks == 1      -> one read_sticks_for_tilize call
+//   2. R_ALIGNED / W_REGION / n_chunks  > 1      -> one helper call per block
+//   3. R_ALIGNED / W_BLOCKS  / no levers         -> run-batched helper calls
+//   4. R_ALIGNED / W_BLOCKS  / read_trid         -> the two-slot B8 double-issue
+//   5. R_ALIGNED / W_BLOCKS  / one_packet|vc|state -> the plain custom loop
+//
+// and it reproduces each of them exactly at the right compile-time constants:
+//   read_ahead == 0 && read_coalesce == 1  ==  (1)(2)(3)(5)  [MEASURED FLAT vs the helper]
+//   read_ahead == 1 && CB_DEPTH   == 2     ==  (4), the B8 schedule
+//                                              [MEASURED IDENTICAL to it: fp32 focus
+//                                               23,016 vs the B8 branch's 22,820]
+//
+// HELPER BYPASS — dataflow_kernel_lib::read_sticks_for_tilize.
+//   CLASS: capability, not ergonomics. The helper owns its CB handshake AND its
+//   barrier internally (tilize_helpers_dataflow.inl:116-126: one plain
+//   noc_async_read per stick, one plain noc_async_read_barrier per block). Its
+//   contract exposes NO transaction id, NO issue-ahead window and NO multi-stick
+//   transfer, so neither of the two things measured here — keeping a read in
+//   flight across the block boundary, and merging contiguous sticks into one
+//   transfer — is reachable through it at any argument. What would close the
+//   gap upstream: a barrier-policy / in-flight-window parameter, and a
+//   "consecutive pages are contiguous" merge hint.
+//
+// The loop below keeps everything else the helper does byte-for-byte: same
+// TensorAccessor, same page order, same L1 stride (== row_bytes on the aligned
+// path), same one-group-per-push granularity.
+
+// --- compile-time args to ADD (host values in host_gating.py.sketch) --------
+//   read_ahead     : groups that may be outstanding (0 or 1; see the sketch)
+//   read_coalesce  : source sticks per NoC transfer (1, or tile_h)
+// --- compile-time args to DELETE -------------------------------------------
+//   read_trid      : subsumed by read_ahead (the `if constexpr (read_trid)`
+//                    branch and its whole `else` twin both go away)
+
+constexpr uint32_t in_tile_bytes = get_tile_size(cb_input_sticks);
+constexpr uint32_t slot_bytes = wt_chunk * in_tile_bytes;
+// Clamped so a transfer never leaves the block it belongs to.
+constexpr uint32_t coal = read_coalesce > tile_h ? tile_h : read_coalesce;
+constexpr uint32_t xfer_bytes = coal * row_bytes;
+constexpr uint32_t n_trid = read_ahead + 1;
+
+// The reader is the CB's only producer and starts on an empty CB, so the write
+// pointer at entry IS the ring base and the slot walk below is exact. Flow
+// control still comes entirely from cb_reserve_back.
+const uint32_t slot_base = get_write_ptr(cb_input_sticks);
+uint32_t slot = 0;
+uint32_t trid_issue = 1, trid_wait = 1;
+uint32_t pending = 0;
+
+BlockIndex<precomp_index != 0, nt_h> idx;
+idx.init(start_block, block_row0, block_wc0);
+for (uint32_t i = 0; i < num_blocks; ++i) {
+    // block -> (first source stick, byte offset in the stick), per work
+    // assignment. UNCHANGED from the loops this replaces.
+    uint32_t row, col_off;
+    if constexpr (work_mode == 1 /* W_REGION */) {
+        const uint32_t r = (n_chunks == 1) ? i : i / n_chunks;
+        row = tile_row0 + r;
+        col_off = col_off_base + ((n_chunks == 1) ? 0 : (i - r * n_chunks) * row_bytes);
+    } else {
+        idx.seek(i);
+        row = idx.row;
+        col_off = idx.wc * row_bytes;
+        idx.advance();
+    }
+
+    {
+        // Room for every still-unpushed group AND the one about to be issued.
+        MaybeDeviceZoneScope("reader_reserve");
+        cb_reserve_back(cb_input_sticks, (pending + 1) * wt_chunk);
+    }
+    {
+        MaybeDeviceZoneScope("reader_issue");
+        if constexpr (read_ahead > 0) {
+            noc_async_read_set_trid(trid_issue);
+        }
+        uint32_t l1 = slot_base + slot * slot_bytes;
+        for (uint32_t r = 0; r < tile_h; r += coal) {
+            // `coal > 1` merges `coal` consecutive sticks into ONE transfer.
+            // Host-gated on the source pages being contiguous behind one
+            // address (see host_gating.py.sketch) — with coal == 1 this is the
+            // helper's own per-stick issue, unchanged.
+            issue_rows.read(accessor.get_noc_addr(row * tile_h + r, col_off), l1, xfer_bytes);
+            l1 += xfer_bytes;
+        }
+    }
+    slot = (slot + 1 == CB_DEPTH) ? 0 : slot + 1;
+    if constexpr (read_ahead > 0) {
+        trid_issue = (trid_issue == n_trid) ? 1 : trid_issue + 1;
+    }
+    ++pending;
+
+    if (pending > read_ahead) {
+        {
+            MaybeDeviceZoneScope("reader_barrier");
+            if constexpr (read_ahead > 0) {
+                noc_async_read_barrier_with_trid(trid_wait);
+                trid_wait = (trid_wait == n_trid) ? 1 : trid_wait + 1;
+            } else {
+                noc_async_read_barrier();
+            }
+        }
+        cb_push_back(cb_input_sticks, wt_chunk);
+        --pending;
+    }
+}
+// Drain whatever the window still holds. A core with fewer blocks than the
+// window never fills it, and this is what makes that degenerate to the plain
+// schedule instead of hanging.
+while (pending > 0) {
+    if constexpr (read_ahead > 0) {
+        noc_async_read_barrier_with_trid(trid_wait);
+        trid_wait = (trid_wait == n_trid) ? 1 : trid_wait + 1;
+    } else {
+        noc_async_read_barrier();
+    }
+    cb_push_back(cb_input_sticks, wt_chunk);
+    --pending;
+}
+if constexpr (read_ahead > 0) {
+    // MANDATORY: leave the command buffer's packet tag clear for the next
+    // kernel (same hygiene the existing B8 branch already observes).
+    noc_async_read_set_trid(0);
+}

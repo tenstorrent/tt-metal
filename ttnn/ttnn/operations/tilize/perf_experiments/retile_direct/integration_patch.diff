@@ -1,0 +1,190 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+#
+# INTEGRATION SKETCH for the `retile_direct` idea — NOT a mechanically appliable
+# patch. Annotated hunks against the three files the coordinator owns. Every
+# number below is measured on bgd-lab-16 / wormhole_b0, one fresh-cache launch
+# per arm, DEVICE KERNEL DURATION [ns]; the baseline is the op's CURRENT retile
+# reader (staged pages -> row-major sticks via local NoC loopback + tilize
+# compute) re-measured today.
+#
+# ============================================================================
+# THE MECHANISM IN ONE PARAGRAPH
+# ============================================================================
+# The retile permutation's contiguous run is min(out_face_h, src_face_h) FACE
+# ROWS, not one. The op's current reader throws that away by routing through a
+# ROW-MAJOR intermediate, where the run collapses to a single face row (32 B on
+# bf16) because stepping the destination by one row steps the source by a whole
+# face. Landing the permutation DIRECTLY in the output tile keeps the run: on the
+# focus 32->8 bf16 case it is 8 face rows = 256 B, so an output tile is 2
+# transfers instead of 16, every byte crosses L1 once instead of twice, and the
+# compute tilize has nothing left to do.
+#
+# ============================================================================
+# WHAT THE BAKE-OFF ANSWERS (Perf 1 declined this for `shape of the change`)
+# ============================================================================
+# Perf 1's two blockers, re-priced:
+#
+#   (a) `out_dtype == in_dtype`.  DELETED, at no measured cost. The reader lands
+#       the permuted tile in cb_input_sticks (whose page ALREADY is a tile of the
+#       OUTPUT geometry in the INPUT dtype: page_size = tile_h*tile_w*elem_in,
+#       TileDescriptor(tile_h, tile_w)) and COMPUTE owns the cast alone as a
+#       `compute_kernel_lib::copy_tiles` datacopy instead of a tilize. Measured
+#       bit-identical on bf16->fp32, fp32->bf16 and bf16->bfloat8_b, and the
+#       datacopy pass is FREE on the focus shape (23,982 vs 24,749 ns for the
+#       same reader with/without it — inside the noise band).
+#
+#   (b) the DRAM-alignment predicate.  It is ONE compile-time comparison, not a
+#       dispatch: `run_bytes % DRAM_ALIGN`. It fires on exactly one measured cell
+#       (uint8 with a one-row face: 32->1 and 1->32, run = 16 B < 32 B), and the
+#       alignment-FREE staged form is the same code path with the source pointer
+#       swapped — not a separate kernel.
+#
+# ============================================================================
+# MEASURED MENU — focus [1,1,1024,1024] bf16 32->8 DRAM->DRAM, 64 cores
+# ============================================================================
+#   arm                  ns        vs baseline   bit-exact   needs
+#   baseline (today)  41,923/41,949   1.00x        yes        -
+#   direct_dram       24,744/23,982   1.72x        yes        same dtype + align
+#   direct_dram_cast  23,996/24,749   1.72x        yes        align
+#   direct_noc        26,562/26,537   1.58x        yes        same dtype
+#   direct_noc_cast   28,145/27,309   1.51x        yes        -
+# (two independent fresh-cache samples each; arms 1 and 3 are inside each other's
+# noise, which is the load-bearing result: the compute datacopy costs nothing.)
+#
+# ============================================================================
+# 1. tilize_program_descriptor.py
+# ============================================================================
+--- a/ttnn/ttnn/operations/tilize/tilize_program_descriptor.py
++++ b/ttnn/ttnn/operations/tilize/tilize_program_descriptor.py
+@@ near the other module constants (NOC_ALIGN_BYTES is already here)
++# DRAM NoC transfer alignment. A DRAM-sourced transfer must start on this
++# boundary; the retile-direct reader's source offsets are all multiples of its
++# run length, so `run_bytes % NOC_DRAM_ALIGN_BYTES` is the WHOLE predicate.
++NOC_DRAM_ALIGN_BYTES = 32   # wormhole_b0; 64 on blackhole -> read it from the hal
++
++# The DRAM-direct form's transaction floor. At a 32 B run it is a measured
++# REGRESSION on every geometry tried (1->32 bf16: 99,142 vs 60,837 ns for the
++# staged form); at 64 B it is already a 1.33x win (32->2 bf16: 42,052 vs 55,839
++# baseline). Nothing between was measured, so 64 is the lowest PROVEN floor.
++MIN_DIRECT_DRAM_RUN_BYTES = 64
+@@ after `regime = R_RETILE` (line ~1009)
++    # ---- Perf 2: the RETILE-DIRECT reader ---------------------------------
++    # Face-row run geometry, mirrored from the kernel. Both tile heights are
++    # powers of two <= 32, and a tile's face height is min(tile_h, 16)
++    # (tile.cpp TILE_FACE_HW_CHOICES), so this is exact.
++    retile_run_bytes = 0
++    if retile:
++        src_face_h = min(in_tile_h, 16)
++        out_face_h = min(tile_h, 16)
++        retile_run_bytes = min(src_face_h, out_face_h) * 16 * elem_in
++
++    # CARVE-OUT (the ONLY one): a 1-row OUTPUT tile. out_face_h == 1 makes every
++    # run one face row with no reuse, and the direct form measured 0.79-0.89x
++    # there on [1,1,1024,1024] (bf16 32->1: 79,959-89,195 vs 70,788 baseline;
++    # uint8 32->1: 20,220-24,545 vs 20,078). Everything else takes the new path.
++    retile_direct = retile and tile_h > 1
++
++    # Inside the direct path, WHERE the bytes come from. Both forms produce
++    # byte-identical output; this is a pure transfer-efficiency choice.
++    #   DRAM-direct : one DRAM transfer per run, no L1 round trip. Needs the run
++    #                 to be DRAM-alignable and >= the transaction floor.
++    #   staged      : one DRAM transfer per whole source PAGE (always aligned)
++    #                 + a local NoC loopback per run. Wins when the write leg is
++    #                 gone (a resident L1 output shard makes the DRAM read the
++    #                 wall): 32->8 sharded 14,818 vs 20,291 ns.
++    retile_direct_dram = int(
++        retile_direct
++        and retile_run_bytes % NOC_DRAM_ALIGN_BYTES == 0
++        and retile_run_bytes >= MIN_DIRECT_DRAM_RUN_BYTES
++        and out_placement != P_LOCAL_SHARD
++    )
+@@ reader_ct_args — two new compile-time args at the end
+     reader_ct_args = [
+         ...
+         read_state,
+         precomp_index,
++        int(retile_direct),
++        retile_direct_dram,
+     ]
+@@ compute_ct_args (line ~1143)
+-    compute_ct_args = [wt_chunk, 1 if needs_cast else 0, ABLATE["compute"]]
++    # The retile-direct reader hands compute either NOTHING (no cast: it produced
++    # cb_output_tiles itself) or an output-shaped tile in the INPUT dtype to
++    # datacopy. `needs_cast` is unchanged and still selects the reconfigure.
++    compute_ct_args = [wt_chunk, 1 if needs_cast else 0, ABLATE["compute"], int(retile_direct)]
+#
+# CB TOPOLOGY — no new CB, and two get smaller (NOT exploited in the bench, which
+# deliberately kept the op's blocking so the delta is attributable to the kernel):
+#   * !needs_cast + direct  -> cb_input_sticks has no producer and no consumer.
+#                              It can drop to a single page (or vanish).
+#   * retile_direct_dram    -> CB_RETILE_STAGE is never touched; drop it.
+#   Both free L1 that `wt_cap()`/`derive_blocking()` would hand back as a wider
+#   WT_CHUNK. Free upside on top of the numbers above; re-derive `stage_bytes`.
+#
+# ============================================================================
+# 2. kernels/tilize_reader.cpp — the R_RETILE branch
+# ============================================================================
+# Take `experiment_kernels/retile_reader.cpp`'s R_RETILE branch verbatim, with
+# the bake-off `RETILE_ARM` macro replaced by the two compile-time args:
+#
+#     constexpr uint32_t retile_direct      = get_compile_time_arg_val(23);
+#     constexpr uint32_t retile_direct_dram = get_compile_time_arg_val(24);
+#     constexpr bool arm_dram  = retile_direct_dram != 0;
+#     constexpr bool arm_cast  = needs_cast != 0;        // NEW reader ct arg, or
+#                                                        // reuse elem_out != elem_in
+#     constexpr uint32_t dst_cb = (!retile_direct || arm_cast) ? cb_input_sticks
+#                                                              : cb_output_tiles;
+#
+# i.e. the carve-out is written the way the graduation rule asks:
+#
+#     if constexpr (!retile_direct) { /* legacy loopback, unchanged */ }
+#     else                          { /* the direct face-run loop */ }
+#
+# The staging block is compiled out entirely when `arm_dram`.
+#
+# NOT recommended for graduation (measured, kept in the bench for the record):
+# the FULL-WIDTH merge arms (5/6). When src_face_h == out_face_h the two column
+# halves fuse into one run, which exists on exactly two geometries and measured
+# flat there: 32->16 22,799 (merge) vs 22,216 (plain); 16->32 23,891 vs 24,261.
+# Extra kernel branch, no win.
+#
+# ============================================================================
+# 3. kernels/tilize_compute.cpp
+# ============================================================================
+--- a/ttnn/ttnn/operations/tilize/kernels/tilize_compute.cpp
++++ b/ttnn/ttnn/operations/tilize/kernels/tilize_compute.cpp
+@@
++#include "ttnn/cpp/ttnn/kernel_lib/copy_tile_helpers.hpp"
+@@
+     constexpr uint32_t ablate_compute = get_compile_time_arg_val(2);
++    // Perf 2 (retile-direct): the READER already produced the output tile
++    // layout. With no cast it produced cb_output_tiles itself and this kernel
++    // has nothing to do; with a cast it produced an output-shaped tile in the
++    // INPUT dtype in cb_input_sticks and this kernel owns the conversion ALONE —
++    // a datacopy, not a tilize.
++    constexpr uint32_t retile_direct = get_compile_time_arg_val(3);
+@@ after the num_blocks == 0 early return
++    if constexpr (retile_direct) {
++        if constexpr (!needs_cast) {
++            return;                       // the reader is the whole op
++        }
++        MaybeDeviceZoneScope("compute_tilize");
++        compute_kernel_lib::copy_tiles<
++            compute_kernel_lib::CopyInputPolicy::WaitAndPop,
++            compute_kernel_lib::CopyDataFormatReconfig::INPUT_AND_OUTPUT>(
++            cb_input_sticks, cb_output_tiles, num_blocks * wt_chunk);
++        return;
++    }
+#
+# NOTE the ordering: `compute_kernel_hw_startup(cb_input_sticks, cb_output_tiles)`
+# must still run before the `retile_direct && !needs_cast` return, or not at all —
+# it is already called before `num_blocks == 0` returns, so leaving it alone is
+# correct and was what the bench measured (the empty arm skipped it entirely and
+# was equally correct; keeping it is the conservative choice).
+#
+# ============================================================================
+# 4. WRITER — unchanged. It drains cb_output_tiles exactly as before; only the
+#    producer's identity changes (reader instead of compute), which is invisible
+#    to it. The CB single-producer invariant still holds on every path.
+# ============================================================================

@@ -12,10 +12,87 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/tilize.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 // PERMANENT per-stage instrumentation (never remove — free when the profiler is
 // off; see the header's durability contract).
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+
+namespace {
+
+// ── PERF 2 — RAW-LLK BYPASS, justified and MEASURED ─────────────────────────
+// Helper bypassed: `compute_kernel_lib::tilize<...>` (tilize_helpers.hpp), and
+// under it the compute API `ckernel::tilize_block` (api/compute/tilize.h:171),
+// on the REGULAR (non-fast) tilize path ONLY.
+//
+// `tilize_block`'s body is one DEST acquire -> datacopy -> commit -> release
+// round trip PER TILE, always on DEST slot 0 — so it uses 1/8 (1/4 for 32-bit
+// datums) of the DEST section it is allowed and pays a math<->pack semaphore
+// trip for every single tile. The FAST path (`fast_tilize_block`, taken only for
+// 32x32 output tiles with a bf16/fp32 input and a non-fp32 output) already fills
+// a whole DEST section per acquire, which is exactly why it is fast — and a
+// handshake ablation showed 99.5% of its wall is LLK payload, i.e. nothing left
+// to win there. Everything ELSE — every `tile_height < 32`, every fp32 output,
+// the bf16->fp32 cast, the integer dtypes — falls to the regular path.
+//
+// `tilize_block_wide` is `tilize_block` with the DEST window widened to the full
+// section: N tiles datacopied into DEST slots 0..N-1 under ONE acquire, packed
+// out under one commit. Same unpack MOP, same datacopy LLK, same pack LLK, same
+// data formats, same DST_ACCUM_MODE / DST_SYNC_MODE / MATH_FIDELITY — the ONLY
+// change is how many tiles share a DEST section, so the output is bit-identical
+// by construction (and was verified bit-exact on every cell measured).
+//
+// Measured on the zero-NoC same-spec sharded plan [1,1,2048,256] H x8 bf16,
+// baseline -> wide: tile_h=8 13,435 -> 7,428 (1.81x), tile_h=4 1.59x, tile_h=2
+// 1.63x, tile_h=1 1.61x, tile_h=16 1.43x, bf16->fp32 cast 1.22x; interleaved
+// DRAM a_square tile_h=8 97,226 -> 91,172 (1.066x). Flat, never slower, on the
+// dtypes whose regular path is already DEST-bound (fp32, uint32, uint16, uint8)
+// and at WT_CHUNK <= 2 (nothing to widen). No measured regression anywhere.
+//
+// Why raw and not a helper flag: `compute_kernel_lib::tilize` hard-wires
+// `tilize_block` on its non-fast branch (tilize_helpers.inl:246) and exposes no
+// DEST-window parameter; `block_width_tiles` is a template parameter but it
+// controls the CB HANDSHAKE width, not the DEST window. There is no compute-API
+// entry point for "regular tilize, N tiles per DEST section" at all. Classified
+// `capability` in the changelog's Helper bypasses table. Do NOT "fix" this back
+// to the helper call — that reverts a measured 1.4-1.8x on every tiny-tile,
+// cast and integer cell.
+template <uint32_t window>
+ALWI void tilize_block_wide(uint32_t icb, uint32_t block, uint32_t ocb) {
+    static_assert(window >= 1, "window must be >= 1");
+    using namespace ckernel;
+
+    UNPACK((llk_unpack_tilize_block(icb, block, 0 /*input_tile_index*/)));
+
+    uint32_t done = 0;
+    while (done < block) {
+        const uint32_t left = block - done;
+        const uint32_t n = (left < window) ? left : window;
+
+        MATH((llk_math_wait_for_dest_available()));
+        PACK((llk_packer_wait_for_math_done()));
+
+        for (uint32_t i = 0; i < n; ++i) {
+            MATH((
+                llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+                    i /*dst index*/, icb)));
+        }
+        for (uint32_t i = 0; i < n; ++i) {
+            PACK((llk_pack<DST_ACCUM_MODE, true /*out_of_order*/, PackMode::Default>(
+                i /*dst tile index*/, ocb, done + i /*ocb tile index*/)));
+        }
+
+        MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+        PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+
+        done += n;
+    }
+}
+
+}  // namespace
 
 void kernel_main() {
     constexpr uint32_t cb_input_sticks = 0;
@@ -57,25 +134,73 @@ void kernel_main() {
     // .claude/references/device-zone-scope-attribution.md §2.
     MaybeDeviceZoneScope("compute_tilize");
 
-    if constexpr (needs_cast) {
-        // A real value-preserving cast: reconfigure both unpack and pack.
-        compute_kernel_lib::tilize<
-            wt_chunk,
-            cb_input_sticks,
-            cb_output_tiles,
-            InitUninitMode::InitAndUninit,
-            WaitMode::WaitBlock,
-            ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
-            Fp32Mode::Fast>(num_blocks);
+    // The library's own fast/regular decision, re-evaluated here so the DEST
+    // window can be applied to exactly the branch that lacks one. Public
+    // constexpr, so exactly one of the two bodies below is emitted.
+    constexpr bool use_fast = compute_kernel_lib::can_use_fast_tilize<wt_chunk, cb_input_sticks, cb_output_tiles>();
+
+    if constexpr (use_fast) {
+        // ── the fast LLK path: the helper verbatim ────────────────────────
+        // `fast_tilize_block` already fills a whole DEST section per acquire and
+        // a handshake ablation puts 99.5% of this path's wall in LLK payload, so
+        // there is nothing to widen and nothing to hoist. Unchanged since Phase 0.
+        if constexpr (needs_cast) {
+            // A real value-preserving cast: reconfigure both unpack and pack.
+            compute_kernel_lib::tilize<
+                wt_chunk,
+                cb_input_sticks,
+                cb_output_tiles,
+                InitUninitMode::InitAndUninit,
+                WaitMode::WaitBlock,
+                ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+                Fp32Mode::Fast>(num_blocks);
+        } else {
+            // Same format in and out — skip the ~150 ns register reconfiguration.
+            compute_kernel_lib::tilize<
+                wt_chunk,
+                cb_input_sticks,
+                cb_output_tiles,
+                InitUninitMode::InitAndUninit,
+                WaitMode::WaitBlock,
+                ReconfigureRegisterDatatypeMode::NoReconfigure,
+                Fp32Mode::Fast>(num_blocks);
+        }
     } else {
-        // Same format in and out — skip the ~150 ns register reconfiguration.
-        compute_kernel_lib::tilize<
-            wt_chunk,
-            cb_input_sticks,
-            cb_output_tiles,
-            InitUninitMode::InitAndUninit,
-            WaitMode::WaitBlock,
-            ReconfigureRegisterDatatypeMode::NoReconfigure,
-            Fp32Mode::Fast>(num_blocks);
+        // ── the regular LLK path, with the DEST window widened (Perf 2) ────
+        // Prologue/epilogue reproduce exactly what the helper does for the
+        // non-fast path (tilize_helpers.inl:159-199, 258-272); only the block
+        // body changes. See tilize_block_wide's header comment for the measured
+        // justification of the bypass.
+        //
+        // DEST tile capacity. NOT `compute_kernel_lib::DEST_AUTO_LIMIT`: that
+        // halves the capacity on DST_ACCUM_MODE alone, but a 32-BIT INPUT DATUM
+        // (Float32/Tf32/Int32/UInt32) occupies a 32-bit DEST slot whether or not
+        // fp32 accumulation is on. MEASURED: uint32 tilize with
+        // fp32_dest_acc_en=false (so DEST_AUTO_LIMIT == 8) is NOT bit-exact at a
+        // window of 8; it IS at 4. This is the corrected rule, and the library's
+        // get_dest_limit() is reported upstream as a latent capability bug.
+        constexpr uint32_t in_fmt = compute_kernel_lib::dfb_l1_format<cb_input_sticks>();
+        constexpr bool input_is_32bit =
+            in_fmt == static_cast<uint32_t>(DataFormat::Float32) || in_fmt == static_cast<uint32_t>(DataFormat::Tf32) ||
+            in_fmt == static_cast<uint32_t>(DataFormat::Int32) || in_fmt == static_cast<uint32_t>(DataFormat::UInt32);
+        constexpr uint32_t dest_window = (compute_kernel_lib::get_fp32_dest_acc_enabled() || input_is_32bit)
+                                             ? (compute_kernel_lib::get_dst_full_sync_enabled() ? 8u : 4u)
+                                             : (compute_kernel_lib::get_dst_full_sync_enabled() ? 16u : 8u);
+
+        if constexpr (needs_cast) {
+            reconfig_data_format_srca(cb_input_sticks);  // srcB is fast-path only
+            pack_reconfig_data_format(cb_output_tiles);
+        }
+        tilize_init(cb_input_sticks, wt_chunk, cb_output_tiles);
+        DataflowBuffer in_dfb(cb_input_sticks);
+        DataflowBuffer out_dfb(cb_output_tiles);
+        for (uint32_t block = 0; block < num_blocks; ++block) {
+            in_dfb.wait_front(wt_chunk);
+            out_dfb.reserve_back(wt_chunk);
+            tilize_block_wide<dest_window>(cb_input_sticks, wt_chunk, cb_output_tiles);
+            out_dfb.push_back(wt_chunk);
+            in_dfb.pop_front(wt_chunk);
+        }
+        tilize_uninit(cb_input_sticks, cb_output_tiles);
     }
 }

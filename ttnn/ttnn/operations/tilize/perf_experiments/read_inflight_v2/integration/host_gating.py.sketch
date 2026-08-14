@@ -1,0 +1,145 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""INTEGRATION SKETCH — the host side of the ONE R_ALIGNED reader loop.
+
+Three changes to tilize_program_descriptor.py. Everything is derived from
+values the descriptor already computes; nothing new is measured at runtime.
+"""
+
+# ===========================================================================
+# 1. THE INPUT CB DEEPENS BY ONE GROUP — AND ONLY THE INPUT CB.
+#
+# The measured rule is NOT "more depth" and NOT "more in flight": it is SLACK.
+# Every arm with `cb_depth == ahead + 1` (zero slack) landed on the baseline or
+# below it; every arm with `cb_depth >= ahead + 2` won. `ahead == 1` is the best
+# or tied everywhere, and `ahead >= 2` is flat on the crossover and a REGRESSION
+# on interleaved W_BLOCKS (wblocks8: ahead1_d3 15,156 -> ahead3_d5 17,073 ->
+# ahead4_d6 18,421 ns). So: ONE outstanding group, ONE group of slack.
+#
+# The output CB is untouched (depth 2), which is what keeps the L1 cost of this
+# to `wt_chunk * in_tile_bytes` instead of `wt_chunk * (in + out)`.
+# ===========================================================================
+
+IN_CB_EXTRA_DEPTH = 1  # groups of slack behind the one outstanding read
+
+
+def cb_pages_in(cb_depth, wt_chunk, extra):
+    return (cb_depth + extra) * NT_BLK * wt_chunk
+
+
+def cb_bytes(cb_depth, wt_chunk, in_tile_bytes, out_tile_bytes, extra=IN_CB_EXTRA_DEPTH):
+    """L1 the two streaming CBs hold — the INPUT side one group deeper."""
+    return cb_pages_in(cb_depth, wt_chunk, extra) * in_tile_bytes + cb_pages(cb_depth, wt_chunk) * out_tile_bytes
+
+
+# `wt_cap()` already reads cb_bytes(), so the L1 ceiling follows automatically.
+#
+# WHAT THAT COSTS THE BLOCKING (this is question 2, answered):
+#   interleaved bf16 : wt_cap 128 -> 102   (per tile-col 8192 B -> 10240 B)
+#   interleaved fp32 : wt_cap  64 ->  51
+#   aliased dest     : wt_cap 255 -> 170   (FAST_TILIZE_MAX_W still clamps)
+# The cap can therefore force at most ONE extra halving of WT_CHUNK, and only
+# on a cell whose transfer was ALREADY >= cap * 32 * elem bytes — i.e. >= 6.5 KB
+# (bf16) / 6.5 KB (fp32). The forced split lands at >= 3.2 KB, which is 3x the
+# op's own MIN_PIPELINE_READ_BYTES floor of 1024 B. The depth can never drive
+# the read transfer below the transfer floor; that is arithmetic, not a guess.
+#
+# MEASURED on a cell built so the cap actually binds ([1,1,2048,4096] bf16,
+# 8 cores, NT_H 64 >> cores so the pipeline floor is 1 and only L1 is left):
+#   n_chunks 1, WT_CHUNK 128, depth 2, helper baseline      180,902 ns
+#   n_chunks 1, WT_CHUNK 128, depth 2, ahead 1              180,383 ns
+#   n_chunks 2, WT_CHUNK  64, depth 2, helper baseline      171,573 ns
+#   n_chunks 2, WT_CHUNK  64, depth 3, ahead 1              178,100 ns
+#   n_chunks 2, WT_CHUNK  64, depth 4, ahead 1              170,078 ns
+#   n_chunks 1, WT_CHUNK 128, depth 3, ahead 1 (OVER the
+#     1 MiB CB budget at 1,310,720 B — it still ALLOCATES) 182,037 ns
+# Every arm inside ~6%: this cell is DRAM-bandwidth bound, so the blocking
+# choice does not move it. Neither resolution is wrong; recomputing the blocking
+# (letting wt_cap see the deeper input CB) is the one that stays inside the op's
+# own L1 budget, so that is the recommendation.
+
+# ===========================================================================
+# 2. THE SCHEDULE KNOBS — replacing `read_trid`.
+# ===========================================================================
+
+# `read_trid` is DELETED. It was gated on `cb_pages(cb_depth, wt_chunk) ==
+# 2 * NT_BLK * wt_chunk and NT_BLK == 1 and not halve_cores`, i.e. exactly
+# "one outstanding group with ZERO slack" — the arm this sweep measured as
+# baseline-or-worse on every cell.
+
+aligned_accessor_read = regime == R_ALIGNED and in_placement == P_ACCESSOR  # NOTE: no W_BLOCKS clause
+src_in_dram = input_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
+
+# ISSUE-AHEAD. Two conditions, both mechanical:
+#   * the input CB actually got its slack group (if the L1 fallback dropped
+#     cb_depth back to 1, there is no slack and `ahead` MUST be 0 — the
+#     zero-slack arm is a 0.73x REGRESSION at fp32);
+#   * the source is DRAM. On a source that lives in another core's L1 the
+#     transaction-id machinery is pure added RISC work with no fabric latency
+#     to hide behind, and it costs 0.84x-0.81x (measured, 3 repeats, three
+#     cells). See the coalescing knob below for what wins there instead.
+read_ahead = int(aligned_accessor_read and src_in_dram and cb_depth + IN_CB_EXTRA_DEPTH >= 2 + 1)
+
+# TRANSACTION MERGE. Legal exactly when `coal` consecutive source sticks are one
+# contiguous address range and the block takes the WHOLE stick:
+#   * the source is a SHARD (not interleaved) — an interleaved page walk
+#     round-robins the banks, and the merged read is NOT bit-exact (measured);
+#   * one page IS one whole tensor row (`src_row_pages == 1`);
+#   * the block spans the whole row (`n_chunks == 1` and the chunk's byte width
+#     equals the source page), so consecutive sticks are adjacent in L1;
+#   * a block never straddles two shards: source shard height is a whole number
+#     of tile-rows, and every block starts at a tile-row boundary.
+src_shard_rows = ...  # source shard's row count, from memory_config().shard_spec
+read_coalesce = (
+    tile_h
+    if (
+        aligned_accessor_read
+        and not src_in_dram
+        and input_tensor.memory_config().is_sharded()
+        and src_row_pages == 1
+        and n_chunks == 1
+        and wt_chunk * tile_w * elem_in == src_page_bytes
+        and src_shard_rows % tile_h == 0
+    )
+    else 1
+)
+
+# ===========================================================================
+# 3. `derive_blocking()` NEEDS NOTHING TOLD except the deeper input CB.
+#
+# It already takes `cb_depth` and routes it through `wt_cap()`; change (1) is
+# entirely inside `cb_bytes()`, so the ceiling, the depth fallback and both CB
+# descriptors move together from one source, as they do today.
+#
+# The ONE ordering constraint: `read_ahead` must be computed AFTER the L1
+# fallback loop that can decrement `cb_depth`, so it sees the depth actually
+# shipped. Placing it next to the current `read_trid` line satisfies that.
+# ===========================================================================
+
+# ===========================================================================
+# 4. TWO INTERACTIONS WITH THE LEVERS ALREADY IN THE KERNEL.
+#
+# (a) `aligned_accessor_read` above intentionally DROPS the `work_mode ==
+#     W_BLOCKS` clause, because the unified loop covers W_REGION too (that is
+#     where the crossover's 90%-of-wall `reader_helper` stage lives). The OTHER
+#     three levers gated on that same name today — `read_one_packet` (B6),
+#     `read_vc_enable` (B10), `read_state` (B13) — were priced on W_BLOCKS only,
+#     so keep their gate as it is (`... and work_mode == W_BLOCKS`) unless they
+#     are re-measured on W_REGION. Split the predicate into two names rather
+#     than widening one.
+#
+# (b) `read_one_packet` / `read_state`'s cached LENGTH must become `xfer_bytes`,
+#     not `row_bytes`, once `read_coalesce > 1` — and a coalesced transfer is
+#     tile_h * row_bytes (16 KB on the measured cell), which is far over
+#     NOC_MAX_BURST_SIZE, so `one_packet` must be forced OFF whenever
+#     `read_coalesce > 1`. The two levers are mutually exclusive by construction.
+#
+# 5. WHAT WAS *NOT* MEASURED (untested, not an exception):
+#     * R_PAD and R_RETILE — different loops, out of this idea's scope.
+#     * W_REGION with n_chunks > 1 on a DRAM source (the mechanism is the same
+#       as W_BLOCKS, which IS measured, but the cell itself was not run).
+#     * a DRAM-SHARDED source for the coalescing knob (a DRAM shard is also one
+#       contiguous range per bank, so it should qualify — `not src_in_dram` in
+#       the predicate above is therefore CONSERVATIVE, and could become
+#       `is_sharded()` alone once measured).
+#     * Blackhole. Every number here is Wormhole B0 (n150).
