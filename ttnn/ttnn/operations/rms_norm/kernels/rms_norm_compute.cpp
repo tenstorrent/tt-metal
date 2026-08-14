@@ -45,6 +45,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 
+#include "rms_norm_finalize.hpp"
+
 namespace ckl = compute_kernel_lib;
 
 constexpr uint32_t cb_input_tiles = 0;
@@ -62,6 +64,17 @@ constexpr uint32_t cb_rm_stage_out = 11;
 constexpr uint32_t cb_thread_sync = 12;
 
 constexpr uint32_t NO_MASK_COL = 0xFFFFFFFFu;
+
+// ---- TEMPORARY ablation hook (Perf 2 breakdown) --------------------------
+// Bit mask passed as a -D define by the program descriptor when
+// /tmp/rms_norm_ablate_bits exists.  Each bit STUBS one stage's PAYLOAD while
+// keeping its CB/semaphore scaffolding intact, so stages can be peeled
+// cumulatively.  Compiles to 0 (= the real op) when the define is absent.
+#ifndef RMS_ABLATE
+#define RMS_ABLATE 0
+#endif
+#define ABL_COMBINE 1u  // owner's cross-core reduce + finalize
+#define ABL_LOCAL 4u    // sumsq + scale + apply_gamma
 
 // Largest d <= cap that divides `width`.  See DEST_BLOCK below.
 constexpr uint32_t dest_block_divisor(uint32_t width, uint32_t cap) {
@@ -266,13 +279,43 @@ void kernel_main() {
     constexpr auto block_shape_batched =
         ckl::IterationShape::grid(BLOCK_ROWS, SLICE_HIDDEN_TILES).block_size(DEST_BLOCK);
 
-    auto finalize = [inv_w_bits, eps_bits](uint32_t dst_idx) {
-        binop_with_scalar_tile_init();
-        mul_unary_tile(dst_idx, inv_w_bits);
-        add_unary_tile(dst_idx, eps_bits);
-        rsqrt_tile_init();
-        rsqrt_tile(dst_idx);
-    };
+    // The reduce helper's documented extension point.  Its body is ONE scoped,
+    // fused SFPU walk over column 0 -- the only axis a REDUCE_ROW result carries
+    // and the only one the `BroadcastDim::Col` consumer reads.  See
+    // rms_norm_finalize.hpp for the raw-LLK justification and the measured 4.12x
+    // that authorizes the helper bypass; do not revert it to the wrapper chain.
+    auto finalize = [inv_w_bits, eps_bits](uint32_t dst_idx) { rms_finalize(dst_idx, inv_w_bits, eps_bits); };
+
+    // ---- WHERE apply_gamma_block runs in the block schedule (Perf 2) ----
+    //
+    // gamma does not depend on the cross-core combine -- multiplication commutes,
+    // so `x * rsqrt(mean+eps) * gamma` may apply gamma on either side of it.  The
+    // op used to run it LAST, which put a whole B*S-tile pass on the serial
+    // POST-combine tail while the compute thread had just spent the entire combine
+    // round trip blocked in `cp_rms_wait` doing nothing.  Running it BEFORE the
+    // combine moves that pass into the window that was already idle.
+    //
+    // MEASURED (Blackhole p150b @1350 MHz, whole op, one fresh run per point):
+    //     focus (1,1,8192,1024) BLOCK   34350 -> 30579   1.123x
+    //     S=8 / S=16 / B=1 / B=8 / B=32 / s=2 / s=16      1.077x - 1.186x
+    // The pass did not get cheaper -- it stopped being on the critical path.
+    // PCC 0.999909 -> 0.999908: the reorder swaps which product is rounded to
+    // bf16 first, and that is measured, not assumed.
+    //
+    // THE ONE CARVE-OUT, and it is structural rather than a benchmark artifact:
+    // the entire benefit is hiding the pass inside the combine's latency, and at
+    // `NUM_HIDDEN_SLICES == 1` there IS no combine -- `cp_rms_wait` above does not
+    // even compile in.  Measured there at -2.2% (45608 -> 46632, reproduced 3x),
+    // isolated to gamma's DRAM round trip: with gamma resident in L1 the same
+    // reorder is dead flat at s == 1 (45612 -> 45550) while the focus win is
+    // unchanged (1.119x).  So the exception is "there is no combine to hide behind",
+    // and it disappears by itself if the reader ever lands gamma earlier on that
+    // path -- it does not have to be widened by hand.
+    constexpr bool GAMMA_FIRST = (HAS_GAMMA != 0) && (GAMMA_FUSED == 0) && (NUM_HIDDEN_SLICES > 1);
+    // The scale's pack target follows from that choice: whoever runs LAST must land
+    // the block in its final home (cb_output_tiles under TILE, cb_input_tiles under
+    // ROW_MAJOR, where untilize reads it back).
+    constexpr bool SCALE_IN_PLACE = (IS_ROW_MAJOR != 0) || ((HAS_GAMMA != 0) && (GAMMA_FUSED == 0) && !GAMMA_FIRST);
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
         // Where an IN-PLACE pack lands, measured from cb_input_tiles' BASE.
@@ -339,7 +382,56 @@ void kernel_main() {
             // cb_sq_partials' reserve is the only thing that can back-pressure —
             // so this number is close to real payload on all three threads.
             MaybeDeviceZoneScope("cp_sumsq");
+#if (RMS_ABLATE & ABL_LOCAL)
+            cb_reserve_back(cb_sq_partials, BLOCK_ROWS);
+            cb_push_back(cb_sq_partials, BLOCK_ROWS);
+#else
             ckl::sum_of_squares<x_held, ckl::row_output(cb_sq_partials)>(block_shape);
+#endif
+        }
+
+        // ---- apply_gamma_block: gamma is a 1D [W] operand -> Row broadcast ----
+        //      (unfused path only; the fused one does it inside the scale's DEST
+        //      window, so nothing is packed between the two multiplies).
+        //      ONE implementation, invoked at ONE of two points in the schedule --
+        //      see GAMMA_FIRST above.  It packs IN PLACE when it is not the last
+        //      pass over the block, and into the output CB when it is.
+        auto apply_gamma_block = [&]() {
+            if constexpr (HAS_GAMMA && !GAMMA_FUSED) {
+                // The deferred gamma wait (see the boot comment).  Never popped, so
+                // only the first block can actually block here.
+                {
+                    MaybeDeviceZoneScope("cp_gamma_wait");
+                    cb_wait_front(cb_gamma_tiles, SLICE_HIDDEN_TILES);
+                }
+                MaybeDeviceZoneScope("cp_apply_gamma");
+#if (RMS_ABLATE & ABL_LOCAL)
+                if constexpr (GAMMA_FIRST || IS_ROW_MAJOR) {
+                    (void)0;
+                } else {
+                    for (uint32_t i = 0; i < BLOCK_ROWS * SLICE_HIDDEN_TILES; i += DEST_BLOCK) {
+                        cb_reserve_back(cb_output_tiles, DEST_BLOCK);
+                        cb_push_back(cb_output_tiles, DEST_BLOCK);
+                    }
+                }
+#else
+                if constexpr (GAMMA_FIRST || IS_ROW_MAJOR) {
+                    ckl::eltwise_chain(
+                        block_shape_batched,
+                        ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_held, gamma_row>{},
+                        ckl::PackTile<in_place>{pack_base});
+                    sync_pack_to_unpack();  // packed in place; the next pass unpacks it
+                } else {
+                    ckl::mul<x_held, gamma_row, to_output_batched>(block_shape_batched);
+                }
+#endif
+            }
+        };
+
+        // Pre-combine slot: the pass runs inside the window the compute thread
+        // would otherwise spend blocked in `cp_rms_wait`.
+        if constexpr (GAMMA_FIRST) {
+            apply_gamma_block();
         }
 
         if constexpr (NUM_HIDDEN_SLICES > 1) {
@@ -378,6 +470,11 @@ void kernel_main() {
                     cb_wait_front(cb_gathered_partials, NUM_HIDDEN_SLICES * OWN_ROWS);
                 }
                 MaybeDeviceZoneScope("cp_combine");
+#if (RMS_ABLATE & ABL_COMBINE)
+                cb_pop_front(cb_gathered_partials, NUM_HIDDEN_SLICES * OWN_ROWS);
+                cb_reserve_back(cb_combine_out, OWN_ROWS);
+                cb_push_back(cb_combine_out, OWN_ROWS);
+#else
                 ckl::reduce<
                     ckernel::PoolType::SUM,
                     ckernel::ReduceDim::REDUCE_ROW,
@@ -394,6 +491,7 @@ void kernel_main() {
                     ckl::ReduceInputMemoryLayout::contiguous(),
                     ckl::NoAccumulation{},
                     finalize);
+#endif
             }
         } else {
             // ---- collapse_partial_block with the finalize fused in ----
@@ -460,42 +558,29 @@ void kernel_main() {
                         ckl::DestReuseBinary<gamma_full, ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>{},
                         ckl::PackTile<to_output_batched>{});
                 }
-            } else if constexpr (HAS_GAMMA || IS_ROW_MAJOR) {
+            } else if constexpr (SCALE_IN_PLACE) {
                 // Spelled as an explicit chain rather than `ckl::mul<...>` only because
                 // the convenience wrappers default-construct their elements and so
                 // cannot carry the runtime `pack_base`.  Same helper, same chain.
                 MaybeDeviceZoneScope("cp_scale");
+#if (RMS_ABLATE & ABL_LOCAL)
+                cb_pop_front(cb_rms_recip, BLOCK_ROWS);
+#else
                 ckl::eltwise_chain(
                     block_shape_batched,
                     ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_held, rms_col>{},
                     ckl::PackTile<in_place>{pack_base});
                 sync_pack_to_unpack();  // x*r packed in place; the next stage unpacks it
+#endif
             } else {
                 MaybeDeviceZoneScope("cp_scale");
                 ckl::mul<x_held, rms_col, to_output_batched>(block_shape_batched);
             }
         }  // cp_scale_total
 
-        // ---- apply_gamma_block: gamma is a 1D [W] operand -> Row broadcast ----
-        //      (unfused path only; the fused one did it above in the same DEST
-        //      window, so nothing is packed between the two multiplies).
-        if constexpr (HAS_GAMMA && !GAMMA_FUSED) {
-            // The deferred gamma wait (see the boot comment).  Never popped, so
-            // only the first block can actually block here.
-            {
-                MaybeDeviceZoneScope("cp_gamma_wait");
-                cb_wait_front(cb_gamma_tiles, SLICE_HIDDEN_TILES);
-            }
-            MaybeDeviceZoneScope("cp_apply_gamma");
-            if constexpr (IS_ROW_MAJOR) {
-                ckl::eltwise_chain(
-                    block_shape_batched,
-                    ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_held, gamma_row>{},
-                    ckl::PackTile<in_place>{pack_base});
-                sync_pack_to_unpack();  // x*r*gamma packed in place; untilize unpacks it
-            } else {
-                ckl::mul<x_held, gamma_row, to_output_batched>(block_shape_batched);
-            }
+        // Post-combine slot: only where GAMMA_FIRST could not be taken (see above).
+        if constexpr (!GAMMA_FIRST) {
+            apply_gamma_block();
         }
 
         // ---- untilize_block (ROW_MAJOR) / release the window (TILE) ----
