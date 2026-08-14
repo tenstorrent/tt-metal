@@ -1020,6 +1020,49 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# ── Qwen-Image (TT-DiT) ────────────────────────────────────────────
+# Merges the retired t3k demo (test_pipeline_qwenimage.py) and t3k perf
+# (test_performance_qwenimage.py) legs. Both files parametrize a 2x4 and a 4x8
+# mesh; require_exact_physical_num_devices in device_params picks the one that
+# matches the machine, so no -k topology filter is needed.
+- name: TT-DiT Qwen-Image e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    pytest --timeout 1200 models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py
+    pytest --timeout 720 models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py
+  model: qwenimage
+  model_family: Qwen
+  skus:
+    wh_llmbox_perf:
+      timeout: 50
+      tier: 3
+      release_ready: false
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+
+# Galaxy carries the pipeline leg only. The 4x8 case of
+# test_performance_qwenimage.py hangs the device mid-pipeline in an
+# uninterruptible driver call and leaks TLB windows that `tt-smi reset` does not
+# reclaim, bricking the runner for every subsequent job (#47355). That is why the
+# legacy `Galaxy DiT Qwen-Image model perf tests` entry was commented out rather
+# than run; this entry preserves that state. Fold the perf line in here once
+# #47355 is fixed.
+- name: TT-DiT Qwen-Image e2e tests (Galaxy)
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    pytest --timeout 1200 models/tt_dit/tests/models/qwenimage/test_pipeline_qwenimage.py
+  model: qwenimage
+  model_family: Qwen
+  skus:
+    wh_galaxy_perf:
+      timeout: 20
+      tier: 3
+      release_ready: false
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+
 # ── Panoptic DeepLab ───────────────────────────────────────────────
 - name: panoptic-deeplab e2e tests
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1020

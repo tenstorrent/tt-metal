@@ -13,7 +13,6 @@ on:
           - unit
           - wan22
           - motif
-          - qwenimage
       platform:
         required: false
         type: choice

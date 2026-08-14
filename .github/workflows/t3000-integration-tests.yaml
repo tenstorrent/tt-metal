@@ -13,7 +13,6 @@ on:
           - tteager
           - trace stress
           - motif
-          - qwenimage
           - deepseek-modules
       platform:
         required: false

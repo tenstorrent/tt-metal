@@ -33,6 +33,7 @@ on:
           - mistral-small-3.1-24b
           - sd35
           - mochi
+          - qwenimage
           - vggnet
           - bert-tiny
           - bert-large

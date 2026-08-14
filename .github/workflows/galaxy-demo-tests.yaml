@@ -13,7 +13,6 @@ on:
           - motif
           - wan22
           - deepseek_v3
-          - qwenimage
       platform:
         required: false
         type: choice

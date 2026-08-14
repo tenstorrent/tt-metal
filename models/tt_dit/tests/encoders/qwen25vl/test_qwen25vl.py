@@ -23,6 +23,7 @@ from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
+from ....utils.test import line_params_req_exact_devices
 
 
 @pytest.mark.parametrize(
@@ -226,7 +227,8 @@ def test_qwen25vl_text_encoder(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 31000000}],
+    [{**line_params_req_exact_devices, "trace_region_size": 31000000}],
+    ids=["line"],
     indirect=True,
 )
 def test_qwen25vl_encoder_pair(

@@ -1156,6 +1156,28 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# ── Qwen-Image (TT-DiT) ────────────────────────────────────────────
+# The Qwen2.5-VL text encoder pair is the only Qwen-Image unit leg that was in CI:
+# it backed both the retired t3k integration leg (-k 2x4) and the retired Galaxy
+# integration leg (-k 4x8). require_exact_physical_num_devices now selects the
+# mesh per machine, so one entry covers both SKUs.
+- name: TT-DiT Qwen-Image unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
+    pytest --timeout 600 models/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair
+  model: qwenimage
+  model_family: Qwen
+  skus:
+    wh_llmbox:
+      timeout: 10
+      tier: 3
+    wh_galaxy:
+      timeout: 10
+      tier: 3
+  owner_id: U08TED0JM9D # Samuel Adesoye
+  team: models
+
 # ============================================================================
 # Multihost (exabox) model-unit tests
 # ============================================================================

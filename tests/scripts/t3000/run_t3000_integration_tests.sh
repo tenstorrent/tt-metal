@@ -160,11 +160,6 @@ run_t3000_motif_tests() {
     "models/tt_dit/tests/models/motif/test_transformer_block_motif.py::test_transformer_block_motif"
 }
 
-run_t3000_qwenimage_tests() {
-  run_t3000_dit_tests \
-    "models/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair -k 2x4"
-}
-
 run_t3000_tests() {
   # Run ethernet tests
   run_t3000_ethernet_tests
@@ -189,9 +184,6 @@ run_t3000_tests() {
 
   # Run trace tests
   run_t3000_trace_stress_tests
-
-  # Run qwenimage tests
-  run_t3000_qwenimage_tests
 }
 
 fail=0

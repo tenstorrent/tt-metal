@@ -12,6 +12,7 @@ import ttnn
 
 from ....parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
 from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
+from ....utils.test import line_params_req_exact_devices
 
 
 @pytest.mark.parametrize(
@@ -20,7 +21,8 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenIm
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 47000000}],
+    [{**line_params_req_exact_devices, "trace_region_size": 47000000}],
+    ids=["line"],
     indirect=True,
 )
 @pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 50)])

@@ -14,6 +14,7 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from ....parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
 from ....pipelines.events import profiler_event_callback
 from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenImagePipelineConfig
+from ....utils.test import line_params_req_exact_devices
 
 
 @pytest.mark.parametrize(
@@ -45,7 +46,8 @@ from ....pipelines.qwenimage.pipeline_qwenimage import QwenImagePipeline, QwenIm
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 47000000}],
+    [{**line_params_req_exact_devices, "trace_region_size": 47000000}],
+    ids=["line"],
     indirect=True,
 )
 def test_qwenimage_pipeline_performance(

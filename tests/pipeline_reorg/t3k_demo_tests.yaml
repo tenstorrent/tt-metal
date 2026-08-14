@@ -17,12 +17,3 @@
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   model-name: motif
-
-- name: t3k_qwenimage_tests
-  cmd: run_t3000_qwenimage_tests
-  skus:
-    wh_llmbox_perf:
-      timeout: 25
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: qwenimage
