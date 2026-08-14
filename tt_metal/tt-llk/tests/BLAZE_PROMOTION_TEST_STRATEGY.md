@@ -370,37 +370,62 @@ which call site) rather than to keep guessing from the LLK layer.
 
 ## 10. Shared infrastructure the remaining items need
 
-**The compute-API layer is not directly testable from tt-llk — replicate its sequence instead.**
-`-I../../hw/inc` *is* on the tt-llk compile line (`helpers/test_config.py:530`), so
-`api/compute/experimental/*.h` technically resolves. But those headers need the metal JIT environment: the
-`UNPACK()`/`MATH()`/`PACK()` thread-elision macros, `ALWI`, the CB APIs, `get_compile_time_arg_val`. The
-established convention — set by `sources/fast_tilize_metal_api_test.cpp` + `test_fast_tilize_metal_api.py`,
-whose docstring reads "Replicates ttnn tilize compute kernel flow (`compute_kernel_hw_startup` +
-`fast_tilize_init`/`block`/`uninit`) through the LLK test infra" — is to **reproduce the compute-API call
-sequence using `llk_api` / `llk_lib` calls** inside the tt-llk kernel. Every plan above follows that. The
-compute-API wrappers themselves stay covered by the tt-metal gtests and the demo tests.
+**Scope: pure LLKs.** Every remaining item drives the `_llk_*` lib functions and the
+`llk_*` api wrappers directly. The compute-API layer
+(`tt_metal/hw/inc/api/compute/experimental/*.h`) is **not** a test target here; where §3,
+§4, §6 and §8 name a compute-API function such as `mul_reduce_scalar_chunked_tile` or
+`rmsnorm_bcast_scalar_reuse_tiles`, that is shorthand for *the call sequence to reproduce
+at the LLK level* — it names the order to drive the underlying LLKs in, nothing more.
 
-`-I../../hw/ckernels/blackhole/metal/llk_api` is also on the path, so the new `experimental/llk_sfpu/...`
-and `experimental/llk_*_api.h` headers are includable as `"experimental/<name>.h"` with no fixture — the
-`VENDORED_LLK_LIB` include-path hack that #52727 deletes is exactly what promotion buys.
+**Include paths already work.** `-I../../hw/ckernels/blackhole/metal/llk_api` is on the
+tt-llk compile line, so the promoted `experimental/llk_sfpu/...` and
+`experimental/llk_*_api.h` headers are includable as `"experimental/<name>.h"` with no
+fixture, and `experimental/...` under `tt_llk_blackhole/{llk_lib,common/inc/sfpu}` likewise.
+The `VENDORED_LLK_LIB` include-path fixture that #52727 deletes is exactly what the
+promotion buys. Nothing further is needed to reach any remaining header.
 
-New helper plumbing needed:
+One wrinkle worth knowing: the metal-tree SFPU headers under
+`experimental/llk_sfpu/` are written against the metal macro environment and read bare
+`APPROX` / `DST_ACCUM_MODE`, so a tt-llk driver must define those before the include. Both
+landed SFPU drivers show the pattern (`sfpu_add_rsqrt_test.cpp`, `sfpu_sampling_test.cpp`).
 
-- **`helpers/llk_params.py`** — `MathOperation.AddRsqrt`.
-- **`helpers/test_variant_parameters.py`** — new `TemplateParameter`s: `NUM_TILES_TEMPLATE` (rmsnorm's
-  `num_tiles` is a *template* arg, unlike the existing runtime `TILE_COUNT`), `CLEAR_DEST`,
-  `UNPACK_FULL_TRANSPOSE`, `DST_CAPACITY`, `USE_SHORTHAND_INIT`, `RESTORE_TILE_PACK_MOP`, `DENSE_PACKING`,
-  `TOP32_MODE`, `TOP32_TOP_MIN`, `SORT_DIRECTION`, `POLLUTER_INIT`.
-- **`helpers/golden_generators.py`** — `AddRsqrtGolden` (or a branch in the binop-scalar golden),
-  `RmsnormBcastScalarGolden`, `Top32RmGolden` (likely an extension of `TopKXLGolden`),
-  `MulReduceScalarChunkedGolden`.
-- **`conftest.py`** — all new tests are `blackhole_only`.
-- **Test-isolation caution.** Two of these tests (`custom_mm` uninit-restore, the optional sampling polluter)
-  deliberately leave hardware state dirty between runs. Per the tt-llk notes, HW state leaks between kernel
-  reconfigurations and a `TENSIX TIMED OUT` there must **not** be masked with `tt-smi -r` — that would hide
-  the very reconfig escape the test is designed to catch.
+### Test parameters that already exist and can be reused
 
----
+Landed while building the completed items; check here before adding a new one:
+
+| Parameter | Emits | Useful for |
+|---|---|---|
+| `CUSTOM_MM_UNINIT` | `UNINIT_DENSE_PACKING`, `UNINIT_RESTORE_MOP`, `UNINIT_SKIP`, `BLOCK_MOP_NUM_FACES` | OPEN #3 — the same dense/geometry axes |
+| `PACK_NUM_TILES` | `PACK_NUM_TILES` | any driver with a compile-time-bounded pack loop |
+| `SFPU_FAST_APPROX` | `SFPU_FAST_APPROX` | sqrt/rsqrt-family template arg |
+| `SORT_DST_WRITE_OFFSET` | `SORT_DST_WRITE_OFFSET` | OPEN #4 — `top32_rm` shares the helper |
+| `SAMPLING_PRGM0_HAZARD` | `SAMPLING_POLLUTE_PRGM0`, `SAMPLING_SKIP_RECIP_INIT` | template for any "prove the init is load-bearing" axis |
+
+### Still to add
+
+- **`helpers/test_variant_parameters.py`** — for OPEN #1: a compile-time `DST_CAPACITY` and
+  the chunked `num_tiles` (both are template args in the chunked reduction, not runtime).
+  For OPEN #2: `NUM_TILES_TEMPLATE` (rmsnorm's `num_tiles` is a *template* arg, unlike the
+  existing runtime `TILE_COUNT`), `CLEAR_DEST`, `UNPACK_FULL_TRANSPOSE`. For OPEN #4:
+  `TOP32_MODE`, `TOP32_TOP_MIN`, `SORT_DIRECTION`.
+- **`helpers/golden_generators.py`** — `MulReduceScalarChunkedGolden` (OPEN #1),
+  `RmsnormBcastScalarGolden` (OPEN #2), `Top32RmGolden` (OPEN #4, likely an extension of
+  the existing `TopKXLGolden`). OPEN #3 should reuse the existing matmul golden and
+  `helpers/matmul_sweep.py`.
+- **`conftest.py`** — every remaining test is Blackhole-only: `skip_for_wormhole` +
+  `skip_for_quasar`.
+
+Not needed, contrary to an earlier draft of this section: no `MathOperation` entry and no
+dedicated golden class for `add_rsqrt` (it landed as a self-contained file computing its
+golden inline), and no `USE_SHORTHAND_INIT` (that approach was reverted — see §9).
+
+### Test-isolation caution
+
+The landed `custom_mm` uninit-restore driver deliberately leaves hardware state dirty
+between its two runs, and OPEN #1's chunked reduction re-inits mid-loop. Per the tt-llk
+notes, HW state leaks between kernel reconfigurations, and a `TENSIX TIMED OUT` in such a
+test must **not** be masked with `tt-smi -r` — that would hide the very reconfig escape the
+test exists to catch. Reset only for a genuine runtime hang, and record what hung first.
 
 ---
 
@@ -427,6 +452,3 @@ New helper plumbing needed:
    Is there a packaging/compile gate that catches a header added to `experimental/` but missing from
    `sources.cmake`? Neither #52713 nor #52745 touches `sources.cmake`; #52713 adds no compute-API header, so
    it looks correct, but a gate would make that verifiable rather than reviewed.
-
-
----
