@@ -339,10 +339,9 @@ static uint64_t get_pcie_base_cached(uint32_t device_id) {
 extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     emule_require_self(__func__);
 
-    // Host-facing (PCIe) address: SimulationSysmemManager's device_io_addr space shares the 64-bit
-    // range with on-chip NOC addresses, and pcie_base_ alone cannot separate them — on Wormhole it
-    // is 0x8'0000'0000, below the bit-36 coordinate field, so every on-chip address clears it.
-    // Membership in the mapped-buffer registry is the discriminator; the threshold is a pre-filter.
+    // pcie_base alone cannot tell host-facing from on-chip: on Wormhole it is 0x8'0000'0000,
+    // below the bit-36 coordinate field, so every on-chip address clears it. Registry
+    // membership is the discriminator; the threshold is only a pre-filter.
     uint32_t device_id = __emule_self->chip_id;
     if (noc_addr >= get_pcie_base_cached(device_id)) {
         auto* sw_emu = get_sw_emulated_chip(static_cast<tt::ChipId>(device_id));
@@ -357,8 +356,8 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
         if (auto* host_ptr = static_cast<uint8_t*>(sysmem->get_mapped_host_ptr(noc_addr))) {
             return host_ptr;
         }
-        // Registry miss — fall through and decode as on-chip. A genuine host-facing miss finds no
-        // core either and still returns nullptr, which callers like noc_semaphore_set_remote need.
+        // Miss: decode as on-chip. A real host-facing miss finds no core either and still
+        // returns nullptr, which noc_semaphore_set_remote relies on.
     }
 
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
@@ -1533,9 +1532,8 @@ static std::map<std::string, std::string> build_kernel_defines(
                 }
             }
         }
-        // A dataflow buffer carries the same LLK-facing entry metadata as a circular buffer, keyed
-        // by the same device slot, so it feeds the same tables — without this a program declaring
-        // DFBs instead of CBs (ttnn::typecast) reports page size 0 to its kernels.
+        // A DFB carries the same entry metadata at the same device slot, so it feeds the same
+        // tables; without this ttnn::typecast reports page size 0 to its kernels.
         // See tt-emule docs/cb-dataformat.md.
         for (const auto& dfb_impl : impl.dataflow_buffers_on_core(first_core)) {
             const uint32_t slot = dfb_impl->device_slot;
@@ -1761,10 +1759,8 @@ static void collect_kernels(
             // them, `SelectByRISCV<>` aliases fail to resolve. Emule runs all RISCs in one unified
             // thread, so we set the corresponding macro based on the kernel's processor class.
             //
-            // PROCESSOR_INDEX — silicon's HAL emits it alongside the COMPILE_FOR_* defines, and
-            // get_hw_thread_idx() returns it, so the debug headers reaching it (waypoint, pause,
-            // assert, device_print) fail to compile without it. Taken from the HAL, not hard-coded,
-            // so it tracks tt-metal.
+            // PROCESSOR_INDEX backs get_hw_thread_idx(), so the debug headers that reach it
+            // (waypoint, pause, assert, device_print) will not compile without it.
             uint32_t processor_type_idx = 0;  // emule fuses TRISC0-2 into one compute fiber
             if (is_tensix) {
                 defines["COMPILE_FOR_TRISC"] = "1";
@@ -2922,9 +2918,8 @@ static void init_core_cb_sync(
     bool configured[EMULE_NUM_CBS] = {};
     auto configure = [&](const std::shared_ptr<CircularBufferImpl>& cb_impl, const CoreCoord& lc) {
         for (uint8_t idx : cb_impl->local_buffer_indices()) {
-            // Loud, not clamped: an index past the ceiling means the host CircularBufferConfig
-            // did not cap at the arch's NUM_CIRCULAR_BUFFERS. Skipping it silently leaves the
-            // CB's sync state uninitialised, which surfaces far away as wrong tile data.
+            // Loud, not clamped: a silent skip leaves the CB's sync state uninitialised, which
+            // resurfaces far away as wrong tile data.
             TT_FATAL(
                 idx < EMULE_NUM_CBS,
                 "CB index {} exceeds the emulated CB ceiling ({}); the host CircularBufferConfig must cap at the "
@@ -3002,10 +2997,9 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
         // MEM_ZEROS_BASE undisturbed for kernels that NOC-read the region.
         return {};
     }
-    // Tile counters are Quasar hardware; on WH/BH a DFB is the circular buffer the
-    // kernel-side DataflowBuffer wraps, so init_cb_sync below is its whole sync state.
-    // Same predicate metal's own finalize_dataflow_buffer_configs() splits on.
-    // See docs/DFB_EMULATION.md §1.
+    // Tile counters are Quasar hardware. On WH/BH a DFB is the CB the kernel-side
+    // DataflowBuffer wraps, so init_cb_sync below is its whole sync state.
+    // See tt-emule docs/DFB_EMULATION.md §1.
     const bool tc_backed = MetalContext::instance().hal().has_tile_counter_registers();
     // DFB fallback path: start the bump allocator at 0.  When Quasar bring-up needs
     // to protect MEM_ZEROS from bump-allocator overlap, dispatch its per-arch
@@ -3059,8 +3053,7 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
 
         // Also populate CB sync state for this DFB so compute ops (pack_tile,
         // matmul_tiles) can reuse the same L1 buffer via cb_read_ptr/cb_write_ptr.
-        // On WH/BH this IS the DFB's sync state, and the slot is a CB index — host
-        // assign_dfb_device_slot() picks it below get_arch_num_circular_buffers().
+        // On WH/BH the slot is a CB index, so this IS the DFB's whole sync state.
         TT_FATAL(
             device_slot < EMULE_NUM_CBS,
             "DFB device slot {} exceeds the emulated CB ceiling ({}); the host assigns slots below the arch's "
@@ -3083,15 +3076,13 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
             dfb_face_r_dim,
             dfb_num_faces);
 
-        // Quasar tile counters: STRIDED gets M TCs, ALL DM-DM gets P*C. Counter IDs are
-        // spaced by MAX_TC_SLOTS_PER_DFB to prevent cross-DFB collisions. DFBSyncState is
-        // part of the same tile-counter model, so it is populated here too.
+        // STRIDED gets M TCs, ALL DM-DM gets P*C, spaced by MAX_TC_SLOTS_PER_DFB so DFBs cannot
+        // collide. DFBSyncState belongs to the same model, so it is populated here too.
         if (tc_backed) {
             core->init_dfb_sync(device_slot, base, cfg.entry_size, cfg.num_entries, capacity);
             if (device_slot >= (tt_emule::TILE_COUNTERS_PER_NEO / tt_emule::MAX_TC_SLOTS_PER_DFB)) {
-                // counter_base below assigns out of NEO 0 only. Lifting this means spreading
-                // DFBs across NEOs and threading neo_id through populate_dfb_interface_slots
-                // and the cb_api CB->DFB bridge.
+                // counter_base assigns out of NEO 0 only. Lifting this means spreading DFBs
+                // across NEOs and threading neo_id through the CB->DFB bridge.
                 throw std::out_of_range(
                     "Quasar DFB device slot exceeds safe TC range (max 8 DFBs per NEO with neo_id=0)");
             }
@@ -3144,10 +3135,8 @@ static void setup_core_state(
         init_core_semaphores(core, impl, logical_core, emule_sem_base);
 
         auto dfb_impls = impl.dataflow_buffers_on_core(logical_core);
-        // Tile-counter and per-thread DFB-interface state is Quasar-only. Leaving both null
-        // on WH/BH keeps the cb_api CB->DFB bridge short-circuited, where a DFB is already
-        // CB-backed (allocate_dfbs_on_core) — and keeps a WH/BH slot, which may run to
-        // get_arch_num_circular_buffers(), from indexing the MAX_DFBS-sized interface array.
+        // Quasar-only. Null on WH/BH keeps the cb_api CB->DFB bridge short-circuited, and stops
+        // a slot legal up to get_arch_num_circular_buffers() indexing the MAX_DFBS-sized array.
         bool has_tc_dfbs = !dfb_impls.empty() && MetalContext::instance().hal().has_tile_counter_registers();
         std::vector<DFBAllocInfo> dfb_allocs = allocate_dfbs_on_core(core, logical_core, dfb_impls);
 
