@@ -491,6 +491,7 @@ def fast_device_to_host(
     pre_transfer_fn: Callable[[ttnn.Tensor], ttnn.Tensor] | None = None,
     permute: tuple[int, ...] | None = None,
     dtype: torch.dtype | None = None,
+    mesh_barrier: bool = True,
 ) -> torch.Tensor | None:
     """Fast D2H transfer using async DMA and zero-copy to_torch.
 
@@ -646,8 +647,16 @@ def fast_device_to_host(
     # Single .cpu() on the mesh tensor batches all DMA reads into one C++
     # dispatch — host buffers are allocated in parallel and the reader thread
     # pool processes all completion-queue reads concurrently.
-    host_tensor = tt_tensor.cpu(blocking=False)
-    ttnn.synchronize_device(mesh_device)
+    # mesh_barrier=False reads each shard blocking instead of ending in a mesh-wide
+    # synchronize_device. The barrier is what deadlocks when this runs as the first eager op after a
+    # traced denoise replay — measured repeatedly at the VAE encoder, always on the second
+    # generation of a warm worker, always here at the synchronize. The decoder survives the same
+    # helper because it runs at the END of the call that traced, not against a replay that just
+    # finished. A blocking .cpu() waits on this tensor's own completion queue entries, which is all
+    # this read needs; it never asks every device to rendezvous.
+    host_tensor = tt_tensor.cpu(blocking=not mesh_barrier)
+    if mesh_barrier:
+        ttnn.synchronize_device(mesh_device)
 
     # Extract per-shard host tensors (single-host: just wraps each shard).
     host_shard_tensors = ttnn.get_device_tensors(host_tensor)

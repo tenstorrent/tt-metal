@@ -1380,6 +1380,12 @@ class LTXVideoEncoder(Module):
             self.mesh_device,
             concat_dims,
             ccl_manager=self.ccl_manager,
+            # The encoder is the FIRST eager op a warm worker reaches after a traced denoise
+            # replay, and a mesh-wide rendezvous there deadlocks: every hang seen in the served
+            # path lands on this read, on the second generation, never the first. Read the shards
+            # blocking instead — this needs its own completion-queue entries, not a barrier across
+            # devices that a just-finished replay leaves unable to meet.
+            mesh_barrier=False,
         )  # (B, F', H', W', 128)
 
         result = result[:, :, :logical_h, :logical_w, :]
