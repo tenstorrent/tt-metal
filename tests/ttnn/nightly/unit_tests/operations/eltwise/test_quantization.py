@@ -992,3 +992,89 @@ def test_requant_uint8_input_with_tensor_zero_point(device, output_dtype):
     from_int32 = ttnn.to_torch(ttnn.requantize(q_int32, in_scale, in_zp_tt, out_scale, out_zp_tt, dtype=output_dtype))
 
     assert torch.equal(from_uint8, from_int32)
+
+
+def test_quantize_tensor_zero_point_honors_memory_config(device):
+    """Composite (tensor zero-point) path must honor caller memory_config.
+
+    Regression for the DRAM-input / L1-output case: without forwarding
+    memory_config into the final typecast, the output incorrectly stays in DRAM.
+    """
+    torch.manual_seed(0)
+    input_tr = torch.rand(64, 128, dtype=torch.float32)
+    axis = 1
+    scale, zero_point = calculate_scale_zero_point_per_channel(input_tr, axis, -128, 127)
+
+    input_tt = ttnn.from_torch(
+        input_tr,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    scale_tt = ttnn.from_torch(scale, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    zero_point_tt = ttnn.from_torch(zero_point, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    quantized_tt = ttnn.quantize(
+        input_tt,
+        scale_tt,
+        zero_point_tt,
+        axis=axis,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    assert (
+        quantized_tt.memory_config() == ttnn.L1_MEMORY_CONFIG
+    ), f"expected L1 output, got {quantized_tt.memory_config()}"
+
+
+@pytest.mark.parametrize(
+    "use_tensor_scale,axis",
+    [
+        (True, 1),  # Tensor+Tensor per-channel composite arm
+        (False, None),  # float+Tensor per-tensor composite arm
+    ],
+)
+def test_quantize_tensor_zero_point_honors_output_tensor(device, use_tensor_scale, axis):
+    """Composite path must write into a preallocated INT32 output_tensor."""
+    torch.manual_seed(0)
+    input_tr = torch.rand(64, 128, dtype=torch.float32)
+
+    input_tt = ttnn.from_torch(
+        input_tr,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    if use_tensor_scale:
+        scale, zero_point = calculate_scale_zero_point_per_channel(input_tr, axis, -128, 127)
+        scale_arg = ttnn.from_torch(scale, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        zero_point_tt = ttnn.from_torch(zero_point, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    else:
+        scale, zero_point = calculate_scale_zero_point_per_tensor(input_tr, -128, 127)
+        scale_arg = scale
+        zero_point_tt = convert_scalar_to_ttnn_tensor(device, zero_point, 1, ttnn.int32)
+
+    output_tt = ttnn.zeros(
+        input_tr.shape,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    quantized_tt = ttnn.quantize(
+        input_tt,
+        scale_arg,
+        zero_point_tt,
+        axis=axis,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        output_tensor=output_tt,
+    )
+    assert quantized_tt.buffer_address() == output_tt.buffer_address(), (
+        f"expected output to alias preallocated tensor "
+        f"(got {quantized_tt.buffer_address()} vs {output_tt.buffer_address()})"
+    )
+    assert (
+        quantized_tt.memory_config() == ttnn.L1_MEMORY_CONFIG
+    ), f"expected L1 output, got {quantized_tt.memory_config()}"

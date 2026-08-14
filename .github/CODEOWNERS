@@ -206,6 +206,7 @@ tt_metal/hw/inc/experimental/udm/ @yugaoTT @SeanNijjar @tenstorrent/codeowner-by
 tt_metal/api/tt-metalium/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT @tenstorrent/codeowner-bypass
 tt_metal/impl/experimental/noc_estimator/ @nstamatovicTT @atatuzunerTT @tenstorrent/codeowner-bypass
 tt_metal/impl/experimental/noc_estimator/**/CMakeLists.txt @nstamatovicTT @atatuzunerTT @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+tt_metal/impl/experimental/offline_compile/ @ruizhangTT @tenstorrent/metalium-runtime @tenstorrent/codeowner-bypass
 tt_metal/impl/emulation/ @smeydanshahiTT @xanderchin @arminaleTT @sgholamiTT @tenstorrent/codeowner-bypass
 
 # metal misc
@@ -578,7 +579,6 @@ models/perf/ @yieldthought @esmalTT @mtairum @uaydonat @tenstorrent/codeowner-by
 models/perf/benchmarking_utils.py @williamlyTT @mtairum @uaydonat @tenstorrent/codeowner-bypass
 models/demos/utils/llm_demo_utils.py @mtairum @esmalTT @uaydonat @tenstorrent/codeowner-bypass
 models/experimental/bevformer/ @mbezuljTT @ddjekicTT @tenstorrent/codeowner-bypass
-models/experimental/oft @mbezuljTT @pavlepopovic @ianastasijevicTT @ddjekicTT @tenstorrent/codeowner-bypass
 models/experimental/panoptic_deeplab @mbezuljTT @ianastasijevicTT @pavlepopovic @ddjekicTT @tenstorrent/codeowner-bypass
 models/demos/stable_diffusion_xl_base @mbezuljTT @pavlepopovic @ipotkonjak-tt @tenstorrent/codeowner-bypass
 models/demos/vision/classification/mobilenetv2 @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass

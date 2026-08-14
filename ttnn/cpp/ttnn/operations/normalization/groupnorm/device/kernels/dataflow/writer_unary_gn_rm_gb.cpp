@@ -68,14 +68,14 @@ void kernel_main() {
 
     constexpr uint32_t use_welford = get_named_compile_time_arg_val("groupnorm_mode") > 0;
 
-    // Non-tile-aligned H*W (#50682): host-precomputed corrected reduce scaler, and K for the
-    // compute kernel's variance correction. See compute/groupnorm.cpp for the derivation.
+    // Non-tile-aligned H*W: host-precomputed corrected reduce scaler, plus a second, row-masked set
+    // of mask tiles streamed behind the normal one. See compute/groupnorm.cpp.
     constexpr uint32_t logical_hw = get_named_compile_time_arg_val("logical_hw");
     constexpr uint32_t padded_hw = get_named_compile_time_arg_val("padded_hw");
     constexpr bool has_pad_correction = padded_hw != logical_hw;
-    constexpr uint32_t dfb_k_id = tt::CBIndex::c_1;
     constexpr uint32_t pad_scaler_bits = get_named_compile_time_arg_val("pad_scaler_bits");
-    constexpr uint32_t pad_k_bits = get_named_compile_time_arg_val("pad_k_bits");
+    constexpr bool has_row_mask = get_named_compile_time_arg_val("has_row_mask") == 1;
+    constexpr uint32_t mask_tiles_per_group = has_row_mask ? 2 * block_w : block_w;
 
     constexpr auto out_args = TensorAccessorArgs<0>();
     constexpr auto gamma_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
@@ -99,6 +99,9 @@ void kernel_main() {
     const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(7);
     const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(8);
     const uint32_t num_channels_tiles = get_arg_val<uint32_t>(9);
+    // Only read when has_row_mask; equals input_mask_tile_start_id on cores that do not hold a
+    // batch's final row-tile.
+    const uint32_t input_mask_row_tile_start_id = get_arg_val<uint32_t>(10);
 
     constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
     constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
@@ -146,11 +149,12 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < num_batches_per_core; ++b) {
         uint32_t input_mask_tile_id = input_mask_tile_start_id;
+        uint32_t input_mask_row_tile_id = input_mask_row_tile_start_id;
         index_g_offset = 0;
         row_offset = num_cols_per_group;
 
         for (uint32_t i = 0; i < num_groups_per_core; ++i) {
-            dfb_input_mask.reserve_back(block_w);
+            dfb_input_mask.reserve_back(mask_tiles_per_group);
             uint32_t l1_write_addr_input_mask = dfb_input_mask.get_write_ptr();
             for (uint32_t j = 0; j < block_w; ++j) {
                 noc.async_read(
@@ -162,21 +166,33 @@ void kernel_main() {
                 l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
                 input_mask_tile_id += 1;
             }
+            // Row-masked set, immediately behind the normal one: compute selects it with +block_w.
+            if constexpr (has_row_mask) {
+                for (uint32_t j = 0; j < block_w; ++j) {
+                    noc.async_read(
+                        mask,
+                        CoreLocalMem<uint32_t>(l1_write_addr_input_mask),
+                        input_mask_single_tile_size_bytes,
+                        {.page_id = input_mask_row_tile_id},
+                        {});
+                    l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
+                    input_mask_row_tile_id += 1;
+                }
+            }
             noc.async_read_barrier();
-            dfb_input_mask.push_back(block_w);
+            dfb_input_mask.push_back(mask_tiles_per_group);
 
             if (i == 0 and b == 0) {
                 if constexpr (!use_welford) {
                     constexpr uint32_t dfb_in_2 = tt::CBIndex::c_2;
                     if constexpr (has_pad_correction) {
-                        // Corrected scaler = 1 / sqrt(reduce_factor_w * logical_hw / padded_hw),
-                        // precomputed on host to avoid a device-side sqrt.
+                        // 1 / sqrt(reduce_factor_w * logical_hw / padded_hw), precomputed on host.
+                        // The row mask fixes the numerator; this fixes the denominator.
                         const float pad_corrected_scaler = __builtin_bit_cast(float, pad_scaler_bits);
                         dataflow_kernel_lib::prepare_reduce_scaler<
                             dfb_in_2,
                             ckernel::PoolType::AVG,
                             ckernel::ReduceDim::REDUCE_SCALAR>(pad_corrected_scaler);
-                        generate_bcast_col_scalar(CircularBuffer(dfb_k_id), pad_k_bits);
                     } else {
                         constexpr uint32_t reduce_factor_w = get_named_compile_time_arg_val("reduce_factor_w");
                         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
