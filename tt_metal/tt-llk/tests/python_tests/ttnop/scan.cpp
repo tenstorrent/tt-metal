@@ -214,7 +214,12 @@ void emit_json(const std::string& path, const ElfImage& elf, const Range& body, 
     std::printf("  \"unpacker_mask\": %u,\n", scanned.unpacker_mask);
     // Published so the host never has to keep its own copy of these encodings.
     std::printf(
-        "  \"fillers\": {\"tti_nop\": %u, \"sfpnop\": %u, \"unpacr0\": %u, \"unpacr1\": %u},\n", FILLER_TTI_NOP, FILLER_SFPNOP, FILLER_UNPACR0, FILLER_UNPACR1);
+        "  \"fillers\": {\"tti_nop\": %u, \"sfpnop\": %u, \"unpacr0\": %u, \"unpacr1\": %u, \"risc_nop\": %u},\n",
+        FILLER_TTI_NOP,
+        FILLER_SFPNOP,
+        FILLER_UNPACR0,
+        FILLER_UNPACR1,
+        FILLER_RISC_NOP);
     std::printf("  \"sites\": [");
     for (std::size_t i = 0; i < scanned.sites.size(); ++i)
     {

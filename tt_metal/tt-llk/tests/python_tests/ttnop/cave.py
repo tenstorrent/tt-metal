@@ -85,32 +85,33 @@ class Cave:
 def filler_choices(thread: str, site, scan, forced: str = None) -> list:
     """Which filler(s) to try at a site, as (name, word) pairs.
 
-    A nop only widens a timing window if it retires on the unit whose timing is
-    in question, so unpack sync sites get an unpacker-retired nop and SFPU sites
-    get an SFPU nop. More than one pair comes back when the SETADCXX census
-    found nothing and both unpackers are worth trying.
+    - `tti_nop` delays the RISC and the Tensix front-end together.
+    - `risc_nop` delays the RISC alone, leaving the backend to drain — the
+      opposite direction to `tti_nop`, and the only way to shift a RISC MMIO
+      write against the unit that consumes it.
+    - the unit-retired nops narrow it further: an unpacker nop on unpack sync
+      sites, an SFPU nop on SFPU sites.
     """
     if forced:
         # A raw word is allowed so a one-off experiment can pin an encoding the
         # named table does not carry.
         return [(forced, scan.fillers.get(forced) or int(forced, 0))]
+    names = ["tti_nop"]
     if thread == "unpack" and scan.mode == "sync":
-        units = scan.unpackers() or (0, 1)
-        return [(f"unpacr{unit}", scan.fillers[f"unpacr{unit}"]) for unit in units]
-    if site.sfpu:
-        return [("sfpnop", scan.fillers["sfpnop"])]
-    return [("tti_nop", scan.fillers["tti_nop"])]
+        names += [f"unpacr{unit}" for unit in (scan.unpackers() or (0, 1))]
+    elif site.sfpu:
+        # SFPU nops stay off the unpack thread: the SFPU belongs to math, and
+        # pushing one from another thread is a change in behaviour, not a delay.
+        names.append("sfpnop")
+    names.append("risc_nop")
+    return [(name, scan.fillers[name]) for name in names]
 
 
 class Injector:
     """Applies and undoes detours through a caller-supplied word reader/writer.
 
-    A sweep walks the delays of one site back to back, so the cave contents barely
-    change between variants. Whatever is already correct is left alone and the
-    common case costs a single word: the jump at the site, aimed one filler further
-    in. What is currently written is tracked per thread rather than re-read,
-    because the tracking is only ever wrong if something outside reloaded the
-    kernel — which is what forget() is for.
+    Same-site delay steps rewrite one word (the jump). Bookkeeping is per thread;
+    call forget() if something else reloaded the kernel.
     """
 
     def __init__(self, read_words, write_words, max_delay: int = DEFAULT_MAX_DELAY):

@@ -147,6 +147,24 @@ def _by_site(records: list):
     return sites, labels, len(case_number)
 
 
+def _by_filler(group: list):
+    """Split one site's records by filler, strongest cliff first.
+
+    The same ATGETM can fail with unpacr1 at n=42 and tti_nop only at n=91.
+    Grouping them together and then taking the lowest-delay row hid every
+    filler except the earliest.
+    """
+    buckets = defaultdict(list)
+    for record in group:
+        buckets[record["filler"]].append(record)
+    return [
+        (name, buckets[name])
+        for name in sorted(
+            buckets, key=lambda name: (min(r["delay"] for r in buckets[name]), name)
+        )
+    ]
+
+
 def render(report_dir: Path, env: dict) -> str:
     records = load(report_dir)
     if not records:
@@ -161,29 +179,29 @@ def render(report_dir: Path, env: dict) -> str:
         "",
         "## Failing sites",
         "",
-        "| # | thread | site | failing NOP counts | how |",
-        "| --- | --- | --- | --- | --- |",
+        "| # | thread | site | NOP_TYPE | failing NOP counts | how |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for key in sorted(sites):
         group = sites[key]
-        tags = sorted({record["tag"] for record in group})
-        out.append(
-            f"| {labels[key]} | {key[1]} | `{group[0]['op']}@0x{key[2]:05x}` | "
-            f"{as_ranges(record['delay'] for record in group)} | {', '.join(tags)} |"
-        )
+        site = f"`{group[0]['op']}@0x{key[2]:05x}`"
+        for filler, rows in _by_filler(group):
+            tags = sorted({record["tag"] for record in rows})
+            out.append(
+                f"| {labels[key]} | {key[1]} | {site} | `{filler}` | "
+                f"{as_ranges(record['delay'] for record in rows)} | {', '.join(tags)} |"
+            )
 
     for key in sorted(sites):
         case, thread, addr = key
-        group = sorted(sites[key], key=lambda record: record["delay"])
+        group = sites[key]
         head = group[0]
-        delays = [record["delay"] for record in group]
+        fillers = _by_filler(group)
         out += [
             "",
             f"## {labels[key]}. {thread} {head['op']} @ 0x{addr:05x}",
             "",
             f"- case: `{case}`",
-            f"- failing NOP counts ({len(set(delays))} of them): {as_ranges(delays)}",
-            f"- filler: `{head['filler']}` = `0x{head['filler_word']:08x}`",
             f"- site index (mode `{head['site_mode']}`): {head['site_index']}",
         ]
         first_error = next(
@@ -192,18 +210,35 @@ def render(report_dir: Path, env: dict) -> str:
         if first_error:
             out.append(f"- first error: `{first_error}`")
 
+        out += [
+            "",
+            "### NOP types",
+            "",
+            "| NOP_TYPE | word | failing NOP counts | how |",
+            "| --- | --- | --- | --- |",
+        ]
+        for filler, rows in fillers:
+            tags = sorted({record["tag"] for record in rows})
+            delays = [record["delay"] for record in rows]
+            out.append(
+                f"| `{filler}` | `0x{rows[0]['filler_word']:08x}` | "
+                f"{as_ranges(delays)} ({len(set(delays))}) | {', '.join(tags)} |"
+            )
+
         # Only a depth run repeats a variant, and only then is a rate meaningful.
         if any(record["runs"] > 1 for record in group):
             out += [
                 "",
                 "### Failure rate",
                 "",
-                "| nops | fails / runs | how |",
-                "| --- | --- | --- |",
+                "| NOP_TYPE | nops | fails / runs | how |",
+                "| --- | --- | --- | --- |",
             ]
             out += [
-                f"| {record['delay']} | {record['fails']} / {record['runs']} | {record['tag']} |"
-                for record in group
+                f"| `{record['filler']}` | {record['delay']} | "
+                f"{record['fails']} / {record['runs']} | {record['tag']} |"
+                for filler, rows in fillers
+                for record in sorted(rows, key=lambda record: record["delay"])
             ]
 
         out += ["", "### Where the NOPs went in (innermost frame first)", ""]
@@ -211,14 +246,12 @@ def render(report_dir: Path, env: dict) -> str:
         out += [f"{i}. `{frame}`" for i, frame in enumerate(chain, 1)] or [
             "_no DWARF available_"
         ]
+        out += ["", "### Reproduce", "", "```bash"]
         out += [
-            "",
-            "### Reproduce",
-            "",
-            "```bash",
-            reproduce_command(head, delays),
-            "```",
+            reproduce_command(rows[0], [record["delay"] for record in rows])
+            for filler, rows in fillers
         ]
+        out.append("```")
 
     return "\n".join(out) + "\n"
 

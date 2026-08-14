@@ -1,18 +1,13 @@
 name: "LLK bit-exact impl"
-# Entry points: workflow_call only. Dispatch lives in llk-bit-exact.yaml.
-#
-# TEMPORARY BRANCH OVERRIDE — see banner in llk-bit-exact.yaml.
-# This impl currently loads llk_ttnop_tests.yaml and runs ttnop/ci.sh (WH).
-# Restore TESTS_YAML_PATH=llk_bit_exact_tests.yaml + bit_exact budget + JUnit
-# upload before merging to main.
+# Called by llk-bit-exact.yaml; runs ttnop/ci.sh from llk_ttnop_tests.yaml.
 
 on:
   workflow_call:
     inputs:
       architecture:
-        description: "Architecture to run (ttnop dry-run: wormhole only)"
+        description: "Architecture to run: all, wormhole, or blackhole"
         required: false
-        default: wormhole
+        default: all
         type: string
       pytest-markers:
         description: "Pytest mark expression for LLK python_tests"
@@ -27,7 +22,7 @@ permissions:
 
 env:
   LLK_PATH: tt_metal/tt-llk
-  # ttnop defaults (ttnop/README.md). TEMP override for this branch.
+  # Default ttnop sweep: unpack+math, sync sites, delays 1-100.
   TTNOP_THREADS: unpack,math
   TTNOP_SITE_MODE: sync
   TTNOP_DELAYS: 1-100
@@ -65,13 +60,13 @@ jobs:
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
 
+  # Build the WH/BH shard matrix from llk_ttnop_tests.yaml.
   load-test-matrix:
     runs-on: ubuntu-slim
     needs: [build-images]
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      # TEMP: was ./tests/pipeline_reorg/llk_bit_exact_tests.yaml
       TESTS_YAML_PATH: ./tests/pipeline_reorg/llk_ttnop_tests.yaml
     steps:
       - name: Checkout the repository
@@ -87,7 +82,6 @@ jobs:
       - name: Verify test timeouts against budget
         run: |
           set -e
-          # TEMP: was "bit_exact"
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
@@ -98,12 +92,19 @@ jobs:
           ARCHITECTURE: ${{ inputs.architecture }}
         run: |
           set -euo pipefail
+          # Map architecture input to the SKUs listed in llk_ttnop_tests.yaml.
           case "$ARCHITECTURE" in
+            all)
+              ENABLED_SKUS="ALL_SKUS_IN_TESTS"
+              ;;
             wormhole)
               ENABLED_SKUS="wh_n150_civ2"
               ;;
+            blackhole)
+              ENABLED_SKUS="bh_p150b_civ2"
+              ;;
             *)
-              echo "::error::This branch override is Wormhole-only (got '$ARCHITECTURE')"
+              echo "::error::Unsupported architecture '$ARCHITECTURE'"
               exit 1
               ;;
           esac
@@ -113,6 +114,7 @@ jobs:
             "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
 
+  # One hardware job per shard; job timeout is the per-machine value in the tests yaml.
   llk-bit-exact-exec:
     needs: [load-test-matrix, build-images]
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
@@ -139,12 +141,17 @@ jobs:
           cd ..
       - name: Set CHIP_ARCH for logs and artifacts
         shell: bash
-        run: echo "CHIP_ARCH=wormhole" >> "$GITHUB_ENV"
-
-      # The sweep's hang recovery resets the card, so if that cannot work here
-      # the shard would only find out hours in, at the first wedge — which is
-      # the failure this whole path exists to avoid. Doing it up front proves
-      # the reset works and hands the sweep a known-good card.
+        env:
+          RUN_ON_LABELS: ${{ join(matrix.test-group.runs_on, ' ') }}
+        run: |
+          RUN_LABEL="${RUN_ON_LABELS%% *}"
+          if [[ "$RUN_LABEL" =~ N150 ]]; then
+            echo "CHIP_ARCH=wormhole" >> "$GITHUB_ENV"
+          elif [[ "$RUN_LABEL" =~ P150 ]]; then
+            echo "CHIP_ARCH=blackhole" >> "$GITHUB_ENV"
+          else
+            echo "CHIP_ARCH=unknown" >> "$GITHUB_ENV"
+          fi
       - name: Reset the card (and prove the recovery path works)
         shell: bash
         working-directory: ${{ env.LLK_PATH }}/tests/python_tests
@@ -155,11 +162,6 @@ jobs:
           HardwareController().reset_card()
           print("card reset OK")
           PY
-      # A found race is a result, not a broken shard: the report artifact is the
-      # deliverable and the job stays green for it. A perturbation that wedged a
-      # core is a different thing — a case was skipped and the sweep ran on
-      # degraded hardware — and supervise.py exits 75 to say so, escalated in the
-      # step below rather than swallowed here.
       - name: Run ttnop sweep
         id: ttnop
         shell: bash
@@ -210,7 +212,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
-          name: ttnop-report-wormhole-${{ matrix.test-group.split_group }}
+          name: ttnop-report-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
           path: |
             ${{ env.LLK_PATH }}/tests/python_tests/ttnop/reports/**/report.md
             ${{ env.LLK_PATH }}/tests/python_tests/ttnop/reports/**/failures.jsonl
@@ -226,7 +228,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
-          name: ttnop-junit-wormhole-${{ matrix.test-group.split_group }}
+          name: ttnop-junit-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
           path: ${{ env.LLK_PATH }}/tests/python_tests/ttnop/reports/**/junit.xml
           if-no-files-found: warn
 
@@ -236,7 +238,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: failure() || steps.ttnop.outputs.status != '0'
         with:
-          name: ttnop-logs-wormhole-${{ matrix.test-group.split_group }}
+          name: ttnop-logs-${{ env.CHIP_ARCH }}-${{ matrix.test-group.split_group }}
           path: |
             ${{ env.LLK_PATH }}/tests/python_tests/test_run*.log
             ${{ env.LLK_PATH }}/tests/python_tests/test_errors*.log
