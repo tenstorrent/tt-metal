@@ -80,6 +80,8 @@ class TtCombineModule(LightweightModule):
         """
         if fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
             raise ValueError("fp8_output requires Blackhole hardware")
+        if fp8_output and cmb_version == 2:
+            raise ValueError("combine_fabric2d has no fp8 output path")
         super().__init__()
         self.mesh_device = mesh_device
         self.dispatch_group_size = dispatch_group_size
@@ -179,7 +181,6 @@ class TtCombineModule(LightweightModule):
                 topology=self.topology,
                 memory_config=self.memory_config,
                 init_zeros=self.init_zeros,
-                use_fp8_combine=self.fp8_output,
             )
 
         return output
