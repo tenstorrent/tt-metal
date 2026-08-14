@@ -200,21 +200,24 @@ SUPPORTED = {
 # ---------------------------------------------------------------------------
 
 EXCLUSIONS = [
-    # bfloat8_b is a block-float format: its shared exponent is defined over the
-    # tile's 16x16 face structure, and the pad fill is materialized in the INPUT
-    # element format before the pack. Padding into bf8b is therefore not wired
-    # up yet (a future refinement could enable it).
-    {"output_dtype": ttnn.bfloat8_b, "pad_mode": "auto"},
-    {"output_dtype": ttnn.bfloat8_b, "pad_mode": "explicit"},
-    # Padding + a WIDENING cast. The fill is materialized into the input CB, so
-    # it is necessarily packed in the INPUT element format (op_design.md §10 —
-    # packing it in output_dtype is garbage the moment a cast is requested).
-    # A fill that is inexact in bf16 (any value that is not bf16-representable)
-    # therefore lands as the bf16-rounded value in an fp32 output, while the
-    # oracle expects the fp32 value. Exact fills (zero) are unaffected, so only
-    # the non-zero buckets are refused.
-    {"dtype": ttnn.bfloat16, "output_dtype": ttnn.float32, "pad_value": "positive"},
-    {"dtype": ttnn.bfloat16, "output_dtype": ttnn.float32, "pad_value": "negative"},
+    # --- Refinement 4 -------------------------------------------------------
+    # Both Phase-0 padding EXCLUSIONS are GONE.
+    #
+    # (1) `bfloat8_b` output x pad_mode {auto, explicit}: nothing was actually
+    #     wrong. The fill is materialized into the INPUT CB (a plain float format)
+    #     and the packer builds the block-float shared exponent over whatever it
+    #     is handed, pad included — the 16x16 face structure never sees a
+    #     half-written exponent because a pad position is an ordinary datum by
+    #     the time it reaches the pack stage.
+    #
+    # (2) `bfloat16 -> float32` x pad_value {positive, negative}: fixed rather
+    #     than refused. The reader still fills in the INPUT element format (that
+    #     is a hard contract — packing the fill in output_dtype is garbage the
+    #     moment a cast is requested), so a fill that is inexact in bf16 used to
+    #     land bf16-rounded in an fp32 output. The writer now re-stamps the pad
+    #     region of each output tile with a SECOND fill word packed in the OUTPUT
+    #     format, after the cast (`pad_word_out` / R4_OUT_FILL). See
+    #     `tilize_writer.cpp` and `_pack_pad_word`.
 ]
 
 # --- Refinement 1 (sharded placement) ---------------------------------------

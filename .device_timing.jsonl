@@ -175,3 +175,6 @@
 {"event": "phase", "phase": "refinement_4", "state": "start", "at_ms": 1786720507686}
 {"source":"tt-probe","pid":316413,"started_at_ms":1786721498360,"wait_ms":192,"run_ms":21883,"test_path":"tilize","exit_code":0}
 {"source":"tt-probe","pid":318332,"started_at_ms":1786721589274,"wait_ms":234,"run_ms":18576,"test_path":"tilize","exit_code":0}
+{"source":"tt-probe","pid":319778,"started_at_ms":1786721665816,"wait_ms":212,"run_ms":20955,"test_path":"tilize","exit_code":0}
+{"source":"tt-probe","pid":321390,"started_at_ms":1786721959362,"wait_ms":223,"run_ms":16292,"test_path":"tilize","exit_code":1}
+{"source":"tt-probe","pid":321690,"started_at_ms":1786722002181,"wait_ms":177,"run_ms":31360,"test_path":"tilize","exit_code":0}

@@ -49,54 +49,14 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+// fill_l1_with_val: the alignment-aware, sub-word-replicating L1 fill. Shared
+// with the writer (which stamps the same pad region in the OUTPUT element format
+// after the cast), so the fill primitive has ONE source.
+#include "ttnn/ttnn/operations/tilize/kernels/tilize_fill.hpp"
 
 namespace {
 
-// Alignment-aware L1 fill: 4-byte stores for the aligned middle, element-sized
-// stores for the unaligned head/tail (rv32 faults on unaligned wide stores).
-// `val` carries the fill in the INPUT element format in its low bytes; it is
-// replicated across the 32-bit store word, so a sub-word element fills every
-// position (a value written once per word is invisible at 0 and garbage
-// otherwise).
-template <uint32_t elem_bytes>
-FORCE_INLINE void fill_l1_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t val) {
-    static_assert(elem_bytes == 1 || elem_bytes == 2 || elem_bytes == 4, "unsupported element width");
-    using elem_t =
-        std::conditional_t<elem_bytes == 1, uint8_t, std::conditional_t<elem_bytes == 2, uint16_t, uint32_t>>;
-
-    const uint32_t end_addr = start_addr + n_bytes;
-    const uint32_t start_addr_4B = (start_addr + 3u) & ~3u;
-    const uint32_t end_addr_4B = end_addr & ~3u;
-
-    uint32_t val_4B = val;
-    if constexpr (elem_bytes == 1) {
-        const uint32_t b = val & 0xFFu;
-        val_4B = (b << 24) | (b << 16) | (b << 8) | b;
-    } else if constexpr (elem_bytes == 2) {
-        const uint32_t h = val & 0xFFFFu;
-        val_4B = (h << 16) | h;
-    }
-
-    for (auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_addr_4B);
-         ptr < reinterpret_cast<volatile tt_l1_ptr uint32_t*>(end_addr_4B);
-         ++ptr) {
-        *ptr = val_4B;
-    }
-
-    if constexpr (elem_bytes < 4) {
-        const elem_t v = static_cast<elem_t>(val);
-        for (auto* ptr = reinterpret_cast<volatile tt_l1_ptr elem_t*>(start_addr);
-             ptr < reinterpret_cast<volatile tt_l1_ptr elem_t*>(start_addr_4B);
-             ++ptr) {
-            *ptr = v;
-        }
-        for (auto* ptr = reinterpret_cast<volatile tt_l1_ptr elem_t*>(end_addr_4B);
-             ptr < reinterpret_cast<volatile tt_l1_ptr elem_t*>(end_addr);
-             ++ptr) {
-            *ptr = v;
-        }
-    }
-}
+using tilize_kernels::fill_l1_with_val;
 
 // Read `n_bytes` of ONE row-major source row, starting `byte_off` bytes into it,
 // into L1 at `l1_addr` — the single source for source addressing on the accessor

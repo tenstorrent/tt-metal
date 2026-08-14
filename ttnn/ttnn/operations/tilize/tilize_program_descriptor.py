@@ -44,6 +44,15 @@ NOC_ALIGN_BYTES = 32  # transfer granularity a split gather has to keep
 # shared exponent, and the LLK's 8-bit tilize path must not be selected for it.
 EIGHT_BIT_DTYPES = (ttnn.uint8,)
 
+# Block-float formats: a group of datums shares one exponent, so an individual
+# element word cannot be written into a tile after the pack (which is why the
+# output-format pad stamp below never applies to them).
+BLOCK_FLOAT_DTYPES = tuple(d for d in (getattr(ttnn, "bfloat8_b", None), getattr(ttnn, "bfloat4_b", None)) if d)
+
+# Faces are 16x16 on every supported arch; the output-format pad stamp addresses a
+# tiled tile through that geometry, so it needs whole face-rows.
+FACE_HEIGHT = 16
+
 # --- blocking-model constants (single source; every knob derives from these)-
 CB_L1_BUDGET = 1_048_576  # bytes of L1 reserved for the two streaming CBs
 FAST_TILIZE_MAX_W = 255  # tilize_helpers.inl:95 -> block_width_tiles < 256
@@ -151,6 +160,11 @@ W_REGION = 1
 #                      the NoC drains between blocks (master.md B8 off arm).
 #   read_vc       0 -> every reader issues on the default read VC
 #                      (master.md B10 off arm).
+#   out_fill      0 -> skip the writer's OUTPUT-format pad stamp, leaving the
+#                      reader's input-format fill as the only fill (the
+#                      pre-Refinement-4 behaviour: exact everywhere EXCEPT a
+#                      widening cast whose fill the input format cannot hold,
+#                      which is precisely what Phase 0 put in EXCLUSIONS).
 #   zero_copy     0 -> never alias a CB on a resident L1 shard: take the
 #                     TensorAccessor path on both sides and the generic block
 #                     split over the whole grid, i.e. re-read/re-write the local
@@ -181,6 +195,7 @@ LEVERS = {
     # deleted — the mechanism is correct, it just has nothing to break up here.
     "read_vc": 0,
     "read_one_packet": 1,
+    "out_fill": 1,
 }
 
 # Levers deliberately SHIPPED in their 0 arm, with the measurement that put them
@@ -471,6 +486,43 @@ def _pack_pad_word(value, dtype):
     raise ValueError(f"tilize: no pad-value packing for dtype {dtype}")
 
 
+def _quantize_to_dtype(value, dtype):
+    """`value` as it survives a round trip through ``dtype``'s element format.
+
+    Built on ``_pack_pad_word`` so there is exactly ONE definition of "the fill in
+    format X" — the quantizer cannot drift from the word the kernel actually stores.
+    """
+    word = _pack_pad_word(value, dtype)
+    if dtype == ttnn.float32:
+        return struct.unpack("<f", struct.pack("<I", word))[0]
+    if dtype == ttnn.bfloat16:
+        return struct.unpack("<f", struct.pack("<I", word << 16))[0]
+    return word  # an integer element format stores the value verbatim
+
+
+def needs_output_format_fill(value, in_dtype, out_dtype):
+    """Does the pad fill need a SECOND word packed in the output format?
+
+    The reader always fills the input CB in the **input** element format — that is
+    a hard contract (the fill travels the data path, so packing it in
+    ``output_dtype`` is garbage the moment a cast is requested). The consequence is
+    that a WIDENING cast delivers an input-rounded fill: bf16 cannot hold 10.2, so
+    an fp32 output would carry 10.1875 where the oracle wants 10.2.
+
+    True exactly when that round-trip loses the value, which is what makes the
+    writer's output-format stamp worth its L1 stores. THE single source for the
+    decision (host gate + `out_fill` compile-time arg + the ledger's off-arm).
+    """
+    if value is None or in_dtype == out_dtype:
+        return False
+    if in_dtype in BLOCK_FLOAT_DTYPES or out_dtype in BLOCK_FLOAT_DTYPES:
+        # A block-float tile's datums share an exponent, so a raw element word
+        # cannot be stamped into one. The input-format fill is quantized by the
+        # packer exactly as real data is, which IS the definition of correct here.
+        return False
+    return _quantize_to_dtype(value, out_dtype) != _quantize_to_dtype(_quantize_to_dtype(value, in_dtype), out_dtype)
+
+
 def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.ProgramDescriptor:
     # ========== 1. TENSOR / TILE GEOMETRY =================================
     tile_h, tile_w = plan.tile_h, plan.tile_w
@@ -700,6 +752,20 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     nth_per_img = _div_up(target[-2], tile_h)
     pad_word = _pack_pad_word(plan.pad_value, input_tensor.dtype)
 
+    # -- Refinement 4: the OUTPUT-format pad stamp (lever `out_fill`) ---------
+    # The reader's input-format fill is arithmetically exact for every path except
+    # a WIDENING cast with a fill the input format cannot hold. There the writer
+    # re-stamps the pad region of each finished tile with a second word packed in
+    # the OUTPUT format (see kernels/tilize_fill.hpp). Gated on the round-trip
+    # actually losing the value, so every other cell is byte-identical to before.
+    out_fill = int(
+        plan.has_pad_region
+        and tile_h % FACE_HEIGHT == 0  # the stamp addresses whole 16x16 face rows
+        and bool(LEVERS["out_fill"])
+        and needs_output_format_fill(plan.pad_value, input_tensor.dtype, output_tensor.dtype)
+    )
+    pad_word_out = _pack_pad_word(plan.pad_value, output_tensor.dtype) if out_fill else 0
+
     # -- Refinement-3 read levers (interleaved aligned path only) ------------
     # All three need the custom reader loop; with all three off the reader
     # compiles to the library-helper call verbatim (the Phase-0 hot path).
@@ -759,6 +825,15 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         ABLATE["dm"] or ABLATE["dm_write"],
         LEVERS["page_write"],
         write_trid,
+        out_fill,
+        # Only queried on the stamp path: `element_size()` is undefined for a
+        # block-float output, which `needs_output_format_fill` already excludes.
+        output_tensor.element_size() if out_fill else 4,
+        tile_h,
+        h_in,
+        in_shape[-1],  # valid columns inside the padded target
+        nth_per_img,
+        n_img_in,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
@@ -798,7 +873,14 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             tile_col0 * tile_w * elem_in,  # the region's byte offset within a stick
             shard_index % NUM_READ_VCS,  # B10: this core's read-request VC
         ]
-        writer_rt_args[core.x][core.y] = [dst_addr, start_block, blocks_this_core, tile_row0, tile_col0]
+        writer_rt_args[core.x][core.y] = [
+            dst_addr,
+            start_block,
+            blocks_this_core,
+            tile_row0,
+            tile_col0,
+            pad_word_out,  # the fill in the OUTPUT element format (0 when unused)
+        ]
         compute_rt_args[core.x][core.y] = [blocks_this_core]
         if work_mode == W_BLOCKS:
             start_block += blocks_this_core
