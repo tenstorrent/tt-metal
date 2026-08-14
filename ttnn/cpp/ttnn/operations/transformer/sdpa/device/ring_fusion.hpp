@@ -24,9 +24,6 @@ struct RingSDPAFusedOpSignaler {
     uint32_t forward_writes_expected = 0;
     uint32_t backward_writes_expected = 0;
 
-    // Set by the program factory when the all-gather relays the diametric slice split across both links
-    bool split_forwarding_enabled = false;
-
     bool initialized_all_gather = false;
     bool initialized_fused_op = false;
 

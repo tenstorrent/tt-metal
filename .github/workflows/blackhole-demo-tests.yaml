@@ -15,7 +15,6 @@ on:
         type: choice
         options:
           - all
-          - mochi
       system-type:
         description: "Select system type to test"
         required: false

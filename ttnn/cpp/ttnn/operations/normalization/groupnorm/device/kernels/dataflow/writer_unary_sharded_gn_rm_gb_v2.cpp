@@ -91,6 +91,16 @@ void kernel_main() {
     const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(6);
     const uint32_t input_mask_tile_start_id = get_arg_val<uint32_t>(7);
 
+#ifdef PAD_CORRECTION
+    // Non-tile-aligned H*W: a second, row-masked set of mask tiles is streamed behind the normal
+    // one, which compute selects with +block_w. Arg 9 equals input_mask_tile_start_id on cores that
+    // do not hold a batch's final row-tile, making their second set a copy of the first.
+    constexpr uint32_t mask_tiles_per_group = 2 * block_w;
+    const uint32_t input_mask_row_tile_start_id = get_arg_val<uint32_t>(9);
+#else
+    constexpr uint32_t mask_tiles_per_group = block_w;
+#endif
+
     constexpr uint32_t dfb_gamma_id = tt::CBIndex::c_5;
     constexpr uint32_t dfb_beta_id = tt::CBIndex::c_6;
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
@@ -120,11 +130,14 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < num_batches_per_core; ++b) {
         uint32_t input_mask_tile_id = input_mask_tile_start_id;
+#ifdef PAD_CORRECTION
+        uint32_t input_mask_row_tile_id = input_mask_row_tile_start_id;
+#endif
 #if defined(FUSE_NEGATIVE_MASK)
         uint32_t input_negative_mask_tile_id = input_mask_tile_start_id;
 #endif
         for (uint32_t i = 0; i < num_groups_per_core; ++i) {
-            dfb_input_mask.reserve_back(block_w);
+            dfb_input_mask.reserve_back(mask_tiles_per_group);
             uint32_t l1_write_addr_input_mask = dfb_input_mask.get_write_ptr();
             for (uint32_t j = 0; j < block_w; ++j) {
                 noc.async_read(
@@ -136,8 +149,20 @@ void kernel_main() {
                 l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
                 input_mask_tile_id += 1;
             }
+#ifdef PAD_CORRECTION
+            for (uint32_t j = 0; j < block_w; ++j) {
+                noc.async_read(
+                    mask,
+                    CoreLocalMem<uint32_t>(l1_write_addr_input_mask),
+                    input_mask_single_tile_size_bytes,
+                    {.page_id = input_mask_row_tile_id},
+                    {});
+                l1_write_addr_input_mask += input_mask_single_tile_size_bytes;
+                input_mask_row_tile_id += 1;
+            }
+#endif
             noc.async_read_barrier();
-            dfb_input_mask.push_back(block_w);
+            dfb_input_mask.push_back(mask_tiles_per_group);
 
 #if defined(FUSE_NEGATIVE_MASK)
             dfb_input_negative_mask.reserve_back(block_w);
@@ -159,15 +184,13 @@ void kernel_main() {
             if (i == 0 and b == 0) {
                 constexpr uint32_t dfb_in_2 = tt::CBIndex::c_2;
 #ifdef PAD_CORRECTION
-                // Non-tile-aligned H*W (#50682): host-precomputed corrected reduce scaler, plus
-                // K into dfb_k for the compute kernel's variance correction.
-                constexpr uint32_t dfb_k_id = tt::CBIndex::c_18;
+                // Host-precomputed corrected reduce scaler: the row mask fixes the numerator,
+                // this fixes the denominator.
                 const float pad_corrected_scaler = __builtin_bit_cast(float, get_arg_val<uint32_t>(8));
                 dataflow_kernel_lib::prepare_reduce_scaler<
                     dfb_in_2,
                     ckernel::PoolType::AVG,
                     ckernel::ReduceDim::REDUCE_SCALAR>(pad_corrected_scaler);
-                generate_bcast_col_scalar(CircularBuffer(dfb_k_id), get_arg_val<uint32_t>(9));
 #else
                 dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                     dfb_in_2,
