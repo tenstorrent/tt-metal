@@ -173,22 +173,16 @@ BFP_BLOCK_ELEMENTS = 16
 
 
 def _zero_finite_lanes_of_nonfinite_blocks(operand):
-    """Zero every finite element that shares a block with a non-finite one, in place.
+    """Zero every finite element sharing a block with a non-finite one, in place.
 
-    The three block-float formats differ only in mantissa width, which this rule does not
-    depend on: the shared exponent is what a +/-inf or NaN destroys, so all of Bfp8_b,
-    Bfp4_b and Bfp2_b want the same pass. The non-finite lanes keep their own values --
-    only their finite neighbours are flattened.
+    Shared by Bfp8_b/Bfp4_b/Bfp2_b -- mantissa width differs, the destroyed shared exponent
+    does not. Non-finite lanes keep their values; only finite neighbours flatten. Mutates
+    *operand* and returns it; callers use the in-place half and discard the return.
 
-    Vectorised because it is not a cheap tail call: the callers pass the *result tensor*,
-    not the list the signatures used to claim, so the previous element-wise loop iterated a
-    torch tensor and paid a 0-dim tensor construction per element. On a [128, 256] tile it
-    was the single largest cost in the whole broad sweep -- roughly half of a variant's
-    host time, ahead of the kernel it was there to check. The inner loop also rescanned a
-    block once per non-finite element in it, so an all-inf block cost 16x what one needed.
-
-    Mutates *operand* and returns it: every caller relies on the in-place half and discards
-    the return, which the original did too.
+    Vectorised: it was the broad sweep's largest cost, ~half a variant's host time on
+    [128, 256]. Callers pass the *result tensor*, not the list the signatures claimed, so the
+    old loop iterated a torch tensor at a 0-dim construction per element, rescanning each
+    block once per non-finite in it (16x for an all-inf block).
     """
     if isinstance(operand, torch.Tensor):
         values = operand
@@ -230,21 +224,16 @@ def check_bfp2_b(operand: list) -> list:
 def convert_nan_to_inf(operand):
     """Replace every NaN with an infinity *of the same sign*, preserving the input type.
 
-    Accepts a torch.Tensor or a plain list of floats and returns the same
-    type so that downstream code (e.g. `result.to(...)`) does not break
-    when the caller passes a tensor.
+    Takes a Tensor or a list of floats and returns the same type, so downstream
+    `result.to(...)` does not break on a tensor.
 
-    The sign is not decoration. This substitution models the pack path, which does not
-    synthesise a value: it leaves the sign bit alone and rewrites the exponent/mantissa, so
-    a NaN with its sign set packs to -inf. Returning +inf for every NaN made the golden
-    disagree with the hardware on the ops that produce a negative NaN -- Neg(NaN) -> -inf
-    being the case that measured it.
-
-    Reading a sign here is only sound because two things upstream make it mean something:
-    cast_to_dest_dtype keeps a NaN's sign across the Dest write, which torch's bfloat16 cast
-    would otherwise force to 1, and UnarySFPUGolden canonicalises the sign of a *generated*
-    NaN, which IEEE leaves unspecified and torch picks arbitrarily. Without both, this
-    reports a sign that came from the cast or from the host libm rather than from the datum.
+    The sign models the pack path, which rewrites exponent/mantissa and leaves the sign bit
+    alone, so a signed NaN packs to -inf; returning +inf for every NaN disagreed with hardware
+    on ops producing a negative NaN, Neg(NaN) -> -inf being the case that measured it. Sound
+    only because cast_to_dest_dtype keeps that sign across the Dest write (torch's bfloat16
+    cast would force it to 1) and UnarySFPUGolden canonicalises a *generated* NaN's sign
+    (IEEE unspecified, torch arbitrary) -- without both, the sign read here comes from the
+    cast or the host libm, not the datum.
     """
     if isinstance(operand, torch.Tensor):
         return torch.where(
@@ -258,31 +247,24 @@ def convert_nan_to_inf(operand):
 def sfpu_total_order_key(value: float) -> int:
     """Rank *value* under the total order the SFPU compares FP32 with.
 
-    `SFPGT`, `SFPLE` and `SFPSWAP` all route through the ISA's `SignMagIsSmaller()`, which
-    "treats C and D as sign-magnitude integers" and gives the documented total order
+    `SFPGT`, `SFPLE` and `SFPSWAP` route through the ISA's `SignMagIsSmaller()`, which "treats
+    C and D as sign-magnitude integers" and documents
 
         -NaN < -Inf < ... < -0 < +0 < ... < +Inf < +NaN
 
-    (tt-isa-documentation, BlackholeA0/TensixTile/TensixCoprocessor/{SFPGT,SFPLE,SFPSWAP}.md).
-    So the comparison is a bit-pattern compare remapped from sign-magnitude to two's
-    complement, **not** an IEEE compare: a +NaN outranks every finite value by construction,
-    and IEEE's rule that every ordered comparison with a NaN is false does not apply.
+    (tt-isa-documentation, BlackholeA0/TensixTile/TensixCoprocessor/{SFPGT,SFPLE,SFPSWAP}.md)
+    -- a bit-pattern compare remapped sign-magnitude -> two's complement, **not** IEEE: +NaN
+    outranks every finite value and IEEE's false-on-NaN rule does not apply. Modelling it
+    enrols the comparison ops for cat B as passes; IEEE semantics disagree at NaN, and
+    xfailing that would blame the kernel for behaving as documented. Both zeros rank equal
+    (|-0.0| is 0): the ISA writes "-0 < +0", but SignMagIsSmaller() is false either way, and
+    this comparator cannot see a zero's sign regardless.
 
-    Modelling this is what lets the comparison ops be enrolled for cat B as ordinary passes.
-    A golden that keeps Python's IEEE semantics disagrees with the hardware at NaN, and
-    recording that as a kernel xfail would blame the kernel for behaving as documented.
-
-    Both zeros rank equal here, because the magnitude of -0.0 is 0. The ISA writes the chain
-    as "-0 < +0", but SignMagIsSmaller() answers "is C less than D" and returns false either
-    way for the pair -- and this suite's comparator cannot see a zero's sign regardless.
-
-    Documented on both architectures, which is not what the first reading of the ISA said.
-    Wormhole has no SFPGT and no SFPLE, and that was taken to mean it has no total order --
-    but SFPSWAP.md carries the same SignMagIsSmaller() and the same chain, so the order is
-    specified there too. Measured green on a Wormhole n300 afterwards: all seven ops enrolled
-    against this model pass 8/8, and a direct probe reproduces the Blackhole answers value for
-    value. What these kernels lower to on Wormhole is still unread -- sfpi expands the
-    comparison in the compiler backend -- so treat that half as measured rather than derived.
+    Documented on both arches, contrary to the first reading: Wormhole lacks SFPGT/SFPLE,
+    taken to mean no total order, but its SFPSWAP.md carries the same SignMagIsSmaller() and
+    chain. Measured green on a Wormhole n300 -- seven enrolled ops 8/8, a direct probe
+    reproducing the Blackhole answers value for value. What they lower to there is unread
+    (sfpi expands the compare in the backend), so treat that half as measured, not derived.
     """
     bits = struct.unpack("<i", struct.pack("<f", value))[0]
     # Sign bit set -> negative side of the order, ranked by magnitude descending.
@@ -331,16 +313,15 @@ def sfpu_clamp(value: float, low: float, high: float) -> float:
 def cast_to_dest_dtype(values: torch.Tensor, dtype) -> torch.Tensor:
     """Cast fp32 *values* to a Dest *dtype*, keeping the sign of any NaN.
 
-    torch's fp32 -> bfloat16 cast canonicalises every NaN to 0xFFFF, sign bit set, so a
-    positive NaN comes back negative. Hardware does no such thing: a 16-bit Dest holds the
-    top half of the fp32 pattern, so the sign bit survives verbatim, and the pack path's
-    NaN -> inf substitution then reads it (see convert_nan_to_inf). Without this repair the
-    golden reports -inf for *every* NaN reaching a Float16_b Dest -- right for Neg(NaN) and
-    wrong for the four other ops in the tranche, all by the same accident.
+    torch's fp32 -> bfloat16 cast canonicalises every NaN to 0xFFFF, sign set, turning a
+    positive NaN negative. Hardware does not: a 16-bit Dest holds the top half of the fp32
+    pattern, so the sign survives and the pack path's NaN -> inf substitution reads it
+    (convert_nan_to_inf). Unrepaired, the golden gives -inf for *every* NaN reaching a
+    Float16_b Dest -- right for Neg(NaN), wrong for the tranche's other four, one accident.
 
-    Only bfloat16 is affected; torch's fp16 cast already carries the sign through. The
-    repair has to happen here rather than in convert_nan_to_inf because untilize_block
-    reorders lanes in between, so by then no fp32 sign source is lane-aligned any more.
+    Only bfloat16 is affected; torch's fp16 cast carries the sign through. It must be fixed
+    here, not in convert_nan_to_inf, because untilize_block reorders lanes in between,
+    leaving no lane-aligned fp32 sign source.
     """
     out = values.to(dtype)
     if dtype is not torch.bfloat16:
@@ -1873,24 +1854,19 @@ class DataCopyGolden:
 class TypecastGolden:
     """Golden generator for the SFPU typecast operation.
 
-    Models the production typecast flow (copy_tile -> typecast_tile -> pack):
-    the input tile is loaded into Dest, the SFPU converts each datum in place
-    to the output dtype, and the packer writes it to L1. Typecast is purely
-    elementwise and the device result is read back in row-major order (same
-    unpack->Dest->pack data path as DataCopyGolden), so no tilization is
-    applied to the elementwise conversion.
-
-    Covers the full ttnn typecast matrix across float, integer, and block-float
-    (Bfp8_b / Bfp4_b) source/destination dtypes:
-      * input block-float is round-tripped through its unpack quantization
-        (``quantize_input_to_unpack_format``) to match what the SFPU sees;
-      * float/int -> integer: truncation toward zero for int32/uint32 and
-        round-to-nearest for uint16/uint8 (whole-number stimuli make both
-        exact); UInt8 keeps the low byte; others clamp to the dest range;
+    Models the production flow (copy_tile -> typecast_tile -> pack): the tile loads into Dest,
+    the SFPU converts each datum in place, the packer writes it to L1. Purely elementwise and
+    read back row-major over the same unpack->Dest->pack path as DataCopyGolden, so the
+    conversion applies no tilization. Covers the full ttnn matrix over float, integer and
+    block-float (Bfp8_b / Bfp4_b) source/destination dtypes:
+      * block-float input round-trips through ``quantize_input_to_unpack_format``, matching
+        what the SFPU sees;
+      * float/int -> integer: truncate toward zero for int32/uint32, round-to-nearest for
+        uint16/uint8 (whole-number stimuli make both exact); UInt8 keeps the low byte, others
+        clamp to the dest range;
       * -> plain float: value-preserving cast;
-      * -> block-float: the result is tilized into 16-element BFP blocks, run
-        through the packer's shared-exponent quantization, and untilized back
-        to row-major (mirrors DataCopyGolden's BFP output handling).
+      * -> block-float: tilized into 16-element BFP blocks, through the packer's
+        shared-exponent quantization, untilized back to row-major (as DataCopyGolden).
     """
 
     _BLOCK_FLOAT_FORMATS = (
@@ -2214,17 +2190,12 @@ class PackGolden:
         rtol=0.01,
         atol=0.01,
     ) -> bool:
-        """
-        Check if test failure is due to threshold rounding/format conversion issues in ReLU.
-        When a value is very close to the threshold, golden (Python) and hardware (Tensix)
-        may make different decisions due to:
-        - FP16/BF16 precision differences
-        - Rounding during format conversions
-        - Threshold encoding/decoding precision loss
-        With values relatively close to the threshold, these small differences can lead to
-        one side being clamped to zero while the other retains a small non-zero value.
-        This function checks if all mismatches between golden and result tensors
-        can be explained by such near-threshold issues.
+        """Are all golden/result mismatches explained by ReLU near-threshold rounding?
+
+        Near the threshold, golden (Python) and hardware (Tensix) can clamp differently -- one
+        to zero, the other to a small non-zero -- via FP16/BF16 precision, format-conversion
+        rounding, or threshold encode/decode loss.
+
         Args:
             golden_tensor: Expected output tensor
             result_tensor: Actual hardware output tensor
@@ -2232,7 +2203,7 @@ class PackGolden:
             rtol: Relative tolerance for threshold proximity checks (default 0.01)
             atol: Absolute tolerance for threshold proximity checks (default 0.01)
         Returns:
-            bool: True if all mismatches are near-threshold rounding issues, False otherwise
+            bool: True if every mismatch is a near-threshold rounding issue, else False
         """
         relu_type = PackGolden.get_relu_type(relu_config)
         threshold = PackGolden.get_relu_threshold(relu_config, intermediate_format)

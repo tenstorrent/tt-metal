@@ -94,47 +94,36 @@ _ELEMENTS_PER_TILE = DEFAULT_TILE_R_DIM * DEFAULT_TILE_C_DIM
 
 
 # Per-op (atol, rtol) overrides for the binary suite, mirroring CUSTOM_TOLERANCES in
-# test_sfpu_unary.py. `None` in either slot keeps the format default (0.05 / 0.05 for the
-# float formats).
+# test_sfpu_unary.py. `None` keeps the format default (0.05 / 0.05 for the float formats).
 #
-# Only two ops belong here, and for the same reason: their error is a property of the op's
-# own *composition* rather than of the stimuli, so it grows with the operands no matter how
-# the domain is drawn. Both were previously kept accurate by capping the registry domain
-# instead — pow at 3 and xlogy's x at 4 — which bought a passing test by never evaluating
-# the op where it is interesting. A tolerance that describes the real error is the honest
-# trade: the domain widens, and the number below says how much error that costs.
+# Only two ops belong here, for one reason: their error is a property of the op's own
+# *composition* rather than of the stimuli, so it grows with the operands however the domain
+# is drawn. Both were previously kept accurate by capping the registry domain instead -- pow
+# at 3, xlogy's x at 4 -- buying a passing test by never evaluating the op where it is
+# interesting. Every number below is measured, not chosen: Blackhole p150b over the widened
+# domains, max across Float16_b and Float32 at dest_acc=Yes, ~32k elements per cell.
+# Re-measure (harness in the plan, item 4) before widening either domain further.
 #
-#   pow   evaluates a**b as exp(b * ln a), so the error tracks the product b * ln(a) handed
-#         to the shared exp approximation. Measured on Blackhole (see the plan's item 4).
-#   xlogy computes x * log(y), so the *absolute* error scales with x while a fixed atol
-#         does not. Measured the same way.
-#
-# Every number here is measured, not chosen. Re-measure before widening either domain
-# further; the harness is described in the plan.
-#
-# Measured on Blackhole p150b over the widened domains, max across Float16_b and Float32
-# at dest_acc=Yes, ~32k elements per cell:
-#
-#   pow, relative error (the thing that bounds it):
+#   pow -- a**b is exp(b * ln a), so relative error tracks the product handed to the shared
+#   exp approximation:
 #     A<=3  B<=3  (b*ln a = 3.30)   max_rel  10.00%
 #     A<=8  B<=3  (6.24)            max_rel  10.24%
 #     A<=8  B<=4  (8.32)            max_rel  13.35%   <- the domain now registered
 #     A<=16 B<=4  (11.09)           max_rel  10.34%
-#   The relative error is ~flat in the operands rather than growing with them, so what
-#   had been capping the domain was the fixed 5% rtol and not the op. rtol=0.15 clears the
-#   measured 13.35% with margin. A<=16 was rejected for a different reason: it drives
-#   |golden| to 6.2e4, which is within a factor of 1.06 of Float16's ceiling.
+#   ~Flat in the operands rather than growing, so the fixed 5% rtol had been capping the
+#   domain, not the op; rtol=0.15 clears 13.35% with margin. A<=16 was rejected for a
+#   different reason: it drives |golden| to 6.2e4, within 1.06x of Float16's ceiling.
 #
-#   xlogy, absolute error (relative is meaningless — xlogy(0, y) = 0, so any error there
-#   is an infinite relative error):
+#   xlogy -- x * log(y), so *absolute* error scales with x while a fixed atol does not
+#   (relative is meaningless: xlogy(0, y) = 0, making any error there infinitely relative):
 #     x<=4   max_abs 0.25 (Float16_b) / 0.058 (Float32)
 #     x<=8   max_abs 0.50            / 0.116            <- the domain now registered
 #     x<=16  max_abs 1.00            / 0.232
 #     x<=32  max_abs 2.00            / 0.464
-#   Exactly linear in x, which is the documented model (error ~ x * abs_err(ln y)) and is
-#   why a fixed atol could never hold. Float16_b dominates because at |golden| ~ 72 a
-#   bfloat16 ULP is already 0.5, so most of that number is output quantization rather than
-#   the kernel. atol=0.6 covers x<=8 with 20% margin.
+#   Exactly linear in x, the documented model (error ~ x * abs_err(ln y)), which is why no
+#   fixed atol could hold. Float16_b dominates because at |golden| ~ 72 a bfloat16 ULP is
+#   already 0.5 -- mostly output quantization, not the kernel. atol=0.6 covers x<=8 with 20%
+#   margin.
 BINARY_CUSTOM_TOLERANCES = {
     MathOperation.SfpuElwpow: (None, 0.15),
     # xlogy is keyed by *output format*, because the measurement above splits by nearly 5x:
@@ -1290,49 +1279,43 @@ assert _BINARY_EDGE_OPS, (
 #
 # DOCUMENTED, and expected to XPASS on Blackhole:
 #
-#   The sign of a zero result is lost. div(0, -x) returns +0.0 where IEEE gives -0.0, and
-#   fmod/remainder do the same for a negative divisor, as does xlogy(0, tiny).
-#
-#   This is SFPMAD, which every one of these ops is built on:
+#   The sign of a zero result is lost -- div(0, -x) returns +0.0 where IEEE gives -0.0,
+#   fmod/remainder likewise for a negative divisor, as does xlogy(0, tiny). This is SFPMAD,
+#   which all of these ops are built on:
 #     Wormhole  — "If the output (before rounding) is denormal or negative zero, it'll be
 #                  flushed to positive zero."          (WormholeB0/.../SFPMAD.md)
 #     Blackhole — "If the output (after rounding) is denormal, it'll be flushed to
 #                  sign-preserved zero."               (BlackholeA0/.../SFPMAD.md)
 #   and Blackhole's page lists "improved edge-case handling of NaNs and of negative zero"
-#   among its upgrades over Wormhole. So this is a documented Wormhole limitation that
-#   Blackhole is documented to fix — the xfails below are non-strict precisely so they
-#   report XPASS there rather than failing the suite.
+#   among its upgrades over Wormhole. A documented Wormhole limitation that Blackhole is
+#   documented to fix, so the xfails below are non-strict precisely to report XPASS there.
 #
 # STILL OPEN — not explained by the ISA:
 #
-#   0/0 and x%0 return inf where IEEE says nan. div(0, 0) -> inf against a nan golden,
-#   fmod(x, 0) and remainder(x, 0) -> inf, xlogy(0, 0) -> -inf. SFPMAD says "if any input
-#   is NaN or ±Infinity, then the result will be NaN or ±Infinity, following the usual
-#   IEEE754 rules", which makes 0 x inf a NaN — so this is the kernels' own reciprocal
-#   composition, not the multiply. The finite poles agree exactly (div(-2, ±1/64) = ∓128,
-#   every ±inf lines up), so it is specifically the indeterminate form.
+#   0/0 and x%0 return inf where IEEE says nan: div(0, 0) -> inf against a nan golden,
+#   fmod(x, 0) and remainder(x, 0) -> inf, xlogy(0, 0) -> -inf. SFPMAD says "if any input is
+#   NaN or ±Infinity, then the result will be NaN or ±Infinity, following the usual IEEE754
+#   rules", making 0 x inf a NaN -- so this is the kernels' own reciprocal composition, not
+#   the multiply. The finite poles agree exactly (div(-2, ±1/64) = ∓128, every ±inf lines
+#   up), so it is specifically the indeterminate form.
 #
-#   0**0 returns 0 where C, torch and the golden give 1. pow evaluates exp(b·ln a), so this
-#   is a composition artifact rather than anything the ISA prescribes.
+#   0**0 returns 0 where C, torch and the golden give 1. pow evaluates exp(b·ln a), so a
+#   composition artifact rather than anything the ISA prescribes.
 #
-# Those two groups are exactly the classes the probe is partitioned into: the documented
-# one is _EDGE_CLASS_NEGATIVE_ZERO, and the open ones are _EDGE_CLASS_BOTH_ZERO (the
-# indeterminate forms, and 0**0) and _EDGE_CLASS_NAN (x % 0). _EDGE_CLASS_ORDINARY holds
-# everything that agreed — the ±inf poles, the finite quotients, the exact remainders — and
-# is asserted rather than tolerated, which is only possible now that it is not sharing a
-# tensor with the others.
+# Those groups are the classes the probe partitions into: documented is
+# _EDGE_CLASS_NEGATIVE_ZERO; open are _EDGE_CLASS_BOTH_ZERO (indeterminate forms, and 0**0)
+# and _EDGE_CLASS_NAN (x % 0). _EDGE_CLASS_ORDINARY holds everything that agreed -- ±inf
+# poles, finite quotients, exact remainders -- asserted rather than tolerated, which is only
+# possible now it does not share a tensor with the others.
 #
-# Recorded as non-strict xfails per Phase 0's precedent for approximate exp: the case still
-# executes and reports XPASS if the behaviour changes. Enumerated per (input, output,
-# dest_acc) rather than by predicate so a combination drifting in or out shows up here.
-#
-# Keyed by (op, edge class): the combination lists below started as one list per op, and
-# every class of an op inherits it. That is the honest starting point rather than a
-# measurement — the old bundled variant could only report "something in this tensor
-# diverges", so which class drove which combination into the list is not recoverable from
-# it. The first per-class run on each arch tightens them: a class that XPASSes across the
-# board loses its entry, and one that XPASSes on Blackhole alone becomes arch-gated the way
-# the reduce xfail is.
+# Non-strict xfails per Phase 0's approximate-exp precedent, so a case still executes and
+# reports XPASS if behaviour changes; enumerated per (input, output, dest_acc) rather than by
+# predicate so a combination drifting in or out shows up here. Keyed by (op, edge class),
+# though the lists began as one per op with every class inheriting it -- an honest starting
+# point rather than a measurement, the old bundled variant being able to report only
+# "something in this tensor diverges". The first per-class run on each arch tightens them: a
+# class XPASSing across the board loses its entry, one XPASSing on Blackhole alone becomes
+# arch-gated the way the reduce xfail is.
 _BINARY_EDGE_COMBINATIONS = {
     MathOperation.SfpuElwdiv: (
         (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
@@ -1422,17 +1405,13 @@ assert all(
 # asserted rather than tolerated.
 #
 # This is the prediction the non-strict xfails existed to settle, and it resolved in favour
-# of the ISA. `SFPMAD` flushes a negative-zero result to positive zero on Wormhole and to
-# sign-preserved zero on Blackhole, and Blackhole's page lists "improved edge-case handling
-# of NaNs and of negative zero" among its upgrades. Measured on a Blackhole p150b, the
-# negative-zero class XPASSed on **all 16** cells it is claimed for — every one of div,
-# xlogy, fmod and remainder, at both dest_acc values — and nothing else XPASSed.
-#
-# So the sign of a zero result is now *checked* on Blackhole. A regression there fails
-# rather than quietly returning to XFAIL, which is the coverage this arch-gate buys. The
-# indeterminate-form classes (both_zero, nan_golden) are deliberately NOT gated: they are
-# the kernels' own reciprocal composition, unexplained by the ISA, and they still diverge on
-# Blackhole.
+# of the ISA -- the SFPMAD negative-zero split quoted above. Measured on a Blackhole p150b,
+# the negative-zero class XPASSed on **all 16** cells it is claimed for (div, xlogy, fmod and
+# remainder, at both dest_acc values) and nothing else XPASSed. So a zero result's sign is now
+# *checked* there: a regression fails rather than quietly returning to XFAIL, which is the
+# coverage this gate buys. The indeterminate-form classes (both_zero, nan_golden) are
+# deliberately NOT gated -- the kernels' own reciprocal composition, unexplained by the ISA,
+# and still diverging on Blackhole.
 _WORMHOLE_ONLY_EDGE_CLASSES = frozenset({_EDGE_CLASS_NEGATIVE_ZERO})
 
 
