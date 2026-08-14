@@ -371,7 +371,11 @@
 #define TTI_MVMUL(clear_dvalid, instr_mod19, addr_mode, dst) INSTRUCTION_WORD(TT_OP_MVMUL(clear_dvalid, instr_mod19, addr_mode, dst))
 
 #define TT_OP_NOP TT_OP(0x02, 0)
-#define TTI_NOP   INSTRUCTION_WORD(TT_OP_NOP)
+#if defined(__has_builtin) && __has_builtin(__builtin_riscv_tt_nop)
+#define TTI_NOP __builtin_riscv_tt_nop()
+#else
+#define TTI_NOP INSTRUCTION_WORD(TT_OP_NOP)
+#endif
 
 #define TT_OP_PACR(CfgContext, RowPadZero, DstAccessMode, AddrMode, AddrCntContext, ZeroWrite, ReadIntfSel, OvrdThreadId, Concat, CtxtCtrl, Flush, Last) \
     TT_OP(                                                                                                                                               \
