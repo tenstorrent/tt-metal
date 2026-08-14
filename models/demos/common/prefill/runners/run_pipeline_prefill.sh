@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # Thin launcher for the pipeline-parallel prefill runner under tt-run.
 #
-# All real config (mesh, layer split, chunk count, transport, PCC, PREFILL_* env) lives in the
-# rank-binding YAML's global_env — ttrun does NOT auto-propagate PREFILL_* from the shell, so
-# per-run knobs belong there, not here. This script only captures the launch boilerplate: env
-# exports, the host list / TCP interface, the activation-handoff dir cleanup, and the ttrun call.
+# Baseline config (mesh, layer split, chunk count, transport, PCC, PREFILL_* env) lives in the
+# rank-binding YAML's global_env. In addition, this script injects every PREFILL_* var exported in
+# the launching shell directly into the YAML's global_env on the fly (written to a temp binding) —
+# ttrun itself only auto-propagates TT_/ARCH_/WH_/TTNN_/DEEPSEEK_/MESH_ prefixes, so without this,
+# shell PREFILL_* reach at most the rank co-located with mpirun via fork inheritance, skewing rank 0
+# vs the rest. Shell exports OVERRIDE same-named global_env keys in the merged temp binding; the
+# on-disk YAML is never modified.
 #
 # Usage:
 #   run_pipeline_prefill.sh <rank_binding.yaml> [host_list] [tcp_iface]
@@ -67,6 +70,41 @@ FWD_ENV=""
 # -x PATH/LD_LIBRARY_PATH: ttrun only forwards TT_*/ARCH_*/... prefixed vars, not PATH, so peer ranks
 # would otherwise resolve a bare `python3` to the system interpreter (no ttnn). Forwarding the launch
 # host's PATH works only because every host's venv sits at the identical clone path.
+#
+# Merge shell-exported PREFILL_* into the binding's global_env (see header). Writes a temp copy of
+# the binding next to it (same dir, so a relative mesh_graph_desc_path still resolves) and points
+# ttrun at the copy. Requires python3 with PyYAML on the launch host (the tt-metal venv has it).
+# NOTE: keep the gate assignment-based — `env | grep -q` under pipefail returns 141 (grep -q closes
+# the pipe early, env dies on SIGPIPE), which would silently skip the merge.
+PREFILL_PAIRS="$(env | grep -E '^PREFILL_[A-Za-z0-9_]+=' || true)"
+if [ -n "$PREFILL_PAIRS" ]; then
+  MERGED_BINDING="$(mktemp "$(dirname "$RANK_BINDING")/.rank_binding_merged.XXXXXX.yaml")"
+  trap 'rm -f "$MERGED_BINDING"' EXIT
+  PREFILL_PAIRS="$PREFILL_PAIRS" \
+  python3 - "$RANK_BINDING" "$MERGED_BINDING" <<'EOF'
+import os, re, sys
+import yaml
+
+src, dst = sys.argv[1], sys.argv[2]
+# PREFILL_PAIRS (newline-joined KEY=VALUE, pre-filtered) is the same set the bash gate tested.
+shell = dict(line.split("=", 1) for line in os.environ["PREFILL_PAIRS"].splitlines() if line)
+with open(src) as f:
+    doc = yaml.safe_load(f)
+env = doc.setdefault("global_env", {})
+overrides = []
+for k, v in shell.items():
+    if k in env and str(env[k]) != v:
+        overrides.append(f"{k}: {env[k]} -> {v}")
+    env[k] = v
+with open(dst, "w") as f:
+    yaml.safe_dump(doc, f, sort_keys=False)
+print(f"[run_pipeline_prefill] injected {len(shell)} shell PREFILL_* into global_env of {dst}")
+for line in overrides:
+    print(f"[run_pipeline_prefill]   shell overrides binding: {line}")
+EOF
+  RANK_BINDING="$MERGED_BINDING"   # point ttrun at the merged copy (plain assignment, not a per-command prefix)
+fi
+
 # `--` terminates ttrun's own option parsing: ttrun's -m short flag (--mesh-graph-descriptor) otherwise
 # swallows the target's `python3 -m <module>` and trips the mesh-graph/rank-binding mutual-exclusion check.
 exec python3 ttnn/ttnn/distributed/ttrun.py \
