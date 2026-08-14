@@ -714,3 +714,292 @@ SFPU calls** — the helper's own documented extension point.
 4. **`DEST_BLOCK_TILES` 8 → 4** is a free measured 4 % at `S=8/16` and flat at `S=4/5` (I5's sweep),
    and it side-steps the `DestReuseBinary` window bug. Not taken here only because it was outside
    every floated idea's scope.
+
+---
+
+## Perf 2 — Tournament: the combine's SFPU tail, the post-combine gamma pass, and 430 KB of unspent L1
+
+- **Date**: 2026-08-14
+- **Round**: 2 of 2. Nothing moved in `SUPPORTED` — a perf tournament changes device-ns only.
+- **Focus case (perf-flagged, MANDATORY, measured at its EXACT config, never a proxy)**:
+  `(1,1,8192,1024)` **BLOCK_SHARDED**, shard `[1024,128]`, core grid `(8,8)`, bf16 / TILE / bf16 TILE
+  gamma in DRAM / `math_fidelity=HiFi2` / `fp32_dest_acc_en=False` / `math_approx_mode=False`,
+  Blackhole p150b **@1350 MHz** (== `extras.reference_aiclk_mhz`, so no clock scaling is needed).
+  It re-entered the round as the only `perf`-group cell materially off its reference (**1.35×
+  `achievable_ns`**, 34616 vs 25640); the four sharded decode cells were at 1.11–1.23× and every
+  interleaved cell was already under. Every axis of that config is in `SUPPORTED` — no generality gap.
+  Plan on entry: `s=8` hidden slices, `S=4` hidden tiles/core, `block_rows=16` ⇒ **2 blocks**,
+  `num_owners=8`, `own_rows=2`, 8 row-groups × 8 cores.
+
+### Round shift — Perf 1's graduation moved the critical path, and its round-2 queue was partly wrong
+
+Perf 1's reduce-scatter left a *different* op, so the breakdown was re-run from scratch. Two of its four
+queued items did not survive measurement and are corrected below: `wr_store_wait` (queued as the new #1)
+is **occupancy, not a bottleneck** — on a resident output shard the writer moves *zero* bytes and that
+20734 ns is the mirror of compute's latency — and `DEST_BLOCK_TILES 8 → 4` (queued as "a free 4 %") is
+**refuted**, 8 is the best value at every `S`.
+
+### Measured breakdown (permanent instrumentation + cumulative ablation)
+
+Zone coverage verified before ranking anything: **84 markers max per `(core, RISC)`** against the 250
+cap, and the last user zone ends at **1.00** of the `*-KERNEL` span on every RISC (exhaustion is
+silent, so this check is mandatory).
+
+**An attribution correction that changes the ranking**, recorded because it is easy to get wrong:
+`cb_wait_front` in a compute kernel is **UNPACK-only** (`api/compute/cb_api.h`), so the op's hoisted
+wait zones only hoist on `TRISC_0`. `TRISC_1`/`TRISC_2` absorb the wait inside the *following* work
+zone — `cp_scale` reads 8327 (math) / 11177 (pack) against 4242 on unpack, and the 4–7 µs difference
+is precisely the hoisted `cp_rms_wait` (9284), not payload. **Rank off `TRISC_0` and the ablation,
+never off the math/pack zone values.**
+
+Per-stage device-ns **per core, summed over the run** (baseline, 34616 ns wall, 64 cores, 2 blocks):
+
+| zone | ns/core | reading |
+|---|---|---|
+| `wr_store_total` / `wr_store_wait` | 21859 / 20734 | **not a bottleneck** — a resident output shard moves 0 bytes; this is the writer mirroring compute |
+| `rd_gather_wait` | 13246 | the owner's view of the incast |
+| `cp_combine_wait` (TRISC_0) | 11434 | the same event on the unpack thread |
+| `cp_rms_wait` (TRISC_0) | 9284 | compute blocked on the broadcast — **an idle window with nothing in it** |
+| `wr_gather_issue` | 6604 | contributor-side issue (max/p50 = 1.44) |
+| `cp_scale` / `cp_apply_gamma` / `cp_sumsq` (TRISC_0) | 4242 / 3564 / 3542 | the local payload |
+| `rd_bcast_recv` / `rd_stat_funnel_wait` | 2967 / 5603 | post-Perf-1 broadcast + funnel |
+
+**Cumulative ablation** (payload stubbed via the new `RMS_ABLATE` hook, CB/semaphore/barrier
+scaffolding kept, one fresh-cache profiled run each; peeled **cumulatively** because stages overlap
+and a solo removal under-counts):
+
+| variant | ns | attributed |
+|---|---|---|
+| full | 34616 | — |
+| − the owner's combine reduce **+ finalize** | 29067 | **combine reduce = 5549 ns (16 %)** |
+| − also the gather incast payload | 18773 | **gather = 10294 ns (30 %)** |
+| − also the local compute (sumsq + scale + apply_gamma) | 8256 | **local = 10517 ns (30 %)** |
+| floor (boot + dispatch + 2 blocks of sync scaffolding + mcast round trips) | 8256 | **24 %** |
+
+Overlap cross-checks, which is what makes the peel trustworthy: solo `−gather` = 10349 ≈ cumulative
+10294, so the gather is **not** overlap-hidden (it is a serial latency chain); solo `−local` = 13848 >
+cumulative 10517, because removing local work also removes the upstream serialization feeding the gather.
+
+**Roofline gate** (`/perf-ceiling-dm`), which is what decided where *not* to spend:
+- The gather moves 8 MB of fp32 stat tiles in 10.3 µs = **815 GB/s aggregate** (~15 % of the 64-core NoC
+  roofline) and **12.7 GB/s per receiving core** against the 87 GB/s single-core L1 write-port roofline
+  Perf 1 measured. Unlike Perf 1's single-root incast, this transfer is **far** from its roofline, so the
+  payload has real headroom — and the tile ships 4096 B whose information content after the within-tile
+  collapse is 128 B, a **32× over-ship**.
+- The `wr_gather_issue` "206 ns per 4 KB write" looked issue-bound and **is not**: a dedicated
+  transaction-count sweep (P2) put only **~13 ns of it per transaction**, on top of a ~3000 ns/block
+  floor independent of transaction count. Fewer **bytes** is the lever; fewer transactions is not.
+
+**Ranked bottleneck: (1) the gather incast, (2) local compute, (3) the fixed floor, (4) the owner
+combine reduce.**
+
+### Portfolio floated (6 ideas, deliberately overlapping)
+
+| # | idea | tier | verdict |
+|---|---|---|---|
+| P1 | **compact stat gather** — collapse within-tile at the contributor, `transpose_dest`, ship 2×64 B, sum at the owner (32× payload cut) | T3 | **WIN**, not graduated (conflicts with P6; see aggregation) |
+| P2 | **coalesce the gather writes** — re-page the landing so a contributor's `own_rows` tiles are contiguous | T2 | **NULL** |
+| P3 | **fold `apply_gamma` into the sum-of-squares pass** (3 passes → 2) | T3 | **WIN → GRADUATED**, but as a *reorder*, not the proposed fold |
+| P4 | **scope the finalize's SFPU work to the axis that carries data** | T2/T3 | **WIN → GRADUATED** |
+| P5 | **one block per core** — stop paying two combine round trips when L1 can afford one | T2 | **WIN → GRADUATED** |
+| P6 | **software-pipeline the block loop** so the combine round trip is hidden | T3 | **WIN**, not graduated (superseded by P5 on the focus geometry) |
+
+P1/P2 both attack the gather and P5/P6 both attack the block count — that overlap is what let the
+tournament pick by measurement instead of by argument, and in both pairs the *cheaper* idea lost.
+
+### Per-idea results (measured in isolation, in the subagents' own benches)
+
+**P1 — compact stat gather — WIN, 1.319× on the stage.** `25278 → 19164` at the focus geometry. The
+baseline is **linear in `s`** (+~1.2 µs per slice); the candidate is **flat** (22.5 → 24.1 µs from
+`s=8` to `s=32`), which is the whole mechanism: `s=16` **1.689×** · `s=28` **2.135×** · `s=32`
+**2.466×** · `B=32` 1.380× · decode `s=32,B=1` 1.455×. A two-option menu separated the causes:
+shipping half the bytes with the same owner tile count (`collapse_2k`) buys 1.128×, and *also* cutting
+the owner from `s*own_rows = 16` unpacked tiles to `own_rows = 2` buys the rest. `out_pcc` identical to
+the baseline to 7 digits — the collapse-then-sum reordering is measured PCC-neutral, not assumed.
+One exception, **measured**: `s == 2` at 0.876× (two contributors do not repay the contributor-side
+collapse); `s == 4` is **flat** (0.98–1.06×) and *in* the domain. It also measured the ceiling on the
+transaction-count idea at **~3 %** with a deliberately-wrong 64 B probe — which is what let P2 be
+discarded on evidence rather than on P1's say-so.
+
+**P2 — coalesce the gather writes — NULL.** `26156 → 26150` (1.000×), bit-identical output. A
+transaction-count sweep at fixed bytes and fixed destinations (8 / 16 / 64 transactions per block per
+core) put the cost at **~13 ns per transaction** on top of a **~3000 ns/block floor independent of
+transaction count**; coalescing buys 33 ns of a 7108 ns stage and the longer barrier tail gives most of
+it back. Isolation confirmed against the real op (`wr_gather_issue` 6577 ns/core, max/p50 1.45, vs the
+op's 6604 / 1.44), so the null is about the stage and not the harness.
+
+**P3 — gamma before the combine — WIN, 1.123×, by a mechanism the idea did not propose.** The
+**fold** into `sum_of_squares` is a **REGRESSION (0.889×)**: the premise "removes a whole read+pack"
+is false because `sum_of_squares` packs *nothing* today, so folding gamma in *adds* that pack to pass 1,
+delays the last `Sum(x²)` partial and slips the whole group's gather. What wins is the *reorder the
+fold implied* — running `apply_gamma` on the **pre-combine** side as its own pass: `34350 → 30579`,
+and 1.077–1.186× across `S ∈ {4,8,16}`, `B ∈ {1,8,16,32}`, `s ∈ {2,8,16}`.
+
+**P4 — scope the finalize to column 0 — WIN, 4.12× on the finalize.** The split it was asked for is
+the round's most useful single number: the owner combine is 5535 ns of which the **finalize is 3993
+(72 %)** and the `reduce_tile` sum only 1542 (28 %) — *the finalize is the combine*. Menu (isolated
+MATH-thread ns per finalize): stock 989.7 → `VectorMode::C` 514.8 → scope-only `c_skip` 283.7 →
+**fused + `c_skip` 240.1 (4.12×, 8 vector ops instead of 96)**. **Scope is the lever, not fusion**:
+fusion alone is 1.10×. Every option is bit-identical on column 0.
+
+**P5 — one block per core — WIN, 1.063×,** and it found that `device.l1_size_per_core` is **not bound
+to Python**, so the 1 MB fallback has been running everywhere against a part that reports 1,461,376 B
+per bank. Coarser is monotone on TILE+sharded (B1…B32 = 113250 / 78129 / 51881 / 38549 / 34733 /
+**32635**) and **U-shaped with its minimum at the shipped value** on ROW_MAJOR sharded.
+
+**P6 — software-pipeline the block loop — WIN, 1.223×** (`34591 → 28282` at lead (1,1)),
+**bit-identical** to the serial baseline, no raw LLK, and **no measured regression anywhere**. Head to
+head it beat P5's lever *at the time*: pipelined `B=16/nb=2` 28282 ns @ 476 KB CB vs fat `B=32/nb=1`
+32765 ns @ 540 KB — faster *and* 64 KB cheaper. The win grows with round trips (nb=8 1.310×, nb=16
+1.349×) and it reaches geometries P5 cannot: on `(1,1,8192,2048)` a fat block is **L1-infeasible** while
+pipelined `B=8` lead 2 is 1.130× ahead of the best affordable serial point.
+
+### Aggregation — the fastest NON-CONFLICTING combination
+
+- **P2 discarded** (null).
+- **P1 vs P6** both rewrite the gather-landing machinery and could not both graduate this round. P6 won
+  the overlap on a **measured whole-op** number (28282) against P1's *estimate*, with no raw LLK and no
+  measured regression.
+- **P5 vs P6** are not substitutes: P6 needs a budget that can afford its extra landing windows, so P5
+  is P6's prerequisite. Both were kept.
+- **Then P5 changed the answer.** After graduating P4 + P3 + P5, the focus geometry selects
+  `block_rows = 32` ⇒ **`num_blocks == 1`** (verified: the per-zone exec count halved 128 → 64). P6's
+  leads clamp to 0 at one block and emit a **byte-identical program**, so on the perf-flagged target
+  P6's benefit is now **zero** — it was superseded by the cheaper lever it had beaten. It remains the
+  lever for L1-constrained deep shards, where P5 cannot be spent at all. Not graduated; queued below.
+- **Graduated: P4 + P3 + P5.**
+
+### What graduated, and how widely
+
+**P4 — the finalize's SFPU scope, as the op's ONE finalize.** `rms_norm_finalize.hpp` is a single
+scoped+fused sfpi body (`rsqrt(v*inv_w + eps)` per vector at `VectorMode::C` with an even-parity
+`dst_reg` stride). **No predicate at all**: it serves *both* call sites — the owner's cross-core
+combine and the `s == 1` collapse — and **the three-wrapper chain it replaces is deleted**. Domain:
+**everywhere**, verified correct on 18 cells spanning BLOCK / WIDTH / HEIGHT / INTERLEAVED × TILE /
+ROW_MAJOR × bf16 / float32 / bfloat8_b × `fp32_dest_acc_en` both × HiFi2 / HiFi4 × W- and H-non-aligned
+× gamma / no-gamma. The two interleaved DRAM-bound cells that measured flat (−0.2 %, +0.1 %) are **flat,
+not exceptions**, and stay on the unified path — the same config wins 1.065×/1.388× wherever the
+finalize is not diluted.
+
+**P3 — `apply_gamma` before the combine.** ONE implementation invoked at one of two points (a
+`GAMMA_FIRST` constant picks the slot; `SCALE_IN_PLACE` follows from it, because whoever runs last must
+land the block in its final home), **not** a duplicated body. The single **carve-out** is
+`NUM_HIDDEN_SLICES == 1` and it is **structural rather than a benchmark artifact**: the entire benefit
+is hiding the pass inside the combine's latency, and at `s == 1` there is no combine — `cp_rms_wait`
+does not even compile in. Earned by a measured **−2.2 %** (45608 → 46632, reproduced 3×) that the
+subagent then *isolated*: with gamma resident in L1 the same reorder is **dead flat** at `s == 1`
+(45612 → 45550) while the focus win is unchanged, so the cause is gamma's DRAM round trip, not the
+pattern. Written as the narrow exception, so it disappears by itself if the reader ever lands gamma
+earlier on that path. `no_gamma` is flat (nothing to move) and stays on the unified path; ROW_MAJOR is
+untested-but-included, and the golden suite covers it.
+
+**P5 — the part's real L1 on the TILE+sharded block ladder.** `_block_ladder_budget` spends
+`REAL_L1_PER_CORE` only where a coarser block costs nothing. **Two carve-outs, both earned by measured
+regressions**, and both written as "the paths that regress keep the conservative budget":
+
+| carve-out | measured reason |
+|---|---|
+| ROW_MAJOR sharded | the core tilizes its own sticks into a `B*S`-tile CB before the reduce can start — a serial fill. U-shaped, minimum at the **shipped** `B=8`: B1…B32 = 152885 / 119401 / 99630 / **96401** / 100469 / 101807 ns. Coarsening costs 4.1 % / 5.6 %. |
+| the INTERLEAVED partition search | +5.7 % on `(1,1,8192,5120)` (401839 → 424912, median of 5). **Refinement 4's attribution of this was wrong**: `block_rows` is 1 in *both* plans; what moves is the search's admission filter, which a wider budget lets pick `G=110,s=1,S=160,depth1` over `G=55,s=2,S=80,depth2`. The interleaved search is therefore not touched at all and every interleaved plan is byte-identical. |
+
+Instrumentation was extended to every new path (`cp_apply_gamma` now fires in either slot, unchanged in
+name so the zone series is continuous across the round), so per-stage observability did not regress. The
+`RMS_ABLATE` cumulative-ablation hook that produced the breakdown ships with the op — inert without its
+`/tmp` file, and it warns loudly on stderr when active because it produces wrong answers by construction.
+
+### Whole-op before/after (zoned vs zoned)
+
+| case (its exact config) | Perf 1 | **Perf 2** | | `achievable_ns` | ratio before → after |
+|---|---|---|---|---|---|
+| **`(1,1,8192,1024)` BLOCK `[1024,128]`/(8,8)** | 34616 | **25944** | **1.33×** | 25640 | 1.35× → **1.01×** |
+| `(1,1,32,1024)` WIDTH `[32,128]`/(8,1) | 4548 | **3576** | 1.27× | 4110 | 1.11× → **0.87×** |
+| `(1,1,32,2304)` WIDTH `[32,256]`/(9,1) | 5329 | **4330** | 1.23× | 4617 | 1.15× → **0.94×** |
+| `(1,1,32,5120)` WIDTH `[32,160]`/(8,4) | 6484 | **5239** | 1.24× | 5267 | 1.23× → **0.99×** |
+| `(1,1,32,7168)` WIDTH `[32,256]`/(7,4) | 6358 | **5080** | 1.25× | 5481 | 1.16× → **0.93×** |
+| interleaved prefill 1024 / 2304 / 5120 / 7168 | 87953 / 186816 / 399074 / 568245 | 84612 / 185528 / 396546 / 560376 | 1.01–1.04× | 96744 / 211345 / 738307 / 1032281 | all under |
+| interleaved decode 1024 / 2304 / 5120 / 7168 (+floor) | 6164 / 7092 / 9138 / 10215 / 3533 | **5066 / 5967 / 7847 / 8918 / 2776** | 1.14–1.27× | 9149 / 17003 / 75825 / 104259 | all far under |
+
+**All 13 perf-flagged cells are now at or under their `achievable_ns`.** The focus case's 1.012× is
+inside the 1.6 % run-to-run spread measured on this harness, i.e. it is at its reference. The
+`(1,1,32,7168)` interleaved decode cell, the only one carrying `minimum_expected_speedup = 7.0`
+(goal ≤ 14894 ns at 1350 MHz), measures **8918 ns**.
+
+### Guard-set no-regression
+
+One representative per distinct kernel path × layout × placement, all re-run after the last graduation:
+
+- Golden `perf` + `pad_poison`: **37/37 pass**. Golden `loose`: **6/6 pass**.
+- Golden `resilience` (the sharded stress sweep): **333 passed / 8 failed / 3 skipped** — the **same 8
+  cells** as the Perf-1 baseline (the wide-W `HEIGHT_SHARDED` cells Refinement 2 left failing, plus the
+  `13x777x1023` `WIDTH_SHARDED` CB-vs-L1 clash). P5's wider budget was additionally A/B'd by its
+  subagent across 29 sharded resilience cells × 3 budgets: **identical outcome set**, and
+  `13x777x1023` is untouched because its per-core shard alone is 1.33 MB, so the ladder returns
+  `block_rows == 1` at every budget.
+- 4-shape full-cartesian slice (`2x1x128x100`, `4x1x512x512`, `1x1x224x3072`, `1x1x160x11008`):
+  **296 passed / 78 xfailed / 2 failed** — identical to the Perf-1 record, same two cells.
+- Both interleaved perf harnesses green and **faster**, not merely flat.
+- **No precision was traded anywhere.** `fp32_dest_acc_en`, `math_fidelity`, `math_approx_mode` and
+  every dtype are untouched; none was used as a lever. P4 never flips `APPROX` and calls the identical
+  non-approximate `_calculate_sqrt_body_` the wrapper calls; P3's reorder is one bf16 rounding of a
+  symmetric product either way and measured 0.999909 → 0.999908; P5 does not change arithmetic at all.
+  A narrower stat-CB format was deliberately **not** floated as a lever.
+
+### Helper bypasses
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `rsqrt_tile` | capability | hardcodes `VectorMode::RC` + `ITERATIONS = 8` at its own call site; there is **no scope parameter at all**, so a caller whose DEST tile is axis-shaped cannot say so. Column parity is the INNER walk axis, so even exposing `ITERATIONS` would not reach it — it needs a `dst_reg` stride. | 748 (whole tile) | 204.5 (col-0) | `rms_norm_finalize.hpp:96` (`ttnn/ttnn/operations/rms_norm/kernels/`) |
+| `mul_unary_tile` / `add_unary_tile` | capability | same hardcoded `VectorMode::RC` + `ITERATIONS = 8`; **and** there is no fused scalar `mul_add` unary, so `v*a + b` costs two whole separate tile walks where one vector body would do. | 242 (both, RC) | ~36 (inlined into the fused body) | `rms_norm_finalize.hpp:96` |
+| `compute_kernel_lib::reduce` — `post_reduce_op` | ergonomics | the extension point hands the caller only a `dst_idx`. There is **no way to declare "this output is column-0-valid"**, so every caller that knows its reduce result is axis-shaped must drop to raw sfpi to exploit it — the knowledge exists at the call site and the API has nowhere to put it. Concrete ask: a `PostReduceScope{Col0, Row0, Scalar}` hint that maps to the right `VectorMode` + parity stride. It would fix softmax's `recip` epilogue too. | 989.7 | 240.1 | `rms_norm_compute.cpp:287` |
+| `compute_kernel_lib` — no "SFPU unary on a reduce result" helper | capability | nothing in kernel_lib productizes axis-scoped SFPU work. `examples/sfpu_tile_scope` documents the mechanism and measures it, but every op that wants it re-derives the sfpi body by hand. | — | — | `ttnn/ttnn/operations/examples/sfpu_tile_scope/` |
+| sfpi compiler | ergonomics | holding two live scalar constants across an **unrolled** `_calculate_sqrt_body_` is an **ICE** ("cannot store sfpu register (register spill)"), not a diagnostic. Undiscoverable without hitting it; the fix (`#pragma GCC unroll 1`) costs nothing measurable but nothing says so. | — | — | `rms_norm_finalize.hpp:84` |
+
+P3 and P5 bypassed nothing: P3 is the op's existing chains in a different order, and P5 is host-side
+plan selection with byte-identical kernels.
+
+**Gaps found by ideas that did NOT graduate**, reported here because this table is their only durable
+channel:
+
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `ckl::reduce` (`ReduceWithinTile::Skip`) | capability | **Still unreachable**, now confirmed by two *independent* ideas this round (P1's contributor collapse, P2's coalesced landing) on top of Perf 1's two. The `static_assert(within_tile == Collapse, "Skip is AccumulateViaAdd-only")` sits at **function** scope AFTER the `if constexpr (AccumulateViaAdd) { …; return; }` block, so it is not in a discarded statement and fires for the very instantiation it means to permit. Moving it into the `else` is the whole fix. | n/a (won't compile) | P1 19164 · P2 26150 | `reduce_helpers_compute.inl:886` |
+| `ckl::ReduceInputMemoryLayout` | capability | carries only a `row_stride` (a row *pitch*, asserted `>= cols`), i.e. `addr(r,k) = r*pitch + k`. There is **no column stride**, so a landing block whose reduce axis is the OUTER index (`addr(r,k) = r + k*own_rows`) is inexpressible — and that transpose is exactly what *any* gather wanting contiguous per-contributor landing produces. | 26156 | 26150 (equal) | `reduce_helpers_compute.hpp:260` |
+| `ckl::transpose` / `reduce`'s `post_reduce_op` | capability | there is no `ckl::transpose`, and `post_reduce_op` cannot carry `transpose_dest`: its `transpose_dest_init` rewrites MATH addrmods/MOP while the helper calls `reduce_init` **once outside** its per-output loop, so a re-configuring post-op silently corrupts every later output tile. (Perf 1 found this; P1 re-hit it and worked around it with `reduce_init → N×reduce_tile → reduce_uninit → transpose_dest_init → N×transpose_dest → finalize → N×pack`.) Note P4 tested the *narrower* question directly and found **no live bug** for SFPU inits at `BLOCK_ROWS = 16` — `llk_math_eltwise_unary_sfpu_init` touches only the SFPU config reg, ADDR_MOD_6/7 and the RWC counters, none of which the FPU reduce datapath carries across iterations. | n/a | 19164 | `reduce_helpers_compute.hpp:491-495` |
+| `ckl::sum_of_squares` / `ckl::eltwise_chain` | capability | a DEST-accumulating walk admits **exactly one** `PackTile` and packs only at row end, so "accumulate per row AND emit a per-tile transformed copy of the same input" is inexpressible. The chain already has the concept (sticky D0 + `transient_lane_width`); what is missing is letting a transient lane reach a second `PackTile` with its own per-tile lifecycle. | n/a (won't compile) | 38634 (and it lost) | `chain.inl:2916, 2923, 3117` |
+| `ckl::eltwise_chain` | ergonomics | nothing in the API surfaces that a DEST accumulator **cannot survive a `tile_regs_release`** at `dst_full_sync_en=False` (`_llk_pack_dest_section_done_` zeroes the packed half and flips the dest-offset id). That is the real constraint forcing everything into one window and capping a fused form at `S+1 ≤ DEST_AUTO_LIMIT`, and it is only discoverable by reading `llk_pack_common.h`. One doc line on `DestAccumulation` would have saved a dead end. | — | — | `chain.hpp:294-303` |
+| `ckl::sum_of_squares` and every `convenience.hpp` wrapper | ergonomics | the wrappers **default-construct their chain elements**, so they cannot carry a runtime tile base — P6 needed `TileOffset::Set` with a runtime value and had to re-spell the call as the explicit `eltwise_chain` the wrapper expands to. **Third independent hit** (the op already records the same friction for `mask_tail_block` and the in-place scale). The gap costs **0 ns** — output bit-identical — so this is author/maintenance cost, not device time. Ask: a `base` parameter on the convenience wrappers. | 34591 | 34598 (equal) | `block_pipeline/kernels/bp_compute.cpp` |
+| kernel_lib dataflow — no gather/scatter helper | capability | pre-existing and re-confirmed by P1 and P6. `mcast_pipe` is one-source-to-a-rectangle; a gather is the mirror shape and has no helper, so the landing, its paging and its arrival counters are all hand-rolled. P6 sharpens the ask: a `GatherPipe` owning *(windows × pages)* of landing plus a **per-window** arrival barrier. | n/a | the whole gather/funnel path | `rms_norm_writer.cpp`, `rms_norm_reader.cpp` |
+
+### Two correctness findings routed out of this round (neither is in the shipped op)
+
+1. **The cumulative gather counter is not pipeline-safe** (found by P6 while building its fork; the
+   shipped op is *not* affected because its contributors advance in lockstep). `gather_progress >=
+   (block+1)*s` on ONE counter is sound only while nobody runs ahead; let one contributor ship blocks 0
+   *and* 1 first and the counter reaches `s` with half the contributors missing. It does **not hang** —
+   PCC sags 0.99994 → 0.99912, a silent wrong answer in the neighbourhood of the 0.9995 gate. Any future
+   scheme that lets contributors run ahead inherits this and needs one counter per landing window.
+2. **A perf A/B harness must upload a fresh `x` per variant.** The op rewrites `x` in place in the
+   caller's resident shard, so a harness that uploads once feeds variant N+1 an already-normalized
+   tensor. PCC cannot see it (rms_norm is idempotent) but ~5.6 % of bf16 elements shift by up to 1 ULP,
+   and it reads exactly like a race.
+
+### Round-3 queue (measured, characterized, not started)
+
+Re-ranked from the zones **after** graduation (focus wall 25987 ns): `rd_gather_wait` **13028**,
+`cp_combine` (math) 9778, `wr_gather_issue` **6979**, then `cp_scale` / `cp_apply_gamma` / `cp_sumsq`
+≈ 3.8 / 3.8 / 3.6 k each on the unpack thread.
+
+1. **P1's compact stat gather is now the clear #1 lever, and its blocker is gone.** The gather is again
+   the top item, and P6 — the idea it lost the overlap to — is no longer competing for the landing
+   machinery, because the focus geometry is now `num_blocks == 1`. Measured 1.319× on the stage at the
+   focus and 1.7–2.5× at `s ≥ 16`, with `s == 2` the one carve-out. Its subagent also left a follow-on
+   it did not take: the collapse reads tile *i* and writes tile *i*, so it can pack **in place** into
+   `cb_sq_partials` and delete `cb_stat_compact` entirely, making it strictly L1-cheaper.
+2. **P6's pipeline for the L1-constrained deep shards** — `(1,1,8192,2048)` and `(1,1,16384,1024)` still
+   land at 2 and 4 blocks because `B=32` needs 555 KB of stat CBs on top of a 1 MB resident shard.
+   Measured 1.130–1.301× there, and it is the only lever that reaches them.
+3. **The `B`-scaled stat CBs are full fp32 *tiles* holding a per-row scalar** — shrinking them is what
+   would unlock one block on the geometries in (2), and it composes with (1), which already ships the
+   compact form across the wire.
+4. **Do not re-float**: `DEST_BLOCK_TILES 8 → 4` (refuted, 8 is best at every `S`), gather-write
+   coalescing (null, the stage is byte-bound), and folding gamma into `sum_of_squares` (0.889×).
