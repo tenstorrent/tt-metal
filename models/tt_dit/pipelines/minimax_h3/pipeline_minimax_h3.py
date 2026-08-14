@@ -1919,9 +1919,12 @@ class MiniMaxH3Pipeline:
             # De-normalized, clamped and colour-converted on device; nothing left to do on host.
             return video
         if self.vae_output_type == "uint8":
-            # `proj_out` already carries the de-normalization, so [-1, 1] -> [0, 1] is all that is
-            # left: one pass rather than the multiply, add and clamp the reference-space path needs.
-            return video.float().add_(1.0).mul_(0.5).clamp_(0, 1)
+            # `float_to_uint8` already applied *both* halves of the mapping on device: `proj_out`'s
+            # fold put pixels in [-1, 1], and the cast then took [-1, 1] -> [0, 255]. So the decode
+            # returns 0..255 and the only step left is the scale. Treating it as [-1, 1] here (as
+            # `add(1).mul(0.5).clamp(0,1)` does) de-normalizes twice and saturates every pixel at or
+            # above 1/255 to white -- measured mean 0.994 against a correct 0.345.
+            return video.float().div_(255.0)
         # The VAE emits ImageNet-normalized RGB.
         video = self._denormalize(video.float(), MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD).clamp(0, 1)
         return video
