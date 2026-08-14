@@ -17,8 +17,8 @@ suite went green on random weights.
 import pytest
 import torch
 
-from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import HIDDEN_SIZE
-from models.demos.deepseek_v3_d_p.reference.attn_res.weights import (
+from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import HIDDEN_SIZE
+from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.weights import (
     CHECKPOINT_PREFIX,
     fold_queries,
     layer_query_names,

@@ -48,7 +48,7 @@ Provenance, so the extract is checkable rather than asserted:
     the license text is unmodified. Every other vendored LICENSE under `models/` is
     normalized the same way — only `*.patch` is excluded from those hooks.
 
-This is the only read in `reference/attn_res/` written by someone other than us, which
+This is the only read in `reference/kimi_k3/attn_res/` written by someone other than us, which
 is what makes it worth vendoring rather than paraphrasing: it is the evidence that the
 equation we implement is the equation the model defines. Two things it cannot do, which
 is why the other two files exist. It takes one softmax over the whole candidate set, so

@@ -4,7 +4,7 @@
 """Canonical host-weight schema for AttnRes: the checkpoint's key names and the fold into queries.
 
 AttnRes holds no matrices — every one of its weights is a `[d]` vector, two per read site,
-and they only ever meet as a product against the candidate (`reference/attn_res/attn_res.py`).
+and they only ever meet as a product against the candidate (`reference/kimi_k3/attn_res/attn_res.py`).
 So the load is a fold, not a conversion, and there is nothing here worth a `.tensorbin`
 cache: all 374 vectors of a 93-layer stack come to 5 MB against the ~100 GB the matmul
 weights put through `tt/WEIGHTS_AND_CACHE.md`'s three-method pattern.
@@ -20,7 +20,7 @@ from collections.abc import Mapping
 
 import torch
 
-from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import HIDDEN_SIZE, NUM_LAYERS, fold_query
+from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import HIDDEN_SIZE, NUM_LAYERS, fold_query
 
 # Kimi K3 nests the decoder under a multimodal wrapper, so its published checkpoint spells
 # these `language_model.model.layers.…`. A state dict taken from an instantiated model is

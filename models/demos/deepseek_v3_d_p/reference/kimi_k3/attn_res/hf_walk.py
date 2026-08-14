@@ -14,13 +14,13 @@ seal, which reads see how many candidates, and when the live stream is absent.
 prefixed `hf_` because it walks it against the vendored read and the two weights
 unfolded, which is the whole difference between the two.
 
-    from models.demos.deepseek_v3_d_p.reference.attn_res.hf_walk import hf_stack
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_walk import hf_stack
     out = hf_stack(hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns, block_size, eps)
 """
 
 import torch
 
-from models.demos.deepseek_v3_d_p.reference.attn_res.hf_attn_res import hf_attn_res
+from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_attn_res import hf_attn_res
 
 
 class HfStream(object):

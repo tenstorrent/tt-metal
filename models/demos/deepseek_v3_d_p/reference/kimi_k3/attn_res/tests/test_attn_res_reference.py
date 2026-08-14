@@ -3,7 +3,7 @@
 
 """What the device is scored against, checked on CPU. No device, no PCC.
 
-Every device gate is measured against `reference/attn_res/attn_res.py`,
+Every device gate is measured against `reference/kimi_k3/attn_res/attn_res.py`,
 which is not the definition — it is the definition with two algebraic shortcuts already
 taken: the two weight vectors folded into one query, and `rsqrt` pulled out of the dot.
 A device test cannot see an error in either, because it compares against the shortcut.
@@ -32,10 +32,10 @@ runs are what the device suites exist for.
 import pytest
 import torch
 
-from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import BLOCK_SIZE as PRODUCTION_BLOCK_SIZE
-from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import EPS
-from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import NUM_LAYERS as PRODUCTION_LAYERS
-from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import (
+from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import BLOCK_SIZE as PRODUCTION_BLOCK_SIZE
+from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import EPS
+from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import NUM_LAYERS as PRODUCTION_LAYERS
+from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import (
     AttnResStream,
     attn_res,
     attn_res_inter_block,
@@ -43,8 +43,8 @@ from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import (
     attn_res_stack,
     fold_query,
 )
-from models.demos.deepseek_v3_d_p.reference.attn_res.hf_attn_res import hf_attn_res
-from models.demos.deepseek_v3_d_p.reference.attn_res.hf_walk import hf_stack
+from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_attn_res import hf_attn_res
+from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_walk import hf_stack
 
 # fp32, the widest the device ever computes in, and the width `hf_attn_res` forces anyway
 # by widening with `.float()`. Every form checked here is an exact rewrite, so the only
