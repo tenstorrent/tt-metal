@@ -289,6 +289,9 @@ class VoxtralTtsBackbonePipeline:
         self.cache_index = ttnn.from_torch(
             torch.zeros(1, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
         )
+        #: Rows the decode rotary table is replicated to: the head count the
+        #: blocks rotate on the row axis, rounded up to the tile it lands in.
+        self._rope_rows = max(_pad_to_tile(self.n_heads), _pad_to_tile(1))
         self._staged = None
         self._pinned = {}
         #: The untilized logits row the last `_greedy_token` scanned.
@@ -537,6 +540,15 @@ class VoxtralTtsBackbonePipeline:
         captures and the unit the perf engine replays.
         """
         cos, sin = self.rotary(position_ids=self.position_buffer)
+        # The decode blocks lay their heads out on the ROW axis (see
+        # `_stubs/attention.py::_decode_native`), so the rotation walks cos/sin
+        # row-wise instead of broadcasting one row across a head dimension.
+        # Every head is at the same position, so every row it needs is the same
+        # row -- replicate it up the tile here, ONCE for the whole step, rather
+        # than 26 times inside the blocks. A block whose operands the layout
+        # does not fit ignores this and reads row 0, which is unchanged.
+        cos = ttnn.repeat(cos, [1, self._rope_rows, 1])
+        sin = ttnn.repeat(sin, [1, self._rope_rows, 1])
         hidden = ttnn.embedding(self.token_buffer, self.w_embed, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         for index in range(len(self.layers)):
             hidden = self.layers[index](

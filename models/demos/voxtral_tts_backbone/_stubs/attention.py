@@ -108,6 +108,10 @@ class TtAttention:
         #: operands, so the explicit chain takes over for the rest of the run
         #: instead of raising inside a captured trace.
         self._fused_rope = True
+        #: Cleared the first time the decode-native head layout refuses this
+        #: model's operands, so the generic layout takes over for the rest of
+        #: the run instead of raising inside a captured trace.
+        self._decode_heads = hasattr(ttnn.experimental, "nlp_create_qkv_heads_decode")
         self._q_end = int(self.wq.shape[-1])
         self._k_end = self._q_end + int(self.wk.shape[-1])
         self._v_end = self._k_end + int(self.wv.shape[-1])
@@ -276,6 +280,12 @@ class TtAttention:
         # their plans is opened once and reused. Q wants 32 cores and K/V want
         # 16 (each measured separately), so that is two conversions rather than
         # three -- and one if a future retune brings them back onto one grid.
+        if self._decode_heads and self._decode_native_applies(hidden_states, cos, kv_cache, cache_pos_tensor):
+            try:
+                return self._decode_native(hidden_states, cos, sin, kv_cache, cache_pos_tensor)
+            except Exception:  # noqa: BLE001 - op/shape refused: generic path below
+                self._decode_heads = False
+
         rope_applied = False
         if self.qkv_plan is not None and self.qkv_plan.matches(hidden_states):
             # ONE fused projection, then split. The three weights are contiguous
@@ -356,6 +366,83 @@ class TtAttention:
         if self.o_plan is not None and self.o_plan.matches(attn):
             return self.o_plan(attn, self.wo, self.compute_kernel_config)
         return ttnn.linear(attn, self.wo, **mm)
+
+    # ------------------------------------------------- decode-native layout
+    def _decode_native_applies(self, hidden_states, cos, kv_cache, cache_pos_tensor) -> bool:
+        """True when this call is the traced decode step this path is built for.
+
+        Needs the fused projection (so there IS a single qkv tensor to split),
+        the resident cache with a DEVICE row index (the traced decode contract),
+        and a cos table already replicated to at least `n_heads` rows -- see
+        `_decode_native` for why the rotation reads it row-wise here.
+        """
+        return (
+            self.qkv_plan is not None
+            and self.o_plan is not None
+            and kv_cache is not None
+            and cache_pos_tensor is not None
+            and self.qkv_plan.matches(hidden_states)
+            and int(cos.shape[-2]) >= self.n_heads
+        )
+
+    def _decode_native(self, hidden_states, cos, sin, kv_cache, cache_pos_tensor):
+        """One decode token, in the layout the decode kernels already want.
+
+        The generic path shapes Q/K/V as `[1, heads, seq, hd]` because that is
+        what a PREFILL SDPA reads. Nothing in a decode step reads it:
+        `paged_update_cache` wants `[1, batch, kv_heads, hd]` and
+        `scaled_dot_product_attention_decode` wants `[1, batch, q_heads, hd]`.
+        Getting from one to the other costs a reshape, a permute and a slice per
+        tensor, two more permutes for the cache writes and one back after the
+        attention -- about nine pure-layout ops per layer, each launching a
+        kernel to move a few KB. At 26 layers that is the single largest
+        non-matmul cost in the step, and the profiler tags every one of those ops
+        `bound_by=dispatch`: their cost IS the launch.
+
+        `nlp_create_qkv_heads_decode` produces the decode layout DIRECTLY from
+        the fused projection, L1-sharded one batch entry per core, so the whole
+        chain collapses to one op -- and its outputs are then already exactly
+        what the cache write and the decode SDPA take, with no permute at either
+        end. `paged_fused_update_cache` writes K and V in a single launch on top
+        of that.
+
+        The rotation stays in PREFILL mode. In this layout the heads sit on the
+        row axis, so the op walks cos/sin row-wise -- which is why the caller
+        replicates the single position's cos/sin up the tile ONCE PER TOKEN
+        (`_decode_native_applies` refuses the path otherwise). Every head rotates
+        by the same angle, so every row it reads is the same row: identical
+        arithmetic to broadcasting it, and the rotation now touches 4 tiles
+        instead of 160 (31 of every 32 rows in the old layout were tile padding).
+        """
+        k_cache, v_cache = kv_cache
+        fused = self.qkv_plan(hidden_states, self.wqkv, self.compute_kernel_config)
+        # [1, tile, qkv] -> [1, 1, batch=1, qkv]; the padded form keeps the tile
+        # row the projection actually wrote, so this is a view, not a copy.
+        fused = ttnn.reshape(fused, (1, 1, 1, self._v_end), (1, 1, _TILE, self._v_end))
+        query, key, value = ttnn.experimental.nlp_create_qkv_heads_decode(
+            fused, num_heads=self.n_heads, num_kv_heads=self.n_kv_heads
+        )
+        query = self._apply_rope(query, cos, sin)
+        key = self._apply_rope(key, cos, sin)
+        # Two writes, not `paged_fused_update_cache`. That op parallelises K and
+        # V across DISJOINT cores and rejects operands that share one
+        # ("input_tensor1 and input_tensor2 must not overlap"); at batch 1 the
+        # head-creation op puts K and V on the same single core, so there is no
+        # second core for it to use. The saving here was never that one op --
+        # it is that K and V arrive ALREADY in the sharded layout the cache
+        # write takes, so neither needs the permute + reshard the generic path
+        # pays to get there.
+        ttnn.experimental.paged_update_cache(k_cache, key, update_idxs_tensor=cache_pos_tensor)
+        ttnn.experimental.paged_update_cache(v_cache, value, update_idxs_tensor=cache_pos_tensor)
+        attn = ttnn.transformer.scaled_dot_product_attention_decode(
+            query, k_cache, v_cache, scale=self.scaling, cur_pos_tensor=cache_pos_tensor
+        )
+        # Already [1, 1, q_heads, hd]: merging the heads is the last two dims,
+        # emitted straight into o_proj's shard as the generic path also does.
+        merged = ttnn.reshape(
+            attn, (1, 1, self.n_heads * self.head_dim), memory_config=self.o_plan.input_memory_config
+        )
+        return self.o_plan.run_presharded(merged, self.wo, self.compute_kernel_config)
 
     def _write_cache_row(self, cache, tensor, cache_pos, cache_pos_tensor):
         """Write ONE token's K or V into the resident cache.
