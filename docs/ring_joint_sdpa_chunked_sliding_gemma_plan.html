@@ -22,7 +22,7 @@
   <h2>Problem statement</h2>
   <p><a href="https://github.com/tenstorrent/tt-metal/commit/4b673f79015c86d9d2ec7b46e31fb1d8932d22e3">Commit 4b673f79015</a> introduced a compact, one-hop predecessor halo for chunked causal sliding attention. For a ring of <code>R</code> devices and a per-device Q slab of <code>Qlocal</code>, one logical Q group is <code>G = R × Qlocal</code>.</p>
   <p>The original runtime validation rejects an invocation unless <code>logical_n ≥ 2G</code> and <code>logical_n % G == 0</code>:</p>
-  <pre>T_FATAL(args.logical_n &gt;= 2 * q_group_size,
+  <pre>TT_FATAL(args.logical_n &gt;= 2 * q_group_size,
         "Chunked sliding attention requires a complete predecessor and current Q group");</pre>
   <p>This incorrectly classifies the first complete chunk (<code>logical_n == G</code>) as invalid. The first group does not have a prior <em>group</em>, but it is still a valid causal sliding problem: device 0 clips its left window at token 0 and devices 1…R−1 obtain their predecessor from earlier devices in the same group.</p>
 
@@ -99,7 +99,7 @@ require ceil((window - 1) / k_chunk_size) * k_chunk_size &lt;= Qlocal</pre>
   <h2>Claude review</h2>
   <p><span class="status done">Reviewed</span> Claude independently confirmed the problem statement, root cause, and the first-group-versus-partial-group distinction. Its verdict was: <strong>approve the direction, but do not implement from the original draft without corrections</strong>.</p>
   <ul>
-    <li>Confirmed that all three threshold consumers must change together for <code>logical_n == G</code>, and that no fourth two-group gate was found.</li>
+    <li>Confirmed that all four threshold consumers must change together for <code>logical_n == G</code>: runtime validation, halo layout, halo-source selection, and Q work-plan construction.</li>
     <li>Confirmed the first-group wrap must clamp the source group to zero while preserving fixed transfer length; a zero-length/omitted transfer can desynchronize the protocol.</li>
     <li>Flagged that this checkout still contains the old code, so the plan now treats the historical commits as references rather than landed fixes.</li>
     <li>Flagged the mandatory Gemma structural gates, the compact-buffer sizing constraint, and the <code>NlocalKV</code>/<code>is_chunked()</code> preflight check; all are incorporated above.</li>

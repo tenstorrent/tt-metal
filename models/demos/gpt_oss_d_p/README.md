@@ -80,9 +80,10 @@ Per chip, per layer, one prefill chunk (`S_loc = S/SP`):
 - Sinks are stored **pre-divided by `config.scaling`** (the `1/√head_dim` softmax scale, i.e. ×√64),
   so the SDPA kernel's own `×scale` of the sink logit recovers the raw HF value (HF does not scale the sink).
 - Layers alternate `sliding_attention` (window 128) and `full_attention` off `hf_config.layer_types`.
-- **Every SP chunk uses the native ring cache-read** (`tt/attention/dense_sp.py`,
+- **Every chunked SP chunk uses the native ring cache-read** (`tt/attention/dense_sp.py`,
   RingJointSDPA) over the block-cyclic SP cache. Chunk 0 writes its K/V into the cache and uses the
-  same complete-first-group ring path as chunks 1+, avoiding a replicated Q/K/V bootstrap.
+  same complete-first-group ring path as chunks 1+. Equal-sized one-shot prefill retains the exact
+  replicated Q/K/V bootstrap because sliding RingJointSDPA requires short Q against a longer K/V cache.
 
 ## Testing
 

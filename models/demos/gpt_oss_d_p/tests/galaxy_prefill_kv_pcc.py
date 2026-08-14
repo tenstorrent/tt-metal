@@ -23,7 +23,7 @@ Env:
 
 Run (single Blackhole galaxy, after weights + golden are staged):
   export HF_MODEL=/path/to/gpt-oss-120b
-  export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+  export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
   PREFILL_TRACE_DIR=/path/to/golden/longbook_8192 \\
     python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py
 """
@@ -114,8 +114,9 @@ def main():
     from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
     from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
-    # Every SP prefill invocation, including one-shot, uses the cache-backed ring path. It therefore
-    # needs the cyclic torus route -> FABRIC_1D_RING + the torus mesh descriptor
+    # Chunked SP prefill uses the cache-backed ring path from chunk 0; one-shot uses the exact
+    # all-gather fallback. Both use ring collectives and therefore need the cyclic torus route
+    # -> FABRIC_1D_RING + the torus mesh descriptor
     # (TT_MESH_GRAPH_DESC_PATH=.../single_bh_galaxy_torus_xy_graph_descriptor.textproto).
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(ROWS, COLS))
