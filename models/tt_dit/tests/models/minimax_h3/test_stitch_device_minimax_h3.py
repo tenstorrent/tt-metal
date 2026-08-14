@@ -190,9 +190,7 @@ def test_pixel_denorm_fold_is_exact_and_commutes_with_the_blend():
     bias = torch.randn(out_features, dtype=torch.float64) * 0.1
     hidden = torch.randn(5, in_features, dtype=torch.float64)
 
-    vae = MiniMaxH3Vae(
-        config, mesh_device=None, pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD)
-    )
+    vae = MiniMaxH3Vae(config, mesh_device=None, pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD))
     state = {"proj_out.weight": weight.clone(), "proj_out.bias": bias.clone()}
     vae._fold_pixel_denorm(state)
 
@@ -243,9 +241,7 @@ def test_temporal_crossfade_survives_the_yuv_conversion():
     b = rng.uniform(-1, 1, size=(frames, 3, height, width))
 
     pos = np.arange(extent, dtype=np.float64).reshape(-1, 1, 1, 1)
-    rgb_blended = np.concatenate(
-        [a[-extent:] * (1 - pos / extent) + b[:extent] * (pos / extent), b[extent:]], axis=0
-    )
+    rgb_blended = np.concatenate([a[-extent:] * (1 - pos / extent) + b[:extent] * (pos / extent), b[extent:]], axis=0)
 
     convert_last = to_yuv420(rgb_blended)
     blend_last = blend_clip_frames(to_yuv420(a), to_yuv420(b), extent)
