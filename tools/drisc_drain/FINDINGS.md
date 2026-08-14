@@ -4198,8 +4198,9 @@ Capture: `tracy_captures/drisc_nocfp_plots_sd15.tracy`, SD delay 15, 120 cores, 
 footprint on, 18.78 MB, 126 contexts, 25 plots.
 
 > **CORRECTION (§N+46).** "Land on the device timebase" is right about the *conversion* and was measured on a
-> part where it was also right about the *result* -- but only because **bh-26 happens to give the DRAM-core and
-> Tensix-worker wall clocks a common origin**. The anchor these plots were converted against
+> part where it was also right about the *result* -- but only because **bh-26's Tensix-worker and DRAM-core wall
+> clocks advance in lockstep** (measured duty ratio 1.0000; on bh-05 the worker side runs at 0.09 of the DRAM
+> side and falls minutes behind). The anchor these plots were converted against
 > (`chip_anchors_[chip]`) is measured on a **Tensix worker**, while the samples are produced by a **DRAM core**.
 > On bh-05 (p100a) those two counters are zeroed by different events, so every number in the table below -- and
 > every DRISC zone -- sat **10-42 minutes** right of the workload. The containment percentages here are real for
@@ -4314,6 +4315,12 @@ not comparable to anything.
   tell you the trace is incomplete — check the BroadcastRing line.
 
 ## §N+44 — The profiler on a REAL model: ResNet-50 trace+2cq (bh-26, 2026-08-13)
+
+> **CORRECTION (§N+46): bh-26 is a `p100a`, not a p150.** `tt-smi` on 2026-08-14 reports `board_type p100a`,
+> `board_id 0000043231911006`, with firmware byte-identical to bh-05's. Every "bh-26 is a p150" / "p150 vs p100a"
+> comparison in this section and in §N+45 is therefore built on a wrong SKU attribution -- either the box was
+> re-provisioned or the original reading was wrong. Absolute times here are still not cross-box comparable (two
+> different physical cards), but **not for the reason stated**.
 
 First real-model run of the DRISC perf-debug profiler with the NoC-footprint instrument on. Everything below
 is from `models/demos/vision/classification/resnet50/blackhole/tests/test_perf_e2e_resnet50.py::test_perf_trace_2cqs[16-0.0018-30-device_params0]`
@@ -4798,11 +4805,47 @@ reset-then-run cadence that makes a worker anchor correct for a DRAM core. (With
 reason is sharper still: the DRAM counter banks ~20 s for every 32 s the card merely *exists*, so the offset is
 already tens of seconds before the first workload runs.)
 
-### It is BOARD-DEPENDENT — validate on bh-05, never on bh-26
+### It is PER-CARD — validate on bh-05, never on bh-26. And the anomaly is on the TENSIX side.
 
-On **bh-26** the same offset is **+0.003 ms after 5 hours of uptime**: that part evidently re-zeroes both
-counters at device open, so the bug does not exist there and a broken build looks perfect. Every §N+43 alignment
-number was taken on bh-26. **A fix that looks correct on bh-26 proves nothing.**
+On **bh-26** the offset is **microseconds**, so the bug is invisible there and a broken build looks perfect. Every
+§N+43 alignment number was taken on bh-26. **A fix that looks correct on bh-26 proves nothing.**
+
+Measured on bh-26 with the same 3-probe, 32 s-apart procedure (read-only; compiled to `/tmp` and linked against
+the existing lib, because **bh-26's `build_Release` is root-owned** — `docker exec` pollution, do not rebuild
+through it):
+
+| | worker advance | DRAM advance | worker/DRAM **duty ratio** | totals |
+|---|---|---|---|---|
+| **bh-26** | +19.60 s / 34 s | +19.60 s / 34 s | **1.0000** | 50.8 h ≡ 50.8 h |
+| **bh-05** | +1.82 s / 32 s | +19.75 s / 32 s | **0.09** | 72 s vs 1,675 s (**23x**) |
+
+bh-26's worker−DRAM offset across the three probes: **4.04, 5.45, 3.56 us** — that is just the latency between
+the two `read_reg` calls, i.e. **zero to measurement precision**, and it reproduces the "+0.003 ms" datum exactly.
+
+**This inverts the framing of the whole bug.** The DRAM counters are IDENTICAL on both cards (~19.6–19.8 s per
+32 s, ~60% of wall — the chip clock-gates when idle, on both). So the DRAM side is *normal everywhere*. What is
+anomalous is **bh-05's TENSIX wall clock, which is stopped ~91% of the time**. The worker-derived anchor is not
+"the wrong clock" so much as *a clock that has been frozen for most of the card's life*, and it falls behind by
+exactly the accumulated shortfall. On bh-26 the two domains run in lockstep, so borrowing the worker's anchor is
+accidentally valid.
+
+**Three explanations RULED OUT by measurement, so nobody re-runs them:**
+
+| hypothesis | verdict |
+|---|---|
+| different board SKU (§N+44 records bh-26 as a **p150**) | **FALSE — bh-26 reports `p100a`**, same as bh-05. Either it was re-provisioned or §N+44 is wrong. |
+| different card firmware (bh-05 has a `p100a.fwbundle` + `tt-flash`, i.e. it was flashed) | **FALSE — byte-identical**: `fw_bundle 19.12.0.0`, `cm_fw 0.34.0.0`, `dm_app_fw 0.28.0.0`, `gddr 2.16` on both. |
+| bh-26 re-zeroes both counters at device open | **FALSE** — bh-26's counters are monotonic across processes and read **50.8 h**, so they have not been zeroed since its last chip reset either. |
+
+So it is a **per-card difference between two same-SKU, same-firmware p100a boards**, and the residual question is
+why one card gates its Tensix clock domain at idle and the other does not. **NOT ESTABLISHED.** The obvious next
+experiment is a `tt-smi -r` on bh-05 followed by a re-probe: if the duty ratio returns to 1.0 the gating is a
+recoverable *state*, and if it stays at 0.09 it is a property of that part. Worth noting bh-05 is the box with the
+degraded-MMIO / VM-freeze / card-wedge history (§N+45, `degraded_state_is_mmio_latency`), so "this card is in an
+unusual state" is a live lead rather than a wild guess.
+
+**None of this changes the fix**, which measures the actual per-core offset at every device open and is therefore
+correct on a card with a duty ratio of 1.0000 and on one at 0.09 alike.
 
 ### PREREQUISITE, proven before any profiler edit: a DRAM tile answers the wall-clock register
 
