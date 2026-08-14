@@ -2040,6 +2040,73 @@ carry how confident it is and what it covered, not just what it concluded.**
 
 ---
 
+## ★★★ F20 — the meta-plan already knows. It is wired to stdout, not to control flow.
+
+**This is the most actionable finding in this document, and the cheapest to fix, because the
+analysis already exists and is good.**
+
+Before failing, `auto-up`'s advisory meta-plan wrote this about the three-block model — unprompted,
+with no access to anything in this file:
+
+> *This is a three-stage TTS pipeline (an LLM-style 26-layer backbone, an audio codec decoder, and
+> a flow-matching vocoder) being routed into `tt_transformers/simple_text_demo` purely by
+> category-default*
+
+Its six listed risks are, one for one, the findings the rest of this document arrived at the hard
+way:
+
+| the meta-plan said | this document filed it as |
+|---|---|
+| *"Backend selection is a category-default match, not a genuine 'voxtral_tts' match — simple_text_demo assumes causal text-token generation"* | **F19** (template dispatch runs a different model) |
+| *"Early success graduating the 26-layer backbone (the 'easy' REUSE/ADAPT part) may create false confidence that masks the fact that the two hard components are architecturally out of scope"* | **F16 / F18** (READY overclaims scope) — stated better than I stated it |
+| *"Do not evaluate codec_decoder/flow_matching against simple_text_demo's logit-based PCC harness — they need a waveform/mel-level comparison harness, which doesn't exist in this backend"* | the **whole correctness-gate argument** (O9, §3 of the optimizer analysis) |
+| *"Both audio-specific components show leaves=1, meaning the discovery tracer could not see inside them"* | **F17** (structure declared, not read) |
+| *"flow-matching ... a multi-step numerical integration loop, not a fixed op graph — which the op catalog has no [coverage for]"* | the `structural` rung's missing sub-levers |
+| *"variable-step sampling overlaps with the already-flagged unsupported 'DynamicShape' NEW-op category"* | — |
+
+It then recommended, correctly:
+
+> *"Cap auto-iterate retry budget on codec_decoder and flow_matching specifically and escalate to
+> human review early, rather than letting the loop retry against op patterns that were never in its
+> catalog."*
+
+And immediately printed:
+
+```
+(advisory only; proceeding with auto-iterate loop. Disable via --no-meta-plan.)
+```
+
+**It identified two components as architecturally out of scope, recommended capping their retry
+budget and escalating to a human, and then proceeded to do exactly what it had just warned
+against.** The run subsequently died on an iteration-budget timeout — spent on the components the
+meta-plan had named half an hour earlier.
+
+### Why this reframes most of this document
+
+The gap in this tool is **not analysis**. A component of it already produces a better architectural
+critique than the rest of the pipeline acts on. Every finding above — the name-based family gate,
+the overloaded `READY`, the template substitution, the logit-only correctness harness — is visible
+to the meta-plan and invisible to the code that makes decisions.
+
+### Suggested fix, in increasing order of ambition
+
+1. **Let the meta-plan set budgets.** It already emits per-component risk. Feeding
+   `cap_iterations(component, n)` and `escalate_to_human(component)` back into the loop is a
+   plumbing change, not a research one — and it is the tool's own recommendation.
+2. **Let it veto a backend.** When it says *"backend selection is a category-default match, not a
+   genuine match"*, that is F19's check already written in prose. Make it a refusal.
+3. **Let it select the correctness harness.** *"they need a waveform/mel-level comparison harness"*
+   is the gate-design decision the optimizer half needs (O9). The meta-plan knows which harness a
+   component requires; nothing asks it.
+
+**Until then the tool prints an accurate diagnosis and then ignores it, which is a worse user
+experience than not producing the diagnosis at all** — the run looks informed and behaves as though
+it is not.
+
+*(Recorded verbatim in `autoup_full2.log` lines 175-193.)*
+
+---
+
 ## Corrections to this document
 
 - **`beat_baseline: false` on 24/24 kernel records is BY DESIGN, not a defect.** I flagged it as a
