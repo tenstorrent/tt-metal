@@ -64,10 +64,13 @@ class KimiK3Adapter(MLAPrefillAdapter):
     # loading all 1.5 TB -- before the supports_pretrained skip in the fixture body runs.
     shared_path = None
 
-    # Device vs upstream KimiSparseMoeBlock, measured 0.995692 on 2x4. Tighter than
-    # test_kimi_k3_moe's final_output_pcc (0.965) even though both compare the same device tensor:
-    # the two references agree to 1.7e-5, so this side has no reference-side slack to absorb.
-    moe_pcc_threshold = 0.99
+    # Device vs upstream KimiSparseMoeBlock. Held at test_kimi_k3_moe's final_output_pcc: the two
+    # compare the same device tensor against references that agree to 1.7e-5, so they measure the
+    # same thing and cannot carry different bars. The old 0.99 was measured on 2x4 (0.995692) and
+    # does not transfer -- 8x4 spreads 896 experts over 32 chips instead of 8, so the top-16 combine
+    # accumulates across 4x as many chips in the bf8 latent space, and both checks land together at
+    # 0.9694 (reference 0.969434, final_output 0.969454). 0.965 keeps the usual ~0.005 of margin.
+    moe_pcc_threshold = 0.965
 
     @property
     def config_builder(self) -> Callable:
