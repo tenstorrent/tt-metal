@@ -113,8 +113,15 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     }
 
     auto& ctx = tt::tt_metal::MetalContext::instance();
+    // Compile-only mode pre-compiles kernels without executing: build the workload's kernels, then
+    // skip binary load + dispatch. Compilation is a distinct step from the enqueue below, so we can
+    // stop after it. See RunTimeOptions::compile_only.
+    const bool compile_only = ctx.rtoptions().get_compile_only();
     if (ctx.rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
+        if (compile_only) {
+            return;
+        }
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
     } else if (ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
@@ -123,6 +130,14 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         // kernel artifacts are still produced; the SD CQ then no-ops the skipped dispatch.
         // Mock only, not is_mock_or_emulated(): Emule builds kernels via its own host-JIT path.
         mesh_workload.impl().compile(mesh_cq.device());
+        if (compile_only) {
+            return;
+        }
+    } else if (compile_only) {
+        // Slow dispatch (non-mock) JIT-compiles inside enqueue_mesh_workload/LaunchProgram; for
+        // compile-only we must build the kernels explicitly here and then skip the dispatch.
+        mesh_workload.impl().compile(mesh_cq.device());
+        return;
     }
     mesh_cq.enqueue_mesh_workload(mesh_workload, blocking);
 }

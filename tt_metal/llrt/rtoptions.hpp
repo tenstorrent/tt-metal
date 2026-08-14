@@ -358,6 +358,11 @@ class RunTimeOptions {
     // Force JIT compile even if dependencies are up to date
     bool force_jit_compile = false;
 
+    // Compile-only mode: run host-side op setup + JIT-compile all kernels, but SKIP device
+    // dispatch. Used to pre-compile a whole model's kernels without executing anything. Any op that
+    // reads device tensor DATA (a data-dependent shape/arg) asserts, since values are never computed.
+    bool compile_only = false;
+
     // Store command queues in device DRAM
     bool dram_backed_cq_env_var_set = false;
     bool dram_backed_cq = false;
@@ -861,6 +866,9 @@ public:
 
     bool get_force_jit_compile() const { return force_jit_compile; }
     void set_force_jit_compile(bool enable) { force_jit_compile = enable; }
+
+    bool get_compile_only() const { return compile_only; }
+    void set_compile_only(bool enable) { compile_only = enable; }
 
     bool get_numa_based_affinity() const { return numa_based_affinity; }
 
