@@ -57,3 +57,20 @@ mailbox before `main`. After that wait succeeds the firmware prints
 
 Success includes `AB_CONFIG_READY: config latched on ISS` and
 `amoadd.d xN -> counter=N OK`.
+
+## Test harness
+
+`./run_harness.sh` builds a host-side Spike wrapper (`x280_harness`) that
+runs any LIM-linked ELF and can copy host files into guest physical memory
+(`--load FILE@ADDR`) or dump guest memory back to a file (`--dump ADDR+LEN:FILE`).
+
+```bash
+./run_harness.sh                  # bundled C benchmarks + load/dump checks
+./run_harness.sh harness/tests/fib.c
+./run_harness.sh build/out/hello.elf
+./run_harness.sh my.bin.elf --load payload.bin@0x08140000 --dump 0x08140000+256:out.bin
+```
+
+C files are linked with `src/boot.S` + `src/htif.c` at `0x08001000`. Guest
+payloads should use addresses in LIM above the linked image; `harness/guest.h`
+defines `HARNESS_DATA_BASE` (`0x08140000`).
