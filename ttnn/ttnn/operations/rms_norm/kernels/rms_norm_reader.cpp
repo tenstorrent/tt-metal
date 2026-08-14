@@ -48,6 +48,31 @@ constexpr uint32_t cb_shard_in = 13;  // ROW_MAJOR + sharded: the resident input
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
+// A DRAM read must start on this boundary; a misaligned one silently returns the
+// wrong bytes.  Only the ROW_MAJOR-sharded gamma slice can be misaligned (its
+// width granule is the L1 alignment, not the tile), and it takes the hand-placed
+// path below.
+constexpr uint32_t DRAM_ALIGN_BYTES = 64;
+
+// Place `n_elems` gamma values into the row-0 lanes of `tiles` consecutive tiles.
+// Row 0 straddles two faces: face0 row0 at element 0, face1 row0 at 16*16.
+// Everything else in the tile is already zero (NoC-zeroed by the caller), and
+// BroadcastDim::Row reads row 0 only, so these are the only lanes that exist.
+template <typename T>
+inline void scatter_gamma_row0(
+    uint32_t src_l1, uint32_t dst_l1, uint32_t tile_bytes, uint32_t n_elems, uint32_t tiles) {
+    auto* src = reinterpret_cast<volatile tt_l1_ptr T*>(src_l1);
+    for (uint32_t t = 0; t < tiles; ++t) {
+        auto* face0 = reinterpret_cast<volatile tt_l1_ptr T*>(dst_l1 + t * tile_bytes);
+        auto* face1 = face0 + FACE_DIM * FACE_DIM;
+        for (uint32_t i = 0; i < FACE_DIM; ++i) {
+            const uint32_t e0 = t * TILE_DIM + i;
+            const uint32_t e1 = e0 + FACE_DIM;
+            face0[i] = (e0 < n_elems) ? src[e0] : T(0);
+            face1[i] = (e1 < n_elems) ? src[e1] : T(0);
+        }
+    }
+}
 
 void kernel_main() {
     // ---- mcast wire (CT 0..4, RT 0..3) ----
@@ -171,6 +196,29 @@ void kernel_main() {
             for (uint32_t t = 0; t < valid_tiles; ++t) {
                 noc_async_read(
                     gamma_accessor.get_noc_addr(slice_base + t), gamma_l1 + t * GAMMA_TILE_BYTES, GAMMA_TILE_BYTES);
+            }
+        } else if (slice_elem_base * GAMMA_ELEM_BYTES % DRAM_ALIGN_BYTES != 0) {
+            // ROW_MAJOR gamma, slice NOT on a DRAM-alignment boundary.  Only a
+            // ROW_MAJOR *shard* can land here: its width granule is the L1
+            // alignment (8 elements for bf16), so a width/block shard's slice can
+            // start mid-DRAM-burst — and a misaligned DRAM read returns garbage
+            // rather than an error.  One aligned burst covers the whole slice
+            // (<= a few hundred elements, read ONCE per kernel); the 32 lanes per
+            // tile that BroadcastDim::Row actually reads are then placed by hand.
+            // That is the "zero over the NoC, hand-write only the real lanes"
+            // pattern, not a whole-tile CPU fill: only row 0 of each face is
+            // touched and the rest of the CB is already zero.
+            const uint32_t byte0 = slice_elem_base * GAMMA_ELEM_BYTES;
+            const uint32_t aligned_base = byte0 & ~(DRAM_ALIGN_BYTES - 1);
+            const uint32_t delta = byte0 - aligned_base;
+            const uint32_t scratch_l1 = gamma_l1 + SLICE_HIDDEN_TILES * GAMMA_TILE_BYTES;
+            noc_async_read(
+                gamma_accessor.get_noc_addr(0, aligned_base), scratch_l1, delta + valid_w * GAMMA_ELEM_BYTES);
+            noc_async_read_barrier();
+            if constexpr (GAMMA_ELEM_BYTES == 4) {
+                scatter_gamma_row0<uint32_t>(scratch_l1 + delta, gamma_l1, GAMMA_TILE_BYTES, valid_w, valid_tiles);
+            } else {
+                scatter_gamma_row0<uint16_t>(scratch_l1 + delta, gamma_l1, GAMMA_TILE_BYTES, valid_w, valid_tiles);
             }
         } else {
             // ROW_MAJOR gamma is ONE stick of W elements. Only row 0 of each tile

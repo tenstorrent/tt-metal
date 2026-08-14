@@ -52,6 +52,9 @@ assert IN_CB_DEPTH == 1, "cb_input_tiles must be exactly one block deep (in-plac
 L1_SIZE_PER_CORE_FALLBACK = 1024 * 1024
 L1_RESERVE = 96 * 1024  # firmware / kernel text / semaphores headroom
 
+# DRAM read-start granule (mirrors DRAM_ALIGN_BYTES in the reader kernel).
+DRAM_ALIGN_BYTES = 64
+
 # ---------------------------------------------------------------------------
 # CB indices (semantic names; the numeric slot is just the buffer index)
 # ---------------------------------------------------------------------------
@@ -154,7 +157,15 @@ def _tile_geometry(input_tensor):
     else:
         # ROW_MAJOR: rows are contiguous and may fold across image boundaries,
         # because the reduce runs along W only (rows never interact).
-        total_sticks = input_tensor.buffer_num_pages()
+        #
+        # Counted from the shape, NOT from buffer_num_pages(): a ROW_MAJOR page is
+        # one *buffer* stick, and a width- or block-sharded buffer's stick is the
+        # SHARD's width, so buffer_num_pages() there is (sticks x width-shards),
+        # not the tensor's stick count.  RM carries no tile padding, so the padded
+        # shape is the logical one.
+        total_sticks = 1
+        for d in padded[:-1]:
+            total_sticks *= d
         row_tiles = _div_up(total_sticks, TILE_DIM)
 
     return row_tiles, hidden_tiles, w, total_sticks
@@ -184,7 +195,17 @@ def _footprint_bytes(block_rows, slice_tiles, num_slices, *, is_row_major, has_g
     return total
 
 
-def _footprint_bytes_sharded(block_rows, slice_tiles, num_slices, *, is_row_major, has_gamma, bytes_):
+def _footprint_bytes_sharded(
+    block_rows,
+    slice_tiles,
+    num_slices,
+    *,
+    is_row_major,
+    has_gamma,
+    bytes_,
+    rm_in_depth=RM_IN_DEPTH,
+    rm_out_depth=RM_OUT_DEPTH,
+):
     """Per-core CB bytes on the SHARDED path.
 
     Same ledger as `_footprint_bytes`, minus the two buffers that are no longer
@@ -197,8 +218,8 @@ def _footprint_bytes_sharded(block_rows, slice_tiles, num_slices, *, is_row_majo
     total = 0
     if is_row_major:
         total += b * s_ * bytes_["in_tile"] * IN_CB_DEPTH  # cb_input_tiles (tilize target)
-        total += RM_IN_DEPTH * s_ * bytes_["in_tile"]  # cb_rm_stage_in
-        total += RM_OUT_DEPTH * s_ * bytes_["out_tile"]  # cb_rm_stage_out
+        total += rm_in_depth * s_ * bytes_["in_tile"]  # cb_rm_stage_in
+        total += rm_out_depth * s_ * bytes_["out_tile"]  # cb_rm_stage_out
     if has_gamma:
         total += s_ * bytes_["gamma_tile"]  # cb_gamma_tiles
     total += b * bytes_["stat_tile"]  # cb_sq_partials
@@ -287,21 +308,36 @@ def _plan_sharded(device, input_tensor, *, has_gamma, bytes_):
     # CB-heap allocations), then the coarsest row block that fits the remainder.
     shard_tiles = shard_rows * slice_tiles
     budget = _l1_working_budget(device) - shard_tiles * (bytes_["in_tile"] + bytes_["out_tile"])
-    block_rows = 1
-    for cand in range(shard_rows, 0, -1):
+
+    def _fits(b, in_depth, out_depth):
+        return (
+            _footprint_bytes_sharded(
+                b,
+                slice_tiles,
+                num_hidden_slices,
+                is_row_major=is_row_major,
+                has_gamma=has_gamma,
+                bytes_=bytes_,
+                rm_in_depth=in_depth,
+                rm_out_depth=out_depth,
+            )
+            <= budget
+        )
+
+    # Turn the coarse knobs first, the overlap knobs only if that is not enough.
+    # A shard pins slice_hidden_tiles, so on the ROW_MAJOR path (three S-sized
+    # staging buffers) the buffer-DEPTH knobs are the only remaining slack.
+    block_rows, rm_in_depth, rm_out_depth = 1, RM_IN_DEPTH, RM_OUT_DEPTH
+    for in_depth, out_depth in ((RM_IN_DEPTH, RM_OUT_DEPTH), (1, RM_OUT_DEPTH), (1, 1)):
         # A divisor keeps every block the same size, which is what lets the
         # resident-shard CB stay exactly full at every block boundary (the
         # in-place rewrite of x needs get_write_ptr() == get_read_ptr()).
-        if shard_rows % cand:
-            continue
-        if (
-            _footprint_bytes_sharded(
-                cand, slice_tiles, num_hidden_slices, is_row_major=is_row_major, has_gamma=has_gamma, bytes_=bytes_
-            )
-            <= budget
-        ):
-            block_rows = cand
+        chosen = next((b for b in range(shard_rows, 0, -1) if shard_rows % b == 0 and _fits(b, in_depth, out_depth)), 0)
+        if chosen:
+            block_rows, rm_in_depth, rm_out_depth = chosen, in_depth, out_depth
             break
+        if not is_row_major:
+            break  # the depth knobs are ROW_MAJOR-only; nothing more to turn
 
     grid = device.compute_with_storage_grid_size()
     return {
@@ -314,6 +350,8 @@ def _plan_sharded(device, input_tensor, *, has_gamma, bytes_):
         "block_rows": block_rows,
         "rect_w": 0,
         "rect_h": 0,
+        "rm_in_depth": rm_in_depth,
+        "rm_out_depth": rm_out_depth,
         "sharded": True,
         "cores": cores,
         "shard_rows": shard_rows,
@@ -385,6 +423,8 @@ def _plan(device, input_tensor, *, has_gamma, bytes_):
         "block_rows": block_rows,
         "rect_w": rect_w,
         "rect_h": rect_h,
+        "rm_in_depth": RM_IN_DEPTH,
+        "rm_out_depth": RM_OUT_DEPTH,
         "sharded": False,
         "cores": None,
         "shard_rows": 0,
@@ -437,6 +477,8 @@ def create_program_descriptor(
     shard_rows = plan["shard_rows"]
     shard_tiles = plan["shard_tiles"]
     shard_w = plan["shard_w"]
+    rm_in_depth = plan["rm_in_depth"]
+    rm_out_depth = plan["rm_out_depth"]
 
     shape = list(input_tensor.shape)
     W = shape[-1]
@@ -588,13 +630,21 @@ def create_program_descriptor(
         # mask_tail_block are gated on the same predicate.  Matches l1_ledger.md.
         cbs.append(_cb(CB_W_MASK, 1, bf16_tile, ttnn.bfloat16))
     if has_gamma:
-        cbs.append(_cb(CB_GAMMA_TILES, S, gamma_tile, gamma.dtype))
+        # A ROW_MAJOR *shard*'s slice can start off the 64 B DRAM boundary (its
+        # width granule is the L1 alignment, not the tile), so the reader reads
+        # one DRAM-aligned burst covering the whole slice into scratch pages past
+        # the S real tiles and hand-places the row-0 lanes.  Sized to hold the
+        # slice plus the alignment slack.
+        gamma_scratch = (
+            _div_up(DRAM_ALIGN_BYTES + S * TILE_DIM * gamma_elem, gamma_tile) if (sharded and is_row_major) else 0
+        )
+        cbs.append(_cb(CB_GAMMA_TILES, S + gamma_scratch, gamma_tile, gamma.dtype))
     if S_COUNT > 1:
         cbs.append(_cb(CB_GATHERED_PARTIALS, S_COUNT * B, stat_tile, ttnn.float32))
         cbs.append(_cb(CB_RMS_BCAST, B, stat_tile, ttnn.float32))
     if is_row_major:
-        cbs.append(_cb(CB_RM_STAGE_IN, RM_IN_DEPTH * S, in_tile, input_tensor.dtype))
-        cbs.append(_cb(CB_RM_STAGE_OUT, RM_OUT_DEPTH * S, out_tile, output_tensor.dtype))
+        cbs.append(_cb(CB_RM_STAGE_IN, rm_in_depth * S, in_tile, input_tensor.dtype))
+        cbs.append(_cb(CB_RM_STAGE_OUT, rm_out_depth * S, out_tile, output_tensor.dtype))
 
     # ---- compile-time args ----
     # A TILE shard is consumed in place, so cb_input_tiles' capacity is the WHOLE
@@ -621,7 +671,7 @@ def create_program_descriptor(
         SEM_GATHER_PROGRESS,
         stat_tile,
         DM_CHUNK_TILES,
-        RM_IN_DEPTH * S,
+        rm_in_depth * S,
         1 if mask_enabled else 0,
         1 if sharded else 0,
         in_wait_tiles,
