@@ -4,13 +4,14 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 #ifdef TRISC_MATH
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_custom_mm_api.h"
+#include "experimental/llk_math_sdpa_custom_mm_api.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "experimental/llk_unpack_AB_custom_mm_api.h"
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_sdpa_custom_mm_api.h"
+#include "experimental/llk_unpack_AB_sdpa_custom_mm_api.h"
 #endif
 namespace ckernel {
 
@@ -32,9 +33,9 @@ ALWI void sdpa_custom_mm_block_init(
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     MATH((llk_math_sdpa_custom_mm_init<transpose>(in0_cb_id, in1_cb_id, ct_dim)));
 
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, ckernel::PackMode::Default>()));
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
-    PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
+    PACK((llk_pack_init<ckernel::PackMode::Default, false>(out_cb_id)));
 
     sdpa_custom_mm_block_init_pack_short();
 }
@@ -53,7 +54,7 @@ ALWI void sdpa_custom_mm_block_init_short(
     }
 }
 
-template <bool read_transposed = false>
+template <bool read_transposed = false, std::uint32_t signal_granularity = 1>
 ALWI void sdpa_custom_mm_block(
     const std::uint32_t in0_cb_id,
     const std::uint32_t in1_cb_id,
@@ -66,7 +67,7 @@ ALWI void sdpa_custom_mm_block(
     const bool mask_chunk = false) {
     UNPACK((llk_unpack_AB_sdpa_custom_mm<read_transposed>(
         in0_cb_id, in1_cb_id, mask_cb_id, in0_tile_index, in1_tile_index, kt_dim, ct_dim, mask_chunk)));
-    MATH((llk_math_sdpa_custom_mm(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim, mask_chunk)));
+    MATH((llk_math_sdpa_custom_mm<signal_granularity>(in0_cb_id, in1_cb_id, dst_index, kt_dim, ct_dim, mask_chunk)));
 }
 
 ALWI void sdpa_custom_mm_block_uninit() {

@@ -110,6 +110,9 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/mul_reduce_scalar.h
     inc/api/compute/experimental/rmsnorm.h
     inc/api/compute/experimental/rope_sfpu.h
+    inc/api/compute/experimental/sdpa.h
+    inc/api/compute/experimental/sdpa_custom_mm.h
+    inc/api/compute/experimental/sdpa_custom_mm_reuse_dest_srcb.h
     inc/api/compute/experimental/semaphore.h
     inc/api/compute/experimental/sum_reduce_scalar.h
     inc/api/compute/binary_fmod.h

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,61 +18,51 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 template <
-    uint32_t num_tiles,
-    BroadcastType BType = BroadcastType::NONE,
-    bool acc_to_dest = false,
+    std::uint32_t num_tiles,
+    BroadcastType BType                          = BroadcastType::NONE,
+    bool acc_to_dest                             = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest = false>
+    bool unpack_to_dest                          = false>
 inline void _llk_unpack_A_sdpa_mop_config_(
-    const bool transpose_of_faces,
-    const std::uint32_t num_faces,
-    const std::uint32_t unpack_src_format,
-    const std::uint32_t unpack_dst_format = 0) {
+    const bool transpose_of_faces, const std::uint32_t num_faces, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format = 0)
+{
     static_assert(
         (((BType == BroadcastType::NONE) && (!acc_to_dest) && (binary_reuse_dest == EltwiseBinaryReuseDestType::NONE))),
         "Not supported configuration when unpacking to dest!");
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    static constexpr uint unpack_srca = TT_OP_UNPACR(
-        SrcA,
-        0b1 /*Z inc*/,
-        0,
-        0,
-        0,
-        1 /* Set OvrdThreadId*/,
-        1 /*Set Dvalid*/,
-        p_unpacr::RAREFYB_DISABLE,
-        0,
-        0,
-        0,
-        0,
-        1);
-    if (num_faces == 1) {
-        constexpr uint32_t outerloop = 1;
-        constexpr uint32_t innerloop = num_tiles;
+    static constexpr std::uint32_t unpack_srca =
+        TT_OP_UNPACR(SrcA, 0b1 /*Z inc*/, 0, 0, 0, 1 /* Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    if (num_faces == 1)
+    {
+        constexpr std::uint32_t outerloop = 1;
+        constexpr std::uint32_t innerloop = num_tiles;
         ckernel_template tmp(outerloop, innerloop, unpack_srca);
         tmp.program();
-    } else {
-        constexpr uint32_t outerloop = 1;
-        const uint32_t innerloop = num_tiles * num_faces / 2;
+    }
+    else
+    {
+        constexpr std::uint32_t outerloop = 1;
+        const std::uint32_t innerloop     = num_tiles * num_faces / 2;
         ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srca);
         tmp.program();
     }
 }
 
 template <
-    uint32_t num_tiles,
-    BroadcastType BType = BroadcastType::NONE,
-    bool acc_to_dest = false,
+    std::uint32_t num_tiles,
+    BroadcastType BType                          = BroadcastType::NONE,
+    bool acc_to_dest                             = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
-    bool unpack_to_dest = false>
+    bool unpack_to_dest                          = false>
 inline void _llk_unpack_A_sdpa_init_(
-    const std::uint32_t transpose_of_faces = 0,
+    const std::uint32_t transpose_of_faces          = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t face_r_dim = FACE_R_DIM,
-    const std::uint32_t num_faces = 4,
-    const std::uint32_t unpack_src_format = 0,
-    const std::uint32_t unpack_dst_format = 0) {
+    const std::uint32_t face_r_dim                  = FACE_R_DIM,
+    const std::uint32_t num_faces                   = 4,
+    const std::uint32_t unpack_src_format           = 0,
+    const std::uint32_t unpack_dst_format           = 0)
+{
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
     // Set transpose register to prevent state pollution
@@ -90,12 +80,14 @@ inline void _llk_unpack_A_sdpa_init_(
         transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
 }
 
-inline void _llk_unpack_A_sdpa_set_srcb_dummy_valid_() {
+inline void _llk_unpack_A_sdpa_set_srcb_dummy_valid_()
+{
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
     TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
 }
 
-inline void _llk_unpack_A_sdpa_set_srca_srcb_dummy_valid_() {
+inline void _llk_unpack_A_sdpa_set_srca_srcb_dummy_valid_()
+{
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK);
     TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
     TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC);

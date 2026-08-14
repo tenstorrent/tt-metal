@@ -10,6 +10,7 @@
 #include "ckernel_ops.h"
 #include "ckernel_template.h"
 #include "cmath_common.h"
+#include "llk_assert.h"
 #include "llk_math_common.h"
 
 using namespace ckernel;
@@ -26,32 +27,31 @@ inline void sdpa_custom_mm_reuse_dest_srcb_configure_addrmod(
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
     const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
-    const bool partial_face = false) {
-    addr_mod_t{
+    const bool partial_face            = false)
+{
+    addr_mod_t {
         .srca = {.incr = 16, .clr = 0, .cr = 0},
         .srcb = {.incr = 0, .clr = 0, .cr = 0},
         .dest = {.incr = 8, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_0);
 
-    addr_mod_t{
-        .srca = {.incr = 16, .clr = 0, .cr = 0},
-        .srcb = {.incr = 8, .clr = 0, .cr = 0},
-        .dest = {.incr = 0, .clr = 0, .cr = 1},  // Return to tile base
+    addr_mod_t {
+        .srca = {.incr = 16, .clr = 0, .cr = 0}, .srcb = {.incr = 8, .clr = 0, .cr = 0}, .dest = {.incr = 0, .clr = 0, .cr = 1}, // Return to tile base
     }
         .set(ADDR_MOD_1);
 
-    addr_mod_t{
+    addr_mod_t {
         .srca = {.incr = 0, .clr = 0, .cr = 0},
         .srcb = {.incr = 0, .clr = 0, .cr = 0},
         .dest = {.incr = 0, .clr = 0, .cr = 0},
     }
         .set(ADDR_MOD_2);
 
-    addr_mod_t{
+    addr_mod_t {
         .srca = {.incr = 0, .clr = 1, .cr = 0},
         .srcb = {.incr = 0, .clr = 1, .cr = 0},
-        .dest = {.incr = 8, .clr = 0, .cr = 0, .c_to_cr = 1},  // Update to next tile
+        .dest = {.incr = 8, .clr = 0, .cr = 0, .c_to_cr = 1}, // Update to next tile
     }
         .set(ADDR_MOD_3);
 }
@@ -64,7 +64,8 @@ inline void sdpa_custom_mm_reuse_dest_srcb_configure_mop(
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
     const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
-    const bool partial_face = false) {
+    const bool partial_face            = false)
+{
     // Select MOV instruction count based on output tile height (in0_tile_r_dim)
     // m=1/4: 4 MOVs (MOV_4_ROWS), m=8: no tail reduction
     // Replay buffer size: m=8: 8 MVMULs, m=1/4: 8 MVMULs + 4 MOVs + 2 ELWADDs = 14
@@ -76,11 +77,12 @@ inline void sdpa_custom_mm_reuse_dest_srcb_configure_mop(
         ckernel::math::replay_buf_offset,
         4,
         // Lambda function to load reply buffer
-        [] {
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);  // 16
-            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);  // 0 (32)
-            TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_3, 0);     // 16 (48)
+        []
+        {
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // 0
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0); // 16
+            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0); // 0 (32)
+            TTI_MVMUL(p_setrwc::CLR_A, 0, ADDR_MOD_3, 0);    // 16 (48)
         });
 }
 
@@ -90,9 +92,10 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_init_(
     const std::uint32_t in0_tile_c_dim = TILE_C_DIM,
     const std::uint32_t in1_tile_r_dim = TILE_R_DIM,
     const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
-    const bool partial_face = false,
-    const std::uint32_t transpose = 0,
-    const std::uint32_t kt_dim = 1) {
+    const bool partial_face            = false,
+    const std::uint32_t transpose      = 0,
+    const std::uint32_t kt_dim         = 1)
+{
     sdpa_custom_mm_reuse_dest_srcb_configure_addrmod<math_fidelity>(
         transpose, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
 
@@ -106,37 +109,53 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_init_(
 // Runtime parameter signal_output:
 //   false (default): Full sdpa_custom_mm_reuse_dest_srcb - MVMULs for all K tiles + finalization
 //   true: Partial K accumulation - MVMULs only, NO finalization (for intermediate K subblocks)
-template <std::uint32_t output_granularity>
+template <std::uint32_t output_granularity, std::uint32_t input_granularity = 1>
 inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
-    uint src_index,
-    uint dst_index,
+    std::uint32_t src_index,
+    std::uint32_t dst_index,
     [[maybe_unused]] const bool transpose = false,
-    const std::uint32_t kt_dim = 1,
-    const std::uint32_t nt_dim = 1,
-    bool signal_output = false) {
+    const std::uint32_t kt_dim            = 1,
+    const std::uint32_t nt_dim            = 1,
+    bool signal_output                    = false)
+{
     static_assert(output_granularity >= 1, "output_granularity must be >= 1");
-    constexpr uint32_t SFPU_FPU = ckernel::semaphore::UNPACK_MATH_DONE;
-    uint32_t dest_buffer_base = get_dest_buffer_base();
+    static_assert(input_granularity >= 1, "input_granularity must be >= 1");
+    constexpr std::uint32_t SFPU_FPU = ckernel::semaphore::UNPACK_MATH_DONE;
+    std::uint32_t dest_buffer_base   = get_dest_buffer_base();
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU | p_stall::SRCB_VLD);
-    for (uint32_t i = 0; i < kt_dim; i++) {
+    for (std::uint32_t i = 0; i < kt_dim; i++)
+    {
         TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, src_index + i * 8 * 2 + dest_buffer_base);
         math::reset_counters(p_setrwc::SET_ABD_F);
-        t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU);
+        if (i % input_granularity == 0)
+        {
+            t6_semaphore_wait_on_zero<p_stall::STALL_MATH>(SFPU_FPU);
+        }
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, 0);
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 4, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, 4);
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 8, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, 8);
         TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 12, ADDR_MOD_2, p_movd2b::MOV_4_ROWS, 12);
-        t6_semaphore_get<p_stall::MATH>(SFPU_FPU);
+        if (i % input_granularity == input_granularity - 1 || i == kt_dim - 1)
+        {
+            t6_semaphore_get<p_stall::MATH>(SFPU_FPU);
+        }
         TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index + dest_buffer_base);
-        if (signal_output && i == kt_dim - 1) {
-            for (uint32_t j = 0; j < nt_dim / output_granularity; j++) {
-                for (std::uint32_t g = 0; g < output_granularity; g++) {
+        if (signal_output && i == kt_dim - 1)
+        {
+            LLK_ASSERT(nt_dim % output_granularity == 0, "nt_dim must be divisible by output_granularity for FPU->SFPU output signal counts to balance");
+            for (std::uint32_t j = 0; j < nt_dim / output_granularity; j++)
+            {
+                for (std::uint32_t g = 0; g < output_granularity; g++)
+                {
                     lltt::replay(ckernel::math::replay_buf_offset, 4);
                 }
                 t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU);
             }
-        } else {
-            for (uint32_t j = 0; j < nt_dim; j++) {
+        }
+        else
+        {
+            for (std::uint32_t j = 0; j < nt_dim; j++)
+            {
                 lltt::replay(ckernel::math::replay_buf_offset, 4);
             }
         }
