@@ -234,26 +234,7 @@ ttnn.attach_golden_function(ttnn.reshape, golden_function=_golden_function)
 ttnn.register_python_operation(name="ttnn.unsqueeze_to_4D")(ttnn._ttnn.operations.core.unsqueeze_to_4D)
 
 
-def _golden_function(input_tensor, dtype=None, *args, spec=None, **kwargs):
-    import torch
-
-    if input_tensor is None:
-        return input_tensor
-    if dtype is None and spec is not None:
-        dtype = spec.dtype
-    # Mirror from_torch's dtype conversion so comparison uses the output dtype
-    # (e.g. uint16) instead of the raw, possibly out-of-range, input values.
-    ttnn_to_torch = {
-        ttnn.uint8: torch.uint8,
-        ttnn.int8: torch.int8,
-        ttnn.uint16: torch.uint16,
-        ttnn.uint32: torch.uint32,
-        ttnn.int32: torch.int32,
-        ttnn.float32: torch.float32,
-        ttnn.bfloat16: torch.bfloat16,
-    }
-    if isinstance(input_tensor, torch.Tensor) and dtype in ttnn_to_torch:
-        return input_tensor.to(ttnn_to_torch[dtype])
+def _golden_function(input_tensor, *args, **kwargs):
     return input_tensor
 
 
