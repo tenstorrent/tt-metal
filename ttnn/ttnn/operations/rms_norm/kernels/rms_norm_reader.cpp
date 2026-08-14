@@ -44,6 +44,7 @@ constexpr uint32_t cb_rms_recip = 6;
 constexpr uint32_t cb_scaler = 7;
 constexpr uint32_t cb_w_mask = 8;
 constexpr uint32_t cb_rm_stage_in = 10;
+constexpr uint32_t cb_shard_in = 13;  // ROW_MAJOR + sharded: the resident input shard
 
 constexpr uint32_t TILE_DIM = 32;
 constexpr uint32_t FACE_DIM = 16;
@@ -74,7 +75,17 @@ void kernel_main() {
     // untaken runtime branch — on the programs where the host does not declare
     // that CB (TILE layout with W % 32 == 0, and every ROW_MAJOR program).
     constexpr uint32_t MASK_ENABLED = get_compile_time_arg_val(CT + 15);
-    constexpr auto in_args = TensorAccessorArgs<CT + 16>();
+    // Placement.  A physical shard is already resident in THIS core's L1, so the
+    // input CB is bound to the caller's buffer and `load_block` degenerates to
+    // publishing pages that are already there (TILE) or to core-local L1 stick
+    // reads that the tilize staging needs anyway (ROW_MAJOR).  Neither path ever
+    // re-reads a local shard through the TensorAccessor.
+    constexpr uint32_t IS_SHARDED = get_compile_time_arg_val(CT + 16);
+    // Pages compute holds at once in cb_input_tiles: one block on every path
+    // except TILE+sharded, where the CB *is* the whole resident shard.
+    constexpr uint32_t IN_WAIT_TILES = get_compile_time_arg_val(CT + 17);
+    constexpr uint32_t SHARD_PAGE_BYTES = get_compile_time_arg_val(CT + 18);
+    constexpr auto in_args = TensorAccessorArgs<CT + 19>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t BLOCK_TILES = BLOCK_ROWS * SLICE_HIDDEN_TILES;
@@ -108,6 +119,9 @@ void kernel_main() {
     const uint32_t is_root = get_arg_val<uint32_t>(RT + 8);
     const uint32_t mask_valid_elems = get_arg_val<uint32_t>(RT + 9);
     const uint32_t total_sticks = get_arg_val<uint32_t>(RT + 10);
+    // This core's hidden slice, in ELEMENTS.  Equals slice_base*32 everywhere
+    // except a ROW_MAJOR shard, whose width granule is the L1 alignment, not 32.
+    const uint32_t slice_elem_base = get_arg_val<uint32_t>(RT + 11);
 
     Noc noc;
     CircularBuffer cb_input_obj(cb_input_tiles);
@@ -115,6 +129,17 @@ void kernel_main() {
     CircularBuffer cb_rm_stage_in_obj(cb_rm_stage_in);
 
     const auto input_accessor = TensorAccessor(in_args, input_addr);
+    // Core-local NoC base (this core's own L1), used for the resident-shard
+    // stick reads and for the ROW_MAJOR gamma face relocation.
+    const uint64_t self_noc = get_noc_addr(my_x[noc_index], my_y[noc_index], 0);
+
+    // ROW_MAJOR + sharded: base of the resident input shard (a CB bound to the
+    // caller's L1 buffer; nothing ever pushes it, so its read pointer is the
+    // shard base for the kernel's life).
+    uint32_t shard_in_base = 0;
+    if constexpr (IS_SHARDED && IS_ROW_MAJOR) {
+        shard_in_base = get_read_ptr(cb_shard_in);
+    }
 
     // =====================================================================
     // prepare_stat_constants — once per kernel
@@ -162,7 +187,7 @@ void kernel_main() {
             for (uint32_t t = 0; t < valid_tiles; ++t) {
                 const uint32_t elems_left = valid_w - t * TILE_DIM;
                 const uint32_t n = elems_left < TILE_DIM ? elems_left : TILE_DIM;
-                const uint32_t src_elem = (slice_base + t) * TILE_DIM;
+                const uint32_t src_elem = slice_elem_base + t * TILE_DIM;
                 noc_async_read(
                     gamma_accessor.get_noc_addr(0, src_elem * GAMMA_ELEM_BYTES),
                     gamma_l1 + t * GAMMA_TILE_BYTES,
@@ -172,7 +197,7 @@ void kernel_main() {
 
             // Step 2: move the spilled 16 elements into face1 row0 with a local
             // L1->L1 NoC copy (L1 alignment is 16, so both offsets are legal).
-            const uint64_t self = get_noc_addr(my_x[noc_index], my_y[noc_index], 0);
+            const uint64_t self = self_noc;
             for (uint32_t t = 0; t < valid_tiles; ++t) {
                 const uint32_t elems_left = valid_w - t * TILE_DIM;
                 if (elems_left <= FACE_DIM) {
@@ -204,6 +229,37 @@ void kernel_main() {
         // stick and any stick slot a ragged tile-row never writes.
         noc.async_write_zeros(cb_rm_stage_in_obj, RM_STAGE_IN_PAGES * IN_TILE_BYTES);
         noc.write_zeros_l1_barrier();
+    } else if constexpr (IS_SHARDED) {
+        // TILE + sharded: cb_input_tiles IS the caller's resident shard, so
+        // `load_block` moves nothing.  What DOES have to happen once is neutralizing
+        // the shard's own padding: tiles past the tensor's hidden extent, and rows
+        // past its row extent, are allocated-but-never-written L1 that Sum(x^2)
+        // would otherwise fold into a real row's denominator.
+        constexpr uint32_t SHARD_ROWS = IN_WAIT_TILES / SLICE_HIDDEN_TILES;
+        bool zeroed_any = false;
+        for (uint32_t r = 0; r < SHARD_ROWS; ++r) {
+            const uint32_t row_base = r * SLICE_HIDDEN_TILES;
+            if (r >= core_row_tiles) {
+                noc.async_write_zeros(
+                    cb_input_obj, SLICE_HIDDEN_TILES * IN_TILE_BYTES, {.offset_bytes = row_base * IN_TILE_BYTES});
+                zeroed_any = true;
+            } else if (valid_tiles < SLICE_HIDDEN_TILES) {
+                noc.async_write_zeros(
+                    cb_input_obj,
+                    (SLICE_HIDDEN_TILES - valid_tiles) * IN_TILE_BYTES,
+                    {.offset_bytes = (row_base + valid_tiles) * IN_TILE_BYTES});
+                zeroed_any = true;
+            }
+        }
+        if (zeroed_any) {
+            noc.write_zeros_l1_barrier();
+        }
+        // Publish the whole resident shard once.  Keeping cb_input_tiles exactly
+        // FULL at every block boundary is what preserves get_write_ptr() ==
+        // get_read_ptr(), which the two in-place rewrites of x depend on; the
+        // block loop below re-publishes one block after each of compute's pops.
+        cb_reserve_back(cb_input_tiles, IN_WAIT_TILES);
+        cb_push_back(cb_input_tiles, IN_WAIT_TILES);
     } else if (valid_tiles < SLICE_HIDDEN_TILES) {
         const uint32_t pad_bytes = (SLICE_HIDDEN_TILES - valid_tiles) * IN_TILE_BYTES;
         for (uint32_t r = 0; r < BLOCK_ROWS; ++r) {
@@ -240,10 +296,14 @@ void kernel_main() {
                         if (stick >= total_sticks) {
                             break;
                         }
-                        noc_async_read(
-                            input_accessor.get_noc_addr(stick, slice_base * TILE_DIM * IN_ELEM_BYTES),
-                            l1 + k * RM_STICK_PITCH,
-                            valid_w * IN_ELEM_BYTES);
+                        // Sharded: the stick already lives in THIS core's L1 and the
+                        // shard page holds exactly this core's columns, so the source
+                        // is a core-local address at column offset 0 — no NoC hop to
+                        // DRAM, no TensorAccessor.
+                        const uint64_t src = IS_SHARDED
+                                                 ? (self_noc + shard_in_base + stick * SHARD_PAGE_BYTES)
+                                                 : input_accessor.get_noc_addr(stick, slice_elem_base * IN_ELEM_BYTES);
+                        noc_async_read(src, l1 + k * RM_STICK_PITCH, valid_w * IN_ELEM_BYTES);
                         if (++pending == RM_CHUNK_STICKS) {
                             noc_async_read_barrier();
                             pending = 0;
@@ -252,6 +312,15 @@ void kernel_main() {
                 }
                 noc_async_read_barrier();
                 cb_push_back(cb_rm_stage_in, SLICE_HIDDEN_TILES);
+            }
+        } else if constexpr (IS_SHARDED) {
+            // load_block (TILE + sharded): nothing to move.  Re-publish one
+            // block's worth of pages so the resident-shard CB is FULL again at
+            // this block's start (see the boot push).  At the default
+            // block_rows == shard_rows this loop body never runs.
+            if (block > 0) {
+                cb_reserve_back(cb_input_tiles, BLOCK_TILES);
+                cb_push_back(cb_input_tiles, BLOCK_TILES);
             }
         } else {
             // load_block (TILE): the whole (BLOCK_ROWS x S) block, one barrier

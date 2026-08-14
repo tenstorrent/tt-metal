@@ -95,7 +95,18 @@ SUPPORTED = {
     # "none" is the absent-gamma sentinel and is ALWAYS legal.
     "gamma_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
-    "memory_layout": [ttnn.TensorMemoryLayout.INTERLEAVED],
+    # All four placements are the SAME logical scheme (op_design.md §Lamps,
+    # "Physical shard placement"): HEIGHT cuts the independent row axis
+    # (num_hidden_slices == 1), WIDTH cuts the dependent hidden axis (the Phase 0
+    # gather + broadcast combine), BLOCK cuts both.  A shard is consumed
+    # NATIVELY — the CB is bound to the caller's resident L1 buffer — never
+    # re-read through a TensorAccessor.
+    "memory_layout": [
+        ttnn.TensorMemoryLayout.INTERLEAVED,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
 }
 
 
@@ -145,9 +156,38 @@ def _structural_checks(input_tensor, gamma):
             raise ValueError(f"rms_norm: gamma must have shape (1, ..., 1, W); got {gamma_shape}")
 
 
-def validate(input_tensor, *, gamma=None, epsilon=1e-6, compute_kernel_config=None):
+def _output_placement_checks(input_tensor, memory_config):
+    """The output inherits the input's placement; a mismatch is a caller error.
+
+    rms_norm is elementwise in placement terms — every core writes exactly the
+    block it read — so the output's shard geometry must equal the input's.  A
+    different geometry would be a re-layout, which is `ttnn.to_memory_config`'s
+    job, not this op's.
+    """
+    if memory_config is None:
+        return
+    src = input_tensor.memory_config()
+    if memory_config.memory_layout != src.memory_layout:
+        raise ValueError(
+            f"rms_norm: output memory_layout {memory_config.memory_layout} must match the "
+            f"input's {src.memory_layout} (the op does not re-place its result)"
+        )
+    if memory_config.shard_spec is not None or src.shard_spec is not None:
+        if memory_config.shard_spec is None or src.shard_spec is None:
+            raise ValueError("rms_norm: output shard_spec must match the input's")
+        if list(memory_config.shard_spec.shape) != list(src.shard_spec.shape) or (
+            memory_config.shard_spec.grid != src.shard_spec.grid
+        ):
+            raise ValueError(
+                f"rms_norm: output shard spec {list(memory_config.shard_spec.shape)} must match the "
+                f"input's {list(src.shard_spec.shape)} on the same grid"
+            )
+
+
+def validate(input_tensor, *, gamma=None, epsilon=1e-6, compute_kernel_config=None, memory_config=None):
     """Runtime support gate. Called as the entry point's first statement."""
     _structural_checks(input_tensor, gamma)
+    _output_placement_checks(input_tensor, memory_config)
 
     cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
     has_gamma = gamma is not None
@@ -186,18 +226,23 @@ def rms_norm(
     gamma: Optional["ttnn.Tensor"] = None,
     epsilon: float = 1e-6,
     compute_kernel_config: "ttnn.ComputeConfigDescriptor" = None,
+    memory_config: Optional["ttnn.MemoryConfig"] = None,
 ) -> "ttnn.Tensor":
     """RMSNorm over the last dimension.
 
     No host-side layout / shape workaround: both TILE_LAYOUT and
     ROW_MAJOR_LAYOUT inputs (and non-tile-aligned H/W) are handled natively by
-    the kernels.
+    the kernels, at INTERLEAVED or any of the three sharded placements.
+
+    `memory_config` selects the output placement; it defaults to the input's, so
+    a sharded input yields a matching sharded output (the norm convention).
     """
     validate(
         input_tensor,
         gamma=gamma,
         epsilon=epsilon,
         compute_kernel_config=compute_kernel_config,
+        memory_config=memory_config,
     )
 
     if compute_kernel_config is None:
@@ -208,7 +253,7 @@ def rms_norm(
         input_tensor.dtype,
         input_tensor.layout,
         input_tensor.device(),
-        input_tensor.memory_config(),
+        memory_config if memory_config is not None else input_tensor.memory_config(),
     )
 
     program_descriptor = create_program_descriptor(

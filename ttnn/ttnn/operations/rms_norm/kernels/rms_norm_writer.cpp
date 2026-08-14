@@ -28,6 +28,7 @@ constexpr uint32_t cb_sq_partials = 2;
 constexpr uint32_t cb_gathered_partials = 4;
 constexpr uint32_t cb_output_tiles = 9;
 constexpr uint32_t cb_rm_stage_out = 11;
+constexpr uint32_t cb_shard_out = 14;  // ROW_MAJOR + sharded: the resident output shard
 
 constexpr uint32_t TILE_DIM = 32;
 
@@ -42,7 +43,12 @@ void kernel_main() {
     constexpr uint32_t TENSOR_HIDDEN_TILES = get_compile_time_arg_val(7);  // page stride only
     constexpr uint32_t OUT_ELEM_BYTES = get_compile_time_arg_val(8);
     constexpr uint32_t DM_CHUNK_TILES = get_compile_time_arg_val(9);
-    constexpr auto out_args = TensorAccessorArgs<10>();
+    // Sharded: the output shard is already this core's L1, so `store_block` is
+    // either a no-op (TILE — cb_output_tiles IS the shard) or a core-local L1
+    // stick write (ROW_MAJOR — untilize's staging drains into the shard).
+    constexpr uint32_t IS_SHARDED = get_compile_time_arg_val(10);
+    constexpr uint32_t SHARD_PAGE_BYTES = get_compile_time_arg_val(11);
+    constexpr auto out_args = TensorAccessorArgs<12>();
 
     constexpr uint32_t RM_STICK_PITCH = SLICE_HIDDEN_TILES * TILE_DIM * OUT_ELEM_BYTES;
     static_assert(RM_STICK_PITCH % 16 == 0, "ROW_MAJOR staging stick pitch must be L1-aligned");
@@ -66,10 +72,17 @@ void kernel_main() {
     const uint32_t root_noc_y = get_arg_val<uint32_t>(8);
     const uint32_t slice_index = get_arg_val<uint32_t>(9);
     const uint32_t total_sticks = get_arg_val<uint32_t>(10);
+    const uint32_t slice_elem_base = get_arg_val<uint32_t>(11);
 
     Noc noc;
     const auto output_accessor = TensorAccessor(out_args, output_addr);
     Semaphore<> gather_progress(GATHER_SEM_ID);
+    const uint64_t self_noc = get_noc_addr(my_x[noc_index], my_y[noc_index], 0);
+
+    uint32_t shard_out_base = 0;
+    if constexpr (IS_SHARDED && IS_ROW_MAJOR) {
+        shard_out_base = get_write_ptr(cb_shard_out);
+    }
 
     // Captured before any push/pop touches the CB, so this is its base address —
     // identical on every core in the row-group rect.
@@ -111,10 +124,10 @@ void kernel_main() {
                         if (stick >= total_sticks) {
                             break;
                         }
-                        noc_async_write(
-                            l1 + k * RM_STICK_PITCH,
-                            output_accessor.get_noc_addr(stick, slice_base * TILE_DIM * OUT_ELEM_BYTES),
-                            valid_w * OUT_ELEM_BYTES);
+                        const uint64_t dst =
+                            IS_SHARDED ? (self_noc + shard_out_base + stick * SHARD_PAGE_BYTES)
+                                       : output_accessor.get_noc_addr(stick, slice_elem_base * OUT_ELEM_BYTES);
+                        noc_async_write(l1 + k * RM_STICK_PITCH, dst, valid_w * OUT_ELEM_BYTES);
                         if (++pending == RM_CHUNK_STICKS) {
                             noc_async_write_barrier();
                             pending = 0;
@@ -129,6 +142,14 @@ void kernel_main() {
                 cb_wait_front(cb_output_tiles, SLICE_HIDDEN_TILES);
                 const uint32_t l1 = get_read_ptr(cb_output_tiles);
                 const uint32_t local_row = first_row + r;
+                // Sharded: cb_output_tiles IS the caller's resident output shard,
+                // so compute already packed this tile-row into its final home.
+                // The pop is the whole store — it just advances the CB window
+                // through the shard, moving no bytes.
+                if (IS_SHARDED) {
+                    cb_pop_front(cb_output_tiles, SLICE_HIDDEN_TILES);
+                    continue;
+                }
                 if (local_row < core_row_tiles) {
                     const uint32_t page = (row_start + local_row) * TENSOR_HIDDEN_TILES + slice_base;
                     uint32_t pending = 0;

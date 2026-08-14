@@ -86,6 +86,12 @@ void kernel_main() {
     constexpr uint32_t HAS_GAMMA = get_compile_time_arg_val(3);
     constexpr uint32_t IS_ROW_MAJOR = get_compile_time_arg_val(4);
     constexpr uint32_t MASK_ENABLED = get_compile_time_arg_val(5);
+    // Pages held in cb_input_tiles at once.  One block everywhere except the
+    // TILE + sharded path, where the CB is bound to the caller's WHOLE resident
+    // shard: there the reader keeps it exactly full at every block boundary, so
+    // waiting the full window is what makes get_write_ptr() == get_read_ptr()
+    // (and therefore the in-place rewrite of x) correct for block_rows < shard_rows.
+    constexpr uint32_t IN_WAIT_TILES = get_compile_time_arg_val(6);
 
     constexpr uint32_t BLOCK_TILES = BLOCK_ROWS * SLICE_HIDDEN_TILES;
 
@@ -163,7 +169,7 @@ void kernel_main() {
         }
 
         // ---- the single cb_input_tiles window for this block ----
-        cb_wait_front(cb_input_tiles, BLOCK_TILES);
+        cb_wait_front(cb_input_tiles, IN_WAIT_TILES);
 
         // ---- mask_tail_block: zero the W-pad lanes of the LAST hidden tile of
         //      each tile-row, in place. Only on the core owning the global last
