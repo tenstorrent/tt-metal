@@ -438,3 +438,235 @@ cast path; and the `use_multicore=False` × sharded refusal. Bench arms added:
 directory: **130 passed** (95 prior + 35 new), green in plain *and* `--dev` mode
 (watcher + CB sanitizer + LLK asserts), so the publish-only reader / drain-only
 writer handshake is race-clean.
+
+---
+
+## Refinement 2 — Cross-spec reshard (general cross-core L1 path) + padded sharded cells
+
+- **Date**: 2026-08-14
+- **Class**: scheme-change (design lamp **L2**) — the new data placement *is* the
+  work. Still no cross-core combine: nothing is reduced, so no semaphores and no
+  multicast anywhere (asserted per-descriptor now, see Tests).
+
+### What was done
+
+**Reused** (the deliberate small-diff path): the one reader/writer/compute kernel
+triple, `shard_side_plan()` / `derive_shard_blocking()` / `wt_cap()` /
+`cb_pages()`, the `W_REGION` work assignment, the existing `R_PAD` fill loop, and
+the `zero_copy` lever knob (its OFF arm is *literally* the pre-Refinement-2
+behaviour on both new paths, so no new counterfactual machinery was needed).
+The compute kernel is **byte-identical** again; the writer is untouched.
+
+**Added** — four things, each a few lines:
+
+| Piece | Where |
+|---|---|
+| `read_row_span()` — splits one row span across source pages | `kernels/tilize_reader.cpp` |
+| `src_page_geometry()` — the single source for the reader's page math (`src_page_bytes`, `src_row_pages`) | `tilize_program_descriptor.py` |
+| Per-**side** zero-copy eligibility (padding disqualifies only the INPUT) | `tilize_program_descriptor.py` §2a |
+| Uneven ROW splits in `shard_side_plan()` (per-region tile-row extent → per-shard block count) | `tilize_program_descriptor.py` |
+| `MIN_STREAM_READ_BYTES` + the `xfer_gate` lever (measured; see Perf gate) | `tilize_program_descriptor.py` |
+| EXCLUSIONS: `pad_mode ∈ {auto, explicit}` × sharded **removed** | `tilize.py` |
+
+Four facts shaped it:
+
+1. **The gather was a silent-corruption bug, not a missing feature.** A ROW_MAJOR
+   page is one *stick* only when the tensor is interleaved or its shard spans the
+   whole row. A WIDTH/BLOCK-sharded source makes a page one **shard row**, so
+   Refinement 1's `page id == folded row index` read the right *number* of bytes
+   from the wrong places whenever such a source was non-local — reachable from
+   the public API and inside the then-SUPPORTED rectangle (measured PCC 0.017 on
+   BLOCK 2×2 → HEIGHT ×4 before the fix). `read_row_span()` splits each span at
+   page boundaries; at `src_row_pages == 1` it is one `noc_async_read`, i.e. the
+   old code. The library reader cannot express it (its contract walks consecutive
+   page ids as consecutive sticks), so a paged source takes the general `R_PAD`
+   loop, where an aligned source fills nothing — `valid_bytes == row_bytes`.
+2. **Padding only ever disqualified the INPUT side.** The fill is materialized
+   into the input CB, which the zero-copy path aliases *on the input tensor*.
+   Compute packs whole (already padded) tiles, so a resident **destination** shard
+   is still written in place. Making eligibility per-side is a 3-line change and
+   is worth **1.35×** (measured below); it is also what turns the padded × sharded
+   golden cells from "tolerated through the accessor" into implemented sharding.
+3. **Uneven shard grids only needed a per-region extent.** `blocks_this_core` was
+   already a runtime arg, so a short last shard just gets fewer blocks; the CB ring
+   still spans the *allocated* shard. W must still divide exactly — `WT_CHUNK` is
+   one compile-time value for every core.
+4. **One geometry is genuinely unaddressable and is now refused.** A gather splits
+   spans at page boundaries, so the page must be 32 B-alignable or the sub-reads
+   drift out of NoC alignment (measured: PCC 0.51 with a 100 B shard row). Every
+   tile-width-aligned shard clears this for every supported dtype, so the typed
+   `SupportRefusal` only fires for a shard row that is not a multiple of 32 **bytes**
+   — a geometry a TILE tensor cannot hold. Better a refusal than a shifted gather.
+
+### Accuracy achieved
+
+Exact — a permutation op has no error budget. `torch.equal` bit-for-bit
+(PCC = 1.0, rtol = atol = 0) on bf16 **and** fp32 for: the six reshard
+configurations (BLOCK→HEIGHT, WIDTH→HEIGHT, WIDTH→wider WIDTH, HEIGHT→WIDTH,
+uneven same-spec, uneven destination), both arms of the `xfer_gate` (it is a perf
+choice, not a contract), and every padded × sharded scenario — where the data
+region is exact **and** the pad region is exactly the fill on the padded readback,
+with the logical view unpromoted. The only non-exact sharded case remains the
+deliberate `float32 → bfloat16` pack (one bf16 ulp, unchanged since Phase 0).
+
+### Golden test progress
+
+`eval/golden_tests/tilize/test_golden.py`: **190 passed** (was 168), **158
+xfailed** (was 180), **0 failed, 0 xpass-strict drift**, 592 INVALID-skipped.
+The +22 are the seven padded × sharded scenarios × their supported dtype pairs
+(bf8b output and `bf16→fp32` with a non-zero fill are still EXCLUSIONS, so most
+scenarios contribute 3). `test_regression.py` unchanged at 10 failed / 16 passed —
+all ten are integer dtypes (Refinement 4). The cross-spec / `nd ↔ legacy` cells
+were already green from Refinement 1 and stay green; what changed underneath them
+is that the gather is now correct for *any* source shard width, not only
+full-width ones.
+
+### Perf gate
+
+Box: Wormhole B0, 8×8 grid, AICLK 0.985 GHz. `DEVICE KERNEL DURATION [ns]`,
+in-process profiler, one warm launch then one measured launch per variant.
+
+**1. Classification of the new path** (ablation, payload stubbed, sync kept) on
+`[1,1,1024,256]` WIDTH×2 → HEIGHT×8 (paged gather into a local destination):
+
+| variant | ns |
+|---|---|
+| full | 18,487 |
+| no-compute | 17,615 (−4.7%) |
+| sync-only | 745 |
+
+**DM-bound (95%)**. Re-target: with the destination local there is **no write
+traffic at all**, so the ceiling is not the DRAM floor *or* the packer — it is the
+**source shard's L1 egress**: 512 KB leaves just two cores in 256 B transfers
+(≈14 GB/s per source core, against a ~31 GB/s single-link peak that 256 B
+transfers cannot reach). The fan-in is chosen by the caller's shard spec, not by
+this op.
+
+**2. The new lever — `xfer_gate` (master.md B5 crossed with A2), measured**
+
+Aliasing the destination pins `WT_CHUNK` to the shard's width, which pins the
+**reader's** per-row transfer. Below a measured knee that costs more than the NoC
+write it saves, so the gate falls back to the accessor on both sides and lets
+`derive_blocking()` pick a coarse chunk again:
+
+| configuration (`[1,1,1024,256]` bf16) | read xfer | gate ON | gate OFF (alias anyway) | speedup |
+|---|---|---|---|---|
+| one-tile-wide destination shard (WIDTH ×8) | 64 B | 16,827 | 53,945 | **3.21×** |
+| 128 B source pages (WIDTH ×4 → HEIGHT ×8) | 128 B | 19,936 | 33,126 | **1.66×** |
+| `[1,1,512,64]` DRAM → HEIGHT ×4 | 128 B | 4,269 | 7,451 | **1.75×** |
+| DRAM → HEIGHT ×8 (above the knee) | 512 B | 7,983 | 8,058 | 1.01× (no effect) |
+
+The knee is between 128 B (loses) and 256 B (wins 1.19×): `MIN_STREAM_READ_BYTES
+= 256`. Above it the local destination still wins 1.19× / 1.30× / 2.06×, so the
+gate is a *path* gate, not a retreat from zero-copy. It never gates a
+**source**-local plan — the writer always moves whole TILE pages — confirmed by
+measuring that direction anyway: 0.94× (2 cores) / 3.13× (8) / 1.13× (32) /
+1.99× (narrow local source), i.e. parity at worst. This also **improves** a
+Refinement-1 row: the `[1,1,512,64]` DRAM → HEIGHT ×4 crossover drops
+7,360 → 4,242 ns.
+
+**3. The per-side eligibility change, measured against `zero_copy=0`** (which is
+exactly the pre-Refinement-2 both-accessor plan):
+
+| shape | zero-copy ON | OFF (pre-R2 behaviour) | speedup |
+|---|---|---|---|
+| `[1,1,2040,256]` → pad `[1,1,2048,256]`, HEIGHT ×8 out | 22,466 | 30,396 | **1.35×** |
+| `[1,1,1024,256]` WIDTH ×2 → HEIGHT ×8 (reshard) | 18,487 | 19,464 | 1.05× (inside the band; the 2-core fan-in is the wall) |
+
+**4. Cumulative bench set — non-regression** (every Phase-0 and Refinement-1 row
+re-measured; flagged rows re-measured 4× and reported as medians):
+
+| shape | dtype | Phase 0 | Refinement 1 | Refinement 2 | vs R1 |
+|---|---|---|---|---|---|
+| `[1,1,2048,2048]` | bf16 | 92,859 | 92,407 | 93,160 (median of 4) | +0.8% |
+| `[1,1,2048,2048]` | fp32 | 191,169 | 195,416 | 194,007 | −0.7% |
+| `[1,1,32,16384]` | bf16 | 13,315 | 12,966 | 13,281 | +2.4% |
+| `[1,1,32,16384]` | fp32 | 27,466 | 25,677 | 27,580 (median of 4) | +7.4% vs R1, **+0.4% vs Phase 0** |
+| `[1,1,8192,1024]` | bf16 | 170,508 | 171,441 | 170,672 | −0.4% |
+| `[1,1,8192,1024]` | fp32 | 363,140 | 358,227 | 358,597 | +0.1% |
+| `[1,1,32,64]` | bf16 | 2,889 | 2,909 | 2,870 | −1.3% |
+| `[1,1,32,64]` | fp32 | 3,101 | 3,052 | 3,141 (median of 4) | +2.9% |
+| `[1,1,512,64]` H-sharded ×4 same-spec | bf16 | — | 1,402 | 1,420 | +1.3% |
+| `[1,1,512,64]` H-sharded ×4 same-spec | fp32 | — | 2,213 | 2,211 | −0.1% |
+| `[1,1,2048,256]` H-sharded ×8 same-spec | bf16 | — | 4,901 | 4,843 | −1.2% |
+| `[1,1,2048,256]` H-sharded ×8 same-spec | fp32 | — | 12,347 | 12,360 | +0.1% |
+| `[1,1,512,64]` DRAM → H-sharded ×4 | bf16 | — | 7,360 | **4,242** | **−42%** (the gate) |
+| `[1,1,2048,256]` DRAM → H-sharded ×8 | bf16 | — | 14,768 | 14,766 | 0.0% |
+
+One row is worth being explicit about: `[1,1,32,16384]` fp32 reads +7.4% against
+Refinement 1's number but +0.4% against Phase 0's. Measured 4× this session it
+spans 25,775–28,076 ns (±4.3%), i.e. **this row's own run-to-run spread exceeds
+the ≤3% band the queue set**, and Refinement 1's 25,677 was the low end of it. The
+interleaved DRAM path compiles *identical* kernels before and after this
+refinement (the `R_ALIGNED` library-helper branch is untouched; the two new
+compile-time args are unused there), so there is no mechanism for a regression on
+it. Same reading for `[1,1,2048,2048]` bf16 and `[1,1,32,64]` fp32.
+
+**New cumulative rows, carried forward:**
+
+| shape | placement | dtype | ns |
+|---|---|---|---|
+| `[1,1,1024,256]` | WIDTH ×2 → HEIGHT ×8 cross-spec reshard (paged gather, destination local) | bf16 | 18,487 |
+| `[1,1,1024,256]` | WIDTH ×4 → HEIGHT ×8 (gated: paged gather on the full grid) | bf16 | 19,936 |
+| `[1,1,1024,256]` | DRAM → WIDTH ×8 (gated) | bf16 | 16,827 |
+| `[1,1,2040,256]` → `[1,1,2048,256]` | padded into HEIGHT ×8 local shard | bf16 | 22,466 |
+
+**5. Lever ledger.** `python3 -m eval.verify_levers ... --phase 2` → **0
+blocking**, 10 signal (all staleness from the topology block gaining three plan
+paths; every stale negative closure re-read and recorded in the ledger's
+`phase2_stale_closure_reread` note). `C14` / `C15` / `A2` keep both arms and gain
+the two new measured shapes; `A2`'s note now records the *refinement* that
+launching only on data-holding cores pays only while those cores move data in big
+enough transfers; `B5` gains the read-side numbers (a far larger swing than the
+write side it was closed on). The `xfer_gate` knob has both arms in
+`_bench_tilize.py`; like `L4_split_reader` it has no Part-2 catalog ID, so it is
+recorded in `notes`. **L4 `split_reader` is now MORE applicable** than at
+Refinement 1 — on a destination-local gather BRISC does no NoC work at all — and
+is still Refinement 3's business.
+
+### Issues encountered
+
+1. **The headline finding: destination-local zero-copy is not unconditionally a
+   win**, and Refinement 1 shipped it unconditionally. Two configurations already
+   inside SUPPORTED were 1.75× and 3.45× slower than the generic full-grid split
+   because an aliased destination shard that is narrow in W pins the reader to
+   64–128 B transfers on only the shard's cores. Found by building the ON/OFF arm
+   pair for the *new* path and then sweeping the neighbouring configurations
+   rather than assuming the R1 result generalized. Fixed by the measured
+   `xfer_gate` (both arms shipped), not by reverting the placement.
+2. **A cross-spec reshard with a narrow source shard was silently wrong**, not
+   unsupported: `shard_side_plan()` succeeded for both sides, the destination went
+   local, and the source was addressed as if page == stick. It never showed up
+   because every golden and unit source shard was full-width. This is why the new
+   test set asserts `src_row_pages` (the geometry) and not only identity.
+3. **NoC alignment bounds the gather**, not the addressing: splitting a span at
+   page boundaries makes the sub-read lengths `page_bytes − (multiple of 32)`, so a
+   page that is not a 32 B multiple leaves source and destination misaligned and
+   the data lands shifted. Refused explicitly rather than silently returned.
+4. `n_shards > n_cores` (an ND grid where one core holds several shards) still
+   falls back to the accessor path — one core would need several region
+   assignments, and the runtime-arg shape is one region per core. It is correct
+   there (the golden `nd (1,64,96)` on 2 cores cell passes), just not zero-copy.
+   Recorded, not filed: no cell is failing on it.
+5. Three Refinement-1 placement pins had to move to *wider* shards
+   (`interleaved_in_sharded_out`, `cross_spec_gathers_into_the_local_destination`)
+   because at their original 64-wide shard the gate now — correctly, per the
+   measurement — prefers the grid split. The mechanism they exist to pin is
+   unchanged and still asserted; the narrow counterparts are pinned by the new
+   gate tests, in both arms.
+
+### Tests added
+
+`tests/ttnn/unit_tests/operations/tilize/test_tilize_sharded.py` +36 cases
+(35 → 71 in the file, whole tilize unit directory **166 passed**): reshard
+placement + source page geometry (6 configs, asserting `src_row_pages`, two CBs
+and **zero semaphores** — no DRAM staging, no cross-core combine), the
+interleaved hot path still `R_ALIGNED` with `src_row_pages == 1`, reshard identity
+× bf16/fp32, the uneven grid's per-shard block counts (`[2, 2, 1]`), padded ×
+sharded placement (destination stays local, input CB stays streaming, `R_PAD`
+selected) and padded identity × two fill values (pad region exact, logical shape
+unpromoted), the unaddressable-shard-row refusal, and the `xfer_gate` in **both**
+arms (placement flip + identity under each). Bench arms added:
+`test_bench_reshard_cross_spec`, `test_bench_lever_xfer_gate`,
+`test_bench_lever_xfer_gate_narrow_destination`, `test_bench_reshard_ablation`,
+`test_bench_padded_into_local_shard`.

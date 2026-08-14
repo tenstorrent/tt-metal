@@ -117,7 +117,7 @@ and the harness's no-regression gate diffs prior-passing nodeids.
 
 ---
 
-### [ ] Refinement 2 — Cross-spec reshard (general cross-core L1 path) + padded sharded cells
+### [x] Refinement 2 — Cross-spec reshard (general cross-core L1 path) + padded sharded cells
 
 **Goal**: move the cells Refinement 1 left in `EXCLUSIONS` into passing: input shard spec ≠ output shard
 spec (including `nd ↔ legacy_2d`, different schemes, uneven/padded shard grids) via a **general
@@ -144,6 +144,26 @@ the kernel really has two code paths* (local zero-copy vs cross-core gather) —
 with no hangs and no DRAM staging on either side; the padded × sharded cells pass (data region identical,
 pad region exactly the fill); every cell Refinement 1 put in `EXCLUSIONS` for cross-spec reasons is gone
 from `EXCLUSIONS`; Phase-0 + Refinement-1 bench sets show no regression.
+
+**Outcome**: done. Golden `test_golden.py` 168 → **190 passed**, 180 → 158 xfail, 0 failed, 0 xpass drift
+(+22 = the seven padded × sharded scenarios; the four `pad_mode × shard_api` EXCLUSIONS are gone).
+The general gather turned out to be a **silent-corruption fix**, not only a new capability: a source
+shard narrower than a tensor row makes an RM page one *shard row*, so Refinement 1's `page == stick`
+addressing read the right byte count from the wrong places on any non-local WIDTH/BLOCK-sharded source
+(measured PCC 0.017 → exact). `read_row_span()` splits a span at page boundaries and is one
+`noc_async_read` at `src_row_pages == 1`, so the hot path is byte-identical; one geometry
+(a shard row that is not a 32 B multiple) is refused rather than silently shifted. Padding now
+disqualifies only the **input** side from zero-copy, worth a measured **1.35×**, and `shard_side_plan()`
+accepts uneven ROW splits. Second finding, from building the ON/OFF arm pair and then sweeping the
+neighbours: **destination-local zero-copy is not unconditionally a win** — an aliased destination pins
+`WT_CHUNK` to the shard width and therefore the reader's transfer, so below a measured 256 B knee it
+loses 1.66×–3.21× to the generic full-grid split. Shipped as the `xfer_gate` lever (both arms in the
+bench), which also drops a Refinement-1 crossover row 7,360 → 4,242 ns. The reshard path is now
+**DM-bound (95%)** with its ceiling re-targeted to the *source* shard's L1 egress (2 cores × 256 KB in
+256 B transfers), not the DRAM floor — remaining headroom there is the caller's shard spec plus L4
+`split_reader` (BRISC does no NoC work at all on a destination-local gather), left to Refinement 3.
+`n_shards > n_cores` (one core holding several ND shards) still takes the accessor path — correct, not
+zero-copy, and no cell is failing on it. `verify_levers --phase 2`: 0 blocking.
 
 ---
 
