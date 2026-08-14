@@ -5014,7 +5014,12 @@ class MaxPoolWithIndicesGolden:
     ):
         torch_format = format_dict[data_format]
         rows, cols = tile_dimensions
-        values = torch.as_tensor(values, dtype=torch.float32).reshape(rows, cols)
+        values = (
+            torch.as_tensor(values, dtype=torch.float32)
+            .reshape(rows, cols)
+            .to(torch_format)
+            .to(torch.float32)
+        )
         indices = torch.as_tensor(indices, dtype=torch.int64).reshape(rows, cols)
 
         window = values[:num_rows]

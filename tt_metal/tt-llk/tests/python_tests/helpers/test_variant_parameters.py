@@ -1478,6 +1478,7 @@ class MAX_POOL_CONFIG(TemplateParameter):
     max_pool_num_rows: int
     row_major: bool
     accumulate: bool = False
+    chunk: int = 0
 
     def convert_to_cpp(self) -> str:
         layout = "ROW_MAJOR" if self.row_major else "TILE"
@@ -1487,5 +1488,6 @@ class MAX_POOL_CONFIG(TemplateParameter):
                 f"constexpr int MAX_POOL_NUM_ROWS = {self.max_pool_num_rows};",
                 f"constexpr auto MAX_POOL_LAYOUT = ckernel::DataLayout::{layout};",
                 f"constexpr bool MAX_POOL_ACCUMULATE = {accumulate};",
+                f"constexpr std::uint32_t MAX_POOL_CHUNK = {self.chunk};",
             ]
         )

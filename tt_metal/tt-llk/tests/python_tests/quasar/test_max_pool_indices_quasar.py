@@ -6,10 +6,9 @@ import sys
 
 import pytest
 import torch
-from helpers.format_config import DataFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MaxPoolWithIndicesGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, format_dict
-from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
@@ -26,20 +25,60 @@ TILE_ROWS = 32
 TILE_COLS = 32
 FACE_DIM = 16
 OUT_OF_WINDOW_SENTINEL = 100.0
+BF16_FORMATS = InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b)
+FP32_FORMATS = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
 
 # Exercise every supported row count, both short-path layouts, the three generic
-# sizes, and the generic accumulation fold.
+# sizes, both accumulation phases, and 16-bit and 32-bit Dest index transport.
 CASES = [
-    pytest.param(4, False, False, id="tile-4"),
-    pytest.param(8, False, False, id="tile-8"),
-    pytest.param(9, False, False, id="tile-9"),
-    pytest.param(4, True, False, id="row-major-4"),
-    pytest.param(8, True, False, id="row-major-8"),
-    pytest.param(9, True, False, id="row-major-9"),
-    pytest.param(16, True, False, id="row-major-16"),
-    pytest.param(20, True, False, id="row-major-20"),
-    pytest.param(32, True, False, id="row-major-32"),
-    pytest.param(32, True, True, id="row-major-32-accumulate"),
+    pytest.param(BF16_FORMATS, DestAccumulation.No, 4, False, False, 0, id="tile-4"),
+    pytest.param(BF16_FORMATS, DestAccumulation.No, 8, False, False, 0, id="tile-8"),
+    pytest.param(BF16_FORMATS, DestAccumulation.No, 9, False, False, 0, id="tile-9"),
+    pytest.param(
+        BF16_FORMATS, DestAccumulation.No, 4, True, False, 0, id="row-major-4"
+    ),
+    pytest.param(
+        BF16_FORMATS, DestAccumulation.No, 8, True, False, 0, id="row-major-8"
+    ),
+    pytest.param(
+        BF16_FORMATS, DestAccumulation.No, 9, True, False, 0, id="row-major-9"
+    ),
+    pytest.param(
+        BF16_FORMATS, DestAccumulation.No, 16, True, False, 0, id="row-major-16"
+    ),
+    pytest.param(
+        BF16_FORMATS, DestAccumulation.No, 20, True, False, 0, id="row-major-20"
+    ),
+    pytest.param(
+        BF16_FORMATS, DestAccumulation.No, 32, True, False, 0, id="row-major-32"
+    ),
+    pytest.param(
+        BF16_FORMATS,
+        DestAccumulation.No,
+        32,
+        True,
+        True,
+        0,
+        id="row-major-32-accumulate-seed",
+    ),
+    pytest.param(
+        BF16_FORMATS,
+        DestAccumulation.No,
+        32,
+        True,
+        True,
+        1,
+        id="row-major-32-accumulate-fold",
+    ),
+    pytest.param(
+        FP32_FORMATS,
+        DestAccumulation.Yes,
+        32,
+        True,
+        True,
+        1,
+        id="row-major-32-fp32-accumulate-fold",
+    ),
 ]
 
 
@@ -70,11 +109,21 @@ def _result_row0(tile: torch.Tensor, row_major: bool) -> torch.Tensor:
 
 
 def _encode_indices(indices: torch.Tensor, row_major: bool, torch_format):
-    return _stage(indices, row_major).to(torch.int16).contiguous().view(torch_format)
+    index_dtype = (
+        torch.int32
+        if torch.empty(0, dtype=torch_format).element_size() == 4
+        else torch.int16
+    )
+    return _stage(indices, row_major).to(index_dtype).contiguous().view(torch_format)
 
 
-def _decode_indices(indices: torch.Tensor) -> torch.Tensor:
-    return indices.contiguous().view(torch.int16).to(torch.int64)
+def _decode_indices(indices: torch.Tensor, torch_format) -> torch.Tensor:
+    index_dtype = (
+        torch.int32
+        if torch.empty(0, dtype=torch_format).element_size() == 4
+        else torch.int16
+    )
+    return indices.contiguous().view(index_dtype).to(torch.int64)
 
 
 def _make_values(num_rows: int):
@@ -97,33 +146,36 @@ def _make_values(num_rows: int):
     return values
 
 
-def _make_accumulator():
-    """Prior result wins even columns and loses odd columns."""
-    values = torch.full((TILE_ROWS, TILE_COLS), -200.0, dtype=torch.float32)
-    values[0, 0::2] = -0.25
+def _make_accumulator(poison: bool):
+    """Create either a fold input or values that chunk zero must ignore."""
+    fill_value = OUT_OF_WINDOW_SENTINEL if poison else -200.0
+    values = torch.full((TILE_ROWS, TILE_COLS), fill_value, dtype=torch.float32)
+    if not poison:
+        values[0, 0::2] = -0.25
     indices = torch.zeros((TILE_ROWS, TILE_COLS), dtype=torch.int64)
     indices[0] = 2000 + torch.arange(TILE_COLS)
     return values, indices
 
 
 @pytest.mark.quasar
-@pytest.mark.parametrize("num_rows,row_major,accumulate", CASES)
-@parametrize(
-    formats=input_output_formats([DataFormat.Float16_b], same=True),
+@pytest.mark.parametrize(
+    "formats,dest_acc,num_rows,row_major,accumulate,chunk",
+    CASES,
 )
-def test_max_pool_indices_quasar(formats, num_rows, row_major, accumulate):
-    (formats,) = formats
+def test_max_pool_indices_quasar(
+    formats, dest_acc, num_rows, row_major, accumulate, chunk
+):
     torch_format = format_dict[formats.input_format]
 
     values = _make_values(num_rows)
     indices = torch.arange(TILE_ROWS * TILE_COLS, dtype=torch.int64).reshape(
         TILE_ROWS, TILE_COLS
     )
-    accum_values, accum_indices = _make_accumulator()
+    accum_values, accum_indices = _make_accumulator(poison=accumulate and chunk == 0)
 
     # Dest tiles are values/current, values/accumulator, indices/current,
-    # indices/accumulator. This also gives the accumulate=true path a real prior
-    # result to compare against at chunk=1.
+    # indices/accumulator. Chunk zero gets a winning poison value that must be
+    # ignored, while later chunks get a real prior result to fold.
     src_A = torch.cat(
         [
             _stage(values, row_major).to(torch_format),
@@ -139,7 +191,7 @@ def test_max_pool_indices_quasar(formats, num_rows, row_major, accumulate):
         formats,
         templates=[
             DEST_SYNC(),
-            MAX_POOL_CONFIG(num_rows, row_major, accumulate),
+            MAX_POOL_CONFIG(num_rows, row_major, accumulate, chunk),
         ],
         runtimes=[
             TILE_COUNT(4),
@@ -157,7 +209,7 @@ def test_max_pool_indices_quasar(formats, num_rows, row_major, accumulate):
             tile_count_B=1,
             tile_count_res=2,
         ),
-        dest_acc=DestAccumulation.No,
+        dest_acc=dest_acc,
         unpack_to_dest=False,
     )
 
@@ -172,9 +224,9 @@ def test_max_pool_indices_quasar(formats, num_rows, row_major, accumulate):
         "bits",
     )
     golden_values = golden[:TILE_COLS]
-    golden_indices = _decode_indices(golden[TILE_COLS:])
+    golden_indices = _decode_indices(golden[TILE_COLS:], torch_format)
 
-    if accumulate:
+    if accumulate and chunk > 0:
         prior_values = accum_values[0].to(torch_format)
         prior_indices = accum_indices[0]
         prior_wins = prior_values > golden_values
@@ -183,13 +235,14 @@ def test_max_pool_indices_quasar(formats, num_rows, row_major, accumulate):
 
     result_values = _result_row0(result[: TILE_ROWS * TILE_COLS], row_major)
     result_indices = _decode_indices(
-        _result_row0(result[TILE_ROWS * TILE_COLS :], row_major)
+        _result_row0(result[TILE_ROWS * TILE_COLS :], row_major), torch_format
     )
 
     if not torch.equal(result_indices, golden_indices):
         print(
             f"max_pool_with_indices index mismatch: rows={num_rows}, "
-            f"row_major={row_major}, accumulate={accumulate}",
+            f"row_major={row_major}, accumulate={accumulate}, chunk={chunk}, "
+            f"dest_acc={dest_acc.name}",
             file=sys.stderr,
         )
         print(f"got:  {result_indices.tolist()}", file=sys.stderr)
