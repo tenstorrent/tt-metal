@@ -176,10 +176,15 @@ void kernel_main() {
         dfb_ex_partial.reserve_back(2);
         if constexpr (welford_fp32_alias) {
             // Reconfigure the transpose op for the alias buffer index consumed by the
-            // welford loop below.
+            // welford loop below. hw_startup configured Unpacker A from the primary CB
+            // (Default / SrcA dest format); the alias is UnpackToDestFp32. Switch dest
+            // format onto the alias before transpose_init so LLK_ASSERT
+            // unp_A_dst_format does not fire.
 #ifdef TILIZE_IN
+            reconfig_data_format_srca(dfb_in_welford_id);
             transpose_init(dfb_in_welford_id);
 #else
+            reconfig_data_format_srca(dfb_in0_welford_id);
             transpose_init(dfb_in0_welford_id);
 #endif
         } else {

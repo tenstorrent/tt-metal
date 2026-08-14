@@ -257,7 +257,7 @@
     sim_wormhole_b0:
       timeout: 40
     sim_blackhole:
-      timeout: 40
+      timeout: 60
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
 
@@ -275,8 +275,8 @@
     bh_p150b_civ2:
       timeout: 40
     sim_wormhole_b0:
-      timeout: 40
+      timeout: 60
     sim_blackhole:
-      timeout: 40
+      timeout: 60
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev

@@ -20,6 +20,7 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "test_gold_impls.hpp"
 #include "impl/data_format/bfloat16_utils.hpp"
+#include "impl/context/metal_context.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -35,7 +36,15 @@ TEST_F(UnitMeshFixture, TransposeHC) {
     constexpr uint32_t tile_elements = 32U;
     constexpr uint32_t tile_size = tile_elements * tile_elements;
 
-    const std::vector<uint32_t> shape = {2U, tile_elements * 3U, tile_elements * 5U, tile_elements * 2U};
+    // BH DRAM reads are 64B-aligned. This kernel gathers 32B subtile lines, so on BH every
+    // line takes the serialized misaligned path (~64 NOC round-trips per tile). The default
+    // 1920-tile tensor spent >17 minutes in LaunchProgram on BH sim (job budget 30m) with no
+    // host-side progress. Keep a tile-aligned NCHW smoke shape that still exercises that path.
+    const bool blackhole_simulator = this->arch_ == tt::ARCH::BLACKHOLE &&
+                                     tt::tt_metal::MetalContext::instance().rtoptions().get_simulator_enabled();
+    const std::vector<uint32_t> shape =
+        blackhole_simulator ? std::vector<uint32_t>{1U, tile_elements, tile_elements, tile_elements}
+                            : std::vector<uint32_t>{2U, tile_elements * 3U, tile_elements * 5U, tile_elements * 2U};
     const uint32_t num_elements =
         std::accumulate(std::cbegin(shape), std::cend(shape), 1U, [](const uint32_t left, const uint32_t right) {
             return left * right;

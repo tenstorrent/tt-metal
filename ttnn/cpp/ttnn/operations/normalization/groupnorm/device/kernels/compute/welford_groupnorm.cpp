@@ -224,16 +224,6 @@ void kernel_main() {
     compute_kernel_hw_startup(dfb_in0_id, dfb_in0_id, dfb_in0_id);
 #endif
 
-    if constexpr (welford_unpack_fp32_active) {
-        // Reconfigure the transpose op for the welford intake CB. The factory marks this CB
-        // with UnpackToDestFp32: c_29 in the TILIZE_IN branch, c_19 in the non-TILIZE_IN alias branch.
-#ifdef TILIZE_IN
-        transpose_init(dfb_in_id);
-#else
-        transpose_init(dfb_in0_welford_id);
-#endif
-    }
-
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t num_out_blocks_padded = num_out_blocks;
     uint32_t extra_out_block = false;
@@ -261,6 +251,21 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < num_batches; ++b) {
         dfb_ex_partial.reserve_back(2);
+        if constexpr (welford_unpack_fp32_active) {
+            // Reconfigure the transpose op for the welford intake CB. The factory marks this CB
+            // with UnpackToDestFp32: c_29 in the TILIZE_IN branch, c_19 in the non-TILIZE_IN
+            // alias branch. hw_startup configured Unpacker A from dfb_in0 (Default dest
+            // format); later batches also reconfig SrcA during the normalize path. Switch dest
+            // format onto the unpack-fp32 intake CB before transpose_init so LLK_ASSERT
+            // unp_A_dst_format does not fire.
+#ifdef TILIZE_IN
+            reconfig_data_format_srca(dfb_in_id);
+            transpose_init(dfb_in_id);
+#else
+            reconfig_data_format_srca(dfb_in0_welford_id);
+            transpose_init(dfb_in0_welford_id);
+#endif
+        }
         tile_regs_acquire();
         welford_init();
 
@@ -304,9 +309,15 @@ void kernel_main() {
                         dfb_in0_welford.wait_front(1);
                     }
 #ifdef TILIZE_IN
+                    if constexpr (welford_unpack_fp32_active) {
+                        reconfig_data_format_srca(dfb_in_id);
+                    }
                     transpose_init(dfb_in_id);
                     transpose_tile(dfb_in_id, 0, input_dst);
 #else
+                    if constexpr (welford_unpack_fp32_active) {
+                        reconfig_data_format_srca(dfb_in0_welford_id);
+                    }
                     transpose_init(dfb_in0_welford_id);
                     transpose_tile(dfb_in0_welford_id, 0, input_dst);
 #endif
