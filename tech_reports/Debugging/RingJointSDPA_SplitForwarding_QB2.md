@@ -49,6 +49,29 @@ The third row is the load-bearing one: this workload has two inputs, one `npkt=1
 The fix leaves the `npkt=2` input genuinely split across both links, so **split forwarding stays
 active at ring 4**. This is a real fix, not the ring-size gate in disguise.
 
+### The fix is NOT sufficient — a third failure remains [VERIFIED]
+
+The full nightly with this fix reaches **24 passed, 0 failed**, then hangs in
+`test_ring_mla_chunked_kv_actual_isl_indexed_reuse_max_accuracy_and_determinism`. This test is
+**not** in §3's list — almost certainly because the original nightly's device died at the
+`-all-qk` tests before ever reaching it, so it was hidden inside the six cascade failures. §3's
+"only two real bugs" claim is therefore wrong: there are at least three.
+
+Controlled A/B on QB2, same box, same build system, single test in isolation:
+
+| Configuration | Result |
+|---|---|
+| Feature absent (pre-#52730) | **PASS in 4.0 s** |
+| Feature + the single-packet fix above | **HANG** — `TIMEOUT: device is unrecoverable` |
+
+So split forwarding still breaks this test through some mechanism the single-packet guard does not
+address. **This is the top open item; the feature is not landable until it is resolved.** Reset the
+devices (`tt-smi -r`) between attempts. Start by checking whether this test's shapes produce a
+relayed input that is unsplittable in some *other* way than `npkt == 1`, and whether its
+`kv_actual_isl` clamp (which shrinks `input_tile_id_end` on-device, in both AG kernels) can change
+`num_packets` after `first_half_pages` has already been derived — a clamp that lands between the two
+would desync the reader and writer halves.
+
 ### What this corrects in the rest of this document
 
 - **§7's ring-4 degenerate-case hypothesis is DISPROVED.** Ring 4 is not special. The `+1` relay
@@ -430,9 +453,12 @@ attempt in #38256. It has a track record of being hard to get right.
 
 ## 13. Remaining work on QB2
 
-The root cause is fixed (§0) and the two real failures from §3 pass. What the fix has *not*
-exercised:
+The single-packet root cause is fixed (§0) and the two failures from §3 pass, but the nightly is
+**not green** — resolve the remaining hang first.
 
+0. **`test_ring_mla_chunked_kv_actual_isl_indexed_reuse_max_accuracy_and_determinism` hangs**
+   (§0). Passes with the feature absent, hangs with the feature plus the single-packet fix.
+   **This blocks the re-land.** Everything below is secondary to it.
 1. **The sliding-window path.** `get_next_ring_id_and_consume_one_signal()` still lacks the split
    second-half wait its sibling has (§9, defect 2). The failing tests used
    `get_next_ring_id_and_sync()`, so this path is untested against split forwarding. Find or add a
