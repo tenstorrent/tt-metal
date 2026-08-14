@@ -238,7 +238,7 @@ def test_opt_in_capture_prime_runs_after_allocations_and_before_capture_gate(mon
         ("release-prime", "prime-output"),
         ("sync", "mesh"),
     ]
-    assert ("capture", "persistent") in events[first_begin:]
+    assert ("capture", PersistentInputs("persistent")) in events[first_begin:]
 
 
 def test_capture_prime_failure_rolls_back_without_beginning_trace(monkeypatch, expect_error):
