@@ -48,10 +48,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
             }
         }
-        else if constexpr (unpack_to_dest)
+        else
         {
-            // L1_TO_L1 may leave UNP_DEST waiting for inactive SFPU/PACK clients.
-            // Isolated/congested UNP_DEST execution must not inherit that chain.
+            // CFG wait masks persist across run types on the same device.
+            // Isolated/congested UNPACK must not inherit the L1_TO_L1 chain.
             set_up_zero_dest_dvalid_handshake_for_unpack();
         }
 
@@ -163,11 +163,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::SFPU>();
             }
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        else
         {
-            // FPU datacopy (when present) and SFPU execute sequentially on this
-            // thread. Keep them on one Dest bank instead of creating a dvalid
-            // chain whose producer would also wait for inactive UNPACK/PACK.
+            // CFG wait masks persist across run types. MATH_ISOLATE runs without
+            // a pack consumer; UNPACK_ISOLATE / L1_CONGESTION only mock Src
+            // handshakes. None of them may inherit the FPU→SFPU→PACK chain.
             set_up_zero_dest_dvalid_handshake_for_math();
             set_up_zero_dest_dvalid_handshake_for_sfpu();
         }
@@ -276,12 +276,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     {
         ZONE_SCOPED("INIT")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
-        {
-            // PACK runs without the L1_TO_L1 producer chain in isolated modes.
-            set_up_zero_dest_dvalid_handshake_for_pack();
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
         {
             // Declare the same dvalid client chain that UNPACK and MATH use.
             if constexpr (unpack_to_dest)
@@ -292,6 +287,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 set_up_fpu_to_sfpu_to_pack_dest_dvalid_chain<dest_dvalid_client::PACK>();
             }
+        }
+        else
+        {
+            // PACK_ISOLATE / L1_CONGESTION pack independently. UNPACK_ISOLATE /
+            // MATH_ISOLATE do not pack. None may inherit the L1_TO_L1 wait mask.
+            set_up_zero_dest_dvalid_handshake_for_pack();
         }
 
         ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
