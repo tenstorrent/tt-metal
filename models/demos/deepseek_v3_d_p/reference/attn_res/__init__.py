@@ -36,19 +36,23 @@ is the other thing no HuggingFace function exposes, because it lives in the mode
 layer loop rather than in the read.
 
 ``attn_res.py`` is the folded torch form the device modules mirror: one query
-carrying ``res_norm.weight * res_proj.weight``, ``rsqrt`` pulled out of the dot,
-and the split read the device op is structured around. It drives its own walk over
-that read. Every device PCC gate is measured against this file.
+carrying ``res_norm.weight * res_proj.weight`` and ``rsqrt`` pulled out of the dot.
+It holds the read twice — ``attn_res`` reads the whole candidate set at once, while
+``attn_res_inter_block`` + ``attn_res_merge`` split it the way the device op is
+structured, scoring the sealed half separately from the live stream. Its walk drives
+the one-shot form; the split is checked against that form rather than used by it.
+Every device PCC gate is measured against this file.
 
 So the schedule is written twice — ``hf_walk.HfStream`` and
 ``attn_res.AttnResStream`` — and that is deliberate. The two differ in exactly two
 places: which read they call, and whether the query arrives folded or as the two
 weights the checkpoint stores. ``seal``, ``accumulate`` and ``num_sealed`` are
 identical in both, so the pair does not gate the schedule against itself. What it
-gates is that the folded query equals ``norm * proj``, and that the split read
-equals the vendored one, at every site of a whole stack rather than at the single
-read the other gates cover. Collapsing the two into one class parametrized by a
-read function would leave ``test_stack_matches_hf_walk`` comparing a walk to itself.
+gates is that the folded query equals ``norm * proj`` at every site of a whole stack
+rather than at the single read the other gates cover. Collapsing the two into one class
+parametrized by a read function would leave ``test_stack_matches_hf_walk`` comparing a
+walk to itself. The schedule the pair shares is instead pinned to a written-down trace,
+which catches a boundary that moves but not one that was read wrong to begin with.
 
 ``tests/`` beside these files is where all three shortcuts — the folded query, the
 hoisted ``rsqrt``, the split read — are checked against forms that do not share

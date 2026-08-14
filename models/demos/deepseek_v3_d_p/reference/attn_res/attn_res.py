@@ -22,10 +22,15 @@ online-softmax algebra.
 
 import torch
 
-HIDDEN_SIZE = 7168
-NUM_LAYERS = 93
-BLOCK_SIZE = 12
-EPS = 1e-5
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+
+HIDDEN_SIZE = KimiK3Config.EMB_SIZE
+NUM_LAYERS = KimiK3Config.NUM_LAYERS
+BLOCK_SIZE = KimiK3Config.ATTN_RES_BLOCK_SIZE
+
+# The read takes its epsilon off the `res_norm` module, which the model builds with
+# `rms_norm_eps` — AttnRes has no epsilon of its own to drift from the layer norms'.
+EPS = KimiK3Config.RMS_NORM_EPS
 
 
 def fold_query(norm_weight, proj_weight):
@@ -202,8 +207,14 @@ def attn_res_stack(hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns, block
     Returns:
         [N, d] — what `model.norm` sees.
     """
+    # Unequal sequences would walk their common prefix and still return a plausible [N, d].
+    # This is the oracle every device gate is scored against, so a short walk has to raise
+    # rather than quietly move the target.
+    lengths = (len(attn_fns), len(mlp_fns), len(q_pre), len(q_post))
+    assert len(set(lengths)) == 1, f"attn_fns/mlp_fns/q_pre/q_post have lengths {lengths}"
+
     stream = AttnResStream(hidden_states, block_size=block_size, eps=eps)
-    for layer_idx, (attn_fn, mlp_fn) in enumerate(zip(attn_fns, mlp_fns)):
+    for layer_idx, (attn_fn, mlp_fn) in enumerate(zip(attn_fns, mlp_fns, strict=True)):
         attn_res_layer(stream, layer_idx, q_pre[layer_idx], q_post[layer_idx], attn_fn, mlp_fn)
         if hook is not None:
             hook(layer_idx, stream)

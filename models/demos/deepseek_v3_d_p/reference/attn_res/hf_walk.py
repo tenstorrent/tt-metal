@@ -10,9 +10,9 @@ so nothing here re-derives it.
 
 What this file holds is the part no HuggingFace function exposes: which layers
 seal, which reads see how many candidates, and when the live stream is absent.
-`attn_res.py` walks the same schedule against the folded query and the split read;
-everything here is prefixed `hf_` because it walks it against the vendored read
-and the two weights unfolded, which is the whole difference between the two.
+`attn_res.py` walks the same schedule against the folded query; everything here is
+prefixed `hf_` because it walks it against the vendored read and the two weights
+unfolded, which is the whole difference between the two.
 
     from models.demos.deepseek_v3_d_p.reference.attn_res.hf_walk import hf_stack
     out = hf_stack(hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns, block_size, eps)
@@ -98,8 +98,13 @@ def hf_stack(hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns, block_size,
     Returns:
         [N, d] — what `model.norm` sees.
     """
+    # Truncating here would be worse than in `attn_res_stack`: the gate that compares the two
+    # hands both walks the same sequences, so a short walk agrees with itself and passes.
+    lengths = (len(attn_fns), len(mlp_fns), len(q_pre), len(q_post))
+    assert len(set(lengths)) == 1, f"attn_fns/mlp_fns/q_pre/q_post have lengths {lengths}"
+
     stream = HfStream(hidden_states, block_size=block_size, eps=eps)
-    for layer_idx, (attn_fn, mlp_fn) in enumerate(zip(attn_fns, mlp_fns)):
+    for layer_idx, (attn_fn, mlp_fn) in enumerate(zip(attn_fns, mlp_fns, strict=True)):
         hf_layer(stream, layer_idx, q_pre[layer_idx], q_post[layer_idx], attn_fn, mlp_fn)
         if hook is not None:
             hook(layer_idx, stream)

@@ -19,6 +19,10 @@ So each shortcut is checked here instead, against something that does not share 
     which places the same seals and reads but drives the vendored read with the two weights
     unfolded. Which layers seal and which reads see how many candidates is scheduling rather
     than algebra, and no read-level check can reach it.
+  * the schedule itself, against a written-down trace. Both walks were transcribed from the
+    same reading of the model's layer loop, so comparing them cannot expose a misreading —
+    only a later change that moves a boundary in one of them. The trace is what a reviewer
+    checks against the model source by eye.
 
 All of it runs in milliseconds at a `d` far below production's. What is under test is
 algebra and scheduling, neither of which depends on the shape — the shapes production
@@ -28,8 +32,11 @@ runs are what the device suites exist for.
 import pytest
 import torch
 
+from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import BLOCK_SIZE as PRODUCTION_BLOCK_SIZE
+from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import EPS
+from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import NUM_LAYERS as PRODUCTION_LAYERS
 from models.demos.deepseek_v3_d_p.reference.attn_res.attn_res import (
-    EPS,
+    AttnResStream,
     attn_res,
     attn_res_inter_block,
     attn_res_merge,
@@ -153,8 +160,12 @@ def test_stack_matches_hf_walk():
     live stream is `None` until the next accumulate, and the pre-attention read is
     skipped only while nothing is sealed. `hf_stack` places all of that identically and
     differs only in the read it calls and the query form it takes, so what this gate
-    holds is the folded query and the split read at every site of a whole stack at once,
-    rather than the single call the two gates above cover.
+    holds is the folded query at every site of a whole stack at once, rather than at the
+    single call the two gates above cover.
+
+    It does not hold the schedule itself. Both walks transcribe the same reading of the
+    model's layer loop, so a misreading agrees with itself here; the two tests below pin
+    the schedule to a written-down trace instead.
     """
     hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns = _stack_case()
 
@@ -173,3 +184,127 @@ def test_stack_matches_hf_walk():
     assert got.shape == want.shape, f"{got.shape} != {want.shape}"
     delta = _max_abs(got, want)
     assert delta <= TOL, f"the folded walk differs from the HuggingFace-driven one by {delta:.3e}"
+
+
+def _record_reads(monkeypatch):
+    """Candidate counts, in issue order, for every read a walk performs.
+
+    `attn_res_stack` builds its own stream, so there is no seam to inject a recorder at.
+    """
+    original = AttnResStream.read
+    candidates = []
+
+    def recording_read(stream, q):
+        candidates.append(stream.num_sealed + 1)
+        return original(stream, q)
+
+    monkeypatch.setattr(AttnResStream, "read", recording_read)
+    return candidates
+
+
+def _tiny_stack(num_layers, hidden_size=8, num_tokens=2):
+    """A stack whose modules and shapes are as small as the schedule allows.
+
+    The schedule does not depend on `d`, so pricing these at production width would buy
+    nothing and make the 93-layer case slow enough to skip.
+    """
+    generator = torch.Generator().manual_seed(0)
+    zeros = torch.zeros(hidden_size, dtype=DTYPE)
+    query = (1.0 + zeros, zeros.reshape(1, -1))
+    return (
+        torch.randn(num_tokens, hidden_size, generator=generator, dtype=DTYPE),
+        [fold_query(*query)] * num_layers,
+        [fold_query(*query)] * num_layers,
+        fold_query(*query),
+        [torch.zeros_like] * num_layers,
+        [torch.zeros_like] * num_layers,
+    )
+
+
+def test_stack_seals_on_block_boundaries(monkeypatch):
+    """The seal schedule, against a trace rather than against a second walk.
+
+    A layer seals when its index is a multiple of the block size, before its attention
+    output is accumulated, so the sealed snapshot holds the previous block and nothing
+    of this one. Layer 0 seals the token embedding, which no block contributes to.
+
+    This does not establish that the schedule matches the model — the expected trace was
+    written from the same reading of the layer loop as the walks. What it establishes is
+    that the schedule is stated somewhere a reviewer can check against the model source,
+    and that a later change to a boundary fails here instead of moving both walks together.
+    """
+    hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns = _tiny_stack(NUM_LAYERS)
+
+    sealed_after_layer = []
+    candidates = _record_reads(monkeypatch)
+    attn_res_stack(
+        hidden_states,
+        q_pre,
+        q_post,
+        q_out,
+        attn_fns,
+        mlp_fns,
+        block_size=BLOCK_SIZE,
+        eps=EPS,
+        hook=lambda layer_idx, stream: sealed_after_layer.append(stream.num_sealed),
+    )
+
+    # Five layers at block size two: seals at 0, 2 and 4.
+    assert sealed_after_layer == [1, 1, 2, 2, 3]
+
+    # Two reads per layer, less layer 0's skipped pre-attention read, plus the model-level
+    # read after the last layer. Each entry is the sealed count at that read, plus the live
+    # stream.
+    assert candidates == [2, 2, 2, 2, 3, 3, 3, 3, 4, 4]
+
+
+def test_production_schedule_performs_186_reads(monkeypatch):
+    """The counts the device modules and their PCC gates are sized against.
+
+    93 layers at block size 12 seal on layers 0, 12, …, 84 — eight snapshots, the first
+    being the embedding and the last nine layers still live at the end. So the final read
+    mixes nine candidates, and the stack performs 186 reads.
+    """
+    hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns = _tiny_stack(PRODUCTION_LAYERS)
+
+    sealed_after_layer = []
+    candidates = _record_reads(monkeypatch)
+    attn_res_stack(
+        hidden_states,
+        q_pre,
+        q_post,
+        q_out,
+        attn_fns,
+        mlp_fns,
+        block_size=PRODUCTION_BLOCK_SIZE,
+        eps=EPS,
+        hook=lambda layer_idx, stream: sealed_after_layer.append(stream.num_sealed),
+    )
+
+    assert sealed_after_layer[-1] == 8
+    assert len(candidates) == 186
+    assert candidates[-1] == 9
+
+
+@pytest.mark.parametrize("shortened", ["q_pre", "q_post", "attn_fns", "mlp_fns"])
+def test_stack_rejects_mismatched_sequences(shortened, expect_error):
+    """A walk shorter than the caller asked for must raise, not return a plausible tensor.
+
+    Both walks are handed the same sequences by `test_stack_matches_hf_walk`, so a silent
+    truncation would shorten both and agree with itself.
+    """
+    hidden_states, q_pre, q_post, q_out, attn_fns, mlp_fns = _tiny_stack(NUM_LAYERS)
+    sequences = {"q_pre": q_pre, "q_post": q_post, "attn_fns": attn_fns, "mlp_fns": mlp_fns}
+    sequences[shortened] = sequences[shortened][:-1]
+
+    with expect_error(AssertionError, "lengths"):
+        attn_res_stack(
+            hidden_states,
+            sequences["q_pre"],
+            sequences["q_post"],
+            q_out,
+            sequences["attn_fns"],
+            sequences["mlp_fns"],
+            block_size=BLOCK_SIZE,
+            eps=EPS,
+        )

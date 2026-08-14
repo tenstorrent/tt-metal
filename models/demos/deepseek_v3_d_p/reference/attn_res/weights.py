@@ -58,18 +58,24 @@ def validate_query_weights(
     hidden_size: int = HIDDEN_SIZE,
     prefix: str = CHECKPOINT_PREFIX,
 ) -> None:
-    """Check that every query weight is present and `[d]`-shaped.
+    """Check that every query weight is present and has the shape the model declares.
 
-    `res_proj.weight` is stored `[1, d]` — it is a projection to a scalar score, so the
-    checkpoint keeps the output dimension. `fold_query` flattens both factors.
+    `res_norm.weight` is `[d]` and `res_proj.weight` is `[1, d]` — the latter is a projection
+    to a scalar score, so the checkpoint keeps the output dimension. Both shapes are read off
+    the HuggingFace module definitions rather than an observed checkpoint.
+
+    `fold_query` flattens both factors, so a transposed store would fold to the same numbers
+    and pass a bare element count. Checking the shape is what makes this a load-time boundary
+    instead of a silent reinterpretation.
     """
     for name in query_weight_names(num_layers, prefix):
         try:
             weight = weights[name]
         except KeyError as error:
             raise ValueError(f"missing AttnRes weight: {name}") from error
-        if weight.numel() != hidden_size:
-            raise ValueError(f"{name} holds {weight.numel()} elements, expected {hidden_size}")
+        expected = (1, hidden_size) if name.endswith(f"_{QUERY_FACTORS[1]}.weight") else (hidden_size,)
+        if tuple(weight.shape) != expected:
+            raise ValueError(f"{name} has shape {tuple(weight.shape)}, expected {expected}")
 
 
 def fold_queries(
