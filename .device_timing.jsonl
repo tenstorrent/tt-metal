@@ -174,3 +174,4 @@
 {"source":"run_safe_pytest","pid":309410,"started_at_ms":1786720494579,"wait_ms":2,"run_ms":13092,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize.py","exit_code":0}
 {"event": "phase", "phase": "refinement_4", "state": "start", "at_ms": 1786720507686}
 {"source":"tt-probe","pid":316413,"started_at_ms":1786721498360,"wait_ms":192,"run_ms":21883,"test_path":"tilize","exit_code":0}
+{"source":"tt-probe","pid":318332,"started_at_ms":1786721589274,"wait_ms":234,"run_ms":18576,"test_path":"tilize","exit_code":0}

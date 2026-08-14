@@ -21,3 +21,5 @@
 {"event":"tool_use","tool":"Skill","skill":"numeric-formats-metal","args":"","ts":"2026-08-14T15:15:36+00:00"}
 {"event":"test_run","status":"partial","test":"probes/probe_021.py","detail":"uint32/uint16/int32 identity exact out of the box on [1,1,64,128] and [1,1,32,64]; uint8 returns ALL ZEROS (8159/8192 wrong)","ts":"2026-08-14T15:32:16+00:00"}
 {"event":"hypothesis","detail":"uint8 all-zero output: the in-tree LLK 8-bit tilize test (tt-llk tests/python_tests/test_unpack_tilize.py::test_unpack_tilize_int8) only passes with DestAccumulation.Yes, and the pre-nuke ttnn tilize set fp32_llk_acc for its 8-bit (FP8_E4M3) dtype. Try fp32_dest_acc_en=True when either side is an 8-bit format.","ts":"2026-08-14T15:32:16+00:00"}
+{"event":"fix_applied","detail":"fp32_dest_acc_en=True when either side is an 8-bit datum dtype (EIGHT_BIT_DTYPES). uint8 identity now exact on [1,1,64,128] single- and multi-core (probe_022).","ts":"2026-08-14T15:33:45+00:00"}
+{"event":"test_run","status":"pass","test":"probes/probe_022.py","detail":"uint8 exact identity, multicore True+False; host TILE round-trip sane","ts":"2026-08-14T15:33:45+00:00"}

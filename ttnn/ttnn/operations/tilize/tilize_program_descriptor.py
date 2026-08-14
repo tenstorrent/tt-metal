@@ -39,6 +39,11 @@ DEFAULT_TILE_WIDTH = 32  # a tile is always 32 wide
 NUM_CIRCULAR_BUFFERS = 32
 NOC_ALIGN_BYTES = 32  # transfer granularity a split gather has to keep
 
+# Dtypes whose DATUM is one byte. Not the same question as `element_size() == 1`:
+# bfloat8_b also reports one byte per element but is a block-float format with a
+# shared exponent, and the LLK's 8-bit tilize path must not be selected for it.
+EIGHT_BIT_DTYPES = (ttnn.uint8,)
+
 # --- blocking-model constants (single source; every knob derives from these)-
 CB_L1_BUDGET = 1_048_576  # bytes of L1 reserved for the two streaming CBs
 FAST_TILIZE_MAX_W = 255  # tilize_helpers.inl:95 -> block_width_tiles < 256
@@ -820,8 +825,17 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     lossless_fp32 = (
         input_tensor.dtype == ttnn.float32 and output_tensor.dtype == ttnn.float32 and bool(LEVERS["fp32_dest"])
     )
+    # 8-bit datums (Refinement 4) need fp32 DEST as well — for a different reason.
+    # The tilize LLK's 8-bit path (ckernel_defs.h IS_8BIT_FORMAT) is only validated
+    # with DEST accumulation on (tt-llk `test_unpack_tilize_int8` runs
+    # DestAccumulation.Yes), and the reference C++ tilize set the same `fp32_llk_acc`
+    # flag for its own 8-bit dtype. With a 16-bit DEST the 8-bit tile packs as ZEROS
+    # (measured: probes/probe_021.py, every element 0). Keyed on the DTYPE, not on
+    # element_size(), because bfloat8_b also reports 1 byte/elem and is a block-float
+    # format, not an 8-bit datum.
+    eight_bit = input_tensor.dtype in EIGHT_BIT_DTYPES or output_tensor.dtype in EIGHT_BIT_DTYPES
     compute_config = ttnn.ComputeConfigDescriptor()
-    compute_config.fp32_dest_acc_en = lossless_fp32
+    compute_config.fp32_dest_acc_en = lossless_fp32 or eight_bit
     if lossless_fp32:
         unpack_modes = [ttnn.UnpackToDestMode.Default] * NUM_CIRCULAR_BUFFERS
         unpack_modes[CB_INPUT_STICKS] = ttnn.UnpackToDestMode.UnpackToDestFp32
