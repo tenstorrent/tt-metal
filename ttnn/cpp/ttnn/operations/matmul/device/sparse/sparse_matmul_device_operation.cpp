@@ -63,9 +63,19 @@ ttnn::Shape compute_sparse_matmul_output_shape(
 
     return output_shape;
 }
+
+ttnn::Shape compute_sparse_matmul_compact_output_shape(
+    const ttnn::Tensor& input_tensor_a, const ttnn::Tensor& input_tensor_b, uint32_t nnz) {
+    return ttnn::Shape{1U, nnz, input_tensor_a.logical_shape()[-2], input_tensor_b.logical_shape()[-1]};
+}
 }  // namespace
 
 namespace ttnn::prim {
+
+void SparseMatmulDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(operation_attributes, tensor_args);
+}
 
 void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -210,6 +220,49 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
     // on-device in reader_bmm_tile_layout_in0_sender_padding.cpp (asserts loudly under watcher instead of
     // hanging).
 
+    const bool is_output_tensor_given =
+        !tensor_args.optional_output_tensors.empty() && tensor_args.optional_output_tensors.at(0).has_value();
+    if (is_output_tensor_given) {
+        // The program factory derives the writer's page geometry from the input tiles
+        // ({in0 tile height, in1 tile width}), not from the output tensor, so an optional
+        // output with any other tile would be paged differently than the writer writes it.
+        const auto& optional_output_tile = tensor_args.optional_output_tensors.at(0)->tensor_spec().tile();
+        TT_FATAL(
+            optional_output_tile.get_height() == in0_tile.get_height() &&
+                optional_output_tile.get_width() == in1_tile.get_width(),
+            "Optional output tensor tile {}x{} must match the output tile {}x{} derived from the input tiles",
+            optional_output_tile.get_height(),
+            optional_output_tile.get_width(),
+            in0_tile.get_height(),
+            in1_tile.get_width());
+
+        const auto& optional_output_shape = tensor_args.optional_output_tensors.at(0)->logical_shape();
+        const auto expanded_output_shape = compute_sparse_matmul_output_shape(
+            input_tensor_a,
+            input_tensor_b,
+            operation_attributes.is_input_a_sparse,
+            operation_attributes.is_input_b_sparse);
+
+        if (operation_attributes.nnz.has_value()) {
+            const auto compact_output_shape = compute_sparse_matmul_compact_output_shape(
+                input_tensor_a, input_tensor_b, operation_attributes.nnz.value());
+            TT_FATAL(
+                optional_output_shape == expanded_output_shape || optional_output_shape == compact_output_shape,
+                "Optional output tensor shape {} must match expanded output shape {} or compact output shape {} "
+                "when nnz={}",
+                optional_output_shape,
+                expanded_output_shape,
+                compact_output_shape,
+                operation_attributes.nnz.value());
+        } else {
+            TT_FATAL(
+                optional_output_shape == expanded_output_shape,
+                "Optional output tensor shape {} must match expanded output shape {} when nnz is not provided",
+                optional_output_shape,
+                expanded_output_shape);
+        }
+    }
+
     // The mcast_in0 kernel derives in1_num_subblocks = out_block_w / out_subblock_w and bakes it in
     // as a compute-kernel compile-time arg. When out_subblock_w does not divide out_block_w the
     // integer division yields 0, the compute kernel's in1_subblock loop runs zero times and never
@@ -301,6 +354,13 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     SparseMatmulDeviceOperation::tensor_return_value_t output_tensors;
     const auto& optional_output_tensors = tensor_args.optional_output_tensors;
     const auto& input_tensors = tensor_args.input_tensors;
+    // A compact output is fully written by the in1 writer (one block per non-zero sparsity entry),
+    // so it skips the zero-fill below; expanded outputs rely on it to zero the skipped blocks.
+    const bool compact_output = !optional_output_tensors.empty() && optional_output_tensors[0].has_value() &&
+                                operation_attributes.nnz.has_value() &&
+                                optional_output_tensors[0]->logical_shape() ==
+                                    compute_sparse_matmul_compact_output_shape(
+                                        input_tensors.at(0), input_tensors.at(1), operation_attributes.nnz.value());
 
     if (!optional_output_tensors.empty() and optional_output_tensors[0].has_value()) {
         output_tensors.reserve(optional_output_tensors.size());
@@ -310,14 +370,16 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
                 "If using optional output tensors, all output tensors must have a value");
             output_tensors.emplace_back(optional_output_tensor.value());
         }
-        for (auto& output_tensor : output_tensors) {
-            output_tensor = ttnn::zeros_like(
-                output_tensor,
-                std::nullopt,
-                std::nullopt,
-                std::nullopt,
-                std::nullopt,
-                std::optional<Tensor>(output_tensor));
+        if (!compact_output) {
+            for (auto& output_tensor : output_tensors) {
+                output_tensor = ttnn::zeros_like(
+                    output_tensor,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt,
+                    std::optional<Tensor>(output_tensor));
+            }
         }
         return output_tensors;
     }
@@ -327,6 +389,7 @@ SparseMatmulDeviceOperation::tensor_return_value_t SparseMatmulDeviceOperation::
     for (const auto& output_spec : output_specs) {
         output_tensors.emplace_back(create_device_tensor(output_spec, device));
     }
+    // Compact output requires a caller-supplied tensor, so this path is never compact.
     for (auto& output_tensor : output_tensors) {
         output_tensor = ttnn::zeros_like(
             output_tensor,

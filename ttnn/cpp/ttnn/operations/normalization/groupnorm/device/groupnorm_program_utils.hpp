@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <array>
 #include <vector>
 #include <cstdint>
 #include <initializer_list>
@@ -17,19 +16,17 @@ namespace ttnn::prim {
 
 enum class GroupNormMode : uint32_t { LEGACY = 0, WELFORD_NATIVE = 1, WELFORD_RECIPROCALS = 2 };
 
-// Non-tile-aligned H*W (#50682): the two-pass path reduces over the tile-padding rows as data, so
-// the scaler must divide by the real element count and the compute kernel must subtract K*E[x]^2.
-// Shared by all three two-pass factories so the scaler formula has one definition. Kernels re-derive
-// `active` from (padded_hw != logical_hw), hence `kernel_logical_hw` reporting padded_hw when off --
-// a disagreeing flag would hang the compute kernel on dfb_k.wait_front. Interleaved ships these as
-// compile-time args, so H*W=200 and H*W=224 (same padded 224) must not share a cached program; they
-// do not, because the default program hash keys on TensorSpec's logical_shape.
+// Non-tile-aligned H*W: the reduce scaler must divide by the real element count (`scaler_bits`),
+// and the padding rows must be excluded from both accumulation passes -- the kernels do that by
+// switching to a row-masked set of input-mask tiles on each batch's final row-tile, of which
+// `rows_in_last_tile` are real. Shared by all three two-pass factories. Kernels re-derive `active`
+// from (padded_hw != logical_hw), hence kernel_logical_hw reporting padded_hw when off.
 struct GroupNormPadCorrection {
     bool active = false;
     uint32_t logical_hw = 0;
     uint32_t padded_hw = 0;
-    uint32_t kernel_logical_hw = 0;  // what the kernels are told: logical when active, else padded
-    uint32_t k_bits = 0;             // K = padded_hw/logical_hw - 1, as float bits
+    uint32_t kernel_logical_hw = 0;  // logical when active, else padded
+    uint32_t rows_in_last_tile = 0;  // logical_hw % tile_height
 
     // Reduce scaler that divides by the real element count rather than the padded one. The sqrt is
     // because the AVG/REDUCE_SCALAR LLK applies the scaler twice (row then col). Scaling the divisor
@@ -39,18 +36,15 @@ struct GroupNormPadCorrection {
     uint32_t scaler_bits(uint32_t reduce_factor_w) const;
 };
 
-GroupNormPadCorrection make_group_norm_pad_correction(uint32_t logical_hw, uint32_t padded_hw, bool use_welford);
+GroupNormPadCorrection make_group_norm_pad_correction(
+    uint32_t logical_hw, uint32_t padded_hw, bool use_welford, uint32_t tile_height = 32);
 
-// Appends the three single-tile pad-correction CBs when the correction is active: dfb_k (written by
-// the writer) plus two scratch tiles. The indices differ per path by what each already occupies.
-// Costs 3 tiles per core when active -- 6KB at bfloat16, 12KB at float32.
-void append_group_norm_pad_correction_cbs(
-    tt::tt_metal::ProgramDescriptor::CBDescriptors& cbs,
-    const GroupNormPadCorrection& pad,
-    std::array<uint32_t, 3> cb_indices,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    tt::DataFormat data_format,
-    uint32_t single_tile_size);
+// A batch's padding rows sit in its LAST row-tile, so only the core holding that row-tile applies
+// the row mask. `m_index` is virtual_core.y for the interleaved factories, core_index /
+// num_shards_c for the sharded one.
+inline bool group_norm_core_owns_pad_tile(uint32_t m_index, uint32_t num_cores_per_batch) {
+    return (m_index % num_cores_per_batch) == (num_cores_per_batch - 1);
+}
 
 // True when any reconfig-relevant CB format is fp32, so the compute kernel must run its
 // reconfig_data_format calls. When all are bf16 those calls are no-ops and the kernel skips them.
