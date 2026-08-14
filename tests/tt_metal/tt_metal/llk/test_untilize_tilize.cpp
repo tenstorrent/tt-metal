@@ -1375,6 +1375,146 @@ TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstStaticState) {
     }
 }
 
+// Variable-block-width dst untilize (rows packed as full-width blocks plus a
+// tail block — the untilize_with_unpadding shape): functional check of both
+// the LLK 1.0 kernel (re-inits pack on every width switch) and the SST kernel
+// (re-emits only the width-dependent MOP sub-step).
+TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstVariableWidth) {
+    // Row widths with mixed block widths (both must divide the row width):
+    // 12 -> [6,3,3], 16 -> [8,4,4], 24 -> [8,8,4,4].
+    vector<vector<std::uint32_t>> num_tiles = {{2, 12}, {4, 16}, {8, 24}};
+    for (const auto& kernel : {std::string("tests/tt_metal/tt_metal/test_kernels/compute/dst_untilize_variable_width.cpp"),
+                               std::string("experiments/static-state-tracking/kernels/dst_untilize_variable_width_sst.cpp")}) {
+        for (auto num_tile : num_tiles) {
+            unit_tests::compute::tilize::TestConfig test_config = {
+                .dst_full_sync_en = false,
+                .input_single_tile_size = 2 * 1024,
+                .output_single_tile_size = 2 * 1024,
+                .num_tiles_r = num_tile[0],
+                .num_tiles_c = num_tile[1],
+                .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
+                .golden_function = ::unit_tests::compute::gold_standard_untilize,
+                .compute_kernel_override = kernel};
+            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+        }
+    }
+}
+
+// Perf A/B on the variable-width shape: per row, LLK 1.0 pays two
+// pack_untilize_dest_init re-runs (full pack reconfig + untilize init +
+// dest-offset registers) while SST re-emits two MOP configs. The width-switch
+// count scales with num_tiles_r.
+TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstVariableWidthPerfSSTvsBaseline) {
+    // DFBs are sized to the full tensor (2 buffers x num_tiles x 2 KiB must fit in L1).
+    vector<vector<std::uint32_t>> num_tiles = {{4, 12}, {16, 12}, {24, 12}, {8, 24}};
+    std::uint32_t kPerfIters = 400;
+    if (std::getenv("TT_SST_PERF_PROFILE") != nullptr) {
+        num_tiles = {{16, 12}};
+        kPerfIters = 30;
+    }
+    // Three variants: production-shaped baseline (default init re-runs the BH
+    // DEST remap configure = MATH tensix_sync per switch, as in-tree kernels
+    // do), hand-tuned baseline (configure_remap=false re-inits), and SST.
+    const std::array<std::pair<const char*, const char*>, 3> kernels = {
+        {{"baseline", "tests/tt_metal/tt_metal/test_kernels/compute/dst_untilize_variable_width.cpp"},
+         {"baseline-tuned", "tests/tt_metal/tt_metal/test_kernels/compute/dst_untilize_variable_width_tuned.cpp"},
+         {"sst", "experiments/static-state-tracking/kernels/dst_untilize_variable_width_sst.cpp"}}};
+
+    for (auto num_tile : num_tiles) {
+        std::array<double, 3> us = {0.0, 0.0, 0.0};
+        for (std::size_t k = 0; k < kernels.size(); ++k) {
+            unit_tests::compute::tilize::TestConfig test_config = {
+                .dst_full_sync_en = false,
+                .input_single_tile_size = 2 * 1024,
+                .output_single_tile_size = 2 * 1024,
+                .num_tiles_r = num_tile[0],
+                .num_tiles_c = num_tile[1],
+                .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
+                .golden_function = ::unit_tests::compute::gold_standard_untilize,
+                .compute_kernel_override = kernels[k].second,
+                .perf_iterations = kPerfIters};
+            unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config, &us[k]);
+        }
+
+        log_info(
+            tt::LogTest,
+            "perf summary (variable width): num_tiles_r = {}, num_tiles_c = {}: baseline = {:.2f} us, "
+            "baseline-tuned = {:.2f} us, SST = {:.2f} us, SST/baseline = {:.3f}, SST/tuned = {:.3f}",
+            num_tile[0],
+            num_tile[1],
+            us[0],
+            us[1],
+            us[2],
+            us[2] / us[0],
+            us[2] / us[1]);
+    }
+}
+
+// Greedy DST blocking: rows whose width does not divide by the DST capacity.
+// The LLK 1.0 API (full_ct_dim % block_ct_dim == 0) forces the production
+// dst_untilize kernel to block by the largest DIVISOR of the row width
+// (width 20 -> 4 rounds of 5, width 22 -> 11 rounds of 2), while the SST
+// kernel fills DST to capacity with an explicit-offset remainder block
+// (width 20 -> [8,8,4], width 22 -> [8,8,6]). Fewer DST round-trips = fewer
+// MATH/PACK handshakes on the critical path.
+TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstGreedyBlocking) {
+    vector<vector<std::uint32_t>> num_tiles = {{2, 20}, {2, 22}, {4, 24}};
+    for (auto num_tile : num_tiles) {
+        unit_tests::compute::tilize::TestConfig test_config = {
+            .dst_full_sync_en = false,
+            .input_single_tile_size = 2 * 1024,
+            .output_single_tile_size = 2 * 1024,
+            .num_tiles_r = num_tile[0],
+            .num_tiles_c = num_tile[1],
+            .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
+            .golden_function = ::unit_tests::compute::gold_standard_untilize,
+            .compute_kernel_override = "experiments/static-state-tracking/kernels/dst_untilize_greedy_sst.cpp"};
+        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), test_config);
+    }
+}
+
+// Perf A/B on greedy blocking: production dst_untilize.cpp (divisor blocking,
+// unmodified) vs the SST greedy-blocking kernel, on row widths where divisor
+// blocking degenerates. Width 24 is the control (both kernels block [8,8,8]).
+TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstGreedyBlockingPerfSSTvsBaseline) {
+    vector<vector<std::uint32_t>> num_tiles = {{12, 20}, {12, 22}, {12, 24}};
+    std::uint32_t kPerfIters = 400;
+    if (std::getenv("TT_SST_PERF_PROFILE") != nullptr) {
+        num_tiles = {{12, 22}};
+        kPerfIters = 30;
+    }
+    for (auto num_tile : num_tiles) {
+        unit_tests::compute::tilize::TestConfig base_config = {
+            .dst_full_sync_en = false,
+            .input_single_tile_size = 2 * 1024,
+            .output_single_tile_size = 2 * 1024,
+            .num_tiles_r = num_tile[0],
+            .num_tiles_c = num_tile[1],
+            .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
+            .golden_function = ::unit_tests::compute::gold_standard_untilize,
+            .perf_iterations = kPerfIters};
+
+        double baseline_us = 0.0;
+        double sst_us = 0.0;
+
+        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), base_config, &baseline_us);
+
+        auto sst_config = base_config;
+        sst_config.compute_kernel_override = "experiments/static-state-tracking/kernels/dst_untilize_greedy_sst.cpp";
+        unit_tests::compute::tilize::run_single_core_tilize_program(this->devices_.at(0), sst_config, &sst_us);
+
+        log_info(
+            tt::LogTest,
+            "perf summary (greedy blocking): num_tiles_r = {}, num_tiles_c = {}: baseline = {:.2f} us, SST = {:.2f} "
+            "us, SST/baseline = {:.3f}",
+            num_tile[0],
+            num_tile[1],
+            baseline_us,
+            sst_us,
+            sst_us / baseline_us);
+    }
+}
+
 // Perf A/B: the LLK 1.0 dst_untilize compute kernel vs the static-state-tracking
 // re-implementation, same harness / dataflow / configs. Wall time is measured
 // over pipelined re-enqueues of the validated workload (see perf_iterations).
