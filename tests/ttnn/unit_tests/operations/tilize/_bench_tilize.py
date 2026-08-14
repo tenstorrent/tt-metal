@@ -83,6 +83,7 @@ def _measure(
     in_mem_config=None,
     out_mem_config=None,
     pad=None,
+    out_dtype=None,
 ):
     """One warm launch (compile + program cache), then ONE measured launch.
 
@@ -96,7 +97,12 @@ def _measure(
     pd.LEVERS.update(levers)
     pd.ABLATE.update(ablate)
     try:
-        torch_input = torch.randn(shape).to(torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32)
+        if dtype == ttnn.uint8:
+            torch_input = torch.randint(0, 200, shape, dtype=torch.uint8)
+        elif dtype in (ttnn.uint32, ttnn.uint16, ttnn.int32):
+            torch_input = torch.randint(0, 100, shape, dtype=torch.int32)
+        else:
+            torch_input = torch.randn(shape).to(torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32)
         tt_input = ttnn.from_torch(
             torch_input,
             dtype=dtype,
@@ -105,6 +111,8 @@ def _measure(
             memory_config=in_mem_config if in_mem_config is not None else ttnn.DRAM_MEMORY_CONFIG,
         )
         call = dict(memory_config=out_mem_config, use_multicore=use_multicore, use_double_buffer=use_double_buffer)
+        if out_dtype is not None:
+            call["dtype"] = out_dtype
         call.update(pad or {})
 
         tilize(tt_input, **call)
@@ -118,7 +126,7 @@ def _measure(
         pd.LEVERS.update(saved)
         pd.ABLATE.update(saved_ablate)
 
-    elem = 2 if dtype == ttnn.bfloat16 else 4
+    elem = {ttnn.bfloat16: 2, ttnn.float32: 4, ttnn.uint8: 1, ttnn.uint16: 2}.get(dtype, 4)
     tensor_bytes = 1
     for d in shape:
         tensor_bytes *= d
@@ -627,4 +635,63 @@ def test_bench_pipeline_overlap_mechanism(device, pipeline, ablate, name):
         levers=dict(pipeline=pipeline),
         ablate=ablate,
         label=f"overlap/pipeline={pipeline}/{name}",
+    )
+
+
+# --- Refinement 4: the integer dtype family, and the two numeric-format knobs --
+# The dtype family is a WIDTH change on the same data path, so its bench rows exist
+# to (a) give later phases a non-regression baseline on 1-byte and 4-byte integer
+# datums, and (b) price the two knobs this refinement turned: fp32 DEST for 8-bit
+# datums (a correctness requirement, see test_uint8_requires_fp32_dest) and the
+# OUTPUT-format pad stamp.
+
+_R4_DTYPES = {"uint32": ttnn.uint32, "uint8": ttnn.uint8}
+
+
+@pytest.mark.parametrize("regime", ["a_square", "d_smallest"])
+@pytest.mark.parametrize("dtype_name", list(_R4_DTYPES))
+def test_bench_dtype_family(device, regime, dtype_name):
+    """Baseline for the integer dtype family (Refinement 4). uint8 additionally
+    carries fp32 DEST, which is why its per-byte cost is worth recording."""
+    _measure(device, SHAPES[regime], _R4_DTYPES[dtype_name], label=f"dtype/{regime}/{dtype_name}")
+
+
+# Half the output tile-rows are WHOLE PAD tiles — the worst case for the writer's
+# output-format stamp (every element of those tiles is stored individually).
+_OUT_FILL_SHAPE = ([1, 1, 1024, 2048], [1, 1, 2048, 2048])
+
+
+@pytest.mark.parametrize("out_fill", [1, 0], ids=["on", "off"])
+def test_bench_lever_out_fill(device, out_fill):
+    """Refinement 4: the writer's OUTPUT-format pad stamp. OFF is the
+    pre-Refinement-4 behaviour (input-format fill only), which on a WIDENING cast
+    with an input-inexact fill is numerically wrong — so this arm prices the
+    correctness fix, it is not a choice. Worst-case geometry: half the output tiles
+    are whole pad tiles."""
+    shape, target = _OUT_FILL_SHAPE
+    _measure(
+        device,
+        shape,
+        ttnn.bfloat16,
+        out_dtype=ttnn.float32,
+        pad=dict(output_padded_shape=target, pad_value=10.2),
+        levers=dict(out_fill=out_fill),
+        label=f"out_fill={out_fill}/widening_pad",
+    )
+
+
+@pytest.mark.parametrize("regime", ["a_square", "d_smallest"])
+@pytest.mark.parametrize("pack_fast", [1, 0], ids=["on", "off"])
+def test_bench_lever_pack_fast(device, regime, pack_fast):
+    """master.md F24 (`bfp8_pack_precise`). ON (shipped) = the FAST block-float
+    packer; OFF = the precise packer, which rounds instead of truncating and costs
+    an extra pack pass. bfloat8_b is the only output format the knob touches, so
+    the arm has to request it explicitly."""
+    _measure(
+        device,
+        SHAPES[regime],
+        ttnn.bfloat16,
+        out_dtype=ttnn.bfloat8_b,
+        levers=dict(pack_fast=pack_fast),
+        label=f"pack_fast={pack_fast}/{regime}",
     )

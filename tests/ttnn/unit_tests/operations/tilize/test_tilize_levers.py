@@ -129,15 +129,23 @@ def test_c17_in_place_is_structurally_impossible(device):
     assert out.buffer_address() != tt_input.buffer_address()
 
 
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+# Every element width the op supports, INCLUDING the 1-byte datum Refinement 4
+# added — a narrower element is the one thing that could make the aligned read
+# chunk drop below the DRAM alignment, so B11's closure is re-checked over it.
+@pytest.mark.parametrize(
+    "dtype, elem",
+    [(ttnn.bfloat16, 2), (ttnn.float32, 4), (ttnn.uint32, 4), (ttnn.uint16, 2), (ttnn.uint8, 1)],
+    ids=["bf16", "fp32", "uint32", "uint16", "uint8"],
+)
 @pytest.mark.parametrize("w", [64, 2048, 16384], ids=["w64", "w2048", "w16384"])
-def test_b11_every_transaction_is_dram_aligned(device, dtype, w):
+def test_b11_every_transaction_is_dram_aligned(device, dtype, elem, w):
     """B11 (alignment): misalignment cannot occur — nothing to fix.
 
     Both transaction sizes are structurally 32 B multiples: the read chunk is
-    `WT_CHUNK * 32 * elem` and the write is a whole tile page.
+    `WT_CHUNK * 32 * elem` and the write is a whole tile page. The smallest
+    possible chunk is one tile column of 1-byte datums = 32 B, exactly the
+    alignment — so no supported dtype can break it.
     """
-    elem = 2 if dtype == ttnn.bfloat16 else 4
     grid = device.compute_with_storage_grid_size()
     in_tile_bytes = out_tile_bytes = 32 * 32 * elem
     wt_chunk, _, _ = pd.derive_blocking(1, w // 32, in_tile_bytes, out_tile_bytes, grid.x * grid.y, 2, 32)

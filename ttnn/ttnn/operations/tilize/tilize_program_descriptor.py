@@ -160,6 +160,11 @@ W_REGION = 1
 #                      the NoC drains between blocks (master.md B8 off arm).
 #   read_vc       0 -> every reader issues on the default read VC
 #                      (master.md B10 off arm).
+#   pack_fast     0 -> bfp8_pack_precise=True, i.e. the PRECISE block-float packer
+#                      (rounds instead of truncating, one extra pack pass) on a
+#                      bfloat8_b output (master.md F24 off arm). 1 (shipped) is
+#                      the CHEAP default: the fast packer already clears the
+#                      bf8b PCC gate from both bf16 and fp32 inputs.
 #   out_fill      0 -> skip the writer's OUTPUT-format pad stamp, leaving the
 #                      reader's input-format fill as the only fill (the
 #                      pre-Refinement-4 behaviour: exact everywhere EXCEPT a
@@ -196,6 +201,7 @@ LEVERS = {
     "read_vc": 0,
     "read_one_packet": 1,
     "out_fill": 1,
+    "pack_fast": 1,
 }
 
 # Levers deliberately SHIPPED in their 0 arm, with the measurement that put them
@@ -918,6 +924,12 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     eight_bit = input_tensor.dtype in EIGHT_BIT_DTYPES or output_tensor.dtype in EIGHT_BIT_DTYPES
     compute_config = ttnn.ComputeConfigDescriptor()
     compute_config.fp32_dest_acc_en = lossless_fp32 or eight_bit
+    # master.md F24: the expensive setting of the block-float packer is NOT the
+    # default here — the FAST (truncating) packer already clears the bf8b accuracy
+    # gate from both bf16 and fp32 inputs on this op (measured PCC 0.99997 /
+    # 1.00000 against the pad oracle), and tilize does no arithmetic that could
+    # accumulate the truncation. Only the counterfactual arm turns it on.
+    compute_config.bfp8_pack_precise = output_tensor.dtype in BLOCK_FLOAT_DTYPES and not LEVERS["pack_fast"]
     if lossless_fp32:
         unpack_modes = [ttnn.UnpackToDestMode.Default] * NUM_CIRCULAR_BUFFERS
         unpack_modes[CB_INPUT_STICKS] = ttnn.UnpackToDestMode.UnpackToDestFp32
