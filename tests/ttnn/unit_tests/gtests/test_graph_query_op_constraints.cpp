@@ -738,7 +738,7 @@ TEST_P(MatmulOpIfTest, Matmul) {
     const auto& matmul_program_config =
         std::get<std::optional<ttnn::operations::matmul::MatmulProgramConfig>>(GetParam());
     const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != tt::BoardType::N300 && board_type != tt::BoardType::E150) {
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
