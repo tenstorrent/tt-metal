@@ -229,14 +229,13 @@ def test_qwenimage_pipeline_performance(
         "total_time": statistics.mean(total_times),
     }
     if tuple(mesh_device.shape) == (2, 2):
-        # TODO: provisional BH QuietBox 2 targets. These are deliberately loose so the bring-up run
-        # reports real numbers instead of failing the assert below on a guessed threshold. Tighten
-        # them from the first green run before this leg is treated as a perf gate.
+        # BH QuietBox 2, calibrated from run 31845507029:
+        # encoding 0.1189s, denoising 47.1481s, vae 1.1045s, total 57.4226s.
         expected_metrics = {
-            "total_encoding_time": 1.0,
-            "denoising_steps_time": 240.0,
-            "vae_decoding_time": 10.0,
-            "total_time": 260,
+            "total_encoding_time": 0.2,
+            "denoising_steps_time": 55.0,
+            "vae_decoding_time": 1.5,
+            "total_time": 68,
         }
     elif tuple(mesh_device.shape) == (2, 4):
         expected_metrics = {

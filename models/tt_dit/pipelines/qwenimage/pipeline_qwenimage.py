@@ -73,7 +73,7 @@ _PRESETS_WH: dict[tuple[int, ...], dict] = {
 _PRESETS_BH: dict[tuple[int, ...], dict] = {
     # 4-chip boxes (BH QuietBox 2). Mirrors the 2x4 preset with tp halved to fit axis 1.
     # Both dynamic loads are on: with half the chips of the 2x4 case, freeing the encoder and
-    # VAE weights between stages is the memory-safer default. Provisional until a green run.
+    # VAE weights between stages keeps the pipeline in memory. Validated by run 31845507029.
     (2, 2): {
         "cfg": (2, 0),
         "sp": (1, 0),

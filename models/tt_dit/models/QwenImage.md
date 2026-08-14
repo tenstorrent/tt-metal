@@ -61,7 +61,7 @@ pytest models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k "4x
 ## Scalability
 
 Qwen-Image has been implemented to support execution on 4-chip (BH QuietBox 2 with 2x2 mesh topology), 8-chip (QuietBox and LoudBox with 2x4 mesh topology) as well as 32-chip (Galaxy with 4x8 mesh topology) systems.
-The 2x4 and 4x8 configurations have been tested on Wormhole. The 2x2 configuration targets Blackhole (BH QuietBox 2) and is the configuration exercised in CI; it is newly added and its performance targets in `test_performance_qwenimage.py` are provisional until calibrated from a green run.
+The 2x4 and 4x8 configurations have been tested on Wormhole. The 2x2 configuration targets Blackhole (BH QuietBox 2) and is the configuration exercised in CI; it runs 1024x1024 at 50 steps in ~57s end to end.
 
 The DiT model can be parallelized on 3 axes:
 1. `cfg` (classifier-free guidance) - execute conditional and unconditional steps in parallel
