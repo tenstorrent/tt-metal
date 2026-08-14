@@ -788,11 +788,12 @@ section is the credit half of the ledger and is the material for the comparison 
 | run 2 — SiLU folded into the SwiGLU multiply (O4n) | 229.0 | 12.352 | 0.9903 |
 | run 2 — norm's shard chained into QKV (O4o) | — | 12.299 | 0.9903 |
 | run 2 — gate/up plan, reshard now free (O4p) | — | 12.038 | 0.9903 |
-| run 2 — residual stream kept in the norm's shard (O4q) | — | **11.928** | 0.9903 |
+| run 2 — residual stream kept in the norm's shard (O4q) | — | 11.928 | 0.9903 |
+| run 2 — o_proj/down_proj hand shards to the residual add (O4q) | — | **11.839** | 0.9903 |
 | tool's own roofline target | 338.541 | — | gate 0.95 |
 | **hand-port, for reference** | — | **15.907** | — |
 
-**11.928 against 15.907 — the tool is 25.0% AHEAD of 74 human experiments**, autonomously, with
+**11.839 against 15.907 — the tool is 25.6% AHEAD of 74 human experiments**, autonomously, with
 PCC bit-identical across its last four wins (0.990347151783074, unchanged to every decimal). Every
 one of those four was a layout or dispatch result. None spent accuracy.
 
@@ -1444,7 +1445,9 @@ The last of the layout-chaining family, and the one that shows how far it goes:
 > per layer, 26 layers deep. [...] Both norms in a block are built on the same dim, and so is the
 > next layer's, so **the stream can stay in the shard the whole way down**.*
 
-`12.038 → 11.928 ms/token`. Folded into take-item #4 rather than listed separately, because for the
+`12.038 → 11.928 ms/token`, then a further `→ 11.839` closing the loop from the other end — `o_proj`
+and `down_proj` now emit the residual add's shard directly, so the stream is sharded end to end
+through the block rather than only on the norm side. Folded into take-item #4 rather than listed separately, because for the
 hand-port it is the same recommendation carried further: not just norm→QKV, but the residual stream
 never leaving its shard across the depth of the model.
 
