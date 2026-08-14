@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "llk_math_common_api.h"
-#include "../../../../../third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_sdpa_custom_mm_reuse_dest_srcb.h"
+#include "experimental/llk_math_sdpa_custom_mm_reuse_dest_srcb.h"
 
 /*************************************************************************
  * LLK SDPA_CUSTOM_MM_REUSE_DEST_SRCB
@@ -45,14 +46,14 @@ inline void llk_math_sdpa_custom_mm_reuse_dest_srcb_init(
 // Compile-time parameter output_granularity:
 //   Number of output tiles produced between successive FPU->SFPU semaphore posts when
 //   signal_output is true. nt_dim must be divisible by output_granularity.
-template <MathFidelity math_fidelity, std::uint32_t output_granularity>
+template <MathFidelity math_fidelity, std::uint32_t output_granularity, std::uint32_t input_granularity = 1>
 inline void llk_math_sdpa_custom_mm_reuse_dest_srcb(
-    const uint src_index,
-    const uint dst_index,
+    const std::uint32_t src_index,
+    const std::uint32_t dst_index,
     const bool transpose = false,
     const std::uint32_t kt_dim = 1,
     const std::uint32_t nt_dim = 1,
     bool signal_output = false) {
-    _llk_math_sdpa_custom_mm_reuse_dest_srcb_<output_granularity>(
+    _llk_math_sdpa_custom_mm_reuse_dest_srcb_<output_granularity, input_granularity>(
         src_index, dst_index, transpose, kt_dim, nt_dim, signal_output);
 }

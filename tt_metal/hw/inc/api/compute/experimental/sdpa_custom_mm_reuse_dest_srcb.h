@@ -4,13 +4,14 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 #ifdef TRISC_MATH
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_math_sdpa_custom_mm_reuse_dest_srcb_api.h"
+#include "experimental/llk_math_sdpa_custom_mm_reuse_dest_srcb_api.h"
 #endif
 #ifdef TRISC_UNPACK
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_api.h"
-#include "../../hw/ckernels/blackhole/metal/llk_api/llk_unpack_A_sdpa_api.h"
+#include "experimental/llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_api.h"
+#include "experimental/llk_unpack_A_sdpa_api.h"
 #endif
 namespace ckernel {
 
@@ -35,18 +36,18 @@ namespace ckernel {
  * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                          | False    |
  * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                          | False    |
  * | out_cb_id      | The identifier of the output circular buffer (CB)             | uint32_t | 0 to 31                                          | False    |
- * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate tranpose is set | False    |
+ * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate transpose is set | False    |
  * | kt_dim         | The inner dim of the input matrices in tiles                  | uint32_t | even number from 2 to 256                        | False    |
  * | nt_dim         | The number of SrcA tiles per K iteration                      | uint32_t | 1 to 16                                          | False    |
  */
 // clang-format on
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t out_cb_id,
-    const uint32_t transpose = 0,
-    uint32_t kt_dim = 1,
-    uint32_t nt_dim = 1) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t out_cb_id,
+    const std::uint32_t transpose = 0,
+    std::uint32_t kt_dim = 1,
+    std::uint32_t nt_dim = 1) {
     // Intentionally swap in0 and in1 as operation specific hw_configures are deprecated
     UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(in0_cb_id, in1_cb_id, transpose, nt_dim)));
@@ -56,17 +57,17 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init(
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
-    PACK((llk_pack_init<PackMode::Default, false /* zero_output */>(out_cb_id)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
+    PACK((llk_pack_init<ckernel::PackMode::Default, false>(out_cb_id)));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, ckernel::PackMode::Default>()));
 }
 
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t out_cb_id,
-    const uint32_t transpose = 0,
-    uint32_t kt_dim = 1,
-    uint32_t nt_dim = 1) {
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t out_cb_id,
+    const std::uint32_t transpose = 0,
+    std::uint32_t kt_dim = 1,
+    std::uint32_t nt_dim = 1) {
     UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb_init(in0_cb_id, in1_cb_id, transpose, nt_dim)));
     MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, transpose, kt_dim)));
 }
@@ -107,23 +108,23 @@ ALWI void sdpa_custom_mm_reuse_dest_srcb_block_init_short(
  * | signal_output  | Signal SFPU semaphore for pipelining (default false).                   | bool     | true or false                                  | False    |
  */
 // clang-format on
-template <std::uint32_t output_granularity>
+template <std::uint32_t output_granularity, std::uint32_t input_granularity = 1>
 ALWI void sdpa_custom_mm_reuse_dest_srcb_block(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t in0_tile_index,
-    uint32_t in1_tile_index,
-    uint32_t isrc,
-    uint32_t idst,
-    const uint32_t transpose,
-    uint32_t kt_dim,
-    uint32_t nt_dim,
-    uint32_t in1_k_stride = 1,
+    std::uint32_t in0_cb_id,
+    std::uint32_t in1_cb_id,
+    std::uint32_t in0_tile_index,
+    std::uint32_t in1_tile_index,
+    std::uint32_t isrc,
+    std::uint32_t idst,
+    const std::uint32_t transpose,
+    std::uint32_t kt_dim,
+    std::uint32_t nt_dim,
+    std::uint32_t in1_k_stride = 1,
     bool signal_output = false) {
     UNPACK((llk_unpack_A_sdpa_set_srcb_dummy_valid()));
     UNPACK((llk_unpack_AB_sdpa_custom_mm_reuse_dest_srcb(
         in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, kt_dim, nt_dim, in1_k_stride)));
-    MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb<MATH_FIDELITY, output_granularity>(
+    MATH((llk_math_sdpa_custom_mm_reuse_dest_srcb<MATH_FIDELITY, output_granularity, input_granularity>(
         isrc, idst, transpose, kt_dim, nt_dim, signal_output)));
 }
 
