@@ -68,6 +68,9 @@ jobs:
         timeout-minutes: 10
         with:
           libs: ${{ needs.load-test-matrix.outputs.sim-libs }}
+          # Suffixed per impl: artifact names are per-run and sanity-tests runs several of
+          # these impls in one run. Must match the setup-ttsim step below.
+          artifact-name: ttsim-binaries-ttsim-sanity
 
   ttsim-sanity-tests:
     needs: [load-test-matrix, fetch-ttsim]
@@ -132,6 +135,7 @@ jobs:
         with:
           sku: ${{ matrix.test-group.sku }}
           root: ${{ env.TT_METAL_HOME }}
+          artifact-name: ttsim-binaries-ttsim-sanity
 
       # ttsim examples run on the simulator (no hardware power telemetry); wrap the run in the
       # host-load sidecar to capture host CPU/memory/disk/network usage.

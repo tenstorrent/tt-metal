@@ -76,6 +76,9 @@ jobs:
         timeout-minutes: 10
         with:
           libs: ${{ needs.load-test-matrix.outputs.sim-libs }}
+          # Suffixed per impl: artifact names are per-run and sanity-tests runs several of
+          # these impls in one run. Must match the setup-ttsim step below.
+          artifact-name: ttsim-binaries-runtime-sanity
 
   runtime-sanity-tests:
     needs: [load-test-matrix, fetch-ttsim]
@@ -126,6 +129,7 @@ jobs:
         timeout-minutes: 5
         with:
           sku: ${{ matrix.test-group.sku }}
+          artifact-name: ttsim-binaries-runtime-sanity
       - name: Ensure BH links online
         if: ${{ contains(matrix.test-group.sku, 'bh_loudbox') }}
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main

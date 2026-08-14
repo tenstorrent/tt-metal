@@ -92,6 +92,9 @@ jobs:
         timeout-minutes: 10
         with:
           libs: ${{ needs.load-test-matrix.outputs.sim-libs }}
+          # Suffixed per impl: artifact names are per-run and sanity-tests runs several of
+          # these impls in one run. Must match the setup-ttsim step below.
+          artifact-name: ttsim-binaries-ttsim-unit
 
   ttsim-unit-tests:
     needs: [load-test-matrix, fetch-ttsim]
@@ -135,6 +138,7 @@ jobs:
         timeout-minutes: 5
         with:
           sku: ${{ matrix.test-group.sku }}
+          artifact-name: ttsim-binaries-ttsim-unit
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
