@@ -8,6 +8,7 @@ runtime that can run one variant and recover from a hang. That is the seam the
 Metal backend would slot into.
 """
 
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,6 +61,10 @@ class Config:
     filler: str = "auto"
     selector: str = ""
     repeats: int = 1
+    # Freeze the stimuli and compare each variant's output against the baseline's.
+    # Off restores the rolling RNG stream, which samples different data per variant
+    # but leaves nothing to compare against.
+    drift: bool = True
     arch: str = "wormhole"
     report_dir: Path = field(default_factory=lambda: HERE / "reports")
 
@@ -79,6 +84,7 @@ class Config:
             filler=os.environ.get("TTNOP_FILLER", "auto").strip().lower(),
             selector=os.environ.get("TTNOP_SITES", "").strip(),
             repeats=int(os.environ.get("TTNOP_REPEATS", "1")),
+            drift=os.environ.get("TTNOP_DRIFT", "1").strip() not in ("", "0"),
             arch=os.environ.get("CHIP_ARCH", "wormhole").strip().lower(),
             report_dir=Path(
                 os.environ.get("TTNOP_REPORT_DIR", str(HERE / "reports"))
@@ -146,7 +152,11 @@ class DeviceWedged(RuntimeError):
 
 
 def run(config: Config, variants: list, runtime, record_sink) -> list:
-    """Run every variant `repeats` times. Returns one label per failing variant."""
+    """Run every variant `repeats` times. Returns (label, tags) per recorded variant.
+
+    The tags come back with the label because not every tag is a failure: a caller
+    that only wants the red ones has to be able to tell `drift` from `mismatch`.
+    """
     failing = []
     for variant in variants:
         fails, tags, first_error = 0, set(), ""
@@ -164,6 +174,53 @@ def run(config: Config, variants: list, runtime, record_sink) -> list:
                     raise DeviceWedged(f"soft reset failed after {variant.label()}")
         finally:
             if fails:
-                failing.append(f"{variant.label()} {','.join(sorted(tags))}")
+                failing.append((f"{variant.label()} {','.join(sorted(tags))}", tags))
                 record_sink(variant, fails, tags, first_error)
     return failing
+
+
+def same_elements(before, after):
+    """Elementwise equality, with NaN counted as equal to itself.
+
+    Two runs of the same kernel on the same stimuli put the same NaN in the same
+    place; plain `==` calls that a difference, which would report drift against
+    every test whose golden contains one.
+    """
+    if before.is_floating_point():
+        return (before == after) | (before.isnan() & after.isnan())
+    return before == after
+
+
+def describe_drift(before: list, after: list):
+    """How `after` differs from `before`.
+
+    Returns (message, pcc). Message is "" when the two runs agree exactly
+    """
+    if len(before) != len(after):
+        return f"{len(after)} device run(s) against the baseline's {len(before)}", None
+    for base, now in zip(before, after):
+        if base is None and now is None:
+            continue
+        if base is None or now is None or base.shape != now.shape:
+            return "result buffer changed shape or vanished", None
+        same = same_elements(base, now)
+        if bool(same.all()):
+            continue
+        moved = f"{int((~same).sum())} of {base.numel()} element(s)"
+        try:
+            from helpers.utils import calculate_pcc
+
+            pcc = float(calculate_pcc(now, base))
+            gap = (base.double() - now.double()).abs().max().item()
+            if not math.isfinite(pcc):
+                # Constant tensors have no correlation to report
+                raise ValueError("pcc is not finite")
+        except Exception:
+            # Scoring is a nicety. It must never turn a drift finding into an error.
+            return f"output changed vs baseline: {moved}", None
+        return (
+            f"output changed vs baseline: pcc={pcc:.6f} (Δ {1.0 - pcc:.2g}), "
+            f"{moved}, max |delta|={gap:g}",
+            pcc,
+        )
+    return "", None
