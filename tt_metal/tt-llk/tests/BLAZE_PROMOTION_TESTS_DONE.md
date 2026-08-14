@@ -21,10 +21,10 @@
 | | |
 |---|---|
 | Verification tier (V1-V4) | 4 of 4, all green |
-| New test items landed | 3 (`add_rsqrt`, `custom_mm` `block_uninit`, sort-header coexistence) |
-| Test results | **75 passing / 2 xfailed** across 3 drivers + 3 python suites |
-| Files added | 6 (3 `tests/sources/*.cpp`, 3 `tests/python_tests/test_*.py`) |
-| Product findings | 1 defect (needs a decision) + 3 behavioural constraints |
+| New test items landed | 4 (`add_rsqrt`, `custom_mm` `block_uninit`, sort-header coexistence, sampling Prgm0 hazard) |
+| Test results | **87 new variants passing / 2 xfailed** (42 + 30 + 3 + 12) |
+| Files | 6 added (3 `tests/sources/*.cpp`, 3 `tests/python_tests/test_*.py`) + 2 extended (`sfpu_sampling_test.cpp`, `test_sfpu_sampling.py`) |
+| Product findings | 1 defect (needs a decision) + 4 behavioural constraints |
 
 ### Landed tests
 
@@ -33,6 +33,7 @@
 | `add_rsqrt` SFPU functor (#52709) | `tests/sources/sfpu_add_rsqrt_test.cpp`, `tests/python_tests/test_sfpu_add_rsqrt.py` | 42 passed, 14 skipped |
 | `custom_mm`/`compressed_custom_mm` `block_uninit` (#52727) | `tests/sources/custom_mm_uninit_restore_test.cpp`, `tests/python_tests/test_custom_mm_uninit_restore.py` | 30 passed, 2 xfailed, 32 skipped |
 | Sort-header coexistence (#52713) | `tests/sources/sort_headers_coexist_test.cpp`, `tests/python_tests/test_sort_headers_coexist.py` | 3 passed |
+| Sampling `vConstFloatPrgm0` hazard (#52745) | `tests/sources/sfpu_sampling_test.cpp`, `tests/python_tests/test_sfpu_sampling.py` (extended) | 63 passed, 97 skipped (was 51 passed) |
 
 ### Verification tier — all green on the merged branch
 
@@ -40,7 +41,7 @@
 |---|---|---|
 | `test_matmul_custom_compressed.py` | V1 / #52727 | 582 passed |
 | `test_topk_xl.py` | V2 / #52713 | 71 passed |
-| `test_sfpu_sampling.py` | V3 / #52745 | 51 passed, 93 skipped |
+| `test_sfpu_sampling.py` | V3 / #52745 | 51 passed, 93 skipped as the baseline; **63 passed, 97 skipped** after the hazard test below was added |
 | `test_generalized_moe_gate.py` | V4 / #52747 | 89 passed |
 | `test_sfpu_generic_moe_gate_topk.py` | V4 / #52747 | 24 passed |
 | `test_eltwise_binary.py` | regression baseline | 4388 passed, 72 skipped |
@@ -93,9 +94,8 @@ two things this PR's call-site changes touch:
 
 **Verdict: no new test.** Run `test_sfpu_sampling.py` unchanged.
 
-**One optional hardening idea remains open** — a polluter test proving
-`sampling_recip_init` is *necessary*, not merely present. It is carried in the
-open-work document, not here.
+**The polluter test is now done** — see section 5 below, and Finding 4 for what it
+turned up about why the hazard was invisible.
 
 
 ---
@@ -217,7 +217,60 @@ tiles 32 rows apart instead of 64). Run the identical matrix for
 
 ---
 
-## 5. Findings from building these tests
+## 5. Sampling `vConstFloatPrgm0` cross-op hazard (#52745) — DONE
+
+> **What landed:** two switches in `tests/sources/sfpu_sampling_test.cpp` plus
+> `test_sfpu_sampling_recip_prgm0_hazard` in `tests/python_tests/test_sfpu_sampling.py`.
+> Suite went from 51 passed to **63 passed, 97 skipped** on BH p100a.
+
+The existing sweep covered every entry point but always called `sampling_recip_init`
+immediately before the op, so it proved the init *works* and never that it is *needed*.
+#52745's motivation is the opposite direction: the `legacy_compat=false` reciprocal reads
+`vConstFloatPrgm0` as its Newton-Raphson constant, and only `sfpu_reciprocal_init` writes
+the `2.0f` it expects, so a kernel that ran another `Prgm0`-owning op earlier is silently
+wrong.
+
+The driver now takes `SAMPLING_POLLUTE_PRGM0` (runs `log_init` first, standing in for that
+earlier op) and `SAMPLING_SKIP_RECIP_INIT` (drops the repair). `log_init` is chosen because
+it sets `Prgm0` to `LOG_TWO * 2^-23` — about nine orders of magnitude from `2.0f`.
+
+Asserted matrix, with the polluter always active:
+
+| `legacy_compat` | `recip_init` | expectation |
+|---|---|---|
+| true | either | correct — the legacy reciprocal never reads `Prgm0`, so it must be immune |
+| false | called | correct — this is what the init exists for |
+| false | skipped | **wrong** — the init is load-bearing |
+
+The `(pollute=false, skip_init=true)` cell is deliberately not swept: with neither a
+polluter nor an init, `Prgm0` holds whatever the invariant LLK SFPU init left, which is not
+a defined value and so not assertable either way.
+
+### Finding 4 — why this hazard was invisible, and what it actually costs
+
+The pollution does **not** produce garbage. `Prgm0` becomes ~8.3e-8 instead of `2.0f`, so
+`t = x * y - Prgm0` comes out *positive* (`x * y` is ~1 since `y ≈ 1/x`), the
+`v_if(t < 0)` refinement inside `sfpu_reciprocal_iter` never fires, and the raw
+`approx_recip` result survives unrefined. Max relative error vs golden, measured:
+
+| output / `dest_acc` | `recip_init` called | `recip_init` skipped |
+|---|---|---|
+| Float16_b / No | 0.0 | 6.2e-03 |
+| Float32 / Yes | 1.1e-07 | 5.0e-03 |
+| Float16_b / Yes | 2.3e-03 | 5.0e-03 |
+
+So the cost is about **1e-3 relative** — real, but comfortably inside the suite's 2%
+`RECIP_REL_TOL`, which is why no existing variant could have caught it. The test therefore
+asserts on a hazard-specific **1e-3** threshold rather than the suite tolerance.
+
+The third row is excluded from the strict check: there the packer's own fp32->bf16
+conversion already costs 2.3e-3, only 2.2x from the unrefined error, so a strict assertion
+would be measuring the packer rather than the hazard. Worth knowing if anyone tightens
+`RECIP_REL_TOL` later — bf16 output with an fp32 DEST cannot distinguish the two.
+
+---
+
+## 6. Findings from building these tests
 
 ### Finding 1 — `restore_tile_pack_mop` is only observable at mismatched tile geometry
 
@@ -280,7 +333,7 @@ helper, with the constraint documented in the driver.
 
 ---
 
-## 6. Note on tooling (applies to the remaining work too)
+## 7. Note on tooling (applies to the remaining work too)
 
 Run tests through `tt-llk/.claude/scripts/run_test.sh` (`count` / `compile` / `run`), not
 raw pytest. Two gotchas cost time: a `--k` expression containing brackets or commas
