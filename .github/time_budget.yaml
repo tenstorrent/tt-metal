@@ -313,11 +313,15 @@ llk:
   bit_exact:
     wh_n150_civ2: 90
     bh_p150b_civ2: 180
-  # Manual ttnop WH dry-run (4-way split). verify_time_budget sums every
-  # shard's timeout for the SKU (4 × 1800 = 7200), even though the shards
-  # run in parallel. UNKNOWN: raise/lower after first run.
+  # Manual ttnop WH dry-run (15-way split). verify_time_budget sums every
+  # shard's timeout for the SKU (15 × 1440 = 21600), even though the shards
+  # run in parallel — so splitting finer raises this total even as it shortens
+  # each shard. Sized off the first run that actually swept, which measured
+  # ~2.4 cases/min and puts a 15th of the suite at ~19h; see
+  # tests/pipeline_reorg/llk_ttnop_tests.yaml for why that is still above the
+  # ~10h the runners actually last.
   ttnop:
-    wh_n150_civ2: 7200
+    wh_n150_civ2: 21600
   merge_gate:
     wh_n150_civ2: 300
     bh_p150b_civ2_viommu: 70

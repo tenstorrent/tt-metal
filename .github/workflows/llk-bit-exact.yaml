@@ -18,10 +18,12 @@ name: "LLK bit-exact"
 #
 # The per-shard timeout is not the lever it looks like: run 31714492632 lost
 # three shards at ~10h08m to the runner going away, never reaching the 1800 min
-# job timeout. See tests/pipeline_reorg/llk_ttnop_tests.yaml.
+# job timeout in force then. Shard count is the lever, which is why the sweep is
+# now split 15 ways. See tests/pipeline_reorg/llk_ttnop_tests.yaml for the sizing.
 #
 # UNKNOWN (ask tomorrow):
-#   - Does dispatching 4 SKU jobs reserve machines, or need an infra ticket?
+#   - Does dispatching 15 SKU jobs reserve machines, or need an infra ticket?
+#     This went from 4 to 15 concurrent wh_n150_civ2, which may well queue.
 # =============================================================================
 
 on:

@@ -129,7 +129,7 @@ EXIT_WEDGED = 75
 
 
 def log(message: str) -> None:
-    print(f">> supervisor: {message}", flush=True)
+    print(f"\n>> supervisor: {message}", flush=True)
 
 
 def read_ids(path) -> list:

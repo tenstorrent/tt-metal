@@ -11,19 +11,34 @@
 # Deliberately no -x: a found race turns that case red, but the suite must
 # finish so report.md lists every failing variant.
 #
-# The 1800 min timeouts below are a fiction and cannot be the fix for a shard
-# that runs long: in run 31714492632 three of these four shards were killed at
-# ~10h08m elapsed with "the self-hosted runner lost communication with the
-# server", nowhere near 30h, so the job timeout never fired. Raising it is also
-# not available — 4 x 1800 already pins llk.ttnop.wh_n150_civ2 at its 7200
-# budget, which verify_time_budget.py sums across shards. Fitting under that
-# ~10h ceiling needs more shards and/or a coarser TTNOP_DELAYS; still to size.
+# Sizing, all of it off the one run that actually swept. Group 3 of the old
+# 4-way split collected 10198 cases and finished them at ~2.4/min (182 cases
+# across 75 min of supervisor progress), so the whole suite is ~40800 cases and
+# ~283 shard-hours. That put a quarter of it at ~70h, which is why this is now
+# split 15 ways: ~2700 cases and ~19h each. The measurement is extrapolated
+# from under 2% of one shard, so treat every number here as an order of
+# magnitude.
+#
+# 15 shards is a large improvement but still not under the ceiling. Runs end
+# at ~10h however long the timeout is: in run 31714492632 three shards were
+# killed at ~10h08m with "the self-hosted runner lost communication with the
+# server", nowhere near even the 30h timeout then in force, so the job timeout
+# never fired and was never what ended them. Fitting ~19h shards under ~10h
+# needs ~28 shards at this rate, or a coarser TTNOP_DELAYS than 1-100 to cut the
+# work per case. The 1440 min (24h) timeout below is sized to the ~19h
+# estimate with margin, so that the timeout is not also a limit; it is not a
+# claim the shard will finish.
+#
+# 15 x 1440 = 21600, which llk.ttnop.wh_n150_civ2 in .github/time_budget.yaml
+# has to match: verify_time_budget.py sums every shard's timeout for the SKU.
 #
 # UNKNOWN (ask infra / manager):
 #   - owner_id below is the LLK CI default (Nemanja). Change if ttnop should
 #     page someone else.
+#   - 15 concurrent wh_n150_civ2 machines: does dispatching that many reserve
+#     them, or does it queue behind other pipelines?
 
-- name: llk_ttnop_wormhole group 1/4
+- name: llk_ttnop_wormhole group 1/15
   split_group: 1
   team: llk
   coverage: false
@@ -31,14 +46,14 @@
     set -euo pipefail
     cd tests/python_tests/ttnop
     ./ci.sh --test . \
-      --splits 4 --group 1 \
+      --splits 15 --group 1 \
       --report-dir reports/wormhole-1
   skus:
     wh_n150_civ2:
-      timeout: 1800
+      timeout: 1440
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_ttnop_wormhole group 2/4
+- name: llk_ttnop_wormhole group 2/15
   split_group: 2
   team: llk
   coverage: false
@@ -46,14 +61,14 @@
     set -euo pipefail
     cd tests/python_tests/ttnop
     ./ci.sh --test . \
-      --splits 4 --group 2 \
+      --splits 15 --group 2 \
       --report-dir reports/wormhole-2
   skus:
     wh_n150_civ2:
-      timeout: 1800
+      timeout: 1440
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_ttnop_wormhole group 3/4
+- name: llk_ttnop_wormhole group 3/15
   split_group: 3
   team: llk
   coverage: false
@@ -61,14 +76,14 @@
     set -euo pipefail
     cd tests/python_tests/ttnop
     ./ci.sh --test . \
-      --splits 4 --group 3 \
+      --splits 15 --group 3 \
       --report-dir reports/wormhole-3
   skus:
     wh_n150_civ2:
-      timeout: 1800
+      timeout: 1440
   owner_id: U09UC143684 # Nemanja Divnic
 
-- name: llk_ttnop_wormhole group 4/4
+- name: llk_ttnop_wormhole group 4/15
   split_group: 4
   team: llk
   coverage: false
@@ -76,9 +91,174 @@
     set -euo pipefail
     cd tests/python_tests/ttnop
     ./ci.sh --test . \
-      --splits 4 --group 4 \
+      --splits 15 --group 4 \
       --report-dir reports/wormhole-4
   skus:
     wh_n150_civ2:
-      timeout: 1800
+      timeout: 1440
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_ttnop_wormhole group 5/15
+  split_group: 5
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --splits 15 --group 5 \
+      --report-dir reports/wormhole-5
+  skus:
+    wh_n150_civ2:
+      timeout: 1440
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_ttnop_wormhole group 6/15
+  split_group: 6
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --splits 15 --group 6 \
+      --report-dir reports/wormhole-6
+  skus:
+    wh_n150_civ2:
+      timeout: 1440
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_ttnop_wormhole group 7/15
+  split_group: 7
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --splits 15 --group 7 \
+      --report-dir reports/wormhole-7
+  skus:
+    wh_n150_civ2:
+      timeout: 1440
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_ttnop_wormhole group 8/15
+  split_group: 8
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --splits 15 --group 8 \
+      --report-dir reports/wormhole-8
+  skus:
+    wh_n150_civ2:
+      timeout: 1440
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_ttnop_wormhole group 9/15
+  split_group: 9
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --splits 15 --group 9 \
+      --report-dir reports/wormhole-9
+  skus:
+    wh_n150_civ2:
+      timeout: 1440
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_ttnop_wormhole group 10/15
+  split_group: 10
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --splits 15 --group 10 \
+      --report-dir reports/wormhole-10
+  skus:
+    wh_n150_civ2:
+      timeout: 1440
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_ttnop_wormhole group 11/15
+  split_group: 11
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --splits 15 --group 11 \
+      --report-dir reports/wormhole-11
+  skus:
+    wh_n150_civ2:
+      timeout: 1440
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_ttnop_wormhole group 12/15
+  split_group: 12
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --splits 15 --group 12 \
+      --report-dir reports/wormhole-12
+  skus:
+    wh_n150_civ2:
+      timeout: 1440
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_ttnop_wormhole group 13/15
+  split_group: 13
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --splits 15 --group 13 \
+      --report-dir reports/wormhole-13
+  skus:
+    wh_n150_civ2:
+      timeout: 1440
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_ttnop_wormhole group 14/15
+  split_group: 14
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --splits 15 --group 14 \
+      --report-dir reports/wormhole-14
+  skus:
+    wh_n150_civ2:
+      timeout: 1440
+  owner_id: U09UC143684 # Nemanja Divnic
+
+- name: llk_ttnop_wormhole group 15/15
+  split_group: 15
+  team: llk
+  coverage: false
+  cmd: |
+    set -euo pipefail
+    cd tests/python_tests/ttnop
+    ./ci.sh --test . \
+      --splits 15 --group 15 \
+      --report-dir reports/wormhole-15
+  skus:
+    wh_n150_civ2:
+      timeout: 1440
   owner_id: U09UC143684 # Nemanja Divnic
