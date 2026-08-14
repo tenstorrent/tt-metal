@@ -35,6 +35,7 @@ def main() -> int:
     module.EVIDENCE = ROOT / "doc/optimized_full_model"
     module.STAGE = "optimized_full_model"
 
+    PROBE_8192 = json.loads((ROOT / "doc/optimized_full_model/prefill_trace_probe_8192.json").read_text())
     evidence = module.EVIDENCE
     original_build = module.build
 
@@ -100,10 +101,19 @@ def main() -> int:
             ),
             "prefill_trace_max_entries_default": 1,
             "prefill_trace_bound": (
-                "one entry per 32-row padded-length bucket; retained DRAM scales with the padded row "
-                "count, so prefill_trace_max_entries x padded_rows must be budgeted against "
-                "trace_region_bytes and DRAM by any caller that raises either. Only the 128-row, "
-                "1-entry configuration is measured."
+                "one entry per 32-row padded-length bucket. Retained DRAM is nearly "
+                "length-independent -- the trace's persistent output is one 32-row logits tile at any "
+                "prompt length -- and is measured at both ends of the supported range: 3.3 MB at 128 "
+                "rows and 4.6 MB at 8192 (prefill_trace_probe.json, prefill_trace_probe_8192.json). "
+                "The binding resource is the mesh's fixed trace_region_size, not DRAM, and a capture "
+                "that exceeds it falls back to the eager prefill for that request. The speedup is "
+                "short-prompt only: 1.33x at 128 rows and 1.00x at 8192, where host dispatch is a "
+                "rounding error against device work. An earlier revision of this field extrapolated "
+                "the 128-row DRAM figure to ~210 MB at 8192; that was wrong by ~45x and is withdrawn."
+            ),
+            "prefill_trace_retained_dram_bytes_at_8192_rows": PROBE_8192["capture_retained_dram_bytes"],
+            "prefill_trace_speedup_at_8192_rows": round(
+                PROBE_8192["eager_ms"]["min"] / PROBE_8192["traced_ms"]["min"], 3
             ),
             "decode_peak_l1_delta_bytes_per_bank": l1["l1_peak_delta_per_bank_bytes"],
             "decode_peak_l1_free_per_bank_at_that_peak": l1["l1_free_per_bank_at_peak_with_change"],

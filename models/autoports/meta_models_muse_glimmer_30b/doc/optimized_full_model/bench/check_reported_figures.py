@@ -47,11 +47,11 @@ resolved: list[tuple[str, str]] = []
 #: sections this file never opened were wrong.  ``SOURCES`` below is the other half --
 #: adding an unchecked section that needs a new artifact now fails on a missing source
 #: rather than sliding past on an unchanged count.
-ADVERTISED_CHECKS = 1101
+ADVERTISED_CHECKS = 1118
 #: Of that total, how many are real assertions (``close``/``same``) as opposed to README
 #: bindings (``bind``/``perf``), which assert nothing on their own.  Round 4 asked for the
 #: split to be stated next to the number rather than folded into it.
-ADVERTISED_BINDINGS = 63
+ADVERTISED_BINDINGS = 66
 
 
 #: Numbers that appear in a README table and are **not** resolved by any check above, listed
@@ -713,6 +713,38 @@ def main() -> int:
     same(
         "the softcap flag is read off the built model, not the module global",
         "bool(self.model.lm_head.softcap_in_l1)" in text(ROOT / "tt/generator.py"),
+        True,
+    )
+    # The 8192-row bucket, measured rather than extrapolated (round 15's P1).  The old text put
+    # a 64x scaling law into the capability contract for a figure that is ~99 %
+    # length-independent, and the gate could not see it because it was prose.
+    probe8 = load(D / "prefill_trace_probe_8192.json")
+    same("the 8192-row probe measured that bucket", probe8["length"], 8192)
+    close("...and its retained DRAM", round(probe8["capture_retained_dram_bytes"] / 1e6, 1), 4.6, tol=1e-2)
+    same(
+        "the README states the measured 8192-row retained DRAM, not an extrapolation",
+        f"| 8192 | **{probe8['capture_retained_dram_bytes'] / 1e6:.1f} MB** |" in readme.replace("  ", " "),
+        True,
+    )
+    for label, value, digits in (
+        ("capture", probe8["capture_ms"], 2),
+        ("eager", probe8["eager_ms"]["min"], 2),
+        ("traced replay", probe8["traced_ms"]["min"], 2),
+    ):
+        same(f"...and its {label} ms", f"{value:.{digits}f} ms" in readme, True)
+        bind(f"...binding the 8192-row {label} figure", f"{value:.{digits}f}")
+    speedup = probe8["eager_ms"]["min"] / probe8["traced_ms"]["min"]
+    same("...and that the trace stops paying at that length", f"**{speedup:.2f}x**" in readme, True)
+    same("...bit-identical there too", probe8["replay_vs_eager"]["bit_identical"], True)
+    same(
+        "the withdrawn extrapolation is named as withdrawn, not repeated as fact",
+        readme.count("~210 MB at 8192") == 1
+        and "that was wrong by ~45x and is withdrawn" in text(ROOT / "doc/context_contract.json"),
+        True,
+    )
+    same(
+        "a failed prefill capture falls back to the eager path",
+        "this request falls back to the eager prefill" in text(ROOT / "tt/generator.py"),
         True,
     )
     l1 = load(D / "l1_highwater_probe.json")
@@ -2898,7 +2930,7 @@ def main() -> int:
     same(
         "the traced-prefill retained DRAM is stated as the probe measured it",
         readme.count(f"{trace_probe['capture_retained_dram_bytes'] / 1e6:.1f} MB"),
-        3,
+        4,
     )
     # The shared sampler's retry must actually retain what it cannot release: round 10 showed a
     # retry that drops its orphans and returns 0 passed a presence-only check.

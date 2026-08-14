@@ -320,15 +320,33 @@ Each is one device job, one at a time, per `$tt-device-usage`.
 | context contract | `../context_contract.json` | 131072, unreduced |
 | figure gate | `bench/check_reported_figures.py` | `FIGURES_OK`, 0 failures |
 
-Every perf, accuracy, autoregressive, qualitative, watcher, Tracy and contract row above
-was re-run **after** the last code change — including the round-2 cache-identity and
-retirement fix — so no reported figure predates the code it describes. The one exception
-is named rather than hidden: `ttft_breakdown_before.json`, `prefill_host_probe.json`,
-`prefill_opcount.json`, `ccl_host_probe_*.json`, `prefill_trace_probe.json`,
-`l1_highwater_probe.json` and the three `decode_ab*.json` files are *diagnostic* runs
-whose subject (host dispatch cost, the collectives, the traced-prefill mechanism, the L1
-delta, the A/B arms) is unchanged by that fix, which only alters when an already-captured
-prefill trace is released.
+**Provenance, per artifact.** This paragraph used to say that every row above post-dated the
+last code change. That was true when it was written and stopped being true around round 7;
+round 15 of the stage review caught it still standing. The honest version is a partition:
+
+* **Current** — re-run after the last code change: the 58-case suite forward and reverse, the
+  gated watcher run, `evidence_perf{,_before,_prefill_trace}.json` and their logs, the context
+  contract, `perf_summary.json`, `invalidation_cost_probe.json`,
+  `prefill_trace_probe_8192.json`, both mutation-harness arms and the three negative controls.
+* **Older, and unaffected for a stated reason** — `evidence_accuracy.json`,
+  `evidence_fp32_gate.json`, `evidence_misses.json`, `evidence_autoregress.json`,
+  `sampler_ab.json`, `qualitative/`, the four `tracy/` captures and the limitation-6 watcher
+  arms date from `3d03b5ca595`–`24cdea2f559`. Every commit after round 6 that touched
+  `tt/*.py` or `models/common/sampling/generator.py` changed **trace lifecycle and reporting,
+  not the traced graphs or their numerics**: the release/retry/defer paths, a divisibility
+  `raise`, the `deallocate` warning, a two-pass `set_kv_cache`, `capability_report` fields, and
+  the sampler's orphan list. None of them alters an op, a dtype, a layout or a program config,
+  which is what those artifacts measure. The behavioural claims among them
+  (`split_sampling`, `fallback_audit`) are independently re-pinned by the current 58-case run.
+* **Diagnostic, and unchanged by any of it** — `ttft_breakdown_before.json`,
+  `prefill_host_probe.json`, `prefill_opcount.json`, `ccl_host_probe_*.json`,
+  `prefill_trace_probe.json`, `l1_highwater_probe.json` and the three `decode_ab*.json`.
+
+One consequence is worth naming rather than leaving to inference: `evidence_accuracy.json`'s
+`capacity` block predates round 7, so it carries none of the three decode-path flags that block
+gained in that round. The flags were the module defaults at that commit, so the values it would
+have recorded are the shipped ones — but that is an inference, and the three perf arms carry the
+flags explicitly, which is where the carried-forward-contract table's provenance now points.
 
 ## 7. Three harness problems worth recording
 
@@ -956,6 +974,33 @@ started failing.
 | **P2** the work log recorded an allowlist cleanup that had not happened | it has now: the four TTFT-phase minima, the shard width and the stale `691.07` are bound and out of the allowlist, which is 183 entries and bound to its own length |
 | the README cross-check ran before half the bindings were registered | moved to the end of the gate, where it means what it says |
 
+### Round 15 — `more-work-needed`
+
+The review walked the goal contract requirement by requirement and found every one met on
+evidence it re-derived itself. Both findings were about claims, and the P1 was a figure that no
+artifact supported — in the capability contract, on the one shipped-but-opt-in feature, for the
+benefit of the next stage.
+
+**"~210 MB at 8192" was a 64× extrapolation of a figure that is ~99 % length-independent.**
+`prefill_logits` slices one 32-row tile whatever the prompt length, so the trace's retained
+output is a constant `[1, 1, 32, 50688]`. Rather than restate it as unmeasured, it is now
+**measured**: `prefill_trace_probe.py --length 8192` gives **4.6 MB** retained — the claim was
+wrong by ~45× in the alarming direction — and the real bound is the mesh's fixed
+`trace_region_size`, which the earlier text never named.
+
+The same run answered a question nobody had asked. At 8192 rows the traced replay is
+**921.52 ms against 917.36 ms eager — 1.00x, no win at all.** What the trace removes is host
+dispatch, and at 8192 rows dispatch is a rounding error against device work. So the flag is a
+*short-prompt* win, and the README's advice to a serving stage — "raise
+`prefill_trace_max_entries` to its bucket count" — is now qualified to the buckets where it
+pays, with one command per bucket to check.
+
+| finding | what was done |
+| --- | --- |
+| **P1** an unsupported 64× DRAM scaling law in `README.md`, `tt/generator.py` and `doc/context_contract.json`, on a feature the next stage is told to enable | measured at 8192 (4.6 MB, 1.00x, bit-identical); all four places restated with the measurement, the withdrawn extrapolation named as withdrawn, `trace_region_size` named as the real bound, and the new probe bound by the gate. A failed capture now falls back to the eager prefill for that request instead of raising mid-call — the contract the full-bucket-cache case already had |
+| **P2** §6's "every evidence row post-dates the last code change" is no longer true | replaced with per-artifact provenance: which files are current, and for each older one the specific reason it is unaffected |
+| the `506 µs` step delta was off by one | 507.2 µs, from the two arms' own minima |
+
 ## 11. Commits
 
 Local checkpoints on `agentic-research/hous/muse-glimmer-30b`, on top of the full-model
@@ -977,7 +1022,8 @@ stage's `93adb25b7a8`. Never pushed.
 | `562c529f4f2` | round-11 review fixes: by-construction numeric coverage over every README table, the dtype/fidelity table bound to the CSV, per-tensor deferred frees, the third negative control, and the retry reachable from the short-circuit |
 | `d45ac8e2a0f` | round-12 review fixes: the terminal term derived from named ids with the NoPE asymmetry priced, the carried-forward decoder contract bound cell by cell, the stale mutation count, and the gate's perimeter stated rather than overclaimed |
 | `c6a85246281` | round-13 review fixes: the RoPE tables moved out of the terminal term with every dependent figure recomputed, the both-captures rule that catches the class, and the perimeter statement corrected against seven surviving in-perimeter mutations |
-| *(this commit)* | round-14 review fixes: the layer-stack floor table bound cell by cell, the generated mutation sweep as a harness arm, the cross-check loop moved to where it covers every binding, and the cross-capture bracket derived rather than stated |
+| `d8c5d686b13` | round-14 review fixes: the layer-stack floor table bound cell by cell, the generated mutation sweep as a harness arm, the cross-check loop moved to where it covers every binding, and the cross-capture bracket derived rather than stated |
+| *(this commit)* | round-15 review fixes: the 8192-row prefill-trace measurement that replaced a 64x extrapolation, the eager fallback on a failed capture, and per-artifact evidence provenance |
 
 Nothing unrelated is in any of them: `git status` is clean at each. Outside
 `doc/optimized_full_model/`, `git diff --name-only 93adb25b7a8..HEAD` is exactly eight paths:

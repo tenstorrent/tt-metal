@@ -188,7 +188,7 @@ divide the SFPU work:
 Per-round spread is ±0.0005 ms, so the ordering is ~60x the noise. 80 is the largest
 count that divides the 160-tile intermediate width. In the shipped profile the row
 reads **4.75 µs of multiply for 5.91 µs of reshard** (2.20 + 1.60 + 2.10), against
-18.03 µs before: **−7.4 µs per layer**, which is where ~383 µs of the 506 µs step delta
+18.03 µs before: **−7.4 µs per layer**, which is where ~383 µs of the 507.2 µs step delta
 comes from.
 
 `test_swiglu_multiply_runs_on_the_wide_grid_and_returns_the_narrow_one` pins that the
@@ -583,8 +583,33 @@ equivalence class, but only 32 wide — and capture costs 98 ms against a ~15 ms
 per-replay saving. That is a clear win for a caller whose prompt lengths repeat or are
 bucketed and a one-time 98 ms cost for one whose lengths do not, and the generator
 cannot tell which it is. A serving stage that buckets prompt lengths should turn it on
-and raise `prefill_trace_max_entries` to its bucket count; DRAM per entry scales with
-the padded row count, so the 3.3 MB at 128 rows is ~210 MB at 8192.
+and raise `prefill_trace_max_entries` to its bucket count **for its short buckets** — see the
+measurement below, which is why that guidance is now qualified.
+
+**Measured at the other end of the range, because an extrapolation had no business being in a
+capability contract.** Earlier revisions said "DRAM per entry scales with the padded row count,
+so the 3.3 MB at 128 rows is ~210 MB at 8192". Round 15 of the stage review pointed out that
+this is a 64× extrapolation of a figure that is ~99 % prompt-length-*independent*:
+`prefill_logits` slices one 32-row tile whatever the prompt length, so the retained output is a
+constant `[1, 1, 32, 50688]`. Measured instead
+([`prefill_trace_probe_8192.json`](prefill_trace_probe_8192.json),
+[`logs/prefill_trace_probe_8192.log`](logs/prefill_trace_probe_8192.log)):
+
+| at padded length | retained DRAM/device | capture | eager | traced replay | speedup |
+| --- | --- | --- | --- | --- | --- |
+| 128 | 3.3 MB | 98.16 ms | 59.80 ms | 44.96 ms | **1.33x** |
+| 8192 | **4.6 MB** | 308.91 ms | 917.36 ms | 921.52 ms | **1.00x** |
+
+So the DRAM claim was wrong by ~45x in the alarming direction, and the *real* limit is the
+mesh's fixed `trace_region_size` (400 MB here, `open_multichip_mesh(trace_region_size=...)`),
+which nothing in the earlier text named. More usefully, the second row says the flag stops
+paying at long prompts at all: at 8192 the traced replay is **0.5 % slower** than eager, because
+what the trace removes is host dispatch, and at 8192 rows dispatch is a rounding error against
+the device work. The win is a short-prompt win. A serving stage should turn it on for the
+buckets where its prompts actually cluster and leave it off for long ones; `prefill_trace_probe.py
+--length <rows>` is one command per bucket. A capture that fails now falls back to the eager
+path for that request rather than raising, which is the contract the full-bucket-cache case
+already had.
 
 **Three eligibility conditions the advertisement above does not imply**, and round 7 was
 right that a caller reading only the headline would not know them
@@ -1221,7 +1246,9 @@ Twelve cases are new (three of them parametrizations of one test) and each pins 
    serves one 32-row padded-length bucket and capture costs 98 ms against a ~15 ms
    per-replay saving — a win for a caller that repeats or buckets prompt lengths, a
    one-time cost for one that does not, and the generator cannot tell which it is. DRAM
-   per bucket scales with the padded row count (3.3 MB at 128 rows, ~210 MB at 8192), so
+   per bucket is nearly length-independent (3.3 MB at 128 rows, **4.6 MB measured at 8192** —
+   the retained logits are one 32-row tile at any length), and the real limit is the mesh's
+   fixed `trace_region_size`; the flag also stops paying at long prompts (1.00x at 8192), so
    `prefill_trace_max_entries` bounds it. A vLLM stage that buckets prompt lengths
    should turn it on. Full evidence in
    [Where TTFT actually goes](#where-ttft-actually-goes).
@@ -1563,6 +1590,7 @@ Evidence:
 | `prefill_host_probe.json` / `prefill_opcount.json` | the host-dispatch attribution, including the drained-collective pass |
 | `ccl_host_probe_bfp8.json` / `ccl_host_probe_bfp8_loaded.json` / `ccl_host_probe_bf16.json` | the collective arms, at the model's payload dtype and with a loaded queue |
 | `prefill_trace_probe.json` | the traced-prefill measurement: 1.33x, bit-identical, capture cost, retained DRAM |
+| `prefill_trace_probe_8192.json` | the same probe at the other end of the supported range: 4.6 MB retained, 1.00x, bit-identical — the measurement that replaced a 64x extrapolation |
 | `evidence_perf_prefill_trace.json` | TTFT with the opt-in prefill trace on |
 | `l1_highwater_probe.json` | what change 1 costs the decode step's peak L1 |
 | `prefill_trace_release_probe.py` arms | `logs/watcher_probe_*.log`: capture / release / recapture / clone-cache, each watcher-clean |

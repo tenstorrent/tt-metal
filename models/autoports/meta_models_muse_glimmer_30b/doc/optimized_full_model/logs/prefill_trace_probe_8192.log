@@ -1,0 +1,83 @@
+2026-08-14 18:27:09.680 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-14 18:27:11.334 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-14 18:27:11.334 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-14 18:27:11.334 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-14 18:27:11.335 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-14 18:27:42.311 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-14 18:27:42.312 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-14 18:27:42.390 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-14 18:27:42.390 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-14 18:27:42.390 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-14 18:27:42.390 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-14 18:27:42.391 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-14 18:27:42.566 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-14 18:27:42.709 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 18:27:42.709 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 18:27:42.709 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-14 18:27:42.710 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 18:27:42.710 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 18:27:42.755 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 18:27:42.755 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 18:27:42.756 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 18:27:42.756 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 18:27:42.757 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 18:27:42.757 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 18:27:42.758 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 18:27:42.758 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 18:27:42.759 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 18:27:42.791 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-14 18:27:42.792 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-14 18:27:42.792 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-14 18:27:42.793 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-14 18:27:42.793 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 18:27:42.793 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 18:28:18.528 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:837 - MuseGlimmerModel: built 8/52 layers
+2026-08-14 18:28:41.274 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:837 - MuseGlimmerModel: built 16/52 layers
+2026-08-14 18:29:03.741 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:837 - MuseGlimmerModel: built 24/52 layers
+2026-08-14 18:29:25.498 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:837 - MuseGlimmerModel: built 32/52 layers
+2026-08-14 18:29:48.794 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:837 - MuseGlimmerModel: built 40/52 layers
+2026-08-14 18:30:10.775 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:837 - MuseGlimmerModel: built 48/52 layers
+2026-08-14 18:30:21.217 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:837 - MuseGlimmerModel: built 52/52 layers
+2026-08-14 18:30:21.809 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1701 - MuseGlimmerModel built in 157.2s
+PT eager prefill min=917.36 ms over 2 rounds
+PT capture took 308.91 ms and retained 4.6 MB of DRAM per device
+2026-08-14 18:30:26.328 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:123)
+PT replay vs eager {'pcc': 1.0, 'bit_identical': True, 'max_abs_diff': 0.0, 'eager_argmax': 200008, 'replay_argmax': 200008}
+PT traced replay min=921.52 ms -> 1.00x, capture pays back after 308910302992.4 replays of this bucket
+PT_OK
+PT summary -> /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_full_model/prefill_trace_probe_8192.json
+nanobind: leaked 1 instances!
+ - leaked instance 0x721089ba1308 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function "config"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "get_device_id"
+ - leaked function ""
+ - leaked function "get_optimal_dram_bank_to_logical_worker_assignment"
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-14 18:30:35.545 | info     |    BuildKernels | JIT cache stats: 258/258 hits (100.0%) [258 cached, 96 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-14 18:30:35.545 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-14 18:30:35.572 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-14 18:30:35.572 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-14 18:30:36.125 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-14 18:30:36.126 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-14 18:30:36.126 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

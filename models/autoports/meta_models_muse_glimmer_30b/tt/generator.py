@@ -178,8 +178,15 @@ class GeneratorConfig:
     #: for a caller whose prompt lengths repeat or are bucketed and a loss for one whose
     #: lengths do not, and the generator cannot tell which it is. A serving stage that
     #: buckets prompt lengths should turn it on and raise
-    #: :attr:`prefill_trace_max_entries` to its bucket count; DRAM per entry scales with
-    #: the padded row count.
+    #: :attr:`prefill_trace_max_entries` to its bucket count **for its short buckets**.
+    #:
+    #: Two things about the cost, both measured rather than extrapolated (round 15 of the
+    #: stage review found the earlier claim here was neither).  Retained DRAM is nearly
+    #: length-*independent* -- the trace's persistent output is one 32-row logits tile at any
+    #: prompt length -- 3.3 MB at 128 rows and 4.6 MB at 8192, so the binding resource is the
+    #: mesh's fixed ``trace_region_size``, not DRAM.  And the speedup is short-prompt only:
+    #: 1.33x at 128 rows, 1.00x at 8192, because what the trace removes is host dispatch.  A
+    #: capture that fails falls back to the eager prefill for that request.
     prefill_trace: bool = False
     #: How many padded-length buckets may hold a prefill trace at once.  Lengths beyond
     #: this fall back to the eager path rather than evicting -- releasing a trace and its
@@ -336,6 +343,8 @@ class MuseGlimmerGenerator(Generator):
         #: How many times a cache move has forced a release, for the log line and for the
         #: stage's evidence; see :meth:`_invalidate_traces_if_cache_moved`.
         self._prefill_trace_releases = 0
+        #: Prefill-trace captures that raised and fell back to the eager path (round 15).
+        self._prefill_capture_failures = 0
         self._decode_trace_releases = 0
         #: Traces whose ``ttnn.release_trace`` *raised*.  Round 8 of the stage review found
         #: that round 7's retain-in-place policy fixed the leak by reintroducing round 4's
@@ -568,7 +577,23 @@ class MuseGlimmerGenerator(Generator):
         if entry is None:
             if len(self._prefill_traces) >= self.gen_config.prefill_trace_max_entries:
                 return None
-            entry = self._capture_prefill_trace(token_ids, padded_len=padded_len, page_rows=rows)
+            try:
+                entry = self._capture_prefill_trace(token_ids, padded_len=padded_len, page_rows=rows)
+            except Exception as exc:  # noqa: BLE001
+                # This path already owns an eager-fallback contract -- a full bucket cache
+                # returns ``None`` and the caller prefills eagerly -- but a *failed capture*
+                # used to raise out of ``prefill_forward``/``generate()`` mid-request instead.
+                # Round 15 of the stage review pointed out that the resource this can exhaust
+                # (the fixed ``trace_region_size``, not DRAM) is the one a serving caller is
+                # told to push on by raising ``prefill_trace_max_entries``.  Falling back keeps
+                # the request correct at the eager path's cost, which is what the flag promises.
+                logger.warning(
+                    f"MuseGlimmerGenerator: capturing the prefill trace for padded_len={padded_len} "
+                    f"failed ({exc}); this request falls back to the eager prefill. The trace "
+                    "region is the usual limit -- see open_multichip_mesh(trace_region_size=...)."
+                )
+                self._prefill_capture_failures += 1
+                return None
 
         # These two counters are the *prefill*'s, and with this path on they are no
         # longer zero-per-decode-token: one token refresh and one trace replay per

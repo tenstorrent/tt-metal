@@ -1,0 +1,36 @@
+{
+  "length": 8192,
+  "replays": 3,
+  "max_seq_len": 16384,
+  "layer_count": 52,
+  "dram_capacity_bytes": 33778699264,
+  "with_decode_traces": false,
+  "dram_free_before_capture_bytes": 28261686784,
+  "padded_len": 8192,
+  "eager_ms": {
+    "min": 917.3609319841489,
+    "rounds": [
+      920.9185109939426,
+      917.3609319841489
+    ]
+  },
+  "capture_ms": 308.9103029924445,
+  "dram_free_after_capture_bytes": 28257115648,
+  "capture_retained_dram_bytes": 4571136,
+  "replay_vs_eager": {
+    "pcc": 1.0,
+    "bit_identical": true,
+    "max_abs_diff": 0.0,
+    "eager_argmax": 200008,
+    "replay_argmax": 200008
+  },
+  "traced_ms": {
+    "min": 921.5209183360761,
+    "rounds": [
+      921.5209183360761,
+      924.108344654087
+    ]
+  },
+  "speedup": 0.9955,
+  "payback_replays": 308910302992.44
+}
