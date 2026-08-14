@@ -23,7 +23,9 @@ no whole-op dimension (Wt, Rt) appears in any CB capacity.
 
 from __future__ import annotations
 
+import pathlib
 import struct
+import sys
 from pathlib import Path
 
 import ttnn
@@ -234,6 +236,10 @@ DM_CHUNK_TILES = 32
 # single named constant (conservative for WH/BH, both >= 1.4 MB usable).
 L1_SIZE_PER_CORE_FALLBACK = 1024 * 1024
 L1_RESERVE = 96 * 1024  # firmware / kernel text / semaphores headroom
+# The part's REAL per-core L1, spent only where a coarser block costs nothing —
+# see `_block_ladder_budget`.  min(MEM_L1_SIZE) over Wormhole (1464 KB) and
+# Blackhole (1536 KB); the BH allocator reports 1,461,376 B usable per bank.
+REAL_L1_PER_CORE = 1464 * 1024
 
 # DRAM read-start granule (mirrors DRAM_ALIGN_BYTES in the reader kernel).
 DRAM_ALIGN_BYTES = 64
@@ -324,6 +330,50 @@ def _l1_working_budget(device) -> int:
     query = getattr(device, "l1_size_per_core", None)
     total = query() if callable(query) else L1_SIZE_PER_CORE_FALLBACK
     return total - L1_RESERVE
+
+
+def _block_ladder_budget(device, is_row_major: bool) -> int:
+    """The budget the TILE+sharded BLOCK_ROWS ladder is allowed to spend (Perf 2).
+
+    `_l1_working_budget` is deliberately conservative because a coarser block is
+    NOT free everywhere: it lengthens whatever has to FILL the block before the
+    reduce can start.  Measured, that fill exists on exactly two paths and not on
+    the third, so the conservative number is right for two of them and is simply
+    leaving L1 on the floor for the third:
+
+      * INTERLEAVED — the block is a serial DRAM read.  Widening the budget lets
+        the partition SEARCH admit a fatter hidden slice and costs **+5.7 % on
+        `(1,1,8192,5120)`** (401839 -> 424912 ns, median of 5).  NB Refinement 4
+        attributed this to a coarser `block_rows`; that was wrong — `block_rows`
+        is 1 in both plans, and what actually moves is the search's admission
+        filter picking `G=110,s=1,S=160,depth1` over `G=55,s=2,S=80,depth2`.
+      * ROW_MAJOR sharded — the core tilizes its own sticks into a `B*S`-tile CB
+        before the reduce can start, i.e. the same shape of serial fill.  Measured
+        U-shaped with its minimum at the shipped block: B1/B2/B4/**B8**/B16/B32 =
+        152885 / 119401 / 99630 / **96401** / 100469 / 101807 ns on
+        `(1,1,8192,1024)` RM BLOCK — coarsening past it costs 4.1 % / 5.6 %.
+      * TILE + sharded — `cb_input_tiles` IS the caller's resident buffer, so
+        there is NO fill at all.  Coarser is monotonically better here, saturating
+        at one block: B1/B2/B4/B8/B16/B32 = 113250 / 78129 / 51881 / 38549 /
+        34733 / **32635** ns on the perf-flagged focus geometry.
+
+    So this is the narrow exception, written as "the paths that regress keep the
+    conservative budget", never as an allow-list around the shapes benchmarked.
+
+    Why the constant rather than a query: `device.l1_size_per_core` is **not bound
+    to Python** (probed — `l1_size`, `l1_bank_size` are not either), so
+    `L1_SIZE_PER_CORE_FALLBACK` is what actually runs everywhere and the ladder has
+    been leaving ~430 KB per core unused.  1464 KB is `min(MEM_L1_SIZE)` over
+    Wormhole (1464 KB) and Blackhole (1536 KB); the Blackhole allocator reports
+    1,461,376 B usable and both values select an identical plan (measured 32713 vs
+    32510 ns, inside noise).  Verified against 29 sharded `resilience` cells x 3
+    budgets: the outcome set is IDENTICAL, and the pre-existing `13x777x1023`
+    WIDTH CB-vs-L1 failure is untouched (its per-core shard alone is 1.33 MB, so
+    the ladder still returns `block_rows == 1` at every budget).
+    """
+    if is_row_major:
+        return _l1_working_budget(device)
+    return REAL_L1_PER_CORE - L1_RESERVE
 
 
 # ---------------------------------------------------------------------------
@@ -512,7 +562,7 @@ def _plan_sharded(device, input_tensor, *, has_gamma, bytes_):
     # The resident shards are charged against L1 up front (they are tensors, not
     # CB-heap allocations), then the coarsest row block that fits the remainder.
     shard_tiles = shard_rows * slice_tiles
-    budget = _l1_working_budget(device) - shard_tiles * (bytes_["in_tile"] + bytes_["out_tile"])
+    budget = _block_ladder_budget(device, is_row_major) - shard_tiles * (bytes_["in_tile"] + bytes_["out_tile"])
 
     def _fits(b, in_depth, out_depth):
         return (
@@ -1138,6 +1188,24 @@ def create_program_descriptor(
                 eps_bits,
             ]
 
+    # ---- Ablation-profiling hook (see the RMS_ABLATE block in the kernels) ----
+    # `/tmp/rms_norm_ablate_bits` -> a -DRMS_ABLATE=<bits> define on every kernel.
+    # Each bit STUBS one stage's payload while keeping its CB/semaphore
+    # scaffolding, which is how /perf-measure peels stages cumulatively (stages
+    # overlap, so a solo removal under-counts).  Absent file => no define => the
+    # real op, byte-identical.  IT PRODUCES WRONG ANSWERS WHEN ACTIVE, so a stale
+    # file must never go unnoticed: this warns loudly on every program build.
+    _abl = pathlib.Path("/tmp/rms_norm_ablate_bits")
+    _ablate_defines = []
+    if _abl.exists():
+        _bits = _abl.read_text().strip()
+        _ablate_defines = [("RMS_ABLATE", _bits)]
+        print(
+            f"*** rms_norm: ABLATION PROFILING ACTIVE (RMS_ABLATE={_bits} from {_abl}). "
+            f"Stage payloads are STUBBED and the output is WRONG. Delete {_abl} to restore. ***",
+            file=sys.stderr,
+        )
+
     # ---- kernels ----
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
@@ -1160,6 +1228,10 @@ def create_program_descriptor(
         runtime_args=compute_rt,
         config=compute_kernel_config,
     )
+
+    if _ablate_defines:
+        for _k in (reader_kernel, writer_kernel, compute_kernel):
+            _k.defines = _ablate_defines
 
     semaphores = [
         ttnn.SemaphoreDescriptor(id=SEM_MCAST_READY, core_ranges=cb_cores_crs, initial_value=0),

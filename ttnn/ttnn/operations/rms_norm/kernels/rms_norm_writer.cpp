@@ -129,6 +129,10 @@ void kernel_main() {
                 // is RISC-serial address generation + command-buffer work and
                 // scales with the TRANSACTION COUNT (B per contributor).
                 MaybeDeviceZoneScope("wr_gather_issue");
+#ifndef RMS_ABLATE
+#define RMS_ABLATE 0
+#endif
+#if !(RMS_ABLATE & 2u)  // ABL_GATHER: stub the stat-tile NoC payload, keep the barrier + atomics
                 for (uint32_t r = 0; r < BLOCK_ROWS; ++r) {
                     const uint32_t owner = r / OWN_ROWS;
                     const uint32_t page = (r % OWN_ROWS) * NUM_HIDDEN_SLICES + slice_index;
@@ -140,6 +144,7 @@ void kernel_main() {
                             gather_base + page * STAT_TILE_BYTES),
                         STAT_TILE_BYTES);
                 }
+#endif
             }
             {
                 // BARRIER: the bytes actually landing on the root.  This is the
