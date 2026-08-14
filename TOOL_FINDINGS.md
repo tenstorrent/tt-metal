@@ -47,6 +47,46 @@ have stopped on its own. See F6: the agent had no way to report what it had done
 
 ---
 
+## ★ FOR THE HAND-PORT — what to actually do, ranked
+
+The point of the experiment. Everything below is derived from a tool that never saw the hand-port
+(see the blindness audit). Full detail in the O4* entries; this is the short list.
+
+### Take these
+
+| # | change | evidence | risk |
+|---|---|---|---|
+| **1** | **Rotate Q+K in ONE call** — slice q+k out together, split heads once into a 40-head tensor, rotate once, slice apart. NOT ttnn's fused q+k rope operator (§6.23 rejected that correctly, for the interleaved convention); the *same* `rotary_embedding_hf` on a wider tensor. | exact arithmetic, PCC bit-identical, −1.99% on the identical model. 52 rotary launches/token → 26; `[gpt-24]` priced a comparable 26-launch saving at 0.405 ms | **check first:** decode mode wants cos/sin sharded to match, and §6.44 documents the trap (*"RoPE on a core whose cos/sin table lives elsewhere returns 3.4e38"*) |
+| **2** | **Give `_PRG_W2` its own grid and re-sweep it.** One `_MM_GRID` for all five decode matmuls cannot be right for both K-light projections and the deepest K-reduction in the model. | measured curve on the identical op: `96c 0.1589 / 48c 0.0960 / 32c 0.1137 / **24c 0.0934** / 16c 0.1084`, a 1.70× spread. `_PRG_W2` sits at 72c. | none — precision-neutral. Sweep and keep what wins |
+| **3** | **Audit the decode path for the batch-1 / seq-1 pathology** (see ★ THE PATTERN). Four instances in one model. | argmax 32× the bytes; rotation 160 tiles where 4 had data; head creation collapsed to one core; a join moving 8 MB where 64 KB was real | none — these are pure waste |
+
+### Re-open these, don't assume they're settled
+
+| # | what | why |
+|---|---|---|
+| **4** | **§6.8 — device argmax rejected in favour of host.** | The A/B was scored against a **single-core** kernel that didn't have to be single-core. `ttnn.argmax` picks its path from input LAYOUT; a TILE input single-cores the scan *and* pads the row 32×. Re-run with `to_layout(ROW_MAJOR)` in front. Host may still win on a 33 KB reduce that already ends in a D→H copy — but the number you have doesn't answer that. |
+| **5** | **§6.44 — fused K/V cache write deleted as 0.687 ms/step slower.** | The tool measures it **faster** on the same board, but only *after* adopting the decode-native Q/K/V layout, where the fused path has no conversion to pay. §6.44 may be conditional on a layout you haven't adopted rather than wrong. **Unproven** — needs the A/B in both layouts. |
+| **6** | **`_MM_GRID` generally.** | Tuned at §6.52, then §6.65/§6.67/§6.72 changed the structure around it. A structural change invalidates earlier knobs silently (O4m: a stale cap cost 15% on one op). |
+
+### Explicitly do NOT take
+
+- **`down_proj`/`w2` → bf8_b.** This is §6.16, which you measured and declined. The tool takes it only because a 0.95 gate has no reason not to. Your call stands.
+- **DRAM-sharding the LM head weight.** Real bandwidth insight (interleaved buffers round-robin across all 8 banks; the head ran at 256 GB/s where projections manage 340–360), but it costs a **second 226 MB copy**, and Block 1's LM head isn't on your critical path.
+
+### What the experiment confirms about work you already did
+
+Six independent agreements, each reached without sight of your code: the width-sharded decode norm
+(§6.67), the traced decode loop (§6.65), decode matmul program configs (§6.52), the fused `wqkv`,
+the hand-rolled head split over the fused op (§6.72 — *"dispatches fell 3413 → 2867 yet it got
+slower; these were view ops doing no work"*), 2 cores/head on the decode SDPA (`[gpt-21]`), and that
+`activation=` never fuses while `fused_activation` does (`[gpt-26]`).
+
+**And one thing the tool structurally cannot check:** `[gpt-21]` records SDPA settings that were
+faster but *"NOT SAFE — position sweep"*. The tool gates on PCC at a single length. Nothing in it
+would have caught that.
+
+---
+
 ## OWNERSHIP — who should fix what
 
 Split by owner so the PR feedback can be lifted straight out of this file. **Only the first table
@@ -742,11 +782,12 @@ section is the credit half of the ledger and is the material for the comparison 
 | run 2 — DRAM-sharded LM head weight (O4i) | — | 13.228 | 0.9904 |
 | run 2 — untilize vocab blocks before joining (O4j) | — | 13.139 | 0.9904 |
 | run 2 — fused K/V cache write (O4k) | 234.1 | 12.890 | 0.9904 |
-| run 2 — decode SDPA 16 cores/head -> 2 (O4l) | 231.8 | **12.633** | 0.9904 |
+| run 2 — decode SDPA 16 cores/head -> 2 (O4l) | 231.8 | 12.633 | 0.9904 |
+| run 2 — fused-QKV grid re-swept 32 -> 48 (O4m) | 229.6 | **12.427** | 0.9903 |
 | tool's own roofline target | 338.541 | — | gate 0.95 |
 | **hand-port, for reference** | — | **15.907** | — |
 
-**12.633 against 15.907 — the tool is 20.6% AHEAD of 74 human experiments**, autonomously, with
+**12.427 against 15.907 — the tool is 21.9% AHEAD of 74 human experiments**, autonomously, with
 PCC bit-identical across its last four wins (0.990347151783074, unchanged to every decimal). Every
 one of those four was a layout or dispatch result. None spent accuracy.
 
@@ -1264,6 +1305,23 @@ Worth noting the tool took **2 rather than 1** despite 1 measuring faster: *"the
 0.05 ms, whole-model came out marginally better at 2, and 2 still has somewhere to go when a deeper
 cache makes the read matter again."* It declined 0.05 ms to keep headroom at longer context — a
 judgment about future conditions, not a greedy pick.
+
+### O4m — a structural change silently invalidated an earlier knob, and it went back for it
+
+> *The 32-core cap was tuned when Q, K and V were three separate projections. Fusing them into one
+> 3072→6144 read widened N and moved the optimum, but the cap stayed where it was.*
+
+Re-swept: `16 → 17.47 / 32 → 15.98 / 48 → 13.61 / 96 → 35.71 ms`. **48 wins by 15% over the value in
+place.** And the cliff at 96 is the pathology `down_proj` already documented in O4b: `in0_block_w`
+falls to 1, so each core walks 96 sequential single-tile k-blocks to produce 2 output tiles with
+nothing to overlap the reduction against.
+
+**The meta-lesson, and it applies directly to the hand-port: a structural change invalidates every
+knob tuned before it, silently.** Nothing errors; the old value simply stops being optimal. The
+hand-port's `_MM_GRID = (12, 6)` was fixed at §6.52 and has since been through §6.65 (traced loop),
+§6.67 (sharded norm) and §6.72 (head split). It has not been re-swept since. That is the same
+staleness this commit found, and it sharpens O4b: **re-sweep against the current structure, not from
+the historical setting.**
 
 ### O5 — the ladder's escalation is real, and it gives up in the right place
 
