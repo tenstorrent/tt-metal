@@ -786,11 +786,12 @@ section is the credit half of the ledger and is the material for the comparison 
 | run 2 — decode SDPA 16 cores/head -> 2 (O4l) | 231.8 | 12.633 | 0.9904 |
 | run 2 — fused-QKV grid re-swept 32 -> 48 (O4m) | 229.6 | 12.427 | 0.9903 |
 | run 2 — SiLU folded into the SwiGLU multiply (O4n) | 229.0 | 12.352 | 0.9903 |
-| run 2 — norm's shard chained into QKV (O4o) | — | **12.299** | 0.9903 |
+| run 2 — norm's shard chained into QKV (O4o) | — | 12.299 | 0.9903 |
+| run 2 — gate/up plan, reshard now free (O4p) | — | **12.038** | 0.9903 |
 | tool's own roofline target | 338.541 | — | gate 0.95 |
 | **hand-port, for reference** | — | **15.907** | — |
 
-**12.299 against 15.907 — the tool is 22.7% AHEAD of 74 human experiments**, autonomously, with
+**12.038 against 15.907 — the tool is 24.3% AHEAD of 74 human experiments**, autonomously, with
 PCC bit-identical across its last four wins (0.990347151783074, unchanged to every decimal). Every
 one of those four was a layout or dispatch result. None spent accuracy.
 
@@ -1401,6 +1402,37 @@ A rejection that was correct when measured, invalidated by a later, unrelated ch
 That is documented precedent in the hand-port's own log for the general claim behind re-open items
 #4–#6: **a rejection is only valid under the conditions it was measured in, and structural changes
 move those conditions.** §6.67 is the proof that this repo already knows it.
+
+### O4p — and the thing this whole run is actually demonstrating
+
+> *gate/up kept ttnn's default routing on the strength of an old sweep: seven core counts, all lost,
+> "the plan's two reshard ops cost more than they buy". **That accounting was correct and is now
+> obsolete.*** *The norm ahead of this block emits its result IN a 48-core width shard, and gate and
+> up read the SAME activation — so the plan's input reshard is not two ops, or even one. It is zero,
+> and what is left is the matmul routing on its own, which is the part the old sweep could never see
+> separately.*
+
+`43.28 → 41.32 ms` in the slice, `12.299 → 12.038 ms/token`.
+
+**This is the fourth time in one run that a correct rejection went stale**, and it is the most
+transferable observation in this document:
+
+| | rejection | what invalidated it |
+|---|---|---|
+| O4m | QKV grid capped at 32 | fusing Q/K/V widened N |
+| O4k | fused K/V write unavailable | (V relocation made it legal) |
+| O4o→**O4p** | gate/up plan "costs more than it buys" | the norm now emits the shard for free |
+| hand-port `[gpt-28]` | sharded norm, +4.4 ms worse (§6.39/§6.40) | §6.65 traced the reshard dispatch away → §6.67 reversed it |
+
+**A rejection records a measurement under conditions, not a fact.** Every structural change silently
+re-prices every knob and every earlier "no". The tool's real advantage over a human pass is not that
+it finds cleverer optimizations — five of its wins the hand-port already had, and two of them the
+hand-port does better (O4n, and the decode-mode RoPE). **It is that it keeps re-opening its own
+closed questions, cheaply, in an order driven by fresh measurements.** A human does that once or
+twice, when something prompts it; §6.67 and §6.72 are the hand-port's two.
+
+**For the hand-port this is the standing recommendation behind items #2, #4, #5 and #6:** the
+rejections in `STATUS.md` are dated, and the structure has moved underneath several of them.
 
 ### O5 — the ladder's escalation is real, and it gives up in the right place
 
