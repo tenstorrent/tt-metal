@@ -19,6 +19,26 @@ from vllm.logger import init_logger
 
 DEFAULT_MODEL_DIR = Path("models/autoports/google_gemma_4_31b")
 MODEL_DIR_ENV = "GEMMA4_31B_AUTOPORT_DIR"
+
+
+def _resolve_model_dir() -> Path:
+    """Resolve the autoport directory without depending on the caller's cwd.
+
+    Serving harnesses launch the vLLM API server from their own working
+    directory -- tt-inference-server runs it from ``vllm-tt-metal/src`` -- so a
+    relative path, including the repo-relative default, must be anchored to the
+    tt-metal checkout rather than to ``os.getcwd()``. Anchoring to
+    ``TT_METAL_HOME`` keeps a repo-relative ``GEMMA4_31B_AUTOPORT_DIR`` usable in
+    a model spec, where an absolute path would have to hardcode a checkout
+    location that differs between a container and a local tree.
+    """
+    raw = Path(os.environ.get(MODEL_DIR_ENV, DEFAULT_MODEL_DIR))
+    if raw.is_absolute():
+        return raw.resolve()
+    tt_metal_home = os.environ.get("TT_METAL_HOME")
+    if tt_metal_home:
+        return (Path(tt_metal_home) / raw).resolve()
+    return raw.resolve()
 HOST_SAMPLING_COMPAT_ENV = "GEMMA4_31B_VLLM_HOST_SAMPLING_COMPAT"
 REDUCED_LAYERS_ENV = "GEMMA4_31B_VLLM_LAYER_INDICES"
 PAGE_BLOCK_SIZE = 64
@@ -97,7 +117,7 @@ class Gemma4ForCausalLM(GenerativeTestModelBase):
         if not 1 <= int(max_batch_size) <= 32:
             raise ValueError(f"Gemma 4 31B supports max_batch_size in [1, 32], got {max_batch_size}")
 
-        model_dir = Path(os.environ.get(MODEL_DIR_ENV, DEFAULT_MODEL_DIR)).resolve()
+        model_dir = _resolve_model_dir()
         context_contract = _read_context_contract(model_dir)
         supported_context = int(
             context_contract.get("vllm_supported_context", context_contract["current_supported_context"])
