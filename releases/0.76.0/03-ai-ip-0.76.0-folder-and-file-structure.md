@@ -156,7 +156,7 @@ The repository holds**one**Quasar architecture folder. There are no separate Hor
 
 # Runtime Delivery - Folder Structure
 
-**Feature(s) this release:**FD support for dispatch engine; Profiler debug tool support  
+**Feature(s) this release:**FD support for dispatch engine; Profiler debug tool support
 **Source:** [tenstorrent/tt-metal - tt_metal](https://github.com/tenstorrent/tt-metal/tree/main/tt_metal)
 
 ## Level 1 - Common (used by Wormhole, Blackhole, Quasar, and any new designs)
