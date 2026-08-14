@@ -138,7 +138,7 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         # Skip this on single-card systems
-        if: ${{ matrix.test-group.sku != 'bh_p150' && matrix.test-group.sku != 'bh_p150_perf' }}
+        if: ${{ matrix.test-group.sku != 'bh_p150' && matrix.test-group.sku != 'bh_p150_perf' && matrix.test-group.sku != 'bh_p150b_civ2' }}
         timeout-minutes: 10
       - name: Download Llama model weights from LFC
         if: ${{ matrix.test-group['weights-cache-mode'] == 'lfc' && contains(matrix.test-group.name, 'llama') }}

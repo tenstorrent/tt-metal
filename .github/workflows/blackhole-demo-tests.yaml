@@ -17,6 +17,7 @@ on:
           - all
           - mochi
           - z-image-turbo
+          - xtts-v2
       system-type:
         description: "Select system type to test"
         required: false
@@ -25,6 +26,7 @@ on:
         options:
           - all
           - bh_quietbox_2
+          - bh_p150b_civ2
       build-type:
         required: false
         type: choice

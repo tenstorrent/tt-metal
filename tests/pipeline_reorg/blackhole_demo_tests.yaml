@@ -11,8 +11,8 @@
 
 # This pipeline holds Blackhole demo / performance tests that have not yet been
 # migrated to the tier 1/2/3 pipelines
-# (tests/pipeline_reorg/models_{e2e,unit,device_perf}_tests.yaml) — currently only
-# diffusion / vision demos. The Llama / Qwen / Mistral LLM e2e, data-parallel, and
+# (tests/pipeline_reorg/models_{e2e,unit,device_perf}_tests.yaml) — currently
+# diffusion / vision / TTS demos. The Llama / Qwen / Mistral LLM e2e, data-parallel, and
 # device-perf entries have all been migrated out.
 
 # All entries that read HF model checkpoints / tt_cache use the canonical HF_HOME convention
@@ -91,3 +91,72 @@
   owner_id: U088VJ79WDB # Jonathan Su
   team: models
   model-name: z-image-turbo
+
+# ─── xtts-v2 (single P150) ────────────────────────────────────────────────────
+# The nightly home for the XTTS suites the tiered pipelines cannot host: the tier-3 unit job
+# deselects the eval tests with `-k "not eval"` (they pull the extra metric models), and tier 3 has
+# no sweep pipeline while device-OP perf exists only at tier 1. The accuracy gates (PCC + the
+# asserted e2e perf bounds) stay in models_{unit,e2e}_tests.yaml; the demo itself (xtts_demo.py)
+# runs there too and is not repeated here.
+# Not wired anywhere on purpose: test_traced_pass_len_sweep.py (2 h envelope exploration that probes
+# to failure, larger than this whole pipeline's budget) and test_profile_single_step_*.py (already
+# invoked by the device-perf scripts below, which wrap them under the Tracy profiler).
+# NOTE: bh_p150b_civ2 is weights-cache-mode `lfc`, so this pipeline mounts no HF cache
+# (see blackhole-demo-tests-impl.yaml) and every run downloads XTTS-v2 fresh; the eval entries
+# additionally pull Whisper-large-v3 / UTMOS / ECAPA2. Single-P150 only.
+
+- name: xtts-v2 eval metrics (P150 1x1)
+  cmd: |
+    set -e
+    uv pip install -r models/experimental/xtts/requirements.txt
+    pytest -v models/experimental/xtts/tests/pcc/ -k "eval and not long"
+  skus:
+    bh_p150b_civ2:
+      timeout: 25
+  owner_id: U087HGJ455E # Sudhanshu Singhal
+  team: models
+  model-name: xtts-v2
+
+- name: xtts-v2 eval metrics, long chunked (P150 1x1)
+  cmd: |
+    set -e
+    uv pip install -r models/experimental/xtts/requirements.txt
+    pytest -v models/experimental/xtts/tests/pcc/ -k "eval and long"
+  skus:
+    bh_p150b_civ2:
+      timeout: 25
+  owner_id: U087HGJ455E # Sudhanshu Singhal
+  team: models
+  model-name: xtts-v2
+
+# Device-OP perf for one GPT prefill and one GPT decode step. Both are standalone scripts (not
+# pytest targets): each re-runs the matching test_profile_single_step_* test under the Tracy
+# profiler and writes a device-perf report. They need the tracy build, which this pipeline already
+# produces (tracy: true in blackhole-demo-tests.yaml). expected_results is empty upstream, so these
+# track device time rather than gate it.
+- name: xtts-v2 device perf (P150 1x1)
+  cmd: |
+    set -e
+    python models/experimental/xtts/tests/perf/test_device_perf_single_step_prefill.py
+    python models/experimental/xtts/tests/perf/test_device_perf_single_step_decode.py
+  skus:
+    bh_p150b_civ2:
+      timeout: 25
+  owner_id: U087HGJ455E # Sudhanshu Singhal
+  team: models
+  model-name: xtts-v2
+
+# e2e latency across input-sequence lengths (TTFT, decode ms/code, RTF per ISL — logged, not gated).
+# The full DEFAULT_ISL_SWEEP is 8 lengths, each a traced generation with its own compile; XTTS_ISL_SWEEP
+# narrows it to the short/mid/long ends so the job fits the pipeline budget.
+- name: xtts-v2 e2e ISL sweep (P150 1x1)
+  cmd: |
+    set -e
+    export XTTS_ISL_SWEEP=32,192,352
+    pytest -v models/experimental/xtts/tests/perf/test_e2e_isl_sweep_perf.py
+  skus:
+    bh_p150b_civ2:
+      timeout: 30
+  owner_id: U087HGJ455E # Sudhanshu Singhal
+  team: models
+  model-name: xtts-v2

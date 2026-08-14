@@ -219,6 +219,16 @@ EVAL_LONG_TEXT = (
     "follows the story to its end."
 )
 
+# Gates for the nightly long-eval job (tests/pipeline_reorg/blackhole_demo_tests.yaml). Measured on
+# Blackhole P150b, 3/3 identical runs: 556 codes -> 26.17 s audio, CER 0.0000, SECS 0.6979. This test
+# samples off the host RNG (reset_seeds), so there is no run-to-run spread to absorb — the margin is
+# for a *re-sampled* render, since any numerical change shifts the sampled codes and yields different
+# audio. The bounds therefore encode "still intelligible, still the same speaker" rather than
+# "byte-identical to the measurement"; real breakage (babbling, truncation, speaker collapse) lands
+# far outside them.
+LONG_CER_MAX = 0.05
+LONG_SECS_MIN = 0.55
+
 
 @pytest.mark.timeout(2400)
 @pytest.mark.parametrize(
@@ -302,14 +312,13 @@ def test_tt_eval_traced_long(device, xtts_state_dict, reset_seeds):
 
     spk_np = spk_wav[0].numpy()
     logger.info("======= XTTS objective eval metrics (TRACED, CHUNKED PARAGRAPH) =======")
-    try:
-        from models.experimental.xtts.eval.xtts_eval import compute_cer
+    # CER and SECS are gated below, so they are computed outside try/except on purpose: a missing
+    # Whisper / ECAPA2 must fail the job rather than log a warning and pass. UTMOS stays best-effort.
+    from models.experimental.xtts.eval.xtts_eval import compute_cer, compute_secs
 
-        cer, hyp = compute_cer(wav_eval, OUTPUT_SAMPLE_RATE, EVAL_LONG_TEXT)
-        logger.info(f"CER   (Whisper-large-v3, lower=better)        : {cer:.4f}")
-        logger.info(f"        whisper transcript: {hyp!r}")
-    except Exception as e:
-        logger.warning(f"CER   skipped ({type(e).__name__}: {e})")
+    cer, hyp = compute_cer(wav_eval, OUTPUT_SAMPLE_RATE, EVAL_LONG_TEXT)
+    logger.info(f"CER   (Whisper-large-v3, lower=better)        : {cer:.4f}")
+    logger.info(f"        whisper transcript: {hyp!r}")
 
     try:
         from models.experimental.xtts.eval.xtts_eval import compute_utmos
@@ -320,11 +329,9 @@ def test_tt_eval_traced_long(device, xtts_state_dict, reset_seeds):
     except Exception as e:
         logger.warning(f"UTMOS skipped ({type(e).__name__}: {e})")
 
-    try:
-        from models.experimental.xtts.eval.xtts_eval import compute_secs
-
-        secs = compute_secs(wav_eval, OUTPUT_SAMPLE_RATE, spk_np, SPK_SR)
-        logger.info(f"SECS  (ECAPA2 speaker cos-sim, higher=better)  : {secs:.4f}")
-    except Exception as e:
-        logger.warning(f"SECS  skipped ({type(e).__name__}: {e})")
+    secs = compute_secs(wav_eval, OUTPUT_SAMPLE_RATE, spk_np, SPK_SR)
+    logger.info(f"SECS  (ECAPA2 speaker cos-sim, higher=better)  : {secs:.4f}")
     logger.info("======================================================================")
+
+    assert cer <= LONG_CER_MAX, f"CER {cer:.4f} above gate {LONG_CER_MAX} -- whisper heard: {hyp!r}"
+    assert secs >= LONG_SECS_MIN, f"SECS {secs:.4f} below gate {LONG_SECS_MIN} (speaker similarity)"

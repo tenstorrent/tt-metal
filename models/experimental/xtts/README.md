@@ -486,14 +486,37 @@ mels, the conditioning encoder, GPT, sampler, and vocoder run on device.
 
 ### CI
 
-XTTS runs as a **tier-3** model on single Blackhole P150 (`bh_p150b_civ2`):
+XTTS runs on single Blackhole P150 (`bh_p150b_civ2`) — **tier-3** in the gated pipelines, plus the
+nightly Blackhole demo pipeline for the suites tier 3 cannot host:
 
-| Pipeline | Entry | Command | Timeout |
-|----------|-------|---------|--------:|
-| [`models_unit_tests.yaml`](../../../tests/pipeline_reorg/models_unit_tests.yaml) | `xtts-v2 unit tests` | `pytest models/experimental/xtts/tests/pcc/ -k "not eval"` | 25 min |
-| [`models_e2e_tests.yaml`](../../../tests/pipeline_reorg/models_e2e_tests.yaml) | `xtts-v2 e2e tests` | `test_e2e_perf.py` then `demo/xtts_demo.py` | 25 min |
+| Pipeline | Entry | Command | Gate | Timeout |
+|----------|-------|---------|------|--------:|
+| [`models_unit_tests.yaml`](../../../tests/pipeline_reorg/models_unit_tests.yaml) | `xtts-v2 unit tests` | `pytest models/experimental/xtts/tests/pcc/ -k "not eval"` | per-module PCC | 25 min |
+| [`models_e2e_tests.yaml`](../../../tests/pipeline_reorg/models_e2e_tests.yaml) | `xtts-v2 e2e tests` | `test_e2e_perf.py` then `demo/xtts_demo.py` | perf bounds (§7) | 25 min |
+| [`blackhole_demo_tests.yaml`](../../../tests/pipeline_reorg/blackhole_demo_tests.yaml) | `xtts-v2 eval metrics` | `pcc/ -k "eval and not long"` | none — logged | 25 min |
+| [`blackhole_demo_tests.yaml`](../../../tests/pipeline_reorg/blackhole_demo_tests.yaml) | `xtts-v2 eval metrics, long chunked` | `pcc/ -k "eval and long"` | CER ≤ 0.05, SECS ≥ 0.55 | 25 min |
+| [`blackhole_demo_tests.yaml`](../../../tests/pipeline_reorg/blackhole_demo_tests.yaml) | `xtts-v2 device perf` | `test_device_perf_single_step_{prefill,decode}.py` | none — tracked | 25 min |
+| [`blackhole_demo_tests.yaml`](../../../tests/pipeline_reorg/blackhole_demo_tests.yaml) | `xtts-v2 e2e ISL sweep` | `test_e2e_isl_sweep_perf.py` (`XTTS_ISL_SWEEP=32,192,352`) | none — logged | 30 min |
 
-`-k "not eval"` deselects all three eval tests (`test_tt_eval`, `test_tt_eval_traced`,
-`test_tt_eval_traced_long`) so CI does not pull whisper-large-v3, UTMOS or ECAPA2. Timeouts cover the
-first-run download of the ~1.9 GB checkpoint. Warm, the deselected PCC suite is ~9 min and the e2e
-entry ~2 min. Both entries are filed under `team: shield`.
+The gated pipelines hold the accuracy checks: `-k "not eval"` keeps the PCC suite (including both
+ISL sweeps) and deselects the three eval tests (`test_tt_eval`, `test_tt_eval_traced`,
+`test_tt_eval_traced_long`) so they do not pull whisper-large-v3, UTMOS or ECAPA2, while the e2e
+entry asserts the perf bounds in §7. Everything else runs nightly in the demo pipeline, because
+tier 3 has no sweep pipeline and device-OP perf exists only at tier 1.
+
+Of the nightly jobs, only the long chunked eval gates: `LONG_CER_MAX = 0.05` and
+`LONG_SECS_MIN = 0.55` in `tests/pcc/test_tt_trace.py`, measured at CER 0.0000 / SECS 0.6979 over
+3 identical runs on a P150b (556 codes → 26.17 s audio, ~3 min per run). That test samples off the
+host RNG, so the margin exists to tolerate a *re-sampled* render — any numerical change shifts the
+sampled codes and produces different audio — not run-to-run noise. The short eval logs the same
+metrics ungated (its `EVAL_MAX_TOKENS = 150` truncation inflates CER, and it samples off the device
+RNG), and the device-perf and ISL-latency suites report rather than assert (`expected_results` is
+empty upstream). Note that SKU is `weights-cache-mode: lfc`, so the demo pipeline mounts no HF cache
+and re-downloads the ~1.9 GB checkpoint every run; timeouts allow for it. Warm, the deselected PCC
+suite is ~9 min and the e2e entry ~2 min.
+
+Deliberately not in CI: `test_traced_pass_len_sweep.py` (a 2-hour envelope exploration that probes
+to failure — larger than the whole demo pipeline's budget) and `test_profile_single_step_*.py`
+(already invoked by the device-perf scripts, which wrap them under the Tracy profiler).
+
+The tiered entries are filed under `team: shield`, the demo entries under `team: models`.
