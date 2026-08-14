@@ -8,10 +8,10 @@ from quasar.test_matmul_quasar import (
     MATMUL_FORMAT,
     matmul_dest_acc_modes,
     matmul_dest_sync_modes,
+    matmul_dimensions,
     matmul_enable_direct_indexing,
     matmul_implied_math_formats,
     matmul_math_fidelities,
-    matmul_perf_dimensions,
     matmul_register_format_hints,
 )
 from quasar.test_matmul_quasar import test_matmul as run_matmul
@@ -24,7 +24,11 @@ from quasar.test_matmul_quasar import test_matmul as run_matmul
     math_fidelity=matmul_math_fidelities,
     dest_sync_mode=lambda: matmul_dest_sync_modes(is_perf=True),
     dest_acc=matmul_dest_acc_modes,
-    dimensions=matmul_perf_dimensions,
+    dimensions=lambda dest_acc, dest_sync_mode: matmul_dimensions(
+        dest_acc,
+        dest_sync_mode,
+        exact_dest_fill=True,
+    ),
     implied_math_format=lambda format: matmul_implied_math_formats(
         format, is_perf=True
     ),

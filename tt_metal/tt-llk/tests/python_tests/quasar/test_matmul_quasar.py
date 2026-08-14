@@ -30,7 +30,6 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
     runtime,
-    select_perf_input_dimensions,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -93,25 +92,6 @@ def matmul_dimensions(dest_acc, dest_sync, *, exact_dest_fill=False):
             else range(1, max_tiles // mt_dim + 1)
         )
         for kt_dim in kt_dims
-    ]
-
-
-def matmul_perf_dimensions(dest_acc, dest_sync):
-    """Select functional matmul variants by their output matrix shape."""
-    functional_dimensions = matmul_dimensions(dest_acc, dest_sync)
-    output_dimensions = [
-        [input_A_dimensions[0], input_B_dimensions[1]]
-        for input_A_dimensions, input_B_dimensions in functional_dimensions
-    ]
-    perf_output_dimensions = select_perf_input_dimensions(
-        output_dimensions, use_largest_fallback=False
-    )
-
-    return [
-        dimensions
-        for output_shape in perf_output_dimensions
-        for dimensions in functional_dimensions
-        if [dimensions[0][0], dimensions[1][1]] == output_shape
     ]
 
 

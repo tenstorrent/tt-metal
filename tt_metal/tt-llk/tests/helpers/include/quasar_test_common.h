@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel_trisc_common.h"
+#include "perf.h"
 #include "tensor_shape.h"
 
 template <bool implied_math_format, bool fp32_dest, bool int32_dest>
