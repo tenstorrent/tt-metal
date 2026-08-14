@@ -333,13 +333,13 @@
 //
 // mailboxes_t is unconditional: every debug/profiling feature that lives in the mailbox reserves its space
 // whether or not the feature is turned on, so this one number covers, simultaneously and regardless of which
-// are enabled at runtime, the watcher (288B: waypoints, NOC sanitize, assert, pause, stack usage,
-// insert-delays, ring buffer), DPRINT (204B = 1 processor * 204) and the kernel profiler (2304B = 256B
+// are enabled at runtime, the watcher (472B: waypoints, NOC sanitize, assert, pause, stack usage,
+// insert-delays, MPSC ring buffer), DPRINT (204B = 1 processor * 204) and the kernel profiler (2304B = 256B
 // control vector + 1 processor * 2KB marker buffer). Nothing else in the DRISC map is conditional either:
 // the fabric routing tables/packet-header pool are Tensix/ERISC-only, and the realtime profiler message
-// lives in the CQ region rather than the mailbox. The remaining 1492B is the launch ring (8 * 144B) + go
+// lives in the CQ region rather than the mailbox. The remaining 1500B is the launch ring (8 * 144B) + go
 // messages + core info + sync/ready flags.
-#define MEM_DRISC_MAILBOX_SIZE 4288
+#define MEM_DRISC_MAILBOX_SIZE 4480
 #define MEM_DRISC_MAILBOX_END (MEM_DRISC_MAILBOX_BASE + MEM_DRISC_MAILBOX_SIZE)
 #define MEM_DRISC_L1_INLINE_BASE MEM_DRISC_MAILBOX_END
 #define MEM_DRISC_L1_INLINE_END (MEM_DRISC_L1_INLINE_BASE + (MEM_L1_INLINE_SIZE_PER_NOC * 2) * 2)
