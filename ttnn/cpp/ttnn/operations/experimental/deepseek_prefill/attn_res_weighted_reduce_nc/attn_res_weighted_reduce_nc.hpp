@@ -7,7 +7,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::experimental::reduction {
+namespace ttnn::operations::experimental::deepseek_prefill::attn_res_weighted_reduce_nc {
 
 // out[r][0][h][w] = sum_c input[0][c][h][w] * weight[r][c][h][0]
 //
@@ -42,4 +42,4 @@ ttnn::Tensor attn_res_weighted_reduce_nc(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 
-}  // namespace ttnn::experimental::reduction
+}  // namespace ttnn::operations::experimental::deepseek_prefill::attn_res_weighted_reduce_nc

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/reduction/attn_res_weighted_reduce_nc/device/attn_res_weighted_reduce_nc_device_operation.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_weighted_reduce_nc/device/attn_res_weighted_reduce_nc_device_operation.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>

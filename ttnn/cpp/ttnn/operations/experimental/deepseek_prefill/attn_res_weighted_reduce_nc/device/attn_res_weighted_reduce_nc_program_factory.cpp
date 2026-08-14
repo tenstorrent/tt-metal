@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/reduction/attn_res_weighted_reduce_nc/device/attn_res_weighted_reduce_nc_program_factory.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_weighted_reduce_nc/device/attn_res_weighted_reduce_nc_program_factory.hpp"
 
 #include <algorithm>
 
@@ -23,7 +23,7 @@ using namespace tt::tt_metal;
 namespace {
 
 constexpr auto kKernelDir =
-    "ttnn/cpp/ttnn/operations/experimental/reduction/attn_res_weighted_reduce_nc/device/kernels/";
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/attn_res_weighted_reduce_nc/device/kernels/";
 
 }  // namespace
 

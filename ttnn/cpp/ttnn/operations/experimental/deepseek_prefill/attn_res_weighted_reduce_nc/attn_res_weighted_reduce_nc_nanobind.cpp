@@ -12,9 +12,9 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 
-#include "ttnn/operations/experimental/reduction/attn_res_weighted_reduce_nc/attn_res_weighted_reduce_nc.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_weighted_reduce_nc/attn_res_weighted_reduce_nc.hpp"
 
-namespace ttnn::operations::experimental::reduction::detail {
+namespace ttnn::operations::experimental::deepseek_prefill::attn_res_weighted_reduce_nc::detail {
 
 void bind_attn_res_weighted_reduce_nc(nb::module_& mod) {
     ttnn::bind_function<"attn_res_weighted_reduce_nc", "ttnn.experimental.">(
@@ -45,7 +45,7 @@ void bind_attn_res_weighted_reduce_nc(nb::module_& mod) {
             this one returns R planes from one pass over the input, and the constraints
             above are its own. Reach for `fast_reduce_nc` for an ordinary reduction.
         )doc",
-        &ttnn::experimental::reduction::attn_res_weighted_reduce_nc,
+        &ttnn::operations::experimental::deepseek_prefill::attn_res_weighted_reduce_nc::attn_res_weighted_reduce_nc,
         nb::arg("input").noconvert(),
         nb::arg("weight").noconvert(),
         nb::kw_only(),
@@ -54,4 +54,4 @@ void bind_attn_res_weighted_reduce_nc(nb::module_& mod) {
         nb::arg("compute_kernel_config").noconvert() = nb::none());
 }
 
-}  // namespace ttnn::operations::experimental::reduction::detail
+}  // namespace ttnn::operations::experimental::deepseek_prefill::attn_res_weighted_reduce_nc::detail

@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/experimental/reduction/attn_res_weighted_reduce_nc/attn_res_weighted_reduce_nc.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_weighted_reduce_nc/attn_res_weighted_reduce_nc.hpp"
 
-#include "ttnn/operations/experimental/reduction/attn_res_weighted_reduce_nc/device/attn_res_weighted_reduce_nc_device_operation.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_weighted_reduce_nc/device/attn_res_weighted_reduce_nc_device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::experimental::reduction {
+namespace ttnn::operations::experimental::deepseek_prefill::attn_res_weighted_reduce_nc {
 
 ttnn::Tensor attn_res_weighted_reduce_nc(
     const ttnn::Tensor& input,
@@ -40,4 +40,4 @@ ttnn::Tensor attn_res_weighted_reduce_nc(
         input, weight, normalized_dim, memory_config.value_or(input.memory_config()), kernel_config_val);
 }
 
-}  // namespace ttnn::experimental::reduction
+}  // namespace ttnn::operations::experimental::deepseek_prefill::attn_res_weighted_reduce_nc
