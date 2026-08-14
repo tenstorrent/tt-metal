@@ -16,6 +16,8 @@
 #   RUN_NAME  stable run dir name (resume identity)
 # Optional:
 #   SEGMENT_SECONDS  training budget per segment (default 900)
+#   TT_MESH_GRAPH_DESC_PATH  REQUIRED for multi-chip meshes: auto-selection may
+#                    pick a descriptor with the wrong eth-channel count
 #   SBATCH_EXTRA     extra args for the resubmission (e.g. --partition=...)
 set -euo pipefail
 
