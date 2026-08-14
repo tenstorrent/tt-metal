@@ -130,7 +130,7 @@ The repository holds one Quasar op tree. There are no separate program directori
 | L2.5 | Quasar | [tt-metal/tt_metal/tt-llk/tt_llk_quasar/](https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/tt-llk/tt_llk_quasar) | common/inc/{experimental, sfpu, internal}, instructions/ (assembly.yaml), llk_lib/ |
 | L2.6 | Quasar | [tt_metal/hw/ckernels/quasar/metal/llk_api/](https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/hw/ckernels/quasar/metal/llk_api) | llk_sfpu |
 
-### L2.3 Quasar - expanded
+### L2.5-L2.6 Quasar - expanded
 
 | **Folder** | **Contents** |
 | --- | --- |
