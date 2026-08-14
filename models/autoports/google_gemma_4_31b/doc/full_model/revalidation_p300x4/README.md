@@ -277,9 +277,33 @@ host has 16 physical cores and no CUDA or ROCm device.
 
 ## Harness friction worth fixing
 
-`run_prefill_check` and `run_teacher_forcing` accept no `--tensor-cache`, so each
-invocation reconverts all 62 GB of weights and spends roughly 15 minutes before
-producing a number. Only `tests/run_full_model_qualitative.py` takes
-`--tensor-cache`. Stages 07-11 call the readiness runners repeatedly, so adding
-that option to `models/common/readiness_check/` would pay back quickly. Left to
-a stage agent because it is a shared-harness change outside this host move.
+`run_prefill_check` and `run_teacher_forcing` accepted no `--tensor-cache`, so
+each invocation reconverted all 62 GB of weights before producing a number. Only
+`tests/run_full_model_qualitative.py` took `--tensor-cache`.
+
+Fixed in commit `840b8301c40`: `add_build_generator_args()` /
+`build_generator_kwargs()` in `models/common/readiness_check/mesh_device.py` add
+a shared `--tensor-cache` to `run_prefill_check`, `run_teacher_forcing`, and
+`run_autoregressive`, forwarded as `tensor_cache_path`. It is strictly opt-in —
+when the flag is absent the kwarg is omitted rather than passed as `None` — so
+autoports whose `build_generator` does not accept it are unaffected.
+`qwen_qwen3_4b` would reject an unknown key, so unconditional injection was not
+safe.
+
+Measured on this host with teacher forcing:
+
+| Run | Wall time | Result |
+| --- | ---: | --- |
+| without `--tensor-cache` (warm JIT) | 932 s | TTFT 318.01 ms, decode 27.89 t/s/u |
+| with `--tensor-cache` | 680 s | TTFT 312.71 ms, decode 27.90 t/s/u |
+
+252 s saved, 27% faster, accuracy bit-identical at 0.920 / 1.000 / 1.000. The
+win is bounded because `from_pretrained` always calls `_load_checkpoint_state`,
+so the 62 GB safetensors read happens either way; only the torch-to-TTNN
+conversion and host tiling are skipped. Eliminating the read would mean skipping
+`_load_checkpoint_state` when every cache entry is present, which carries
+cache-staleness risk and is model-specific; not attempted.
+
+Full environment and troubleshooting notes for this host, including several
+failure modes that only surface after a complete weight load, are in
+`../../host_runbook_qb2_p300x2.md`.

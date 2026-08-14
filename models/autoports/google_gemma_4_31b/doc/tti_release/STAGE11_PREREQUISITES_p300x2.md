@@ -56,16 +56,26 @@ to `models.autoports.google_gemma_4_31b.tt.generator_vllm`, not
 
 ## Not prepared
 
-- **vLLM is not installed.** Neither `python_env` nor `/opt/venv` has it, so
-  `tests/test_vllm_adapter_contract.py` fails at import. Both venvs are
-  otherwise identical (torch 2.11.0+cpu, Python 3.10.19) and `ttnn` imports from
-  either. The documented procedure is
-  `source plugins/vllm-tt-plugin/docs/install-vllm-tt.sh` from the vLLM repo root
-  with the tt-metal env active, which runs
-  `VLLM_TARGET_DEVICE=empty uv pip install -e .` then installs the plugin. The
-  plugin's `pyproject.toml` states it "runs only inside a tt-metal python_env"
-  and that vLLM must be the locally built `empty` target, never the PyPI CUDA
-  wheel.
+- ~~vLLM is not installed.~~ **Done 2026-08-14.** Installed per
+  `plugins/vllm-tt-plugin/docs/install-vllm-tt.sh` into tt-metal's `python_env`:
+  `vllm 0.1.dev60+gbf98d556b.d20260814.empty`, `vllm-tt-plugin 0.0.0`,
+  `tblib 3.2.2`, with torch unchanged at 2.11.0+cpu and `ttnn` still importing.
+  26 of 27 `tests/test_vllm_adapter_contract.py` now pass; the one failure is the
+  lost plugin work below, not a defect here.
+
+  **Serving is proven end to end on this host.** The server resolves to
+  `models.autoports.google_gemma_4_31b.tt.generator_vllm` (logged by
+  `platform.py:783`), so the demos-routing trap is verified avoided by positive
+  evidence. KV pool allocates at `num_gpu_blocks_override=9740` — identical to
+  the recorded P150b value — reporting `Maximum concurrency for 113,280 tokens
+  per request: 8.62x`. Engine init took 71.66 s, and the non-aligned 149-token
+  request returns **200 PASS**, matching the recorded evidence.
+
+  Several serving failure modes surface only after a full weight load; they and
+  their fixes are recorded in `../host_runbook_qb2_p300x2.md`, including the
+  nested-`vllm` namespace-package shadowing bug, the `--served-model-name` vs
+  path 404, the enforced 113280 context contract, and the
+  `GEMMA4_31B_VLLM_HOST_SAMPLING_COMPAT` requirement for logprob checks.
 - **The nine TTI harness fixes.** Rebuildable from the recorded diagnoses in
   `autofix/*/FIX_RESULT.md` and `autofix/*/AUTODEBUG.md`. Oldest first:
   `f1a89cb4b` external autoport release specs, `6ad299582` service port for
