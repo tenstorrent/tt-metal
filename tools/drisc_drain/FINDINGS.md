@@ -4993,3 +4993,45 @@ Housekeeping: bh-26's `build_Release` was **entirely root-owned (5,038 files)** 
 which made `ninja` fail with `Error writing to build log: Permission denied`. Repaired with
 `sudo chown -R mmemarian:mmemarian build_Release`. The read-only probe earlier in this section was deliberately
 compiled to `/tmp` to avoid touching the tree before that was understood.
+
+### REJECTED: "just synchronise the DRAM and Tensix wall clocks"
+
+The obvious next idea, and it is the wrong layer. Recorded so it is not re-litigated.
+
+**Within a capture the two clocks are ALREADY in lockstep.** Both read exactly 1350.0 MHz in every probe on
+every core, and the independent per-core least-squares fits agree to ~1e-4 (worker 1.350038 GHz, the six DRISCs
+1.349902-1.350039). That bounds intra-run divergence to **~77 us over a 773 ms window** — the same order as the
+0.007-0.145 ms window-edge agreement actually measured. The counters drift apart only **while nothing is being
+timed**. Only the ORIGIN was ever wrong, and an anchor fixes an origin exactly.
+
+Four reasons not to equalise the counters:
+
+1. **It would not stay equal on bh-05.** Its Tensix clock is stopped ~91% of the time, so any equality decays at
+   ~0.9 s per idle second — 18 s of error per 32 s of idle. It would have to be re-established at every device
+   open, which is *exactly what the per-core anchor already does*, without needing write access.
+2. **That register is a SHARED timebase, and writing it corrupts every other consumer**: worker
+   `kernel_profiler`, the RT profiler, `cq_realtime_profiler`, `mem_bench`, `sync_kernel`, and the drainer FW's
+   own timing all read it. Every reference in the tree is a READ; nothing writes it. A rebase mid-flight makes
+   timestamps jump BACKWARDS and trips the invariant this system asserts on every run ("per-lane ts regressions
+   MUST be 0").
+3. **Writability is UNDOCUMENTED.** `RISCV_DEBUG_REG_WALL_CLOCK` does not appear in tt-isa-documentation at all —
+   checked `BlackholeA0/TensixTile/BabyRISCV` and `WormholeB0/TensixTile/BabyRISCV`; the tile control/debug page
+   404s. The tile debug register window `0xFFB1_2000-0xFFB1_2FFF` is documented, the counter's semantics are not.
+   So a write is an experiment on an undocumented register that other subsystems depend on.
+4. **The anchor is verified at both extremes** — bh-05 with the clocks minutes apart, bh-26 with them in lockstep
+   (duty ratio 1.0000). A sync could only ever be validated on the card that is already anomalous.
+
+**Two things the instinct gets RIGHT, kept as separate work items:**
+
+- **Device-side comparability is a genuine gap.** Raw timestamps from a DRAM core and a Tensix core are not
+  comparable outside the host's Tracy mapping, so on-device cross-core causality — a drainer reasoning about
+  worker ordering — is not currently possible. The fix for that is to co-sample and subtract a **measured**
+  offset (the shape-2 device-side rebase), not to write the counters.
+- **bh-05's ~91%-stopped Tensix clock may itself be a FAULT, not a design property.** bh-26 with byte-identical
+  firmware does not do it. If so the right remedy is a card/CMFW bug report, not a profiler change — and the
+  per-core anchor is immune either way.
+
+**The one condition that WOULD force a real sync**: a part that clock-gates one domain **mid-capture**. That
+would appear as DRISC-vs-worker zone SPAN disagreement beyond the drain tail. It did not occur in any of the five
+captures here (bh-05 x2 ResNet, bh-26 x1 synthetic, plus the two probe series) — the residual is fully accounted
+for by the tail. **Span disagreement is the trigger to revisit this decision.**
