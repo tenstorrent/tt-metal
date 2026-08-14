@@ -19,9 +19,11 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
-    constexpr uint32_t page_size_base_idx = 2;
-    constexpr auto tensor_accessor_args =
-        make_tensor_accessor_args_tuple<num_tensors, page_size_base_idx + num_tensors>();
+    // TensorAccessorArgs now begin right after num_tensors: page_size_per_tensor[] was moved out of
+    // compile-time args (it is passed as runtime args by the host to keep the binary shape-invariant).
+    // The tiled reader never used page sizes (it uses get_tile_size()), so nothing else changes here.
+    constexpr uint32_t tensor_accessor_cta_base_idx = 2;
+    constexpr auto tensor_accessor_args = make_tensor_accessor_args_tuple<num_tensors, tensor_accessor_cta_base_idx>();
 
     // ublocks size defined in tiles
     constexpr uint32_t ublock_size_tiles = 1;

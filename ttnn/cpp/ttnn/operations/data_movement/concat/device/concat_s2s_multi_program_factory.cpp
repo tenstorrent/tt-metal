@@ -118,13 +118,24 @@ tt::tt_metal::ProgramDescriptor ConcatS2SMultiProgramFactory::create_descriptor(
     });
 
     const uint32_t output_stride = page_size * output_num_pages_per_stick;
-    const KernelDescriptor::CompileTimeArgs compile_time_args = {
-        cb_dst_id, page_size, output_stride, num_input_tensors};
+    // Only cb_dst_id stays compile-time. page_size, output_stride and num_input_tensors are
+    // shape-derived (NoC transfer size, output stick stride, concat arity) and were forcing a
+    // per-resolution recompile / disk-cache miss for VAE concat. They are moved to the head of the
+    // per-core runtime args (read first by the kernel). num_input_tensors is only a loop bound in the
+    // kernel (no L1 array sizing), so this is safe.
+    const KernelDescriptor::CompileTimeArgs compile_time_args = {cb_dst_id};
 
     std::vector<uint32_t> runtime_args_0;
     std::vector<uint32_t> runtime_args_1;
-    runtime_args_0.reserve(num_input_tensors * 4);
-    runtime_args_1.reserve(num_input_tensors * 4);
+    runtime_args_0.reserve(3 + num_input_tensors * 4);
+    runtime_args_1.reserve(3 + num_input_tensors * 4);
+    // Runtime-arg head (shared layout for both RISCs): page_size, output_stride, num_input_tensors.
+    runtime_args_0.push_back(page_size);
+    runtime_args_0.push_back(output_stride);
+    runtime_args_0.push_back(num_input_tensors);
+    runtime_args_1.push_back(page_size);
+    runtime_args_1.push_back(output_stride);
+    runtime_args_1.push_back(num_input_tensors);
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
         const auto input_num_sticks_per_risc = tt::div_up(input_num_sticks[input_id], 2);
         runtime_args_0.push_back(input_num_pages_per_stick[input_id]);

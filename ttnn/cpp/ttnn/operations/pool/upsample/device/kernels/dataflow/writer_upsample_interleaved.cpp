@@ -18,24 +18,26 @@ void kernel_main() {
     */
     uint32_t num_blocks_to_read = get_arg_val<uint32_t>(1);
     uint32_t start_block_id = get_arg_val<uint32_t>(2);
+    // output_page_size (NoC write size) and output height/width are shape-derived, passed as
+    // runtime args to keep the binary resolution-invariant.
+    uint32_t output_page_size = get_arg_val<uint32_t>(3);
+    uint32_t height = get_arg_val<uint32_t>(4);
+    uint32_t width = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t scale_h = get_compile_time_arg_val(2);
-    constexpr uint32_t scale_w = get_compile_time_arg_val(3);
-    constexpr uint32_t height = get_compile_time_arg_val(4);
-    constexpr uint32_t width = get_compile_time_arg_val(5);
-    constexpr uint32_t block_height = get_compile_time_arg_val(6);
-    constexpr uint32_t num_tiles_per_block_row = get_compile_time_arg_val(7);
+    constexpr uint32_t scale_h = get_compile_time_arg_val(1);
+    constexpr uint32_t scale_w = get_compile_time_arg_val(2);
+    constexpr uint32_t block_height = get_compile_time_arg_val(3);
+    constexpr uint32_t num_tiles_per_block_row = get_compile_time_arg_val(4);
 
-    constexpr auto dst_args = TensorAccessorArgs<8>();
+    constexpr auto dst_args = TensorAccessorArgs<5>();
     const auto s0 = TensorAccessor(dst_args, dst_addr);
 
     DataflowBuffer out_dfb(cb_id_out0);
     Noc noc;
 
-    constexpr uint32_t in_width = width / scale_w;
-    constexpr uint32_t in_height = height / scale_h;
+    const uint32_t in_width = width / scale_w;
+    const uint32_t in_height = height / scale_h;
     uint32_t end_block_id = start_block_id + num_blocks_to_read;
     // reader copied the data from DRAM to CB buffer.
     // writer copy the data from CB buffer to DRAM.

@@ -20,46 +20,43 @@ using ttnn::ccl::Topology;
 #endif
 
 void kernel_main() {
-    constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t padded_M_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t K_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t N_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(7);
-    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(9);
-    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(10);
-    constexpr uint32_t in1_tile_size = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
-    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(13);
-    constexpr uint32_t is_output_writer = get_compile_time_arg_val(14);
-    constexpr uint32_t is_injector_core = get_compile_time_arg_val(15);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(16);
-    constexpr uint32_t my_rank = get_compile_time_arg_val(17);
-    constexpr uint32_t N_chunks = get_compile_time_arg_val(18);
-    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(19);
-    constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(20));
+    // NOTE: M_tiles, padded_M_tiles, N_tiles, padded_N_tiles, M_blocks_per_core, N_blocks_per_core
+    // were moved to runtime args (read below) so this kernel binary is shape (M/N) invariant and
+    // hits the disk program cache across different problem sizes.
+    constexpr uint32_t K_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t in1_tile_size = get_compile_time_arg_val(5);
+    constexpr uint32_t out_tile_size = get_compile_time_arg_val(6);
+    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(7);
+    constexpr uint32_t is_output_writer = get_compile_time_arg_val(8);
+    constexpr uint32_t is_injector_core = get_compile_time_arg_val(9);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(10);
+    constexpr uint32_t my_rank = get_compile_time_arg_val(11);
+    constexpr uint32_t N_chunks = get_compile_time_arg_val(12);
+    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(13);
+    constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(14));
     constexpr bool is_linear = (topology == Topology::Linear);
-    constexpr uint32_t K_tiles_per_device = get_compile_time_arg_val(21);
-    constexpr uint32_t K_block_tail_tiles = get_compile_time_arg_val(22);
+    constexpr uint32_t K_tiles_per_device = get_compile_time_arg_val(15);
+    constexpr uint32_t K_block_tail_tiles = get_compile_time_arg_val(16);
 
 #ifdef FSDP_FUSED
-    // FSDP CT args follow target's base args (topology=20, K_tiles_per_device=21, K_block_tail_tiles=22).
-    constexpr uint32_t fsdp_ring_size = get_compile_time_arg_val(23);
-    constexpr uint32_t fsdp_ring_index = get_compile_time_arg_val(24);
-    constexpr uint32_t fsdp_num_targets_forward = get_compile_time_arg_val(25);
-    constexpr uint32_t fsdp_num_targets_backward = get_compile_time_arg_val(26);
-    constexpr Topology fsdp_topology = static_cast<Topology>(get_compile_time_arg_val(27));
+    // FSDP CT args follow target's base args (topology=14, K_tiles_per_device=15, K_block_tail_tiles=16).
+    constexpr uint32_t fsdp_ring_size = get_compile_time_arg_val(17);
+    constexpr uint32_t fsdp_ring_index = get_compile_time_arg_val(18);
+    constexpr uint32_t fsdp_num_targets_forward = get_compile_time_arg_val(19);
+    constexpr uint32_t fsdp_num_targets_backward = get_compile_time_arg_val(20);
+    constexpr Topology fsdp_topology = static_cast<Topology>(get_compile_time_arg_val(21));
 
-    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(28);
-    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(29);
-    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(30);
-    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(31);
-    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(32);
+    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(22);
+    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(23);
+    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(24);
+    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(25);
+    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(26);
 
-    constexpr uint32_t fsdp_mux_arg_count = 33;
+    constexpr uint32_t fsdp_mux_arg_count = 27;
 
     constexpr ccl_routing_utils::line_unicast_route_info_t fsdp_unicast_route_info_forward =
         ccl_routing_utils::get_line_unicast_route_info_from_args<fsdp_mux_arg_count>();
@@ -69,7 +66,7 @@ void kernel_main() {
 
     constexpr uint32_t ct_arg_count = fsdp_mux_arg_count + 2 * ccl_routing_utils::num_line_unicast_args;
 #else
-    constexpr uint32_t ct_arg_count = 23;
+    constexpr uint32_t ct_arg_count = 17;
 #endif
 
     // Load common runtime args (same for all cores, updated in override_runtime_arguments)
@@ -112,6 +109,13 @@ void kernel_main() {
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
+    // Shape-derived args moved from compile-time to runtime (must match factory append order).
+    const uint32_t M_tiles = get_arg_val<uint32_t>(argidx++);
+    const uint32_t padded_M_tiles = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_tiles = get_arg_val<uint32_t>(argidx++);
+    const uint32_t padded_N_tiles = get_arg_val<uint32_t>(argidx++);
+    const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_blocks_per_core = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FSDP_FUSED
     const uint32_t my_virtual_x = get_arg_val<uint32_t>(argidx++);
@@ -226,7 +230,7 @@ void kernel_main() {
     constexpr uint32_t fsdp_K_local_start_tile = fsdp_ring_index * K_blocks_per_fsdp * K_block_tiles;
     constexpr uint32_t fsdp_K_local_end_tile = (fsdp_ring_index + 1) * K_blocks_per_fsdp * K_block_tiles;
     // PWB N width in tiles — per-device N. PWB shape is [K_full, N_local] with N_local = N_tiles.
-    constexpr uint32_t pwb_N_Wt = N_tiles;
+    const uint32_t pwb_N_Wt = N_tiles;  // N_tiles is now a runtime arg, so this cannot be constexpr.
 
     // Mux connection setup. Each fabric-sender core only parses + connects the single direction
     // it actually uses; the program factory pushes RT args for exactly one direction per sender.

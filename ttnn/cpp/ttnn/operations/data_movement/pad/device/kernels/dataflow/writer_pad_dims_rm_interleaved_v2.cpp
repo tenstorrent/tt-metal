@@ -10,17 +10,19 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
+    // Shape-derived scalars are runtime so the compiled binary is shape-invariant
+    // and disk-cache-hits across VAE spatial resolutions.
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t num_sticks_per_core = get_arg_val<uint32_t>(1);
     uint32_t num_sticks_per_barrier = get_arg_val<uint32_t>(2);
     uint32_t start_page_id = get_arg_val<uint32_t>(3);
+    uint32_t stick_size_bytes = get_arg_val<uint32_t>(4);
+    uint32_t stick_size_padded_aligned = get_arg_val<uint32_t>(5);
+    uint32_t accessor_page_size = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t dfb_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(2);
-    constexpr uint32_t num_output_pages_in_row = get_compile_time_arg_val(3);
-    constexpr uint32_t accessor_page_size = get_compile_time_arg_val(4);
-    constexpr auto dst_args = TensorAccessorArgs<5>();
+    constexpr uint32_t num_output_pages_in_row = get_compile_time_arg_val(1);
+    constexpr auto dst_args = TensorAccessorArgs<2>();
 
     const auto s = TensorAccessor(dst_args, dst_addr, accessor_page_size);
     Noc noc;

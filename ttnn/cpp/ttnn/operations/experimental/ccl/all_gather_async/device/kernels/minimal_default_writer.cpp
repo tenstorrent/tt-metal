@@ -37,26 +37,20 @@ constexpr uint32_t page_size = get_compile_time_arg_val(4);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(5);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(6);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(7));
-constexpr uint32_t gather_dim = get_compile_time_arg_val(8);
-constexpr uint32_t input_batch_head_count = get_compile_time_arg_val(9);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(10);
-constexpr uint32_t input_tensor_Ht = get_compile_time_arg_val(11);
-constexpr uint32_t input_tensor_C = get_compile_time_arg_val(12);
-constexpr uint32_t output_tensor_Wt = get_compile_time_arg_val(13);
-constexpr uint32_t output_tensor_Ht = get_compile_time_arg_val(14);
-constexpr uint32_t output_tensor_C = get_compile_time_arg_val(15);
-constexpr bool fuse_op = get_compile_time_arg_val(16);
-constexpr uint32_t reverse = get_compile_time_arg_val(17) == 1;
-constexpr uint32_t barrier_target_count = get_compile_time_arg_val(18);
+// Shape-derived values (gather_dim, batch_head_count, input/output Wt/Ht/C) are passed as runtime
+// args below so the compiled binary is shape-invariant (avoids per-resolution recompilation).
+constexpr bool fuse_op = get_compile_time_arg_val(8);
+constexpr uint32_t reverse = get_compile_time_arg_val(9) == 1;
+constexpr uint32_t barrier_target_count = get_compile_time_arg_val(10);
 #ifdef USE_WORKER_MUX
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(19);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(20);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(21);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(22);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(23);
-constexpr uint32_t rt_arg_count = 24;
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(11);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(12);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(13);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(14);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(15);
+constexpr uint32_t rt_arg_count = 16;
 #else
-constexpr uint32_t rt_arg_count = 19;
+constexpr uint32_t rt_arg_count = 11;
 #endif
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
@@ -123,6 +117,15 @@ void kernel_main() {
     const auto start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const auto start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     const auto chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
+    // Shape-derived runtime args (moved from compile-time idx 8-15 to keep the binary shape-invariant)
+    const auto gather_dim = get_arg_val<uint32_t>(arg_idx++);
+    const auto input_batch_head_count = get_arg_val<uint32_t>(arg_idx++);
+    const auto input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
+    const auto input_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
+    const auto input_tensor_C = get_arg_val<uint32_t>(arg_idx++);
+    const auto output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
+    const auto output_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
+    const auto output_tensor_C = get_arg_val<uint32_t>(arg_idx++);
 #ifdef USE_WORKER_MUX
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
@@ -305,11 +308,11 @@ void kernel_main() {
     }
 
     uint32_t tile_id_start;
-    if constexpr (gather_dim == 3) {
+    if (gather_dim == 3) {
         tile_id_start = position * input_tensor_Wt;
-    } else if constexpr (gather_dim == 2) {
+    } else if (gather_dim == 2) {
         tile_id_start = position * input_tensor_Ht * input_tensor_Wt;
-    } else if constexpr (gather_dim == 1) {
+    } else if (gather_dim == 1) {
         tile_id_start = position * input_tensor_C * input_tensor_Ht * input_tensor_Wt;
     } else {
         tile_id_start = position * input_batch_head_count * input_tensor_Ht * input_tensor_Wt;
@@ -559,11 +562,11 @@ void kernel_main() {
                 }
             }
         }
-        if constexpr (gather_dim == 3) {
+        if (gather_dim == 3) {
             tile_id_start = actual_slice_chip_id * input_tensor_Wt;
-        } else if constexpr (gather_dim == 2) {
+        } else if (gather_dim == 2) {
             tile_id_start = actual_slice_chip_id * input_tensor_Ht * input_tensor_Wt;
-        } else if constexpr (gather_dim == 1) {
+        } else if (gather_dim == 1) {
             tile_id_start = actual_slice_chip_id * input_tensor_C * input_tensor_Ht * input_tensor_Wt;
         } else {
             tile_id_start = actual_slice_chip_id * input_batch_head_count * input_tensor_Ht * input_tensor_Wt;

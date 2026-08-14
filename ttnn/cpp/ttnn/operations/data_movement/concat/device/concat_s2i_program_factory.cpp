@@ -46,8 +46,15 @@ tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
         });
     }
 
+    // Reader: its only compile-time arg is num_input_tensors (concat arity), which is shape-invariant
+    // and therefore never drives a per-resolution recompile. (Also note the referenced reader kernel
+    // reader_s2i_width.cpp is not present in this tree; the reader path is left untouched.)
     KernelDescriptor::CompileTimeArgs reader_compile_time_args = {num_input_tensors};
-    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {num_input_tensors, input_unit_size};
+    // Writer: input_unit_size is the shard stick size (shard_width * element_size) and is the actual
+    // per-resolution churn driver for VAE concat; num_input_tensors is only a loop bound in the kernel.
+    // Both are moved to runtime args so the writer binary is shape-invariant (disk-cache hit across
+    // resolutions). Only TensorAccessorArgs remain compile-time, now starting at index 0.
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {};
     TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     KernelDescriptor reader_desc;
@@ -79,12 +86,15 @@ tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
         std::vector<uint32_t> reader_runtime_args;
         reader_runtime_args.reserve(num_input_tensors * 2);
         KernelDescriptor::RTArgList writer_runtime_args;
-        writer_runtime_args.reserve(5 + num_input_tensors);
+        writer_runtime_args.reserve(7 + num_input_tensors);
         writer_runtime_args.push_back(output.buffer());
         writer_runtime_args.push_back(core_id);
         writer_runtime_args.push_back(curr_num_output_rows);
         writer_runtime_args.push_back(num_input_tensors * input_shard_spec.shape[0]);
         writer_runtime_args.push_back(input_shard_spec.shape[0]);
+        // num_input_tensors and input_unit_size (stick_size) moved from compile-time to runtime.
+        writer_runtime_args.push_back(num_input_tensors);
+        writer_runtime_args.push_back(input_unit_size);
         for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
             reader_runtime_args.push_back(input_id);
             reader_runtime_args.push_back(input_shard_spec.shape[0]);

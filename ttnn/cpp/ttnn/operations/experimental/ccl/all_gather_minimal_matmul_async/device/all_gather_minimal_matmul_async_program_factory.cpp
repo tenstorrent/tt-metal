@@ -780,18 +780,15 @@ all_gather_minimal_matmul_async_factory_helper(
     bool in0_is_output_writer = transpose_core_grid;
     bool in1_is_output_writer = !transpose_core_grid;
 
+    // NOTE: M_tiles, padded_M_tiles, N_tiles, padded_N_tiles, M_blocks_per_core, N_blocks_per_core
+    // are passed as RUNTIME args (appended to in0_args below) so the kernel binary is shape (M/N)
+    // invariant and hits the disk program cache. Keep in sync with dm_in0_sender.cpp.
     std::vector<uint32_t> in0_sender_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
         K_tiles,
         padded_K_tiles,
-        N_tiles,
-        padded_N_tiles,
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
         in0_tile_size,
         out_tile_size,
         in2_tile_size,
@@ -829,17 +826,11 @@ all_gather_minimal_matmul_async_factory_helper(
             .defines = in0_defines});
 
     std::vector<uint32_t> in0_receiver_no_fabric_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
         K_tiles,
         padded_K_tiles,
-        N_tiles,
-        padded_N_tiles,
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
         in0_tile_size,
         out_tile_size,
         in2_tile_size,
@@ -878,17 +869,11 @@ all_gather_minimal_matmul_async_factory_helper(
             .defines = in0_defines});
 
     std::vector<uint32_t> in0_receiver_fabric_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
         K_tiles,
         padded_K_tiles,
-        N_tiles,
-        padded_N_tiles,
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
         in0_tile_size,
         out_tile_size,
         in2_tile_size,
@@ -944,18 +929,15 @@ all_gather_minimal_matmul_async_factory_helper(
         fsdp_fused ? std::optional<const ttnn::Tensor>{weight_tensor} : std::nullopt;
 
     auto build_in1_ct_args = [&](bool is_injector) {
+        // NOTE: M_tiles, padded_M_tiles, N_tiles, padded_N_tiles, M_blocks_per_core, N_blocks_per_core
+        // are passed as RUNTIME args (appended to in1_args below) so the kernel binary is shape (M/N)
+        // invariant and hits the disk program cache. Keep in sync with dm_in1_sender_out.cpp.
         std::vector<uint32_t> ct = {
-            M_tiles,
-            padded_M_tiles,
             K_tiles,
             padded_K_tiles,
-            N_tiles,
-            padded_N_tiles,
             M_block_tiles,
             K_block_tiles,
             N_block_tiles,
-            M_blocks_per_core,
-            N_blocks_per_core,
             in1_tile_size,
             out_tile_size,
             in2_tile_size,
@@ -1021,15 +1003,10 @@ all_gather_minimal_matmul_async_factory_helper(
             .compile_args = in1_receiver_compile_time_args,
             .defines = in1_defines});
 
+    // M_blocks_per_core, N_blocks_per_core are passed as RUNTIME args (appended to
+    // compute_runtime_args below) so the compute binary is shape (M/N) invariant.
     std::vector<uint32_t> compute_compile_time_args = {
-        K_blocks,
-        M_block_tiles,
-        K_block_tiles,
-        N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
-        subblock_h,
-        subblock_w};
+        K_blocks, M_block_tiles, K_block_tiles, N_block_tiles, subblock_h, subblock_w};
 
     auto compute_defines = defines;
     if (topology == ttnn::ccl::Topology::Linear) {
@@ -1267,7 +1244,14 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_injector_virtual_core.x,
             in0_injector_virtual_core.y,
             in0_core_order_index,
-            in0_core_order.size()};
+            in0_core_order.size(),
+            // Shape-derived args moved from compile-time to runtime (must match dm_in0_sender.cpp read order).
+            M_tiles,
+            padded_M_tiles,
+            N_tiles,
+            padded_N_tiles,
+            M_blocks_per_core,
+            N_blocks_per_core};
         if (in0_core_order_index > (in0_core_order.size() - 3)) {
             uint32_t worker_idx = in0_idx % num_workers_per_link;
             auto last_in0_core = in0_core_order.back();
@@ -1360,6 +1344,13 @@ all_gather_minimal_matmul_async_factory_helper(
             N_start_tile,
             N_end_tile,
             defer_write_k_block,
+            // Shape-derived args moved from compile-time to runtime (must match dm_in1_sender_out.cpp read order).
+            M_tiles,
+            padded_M_tiles,
+            N_tiles,
+            padded_N_tiles,
+            M_blocks_per_core,
+            N_blocks_per_core,
         };
         // FSDP fabric senders are the in1 chain tail — the last two cores of in1_core_order, one per
         // direction (size-2 backward, size-1 forward). For a transpose grid the in1 chain runs along
@@ -1509,6 +1500,9 @@ all_gather_minimal_matmul_async_factory_helper(
             M_end_tile,
             N_start_tile,
             N_end_tile,
+            // Shape-derived args moved from compile-time to runtime (must match compute.cpp read order).
+            M_blocks_per_core,
+            N_blocks_per_core,
         };
         SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
     }

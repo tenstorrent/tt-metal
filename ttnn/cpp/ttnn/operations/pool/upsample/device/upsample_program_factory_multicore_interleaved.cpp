@@ -132,9 +132,11 @@ ProgramDescriptor UpsampleMultiCoreInterleavedProgramFactory::create_descriptor(
     auto* const src_buffer = input.buffer();
     auto* const dst_buffer = output.buffer();
 
+    // NOTE: aligned_input_unit_size (NoC read size) is shape-derived, so it is passed as a
+    // runtime arg (below) rather than a compile-time arg to keep the kernel binary
+    // resolution-invariant (disk-cache hit across VAE resolutions at a fixed scale factor).
     KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
         src0_cb_index,
-        aligned_input_unit_size,
     };
     TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
@@ -147,16 +149,17 @@ ProgramDescriptor UpsampleMultiCoreInterleavedProgramFactory::create_descriptor(
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
     reader_desc.config = ReaderConfigDescriptor{};
 
-    // Writer compile time arguments
-    const int32_t writer_unit_size = output.padded_shape()[-1] * output.element_size();
+    // Writer compile time arguments.
+    // NOTE: writer_unit_size (NoC write size) and output height/width are shape-derived, so they
+    // are passed as runtime args (below) rather than compile-time args to keep the kernel binary
+    // resolution-invariant (disk-cache hit across VAE resolutions at a fixed scale factor).
+    // scale_factor_h/w stay compile-time: they are the SCALE (fixed per scale factor), not the resolution.
+    const uint32_t writer_unit_size = static_cast<uint32_t>(output.padded_shape()[-1] * output.element_size());
 
     KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
         output_cb_index,
-        static_cast<uint32_t>(writer_unit_size),
         scale_factor_h,
         scale_factor_w,
-        output_shape[1],
-        output_shape[2],
     };
 
     if (is_tiled_layout) {
@@ -250,6 +253,7 @@ ProgramDescriptor UpsampleMultiCoreInterleavedProgramFactory::create_descriptor(
                 src_buffer,
                 reader_units,
                 reader_start,
+                aligned_input_unit_size,  // NoC read size (moved from compile-time)
             });
         writer_desc.emplace_runtime_args(
             core,
@@ -257,6 +261,9 @@ ProgramDescriptor UpsampleMultiCoreInterleavedProgramFactory::create_descriptor(
                 dst_buffer,
                 blocks_per_core,
                 blocks_processed,
+                writer_unit_size,                        // NoC write size (moved from compile-time)
+                static_cast<uint32_t>(output_shape[1]),  // output height (moved from compile-time)
+                static_cast<uint32_t>(output_shape[2]),  // output width (moved from compile-time)
             });
 
         blocks_processed += blocks_per_core;

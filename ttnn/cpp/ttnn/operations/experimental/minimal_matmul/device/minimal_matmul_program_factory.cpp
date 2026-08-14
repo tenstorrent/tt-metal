@@ -475,18 +475,15 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     bool in0_is_output_writer = !transpose_core_grid;
     bool in1_is_output_writer = transpose_core_grid;
 
+    // NOTE: M_tiles, padded_M_tiles, N_tiles, padded_N_tiles, M_blocks_per_core, N_blocks_per_core
+    // are passed as RUNTIME args (appended to in0_args below) so the kernel binary is shape (M/N)
+    // invariant and hits the disk program cache. Keep this list in sync with dm_in0_sender.cpp.
     std::vector<uint32_t> in0_sender_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
         K_tiles,
         padded_K_tiles,
-        N_tiles,
-        padded_N_tiles,
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
         in0_tile_size,
         out_tile_size,
         in2_tile_size,
@@ -518,17 +515,11 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             .defines = (fuse_op && fused_op_signaler->read_local_slice_from_input) ? in0_injector_defines : defines});
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
         K_tiles,
         padded_K_tiles,
-        N_tiles,
-        padded_N_tiles,
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
         in0_tile_size,
         out_tile_size,
         in2_tile_size,
@@ -558,17 +549,11 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             .processor = in0_risc, .noc = in0_noc, .compile_args = in0_receiver_compile_time_args, .defines = defines});
 
     std::vector<uint32_t> in1_sender_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
         K_tiles,
         padded_K_tiles,
-        N_tiles,
-        padded_N_tiles,
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
         in1_tile_size,
         out_tile_size,
         in2_tile_size,
@@ -597,17 +582,11 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             .processor = in1_risc, .noc = in1_noc, .compile_args = in1_sender_compile_time_args, .defines = defines});
 
     std::vector<uint32_t> in1_receiver_compile_time_args = {
-        M_tiles,
-        padded_M_tiles,
         K_tiles,
         padded_K_tiles,
-        N_tiles,
-        padded_N_tiles,
         M_block_tiles,
         K_block_tiles,
         N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
         in1_tile_size,
         out_tile_size,
         in2_tile_size,
@@ -635,15 +614,10 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
         tt::tt_metal::DataMovementConfig{
             .processor = in1_risc, .noc = in1_noc, .compile_args = in1_receiver_compile_time_args, .defines = defines});
 
+    // M_blocks_per_core, N_blocks_per_core are passed as RUNTIME args (appended to
+    // compute_runtime_args below) so the compute binary is shape (M/N) invariant.
     std::vector<uint32_t> compute_compile_time_args = {
-        K_blocks,
-        M_block_tiles,
-        K_block_tiles,
-        N_block_tiles,
-        M_blocks_per_core,
-        N_blocks_per_core,
-        subblock_h,
-        subblock_w};
+        K_blocks, M_block_tiles, K_block_tiles, N_block_tiles, subblock_h, subblock_w};
 
     auto compute_defines = defines;
     std::map<std::string, std::string> compute_activation_defines;
@@ -758,6 +732,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_end_tile,
             defer_write_k_block,
             max_defer_write_k_block,
+            // Shape-derived args moved from compile-time to runtime (must match dm_in0_sender.cpp read order).
+            M_tiles,
+            padded_M_tiles,
+            N_tiles,
+            padded_N_tiles,
+            M_blocks_per_core,
+            N_blocks_per_core,
         };
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
@@ -811,6 +792,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             N_end_tile,
             defer_write_k_block,
             max_defer_write_k_block,
+            // Shape-derived args moved from compile-time to runtime (must match dm_in1_sender_out.cpp read order).
+            M_tiles,
+            padded_M_tiles,
+            N_tiles,
+            padded_N_tiles,
+            M_blocks_per_core,
+            N_blocks_per_core,
         };
         // Add ternary addresses if present (after defer_write_k_block, before output addresses)
         if (use_fused_ternary) {
@@ -855,6 +843,9 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
             M_end_tile,
             N_start_tile,
             N_end_tile,
+            // Shape-derived args moved from compile-time to runtime (must match compute.cpp read order).
+            M_blocks_per_core,
+            N_blocks_per_core,
         };
         if (use_fused_ternary) {
             compute_runtime_args.push_back(*reinterpret_cast<const uint32_t*>(&fused_ternary_scalar.value()));

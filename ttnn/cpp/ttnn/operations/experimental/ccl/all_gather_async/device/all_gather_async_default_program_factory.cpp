@@ -540,6 +540,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         mux_base_l1_address);
 
     // Create Reader Kernels
+    // Shape-derived args (gather_dim, batch_head_count, input/output Wt/Ht/C) are passed as runtime
+    // args (see reader_rt_args below) so the compiled binary is shape-invariant across resolutions.
     std::vector<uint32_t> sender_reader_compile_args = {
         ring_size,                        // ring_size
         ring_index,                       // my_chip_id
@@ -549,14 +551,6 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         num_targets_forward,              // num_slices_forward_direction
         num_targets_backward,             // num_slices_backward_direction
         static_cast<uint32_t>(topology),  // topology
-        normalized_dim,                   // gather_dim
-        batch_head_size,                  // input_batch_head_count (product of the first two dims)
-        input_tensor_Wt,                  // input_tensor_Wt
-        input_tensor_Ht,                  // input_tensor_Ht
-        input_tensor_C,                   // input_tensor_C
-        output_tensor_Wt,                 // output_tensor_Wt
-        output_tensor_Ht,                 // output_tensor_Ht
-        output_tensor_C,                  // output_tensor_C
         fuse_op,                          // fuse_op
         reverse_order,                    // reverse
     };
@@ -578,6 +572,8 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
 
     // Create Writer kernels
+    // Shape-derived args (gather_dim, batch_head_count, input/output Wt/Ht/C) are passed as runtime
+    // args (see writer_rt_args below) so the compiled binary is shape-invariant across resolutions.
     std::vector<uint32_t> sender_writer_compile_args = {
         ring_size,                        // ring_size
         ring_index,                       // my_chip_id
@@ -587,14 +583,6 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
         num_targets_forward,              // num_targets_forward_direction
         num_targets_backward,             // num_targets_backward_direction
         static_cast<uint32_t>(topology),  // topology
-        normalized_dim,                   // gather_dim
-        batch_head_size,                  // input_batch_head_count (product of the first two dims)
-        input_tensor_Wt,                  // input_tensor_Wt
-        input_tensor_Ht,                  // input_tensor_Ht
-        input_tensor_C,                   // input_tensor_C
-        output_tensor_Wt,                 // output_tensor_Wt
-        output_tensor_Ht,                 // output_tensor_Ht
-        output_tensor_C,                  // output_tensor_C
         fuse_op,                          // fuse_op
         reverse_order,                    // reverse
         use_fabric_2d_neighbor_barrier ? static_cast<uint32_t>((num_targets_forward != 0) + (num_targets_backward != 0))
@@ -716,6 +704,14 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     start_pages_read_in_row,            // start_pages_read_in_row RT ARG
                     start_row_offset,                   // start_row_offset RT ARG
                     chunks_per_sync_val,                // chunks_per_sync RT ARG
+                    normalized_dim,                     // gather_dim RT ARG (moved from compile-time)
+                    batch_head_size,                    // input_batch_head_count RT ARG (moved from compile-time)
+                    input_tensor_Wt,                    // input_tensor_Wt RT ARG (moved from compile-time)
+                    input_tensor_Ht,                    // input_tensor_Ht RT ARG (moved from compile-time)
+                    input_tensor_C,                     // input_tensor_C RT ARG (moved from compile-time)
+                    output_tensor_Wt,                   // output_tensor_Wt RT ARG (moved from compile-time)
+                    output_tensor_Ht,                   // output_tensor_Ht RT ARG (moved from compile-time)
+                    output_tensor_C,                    // output_tensor_C RT ARG (moved from compile-time)
                 };
                 if (input_is_sharded) {
                     shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
@@ -760,7 +756,15 @@ AllGatherProgramArtifacts build_all_gather_async_minimal_default_program_artifac
                     input_tile_id_end,        // input_tile_id_end
                     start_pages_read_in_row,  // start_pages_read_in_row
                     start_row_offset,         // start_row_offset
-                    chunks_per_sync_val};     // chunks_per_sync
+                    chunks_per_sync_val,      // chunks_per_sync
+                    normalized_dim,           // gather_dim RT ARG (moved from compile-time)
+                    batch_head_size,          // input_batch_head_count RT ARG (moved from compile-time)
+                    input_tensor_Wt,          // input_tensor_Wt RT ARG (moved from compile-time)
+                    input_tensor_Ht,          // input_tensor_Ht RT ARG (moved from compile-time)
+                    input_tensor_C,           // input_tensor_C RT ARG (moved from compile-time)
+                    output_tensor_Wt,         // output_tensor_Wt RT ARG (moved from compile-time)
+                    output_tensor_Ht,         // output_tensor_Ht RT ARG (moved from compile-time)
+                    output_tensor_C};         // output_tensor_C RT ARG (moved from compile-time)
 
                 if (num_mux_cores_per_direction_per_link) {
                     ccl::fabric_mux_connection_rt_args(

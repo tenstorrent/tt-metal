@@ -9,17 +9,19 @@
 #include "api/tensor/noc_traits.h"
 
 void kernel_main() {
-    constexpr uint32_t num_tensors = get_compile_time_arg_val(0);
-    constexpr uint32_t stick_size = get_compile_time_arg_val(1);
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+    // num_tensors and stick_size moved from compile-time to runtime args (shape-invariant binary).
+    // Only the output TensorAccessorArgs remain compile-time, now starting at index 0.
+    constexpr auto dst_args = TensorAccessorArgs<0>();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
     const uint32_t num_pages_per_core = get_arg_val<uint32_t>(2);
     const uint32_t num_tensors_times_rows_per_shard = get_arg_val<uint32_t>(3);
     const uint32_t num_pages_per_tensor = get_arg_val<uint32_t>(4);
+    const uint32_t num_tensors = get_arg_val<uint32_t>(5);
+    const uint32_t stick_size = get_arg_val<uint32_t>(6);
 
-    uint32_t arg_index = 5;
+    uint32_t arg_index = 7;
 
     const auto s = TensorAccessor(dst_args, dst_addr);
     Noc noc;

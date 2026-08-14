@@ -400,16 +400,19 @@ void kernel_main() {
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(4);
-    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
-    constexpr uint32_t subblock_h = get_compile_time_arg_val(6);
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(7);
+    // M_blocks_per_core, N_blocks_per_core moved to runtime args (read below) so this binary is
+    // shape (M/N) invariant and hits the disk program cache across different problem sizes.
+    constexpr uint32_t subblock_h = get_compile_time_arg_val(4);
+    constexpr uint32_t subblock_w = get_compile_time_arg_val(5);
 
     uint32_t argidx = 0;
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
+    // Shape-derived args moved from compile-time to runtime (must match factory append order).
+    const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_blocks_per_core = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FUSE_TERNARY
     const uint32_t fused_ternary_scalar_uint = get_common_arg_val<uint32_t>(0);

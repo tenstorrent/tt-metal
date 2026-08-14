@@ -21,43 +21,40 @@ using ttnn::ccl::Topology;
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
-constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
-constexpr uint32_t padded_M_tiles = get_compile_time_arg_val(1);
-constexpr uint32_t K_tiles = get_compile_time_arg_val(2);
-constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(3);
-constexpr uint32_t N_tiles = get_compile_time_arg_val(4);
-constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(5);
-constexpr uint32_t M_block_tiles = get_compile_time_arg_val(6);
-constexpr uint32_t K_block_tiles = get_compile_time_arg_val(7);
-constexpr uint32_t N_block_tiles = get_compile_time_arg_val(8);
-constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(9);
-constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(10);
-constexpr uint32_t in0_tile_size = get_compile_time_arg_val(11);
-constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
-constexpr uint32_t in2_tile_size = get_compile_time_arg_val(13);
-constexpr uint32_t is_output_writer = get_compile_time_arg_val(14);
-constexpr uint32_t is_injector_core = get_compile_time_arg_val(15);
-constexpr uint32_t num_devices = get_compile_time_arg_val(16);
-constexpr uint32_t my_rank = get_compile_time_arg_val(17);
-constexpr uint32_t in3_tile_size = get_compile_time_arg_val(18);
-constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(19);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(20);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(21);
-constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(22));
+// NOTE: M_tiles, padded_M_tiles, N_tiles, padded_N_tiles, M_blocks_per_core, N_blocks_per_core
+// were moved to runtime args (read inside kernel_main) so this kernel binary is shape (M/N)
+// invariant and hits the disk program cache across different problem sizes.
+constexpr uint32_t K_tiles = get_compile_time_arg_val(0);
+constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(1);
+constexpr uint32_t M_block_tiles = get_compile_time_arg_val(2);
+constexpr uint32_t K_block_tiles = get_compile_time_arg_val(3);
+constexpr uint32_t N_block_tiles = get_compile_time_arg_val(4);
+constexpr uint32_t in0_tile_size = get_compile_time_arg_val(5);
+constexpr uint32_t out_tile_size = get_compile_time_arg_val(6);
+constexpr uint32_t in2_tile_size = get_compile_time_arg_val(7);
+constexpr uint32_t is_output_writer = get_compile_time_arg_val(8);
+constexpr uint32_t is_injector_core = get_compile_time_arg_val(9);
+constexpr uint32_t num_devices = get_compile_time_arg_val(10);
+constexpr uint32_t my_rank = get_compile_time_arg_val(11);
+constexpr uint32_t in3_tile_size = get_compile_time_arg_val(12);
+constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(13);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(14);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(15);
+constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(16));
 constexpr bool is_linear = (topology == Topology::Linear);
-constexpr uint32_t N_chunks = get_compile_time_arg_val(23);
-constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(24);
-constexpr uint32_t K_tiles_per_device = get_compile_time_arg_val(25);
-constexpr uint32_t K_block_tail_tiles = get_compile_time_arg_val(26);
+constexpr uint32_t N_chunks = get_compile_time_arg_val(17);
+constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(18);
+constexpr uint32_t K_tiles_per_device = get_compile_time_arg_val(19);
+constexpr uint32_t K_block_tail_tiles = get_compile_time_arg_val(20);
 
 #ifdef USE_MUX
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(27);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(28);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(29);
-constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(30);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(31);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(21);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(22);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(23);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(24);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(25);
 
-constexpr uint32_t mux_arg_count = 32;
+constexpr uint32_t mux_arg_count = 26;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info_forward =
     ccl_routing_utils::get_line_unicast_route_info_from_args<mux_arg_count>();
@@ -68,7 +65,7 @@ constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info_backwa
 
 constexpr uint32_t ct_arg_count = mux_arg_count + 2 * ccl_routing_utils::num_line_unicast_args;
 #else
-constexpr uint32_t ct_arg_count = 27;
+constexpr uint32_t ct_arg_count = 21;
 #endif
 
 namespace detail {
@@ -140,6 +137,13 @@ void kernel_main() {
     const uint8_t out_ready_sem_injector_noc0_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_core_order_index = get_arg_val<uint32_t>(argidx++);
     const uint32_t in0_core_order_size = get_arg_val<uint32_t>(argidx++);
+    // Shape-derived args moved from compile-time to runtime (must match factory append order).
+    const uint32_t M_tiles = get_arg_val<uint32_t>(argidx++);
+    const uint32_t padded_M_tiles = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_tiles = get_arg_val<uint32_t>(argidx++);
+    const uint32_t padded_N_tiles = get_arg_val<uint32_t>(argidx++);
+    const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_blocks_per_core = get_arg_val<uint32_t>(argidx++);
 
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();

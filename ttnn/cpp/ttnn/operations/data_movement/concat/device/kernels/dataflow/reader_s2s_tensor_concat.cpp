@@ -12,15 +12,18 @@
 
 void kernel_main() {
     constexpr uint32_t output_dfb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t output_stride = get_compile_time_arg_val(2);
-    constexpr uint32_t num_input_tensors = get_compile_time_arg_val(3);
+
+    // page_size, output_stride and num_input_tensors moved from compile-time to runtime args so the
+    // binary is shape-invariant across resolutions. They occupy the first three runtime slots.
+    uint32_t arg_idx = 0;
+    const uint32_t page_size = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t output_stride = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_input_tensors = get_arg_val<uint32_t>(arg_idx++);
 
     Noc noc;
     DataflowBuffer output_dfb(output_dfb_id);
     const uint32_t base_l1_write_addr = output_dfb.get_write_ptr();
 
-    uint32_t arg_idx = 0;
     for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
         const uint32_t input_num_pages_per_stick = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t input_num_sticks = get_arg_val<uint32_t>(arg_idx++);

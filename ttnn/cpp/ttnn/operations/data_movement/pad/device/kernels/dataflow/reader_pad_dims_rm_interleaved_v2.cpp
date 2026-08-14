@@ -49,6 +49,8 @@ inline __attribute__((always_inline)) void read_input_stick_into_l1(
 }
 
 void kernel_main() {
+    // Runtime args.  Shape-derived scalars are runtime so the compiled binary is
+    // shape-invariant and disk-cache-hits across VAE spatial resolutions.
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t num_sticks_per_core = get_arg_val<uint32_t>(1);
     uint32_t num_sticks_per_barrier = get_arg_val<uint32_t>(2);
@@ -56,33 +58,29 @@ void kernel_main() {
     uint32_t front_pad_n = get_arg_val<uint32_t>(4);
     uint32_t front_pad_c = get_arg_val<uint32_t>(5);
     uint32_t front_pad_h = get_arg_val<uint32_t>(6);
-    tt_l1_ptr uint32_t* start_dim_offset = (tt_l1_ptr uint32_t*)(get_arg_addr(7));
+    uint32_t N = get_arg_val<uint32_t>(7);
+    uint32_t H = get_arg_val<uint32_t>(8);
+    uint32_t C = get_arg_val<uint32_t>(9);
+    uint32_t stick_size_bytes = get_arg_val<uint32_t>(10);
+    uint32_t H_padded = get_arg_val<uint32_t>(11);
+    uint32_t C_padded = get_arg_val<uint32_t>(12);
+    uint32_t stick_size_padded = get_arg_val<uint32_t>(13);
+    uint32_t stick_size_padded_front = get_arg_val<uint32_t>(14);
+    uint32_t stick_size_padded_aligned = get_arg_val<uint32_t>(15);
+    uint32_t accessor_page_size = get_arg_val<uint32_t>(16);
+    tt_l1_ptr uint32_t* start_dim_offset = (tt_l1_ptr uint32_t*)(get_arg_addr(17));
 
-    constexpr uint32_t N = get_compile_time_arg_val(0);
-    constexpr uint32_t H = get_compile_time_arg_val(1);
-    constexpr uint32_t C = get_compile_time_arg_val(2);
-    constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(3);
-    constexpr uint32_t N_padded = get_compile_time_arg_val(4);
-    constexpr uint32_t H_padded = get_compile_time_arg_val(5);
-    constexpr uint32_t C_padded = get_compile_time_arg_val(6);
-    constexpr uint32_t stick_size_padded = get_compile_time_arg_val(7);
-    constexpr uint32_t stick_size_padded_front = get_compile_time_arg_val(8);
-    constexpr uint32_t stick_size_padded_end = get_compile_time_arg_val(9);
-    constexpr uint32_t num_zero_pad_sticks_read = get_compile_time_arg_val(10);
-    constexpr uint32_t last_zero_stick_size = get_compile_time_arg_val(11);
-    constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(18);
-
-    constexpr bool not_pad_by_zero = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t front_padding = get_compile_time_arg_val(8);
-    constexpr bool unaligned = get_compile_time_arg_val(19) == 1;
-
-    constexpr uint32_t num_input_pages_in_row = get_compile_time_arg_val(20);
-    constexpr uint32_t accessor_page_size = get_compile_time_arg_val(21);
-    constexpr auto src_args = TensorAccessorArgs<22>();
+    // Compile-time args: dtype/pad-value and the two control-flow selectors only.
+    constexpr bool not_pad_by_zero = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t packed_pad_value_ct = get_compile_time_arg_val(1);
+    constexpr bool front_padding = get_compile_time_arg_val(2) == 1;
+    constexpr bool unaligned = get_compile_time_arg_val(3) == 1;
+    constexpr uint32_t num_input_pages_in_row = get_compile_time_arg_val(4);
+    constexpr auto src_args = TensorAccessorArgs<5>();
 
     uint32_t packed_pad_value = 0;
     if constexpr (not_pad_by_zero) {
-        packed_pad_value = kernel_compile_time_args[13];
+        packed_pad_value = packed_pad_value_ct;
     }
 
     constexpr uint32_t dfb_in0 = tt::CBIndex::c_0;

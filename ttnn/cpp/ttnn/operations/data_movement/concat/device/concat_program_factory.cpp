@@ -196,10 +196,14 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
         }
     }
     // Reader compile-time args
-    // Data is 32 byte aligned
+    // Data is 32 byte aligned.
+    // NOTE: page_size_per_tensor[] used to live here as compile-time args, which made the reader
+    // binary shape-dependent (per-resolution recompile / disk-cache miss for VAE concat). They are
+    // now passed as runtime args (appended after page_id_per_tensor below), so the binary is
+    // shape-invariant. num_input_tensors stays compile-time: it sizes L1 stack arrays in the kernel
+    // and parameterizes the TensorAccessorArgs tuple template, and is concat arity (not shape) so it
+    // does not vary across resolutions. TensorAccessorArgs now begin at compile-time index 2.
     KernelDescriptor::CompileTimeArgs reader_compile_time_args = {src0_cb_index, num_input_tensors};
-    reader_compile_time_args.insert(
-        reader_compile_time_args.end(), page_size_per_tensor.cbegin(), page_size_per_tensor.cend());
     for (uint32_t i = 0; i < num_input_tensors; ++i) {
         TensorAccessorArgs(*input_tensors[i].buffer()).append_to(reader_compile_time_args);
     }
@@ -268,7 +272,7 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
         }
 
         KernelDescriptor::RTArgList reader_kernel_args;
-        reader_kernel_args.reserve(3 + 3 * num_input_tensors);
+        reader_kernel_args.reserve(3 + 4 * num_input_tensors);
         reader_kernel_args.push_back(num_pages_per_core);
         reader_kernel_args.push_back(curr_tensor);
         reader_kernel_args.push_back(curr_tensor_id);
@@ -277,6 +281,9 @@ tt::tt_metal::ProgramDescriptor ConcatProgramFactory::create_descriptor(
         }
         reader_kernel_args.append(num_pages_per_block);
         reader_kernel_args.append(page_id_per_tensor);
+        // page_size_per_tensor moved from compile-time to runtime args (shape-invariant binary).
+        // Only the RM/stick reader consumes these; the tiled reader ignores the trailing args.
+        reader_kernel_args.append(page_size_per_tensor);
 
         reader_desc.emplace_runtime_args(core, reader_kernel_args);
         if (rm_layout) {

@@ -19,18 +19,24 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
-    constexpr uint32_t page_size_base_idx = 2;
-    constexpr auto tensor_accessor_args =
-        make_tensor_accessor_args_tuple<num_tensors, page_size_base_idx + num_tensors>();
+    // TensorAccessorArgs now begin right after num_tensors. page_size_per_tensor[] was moved out of
+    // compile-time args and is now read from runtime args (see page_size_per_tensor_offset below) so
+    // the reader binary is shape-invariant across VAE resolutions.
+    constexpr uint32_t tensor_accessor_cta_base_idx = 2;
+    constexpr auto tensor_accessor_args = make_tensor_accessor_args_tuple<num_tensors, tensor_accessor_cta_base_idx>();
 
     // ublocks size defined in pages
     constexpr uint32_t ublock_size_pages = 1;
 
     [[maybe_unused]] uint32_t num_pages_per_block[num_tensors];
     uint32_t page_id_per_tensor[num_tensors];
+    uint32_t page_size_per_tensor[num_tensors];
     constexpr uint32_t src_addr_base_idx = 3;
+    // Runtime arg layout (relative to src_addr_base_idx): [0..N) src addrs (consumed by tensor
+    // accessors), [N..2N) num_pages_per_block, [2N..3N) page_id_per_tensor, [3N..4N) page_size_per_tensor.
     constexpr uint32_t num_pages_per_block_base_offset = num_tensors;
     constexpr uint32_t page_id_per_tensor_offset = num_pages_per_block_base_offset + num_tensors;
+    constexpr uint32_t page_size_per_tensor_offset = page_id_per_tensor_offset + num_tensors;
 
     auto tensor_accessors_tuple = make_tensor_accessor_tuple(tensor_accessor_args, src_addr_base_idx);
     auto abstract_tensor_accessor_wrappers = make_abstract_tensor_accessor_wrappers(tensor_accessors_tuple);
@@ -39,6 +45,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tensors; ++i) {
         num_pages_per_block[i] = arg_ptr[num_pages_per_block_base_offset + i];
         page_id_per_tensor[i] = arg_ptr[page_id_per_tensor_offset + i];
+        page_size_per_tensor[i] = arg_ptr[page_size_per_tensor_offset + i];
     }
 
     DataflowBuffer dfb_in(cb_id_in);
@@ -54,7 +61,7 @@ void kernel_main() {
         // For width concat we know we start at curr_tensor=0
         // num_pages_per_block[curr_tensor] is always one for width concat
         for (uint32_t j = 0; j < num_tensors; ++j) {
-            auto page_size = kernel_compile_time_args[page_size_base_idx + curr_tensor];
+            auto page_size = page_size_per_tensor[curr_tensor];
             noc.async_read(
                 abstract_tensor_accessor_wrappers[curr_tensor],
                 CoreLocalMem<uint8_t>(l1_write_addr),
@@ -67,7 +74,7 @@ void kernel_main() {
         }
         curr_tensor = 0;
 #else
-        auto page_size = kernel_compile_time_args[page_size_base_idx + curr_tensor];
+        auto page_size = page_size_per_tensor[curr_tensor];
         noc.async_read(
             abstract_tensor_accessor_wrappers[curr_tensor],
             CoreLocalMem<uint8_t>(l1_write_addr),

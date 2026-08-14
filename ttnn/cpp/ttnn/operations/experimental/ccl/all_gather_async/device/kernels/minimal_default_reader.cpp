@@ -29,16 +29,10 @@ constexpr uint32_t page_size = get_compile_time_arg_val(4);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(5);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(6);
 constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(7));
-constexpr uint32_t gather_dim = get_compile_time_arg_val(8);
-constexpr uint32_t input_batch_head_count = get_compile_time_arg_val(9);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(10);
-constexpr uint32_t input_tensor_Ht = get_compile_time_arg_val(11);
-constexpr uint32_t input_tensor_C = get_compile_time_arg_val(12);
-constexpr uint32_t output_tensor_Wt = get_compile_time_arg_val(13);
-constexpr uint32_t output_tensor_Ht = get_compile_time_arg_val(14);
-constexpr uint32_t output_tensor_C = get_compile_time_arg_val(15);
-constexpr bool fuse_op = get_compile_time_arg_val(16);
-constexpr uint32_t reverse = get_compile_time_arg_val(17) == 1;
+// Shape-derived values (gather_dim, batch_head_count, input/output Wt/Ht/C) are passed as runtime
+// args below so the compiled binary is shape-invariant (avoids per-resolution recompilation).
+constexpr bool fuse_op = get_compile_time_arg_val(8);
+constexpr uint32_t reverse = get_compile_time_arg_val(9) == 1;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -55,8 +49,17 @@ void kernel_main() {
     const auto start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     const auto start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     const auto chunks_per_sync = get_arg_val<uint32_t>(arg_idx++);
+    // Shape-derived runtime args (moved from compile-time idx 8-15 to keep the binary shape-invariant)
+    const auto gather_dim = get_arg_val<uint32_t>(arg_idx++);
+    const auto input_batch_head_count = get_arg_val<uint32_t>(arg_idx++);
+    const auto input_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
+    const auto input_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
+    const auto input_tensor_C = get_arg_val<uint32_t>(arg_idx++);
+    const auto output_tensor_Wt = get_arg_val<uint32_t>(arg_idx++);
+    const auto output_tensor_Ht = get_arg_val<uint32_t>(arg_idx++);
+    const auto output_tensor_C = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 18;
+    constexpr uint32_t ct_idx = 10;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -248,11 +251,11 @@ void kernel_main() {
             uint32_t total_tiles = input_tile_id_end - input_tile_id_start;
             uint32_t first_half_tiles = is_split_forwarded_slice ? total_tiles / 2 : 0;
 
-            if constexpr (gather_dim == 3) {
+            if (gather_dim == 3) {
                 output_tile_id_start = actual_sender_chip_id * input_tensor_Wt;
-            } else if constexpr (gather_dim == 2) {
+            } else if (gather_dim == 2) {
                 output_tile_id_start = actual_sender_chip_id * input_tensor_Ht * input_tensor_Wt;
-            } else if constexpr (gather_dim == 1) {
+            } else if (gather_dim == 1) {
                 output_tile_id_start = actual_sender_chip_id * input_tensor_C * input_tensor_Ht * input_tensor_Wt;
             } else {
                 output_tile_id_start =

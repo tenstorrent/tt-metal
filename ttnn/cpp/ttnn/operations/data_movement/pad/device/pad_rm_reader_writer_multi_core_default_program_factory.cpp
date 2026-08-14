@@ -47,10 +47,8 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
     auto stick_size = W * a.element_size();
     auto stick_size_padded = W_padded * a.element_size();
     auto stick_size_padded_front = front_pad[-1] * a.element_size();
-    auto stick_size_padded_end = stick_size_padded - stick_size - stick_size_padded_front;
     uint32_t stick_size_padded_aligned = tt::align(stick_size_padded, hal::get_l1_alignment());
     uint32_t stick_size_padded_DRAM_aligned = tt::align(stick_size_padded, hal::get_dram_alignment());
-    uint32_t row_major_min_bytes = 16;
 
     // Input page-based addressing
     uint32_t num_input_pages_in_row = 1;
@@ -138,38 +136,24 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
         });
     }
 
+    // Compile-time args are only dtype/pad-value and the two control-flow selectors
+    // (front_padding, unaligned).  Every shape-derived scalar is passed as a runtime
+    // arg below so the compiled binary is shape-invariant across VAE resolutions and
+    // hits the disk cache instead of recompiling per spatial shape.
+    // `front_padding` / `unaligned` stay compile-time: they gate `if constexpr`
+    // branches, forming at most a small 2-way bucket of binaries (vs per-resolution).
     std::vector<uint32_t> reader_ct_args = {
-        (std::uint32_t)N + front_pad[-4],
-        (std::uint32_t)H + front_pad[-2],
-        (std::uint32_t)C + front_pad[-3],
-        (std::uint32_t)stick_size,
-        (std::uint32_t)N_padded,
-        (std::uint32_t)H_padded,
-        (std::uint32_t)C_padded,
-        (std::uint32_t)stick_size_padded,
-        (std::uint32_t)stick_size_padded_front,
-        (std::uint32_t)stick_size_padded_end,
-        (std::uint32_t)tt::div_up(stick_size_padded, 512),  // max zero size is 512B
-        (std::uint32_t)(stick_size_padded % 512 == 0 ? 512 : stick_size_padded % 512),
-        (std::uint32_t)not_pad_by_zero,
-        (std::uint32_t)packed_pad_value,
-        (std::uint32_t)row_major_min_bytes,
-        (std::uint32_t)(stick_size_padded_front / row_major_min_bytes),
-        (std::uint32_t)(stick_size_padded_end / row_major_min_bytes),
-        (std::uint32_t)(stick_size_padded / row_major_min_bytes),
-        (std::uint32_t)stick_size_padded_aligned,
-        (std::uint32_t)unaligned,
-        (std::uint32_t)num_input_pages_in_row,
-        (std::uint32_t)input_accessor_page_size};
-    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
+        (std::uint32_t)not_pad_by_zero,                          // 0
+        (std::uint32_t)packed_pad_value,                         // 1
+        (std::uint32_t)(stick_size_padded_front != 0),           // 2 front_padding selector
+        (std::uint32_t)unaligned,                                // 3 unaligned selector
+        (std::uint32_t)num_input_pages_in_row};                  // 4
+    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);  // <5>
 
     std::vector<uint32_t> writer_ct_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)stick_size_padded,
-        (std::uint32_t)stick_size_padded_aligned,
-        (std::uint32_t)num_output_pages_in_row,
-        (std::uint32_t)output_accessor_page_size};
-    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
+        (std::uint32_t)src0_cb_index,                           // 0
+        (std::uint32_t)num_output_pages_in_row};                // 1
+    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);  // <2>
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
@@ -224,19 +208,34 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
             reader_rt_args.push_back(0u);
             writer_rt_args.push_back(0u);
         }
-        reader_rt_args.push_back(num_sticks_per_core);
-        reader_rt_args.push_back(num_sticks_per_barrier);
-        reader_rt_args.push_back(curr_sticks_read * num_input_pages_in_row);
-        reader_rt_args.push_back(static_cast<uint32_t>(front_pad[-4]));
-        reader_rt_args.push_back(static_cast<uint32_t>(front_pad[-3]));
-        reader_rt_args.push_back(static_cast<uint32_t>(front_pad[-2]));
-        for (uint32_t v : start_dim_offset) {
+        reader_rt_args.push_back(num_sticks_per_core);                        // 1
+        reader_rt_args.push_back(num_sticks_per_barrier);                     // 2
+        reader_rt_args.push_back(curr_sticks_read * num_input_pages_in_row);  // 3
+        reader_rt_args.push_back(static_cast<uint32_t>(front_pad[-4]));       // 4 front_pad_n
+        reader_rt_args.push_back(static_cast<uint32_t>(front_pad[-3]));       // 5 front_pad_c
+        reader_rt_args.push_back(static_cast<uint32_t>(front_pad[-2]));       // 6 front_pad_h
+        // Shape-derived scalars moved from compile-time to runtime (constant across
+        // cores).  Kept before start_dim_offset so that tail stays a get_arg_addr ptr.
+        reader_rt_args.push_back(static_cast<uint32_t>(N + front_pad[-4]));          // 7  N (padded loop bound)
+        reader_rt_args.push_back(static_cast<uint32_t>(H + front_pad[-2]));          // 8  H
+        reader_rt_args.push_back(static_cast<uint32_t>(C + front_pad[-3]));          // 9  C
+        reader_rt_args.push_back(static_cast<uint32_t>(stick_size));                 // 10 stick_size_bytes
+        reader_rt_args.push_back(static_cast<uint32_t>(H_padded));                   // 11
+        reader_rt_args.push_back(static_cast<uint32_t>(C_padded));                   // 12
+        reader_rt_args.push_back(static_cast<uint32_t>(stick_size_padded));          // 13
+        reader_rt_args.push_back(static_cast<uint32_t>(stick_size_padded_front));    // 14
+        reader_rt_args.push_back(static_cast<uint32_t>(stick_size_padded_aligned));  // 15
+        reader_rt_args.push_back(static_cast<uint32_t>(input_accessor_page_size));   // 16
+        for (uint32_t v : start_dim_offset) {                                        // 17+ start_dim_offset
             reader_rt_args.push_back(v);
         }
 
-        writer_rt_args.push_back(num_sticks_per_core);
-        writer_rt_args.push_back(num_sticks_per_barrier);
-        writer_rt_args.push_back(curr_sticks_write * num_output_pages_in_row);
+        writer_rt_args.push_back(num_sticks_per_core);                               // 1
+        writer_rt_args.push_back(num_sticks_per_barrier);                            // 2
+        writer_rt_args.push_back(curr_sticks_write * num_output_pages_in_row);       // 3
+        writer_rt_args.push_back(static_cast<uint32_t>(stick_size_padded));          // 4 stick_size_bytes
+        writer_rt_args.push_back(static_cast<uint32_t>(stick_size_padded_aligned));  // 5
+        writer_rt_args.push_back(static_cast<uint32_t>(output_accessor_page_size));  // 6
 
         reader_desc.emplace_runtime_args(core, reader_rt_args);
         writer_desc.emplace_runtime_args(core, writer_rt_args);

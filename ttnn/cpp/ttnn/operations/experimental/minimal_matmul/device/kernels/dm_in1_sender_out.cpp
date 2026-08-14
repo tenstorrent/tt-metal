@@ -15,27 +15,24 @@
 
 void kernel_main() {
     Noc noc;
-    constexpr uint32_t M_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t padded_M_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t K_tiles = get_compile_time_arg_val(2);
-    constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t N_tiles = get_compile_time_arg_val(4);
-    constexpr uint32_t padded_N_tiles = get_compile_time_arg_val(5);
-    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(7);
-    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(8);
-    constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(9);
-    constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(10);
-    constexpr uint32_t in1_tile_size = get_compile_time_arg_val(11);
-    constexpr uint32_t out_tile_size = get_compile_time_arg_val(12);
-    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(13);
-    Semaphore<> in1_sender_semaphore(get_compile_time_arg_val(14));
-    Semaphore<> in1_receiver_semaphore(get_compile_time_arg_val(15));
-    Semaphore<> in1_valid_semaphore(get_compile_time_arg_val(16));
-    constexpr uint32_t is_output_writer = get_compile_time_arg_val(17);
-    constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
-    constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
-    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
+    // NOTE: M_tiles, padded_M_tiles, N_tiles, padded_N_tiles, M_blocks_per_core, N_blocks_per_core
+    // were moved to runtime args (read below) so this kernel binary is shape (M/N) invariant and
+    // hits the disk program cache across different problem sizes.
+    constexpr uint32_t K_tiles = get_compile_time_arg_val(0);
+    constexpr uint32_t padded_K_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t M_block_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t K_block_tiles = get_compile_time_arg_val(3);
+    constexpr uint32_t N_block_tiles = get_compile_time_arg_val(4);
+    constexpr uint32_t in1_tile_size = get_compile_time_arg_val(5);
+    constexpr uint32_t out_tile_size = get_compile_time_arg_val(6);
+    constexpr uint32_t in2_tile_size = get_compile_time_arg_val(7);
+    Semaphore<> in1_sender_semaphore(get_compile_time_arg_val(8));
+    Semaphore<> in1_receiver_semaphore(get_compile_time_arg_val(9));
+    Semaphore<> in1_valid_semaphore(get_compile_time_arg_val(10));
+    constexpr uint32_t is_output_writer = get_compile_time_arg_val(11);
+    constexpr uint32_t is_injector_core = get_compile_time_arg_val(12);
+    constexpr uint32_t N_chunks = get_compile_time_arg_val(13);
+    constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(14);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
@@ -52,6 +49,13 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t max_defer_write_k_block = get_arg_val<uint32_t>(argidx++);
+    // Shape-derived args moved from compile-time to runtime (must match factory append order).
+    const uint32_t M_tiles = get_arg_val<uint32_t>(argidx++);
+    const uint32_t padded_M_tiles = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_tiles = get_arg_val<uint32_t>(argidx++);
+    const uint32_t padded_N_tiles = get_arg_val<uint32_t>(argidx++);
+    const uint32_t M_blocks_per_core = get_arg_val<uint32_t>(argidx++);
+    const uint32_t N_blocks_per_core = get_arg_val<uint32_t>(argidx++);
 
 #ifdef FUSE_TERNARY
     // Fuse addcmul - read runtime addresses before setting out_addr_rt_arg_idx
@@ -63,7 +67,8 @@ void kernel_main() {
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
 
     // Tensor accessor for input tensor
-    constexpr auto in1_args = TensorAccessorArgs<21>();
+    // Base index 15 = number of fixed compile-time args after moving 6 shape args to runtime.
+    constexpr auto in1_args = TensorAccessorArgs<15>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr);
 
     // Always create tuple of output accessors (size = N_chunks)
