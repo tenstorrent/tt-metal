@@ -4,7 +4,7 @@
 
 // Fused Gumbel-max sampling, compute half.
 //
-// Per vocab tile this kernel does, entirely inside DST, what ttnn_fixed::sample spells as five
+// Per vocab tile this kernel does, entirely inside DST, what a composite sample would spell as five
 // separate ttnn ops (rand -> log -> neg -> log -> neg -> mul -> add -> sub):
 //
 //     score = logits * (1 / temperature) + (-log(-log(U)))  [ - padding_mask ]
@@ -45,7 +45,7 @@ constexpr bool do_logits_mask = false;
 // which vocab columns are padding does not depend on the token position. In TILE layout that single
 // logical row lives in row 0 of each tile with rows 1..31 zero-filled, so a plain tile-for-tile
 // subtract would mask ONLY token row 0 and leave every other row unmasked (it then argmaxes onto the
-// first padding column). ttnn::subtract used to hide this by broadcasting; here the broadcast has to
+// first padding column). This requires the mask to be broadcasted; here the broadcast has to
 // be explicit, via unary_bcast<ROW> which splats row 0 down all 32 rows as the tile lands in DST.
 
 // temperature == 0 is greedy decoding: no noise, no scaling, just argmax over the (masked) logits.
