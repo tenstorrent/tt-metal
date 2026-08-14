@@ -7,8 +7,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::distributed;
@@ -130,8 +128,8 @@ int main() {
 
     // Write data to distributed buffers
     auto& cq = mesh_device->mesh_command_queue();
-    tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(a, a_data.data(), false);
-    tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(b, b_data.data(), false);
+    cq.enqueue_write_mesh_buffer(a, a_data.data(), false);
+    cq.enqueue_write_mesh_buffer(b, b_data.data(), false);
 
     // Create program for distributed computation
     auto program = CreateEltwiseAddProgram(a, b, c, tile_size_bytes, num_tiles);
@@ -145,7 +143,7 @@ int main() {
 
     // Read back results
     std::vector<uint32_t> result_data(distributed_buffer_config.global_size / sizeof(uint32_t));
-    tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((result_data).data(), c, true);
+    cq.enqueue_read_mesh_buffer((result_data).data(), c, true);
 
     // Verify results
     auto transform_to_golden = [](const bfloat16& a) { return bfloat16(static_cast<float>(a) + val_to_add); };

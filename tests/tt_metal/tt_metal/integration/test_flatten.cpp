@@ -287,7 +287,7 @@ bool flatten_stress(
         SetRuntimeArgs(program_on_workload, unary_writer_kernel, core, writer_runtime_args);
 
         // Async write input
-        distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src_dram_buffer, src_vec->data(), false);
+        cq.enqueue_write_mesh_buffer(src_dram_buffer, src_vec->data(), false);
         // Share ownership of buffer with program
         AssignGlobalBufferToProgram(
             std::shared_ptr<Buffer>(src_dram_buffer->get_backing_buffer()), program_on_workload);

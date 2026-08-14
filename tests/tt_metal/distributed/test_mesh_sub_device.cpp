@@ -146,8 +146,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
         // Block after this write on host, since the global semaphore update starting the
         // program goes through an independent path (UMD) and can go out of order wrt the
         // buffer data
-        ::tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-            .enqueue_write_mesh_buffer(input_buf, src_vec.data(), true);
+        mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(input_buf, src_vec.data(), true);
 
         for (auto* device : mesh_device_->get_devices()) {
             MetalContext::instance().get_cluster().write_core(

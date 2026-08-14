@@ -611,8 +611,7 @@ std::shared_ptr<tt_metal::distributed::MeshBuffer> create_and_transfer_data_shar
     } else {
         input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device);
     }
-    tt_metal::distributed::as_mesh_command_queue_base(device->mesh_command_queue())
-        .enqueue_write_mesh_buffer(input_buffer, input_vec.data(), false);
+    device->mesh_command_queue().enqueue_write_mesh_buffer(input_buffer, input_vec.data(), false);
     tt_metal::distributed::Finish(device->mesh_command_queue());
 
     log_info(tt::LogTest, "created sharded tensor");

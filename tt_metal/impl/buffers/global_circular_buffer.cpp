@@ -40,8 +40,6 @@
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <umd/device/types/xy_pair.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 namespace tt::tt_metal::experimental {
 
 namespace {
@@ -407,8 +405,8 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         }
     }
     auto mesh_buffer = cb_config_buffer_.get_mesh_buffer();
-    distributed::as_mesh_command_queue_base(mesh_buffer->device()->mesh_command_queue())
-        .enqueue_write_mesh_buffer(mesh_buffer, cb_config_host_buffer.data(), false);
+    mesh_buffer->device()->mesh_command_queue().enqueue_write_mesh_buffer(
+        mesh_buffer, cb_config_host_buffer.data(), false);
 }
 
 const Buffer& GlobalCircularBuffer::cb_buffer() const { return *cb_buffer_.get_buffer(); }

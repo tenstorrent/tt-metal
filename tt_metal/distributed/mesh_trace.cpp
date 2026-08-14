@@ -35,8 +35,6 @@
 #include "impl/allocator/allocator.hpp"
 #include <distributed/mesh_buffer_impl.hpp>
 #include <distributed/mesh_device_impl.hpp>
-#include "mesh_command_queue_base.hpp"
-
 namespace tt::tt_metal::distributed {
 
 MeshTraceId MeshTrace::next_id() {
@@ -161,7 +159,7 @@ void MeshTrace::populate_mesh_buffer(
         }
         auto write_region =
             BufferRegion(write_offset_per_device_range.at(device_range), write_data.size() * sizeof(uint32_t));
-        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_cq).enqueue_write_shard_to_sub_grid(
+        mesh_cq.enqueue_write_shard_to_sub_grid(
             *(trace_buffer->mesh_buffer), write_data.data(), device_range, true, write_region);
         write_offset_per_device_range.at(device_range) += mesh_trace_data.data.size() * sizeof(uint32_t);
     }

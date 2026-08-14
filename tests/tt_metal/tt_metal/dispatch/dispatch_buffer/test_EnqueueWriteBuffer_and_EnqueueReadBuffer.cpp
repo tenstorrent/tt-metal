@@ -2572,13 +2572,11 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, EnqueueBufferVariousDims) {
             auto buf = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
             auto src = local_test_functions::generate_arange_vector(buf->impl().size());
 
-            EXPECT_NO_THROW(distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
-                                .enqueue_write_mesh_buffer(buf, src.data(), false));
+            EXPECT_NO_THROW(mesh_device->mesh_command_queue().enqueue_write_mesh_buffer(buf, src.data(), false));
 
             std::vector<uint32_t> dst;
             dst.resize(buf->impl().size() / sizeof(uint32_t));
-            EXPECT_NO_THROW(distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
-                                .enqueue_read_mesh_buffer(dst.data(), buf, true));
+            EXPECT_NO_THROW(mesh_device->mesh_command_queue().enqueue_read_mesh_buffer(dst.data(), buf, true));
 
             EXPECT_EQ(src, dst);
         }

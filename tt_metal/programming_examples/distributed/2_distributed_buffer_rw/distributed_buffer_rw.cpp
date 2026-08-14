@@ -4,8 +4,6 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 // Stand-alone example demonstrating usage of native multi-device TT-Metalium APIs
 // for issuing Read and Write commands to a distributed memory buffer spanning
 // multiple devices in a mesh.
@@ -44,13 +42,11 @@ int main() {
     // Enqueue a write to the distributed buffer (L1 banks across devices) with random data.
     std::vector<uint32_t> src_data = create_random_vector_of_bfloat16(
         distributed_buffer_size_bytes, 1, std::chrono::system_clock::now().time_since_epoch().count());
-    tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(
-        mesh_buffer, src_data.data(), false);
+    cq.enqueue_write_mesh_buffer(mesh_buffer, src_data.data(), false);
 
     // Enqueue a read from the distributed buffer (L1 banks across devices) to a local buffer.
     std::vector<uint32_t> read_back_data(distributed_buffer_size_bytes / sizeof(uint32_t));
-    tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer(
-        (read_back_data).data(), mesh_buffer, true);
+    cq.enqueue_read_mesh_buffer((read_back_data).data(), mesh_buffer, true);
 
     // Data read back across all devices in the mesh should match the original data.
     assert(src_data == read_back_data);

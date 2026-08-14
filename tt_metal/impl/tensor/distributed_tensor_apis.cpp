@@ -16,8 +16,6 @@
 #include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "tt_metal/distributed/mesh_device_view_impl.hpp"
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 namespace tt::tt_metal {
 
 // ======================================================================================
@@ -163,8 +161,7 @@ void enqueue_read_tensor(
     }
 
     std::unordered_set<distributed::MeshCoordinate> shard_set(coords.begin(), coords.end());
-    distributed::as_mesh_command_queue_base(cq).enqueue_read(
-        device_tensor.impl().raw_mesh_buffer(), dst_distributed_host_buffer, shard_set, blocking);
+    cq.enqueue_read(device_tensor.impl().raw_mesh_buffer(), dst_distributed_host_buffer, shard_set, blocking);
 
     host_tensor = host_tensor_from_buffer_with_topology(
         std::move(dst_distributed_host_buffer), device_tensor.tensor_spec(), get_tensor_topology(device_tensor));
@@ -250,12 +247,10 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
             }
             command_queue.enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);
         } else {
-            distributed::as_mesh_command_queue_base(command_queue)
-                .enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
+            command_queue.enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
         }
     } else {
-        distributed::as_mesh_command_queue_base(command_queue)
-            .enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
+        command_queue.enqueue_write_mesh_buffer(mesh_buffer, data_to_write.data(), /*blocking=*/false);
     }
 
     const auto& mesh_device_shape = mesh_buffer->device()->shape();
@@ -350,12 +345,10 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
         if (any_pinned) {
             cq.enqueue_write_shards(mesh_buffer, transfers, /*blocking=*/true);
         } else {
-            distributed::as_mesh_command_queue_base(cq).enqueue_write(
-                mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+            cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
         }
     } else {
-        distributed::as_mesh_command_queue_base(cq).enqueue_write(
-            mesh_buffer, distributed_host_buffer, /*blocking=*/false);
+        cq.enqueue_write(mesh_buffer, distributed_host_buffer, /*blocking=*/false);
     }
 
     // DistributedHostBuffer may not cover the entire MeshDevice, must preserve coords here.

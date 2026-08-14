@@ -109,8 +109,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
 
     auto buffer_1 = distributed::MeshBuffer::create(replicated_config_1, local_config_1, mesh_device.get());
     EXPECT_TRUE(buffer_1->address() <= max_addr - buffer_1->get_backing_buffer()->aligned_page_size());
-    distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
-        .enqueue_write_mesh_buffer(buffer_1, input_1.data(), false);
+    mesh_device->mesh_command_queue().enqueue_write_mesh_buffer(buffer_1, input_1.data(), false);
     std::vector<uint32_t> output_1;
     {
         auto* shard = buffer_1->get_device_buffer(zero_coord_);
@@ -142,8 +141,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
 
     auto buffer_3 = distributed::MeshBuffer::create(replicated_config_2, local_config_2, mesh_device.get());
     EXPECT_TRUE(buffer_3->address() <= max_addr - buffer_3->get_backing_buffer()->aligned_page_size());
-    distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
-        .enqueue_write_mesh_buffer(buffer_3, input_2.data(), false);
+    mesh_device->mesh_command_queue().enqueue_write_mesh_buffer(buffer_3, input_2.data(), false);
     std::vector<uint32_t> output_2;
     {
         auto* shard = buffer_3->get_device_buffer(zero_coord_);

@@ -124,8 +124,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTrace) {
 
     // Eager mode
     std::vector<uint32_t> eager_output_data(input_data.size());
-    distributed::as_mesh_command_queue_base(data_movement_queue)
-        .enqueue_write_mesh_buffer(input, input_data.data(), true);
+    data_movement_queue.enqueue_write_mesh_buffer(input, input_data.data(), true);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, true);
     tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_queue)
         .enqueue_read_shards(
@@ -136,8 +135,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTrace) {
 
     // Trace mode
     std::vector<uint32_t> trace_output_data(input_data.size());
-    distributed::as_mesh_command_queue_base(data_movement_queue)
-        .enqueue_write_mesh_buffer(input, input_data.data(), true);
+    data_movement_queue.enqueue_write_mesh_buffer(input, input_data.data(), true);
 
     auto tid = this->device_.get()->begin_mesh_trace(mesh_command_queue.id());
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
@@ -194,8 +192,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoop
     distributed::MeshTraceId trace_id;
     bool trace_captured = false;
     for (auto i = 0; i < num_loops; i++) {
-        distributed::as_mesh_command_queue_base(data_movement_queue)
-            .enqueue_write_mesh_buffer(input, input_data.data(), true);
+        data_movement_queue.enqueue_write_mesh_buffer(input, input_data.data(), true);
 
         if (not trace_captured) {
             trace_id = this->device_.get()->begin_mesh_trace(mesh_command_queue.id());
@@ -259,8 +256,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
     vector<uint32_t> eager_output_data(input_data.size());
 
     // Warm up and use the eager blocking run as the expected output
-    distributed::as_mesh_command_queue_base(mesh_command_queue)
-        .enqueue_write_mesh_buffer(input, input_data.data(), kBlocking);
+    mesh_command_queue.enqueue_write_mesh_buffer(input, input_data.data(), kBlocking);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, kBlocking);
     tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
         .enqueue_read_shards(
@@ -273,8 +269,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
         std::string mode = blocking ? "Eager-B" : "Eager-NB";
         for (auto i = 0; i < num_loops; i++) {
             tt::ScopedTimer timer(mode + " loop " + std::to_string(i));
-            distributed::as_mesh_command_queue_base(mesh_command_queue)
-                .enqueue_write_mesh_buffer(input, input_data.data(), blocking);
+            mesh_command_queue.enqueue_write_mesh_buffer(input, input_data.data(), blocking);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, blocking);
             tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
                 .enqueue_read_shards(
@@ -298,8 +293,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
     // Trace mode execution
     for (auto i = 0; i < num_loops; i++) {
         tt::ScopedTimer timer("Trace loop " + std::to_string(i));
-        distributed::as_mesh_command_queue_base(mesh_command_queue)
-            .enqueue_write_mesh_buffer(input, input_data.data(), kNonBlocking);
+        mesh_command_queue.enqueue_write_mesh_buffer(input, input_data.data(), kNonBlocking);
         this->device_->replay_mesh_trace(mesh_command_queue.id(), tid, kNonBlocking);
         tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
             .enqueue_read_shards(
@@ -386,8 +380,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
 
     std::vector<uint32_t> eager_output_data(input_data.size());
     std::vector<uint32_t> trace_output_data(input_data.size());
-    distributed::as_mesh_command_queue_base(mesh_command_queue)
-        .enqueue_write_mesh_buffer(input, input_data.data(), true);
+    mesh_command_queue.enqueue_write_mesh_buffer(input, input_data.data(), true);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, true);
     tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
         .enqueue_read_shards(
@@ -395,8 +388,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
             output,
             true);
 
-    distributed::as_mesh_command_queue_base(mesh_command_queue)
-        .enqueue_write_mesh_buffer(input, input_data.data(), true);
+    mesh_command_queue.enqueue_write_mesh_buffer(input, input_data.data(), true);
 
     auto tid = mesh_device.get()->begin_mesh_trace(mesh_command_queue.id());
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
@@ -452,8 +444,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramDeviceCapture) {
             *input->get_device_buffer(zero_coord_), *output->get_device_buffer(zero_coord_));
         workload.add_program(device_range_, std::move(simple_program));
 
-        distributed::as_mesh_command_queue_base(mesh_command_queue)
-            .enqueue_write_mesh_buffer(input, input_data.data(), true);
+        mesh_command_queue.enqueue_write_mesh_buffer(input, input_data.data(), true);
         distributed::EnqueueMeshWorkload(mesh_command_queue, workload, true);
         tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
             .enqueue_read_shards(
@@ -466,8 +457,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramDeviceCapture) {
     bool has_trace = false;
     distributed::MeshTraceId tid;
     for (int i = 0; i < 1; i++) {
-        distributed::as_mesh_command_queue_base(mesh_command_queue)
-            .enqueue_write_mesh_buffer(input, input_data.data(), true);
+        mesh_command_queue.enqueue_write_mesh_buffer(input, input_data.data(), true);
 
         if (!has_trace) {
             // Program must be cached first
@@ -534,8 +524,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
     vector<uint32_t> eager_output_data(input_data.size());
 
     // Warm up and use the eager blocking run as the expected output
-    distributed::as_mesh_command_queue_base(mesh_command_queue)
-        .enqueue_write_mesh_buffer(input, input_data.data(), kBlocking);
+    mesh_command_queue.enqueue_write_mesh_buffer(input, input_data.data(), kBlocking);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload0, kBlocking);
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload1, kBlocking);
     tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
@@ -549,8 +538,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
         std::string mode = blocking ? "Eager-B" : "Eager-NB";
         for (auto i = 0; i < num_loops; i++) {
             ScopedTimer timer(mode + " loop " + std::to_string(i));
-            distributed::as_mesh_command_queue_base(mesh_command_queue)
-                .enqueue_write_mesh_buffer(input, input_data.data(), blocking);
+            mesh_command_queue.enqueue_write_mesh_buffer(input, input_data.data(), blocking);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload0, blocking);
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload1, blocking);
             tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
@@ -576,8 +564,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
     // Trace mode execution
     for (auto i = 0; i < num_loops; i++) {
         ScopedTimer timer("Trace loop " + std::to_string(i));
-        distributed::as_mesh_command_queue_base(mesh_command_queue)
-            .enqueue_write_mesh_buffer(input, input_data.data(), kNonBlocking);
+        mesh_command_queue.enqueue_write_mesh_buffer(input, input_data.data(), kNonBlocking);
         mesh_device->replay_mesh_trace(mesh_command_queue.id(), tid, kNonBlocking);
         tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
             .enqueue_read_shards(
@@ -648,8 +635,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
         log_info(LogTest, "Starting {} profiling with {} programs", mode, num_programs);
         for (uint32_t iter = 0; iter < num_loops; iter++) {
             ScopedTimer timer(mode + " loop " + std::to_string(iter));
-            distributed::as_mesh_command_queue_base(mesh_command_queue)
-                .enqueue_write_mesh_buffer(input, input_data.data(), blocking);
+            mesh_command_queue.enqueue_write_mesh_buffer(input, input_data.data(), blocking);
             for (uint32_t i = 0; i < num_programs; i++) {
                 distributed::EnqueueMeshWorkload(mesh_command_queue, workloads[i], blocking);
             }
@@ -676,8 +662,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
     // Trace mode execution
     for (auto i = 0; i < num_loops; i++) {
         ScopedTimer timer("Trace loop " + std::to_string(i));
-        distributed::as_mesh_command_queue_base(mesh_command_queue)
-            .enqueue_write_mesh_buffer(input, input_data.data(), kNonBlocking);
+        mesh_command_queue.enqueue_write_mesh_buffer(input, input_data.data(), kNonBlocking);
         mesh_device->replay_mesh_trace(mesh_command_queue.id(), tid, kNonBlocking);
         tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_command_queue)
             .enqueue_read_shards(

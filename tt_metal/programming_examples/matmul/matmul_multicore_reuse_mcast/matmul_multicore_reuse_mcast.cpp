@@ -13,8 +13,6 @@
 #include <bmm_op.hpp>
 #include <algorithm>
 #include "tt-metalium/core_coord.hpp"
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 using namespace tt::constants;
 using namespace std;
 using namespace tt;
@@ -441,12 +439,12 @@ void matmul_multicore_reuse_mcast(
 
     /* Launch program & read in output buffer result into the host vector */
 
-    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src0_dram_buffer, a.data(), false);
-    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src1_dram_buffer, b.data(), false);
+    cq.enqueue_write_mesh_buffer(src0_dram_buffer, a.data(), false);
+    cq.enqueue_write_mesh_buffer(src1_dram_buffer, b.data(), false);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     output.resize(dst_dram_buffer->device_local_size() / sizeof(bfloat16));
-    distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((output).data(), dst_dram_buffer, true);
+    cq.enqueue_read_mesh_buffer((output).data(), dst_dram_buffer, true);
 }
 
 ///////////////////////////////////////

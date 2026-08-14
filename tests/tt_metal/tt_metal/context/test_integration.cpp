@@ -48,7 +48,6 @@
 #include <limits>
 #include <optional>
 #include <string>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal {
@@ -90,11 +89,11 @@ void PerformDeviceWork(
     std::iota(write_data.begin(), write_data.end(), data_pattern);
 
     auto& mesh_cq = mesh_device->mesh_command_queue();
-    distributed::as_mesh_command_queue_base(mesh_cq).enqueue_write_mesh_buffer(mesh_buffer, write_data.data(), false);
+    mesh_cq.enqueue_write_mesh_buffer(mesh_buffer, write_data.data(), false);
 
     std::vector<uint32_t> read_data;
     read_data.resize(mesh_buffer->impl().size() / sizeof(typename std::decay_t<decltype(read_data)>::value_type));
-    distributed::as_mesh_command_queue_base(mesh_cq).enqueue_read_mesh_buffer((read_data).data(), mesh_buffer, true);
+    mesh_cq.enqueue_read_mesh_buffer((read_data).data(), mesh_buffer, true);
 
     if (read_data != write_data) {
         throw std::runtime_error("Buffer read/write verification failed");
@@ -462,11 +461,11 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         std::vector<uint32_t> write_data(num_elements);
         std::iota(write_data.begin(), write_data.end(), 0xDEADBEEFu);
 
-        distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(buffer, write_data.data(), true);
+        cq.enqueue_write_mesh_buffer(buffer, write_data.data(), true);
 
         std::vector<uint32_t> read_data;
         read_data.resize(buffer->impl().size() / sizeof(typename std::decay_t<decltype(read_data)>::value_type));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((read_data).data(), buffer, true);
+        cq.enqueue_read_mesh_buffer((read_data).data(), buffer, true);
 
         auto program = CreateProgram();
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mock_device->shape());

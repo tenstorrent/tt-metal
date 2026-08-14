@@ -938,7 +938,7 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
 
             std::vector<uint32_t> dst_data;
             if (i & 1) {
-                distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(buffer, src_data_1.data(), false);
+                cq.enqueue_write_mesh_buffer(buffer, src_data_1.data(), false);
                 {
                     auto* shard = buffer->get_device_buffer(distributed::MeshCoordinate{0, 0});
                     dst_data.resize(
@@ -951,8 +951,7 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
                 };
                 EXPECT_EQ(src_data_1, dst_data);
             } else {
-                distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(
-                    dram_buffer, src_data_2.data(), false);
+                cq.enqueue_write_mesh_buffer(dram_buffer, src_data_2.data(), false);
                 {
                     auto* shard = dram_buffer->get_device_buffer(distributed::MeshCoordinate{0, 0});
                     dst_data.resize(
@@ -971,7 +970,7 @@ void test_basic_dispatch_functions(const std::shared_ptr<distributed::MeshDevice
     // non blocking fast data movement APIs
     for (int iteration = 0; iteration < k_Iterations; ++iteration) {
         for (int i = 0; i < k_LoopPerDev; ++i) {
-            distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(buffer, src_data_1.data(), false);
+            cq.enqueue_write_mesh_buffer(buffer, src_data_1.data(), false);
         }
     }
 

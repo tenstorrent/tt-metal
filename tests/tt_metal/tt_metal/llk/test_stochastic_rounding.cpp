@@ -176,8 +176,7 @@ StochasticRoundingResult run_stochastic_rounding(
 
     mesh_workload.add_program(distributed::MeshCoordinateRange(cq.device()->shape()), std::move(program));
 
-    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(
-        input_dram_buffer, packed_input.data(), false);
+    cq.enqueue_write_mesh_buffer(input_dram_buffer, packed_input.data(), false);
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     distributed::Finish(cq);
 

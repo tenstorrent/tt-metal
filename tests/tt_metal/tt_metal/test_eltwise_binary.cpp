@@ -139,7 +139,7 @@ void run_eltwise_binary_test(
     // Execute
     std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
         dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src0_dram_buffer, src0_vec.data(), false);
+    cq.enqueue_write_mesh_buffer(src0_dram_buffer, src0_vec.data(), false);
 
     std::vector<uint32_t> src1_vec;
     if (eltwise_op == static_cast<int>(EltwiseOp::MUL)) {
@@ -147,7 +147,7 @@ void run_eltwise_binary_test(
     } else {
         src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 0.0f);
     }
-    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src1_dram_buffer, src1_vec.data(), false);
+    cq.enqueue_write_mesh_buffer(src1_dram_buffer, src1_vec.data(), false);
 
     distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
     auto* shard = dst_dram_buffer->get_device_buffer(distributed::MeshCoordinate(0, 0));

@@ -1554,8 +1554,7 @@ void test_multi_connection_multi_device_data_copy(
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
 
-    tt::tt_metal::distributed::as_mesh_command_queue_base(sender_mesh->mesh_command_queue())
-        .enqueue_write_mesh_buffer(sender_data_buffer, src_vec.data(), false);
+    sender_mesh->mesh_command_queue().enqueue_write_mesh_buffer(sender_data_buffer, src_vec.data(), false);
 
     auto sender_mesh_workload = MeshWorkload();
     auto recv_mesh_workload = MeshWorkload();

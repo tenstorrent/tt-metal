@@ -19,8 +19,6 @@
 #include <random>
 #include <string_view>
 #include <vector>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -242,8 +240,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(a, a_data.data(), false);
-    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(b, b_data.data(), false);
+    cq.enqueue_write_mesh_buffer(a, a_data.data(), false);
+    cq.enqueue_write_mesh_buffer(b, b_data.data(), false);
     // Enqueue the program
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
@@ -252,7 +250,7 @@ int main(int argc, char** argv) {
 
     // Read the output buffer.
     std::vector<bfloat16> c_data(c->device_local_size() / sizeof(bfloat16));
-    distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((c_data).data(), c, true);
+    cq.enqueue_read_mesh_buffer((c_data).data(), c, true);
 
     // Print partial results so we can see the output is correct (plus or minus
     // some error due to BFP16 precision)

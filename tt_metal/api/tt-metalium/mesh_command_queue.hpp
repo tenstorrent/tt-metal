@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <memory>
 #include <optional>
+#include <unordered_set>
 #include <vector>
 
 #include <tt_stl/span.hpp>
@@ -18,6 +19,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 
 namespace tt::tt_metal {
+class DistributedHostBuffer;
 class HostTensor;
 class MemoryConfig;
 class MeshTensor;
@@ -63,6 +65,33 @@ public:
     virtual void enqueue_write_shards(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
+        bool blocking) = 0;
+
+    // MeshBuffer Read/Write APIs
+    virtual void enqueue_write_shard_to_sub_grid(
+        const MeshBuffer& buffer,
+        const void* host_data,
+        const MeshCoordinateRange& device_range,
+        bool blocking,
+        std::optional<BufferRegion> region = std::nullopt) = 0;
+    virtual void enqueue_write_mesh_buffer(
+        const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) = 0;
+    // If PinnedMemory is attached to a HostBuffer used within the enqueue_write, the contents of the memory must not be
+    // modified until the enqueue_write has completed on the device. This may be checked by any of
+    // * calling lock() on the PinnedMemory
+    // * setting the blocking parameter to true
+    // * calling finish() on the MeshCommandQueue
+    // * calling enqueue_record_event_to_host() and then waiting for the event to complete on the host.
+    virtual void enqueue_write(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) = 0;
+
+    virtual void enqueue_read_mesh_buffer(
+        void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) = 0;
+    // TODO: does "enqueue" make sense anymore? Return the object by value instead.
+    virtual void enqueue_read(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        DistributedHostBuffer& host_buffer,
+        const std::optional<std::unordered_set<MeshCoordinate>>& shards,
         bool blocking) = 0;
 
     // MeshTensor Read/Write APIs

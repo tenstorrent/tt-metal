@@ -8,8 +8,6 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/distributed.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -189,12 +187,12 @@ int main() {
     printf("\n");
 
     // Upload inputs (non-blocking), enqueue mesh workload (non-blocking), read back result, then wait for completion
-    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src_buffer, src_vec.data(), false);
-    distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(pad_buffer, pad_vec.data(), false);
+    cq.enqueue_write_mesh_buffer(src_buffer, src_vec.data(), false);
+    cq.enqueue_write_mesh_buffer(pad_buffer, pad_vec.data(), false);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
     dst_vec.resize(dst_buffer->device_local_size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
-    distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((dst_vec).data(), dst_buffer, true);
+    cq.enqueue_read_mesh_buffer((dst_vec).data(), dst_buffer, true);
     distributed::Finish(cq);
 
     printf("Padded tensor with shape (%d, %d):\n", dst_M, dst_N);

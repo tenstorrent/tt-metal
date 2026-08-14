@@ -10,8 +10,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 // This example demonstrates a simple data copy from DRAM into L1(SRAM) and to another place in DRAM.
 // The general flow is as follows:
 // 1. Initialize the device
@@ -104,8 +102,7 @@ int main() {
         // upload is complete. This is useful for performance reasons, as it allows the host to continue while the
         // upload is in progress. Note that the host is responsible for ensuring that the upload is complete before the
         // memory holding the data is freed.
-        distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(
-            input_dram_buffer, input_vec.data(), false);
+        cq.enqueue_write_mesh_buffer(input_dram_buffer, input_vec.data(), false);
 
         // Set runtime arguments for the kernel.
         const std::vector<uint32_t> runtime_args = {
@@ -122,8 +119,7 @@ int main() {
 
         // Read the result back. Use blocking=true to wait for completion.
         std::vector<bfloat16> result_vec(output_dram_buffer->device_local_size() / sizeof(bfloat16));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer(
-            (result_vec).data(), output_dram_buffer, true);
+        cq.enqueue_read_mesh_buffer((result_vec).data(), output_dram_buffer, true);
 
         // Compare the result with the input. The result should be the same as the input.
         TT_FATAL(

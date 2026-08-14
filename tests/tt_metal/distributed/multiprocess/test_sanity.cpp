@@ -22,7 +22,6 @@
 #include "tt_metal/distributed/dummy_mesh_command_queue.hpp"
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -197,12 +196,10 @@ TEST_F(BigMeshDualRankTest2x4, SimpleShardedBufferTest) {
     std::iota(src_vec.begin(), src_vec.end(), 0);
 
     // Write and read back
-    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-        .enqueue_write_mesh_buffer(mesh_buffer, src_vec.data(), false);
+    mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(mesh_buffer, src_vec.data(), false);
     std::vector<uint32_t> dst_vec;
     dst_vec.resize(mesh_buffer->impl().size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
-    tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-        .enqueue_read_mesh_buffer((dst_vec).data(), mesh_buffer, true);
+    mesh_device_->mesh_command_queue().enqueue_read_mesh_buffer((dst_vec).data(), mesh_buffer, true);
 
     // The expectation is that enqueue_write/read_mesh_buffer
     // should handle sharding/unsharding transparently, so dst should equal src

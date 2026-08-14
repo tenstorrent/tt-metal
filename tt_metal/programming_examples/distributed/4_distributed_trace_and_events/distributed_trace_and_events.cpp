@@ -7,8 +7,6 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace tt::tt_metal::distributed;
@@ -250,14 +248,10 @@ int main() {
     // =========== Step 7: Write inputs on MeshCQ1 ===========
     // IO is done through MeshCQ1 and Workload dispatch is done through MeshCQ0. Use MeshEvents to synchronize the
     // independent MeshCQs.
-    tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
-        .enqueue_write_mesh_buffer(add_src0_buf, add_src0_vec.data(), false);
-    tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
-        .enqueue_write_mesh_buffer(add_src1_buf, add_src1_vec.data(), false);
-    tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
-        .enqueue_write_mesh_buffer(mul_sub_src0_buf, mul_sub_src0_vec.data(), false);
-    tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
-        .enqueue_write_mesh_buffer(mul_sub_src1_buf, mul_sub_src1_vec.data(), false);
+    data_movement_cq.enqueue_write_mesh_buffer(add_src0_buf, add_src0_vec.data(), false);
+    data_movement_cq.enqueue_write_mesh_buffer(add_src1_buf, add_src1_vec.data(), false);
+    data_movement_cq.enqueue_write_mesh_buffer(mul_sub_src0_buf, mul_sub_src0_vec.data(), false);
+    data_movement_cq.enqueue_write_mesh_buffer(mul_sub_src1_buf, mul_sub_src1_vec.data(), false);
     // Synchronize
     MeshEvent write_event = data_movement_cq.enqueue_record_event();
     workload_cq.enqueue_wait_for_event(write_event);
@@ -269,10 +263,8 @@ int main() {
     // =========== Step 9: Read Outputs on MeshCQ1 ===========
     std::vector<bfloat16> add_dst_vec(global_buffer_config.global_size / sizeof(bfloat16));
     std::vector<bfloat16> mul_sub_dst_vec(global_buffer_config.global_size / sizeof(bfloat16));
-    tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
-        .enqueue_read_mesh_buffer((add_dst_vec).data(), add_output_buf, true);
-    tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
-        .enqueue_read_mesh_buffer((mul_sub_dst_vec).data(), mul_sub_output_buf, true);
+    data_movement_cq.enqueue_read_mesh_buffer((add_dst_vec).data(), add_output_buf, true);
+    data_movement_cq.enqueue_read_mesh_buffer((mul_sub_dst_vec).data(), mul_sub_output_buf, true);
 
     // =========== Step 10: Verify Outputs ===========
     bool pass = true;

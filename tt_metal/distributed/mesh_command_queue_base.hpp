@@ -123,35 +123,33 @@ public:
 
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
 
-    // MeshBuffer Write APIs (internal — use MeshCommandQueueBase&, not MeshCommandQueue&)
-    virtual void enqueue_write_shard_to_sub_grid(
+    void enqueue_write_shard_to_sub_grid(
         const MeshBuffer& buffer,
         const void* host_data,
         const MeshCoordinateRange& device_range,
         bool blocking,
-        std::optional<BufferRegion> region = std::nullopt);
-    virtual void enqueue_write_mesh_buffer(
-        const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking);
-    // If PinnedMemory is attached to a HostBuffer used within the enqueue_write, the contents of the memory must not be
-    // modified until the enqueue_write has completed on the device.
-    virtual void enqueue_write(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking);
+        std::optional<BufferRegion> region = std::nullopt) override;
+    void enqueue_write_mesh_buffer(
+        const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) override;
+    void enqueue_write(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        const DistributedHostBuffer& host_buffer,
+        bool blocking) override;
     void enqueue_write_shards(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
         bool blocking) override;
 
-    // MeshBuffer Read APIs (internal — use MeshCommandQueueBase&)
-    virtual void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking);
+    void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) override;
     virtual void enqueue_read_shards(
         const std::vector<distributed::ShardDataTransfer>& shard_data_transfers,
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         bool blocking);
-    virtual void enqueue_read(
+    void enqueue_read(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         DistributedHostBuffer& host_buffer,
         const std::optional<std::unordered_set<MeshCoordinate>>& shards,
-        bool blocking);
+        bool blocking) override;
 
     virtual void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) = 0;
     virtual void record_end() = 0;

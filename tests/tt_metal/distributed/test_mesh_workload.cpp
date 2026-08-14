@@ -578,10 +578,10 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
 
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
         for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                .enqueue_write_mesh_buffer(src0_bufs[(col_idx * worker_grid_size.y) + row_idx], src0_vec.data(), false);
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                .enqueue_write_mesh_buffer(src1_bufs[(col_idx * worker_grid_size.y) + row_idx], src1_vec.data(), false);
+            mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(
+                src0_bufs[(col_idx * worker_grid_size.y) + row_idx], src0_vec.data(), false);
+            mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(
+                src1_bufs[(col_idx * worker_grid_size.y) + row_idx], src1_vec.data(), false);
         }
     }
 
@@ -688,9 +688,8 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
 
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
         for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
-            tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue())
-                .enqueue_write_mesh_buffer(
-                    input_buffers[(col_idx * worker_grid_size.y) + row_idx], src_vec.data(), false);
+            mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(
+                input_buffers[(col_idx * worker_grid_size.y) + row_idx], src_vec.data(), false);
         }
     }
 

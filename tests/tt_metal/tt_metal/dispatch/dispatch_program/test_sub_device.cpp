@@ -155,8 +155,7 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
     distributed::Synchronize(device, std::nullopt);
 
     // Test blocking write buffer doesn't stall
-    distributed::as_mesh_command_queue_base(device->mesh_command_queue())
-        .enqueue_write_mesh_buffer(buffer_1, input_1.data(), true);
+    device->mesh_command_queue().enqueue_write_mesh_buffer(buffer_1, input_1.data(), true);
 
     // Test record event won't cause a stall
 

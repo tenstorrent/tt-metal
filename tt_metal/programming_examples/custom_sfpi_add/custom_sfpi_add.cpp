@@ -16,8 +16,6 @@
 #include <string_view>
 #include <vector>
 #include "tt-metalium/base_types.hpp"
-#include "tt_metal/distributed/mesh_command_queue_base.hpp"
-
 using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -147,8 +145,8 @@ int main() {
         // upload is complete. This is useful for performance reasons, as it allows the host to continue while the
         // upload is in progress. Note that the host is responsible for ensuring that the upload is complete before the
         // memory holding the data is freed.
-        distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src0_dram_buffer, a_data.data(), false);
-        distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(src1_dram_buffer, b_data.data(), false);
+        cq.enqueue_write_mesh_buffer(src0_dram_buffer, a_data.data(), false);
+        cq.enqueue_write_mesh_buffer(src1_dram_buffer, b_data.data(), false);
 
         // Set the runtime arguments for the kernels. This also registers the kernels with the program.
         SetRuntimeArgs(program, reader, core, {src0_dram_buffer->address(), src1_dram_buffer->address(), n_tiles});
@@ -164,8 +162,7 @@ int main() {
 
         // Read the result back. Use blocking=true to wait for completion.
         std::vector<bfloat16> result_vec(dst_dram_buffer->device_local_size() / sizeof(bfloat16));
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer(
-            (result_vec).data(), dst_dram_buffer, true);
+        cq.enqueue_read_mesh_buffer((result_vec).data(), dst_dram_buffer, true);
 
         // Compare the result with the input. The result should be the input plus val_to_add.
         constexpr float eps = 1e-2f;  // loose tolerance because of the nature of bfloat16

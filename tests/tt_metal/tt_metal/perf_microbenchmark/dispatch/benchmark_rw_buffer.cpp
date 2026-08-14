@@ -98,8 +98,7 @@ static void BM_write(
         mesh_device.get());
 
     for ([[maybe_unused]] auto _ : state) {
-        tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
-            .enqueue_write_mesh_buffer(device_buffer, host_buffer.data(), true);
+        mesh_device->mesh_command_queue().enqueue_write_mesh_buffer(device_buffer, host_buffer.data(), true);
     }
 
     state.SetBytesProcessed(transfer_size * state.iterations());
