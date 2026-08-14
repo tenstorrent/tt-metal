@@ -741,11 +741,12 @@ section is the credit half of the ledger and is the material for the comparison 
 | run 2 — head creation fed the projection's shard (O4h) | 254.5 | 13.277 | 0.9903 |
 | run 2 — DRAM-sharded LM head weight (O4i) | — | 13.228 | 0.9904 |
 | run 2 — untilize vocab blocks before joining (O4j) | — | 13.139 | 0.9904 |
-| run 2 — fused K/V cache write (O4k) | 234.1 | **12.890** | 0.9904 |
+| run 2 — fused K/V cache write (O4k) | 234.1 | 12.890 | 0.9904 |
+| run 2 — decode SDPA 16 cores/head -> 2 (O4l) | 231.8 | **12.633** | 0.9904 |
 | tool's own roofline target | 338.541 | — | gate 0.95 |
 | **hand-port, for reference** | — | **15.907** | — |
 
-**12.890 against 15.907 — the tool is 19.0% AHEAD of 74 human experiments**, autonomously, with
+**12.633 against 15.907 — the tool is 20.6% AHEAD of 74 human experiments**, autonomously, with
 PCC bit-identical across its last four wins (0.990347151783074, unchanged to every decimal). Every
 one of those four was a layout or dispatch result. None spent accuracy.
 
@@ -1239,6 +1240,30 @@ It tried fusing the MLP's SiLU into the gate projection and reverted it (+13 ms)
 Independently confirmed. It also added a detail the hand-port's note does not have: naming a core
 grid to reach the fused path made gate/up **43.35 → 57.50 ms on the same 96 cores**, because *"the
 router's auto-derived config for a named grid is not the one it picks for itself."*
+
+### O4l — a SIXTH agreement, arrived at through a different knob
+
+Handed no program config, `scaled_dot_product_attention_decode` spends the whole grid: at batch 1
+with 8 KV heads that is **16 cores per head, 128 active**. Its diagnosis is the pattern again —
+
+> *Sixteen ways is far too fine for a 256-deep cache — 16 positions per core, half a tile of work —
+> and the kernel then pays a 4-round tree reduction ACROSS those cores to put each head back
+> together. **The reduction, not the read, was what the op cost.***
+
+It swept `max_cores_per_head_batch`: `default(16) 5.29 / 4 → 3.25 / 2 → 3.04 / 1 → 2.99 ms`.
+Monotone, *"which is the tell that the reduction dominates throughout."* `12.890 → 12.633 ms/token`.
+
+**The hand-port is already there, by another route.** `_SDPA_PRG` passes
+`compute_with_storage_grid_size=CoreCoord(8, 2)` to the decode SDPA — 16 cores total, 8 KV heads,
+so **2 cores per head**. The tool swept a per-head knob and landed on **2**. Same effective
+parallelism, reached from opposite directions. (`[gpt-21]` records the hand-port also found faster
+settings that were *"NOT SAFE — position sweep"*, a correctness dimension the tool's single-length
+gate cannot see.)
+
+Worth noting the tool took **2 rather than 1** despite 1 measuring faster: *"the last step is worth
+0.05 ms, whole-model came out marginally better at 2, and 2 still has somewhere to go when a deeper
+cache makes the read matter again."* It declined 0.05 ms to keep headroom at longer context — a
+judgment about future conditions, not a greedy pick.
 
 ### O5 — the ladder's escalation is real, and it gives up in the right place
 
