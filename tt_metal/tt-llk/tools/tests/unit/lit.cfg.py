@@ -16,8 +16,12 @@ Override the compiler with CXX, and the LLVM tool directory with LLVM_BIN:
     CXX=/path/to/clang++ LLVM_BIN=/usr/lib/llvm-20/bin lit -v tools/tests/unit
 """
 
+import glob
 import os
 import shutil
+import subprocess
+import sys
+import tempfile
 
 import lit.formats
 
@@ -96,6 +100,61 @@ _require(
     f"the sanitizer headers (looked for a sanitizer/ directory in {sanitizer_include})",
     "Run lit against the tools/tests/unit directory inside a tt-llk checkout.",
 )
+
+# ---- libfmt (host mocks) --------------------------------------------------------------
+# sanitizer/output.h under LLK_SAN_MOCK formats reports with header-only libfmt. Probe the
+# candidate include locations; when none works, tests marked REQUIRES: fmt are UNSUPPORTED
+# rather than failing. Override with FMT_INCLUDE=/path/to/include.
+
+
+def _find_fmt_flags():
+    candidates = []
+    if os.environ.get("FMT_INCLUDE"):
+        candidates.append(["-I", os.environ["FMT_INCLUDE"]])
+    candidates.append([])  # system include path
+    # A tt-metal python_env carries fmt inside torch; lit usually runs from that venv.
+    for path in sorted(
+        glob.glob(
+            os.path.join(
+                sys.prefix, "lib", "python3*", "site-packages", "torch", "include"
+            )
+        )
+    ):
+        candidates.append(["-I", path])
+
+    probe = (
+        "#define FMT_HEADER_ONLY\n"
+        "#include <fmt/format.h>\n"
+        'int main() { fmt::print("{}", 1); }\n'
+    )
+    fd, probe_path = tempfile.mkstemp(suffix=".cpp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(probe)
+        for flags in candidates:
+            result = subprocess.run(
+                [cxx, "-std=c++17", "-fsyntax-only"] + flags + [probe_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            if result.returncode == 0:
+                return flags
+    finally:
+        os.unlink(probe_path)
+    return None
+
+
+_fmt_flags = _find_fmt_flags()
+if _fmt_flags is None:
+    config.substitutions.append(("%{fmt_flags}", ""))
+    lit_config.note(
+        "libfmt not found: REQUIRES: fmt tests are UNSUPPORTED "
+        "(set FMT_INCLUDE to an include dir containing fmt/)"
+    )
+else:
+    config.available_features.add("fmt")
+    config.substitutions.append(("%{fmt_flags}", " ".join(_fmt_flags)))
+    lit_config.note(f"libfmt: {' '.join(_fmt_flags) or 'system include path'}")
 
 # ---- substitutions --------------------------------------------------------------------
 # Each test file builds its own command line out of DEFINE'd substitutions on top of

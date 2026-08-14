@@ -30,7 +30,9 @@
 // and what a thread may be handed is not, so the rules are stated once in the arch-independent layer
 // and are identical for every target. api.h only supplies the thread and the state object.
 
-// DEFINE: %{cflags} = -std=c++17 -fsyntax-only -DLLK_SAN_ENABLE -DCOMPILE_FOR_TRISC=0
+// api.h reaches output.h, so the host build needs the LLK_SAN_MOCK primitives and libfmt.
+// REQUIRES: fmt
+// DEFINE: %{cflags} = -std=c++17 -fsyntax-only -DLLK_SAN_ENABLE -DCOMPILE_FOR_TRISC=0 -DLLK_SAN_MOCK -DDEBUG_PRINT_ENABLED %{fmt_flags}
 // DEFINE: %{verify} = -Xclang -verify -Xclang -verify-ignore-unexpected=note
 // DEFINE: %{check} = %clangxx %{cflags} %{verify} -I %{sanitizer_include}
 // RUN: split-file %s %t

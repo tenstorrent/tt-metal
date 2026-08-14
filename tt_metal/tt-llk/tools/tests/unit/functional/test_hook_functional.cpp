@@ -10,16 +10,14 @@
 // from one that records and returns, which is the whole of what these hooks do -- so the cases below
 // drive real sequences and count the reports.
 //
-// Two things the TU has to supply, both declared but deliberately not defined by the headers:
-//
-//   * llk::san::state, the per-thread state object, which on device is a fixed L1 address
-//   * llk::san::detail::state_assert, which on device is the reporting layer and here is a counter, so
-//     that a report can be observed instead of ending the run
-//
-// <cassert> is included first on purpose. state_assert() is spelled that way because assert is a
-// macro, and a kernel that reaches <cassert> before the sanitizer must still compile.
+// The TU supplies llk::san::state (on device a fixed L1 address). Reporting comes from output.h's
+// LLK_SAN_MOCK backend; each emitted report bumps detail::mock_report_count, which is what the cases
+// count. LLK_ASSERT stays a no-op here (no ENABLE_LLK_ASSERT), so a failing check does not end the
+// run.
 
-// RUN: %clangxx -std=c++17 -Wall -Wextra -Werror -DLLK_SAN_ENABLE -DCOMPILE_FOR_TRISC=0 -I %{sanitizer_include} %s -o %t
+// REQUIRES: fmt
+// DEFINE: %{cflags} = -std=c++17 -Wall -Wextra -Werror -DLLK_SAN_ENABLE -DCOMPILE_FOR_TRISC=0 -DLLK_SAN_MOCK -DDEBUG_PRINT_ENABLED %{fmt_flags}
+// RUN: %clangxx %{cflags} -I %{sanitizer_include} %s -o %t
 // RUN: %t
 
 #include <cassert>
@@ -40,35 +38,18 @@ static State thread_state {};
 
 State* const state = &thread_state;
 
-namespace detail
-{
-
-static int reports              = 0;
-static const char* last_message = nullptr;
-
-void state_assert(const bool condition, const char* message)
-{
-    if (!condition)
-    {
-        ++reports;
-        last_message = message;
-    }
-}
-
-} // namespace detail
 } // namespace llk::san
 
 // Each case starts from a thread that has run nothing.
 static void reset()
 {
-    thread_state         = State {};
-    detail::reports      = 0;
-    detail::last_message = nullptr;
+    thread_state              = State {};
+    detail::mock_report_count = 0;
 }
 
 static int reports()
 {
-    return detail::reports;
+    return static_cast<int>(detail::mock_report_count);
 }
 
 int main()

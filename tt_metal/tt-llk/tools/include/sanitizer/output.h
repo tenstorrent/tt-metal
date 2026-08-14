@@ -4,10 +4,6 @@
 
 #pragma once
 
-#include <cstring>
-
-#include "ckernel.h"
-#include "llk_assert.h"
 #include "sanitizer/settings.h"
 #include "sanitizer/types.h"
 
@@ -15,13 +11,97 @@
 #define FULL_KERNEL_NAME "<unknown>"
 #endif
 
-#ifndef LLK_SAN_ENABLE
+#ifdef LLK_SAN_ENABLE
 
-#elif defined(ENABLE_LLK_ASSERT)
+#if !defined(ENABLE_LLK_ASSERT) && !defined(DEBUG_PRINT_ENABLED)
+#error "llk::san | fault   | LLK_SAN_ENABLE is set but neither ENABLE_LLK_ASSERT nor DEBUG_PRINT_ENABLED is defined"
+#endif
 
+#if defined(LLK_SAN_MOCK)
+
+// Host (lit) mocks of the device print/assert primitives.
+
+#define NOINLINE
+#define NOCLONE
+
+struct ct_string
+{
+    const char* ptr;
+};
+
+#define CTSTR(literal) (ct_string {literal})
+
+struct dp_top_callstack_t
+{
+    std::uintptr_t pc;
+    std::uintptr_t ra;
+    std::uintptr_t skip_frames;
+
+    dp_top_callstack_t(std::uintptr_t pc, std::uintptr_t ra, std::uintptr_t skip_frames) : pc(pc), ra(ra), skip_frames(skip_frames)
+    {
+    }
+};
+
+#if defined(DEBUG_PRINT_ENABLED)
+
+#define FMT_HEADER_ONLY
+#include <fmt/format.h>
+
+template <>
+struct fmt::formatter<ct_string> : fmt::formatter<const char*>
+{
+    auto format(const ct_string s, format_context& ctx) const
+    {
+        return fmt::formatter<const char*>::format(s.ptr, ctx);
+    }
+};
+
+template <>
+struct fmt::formatter<dp_top_callstack_t>
+{
+    constexpr auto parse(format_parse_context& ctx)
+    {
+        return ctx.begin();
+    }
+
+    auto format(const dp_top_callstack_t& callstack, format_context& ctx) const
+    {
+        return fmt::format_to(ctx.out(), "pc=0x{:x} ra=0x{:x} skip={}", callstack.pc, callstack.ra, callstack.skip_frames);
+    }
+};
+
+#define DEVICE_PRINT(...) fmt::print(__VA_ARGS__)
+
+#endif // DEBUG_PRINT_ENABLED
+
+// Mirrors common/llk_assert.h.
+#if defined(ENABLE_LLK_ASSERT)
+
+#include <cstdio>
+#include <cstdlib>
+
+#define LLK_ASSERT(condition, message)        \
+    do                                        \
+    {                                         \
+        if (!(condition))                     \
+        {                                     \
+            std::fputs(message "\n", stderr); \
+            std::abort();                     \
+        }                                     \
+    } while (false)
+
+#else
+
+#define LLK_ASSERT(condition, message) ((void)sizeof((condition)))
+
+#endif // ENABLE_LLK_ASSERT
+
+#else // device
+
+#include "ckernel.h"
 #include "llk_assert.h"
 
-#elif defined(DEBUG_PRINT_ENABLED)
+#if defined(DEBUG_PRINT_ENABLED)
 
 #ifdef ENV_LLK_INFRA
 #error "llk::san | fault   | DEBUG_PRINT_ENABLED is not supported in LLK INFRA, only in metal"
@@ -30,8 +110,258 @@
 #include "api/debug/device_print.h"
 
 #else
-#error "llk::san | fault   | LLK_SAN_ENABLE is set but neither ENABLE_LLK_ASSERT nor DEBUG_PRINT_ENABLED is defined"
+
+// Assert-only build: device_print.h is absent, so supply the string carrier the report code expects.
+struct ct_string
+{
+    const char* ptr;
+};
+
+#define CTSTR(literal) (ct_string {literal})
+
+struct dp_top_callstack_t
+{
+    std::uintptr_t pc;
+    std::uintptr_t ra;
+    std::uintptr_t skip_frames;
+
+    dp_top_callstack_t(std::uintptr_t pc, std::uintptr_t ra, std::uintptr_t skip_frames) : pc(pc), ra(ra), skip_frames(skip_frames)
+    {
+    }
+};
+
+#endif // DEBUG_PRINT_ENABLED
+
+#endif // LLK_SAN_MOCK
+
+namespace llk::san
+{
+
+namespace detail
+{
+
+#if defined(LLK_SAN_MOCK)
+// Bumped once per emitted report so host tests can count without capturing stdout.
+inline unsigned mock_report_count = 0;
 #endif
+
+inline void report_tally()
+{
+#if defined(LLK_SAN_MOCK)
+    ++mock_report_count;
+#endif
+}
+
+// No print backend: the report reduces to LLK_ASSERT. Arguments are still evaluated so the
+// signatures stay warning-free and identical across backends.
+template <typename... As>
+inline void device_print_noop(const As&...)
+{
+}
+
+} // namespace detail
+
+} // namespace llk::san
+
+#if !defined(DEVICE_PRINT)
+#define DEVICE_PRINT(...) llk::san::detail::device_print_noop(__VA_ARGS__)
+#endif
+
+namespace llk::san
+{
+
+namespace detail
+{
+
+NOINLINE NOCLONE inline ct_string trigger_name(const Trigger trigger)
+{
+    switch (trigger)
+    {
+        case Trigger::PEDANTIC:
+            return CTSTR("pedantic");
+        case Trigger::WARN:
+            return CTSTR("warn    ");
+        case Trigger::ERROR:
+            return CTSTR("error   ");
+        case Trigger::FAULT:
+            return CTSTR("fault   ");
+        case Trigger::INFO:
+            return CTSTR("info    ");
+        case Trigger::INTERNAL:
+            return CTSTR("internal");
+    }
+    __builtin_unreachable();
+}
+
+NOINLINE NOCLONE inline ct_string operation_status_name(const OperationStatus status)
+{
+    switch (status)
+    {
+        case OperationStatus::Uninitialized:
+            return CTSTR("UNINITIALIZED");
+        case OperationStatus::Initialized:
+            return CTSTR("INITIALIZED");
+        case OperationStatus::Executed:
+            return CTSTR("EXECUTED");
+    }
+    __builtin_unreachable();
+}
+
+NOINLINE NOCLONE inline void print_full_kernel()
+{
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ Current Kernel ]─\r"
+        "│  └── {}\r",
+        CTSTR(FULL_KERNEL_NAME));
+}
+
+NOINLINE NOCLONE inline void print_compute_info(const UnwindContext context)
+{
+    // sstanisic todo: skip the sanitizer-internal frames again once the context zones are ported.
+    DEVICE_PRINT("{}\r", dp_top_callstack_t(context.pc, context.ra, 0));
+}
+
+// Report a tracked field whose provided value differs from the recorded one. Serves both state
+// kinds: the configured Operand state and the Operation record init() wrote; the message names the
+// hook and the kind.
+template <Trigger L, typename S, typename F>
+NOINLINE NOCLONE inline void field_assert(
+    const S& expected, const StateVal<F>& provided, const ct_string message, const UnwindContext update, const UnwindContext current)
+{
+    if (!enabled_trigger(L) || expected.equal(provided))
+    {
+        return;
+    }
+
+    DEVICE_PRINT(
+        "┌─[ llk::san ]─[ {} ]───\r"
+        "│  {}\r",
+        trigger_name(L),
+        message);
+
+    print_full_kernel();
+
+    if (expected.template knows<F>())
+    {
+        DEVICE_PRINT(
+            "│\r"
+            "│  ┌[ Recorded state ]─\r"
+            "│  ├── Value ── {}\r",
+            expected.template get<F>());
+    }
+    else
+    {
+        DEVICE_PRINT(
+            "│\r"
+            "│  ┌[ Recorded state ]─\r"
+            "│  ├── Value ── UNKNOWN (value never recorded?)\r");
+    }
+
+    print_compute_info(update);
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ Failed state check ]─\r"
+        "│  ├── Provided value ── {}\r",
+        provided.value);
+
+    print_compute_info(current);
+
+    DEVICE_PRINT("└─────────────────────────────\n");
+
+    report_tally();
+
+    LLK_ASSERT(false, "llk::san | error   | state assertion, look at the sanitizer log");
+}
+
+// Report a hook that named an Operation its Exu holds no record for. The caller detects the
+// condition (the record type is erased here); this only words it.
+template <Trigger L>
+NOINLINE NOCLONE inline void operation_seated_assert(
+    const OperationStatus seated, const ct_string message, const UnwindContext update, const UnwindContext current)
+{
+    if (!enabled_trigger(L))
+    {
+        return;
+    }
+
+    DEVICE_PRINT(
+        "┌─[ llk::san ]─[ {} ]───\r"
+        "│  {}\r",
+        trigger_name(L),
+        message);
+
+    print_full_kernel();
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ Seated operation ]─\r"
+        "│  ├── Status ── {}\r",
+        operation_status_name(seated));
+
+    print_compute_info(update);
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ Failed hook ]─\r");
+
+    print_compute_info(current);
+
+    DEVICE_PRINT("└─────────────────────────────\n");
+
+    report_tally();
+
+    LLK_ASSERT(false, "llk::san | error   | operation assertion, look at the sanitizer log");
+}
+
+// Report operand state that moved between init() and a later hook (the snapshot is no longer a
+// subset of the configured state).
+template <Trigger L>
+NOINLINE NOCLONE inline void drift_assert(const bool subset, const ct_string message, const UnwindContext update, const UnwindContext current)
+{
+    if (!enabled_trigger(L) || subset)
+    {
+        return;
+    }
+
+    DEVICE_PRINT(
+        "┌─[ llk::san ]─[ {} ]───\r"
+        "│  {}\r",
+        trigger_name(L),
+        message);
+
+    print_full_kernel();
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ Operation initialized here ]─\r");
+
+    print_compute_info(update);
+
+    DEVICE_PRINT(
+        "│\r"
+        "│  ┌[ Failed hook ]─\r");
+
+    print_compute_info(current);
+
+    DEVICE_PRINT("└─────────────────────────────\n");
+
+    report_tally();
+
+    LLK_ASSERT(false, "llk::san | error   | drift assertion, look at the sanitizer log");
+}
+
+} // namespace detail
+
+} // namespace llk::san
+
+// =======================================================================================
+// Legacy reporting -- DISABLED
+// =======================================================================================
+// Written against the old state model (State<T>, OperationState, FsmState, the Operation enum).
+// Kept as the reference for the FSM reporting until that port lands.
+#if 0
 
 namespace llk::san
 {
@@ -313,3 +643,7 @@ NOINLINE NOCLONE bool fsm_assert(
 }
 
 } // namespace llk::san
+
+#endif // legacy reporting
+
+#endif // LLK_SAN_ENABLE

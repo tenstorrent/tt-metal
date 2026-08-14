@@ -590,6 +590,29 @@ public:
         __builtin_unreachable();
     }
 
+    template <typename F>
+    bool knows() const
+    {
+        static_assert(contains<F>(), "Field is not a member of this StateStruct.");
+        if constexpr (contains<F>())
+        {
+            return known.test(index<F>());
+        }
+        __builtin_unreachable();
+    }
+
+    template <typename F>
+    field_type_t<F> get() const
+    {
+        static_assert(contains<F>(), "Field is not a member of this StateStruct.");
+        if constexpr (contains<F>())
+        {
+            constexpr std::size_t idx = index<F>();
+            return std::get<idx>(values);
+        }
+        __builtin_unreachable();
+    }
+
     bool subset_of(const StateStructImpl& other) const
     {
         return subset_of(other, std::index_sequence_for<Fs...> {});

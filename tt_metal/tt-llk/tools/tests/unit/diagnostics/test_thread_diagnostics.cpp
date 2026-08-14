@@ -33,7 +33,9 @@
 // See test_state_diagnostics.cpp for how -verify, split-file and @*:* work, and
 // test_api_diagnostics.cpp for why LLK_SAN_ENABLE and COMPILE_FOR_TRISC are needed here.
 
-// DEFINE: %{cflags} = -std=c++17 -fsyntax-only -DLLK_SAN_ENABLE -DCOMPILE_FOR_TRISC=0
+// api.h reaches output.h, so the host build needs the LLK_SAN_MOCK primitives and libfmt.
+// REQUIRES: fmt
+// DEFINE: %{cflags} = -std=c++17 -fsyntax-only -DLLK_SAN_ENABLE -DCOMPILE_FOR_TRISC=0 -DLLK_SAN_MOCK -DDEBUG_PRINT_ENABLED %{fmt_flags}
 // DEFINE: %{verify} = -Xclang -verify -Xclang -verify-ignore-unexpected=note
 // DEFINE: %{check} = %clangxx %{cflags} %{verify} -I %{sanitizer_include}
 // RUN: split-file %s %t

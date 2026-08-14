@@ -13,6 +13,7 @@
 #include <variant>
 
 #include "sanitizer/operation.h"
+#include "sanitizer/output.h"
 #include "sanitizer/types.h"
 
 namespace llk::san
@@ -20,13 +21,6 @@ namespace llk::san
 
 namespace detail
 {
-
-// Named state_assert() rather than assert() because <cassert> defines assert as a function-like
-// macro, and a kernel is free to include it before this header.
-//
-// sstanisic todo: this is where the reporting lands once output.h is ported -- see the note above the
-// legacy region at the bottom of this header. Until then a failed check is an unresolved symbol.
-void state_assert(bool condition, const char* message);
 
 // -------
 // Defects
@@ -259,6 +253,109 @@ static inline void operand_context_update(ExuContext<E>& context)
     }
 }
 
+// Read twin of operand_context_update: where the operand slot holding F was last written.
+template <typename F, Exu E>
+static inline UnwindContext operand_context_get(const ExuContext<E>& context)
+{
+    if constexpr (E == Exu::Unpack)
+    {
+        using Unpack = Operand<Exu::Unpack>;
+
+        if constexpr (count_of_v<F, Unpack::InputFormatA, Unpack::OutputFormatA, Unpack::FaceHeightA, Unpack::NumFacesA> == 1)
+        {
+            return context.operand.unpack_a;
+        }
+        else if constexpr (count_of_v<F, Unpack::InputFormatB, Unpack::OutputFormatB, Unpack::FaceHeightB, Unpack::NumFacesB> == 1)
+        {
+            return context.operand.unpack_b;
+        }
+        else
+        {
+            // DestWidth32 records no site (see #47440).
+            return UnwindContext::UNKNOWN;
+        }
+    }
+    else if constexpr (E == Exu::Fpu)
+    {
+        return context.operand.fpu;
+    }
+    else if constexpr (E == Exu::Sfpu)
+    {
+        return context.operand.sfpu;
+    }
+    else if constexpr (E == Exu::Pack)
+    {
+        return context.operand.pack;
+    }
+    else
+    {
+        static_assert(always_false_value_v<E>, "llk::san -> [FAULT] Unsupported Exu");
+    }
+}
+
+// --------------
+// Report wording
+// --------------
+
+// CTSTR requires a literal at its expansion site, so the texts are functions with one literal per
+// hook rather than constants.
+
+template <ApiClass A>
+static inline ct_string operand_mismatch_text()
+{
+    if constexpr (A == ApiClass::Execute)
+    {
+        return CTSTR("execute() was given an Operand value that differs from the configured state");
+    }
+    else
+    {
+        static_assert(A == ApiClass::Uninitialize, "llk::san -> [FAULT] no operand mismatch wording for this hook");
+        return CTSTR("uninit() was given an Operand value that differs from the configured state");
+    }
+}
+
+template <ApiClass A>
+static inline ct_string operation_mismatch_text()
+{
+    if constexpr (A == ApiClass::Execute)
+    {
+        return CTSTR("execute() was given an Operation value that differs from init()");
+    }
+    else
+    {
+        static_assert(A == ApiClass::Uninitialize, "llk::san -> [FAULT] no operation mismatch wording for this hook");
+        return CTSTR("uninit() was given an Operation value that differs from init()");
+    }
+}
+
+template <ApiClass A>
+static inline ct_string not_initialized_text()
+{
+    if constexpr (A == ApiClass::Execute)
+    {
+        return CTSTR("execute() was called for an Operation the Exu is not initialized for");
+    }
+    else
+    {
+        static_assert(A == ApiClass::Uninitialize, "llk::san -> [FAULT] no not-initialized wording for this hook");
+        return CTSTR("uninit() was called for an Operation the Exu is not initialized for");
+    }
+}
+
+template <ApiClass A>
+static inline ct_string drift_text()
+{
+    if constexpr (A == ApiClass::Execute)
+    {
+        return CTSTR("execute() found the Operand state changed since init()");
+    }
+    else
+    {
+        static_assert(A == ApiClass::Uninitialize, "llk::san -> [FAULT] no drift wording for this hook");
+        return CTSTR("uninit() found the Operand state changed since init()");
+    }
+}
+
 // --------------------
 // Field Update Wrapper
 // --------------------
@@ -268,43 +365,49 @@ static inline void field_update(State&, StateDiscard<T>)
 {
 }
 
+template <ApiClass A, typename T>
+static inline void field_update(State&, StateDiscard<T>)
+{
+}
+
 template <ApiClass A, typename F>
 static inline void field_update(State& sanitizer, const StateVal<F>& value)
 {
+    constexpr bool configures  = (A == ApiClass::Configure || A == ApiClass::Reconfigure);
+    constexpr bool initializes = (A == ApiClass::Initialize);
+
     using G = field_group_t<F>;
 
-    if constexpr (is_operand_v<G>)
+    if constexpr (configures && is_operand_v<G>)
     {
-        auto& exu = exu_state<operand_of<G>::exu>(sanitizer);
+        constexpr Exu E  = operand_of<G>::exu;
+        ExuState<E>& exu = exu_state<E>(sanitizer);
 
-        if constexpr (A == ApiClass::Configure || A == ApiClass::Reconfigure)
-        {
-            exu.operand.update(value);
-
-            operand_context_update<F>(exu.context);
-        }
-        else if constexpr (A == ApiClass::Initialize)
-        {
-            exu.operation.snapshot.update(value);
-        }
-        else
-        {
-            static_assert(always_false_value_v<A>, "llk::san -> [FAULT] execute() and uninit() check state, they do not update it");
-        }
+        exu.operand.update(value);
+        operand_context_update<F>(exu.context);
     }
-    else
+    else if constexpr (initializes && is_operand_v<G>)
     {
-        static_assert(A == ApiClass::Initialize, "llk::san -> [FAULT] only init() writes Operation state");
+        constexpr Exu E  = operand_of<G>::exu;
+        ExuState<E>& exu = exu_state<E>(sanitizer);
 
-        auto* record = operation_get<G>(sanitizer);
+        exu.operation.snapshot.update(value);
+    }
+    else if (initializes && is_operation_v<G>)
+    {
+        auto* specific = operation_get<G>(sanitizer);
+        // sstanisic todo :: SAN_ASSERT that record is not nullptr.
 
-        // init() seats the record before folding its arguments, so null is a sanitizer fault.
         state_assert(record != nullptr, "llk::san -> [FAULT] field_update() found no record for its own Operation");
 
         if (record != nullptr)
         {
             record->update(value);
         }
+    }
+    else
+    {
+        static_assert(always_false_v<F>, "llk::san -> [FAULT] only init() writes Operation state");
     }
 }
 
@@ -324,13 +427,22 @@ static inline void field_check(State& sanitizer, const StateVal<F>& value)
 
     if constexpr (is_operation_v<G>)
     {
+        auto& exu          = exu_state<operation_of<G>::exu>(sanitizer);
         const auto* record = operation_get<G>(sanitizer);
 
-        state_assert(record != nullptr && record->equal(value), hook_text<A>::operation_mismatch);
+        // The hooks report an unseated operation before folding, so null is a sanitizer fault.
+        LLK_ASSERT(record != nullptr, "llk::san | fault   | field_check() found no record for its own Operation");
+
+        if (record != nullptr)
+        {
+            field_assert<Trigger::ERROR>(*record, value, operation_mismatch_text<A>(), exu.context.operation, exu.context.current);
+        }
     }
     else
     {
-        state_assert(exu_state<operand_of<G>::exu>(sanitizer).operand.equal(value), hook_text<A>::operand_mismatch);
+        auto& exu = exu_state<operand_of<G>::exu>(sanitizer);
+
+        field_assert<Trigger::ERROR>(exu.operand, value, operand_mismatch_text<A>(), operand_context_get<F>(exu.context), exu.context.current);
     }
 }
 
@@ -423,14 +535,14 @@ static inline void execute(State& sanitizer, Vs&&... values)
         // would only invent failures.
         if (operation_get<Op>(sanitizer) == nullptr)
         {
-            state_assert(false, hook_text<hook>::not_initialized);
+            operation_seated_assert<Trigger::ERROR>(exu.operation.status, not_initialized_text<hook>(), exu.context.operation, exu.context.current);
             return;
         }
 
         (field_check<hook>(sanitizer, values), ...);
 
         // Catches a reconfigure() between init() and here, whether or not the field is restated.
-        state_assert(exu.operation.snapshot.subset_of(exu.operand), hook_text<hook>::operand_drift);
+        drift_assert<Trigger::ERROR>(exu.operation.snapshot.subset_of(exu.operand), drift_text<hook>(), exu.context.operation, exu.context.current);
 
         // Advanced even on failure, so the state describes the sequence that actually ran.
         exu.operation.status = OperationStatus::Executed;
@@ -460,13 +572,13 @@ static inline void uninit(State& sanitizer, Vs&&... values)
 
         if (operation_get<Op>(sanitizer) == nullptr)
         {
-            state_assert(false, hook_text<hook>::not_initialized);
+            operation_seated_assert<Trigger::ERROR>(exu.operation.status, not_initialized_text<hook>(), exu.context.operation, exu.context.current);
             return;
         }
 
         (field_check<hook>(sanitizer, values), ...);
 
-        state_assert(exu.operation.snapshot.subset_of(exu.operand), hook_text<hook>::operand_drift);
+        drift_assert<Trigger::ERROR>(exu.operation.snapshot.subset_of(exu.operand), drift_text<hook>(), exu.context.operation, exu.context.current);
 
         exu.operation.status = OperationStatus::Uninitialized;
 
@@ -488,12 +600,10 @@ static inline void uninit(State& sanitizer, Vs&&... values)
 // OperationExtended in operation.h -- so this region cannot compile, and it is the only thing in
 // this header that needs output.h.
 //
-// It is disabled rather than deleted because the reporting it performs still has to be carried
-// over: the guarded entry points above record and compare state but say nothing when a comparison
-// fails, which is what operand_assert / operation_assert / fsm_assert did here.
+// The state reporting has been ported (the entry points above call output.h's asserts); what is
+// still only here is the FSM and the context zone tracking.
 //
-// sstanisic todo: port the reporting onto the new state model and re-enable, or delete this once
-// output.h is rewritten. Until then a runtime mismatch calls the undefined detail::state_assert.
+// sstanisic todo: port the FSM and the zones onto the new state model, then delete this.
 #if 0
 
 static inline void thread_init_impl(SanitizerState& sanitizer)
