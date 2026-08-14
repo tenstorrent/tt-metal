@@ -15,7 +15,6 @@ from copy import deepcopy
 from typing import Optional
 
 import torch
-from loguru import logger
 
 from models.demos.common.prefill.adapter import PrefillModelAdapter as TestVariant
 
@@ -32,9 +31,6 @@ def run_reference_moe(
 ) -> Optional[torch.Tensor]:
     """Forward the variant's upstream MoE reference on CPU."""
     if variant.reference_moe_cls is None:
-        return None
-    if not getattr(variant, "supports_reference_moe_crosscheck", True):
-        logger.info(f"{variant.name}: upstream MoE reference cross-check not supported for this variant, skipping")
         return None
     # Test params can override the variant's default MoE dims (expert count, hidden/intermediate size —
     # e.g. GLM-5.1's 256 experts / 6144 hidden vs the deepseek_v3 variant's 7168), so patch the reference
