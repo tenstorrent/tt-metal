@@ -1,0 +1,291 @@
+operands:
+  - name: "x"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "input_mask"
+    dims: [64, 64]
+    format: "Float16_b"
+    const_value: 1.0
+
+  - name: "scaler"
+    dims: [64, 64]
+    format: "Float16_b"
+    const_value: 1.0
+
+  - name: "inv_num_datums"
+    dims: [64, 64]
+    format: "Float16_b"
+    const_value: 0.000244140625
+
+  - name: "eps"
+    dims: [64, 64]
+    format: "Float16_b"
+    const_value: 0.001
+
+  - name: "gamma"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "beta"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "x_masked"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "ex_sum"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "ex"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "xmm"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "xmm_masked"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "xmm2"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "ex2_sum"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "ex2"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "ex2pe"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "xmm_final"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "xmm_final_masked"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "normalized"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "accum_out"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "gamma_out"
+    dims: [64, 64]
+    format: "Float16_b"
+
+  - name: "output"
+    dims: [64, 64]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "x"
+        src_b: "input_mask"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        math_fidelity: "HiFi4"
+    block_size: [64, 64]
+    pack:
+      - output: "x_masked"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "x_masked"
+        src_b: "scaler"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_SCALAR"
+        reduce_pool: "SUM"
+        reduce_to_tile: true
+        unpacker: "ReduceUnpacker"
+        math_fidelity: "HiFi4"
+    block_size: [64, 64]
+    pack:
+      - output: "ex_sum"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "ex_sum"
+        src_b: "inv_num_datums"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        math_fidelity: "HiFi4"
+    block_size: [64, 64]
+    pack:
+      - output: "ex"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "x"
+        src_b: "ex"
+        operation: "Elwsub"
+        unpacker: "UnpackerAB"
+        broadcast_type: "SCALAR"
+        broadcast_tile: 0
+        math_fidelity: "LoFi"
+    block_size: [64, 64]
+    pack:
+      - output: "xmm"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "xmm"
+        src_b: "input_mask"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        math_fidelity: "HiFi4"
+    block_size: [64, 64]
+    pack:
+      - output: "xmm_masked"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "xmm_masked"
+        src_b: "xmm_masked"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        math_fidelity: "HiFi4"
+    block_size: [64, 64]
+    pack:
+      - output: "xmm2"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "xmm2"
+        src_b: "scaler"
+        operation: "Reduce"
+        reduce_dim: "REDUCE_SCALAR"
+        reduce_pool: "SUM"
+        reduce_to_tile: true
+        unpacker: "ReduceUnpacker"
+        math_fidelity: "HiFi4"
+    block_size: [64, 64]
+    pack:
+      - output: "ex2_sum"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "ex2_sum"
+        src_b: "inv_num_datums"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        math_fidelity: "HiFi4"
+    block_size: [64, 64]
+    pack:
+      - output: "ex2"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "ex2"
+        src_b: "eps"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        math_fidelity: "LoFi"
+      - type: "UnarySfpu"
+        operation: "Rsqrt"
+        approximation_mode: true
+        iterations: 32
+    block_size: [64, 64]
+    pack:
+      - output: "ex2pe"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "x"
+        src_b: "ex"
+        operation: "Elwsub"
+        unpacker: "UnpackerAB"
+        broadcast_type: "SCALAR"
+        broadcast_tile: 0
+        math_fidelity: "LoFi"
+    block_size: [64, 64]
+    pack:
+      - output: "xmm_final"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "xmm_final"
+        src_b: "input_mask"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        math_fidelity: "HiFi4"
+    block_size: [64, 64]
+    pack:
+      - output: "xmm_final_masked"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "xmm_final_masked"
+        src_b: "ex2pe"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        broadcast_type: "SCALAR"
+        broadcast_tile: 0
+        math_fidelity: "HiFi4"
+    block_size: [64, 64]
+    pack:
+      - output: "normalized"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "normalized"
+        src_b: "input_mask"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+    block_size: [64, 64]
+    pack:
+      - output: "accum_out"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "accum_out"
+        src_b: "gamma"
+        operation: "Elwmul"
+        unpacker: "UnpackerAB"
+        broadcast_type: "ROW"
+        math_fidelity: "HiFi4"
+    block_size: [64, 64]
+    pack:
+      - output: "gamma_out"
+        packer: "Packer"
+
+  - math:
+      - type: "Fpu"
+        src_a: "gamma_out"
+        src_b: "beta"
+        operation: "Elwadd"
+        unpacker: "UnpackerAB"
+        broadcast_type: "ROW"
+        math_fidelity: "LoFi"
+    block_size: [64, 64]
+    pack:
+      - output: "output"
+        packer: "Packer"
