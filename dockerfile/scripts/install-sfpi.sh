@@ -61,7 +61,7 @@ mkdir -p "${TMPDIR}"
 
 # Download (use curl if wget not available)
 if command -v wget &> /dev/null; then
-    wget -q -O "${DEB_FILE}" "${DOWNLOAD_URL}"
+    wget -nv -O "${DEB_FILE}" "${DOWNLOAD_URL}"
 else
     curl -fsSL -o "${DEB_FILE}" "${DOWNLOAD_URL}"
 fi

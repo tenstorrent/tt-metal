@@ -1123,14 +1123,33 @@ static std::vector<Tensor> pool2d(
         // ttnn::sum exposes a scalar parameter, but pool_sum is the only reduction entry point
         // that accepts (N, 1, H*W, C) tensors with H*W padding without producing garbage.
         // Replace once ttnn::sum gains equivalent handling.
-        Tensor output = ttnn::operations::reduction::pool_sum(canonical, 2, reduce_mem, compute_kernel_config, scalar);
+        //
+        // Forwarding output_layout into pool_sum makes the to_layout below a no-op; nullopt keeps
+        // the reduce's native layout and defers the conversion.
+        //
+        // ROW_MAJOR: forwarded at any batch size. Untilizing the (N, 1, 1, C) result spreads over
+        // the batch rows, and the fold of N into H below is then a free view instead of a device
+        // op. Block-float is the exception — the reduce rejects a ROW_MAJOR request because
+        // block-float exists only as TILE — so its native TILE result reaches the to_layout below,
+        // which untilizes and widens to BFLOAT16.
+        //
+        // TILE: forwarded only for batch==1, where the following view does not fold axes. At
+        // batch>1 both orders — folding a TILE result, or folding the ROW_MAJOR one and tilizing
+        // after — cost about the same, so the reduce keeps its native layout.
+        const bool forward_output_layout =
+            output_layout == Layout::ROW_MAJOR ? !tt::tt_metal::is_block_float(canonical.dtype()) : batch_size == 1;
+        const std::optional<Layout> reduce_output_layout =
+            forward_output_layout ? std::optional<Layout>(output_layout) : std::nullopt;
+        Tensor output = ttnn::operations::reduction::pool_sum(
+            canonical, 2, reduce_mem, compute_kernel_config, scalar, reduce_output_layout);
         // pool_sum returns (N, 1, 1, C). For batch=1 this is (1, 1, 1, C), the avg_pool2d output
         // convention (1, 1, N*out_H*out_W, C) coincides. For batch>1 we reshape to (1, 1, N, C).
         const auto& output_padded_shape = output.padded_shape();
         if (batch_size == 1) {
-            // Set logical channel count (zero-copy view).
+            // Set logical channel count (zero-copy view). Padded H comes from the reduce, which pads
+            // it to a full tile row for a TILE result.
             ttnn::Shape out_logical({1, 1, 1, channels});
-            ttnn::Shape out_padded({output_padded_shape[0], 1, 1, output_padded_shape[3]});
+            ttnn::Shape out_padded({output_padded_shape[0], 1, output_padded_shape[2], output_padded_shape[3]});
             output = ttnn::experimental::view(output, out_logical, out_padded);
         } else {
             ttnn::Shape correct_logical({1, 1, batch_size, channels});
