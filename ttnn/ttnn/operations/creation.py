@@ -35,13 +35,8 @@ def _golden_function(input_tensor: ttnn.Tensor, *, fill_value: float, **_):
 ttnn.attach_golden_function(ttnn.full_like, golden_function=_golden_function)
 
 
-def _golden_function(input_tensor: ttnn.Tensor, *, fill_value: float, **_):
-    import torch
-
-    return torch.empty_like(input_tensor, fill_value)
-
-
-ttnn.attach_golden_function(ttnn.empty_like, golden_function=_golden_function)
+# empty_like returns uninitialized storage, so comparison mode has no meaningful value golden.
+ttnn.attach_golden_function(ttnn.empty_like, golden_function=None)
 
 
 def _golden_function(input_shape: ttnn.Shape, **_):
