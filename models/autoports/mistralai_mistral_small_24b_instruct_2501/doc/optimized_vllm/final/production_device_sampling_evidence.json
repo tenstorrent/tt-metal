@@ -1,0 +1,66 @@
+{
+  "model": "mistralai/Mistral-Small-24B-Instruct-2501",
+  "server_mode": {
+    "route": "real vLLM TT plugin through tt/generator_vllm.py",
+    "sample_on_device_mode": "all",
+    "trace_mode": "all",
+    "async_scheduling": true,
+    "host_sampling_compatibility": false,
+    "max_num_seqs": 32,
+    "max_model_len": 32768,
+    "mesh": "1x4 Blackhole p300c FABRIC_1D",
+    "precision_config": "bfp4_lofi_bfp8kv_bf16ccl"
+  },
+  "focused_stochastic_request": {
+    "endpoint": "/v1/chat/completions",
+    "temperature": 0.7,
+    "top_p": 0.9,
+    "top_k": 32,
+    "prompt_tokens": 192,
+    "requested_completion_tokens": 128,
+    "completion_tokens": 128,
+    "http_status": 200,
+    "finish_reason": "length",
+    "coherent": true,
+    "health_after": 200
+  },
+  "mixed_slot_reuse": {
+    "waves": 2,
+    "requests_per_wave": 8,
+    "greedy_per_wave": 4,
+    "stochastic_per_wave": 4,
+    "stochastic_config": {
+      "temperature": 0.7,
+      "top_p": 0.9,
+      "top_k": 32
+    },
+    "completed_requests": 16,
+    "http_200": 16,
+    "greedy_outputs_stable_across_reversed_slot_reuse": true,
+    "stochastic_outputs_varied_across_reversed_slot_reuse": true,
+    "coherent": true,
+    "health_after": 200
+  },
+  "live_route_audit": {
+    "environment": "TT_DEVICE_SAMPLING_AUDIT=1",
+    "single_prefill": "perform_device_sampling=True is_decode=False active_top_k=(32,) active_temperature=(0.699999988079071,)",
+    "single_decode": "perform_device_sampling=True is_decode=True active_top_k=(32,) active_temperature=(0.699999988079071,)",
+    "mixed_decode": "perform_device_sampling=True for alternating greedy/stochastic rows, including top_k=32 temperature=0.699999988079071",
+    "source": "server_production_device_sampling.log"
+  },
+  "production_qualitative": {
+    "prompts": 6,
+    "greedy_completions": 6,
+    "on_device_stochastic_completions": 6,
+    "coherent_and_on_topic": true,
+    "degenerate_output_check": "pass",
+    "prompt_2_triple_comma": false,
+    "artifact": "vllm_qualitative_outputs.json"
+  },
+  "compatibility_suite": {
+    "result": "72 passed, 1 expected skip",
+    "scope": "host-only API feature coverage",
+    "not_counted_as": "production stochastic device-sampling proof"
+  },
+  "verdict": "Production stochastic Sampling1D passed prefill, repeated async traced decode, mixed greedy/stochastic scheduling, reversed slot reuse, qualitative generation, and post-run health without host fallback or EngineCore failure."
+}

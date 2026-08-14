@@ -1,0 +1,60 @@
+{
+  "workload": {
+    "profile": "single_user_decode",
+    "prompt_len": 128,
+    "gen_len": 128,
+    "batch": 1,
+    "max_num_seqs": 32,
+    "max_model_len": 32768,
+    "mesh": "1x4 Blackhole p300c TP4",
+    "sampling": "greedy device split Sampling1D"
+  },
+  "before": {
+    "ttft_ms_p50": 568.9420739654452,
+    "ttft_ms_p99": 568.9420739654452,
+    "decode_ms_per_token_e2e": 18.927618723700014,
+    "itl_ms_p50": 17.761714989319444,
+    "itl_ms_p99": 19.39009161666035,
+    "aggregate_output_tokens_per_s": 43.053401769786426,
+    "decode_tokens_per_s_per_user": 52.83284783985324
+  },
+  "after_final_default": {
+    "ttft_ms_p50": 578.7756259087473,
+    "ttft_ms_p99": 578.7756259087473,
+    "decode_ms_per_token_e2e": 18.92541313367918,
+    "itl_ms_p50": 17.7561619784683,
+    "itl_ms_p99": 18.843230889178805,
+    "aggregate_output_tokens_per_s": 42.915479129990935,
+    "decode_tokens_per_s_per_user": 52.8390050424012
+  },
+  "decode_ms_per_token_device": null,
+  "roofline_ms_per_token_estimate": null,
+  "full_model_traced_token_out": {
+    "workload": "128 prompt / 128 decode / batch 1",
+    "ms_per_token": 18.364851,
+    "tokens_per_s_per_user": 54.451842,
+    "serving_gap_percent": 2.96
+  },
+  "ci_serving_burst": {
+    "workload": "100 prompt / 100 generation / 32 requests / concurrency 32",
+    "before_mean_tpot_ms": 19.618114058267572,
+    "before_output_tokens_per_s": 1026.9737752508465,
+    "after_mean_tpot_ms": 19.88732478492588,
+    "after_output_tokens_per_s": 1018.2073600254961,
+    "use": "secondary capacity and nightly-parity evidence only"
+  },
+  "production_device_sampling": {
+    "single_request": "192 prompt / 128 generation / temperature 0.7 / top_p 0.9 / top_k 32",
+    "mixed_slot_reuse": "2 waves x 8 requests; 4 greedy + 4 stochastic per wave; reversed order",
+    "completed_requests": 17,
+    "http_200": 17,
+    "route_audit": "perform_device_sampling=True at stochastic prefill/decode and mixed decode",
+    "health_after": 200,
+    "qualitative_device_sampled_prompts": 6
+  },
+  "named_limitations": [
+    "vllm_serving_profiler_disabled_to_protect_hardware",
+    "host-only sampling features use an explicit compatibility environment and are excluded from performance",
+    "nanobind shutdown leak diagnostics remain after clean server termination"
+  ]
+}

@@ -1,0 +1,10 @@
+Owning run_vllm_server session received Ctrl-C after all production sampling
+checks. The runner reported:
+
+  Shutting down server (PID 2699704)...
+    Terminated cleanly.
+
+A subsequent process scan found no run_vllm_server, vLLM API server, or
+EngineCore process (the only pgrep match was the scan command itself).
+`tt-smi -ls --local` listed UMD chips 0, 1, 2, and 3 as Blackhole p300c
+boards and resettable. No standalone cache owner or serving process remains.

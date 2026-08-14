@@ -45,40 +45,40 @@
     "dataset_name": "random",
     "ignore_eos": true
   },
-  "elapsed_s": 2.982606802834198,
+  "elapsed_s": 2.9753893800079823,
   "completed_requests": 1,
   "total_input_tokens": 127.0,
   "total_output_tokens": 128.0,
   "requested_output_tokens": 128,
   "missing_output_tokens": 0,
   "ttft_ms": {
-    "p50": 578.7756259087473,
-    "p99": 578.7756259087473,
-    "mean": 578.7756259087473
+    "p50": 569.7932238690555,
+    "p99": 569.7932238690555,
+    "mean": 569.7932238690555
   },
   "tpot_ms": {
-    "p50": 18.92541313367918,
-    "p99": 18.92541313367918,
-    "mean": 18.92541313367918
+    "p50": 18.939230614891787,
+    "p99": 18.939230614891787,
+    "mean": 18.939230614891787
   },
   "itl_ms": {
-    "p50": 17.7561619784683,
-    "p99": 18.843230889178805,
-    "mean": 18.92541470849432
+    "p50": 17.75742694735527,
+    "p99": 18.67611532099545,
+    "mean": 18.939232268539353
   },
   "e2el_ms": {
-    "p50": 2982.303093886003,
-    "p99": 2982.303093886003,
-    "mean": 2982.303093886003
+    "p50": 2975.0755119603127,
+    "p99": 2975.0755119603127,
+    "mean": 2975.0755119603127
   },
-  "itl_p50_decode_tps": 56.318477000414426,
-  "itl_mean_decode_tps": 52.83900064557997,
-  "vllm_mean_tpot_decode_tps": 52.8390050424012,
-  "mean_per_request_decode_tps": 52.8390050424012,
+  "itl_p50_decode_tps": 56.314465094783145,
+  "itl_mean_decode_tps": 52.800450716322665,
+  "vllm_mean_tpot_decode_tps": 52.8004553265066,
+  "mean_per_request_decode_tps": 52.8004553265066,
   "mean_per_request_decode_tps_basis": "1000 / mean_tpot_ms from vllm bench serve; this is the TPOT-derived decode value. For burst-serving profiles, scheduler admission and chunked prefill can affect TPOT, so use the single-user profile for headline decode t/s/u.",
-  "output_throughput_tok_per_s": 42.915479129990935,
-  "request_throughput_per_s": 0.3352771807030542,
-  "total_token_throughput_tok_per_s": 85.49568107927881,
+  "output_throughput_tok_per_s": 43.01957950782785,
+  "request_throughput_per_s": 0.3360904649049051,
+  "total_token_throughput_tok_per_s": 85.70306855075079,
   "secondary_benchmarks": {
     "ci_serving_burst": {
       "summary_file": "/home/mvasiljevic/tt-metal/models/autoports/mistralai_mistral_small_24b_instruct_2501/readiness_vllm/vllm_ci_serving_benchmark.json",
@@ -94,8 +94,8 @@
         "dataset_name": "random",
         "ignore_eos": true
       },
-      "output_throughput_tok_per_s": 1018.2073600254961,
-      "vllm_mean_tpot_decode_tps": 50.28328399192114,
+      "output_throughput_tok_per_s": 1021.4964455622269,
+      "vllm_mean_tpot_decode_tps": 50.936766332168595,
       "comparison_scope": "vLLM-nightly-style 100/100/32 serving-burst profile for CI parity and serving capacity. Do not use as headline decode t/s/u because burst admission and chunked prefill can affect TPOT."
     }
   }
