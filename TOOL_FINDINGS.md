@@ -735,12 +735,13 @@ section is the credit half of the ledger and is the material for the comparison 
 | after the down_proj shard-width sweep (O4b) | 281.8 | 16.763 | 0.9708 |
 | after the same sweep generalised to K/V (O4b) | 276.7 | 16.135 | 0.9897 |
 | after fusing Q/K/V into one decode projection (O4c) | 273.6 | 15.976 | 0.9708 |
-| after fusing RoPE into one op (O4d) | 271.9 | **15.212** | **0.9903** |
+| after fusing RoPE into one op (O4d) | 271.9 | 15.212 | 0.9903 |
+| **run 2** — Q+K rotated in one call (O4f) | 269.5 | **14.909** | 0.9903 |
 | tool's own roofline target | 338.541 | — | gate 0.95 |
 | **hand-port, for reference** | — | **15.907** | — |
 
-**15.212 against 15.907 — the tool is now 4.4% AHEAD of 74 human experiments**, autonomously, in
-about 5 hours of loop time, at its best PCC since the dtype walk began.
+**14.909 against 15.907 — the tool is 6.3% AHEAD of 74 human experiments**, autonomously, holding
+PCC 0.9903.
 
 State this with the accuracy bar attached, every time it is quoted: the tool is at e2e PCC 0.9708
 against its 0.95 gate; the hand-port's p150 decode holds 0.981 (`STATUS.md`, and 0.99991 on the
@@ -1015,6 +1016,50 @@ on the same conclusion, and the tool's phrasing supplies the mechanism §6.68 go
 "counted one op short": **dispatch count is not the cost when the ops being removed are views.**
 
 Two independent confirmations of a reversal that was the hardest call in the hand-port's log.
+
+### O4f — a THIRD finding to take: the same win §6.23 rejected, by a route that avoids what it rejected
+
+Run 2's first win, and the one most worth acting on, because it looks like a contradiction of the
+hand-port and is not one.
+
+**What the hand-port rejected (`NOTES.md [gpt-23]`, §6.23):**
+
+> *Two calls, not ttnn's fused q+k rope: that one implements the INTERLEAVED convention via a
+> trans_mat, and our wq/wk are permuted to HALF-SPLIT at load. Measured 0.236 ms/frame for reverting
+> that permute, disjoint q/k cores and losing bit-exactness.*
+
+A correct rejection. The objection is to **ttnn's fused q+k rope operator**, whose convention
+disagrees with the half-split layout the weights are permuted into at load.
+
+**What the tool did instead:** it did not use that operator at all. Q and K are adjacent in the
+fused QKV output and RoPE applies per head against the same cos/sin, so it slices **q+k out
+together**, splits heads once into a **40-head** tensor (32 q + 8 kv), calls the *same*
+`rotary_embedding_hf` **once**, and slices query/key apart afterwards.
+
+```
+trace+1cq 15.2117 -> 14.9090 ms/token (-1.99%)    device 271.92 -> 269.45
+PCC 0.990347 -> 0.990347, UNCHANGED               dispatches 3413 -> 3257
+```
+
+Same convention, same op, one dispatch instead of two — plus it drops a slice and a reshape+permute
+pair, so the block is 2 ops lighter per layer on top of halving the rotary count. **The fusion is
+exact, not an approximation**, which the unchanged PCC confirms.
+
+**Why this matters:** §6.23 measured the cost of a *convention change* and rejected it, correctly.
+This route asks nothing of the convention. The hand-port keeps half-split, keeps its permute, keeps
+bit-exactness, and still gets the launch-count win — 52 rotary launches per token become 26. For
+scale, `[gpt-24]` measured a comparable 26-launch saving (the fused KV write) at **0.405 ms/frame,
+bit-identical**.
+
+**The one thing to check before taking it.** The hand-port's decode RoPE runs `is_decode_mode=True`,
+and `ttnn_voxtral_gpt.py:53` records that *"rotary_embedding_hf's decode mode requires cos/sin
+sharded as well as the input"*. Concatenating to 40 heads changes the shard shape, so the question
+is whether a 40-head sharded rotation is expressible on this grid — not whether the arithmetic
+holds, which it does. (The tool calls prefill mode with `s=1`, so it never met this constraint.)
+
+**Status: strongest candidate of the three.** Unlike O4 (argmax, needs a re-measurement) and O4b
+(`w2` grid, needs a sweep), this one is a known quantity: exact arithmetic, a measured win on the
+identical model, and it sidesteps the specific objection that got it rejected the first time.
 
 ### O5 — the ladder's escalation is real, and it gives up in the right place
 
