@@ -166,7 +166,7 @@ void MeshTrace::populate_mesh_buffer(
 }
 
 MeshTraceBuffer::~MeshTraceBuffer() {
-    if (this->mesh_buffer && this->mesh_buffer->impl().is_allocated() && this->mesh_buffer->device()) {
+    if (this->mesh_buffer && this->mesh_buffer->is_allocated() && this->mesh_buffer->device()) {
         auto current_trace_buffers_size = this->mesh_buffer->device()->get_trace_buffers_size();
         this->mesh_buffer->device()->set_trace_buffers_size(
             current_trace_buffers_size - this->mesh_buffer->impl().size());

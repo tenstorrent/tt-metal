@@ -393,6 +393,10 @@ MeshBufferImpl& MeshBuffer::impl() {
     return *impl_;
 }
 
+bool MeshBuffer::is_allocated() const { return impl().is_allocated(); }
+
+void MeshBuffer::deallocate() { impl().deallocate(); }
+
 MeshDevice* MeshBuffer::device() const { return impl().device(); }
 
 DeviceAddr MeshBuffer::device_local_size() const { return impl().device_local_size(); }
@@ -467,7 +471,7 @@ bool AnyBuffer::is_mesh_buffer() const { return get_mesh_buffer() != nullptr; }
 std::shared_ptr<MeshBuffer> AnyBuffer::get_mesh_buffer() const {
     if (const auto* mesh_buffer_ptr = std::get_if<std::shared_ptr<MeshBuffer>>(&holder_)) {
         auto mesh_buffer = *mesh_buffer_ptr;
-        if (mesh_buffer->impl().is_allocated()) {
+        if (mesh_buffer->is_allocated()) {
             return mesh_buffer;
         }
     }

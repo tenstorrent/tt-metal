@@ -29,7 +29,7 @@ public:
     MeshTensorImpl(std::shared_ptr<distributed::MeshBuffer> mesh_buffer, TensorSpec spec, TensorTopology topology) :
         mesh_buffer_(std::move(mesh_buffer)), spec_(std::move(spec)), topology_(std::move(topology)) {
         TT_FATAL(mesh_buffer_ != nullptr, "MeshBuffer cannot be nullptr.");
-        TT_FATAL(mesh_buffer_->impl().is_allocated(), "MeshBuffer must be allocated.");
+        TT_FATAL(mesh_buffer_->is_allocated(), "MeshBuffer must be allocated.");
         TT_FATAL(
             mesh_buffer_->impl().size() >= spec_.compute_packed_buffer_size_bytes(),
             "MeshBuffer must be large enough to hold the tensor.");

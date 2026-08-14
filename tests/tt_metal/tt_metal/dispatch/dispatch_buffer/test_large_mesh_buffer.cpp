@@ -183,7 +183,7 @@ TEST_P(InterleavedMeshBufferTestSuite, NIGHTLY_DRAMReadback) {
     EXPECT_EQ(mesh_buffer->impl().size(), tensor_size);
     EXPECT_EQ(mesh_buffer->global_layout(), MeshBufferLayout::REPLICATED);
     EXPECT_EQ(mesh_buffer->device_local_size(), tensor_size);
-    EXPECT_TRUE(mesh_buffer->impl().is_allocated());
+    EXPECT_TRUE(mesh_buffer->is_allocated());
 
     // Create test data - use uint16_t for easy verification
     auto num_elements = tensor_size / ElementSize;

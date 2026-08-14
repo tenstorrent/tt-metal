@@ -7,8 +7,10 @@
 #include <stdint.h>
 #include <memory>
 #include <optional>
+#include <variant>
 #include <vector>
 
+#include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -33,6 +35,41 @@ class IDevice;
 namespace distributed {
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
+
+template <typename DType>
+void EnqueueWriteMeshBuffer(
+    MeshCommandQueue& mesh_cq,
+    std::shared_ptr<MeshBuffer>& mesh_buffer,
+    const std::vector<DType>& src,
+    bool blocking = false) {
+    const DeviceAddr buf_size = mesh_buffer->global_layout() == MeshBufferLayout::SHARDED
+                                    ? std::get<ShardedBufferConfig>(mesh_buffer->global_config()).global_size
+                                    : std::get<ReplicatedBufferConfig>(mesh_buffer->global_config()).size;
+    TT_FATAL(
+        src.size() * sizeof(DType) >= buf_size,
+        "Source vector is too small for mesh buffer: mesh buffer size={} bytes, source size={} * {} bytes",
+        buf_size,
+        src.size(),
+        sizeof(DType));
+
+    mesh_cq.enqueue_write_mesh_buffer(mesh_buffer, src.data(), blocking);
+}
+
+template <typename DType>
+void EnqueueReadMeshBuffer(
+    MeshCommandQueue& mesh_cq,
+    std::vector<DType>& dst,
+    std::shared_ptr<MeshBuffer>& mesh_buffer,
+    bool blocking = true) {
+    // This API supports reading MeshBuffers sharded across devices
+    // and a Unit-MeshBuffer with a replicated layout.
+    if (mesh_buffer->global_layout() == MeshBufferLayout::SHARDED) {
+        dst.resize(std::get<ShardedBufferConfig>(mesh_buffer->global_config()).global_size / sizeof(DType));
+    } else {
+        dst.resize(std::get<ReplicatedBufferConfig>(mesh_buffer->global_config()).size / sizeof(DType));
+    }
+    mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
+}
 
 // Make the current thread block until the event is recorded by the associated MeshCommandQueue.
 void EventSynchronize(const MeshEvent& event);

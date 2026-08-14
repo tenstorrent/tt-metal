@@ -101,6 +101,15 @@ public:
     const MeshBufferImpl& impl() const;
     MeshBufferImpl& impl();
 
+    // Returns true if the MeshBuffer is allocated. Note that MeshBuffer is created in the allocated state; either the
+    // destructor or the `deallocate` method deallocate the MeshBuffer.
+    bool is_allocated() const;
+
+    // Deallocates the MeshBuffer.
+    // TODO: Re-consider a need for explicit deallocation methods, as opposed to relying on RAII to clean up the
+    // resources.
+    void deallocate();
+
     // Throws an exception if the corresponding MeshDevice is already deallocated
     MeshDevice* device() const;
     DeviceAddr device_local_size() const;

@@ -261,29 +261,29 @@ TEST_F(MeshBufferTest2x4, Deallocation) {
     // Fetch an address that the allocator provides on first allocation.
     const uint32_t expected_address = [&]() {
         auto buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
-        EXPECT_TRUE(buffer->impl().is_allocated());
+        EXPECT_TRUE(buffer->is_allocated());
         return buffer->address();
     }();
 
     // Test that creating and deallocating a MeshBuffer frees the address.
     auto buffer1 = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
-    EXPECT_TRUE(buffer1->impl().is_allocated());
+    EXPECT_TRUE(buffer1->is_allocated());
     EXPECT_EQ(buffer1->address(), expected_address);
 
-    buffer1->impl().deallocate();
-    EXPECT_FALSE(buffer1->impl().is_allocated());
+    buffer1->deallocate();
+    EXPECT_FALSE(buffer1->is_allocated());
 
     auto buffer2 = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
-    EXPECT_TRUE(buffer2->impl().is_allocated());
+    EXPECT_TRUE(buffer2->is_allocated());
     EXPECT_EQ(buffer2->address(), expected_address);
 
     // Test deallocation of the view also works.
     auto buffer_view = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get(), buffer2->address());
-    EXPECT_TRUE(buffer_view->impl().is_allocated());
+    EXPECT_TRUE(buffer_view->is_allocated());
     EXPECT_EQ(buffer_view->address(), expected_address);
 
-    buffer_view->impl().deallocate();
-    EXPECT_FALSE(buffer_view->impl().is_allocated());
+    buffer_view->deallocate();
+    EXPECT_FALSE(buffer_view->is_allocated());
 }
 
 TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
@@ -352,11 +352,11 @@ TEST_F(MeshBufferTestSuite, MoveConstructor) {
     const auto original_size = original_buffer->impl().size();
     const auto original_device_local_size = original_buffer->device_local_size();
 
-    EXPECT_TRUE(original_buffer->impl().is_allocated());
+    EXPECT_TRUE(original_buffer->is_allocated());
 
     MeshBuffer moved_buffer(std::move(*original_buffer));
 
-    EXPECT_TRUE(moved_buffer.impl().is_allocated());
+    EXPECT_TRUE(moved_buffer.is_allocated());
     EXPECT_EQ(moved_buffer.address(), original_address);
     EXPECT_EQ(moved_buffer.impl().size(), original_size);
     EXPECT_EQ(moved_buffer.device_local_size(), original_device_local_size);
@@ -376,18 +376,18 @@ TEST_F(MeshBufferTestSuite, MoveAssignment) {
     const auto source_size = source_buffer->impl().size();
     const auto source_device_local_size = source_buffer->device_local_size();
 
-    EXPECT_TRUE(source_buffer->impl().is_allocated());
+    EXPECT_TRUE(source_buffer->is_allocated());
 
     const ReplicatedBufferConfig target_buffer_config{.size = 8 << 10};
     auto target_buffer = MeshBuffer::create(target_buffer_config, device_local_config, mesh_device_.get());
     const auto target_original_address = target_buffer->address();
 
-    EXPECT_TRUE(target_buffer->impl().is_allocated());
+    EXPECT_TRUE(target_buffer->is_allocated());
     EXPECT_NE(target_buffer->address(), source_address);
 
     *target_buffer = std::move(*source_buffer);
 
-    EXPECT_TRUE(target_buffer->impl().is_allocated());
+    EXPECT_TRUE(target_buffer->is_allocated());
     EXPECT_EQ(target_buffer->address(), source_address);
     EXPECT_EQ(target_buffer->impl().size(), source_size);
     EXPECT_EQ(target_buffer->device_local_size(), source_device_local_size);
