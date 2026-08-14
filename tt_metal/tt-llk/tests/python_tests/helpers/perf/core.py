@@ -464,7 +464,7 @@ def _write_run_parquet(raw_csv_paths, out_dir) -> None:
     if not raw_csv_paths:
         return
     try:
-        from .perf_parquet import convert_csvs_to_parquet
+        from .parquet import convert_csvs_to_parquet
 
         prov = _ci_provenance()
         parquet_path = Path(out_dir) / f"{prov['run_id']}.parquet"
