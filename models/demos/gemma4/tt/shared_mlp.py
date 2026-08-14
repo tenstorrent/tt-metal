@@ -16,6 +16,7 @@ HF weight shapes:
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
+from models.demos.gemma4.tt.precision import dtype_to_str
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 
@@ -44,8 +45,25 @@ class SharedMLP:
         # doesn't collide with a previously-cached file that holds the same
         # logical weight at a different dtype. The rest of the model's cache
         # entries are unaffected and stay reusable across runs.
-        _dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[dtype]
-        dtype_suffix = f"_{_dtype_str}"
+        dtype_suffix = f"_{dtype_to_str(dtype)}"
+
+        # Match math fidelity to the weight's mantissa width. Fidelity is the number of passes
+        # the matrix unit makes over the operand mantissas, so it — not the storage format — is
+        # what sets math time: a narrower dtype moves fewer bytes but issues the same MACs. At
+        # bfp4 the weights carry 3 mantissa bits, so the extra passes of a higher fidelity spend
+        # time capturing bits that are not there. Left at the op default for wider dtypes, whose
+        # accuracy those passes do buy something for.
+        self.compute_kernel_config = (
+            ttnn.init_device_compute_kernel_config(
+                mesh_device.arch(),
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+            if dtype == ttnn.bfloat4_b
+            else None
+        )
 
         if tp > 1:
             col_mapper = mesh_config.column_parallel(mesh_device)
@@ -100,11 +118,11 @@ class SharedMLP:
         gate/up are column-parallel, down is row-parallel + allreduce.
         """
         # gate = GELU(x @ gate_proj)
-        gate = ttnn.linear(hidden_states, self.gate_proj)
+        gate = ttnn.linear(hidden_states, self.gate_proj, compute_kernel_config=self.compute_kernel_config)
         gate = ttnn.gelu(gate, fast_and_approximate_mode=True)
 
         # up = x @ up_proj
-        up = ttnn.linear(hidden_states, self.up_proj)
+        up = ttnn.linear(hidden_states, self.up_proj, compute_kernel_config=self.compute_kernel_config)
 
         # hidden = gate * up
         hidden = ttnn.mul(gate, up)
@@ -112,7 +130,7 @@ class SharedMLP:
         up.deallocate(True)
 
         # output = hidden @ down_proj
-        output = ttnn.linear(hidden, self.down_proj)
+        output = ttnn.linear(hidden, self.down_proj, compute_kernel_config=self.compute_kernel_config)
         hidden.deallocate(True)
 
         # Allreduce after row-parallel down_proj

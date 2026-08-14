@@ -22,20 +22,22 @@ _PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Module names that may be overridden — keep in sync with the JSON schema and
 # with the constructors that accept these kwargs (Gemma4Model and below).
-KNOWN_MODULES = ("shared_mlp", "attention", "experts", "router", "lm_head", "embedding")
+KNOWN_MODULES = ("shared_mlp", "attention", "experts", "router", "lm_head", "embedding", "kv_cache")
 
 _DTYPE_BY_NAME = {
     "bf16": ttnn.bfloat16,
     "bfloat16": ttnn.bfloat16,
     "bfp8": ttnn.bfloat8_b,
     "bfloat8_b": ttnn.bfloat8_b,
+    "bfp4": ttnn.bfloat4_b,
+    "bfloat4_b": ttnn.bfloat4_b,
     "fp32": ttnn.float32,
     "float32": ttnn.float32,
 }
 
 
 def dtype_to_str(dtype):
-    """Short stable string for cache-filename suffixes ("bf16" / "bfp8" / "fp32").
+    """Short stable string for cache-filename suffixes ("bf16" / "bfp8" / "bfp4" / "fp32").
 
     Cache filenames embed the dtype string so flipping a module's dtype in
     precision_overrides.json doesn't reuse a stale cached tensor at the
@@ -45,6 +47,8 @@ def dtype_to_str(dtype):
         return "bf16"
     if dtype == ttnn.bfloat8_b:
         return "bfp8"
+    if dtype == ttnn.bfloat4_b:
+        return "bfp4"
     if dtype == ttnn.float32:
         return "fp32"
     raise ValueError(f"No cache-suffix mapping for dtype {dtype}")
