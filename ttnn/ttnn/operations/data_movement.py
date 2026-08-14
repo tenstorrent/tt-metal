@@ -19,7 +19,7 @@ def _preprocess_golden_function_inputs(args, kwargs):
     #   A) pad(input, padding, value, ...)          where padding is a list of (start, end) pairs
     #   B) pad(input, output_padded_shape, input_tensor_start, value, ...)  (legacy shape form)
     # Distinguish them by whether the elements of the second argument are (start, end) pairs or ints.
-    if len(pad_arg) > 0 and isinstance(pad_arg[0], (list, tuple)):
+    if len(pad_arg) == 0 or isinstance(pad_arg[0], (list, tuple)):
         padding = list(pad_arg)
         value, args, kwargs = ttnn.reflection.pop_argument("value", args, kwargs)
     else:
@@ -51,7 +51,7 @@ def _golden_function(input_tensor, padding, *args, value=0, **_):
 
     # Global comparison path passes raw ttnn.pad args; support both overloads:
     # (padding_pairs, value) and (output_padded_shape, input_tensor_start, value).
-    if len(padding) > 0 and isinstance(padding[0], (list, tuple)):
+    if len(padding) == 0 or isinstance(padding[0], (list, tuple)):
         pad_pairs = list(padding)
         if args:
             value = args[0]
@@ -175,10 +175,10 @@ ttnn.attach_golden_function(ttnn.repeat_interleave, golden_function=_golden_func
 
 def _golden_function(tensor, shape, **_):
     repeat_dims = [int(shape[i]) for i in range(len(shape))]
-    # ttnn.repeat allows fewer repeat dims than tensor rank (pads trailing 1s);
+    # ttnn.repeat allows fewer repeat dims than tensor rank (pads leading 1s);
     # torch.repeat requires len(dims) >= tensor.dim(), so pad to match.
     if len(repeat_dims) < tensor.dim():
-        repeat_dims = repeat_dims + [1] * (tensor.dim() - len(repeat_dims))
+        repeat_dims = [1] * (tensor.dim() - len(repeat_dims)) + repeat_dims
     return tensor.repeat(*repeat_dims)
 
 
@@ -392,17 +392,28 @@ def _golden_function(input_tensor, *args, skip_negative_entries=False, **kwargs)
 
     if skip_negative_entries:
         keep = (input_tensor >= 0) & (input_tensor < (2**31 - 1))
-        return torch.where(keep, input_tensor + 1, input_tensor)
-    return input_tensor + 1
+        input_tensor.copy_(torch.where(keep, input_tensor + 1, input_tensor))
+    else:
+        input_tensor.add_(1)
+    return input_tensor
 
 
 ttnn.attach_golden_function(ttnn.plus_one, golden_function=_golden_function)
 
 
-def _golden_function(buffer, shape, *args, **kwargs):
+def _golden_function(buffer, shape, dtype, *args, **kwargs):
     import torch
 
-    return torch.as_tensor(buffer).reshape(list(shape))
+    torch_dtype = {
+        ttnn.uint8: torch.uint8,
+        ttnn.int8: torch.int8,
+        ttnn.uint16: torch.uint16,
+        ttnn.int32: torch.int32,
+        ttnn.uint32: torch.uint32,
+        ttnn.float32: torch.float32,
+        ttnn.bfloat16: torch.bfloat16,
+    }[dtype]
+    return torch.as_tensor(buffer, dtype=torch_dtype).reshape(list(shape))
 
 
 ttnn.attach_golden_function(ttnn.from_buffer, golden_function=_golden_function)
@@ -413,14 +424,20 @@ def _golden_function(input, stride_h, stride_w, *args, padding=(0, 0), collapse_
 
     N, H, W, C = input.shape
 
-    if padding is not None and len(padding) >= 2:
+    if padding is not None:
         if len(padding) == 2:
             pad_top = pad_bottom = padding[0]
             pad_left = pad_right = padding[1]
-        else:
+            pad_c_front = pad_c_back = 0
+        elif len(padding) == 4:
             pad_top, pad_bottom, pad_left, pad_right = padding
-        if pad_top or pad_bottom or pad_left or pad_right:
-            input = torch.nn.functional.pad(input, (0, 0, pad_left, pad_right, pad_top, pad_bottom), value=0.0)
+            pad_c_front = pad_c_back = 0
+        else:
+            pad_top, pad_bottom, pad_left, pad_right, pad_c_front, pad_c_back = padding
+        if pad_top or pad_bottom or pad_left or pad_right or pad_c_front or pad_c_back:
+            input = torch.nn.functional.pad(
+                input, (pad_c_front, pad_c_back, pad_left, pad_right, pad_top, pad_bottom), value=0.0
+            )
             N, H, W, C = input.shape
 
     reshaped = input.reshape(N, H // stride_h, stride_h, W // stride_w, stride_w, C)
@@ -507,7 +524,6 @@ ttnn.attach_golden_function(ttnn.fill_ones_rm, golden_function=_golden_function)
 
 
 def _golden_function(cache_tensor, input_tensor, batch_idx, *args, update_idx=0, **kwargs):
-    cache_tensor = cache_tensor.clone()
     seq_len = input_tensor.shape[-2]
     cache_tensor[batch_idx : batch_idx + 1, :, update_idx : update_idx + seq_len, :] = input_tensor
     return cache_tensor
@@ -520,7 +536,6 @@ ttnn.attach_golden_function(ttnn.fill_cache, golden_function=_golden_function)
 # (shape [1, num_heads, batch, head_dim]); it is written into the cache at sequence position
 # update_idx, reading from the padded batch starting at batch_offset.
 def _golden_function(cache, input, update_idx, *args, batch_offset=0, **kwargs):
-    cache = cache.clone()
     num_users = cache.shape[0]
     for user in range(num_users):
         cache[user, :, update_idx, :] = input[0, :, batch_offset + user, :]
@@ -531,7 +546,6 @@ ttnn.attach_golden_function(ttnn.update_cache, golden_function=_golden_function)
 
 
 def _golden_function(cache, input, batch_index, *args, update_idx=0, **kwargs):
-    cache = cache.clone()
     seq_len = input.shape[-2]
     cache[batch_index : batch_index + 1, :, update_idx : update_idx + seq_len, :] = input
     return cache
@@ -541,7 +555,6 @@ ttnn.attach_golden_function(ttnn.kv_cache.fill_cache_for_user_, golden_function=
 
 
 def _golden_function(cache, input, update_index, batch_offset=0, *args, **kwargs):
-    cache = cache.clone()
     num_users = cache.shape[0]
     for user in range(num_users):
         cache[user, :, update_index, :] = input[0, :, batch_offset + user, :]
