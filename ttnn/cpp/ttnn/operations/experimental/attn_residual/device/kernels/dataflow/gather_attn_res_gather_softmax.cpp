@@ -29,6 +29,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+#include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 void kernel_main() {
     // compile-time args
@@ -70,9 +71,15 @@ void kernel_main() {
         FabricConnectionManager::build_from_args<FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION>(
             fabric_arg_idx);
 
+    // A peer's route follows the connection args, two words per peer in the order the
+    // loop below takes them. The words mean different things per fabric — a hop count on
+    // 1D, the peer's node on 2D — so the host encodes them and the header type here
+    // decides how to read them back.
+    const size_t route_arg_idx = fabric_arg_idx;
+
     // One payload header and one increment header per peer: a header carries its
-    // peer's route for the whole kernel, and peers in the same direction differ only
-    // by hop count, so headers cannot be shared even within a direction.
+    // peer's route for the whole kernel, and peers in the same direction still differ by
+    // route, so headers cannot be shared even within a direction.
     cb_reserve_back(cb_id_headers, kStatsPerRow * kPeers);
     const uint32_t header_base = get_write_ptr(cb_id_headers);
     cb_push_back(cb_id_headers, kStatsPerRow * kPeers);
@@ -86,15 +93,17 @@ void kernel_main() {
             continue;
         }
         const bool forward = p > my_rank;
-        const uint32_t hops = forward ? (p - my_rank) : (my_rank - p);
 
         payload_headers[slot] =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_base + (2 * slot) * packet_header_size_bytes);
         inc_headers[slot] =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(header_base + (2 * slot + 1) * packet_header_size_bytes);
 
-        fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)payload_headers[slot], hops);
-        fabric_set_unicast_route<false>((tt::tt_fabric::LowLatencyPacketHeader*)inc_headers[slot], hops);
+        const ccl_routing_utils::line_unicast_route_info_t route_info{
+            .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(route_arg_idx + 2 * slot)),
+            .dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(route_arg_idx + 2 * slot + 1))};
+        ccl_routing_utils::fabric_set_line_unicast_route(payload_headers[slot], route_info);
+        ccl_routing_utils::fabric_set_line_unicast_route(inc_headers[slot], route_info);
 
         peer_connections[slot] =
             forward ? &fabric_connection.get_forward_connection() : &fabric_connection.get_backward_connection();

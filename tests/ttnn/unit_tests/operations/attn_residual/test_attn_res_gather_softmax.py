@@ -46,11 +46,22 @@ PER_CHIP_TOKENS = 640
 TP_AXIS = 1
 SP_AXIS = 0
 
-FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
+FABRIC_1D = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
+FABRIC_2D = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
 
 # Every test derives its shape from the fixture's mesh. 2x4 is what the model runs; 2x2
 # is the narrowest gather that still has peers, and is the widest a 4-chip box can host.
-MESH_ARMS = [pytest.param((2, 4), FABRIC, id="mesh-2x4"), pytest.param((2, 2), FABRIC, id="mesh-2x2")]
+#
+# The fabric is chosen once per program run, before the mesh opens, so the op runs under
+# whichever one the enclosing transformer picked. Both encode a peer's route into the same
+# pair of runtime args and read them back differently, so a route written for the wrong
+# transport still compiles and still sends — it lands on the wrong chip. Only running both
+# catches that. The narrow arm runs the one the model ships on.
+MESH_ARMS = [
+    pytest.param((2, 4), FABRIC_2D, id="fabric2d-mesh-2x4"),
+    pytest.param((2, 4), FABRIC_1D, id="fabric1d-mesh-2x4"),
+    pytest.param((2, 2), FABRIC_2D, id="fabric2d-mesh-2x2"),
+]
 
 
 def _oracle(partial, running_sum, shift, mass, query):
