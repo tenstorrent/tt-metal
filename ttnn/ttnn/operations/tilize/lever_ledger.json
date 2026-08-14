@@ -1,7 +1,7 @@
 {
   "op": "tilize",
   "topology": {
-    "phase": 6,
+    "phase": "Perf 2",
     "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4). Refinement 5 adds the TILE-HEIGHT axis: a tiny tile is a smaller CB page, so derive_blocking()'s L1 cap admits the same or a wider W chunk and the block count scales as H/tile_h (a_square at tile_h=32/16/8/1 = 4/4/4/4 blocks per core over 4x/8x/32x more tile-rows). RETILE keeps the same block definition (1 output tile-row x WT_CHUNK) and adds the reader-private staging buffer to the same L1 ceiling via wt_cap(stage_bytes=stage_tile_bytes(...)). Refinement 6 adds NO new plan path and NO new block factor: its two levers (B13 stateful transfers, D21 host-precomputed block index) are issue-path and index-arithmetic knobs on the EXISTING loops, and both ship parked at a byte-identical default.",
     "plan_paths": [
       "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
@@ -32,7 +32,8 @@
       "tilize_noc.hpp",
       "tilize_reader.cpp",
       "tilize_writer.cpp"
-    ]
+    ],
+    "note": "Perf 2 (perf tournament, round 2). What moved, and where: (a) on a DESTINATION-LOCAL sharded plan the split reader gives each of the two DM RISCs every other block, so each READER sees blocks_per_core/2 while compute still sees all of them, and tilize_writer.cpp is not launched there at all; (b) the cross-core L1 gather prefers WT_CHUNK = the source shard's width in tiles, which re-chunks reshard_cross_spec; (c) R_RETILE lands the permutation directly in the OUTPUT tile, so its row-major intermediate (and its tilize compute pass) survives only at tile_h == 1; (d) the five R_ALIGNED reader paths collapsed into ONE loop with an issue-ahead window. EVERY INTERLEAVED PLAN'S blocking is unchanged, and no kernel FILE was added or removed, which is why the comparable keys above are untouched. A later round re-reading a negative closure on a SHARDED plan should treat (a) and (b) as the disqualifier-expiring change."
   },
   "levers": {
     "A0": {
@@ -378,29 +379,37 @@
       "phase": 0
     },
     "B8": {
-      "status": "measured-no-payoff",
-      "knob": "read_trid",
-      "reason": "[write-side twin knob: write_trid — arms test_bench_lever_write_trid_off / test_bench_lever_both_trid_off] Trid double-issue is BUILT on both halves (reader and writer): block i's transfers are issued before block i-1's barrier, so a request is always in flight across the block boundary. Measured NULL on every regime that can show it (<=1.5%, both signs, inside the +-3% band), including the B0 smallest-regime check on [1,1,32,64]. The cause is measured, not argued: (a) and (c) already run at or below a pure DRAM->DRAM copy of the same tensor, so extra in-flight requests cannot buy bandwidth the DRAM interface will not deliver, and (b) has one block per core so there is no next block to double-issue against. Both levers are correct (bit-exact under --dev) and regression-free, so they are KEPT rather than reverted. NOTE for anyone re-enabling this family: a trid left on the WRITE command buffer halts BRISC in firmware after kernel_main returns (brisck.cc:91 ASSERT(ncrisc_noc_packet_tags_cleared)); it presents as a whole-grid hang at waypoint NKFW, not as a CB deadlock. Reset the trid to 0 before exit.",
+      "status": "applied",
+      "knob": "read_ahead",
+      "reason": "[write-side twin knob: write_trid — unchanged and still null, and Perf 2 re-priced it against the WRITE ROOFLINE instead of one shape: a write-only probe moving the same 16 MB out of 64 cores is FLAT over a 64x change in the in-flight window (one barrier per page 130,584 ns vs one per 64 pages 124,989 ns), so no write-side issue-ahead scheme can buy anything. VC spread on the write side is a 2.45x REGRESSION and dual-NoC writes 1.42x, both measured.] REFUTED AND REPLACED on the READ side. Refinement 6's closure was right about the arm it measured, but that arm was gated on the input CB being EXACTLY two blocks deep — one outstanding read with ZERO SLACK — which a full (window x depth) sweep shows is the one setting that cannot win: every arm with cb_depth == ahead + 1 lands on the baseline or below, every arm with cb_depth >= ahead + 2 wins, and ahead >= 2 regresses. The lever now ships as ONE R_ALIGNED reader loop with a window of 1 against one group of CB slack; the old two-slot branch and its `else` twin are DELETED, not kept alongside. Measured in-op, paired A/B, 3 reps: crossover [1,1,2048,256] DRAM -> resident H x8 shard 13,949 on vs 16,371 off (1.17x); [1,1,8192,256] 50,295 vs 60,988 (1.21x); a_square / c_multiblock / d_smallest / uint8 / tile_h=8 / tile_h=16 flat; tile_h=1 1.04x. ONE carve-out, and it is Perf 1's own mechanism: where the core-halving fires each core owns exactly two blocks, so the window publishes the first block a whole issue loop late with no steady state to amortize — 0.95x bf16 / 0.94x fp32 on [1,1,32,16384]. The window is also off on the split-reader path, which carries its own per-RISC transaction ids. Refinement 6's firmware note still stands: a trid left on a command buffer halts BRISC after kernel_main returns (brisck.cc:91), so the loop clears it on exit.",
       "measured": {
-        "on_ns": 86530.0,
-        "off_ns": 85930.0,
-        "shape": "[1,1,2048,2048] bf16, both halves off (5-sample medians)",
+        "on_ns": 13949.0,
+        "off_ns": 16371.0,
+        "shape": "[1,1,2048,256] bf16, DRAM -> resident HEIGHT shard on 8 cores (in-op paired A/B, 3 reps)",
         "also": {
-          "[1,1,8192,1024] bf16 (4 blocks/core)": {
-            "on_ns": 172345.0,
-            "off_ns": 172041.0
+          "[1,1,8192,256] bf16 -> H x8 (32 blocks/core)": {
+            "on_ns": 50295.0,
+            "off_ns": 60988.0
+          },
+          "[1,1,32,16384] bf16 (2 blocks/core — the carve-out)": {
+            "on_ns": 13798.0,
+            "off_ns": 13113.0
+          },
+          "[1,1,2048,2048] bf16 (at the DRAM copy floor)": {
+            "on_ns": 87569.0,
+            "off_ns": 87740.0
           },
           "[1,1,32,64] bf16 (B0 smallest regime)": {
-            "on_ns": 2923.0,
-            "off_ns": 2922.0
+            "on_ns": 3183.0,
+            "off_ns": 3211.0
           },
-          "write half only off, [1,1,2048,2048] bf16": {
-            "on_ns": 86530.0,
-            "off_ns": 87031.0
+          "WRITE half, 16 MB / 64 cores at the write roofline": {
+            "on_ns": 124196.0,
+            "off_ns": 124989.0
           }
         },
         "topology": {
-          "phase": 6,
+          "phase": "Perf 2",
           "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4). Refinement 5 adds the TILE-HEIGHT axis: a tiny tile is a smaller CB page, so derive_blocking()'s L1 cap admits the same or a wider W chunk and the block count scales as H/tile_h (a_square at tile_h=32/16/8/1 = 4/4/4/4 blocks per core over 4x/8x/32x more tile-rows). RETILE keeps the same block definition (1 output tile-row x WT_CHUNK) and adds the reader-private staging buffer to the same L1 ceiling via wt_cap(stage_bytes=stage_tile_bytes(...)). Refinement 6 adds NO new plan path and NO new block factor: its two levers (B13 stateful transfers, D21 host-precomputed block index) are issue-path and index-arithmetic knobs on the EXISTING loops, and both ship parked at a byte-identical default.",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
@@ -431,11 +440,11 @@
             "tilize_noc.hpp",
             "tilize_reader.cpp",
             "tilize_writer.cpp"
-          ]
+          ],
+          "note": "Perf 2 (perf tournament, round 2). What moved, and where: (a) on a DESTINATION-LOCAL sharded plan the split reader gives each of the two DM RISCs every other block, so each READER sees blocks_per_core/2 while compute still sees all of them, and tilize_writer.cpp is not launched there at all; (b) the cross-core L1 gather prefers WT_CHUNK = the source shard's width in tiles, which re-chunks reshard_cross_spec; (c) R_RETILE lands the permutation directly in the OUTPUT tile, so its row-major intermediate (and its tilize compute pass) survives only at tile_h == 1; (d) the five R_ALIGNED reader paths collapsed into ONE loop with an issue-ahead window. EVERY INTERLEAVED PLAN'S blocking is unchanged, and no kernel FILE was added or removed, which is why the comparable keys above are untouched. A later round re-reading a negative closure on a SHARDED plan should treat (a) and (b) as the disqualifier-expiring change."
         }
       },
-      "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_b8_trid_is_gated_on_the_two_slot_cb_geometry",
-      "phase": 3
+      "phase": "Perf 2"
     },
     "B9": {
       "status": "applied",
@@ -763,18 +772,19 @@
     "C16": {
       "status": "measured-no-payoff",
       "knob": "double_buffer",
-      "reason": "Depth-2 CBs are kept because the public API mandates use_double_buffer=True as the default and the L1 cost is bounded by the CB budget — but they buy nothing measurable, and Refinement 3 established WHY, refuting Phase 0's explanation. Phase 0 said 'the op is DRAM-bound so the reader cannot run ahead'; the real reason was that the grid-filling square landed ONE block per core, leaving the second CB slot with nothing to hold. Refinement 3's pipeline knob gives that shape 4 blocks per core and won 1.077x — and C16 is STILL flat at 4 blocks/core (86,457 depth-2 vs 86,579 depth-1). So the per-core CB depth is genuinely irrelevant here: the read/write overlap that matters is ACROSS cores, and the pipeline win came from both DM halves getting faster (read 50,047->43,641, write 63,830->61,471) at a constant ~19.5 us of overlap, not from per-core buffering.",
+      "reason": "STILL no payoff, re-measured on the Perf-2 topology — and Perf 2 pins down what CB depth actually is on this op. Depth ALONE remains null: on the read-bound crossover plan, raising the input CB from 2 groups to 3 or 4 with the issue schedule untouched measures 15,195 / 15,070 ns against a 14,755 ns baseline — flat to mildly negative, the same verdict Refinement 3 reached on the square. What Perf 2 adds is that depth is not useless, it is USELESS ALONE: the identical extra group becomes a 1.17-1.21x win the moment the reader is allowed to keep a read outstanding across the block boundary (see B8). Window and slack are two halves of one lever, and the op now allocates the extra group ONLY on plans that take the window, so nothing else pays L1 — or a smaller WT_CHUNK — for it. `use_double_buffer` stays a public API knob at its mandated default.",
       "measured": {
-        "on_ns": 86457.0,
-        "off_ns": 86579.0,
-        "shape": "[1,1,2048,2048] bf16, 4 blocks/core (5-sample medians)",
-        "phase0_arm": {
-          "on_ns": 92859.0,
-          "off_ns": 90761.0,
-          "note": "same shape at 1 block/core"
+        "on_ns": 15195.0,
+        "off_ns": 15072.0,
+        "shape": "[1,1,2048,256] bf16 -> H x8: input CB depth 3 vs 4, issue schedule unchanged (depth-2 baseline 14,755)",
+        "also": {
+          "the same extra group WITH the issue-ahead window (B8)": {
+            "on_ns": 12360.0,
+            "off_ns": 14755.0
+          }
         },
         "topology": {
-          "phase": 6,
+          "phase": "Perf 2",
           "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4). Refinement 5 adds the TILE-HEIGHT axis: a tiny tile is a smaller CB page, so derive_blocking()'s L1 cap admits the same or a wider W chunk and the block count scales as H/tile_h (a_square at tile_h=32/16/8/1 = 4/4/4/4 blocks per core over 4x/8x/32x more tile-rows). RETILE keeps the same block definition (1 output tile-row x WT_CHUNK) and adds the reader-private staging buffer to the same L1 ceiling via wt_cap(stage_bytes=stage_tile_bytes(...)). Refinement 6 adds NO new plan path and NO new block factor: its two levers (B13 stateful transfers, D21 host-precomputed block index) are issue-path and index-arithmetic knobs on the EXISTING loops, and both ship parked at a byte-identical default.",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
@@ -805,10 +815,11 @@
             "tilize_noc.hpp",
             "tilize_reader.cpp",
             "tilize_writer.cpp"
-          ]
+          ],
+          "note": "Perf 2 (perf tournament, round 2). What moved, and where: (a) on a DESTINATION-LOCAL sharded plan the split reader gives each of the two DM RISCs every other block, so each READER sees blocks_per_core/2 while compute still sees all of them, and tilize_writer.cpp is not launched there at all; (b) the cross-core L1 gather prefers WT_CHUNK = the source shard's width in tiles, which re-chunks reshard_cross_spec; (c) R_RETILE lands the permutation directly in the OUTPUT tile, so its row-major intermediate (and its tilize compute pass) survives only at tile_h == 1; (d) the five R_ALIGNED reader paths collapsed into ONE loop with an issue-ahead window. EVERY INTERLEAVED PLAN'S blocking is unchanged, and no kernel FILE was added or removed, which is why the comparable keys above are untouched. A later round re-reading a negative closure on a SHARDED plan should treat (a) and (b) as the disqualifier-expiring change."
         }
       },
-      "phase": 3
+      "phase": "Perf 2"
     },
     "C17": {
       "status": "structurally-impossible",
