@@ -176,6 +176,10 @@ def main():
     ap.add_argument("-c", "--config", required=True, help="training config yaml")
     ap.add_argument("--overfit-batch", action="store_true", help="repeat one fixed batch (bringup sanity)")
     ap.add_argument("--max-steps", type=int, default=None, help="override training_config.max_steps")
+    ap.add_argument("--run-name", default=None, help="stable run dir name (required to resume across jobs)")
+    ap.add_argument("--resume", action="store_true", help="resume from <run_dir>/resume.ckpt if present")
+    ap.add_argument("--max-seconds", type=int, default=0,
+                    help="time budget: save resume.ckpt and exit cleanly once exceeded (segmented runs)")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
@@ -200,9 +204,12 @@ def main():
     batch_size = tc["batch_size"]
     max_steps = args.max_steps or tc["max_steps"]
 
-    run_name = f"dit_d{model_cfg['embedding_dim']}x{model_cfg['num_blocks']}_p{model_cfg['patch_size']}_b{batch_size}_{int(time.time())}"
+    run_name = args.run_name or (
+        f"dit_d{model_cfg['embedding_dim']}x{model_cfg['num_blocks']}_p{model_cfg['patch_size']}_b{batch_size}_{int(time.time())}"
+    )
     run_dir = os.path.join(tc["output_dir"], run_name)
     os.makedirs(run_dir, exist_ok=True)
+    resume_path = os.path.join(run_dir, "resume.ckpt")
 
     wandb_run = None
     if lc.get("wandb", False):
@@ -243,10 +250,36 @@ def main():
     sample_every = ec.get("sample_interval", 0)
     ckpt_every = tc.get("model_save_interval", 0)
 
+    # Resume: restore weights + optimizer via ttml.checkpointing (atomic file,
+    # NATIVE-precision gather; immune to the to_numpy stale-cache issue), plus
+    # step / EMA / dataloader-RNG state from the opaque header.
+    start_step = 0
+    if args.resume and os.path.isfile(resume_path):
+        from ttml.checkpointing import load_checkpoint
+
+        header = load_checkpoint(resume_path, model_params=model.parameters(), optimizer=opt)
+        start_step = int(header["step"])
+        rng.bit_generator.state = header["rng_state"]
+        if ema is not None and header.get("ema_state") is not None:
+            ema.state = header["ema_state"]
+        print(f"resumed from {resume_path} at step {start_step}", flush=True)
+
+    def save_resume(step):
+        from ttml.checkpointing import save_checkpoint as ttml_save
+
+        ttml_save(
+            resume_path,
+            header={"step": step, "rng_state": rng.bit_generator.state,
+                    "ema_state": ema.state if ema is not None else None},
+            model_params=model.parameters(),
+            optimizer=opt,
+        )
+
     model.train()
+    t_start = time.time()
     t0 = time.time()
     ema_loss = None
-    for step in range(1, max_steps + 1):
+    for step in range(start_step + 1, max_steps + 1):
         if args.overfit_batch:
             batch_rng = np.random.default_rng(123)
             idx = np.arange(batch_size)
@@ -313,8 +346,16 @@ def main():
                             composer=loss_composer, num_devices=dp_size)
             if ema is not None:
                 save_checkpoint(model, os.path.join(run_dir, f"ckpt_ema_{step:06d}.npz"), state=ema.state)
+            save_resume(step)
+
+        if args.max_seconds and time.time() - t_start > args.max_seconds:
+            save_resume(step)
+            print(f"SEGMENT_END step={step} of {max_steps}", flush=True)
+            return
 
     save_checkpoint(model, os.path.join(run_dir, "ckpt_final.npz"), composer=loss_composer, num_devices=dp_size)
+    save_resume(max_steps)
+    print(f"TRAINING_COMPLETE step={max_steps}", flush=True)
     if ema is not None:
         save_checkpoint(model, os.path.join(run_dir, "ckpt_ema_final.npz"), state=ema.state)
     print(f"done; artifacts in {run_dir}")
