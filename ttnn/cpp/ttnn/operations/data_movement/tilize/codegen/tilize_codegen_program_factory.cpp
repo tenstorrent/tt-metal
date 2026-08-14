@@ -241,6 +241,19 @@ ProgramDescriptor TilizeCodegenProgramFactory::create_descriptor(
         {"seq_id", 0u},   // unused by MODE_TILEROW
         {"batch", 1u},    // unused by MODE_TILEROW
         {"nabatch", 4u},  // batched-read optimization
+        // Benign MODE_TILEROW_PAD defaults: kernel_main() is not templated, so the
+        // get_named_compile_time_arg_val(...) reads inside the `if constexpr (MODE ==
+        // MODE_TILEROW_PAD)` branch are still compiled (and their names resolved) for every
+        // mode that uses this shared kernel, including MODE_TILEROW. Mirrors
+        // builder_utils.py's _merge_tilerow_pad_defaults, which every non-PAD stick-reader
+        // builder picks up automatically.
+        {"elem_size", 2u},
+        {"tile_height", 32u},
+        {"tile_row_shift_bits", 0u},
+        {"num_pages_in_row", 1u},
+        {"unpadded_X_bytes", 0u},
+        {"valid_last_page_bytes", 0u},
+        {"page_size", 32u},
     };
     TensorAccessorArgs(*in_buf).append_to(reader.compile_time_args);
     reader.config = ReaderConfigDescriptor{};
