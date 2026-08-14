@@ -83,7 +83,10 @@ class Qwen3_32BExecutor:
         self.kv_cache_manager = PagedKVCacheManager(model, config.paged_kv_cache)
         self.page_table_layout = self._resolve_page_table_layout()
         self.output_reader = OutputReader(mesh_device)
-        trace_capture_prime_sequence_lengths = _resolve_trace_capture_prime_sequence_lengths(runtime_config)
+        trace_capture_prime_sequence_lengths = _resolve_trace_capture_prime_sequence_lengths(
+            runtime_config,
+            num_devices=int(mesh_device.get_num_devices()),
+        )
         self.prefill_runtime = PrefillRuntime(
             PrefillRuntimeConfig.resolve(
                 model=model,
@@ -474,10 +477,9 @@ def build_qwen3_32b_executor(llm: Qwen3_32BForCausalLM, config: Qwen3_32BExecuto
     return Qwen3_32BExecutor(llm.model, llm.runtime_config, config)
 
 
-def _resolve_trace_capture_prime_sequence_lengths(runtime_config: Any) -> tuple[int, ...]:
+def _resolve_trace_capture_prime_sequence_lengths(runtime_config: Any, *, num_devices: int) -> tuple[int, ...]:
     """Select the T3K Q1024 capture-body prime independently of batching policy."""
 
-    num_devices = int(runtime_config.cluster_shape[0]) * int(runtime_config.cluster_shape[1])
     return (1024,) if num_devices == 8 and runtime_config.can_enable_trace(1024, 0) else ()
 
 

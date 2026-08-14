@@ -579,7 +579,11 @@ def test_qwen3_q1024_capture_prime_is_t3k_product_owned(
         can_enable_trace=lambda length, cached: can_trace_q1024 and length == 1024 and cached == 0,
     )
 
-    assert qwen3_32b_executor._resolve_trace_capture_prime_sequence_lengths(runtime) == expected
+    num_devices = int(cluster_shape[0]) * int(cluster_shape[1])
+    assert qwen3_32b_executor._resolve_trace_capture_prime_sequence_lengths(
+        runtime,
+        num_devices=num_devices,
+    ) == expected
 
 
 def test_phi4_binding_preserves_cap8_trace_buckets_and_pinned_revision():

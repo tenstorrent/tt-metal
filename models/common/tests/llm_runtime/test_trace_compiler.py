@@ -13,7 +13,7 @@ from models.common.llm_runtime.decode import DecodeDeviceInputs, DecodePersisten
 from models.common.llm_runtime.prefill.inputs import PrefillDeviceInputs, PrefillPositionInputs
 from models.common.llm_runtime.prefill.trace import PrefillHiddenPersistentInputs, PrefillReplayState
 from models.common.llm_runtime.program_compiler import ProgramCompiler
-from models.common.llm_runtime.trace_compiler import InputRefreshPolicy, TraceCapturePlan, TraceCompiler
+from models.common.llm_runtime.trace_compiler import InputRefreshPolicy, PersistentInputs, TraceCapturePlan, TraceCompiler
 
 
 @dataclass(frozen=True)
@@ -233,7 +233,7 @@ def test_opt_in_capture_prime_runs_after_allocations_and_before_capture_gate(mon
     assert events[:first_begin] == [
         ("prepare", 1),
         ("workspace", 1),
-        ("prime", "persistent"),
+        ("prime", PersistentInputs("persistent")),
         ("sync", "mesh"),
         ("release-prime", "prime-output"),
         ("sync", "mesh"),
