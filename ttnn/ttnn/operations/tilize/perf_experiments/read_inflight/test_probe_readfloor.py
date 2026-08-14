@@ -42,7 +42,7 @@ _load_torch()
 import ttnn
 from loguru import logger
 
-KERNEL_DIR = pathlib.Path(__file__).parent / "kernels"
+KERNEL_DIR = pathlib.Path(__file__).parent / "experiment_kernels"
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"
 
 PER_CORE_BYTES = 128 * 1024  # the focus plan's per-core read

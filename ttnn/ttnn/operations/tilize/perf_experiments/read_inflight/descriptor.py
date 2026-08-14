@@ -13,14 +13,14 @@ DRAM -> L1 crossover. Everything else is held constant across arms:
   * the blocking (WT_CHUNK, blocks per core, core set),
   * dtype / layout / ComputeConfig (no precision knob is touched anywhere).
 
-The three arms are described in ``kernels/reader.cpp``.
+The three arms are described in ``experiment_kernels/reader.cpp``.
 """
 
 import pathlib
 
 import ttnn
 
-KERNEL_DIR = pathlib.Path(__file__).parent / "kernels"
+KERNEL_DIR = pathlib.Path(__file__).parent / "experiment_kernels"
 
 CB_IN = 0
 CB_OUT = 16

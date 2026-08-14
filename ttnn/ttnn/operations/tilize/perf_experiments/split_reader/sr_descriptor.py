@@ -43,7 +43,7 @@ from pathlib import Path
 
 import ttnn
 
-KERNEL_DIR = Path(__file__).parent / "kernels"
+KERNEL_DIR = Path(__file__).parent / "experiment_kernels"
 
 TILE_H = 32
 TILE_W = 32

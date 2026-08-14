@@ -9,7 +9,7 @@ bench swaps ONLY that: `tilize_program_descriptor.KERNEL_DIR` is pointed at a
 generated per-arm shim directory whose `tilize_reader.cpp` is
 
     #define RETILE_VARIANT <n>
-    #include ".../retile_permute/kernels/retile_reader.cpp"
+    #include ".../retile_permute/experiment_kernels/retile_reader.cpp"
 
 `retile_reader.cpp` is a copy of the op's reader with the retile branch replaced
 by the arm switch; `tilize_writer.cpp` is a one-line include of the op's real
@@ -53,7 +53,7 @@ from ttnn.operations.tilize import tilize_program_descriptor as pd  # noqa: E402
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[5]
-KERNELS = HERE / "kernels"
+KERNELS = HERE / "experiment_kernels"
 GEN = HERE / "generated"
 
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"

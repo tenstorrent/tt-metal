@@ -44,7 +44,7 @@ _load_torch()
 import ttnn
 from loguru import logger
 
-KERNEL = str(Path(__file__).resolve().parent / "kernels" / "gather_reader.cpp")
+KERNEL = str(Path(__file__).resolve().parent / "experiment_kernels" / "gather_reader.cpp")
 
 TILE_W = 32
 _DURATION_KEY = "DEVICE KERNEL DURATION [ns]"

@@ -15,7 +15,7 @@
       "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
       "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
       "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-      "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+      "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
     ],
     "dtypes": [
       "bfloat16",
@@ -37,28 +37,51 @@
   "levers": {
     "A0": {
       "status": "applied",
-      "knob": "w_split",
-      "reason": "Full compute grid on EVERY regime, no bandwidth-knee cap. Per-regime active-core check (interleaved: active == min(grid, total_blocks)): square 64/64, wide-short 64/64 (via the W split \u2014 see the w_split knob and test_grid_fill_on_wide_short_shape), multiblock 64/64, smallest 2/2 (= total_blocks). Sharded regimes are not in SUPPORTED yet (see A2/C14).",
+      "knob": "overlap_cores",
+      "reason": "RE-MEASURED at Perf 1 on the NT_H == 1 topology, which A0's phase-0 closure did not cover. The full grid is still used everywhere A0 originally measured it (that arm, knob `w_split`, is unchanged and still 4.12x). What Perf 1 adds is the one regime where the full grid is a LOSS: a shape whose split lands exactly ONE block per core cannot overlap read with write at all. Cumulative ablation on [1,1,32,16384] bf16: read 4,590 + write 8,680 + sync 1,020 = 14,290 against a measured wall of 13,830 -- the exclusive stage costs SUM, which is the signature of zero overlap, against a max(read,write)+floor ideal of ~9,700. Lighting HALF the cores gives every core two blocks and leaves WT_CHUNK (and so the 512 B read transfer) untouched; buying the same two blocks by halving WT_CHUNK on the full grid instead was measured at 0.908x, which reconfirms the transfer-size floor rather than contradicting it. The predicate is over the BLOCKING (one block per core AND an exact, balanced halving), and every regime outside it was measured to regress: >=2 blocks/core 0.968x, too few blocks to halve 0.706x, an unbalanced 48-core cap 0.949x. Two carve-outs earned by measurement at the guard-set re-measure: R_RETILE (68,125 -> 111,618 ns, 0.61x) and a sub-128 B output page (tile_h=1: 249,507 -> 267,661 ns, 0.93x) -- on both the wall is per-core work, not the DRAM interface, so halving the cores halves the parallelism. tile_h=8 (512 B) is FLAT and stays in the unified path. B8's READ-side trid is turned off on this path (it publishes block i one issue loop late, which is pure latency at exactly two blocks per core): read-half off 1.052x, write-half off 0.995x.",
       "measured": {
-        "on_ns": 92859.0,
-        "off_ns": 382290.0,
-        "shape": "[1,1,2048,2048] bf16",
+        "on_ns": 12991.0,
+        "off_ns": 13383.0,
+        "shape": "[1,1,32,16384] bf16 (in-session A/B; subagent 15-round interleaved A/B: 13,066 vs 13,578, ~4 sigma)",
         "topology": {
-          "phase": 0,
-          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "phase": "Perf 1",
+          "blocks_per_core": "Perf 1 changes the block factors on exactly ONE class of plan: an interleaved shape whose split lands EXACTLY one block on each lit core now lights HALF the cores at the SAME WT_CHUNK, so it becomes 2 blocks/core (b_wide_short 1 -> 2 on 32 cores; d_smallest is excluded, num_blocks_total=2 < 2*grid.x). Every other regime is unchanged: a_square=4, c_multiblock=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8, retile=4. Carved OUT of the halving on measured regressions: R_RETILE (payload is a local L1 permutation, not DRAM traffic) and out_tile_bytes < 128 (the write is transaction-rate bound per core).",
           "plan_paths": [
-            "R_ALIGNED/P_ACCESSOR",
-            "R_PAD/P_ACCESSOR"
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_PAD/P_ACCESSOR + out_fill (whole-pad tiles sourced from a pre-stamped scratch tile)",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
+            "R_RETILE/P_ACCESSOR (face move now via LOCAL NoC loopback, not rv32 stores)",
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)",
+            "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
-            "bfloat8_b(out)"
+            "bfloat8_b(out)",
+            "uint32",
+            "uint16",
+            "int32",
+            "uint8 (Refinement 4; carries fp32 DEST - see F25)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_fill.hpp",
+            "tilize_noc.hpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
           ]
         },
-        "note": "off = single core; 4.12x. Also 4.53x on wide-short (13315 vs 60306) and 4.76x on multiblock (170508 vs 811716). The w_split arm is the per-regime grid-fill proof: on wide-short the OFF arm cannot even be BUILT (the pure height split's input CB is WT=512 tiles -> L1 OOM), pinned by the strict-xfail bench arm."
+        "note": "The original A0 arm (`w_split`, full grid vs single core, 92,859 / 382,290 ns @ [1,1,2048,2048] bf16) is NOT refuted and is still the shipped default everywhere; `overlap_cores` is a second, narrower arm of the same lever. Guard set with the lever forced off, after the carve-out: a_square 86,866/86,842, c_multiblock 173,762/170,327, d_smallest 3,135/3,108, tile_h=8 97,247/95,703, retile 32->8 42,156/41,720 -- all flat."
       },
-      "phase": 0
+      "phase": "Perf 1"
     },
     "A1": {
       "status": "measured-no-payoff",
@@ -83,7 +106,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -110,7 +133,7 @@
       "status": "applied",
       "knob": "zero_copy",
       "predicted_delta_pct": 0.0,
-      "reason": "Refinement 1: the sharded path launches on exactly the cores that hold shards, in shard order (ttnn.get_optimal_worker_cores_for_sharded_tensor), instead of the whole compute grid \u2014 a core with no shard would have nothing local to tilize. Pinned structurally by test_local_shard_launches_only_on_cores_that_hold_data (4 shards -> 4 cores). The zero_copy=0 arm is its only counterfactual and CONFLATES A2 with C14 (turning the placement off also restores the generic full-grid block split), so the number below is the pair's, not A2's alone; A2's own contribution on these shapes is the dispatch cost of the idle cores.",
+      "reason": "Refinement 1: the sharded path launches on exactly the cores that hold shards, in shard order (ttnn.get_optimal_worker_cores_for_sharded_tensor), instead of the whole compute grid — a core with no shard would have nothing local to tilize. Pinned structurally by test_local_shard_launches_only_on_cores_that_hold_data (4 shards -> 4 cores). The zero_copy=0 arm is its only counterfactual and CONFLATES A2 with C14 (turning the placement off also restores the generic full-grid block split), so the number below is the pair's, not A2's alone; A2's own contribution on these shapes is the dispatch cost of the idle cores.",
       "measured": {
         "shape": [
           1,
@@ -120,10 +143,10 @@
         ],
         "on_ns": 1402.0,
         "off_ns": 5257.0,
-        "note": "Conflated with C14 (same knob). Interleaved cells are unaffected: A0 keeps the full grid there. | Refinement 2 REFINES this: launching only on the cores that hold data pays only while those cores still move data in big enough transfers. An aliased destination pins WT_CHUNK to the shard width, and below MIN_STREAM_READ_BYTES (256 B) the shard's few cores LOSE to the full grid \u2014 measured 1.66x (128 B reads) and 3.21x (one-tile-wide destination shard, 64 B reads). Hence the new `xfer_gate` knob.",
+        "note": "Conflated with C14 (same knob). Interleaved cells are unaffected: A0 keeps the full grid there. | Refinement 2 REFINES this: launching only on the cores that hold data pays only while those cores still move data in big enough transfers. An aliased destination pins WT_CHUNK to the shard width, and below MIN_STREAM_READ_BYTES (256 B) the shard's few cores LOSE to the full grid — measured 1.66x (128 B reads) and 3.21x (one-tile-wide destination shard, 64 B reads). Hence the new `xfer_gate` knob.",
         "topology": {
           "phase": 2,
-          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD — an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -151,7 +174,7 @@
     "A3": {
       "status": "structurally-impossible",
       "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_a3_one_reader_one_bank_is_not_expressible_on_an_interleaved_source",
-      "reason": "One reader <-> one bank cannot be expressed for an INTERLEAVED ROW_MAJOR source, for any bank count. An interleaved page lives in bank `page_id % num_banks`; tilize's work unit is a tile-row = TILE_H CONSECUTIVE source sticks = TILE_H consecutive page ids, whose residues mod any num_banks > 1 are distinct. So every reader that produces even one tile touches min(TILE_H, num_banks) banks, and no work assignment fixes that without abandoning the tile. The ~92%-of-peak recipe in Saturating_DRAM_bandwidth.md needs a bank's worth of data RESIDENT per core \u2014 that is lever C15 (prefer sharded), already applied in Refinements 1-2. The Phase-0 predicted 35% was ALSO refuted on the target itself: the 288 GB/s datasheet peak is unreachable here. A pure DRAM->DRAM copy of the same tensors (examples/dram_saturation, no compute kernel at all) measures 87,710 ns @64 cores on [1,1,2048,2048] bf16, 12,078 ns on [1,1,32,16384], 174,772 ns on [1,1,8192,1024] \u2014 i.e. ~192 GB/s, and tilize now runs at or below those numbers.",
+      "reason": "One reader <-> one bank cannot be expressed for an INTERLEAVED ROW_MAJOR source, for any bank count. An interleaved page lives in bank `page_id % num_banks`; tilize's work unit is a tile-row = TILE_H CONSECUTIVE source sticks = TILE_H consecutive page ids, whose residues mod any num_banks > 1 are distinct. So every reader that produces even one tile touches min(TILE_H, num_banks) banks, and no work assignment fixes that without abandoning the tile. The ~92%-of-peak recipe in Saturating_DRAM_bandwidth.md needs a bank's worth of data RESIDENT per core — that is lever C15 (prefer sharded), already applied in Refinements 1-2. The Phase-0 predicted 35% was ALSO refuted on the target itself: the 288 GB/s datasheet peak is unreachable here. A pure DRAM->DRAM copy of the same tensors (examples/dram_saturation, no compute kernel at all) measures 87,710 ns @64 cores on [1,1,2048,2048] bf16, 12,078 ns on [1,1,32,16384], 174,772 ns on [1,1,8192,1024] — i.e. ~192 GB/s, and tilize now runs at or below those numbers.",
       "measured": {
         "topology": {
           "phase": 6,
@@ -168,7 +191,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -211,7 +234,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -235,7 +258,7 @@
     "B0": {
       "status": "applied",
       "knob": "block_write",
-      "reason": "Every per-core-overhead lever is counterfactualed on the SMALLEST regime (d_smallest, [1,1,32,64] = 2 tiles on 2 cores) as well as the large ones. B7's win is 8-14% on the large regimes and inside noise on the smallest \u2014 it is not gated because it never REGRESSES there.",
+      "reason": "Every per-core-overhead lever is counterfactualed on the SMALLEST regime (d_smallest, [1,1,32,64] = 2 tiles on 2 cores) as well as the large ones. B7's win is 8-14% on the large regimes and inside noise on the smallest — it is not gated because it never REGRESSES there.",
       "measured": {
         "on_ns": 2889.0,
         "off_ns": 2942.0,
@@ -267,7 +290,7 @@
         "shape": "[1,1,8192,1024] bf16",
         "topology": {
           "phase": 2,
-          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD — an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -296,14 +319,14 @@
     "B6": {
       "status": "applied",
       "knob": "read_one_packet",
-      "reason": "The custom aligned reader takes noc_async_read_one_packet whenever the per-stick transfer fits NOC_MAX_BURST_SIZE (512 B) \u2014 which is exactly the wide/short regime's 512 B read. It never loses (it is compile-time inert above 512 B, so the coarse-chunk shapes are untouched), so B5 and B6 did NOT have to be traded off against each other: B5 picks the chunk, B6 picks the issue path for whatever chunk B5 chose.",
+      "reason": "The custom aligned reader takes noc_async_read_one_packet whenever the per-stick transfer fits NOC_MAX_BURST_SIZE (512 B) — which is exactly the wide/short regime's 512 B read. It never loses (it is compile-time inert above 512 B, so the coarse-chunk shapes are untouched), so B5 and B6 did NOT have to be traded off against each other: B5 picks the chunk, B6 picks the issue path for whatever chunk B5 chose.",
       "measured": {
         "on_ns": 13478.0,
         "off_ns": 13605.0,
         "shape": "[1,1,32,16384] bf16, 512 B reads (5-sample medians)",
         "topology": {
           "phase": 3,
-          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD — an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -357,7 +380,7 @@
     "B8": {
       "status": "measured-no-payoff",
       "knob": "read_trid",
-      "reason": "[write-side twin knob: write_trid \u2014 arms test_bench_lever_write_trid_off / test_bench_lever_both_trid_off] Trid double-issue is BUILT on both halves (reader and writer): block i's transfers are issued before block i-1's barrier, so a request is always in flight across the block boundary. Measured NULL on every regime that can show it (<=1.5%, both signs, inside the +-3% band), including the B0 smallest-regime check on [1,1,32,64]. The cause is measured, not argued: (a) and (c) already run at or below a pure DRAM->DRAM copy of the same tensor, so extra in-flight requests cannot buy bandwidth the DRAM interface will not deliver, and (b) has one block per core so there is no next block to double-issue against. Both levers are correct (bit-exact under --dev) and regression-free, so they are KEPT rather than reverted. NOTE for anyone re-enabling this family: a trid left on the WRITE command buffer halts BRISC in firmware after kernel_main returns (brisck.cc:91 ASSERT(ncrisc_noc_packet_tags_cleared)); it presents as a whole-grid hang at waypoint NKFW, not as a CB deadlock. Reset the trid to 0 before exit.",
+      "reason": "[write-side twin knob: write_trid — arms test_bench_lever_write_trid_off / test_bench_lever_both_trid_off] Trid double-issue is BUILT on both halves (reader and writer): block i's transfers are issued before block i-1's barrier, so a request is always in flight across the block boundary. Measured NULL on every regime that can show it (<=1.5%, both signs, inside the +-3% band), including the B0 smallest-regime check on [1,1,32,64]. The cause is measured, not argued: (a) and (c) already run at or below a pure DRAM->DRAM copy of the same tensor, so extra in-flight requests cannot buy bandwidth the DRAM interface will not deliver, and (b) has one block per core so there is no next block to double-issue against. Both levers are correct (bit-exact under --dev) and regression-free, so they are KEPT rather than reverted. NOTE for anyone re-enabling this family: a trid left on the WRITE command buffer halts BRISC in firmware after kernel_main returns (brisck.cc:91 ASSERT(ncrisc_noc_packet_tags_cleared)); it presents as a whole-grid hang at waypoint NKFW, not as a CB deadlock. Reset the trid to 0 before exit.",
       "measured": {
         "on_ns": 86530.0,
         "off_ns": 85930.0,
@@ -391,7 +414,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -435,14 +458,14 @@
             "bfloat8_b(out)"
           ]
         },
-        "note": "2.63x \u2014 the largest single-lever win measured. wide-short 13929 vs 32783 (2.35x), multiblock 173311 vs 357969 (2.07x), smallest noise."
+        "note": "2.63x — the largest single-lever win measured. wide-short 13929 vs 32783 (2.35x), multiblock 173311 vs 357969 (2.07x), smallest noise."
       },
       "phase": 0
     },
     "B10": {
       "status": "measured-no-payoff",
       "knob": "read_vc",
-      "reason": "Spreading read requests over NUM_READ_VCS unicast VCs is neutral on the grid-filling square and a LOSS on the wide/short shape. 64 readers already spread over the whole grid, reading pages that round-robin over every DRAM bank, have no first-come-first-serve shared route to break up \u2014 and A3 (the placement lever B10 was predicted to pair with) is structurally impossible on an interleaved source. The knob SHIPS PARKED at its byte-identical default (pd.PARKED_LEVERS), so it stays a live tunable; the ON arm is the bench row.",
+      "reason": "Spreading read requests over NUM_READ_VCS unicast VCs is neutral on the grid-filling square and a LOSS on the wide/short shape. 64 readers already spread over the whole grid, reading pages that round-robin over every DRAM bank, have no first-come-first-serve shared route to break up — and A3 (the placement lever B10 was predicted to pair with) is structurally impossible on an interleaved source. The knob SHIPS PARKED at its byte-identical default (pd.PARKED_LEVERS), so it stays a live tunable; the ON arm is the bench row.",
       "measured": {
         "on_ns": 86136.0,
         "off_ns": 85720.0,
@@ -468,7 +491,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -511,7 +534,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -553,7 +576,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -631,7 +654,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -657,7 +680,7 @@
       "status": "applied",
       "knob": "zero_copy",
       "predicted_delta_pct": 50.0,
-      "reason": "Refinement 1: both CBs are placed ON the resident L1 shard via ttnn.cb_descriptor_from_sharded_tensor when the shard spec matches the blocking, so the reader publishes pages it never fetched and the writer drains pages it never sent \u2014 zero NoC traffic on a local-shard side. The OFF arm (zero_copy=0) takes the TensorAccessor path over the very shard already resident in L1, which is the 'tolerated, not implemented' sharding this lever replaces. Measured 3.7x on the smallest sharded regime and 9.5x on the 8-blocks/core one, so it pays in BOTH regimes (no work-per-core gate needed).",
+      "reason": "Refinement 1: both CBs are placed ON the resident L1 shard via ttnn.cb_descriptor_from_sharded_tensor when the shard spec matches the blocking, so the reader publishes pages it never fetched and the writer drains pages it never sent — zero NoC traffic on a local-shard side. The OFF arm (zero_copy=0) takes the TensorAccessor path over the very shard already resident in L1, which is the 'tolerated, not implemented' sharding this lever replaces. Measured 3.7x on the smallest sharded regime and 9.5x on the 8-blocks/core one, so it pays in BOTH regimes (no work-per-core gate needed).",
       "measured": {
         "shape": [
           1,
@@ -667,10 +690,10 @@
         ],
         "on_ns": 1402.0,
         "off_ns": 5257.0,
-        "note": "smallest sharded regime, HEIGHT-sharded 4 cores, bf16 -> 3.75x. Larger regime [1,1,2048,256] HEIGHT-sharded 8 cores: 4901 ns on / 46548 ns off -> 9.50x. Ablation on the ON arm: full 4901 -> no_compute 862 -> sync_only 856, i.e. the zero-copy path has NO measurable data movement left and is bound by the tilize LLK. | Refinement 2 adds two measured arms on the same knob: padding into a resident destination shard [1,1,2040,256]->[1,1,2048,256] x8 = 22,466 ns ON vs 30,396 ns OFF (1.35x \u2014 per-side eligibility: only the INPUT is disqualified by the fill), and the cross-spec L1 gather [1,1,1024,256] WIDTH x2 -> HEIGHT x8 = 18,487 vs 19,464 ns (1.05x; DM-bound, and with a 2-core source the fan-in is the wall, not the placement).",
+        "note": "smallest sharded regime, HEIGHT-sharded 4 cores, bf16 -> 3.75x. Larger regime [1,1,2048,256] HEIGHT-sharded 8 cores: 4901 ns on / 46548 ns off -> 9.50x. Ablation on the ON arm: full 4901 -> no_compute 862 -> sync_only 856, i.e. the zero-copy path has NO measurable data movement left and is bound by the tilize LLK. | Refinement 2 adds two measured arms on the same knob: padding into a resident destination shard [1,1,2040,256]->[1,1,2048,256] x8 = 22,466 ns ON vs 30,396 ns OFF (1.35x — per-side eligibility: only the INPUT is disqualified by the fill), and the cross-spec L1 gather [1,1,1024,256] WIDTH x2 -> HEIGHT x8 = 18,487 vs 19,464 ns (1.05x; DM-bound, and with a 2-core source the fan-in is the wall, not the placement).",
         "topology": {
           "phase": 2,
-          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD — an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -699,7 +722,7 @@
       "status": "applied",
       "knob": "zero_copy",
       "predicted_delta_pct": 50.0,
-      "reason": "Refinement 1 accepts L1-sharded input and/or output, so the DRAM leg disappears on the sharded side(s): a same-spec sharded call touches DRAM zero times (both CBs alias their shard) and a crossover keeps only the interleaved side's leg. Same knob as C14 \u2014 the zero_copy=0 arm is the only counterfactual that removes the placement, and it also restores the NoC traffic this row is about.",
+      "reason": "Refinement 1 accepts L1-sharded input and/or output, so the DRAM leg disappears on the sharded side(s): a same-spec sharded call touches DRAM zero times (both CBs alias their shard) and a crossover keeps only the interleaved side's leg. Same knob as C14 — the zero_copy=0 arm is the only counterfactual that removes the placement, and it also restores the NoC traffic this row is about.",
       "measured": {
         "shape": [
           1,
@@ -709,10 +732,10 @@
         ],
         "on_ns": 1402.0,
         "off_ns": 5257.0,
-        "note": "Same-spec sharded [1,1,2048,256] bf16 measures 4901 ns (427.9 GB/s of effective read+write) against 46548 ns when the same shard is re-fetched over the NoC; the DRAM->shard crossover of the same shape measures 14768 ns (142 GB/s), i.e. exactly one DRAM leg left. The DRAM floor does NOT describe the zero-copy rows \u2014 they are L1/compute bound (see C14's ablation), which is the re-target Refinement 3 must apply. | Refinement 2: still holds when the destination is packed from a PADDED stream (1.35x) and when the source is another core's narrow shard (1.05x).",
+        "note": "Same-spec sharded [1,1,2048,256] bf16 measures 4901 ns (427.9 GB/s of effective read+write) against 46548 ns when the same shard is re-fetched over the NoC; the DRAM->shard crossover of the same shape measures 14768 ns (142 GB/s), i.e. exactly one DRAM leg left. The DRAM floor does NOT describe the zero-copy rows — they are L1/compute bound (see C14's ablation), which is the re-target Refinement 3 must apply. | Refinement 2: still holds when the destination is packed from a PADDED stream (1.35x) and when the source is another core's narrow shard (1.05x).",
         "topology": {
           "phase": 2,
-          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD — an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -740,7 +763,7 @@
     "C16": {
       "status": "measured-no-payoff",
       "knob": "double_buffer",
-      "reason": "Depth-2 CBs are kept because the public API mandates use_double_buffer=True as the default and the L1 cost is bounded by the CB budget \u2014 but they buy nothing measurable, and Refinement 3 established WHY, refuting Phase 0's explanation. Phase 0 said 'the op is DRAM-bound so the reader cannot run ahead'; the real reason was that the grid-filling square landed ONE block per core, leaving the second CB slot with nothing to hold. Refinement 3's pipeline knob gives that shape 4 blocks per core and won 1.077x \u2014 and C16 is STILL flat at 4 blocks/core (86,457 depth-2 vs 86,579 depth-1). So the per-core CB depth is genuinely irrelevant here: the read/write overlap that matters is ACROSS cores, and the pipeline win came from both DM halves getting faster (read 50,047->43,641, write 63,830->61,471) at a constant ~19.5 us of overlap, not from per-core buffering.",
+      "reason": "Depth-2 CBs are kept because the public API mandates use_double_buffer=True as the default and the L1 cost is bounded by the CB budget — but they buy nothing measurable, and Refinement 3 established WHY, refuting Phase 0's explanation. Phase 0 said 'the op is DRAM-bound so the reader cannot run ahead'; the real reason was that the grid-filling square landed ONE block per core, leaving the second CB slot with nothing to hold. Refinement 3's pipeline knob gives that shape 4 blocks per core and won 1.077x — and C16 is STILL flat at 4 blocks/core (86,457 depth-2 vs 86,579 depth-1). So the per-core CB depth is genuinely irrelevant here: the read/write overlap that matters is ACROSS cores, and the pipeline win came from both DM halves getting faster (read 50,047->43,641, write 63,830->61,471) at a constant ~19.5 us of overlap, not from per-core buffering.",
       "measured": {
         "on_ns": 86457.0,
         "off_ns": 86579.0,
@@ -765,7 +788,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -790,7 +813,7 @@
     "C17": {
       "status": "structurally-impossible",
       "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_c17_in_place_is_structurally_impossible",
-      "reason": "The input is ROW_MAJOR and the output TILE \u2014 different byte orderings of the same values, so the op can never alias one buffer onto the other.",
+      "reason": "The input is ROW_MAJOR and the output TILE — different byte orderings of the same values, so the op can never alias one buffer onto the other.",
       "phase": 0,
       "measured": {
         "topology": {
@@ -808,7 +831,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -849,7 +872,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -881,7 +904,7 @@
     "D20": {
       "status": "measured-no-payoff",
       "knob": "regime_select",
-      "reason": "The compile-time reader-regime selector (R_ALIGNED vs R_PAD, keyed on the pad region actually being non-empty) IS kept \u2014 it is a design contract (\u00a75.1: pad_mode='auto' on an aligned input must not take the pad reader) \u2014 but on this DRAM-bound path the pad reader's extra per-row bookkeeping is free: forcing it on the aligned path costs nothing measurable.",
+      "reason": "The compile-time reader-regime selector (R_ALIGNED vs R_PAD, keyed on the pad region actually being non-empty) IS kept — it is a design contract (§5.1: pad_mode='auto' on an aligned input must not take the pad reader) — but on this DRAM-bound path the pad reader's extra per-row bookkeeping is free: forcing it on the aligned path costs nothing measurable.",
       "measured": {
         "on_ns": 93626.0,
         "off_ns": 92225.0,
@@ -901,7 +924,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -961,7 +984,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -993,7 +1016,7 @@
     "F23": {
       "status": "structurally-impossible",
       "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_f27_no_math_fidelity_sensitive_op",
-      "reason": "The rule F23 protects (never downgrade a precision knob the CALLER supplied) cannot be violated here: tilize exposes no ComputeKernelConfig, so there is no caller-supplied precision knob. The one precision decision the op does make (fp32 DEST) is gated on the dtype PAIR \u2014 see F25.",
+      "reason": "The rule F23 protects (never downgrade a precision knob the CALLER supplied) cannot be violated here: tilize exposes no ComputeKernelConfig, so there is no caller-supplied precision knob. The one precision decision the op does make (fp32 DEST) is gated on the dtype PAIR — see F25.",
       "phase": 0,
       "measured": {
         "topology": {
@@ -1011,7 +1034,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -1056,7 +1079,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -1117,7 +1140,7 @@
             "tilize_writer.cpp"
           ]
         },
-        "note": "the exactness costs 0.7% here and <=3% on the other regimes (wide-short 27737 vs 26903, multiblock 363494 vs 359438) \u2014 i.e. the knob is nearly free where it is needed, and off everywhere else."
+        "note": "the exactness costs 0.7% here and <=3% on the other regimes (wide-short 27737 vs 26903, multiblock 363494 vs 359438) — i.e. the knob is nearly free where it is needed, and off everywhere else."
       },
       "phase": 0,
       "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_numeric_surface.py::test_uint8_requires_fp32_dest"
@@ -1143,7 +1166,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -1167,7 +1190,7 @@
     "F27": {
       "status": "structurally-impossible",
       "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_f27_no_math_fidelity_sensitive_op",
-      "reason": "tilize performs NO arithmetic \u2014 the LLK reinterprets byte positions. There is no multiply whose math_fidelity could be lowered, and the compute kernel calls no fidelity-sensitive API.",
+      "reason": "tilize performs NO arithmetic — the LLK reinterprets byte positions. There is no multiply whose math_fidelity could be lowered, and the compute kernel calls no fidelity-sensitive API.",
       "phase": 0,
       "measured": {
         "topology": {
@@ -1185,7 +1208,7 @@
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
             "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)",
             "R_RETILE/P_ACCESSOR/W_BLOCKS (Refinement 5: TILE input at another tile height; whole source PAGES staged into CB_RETILE_STAGE, face rows permuted locally)",
-            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile \u2014 the destination shard still aliases; a tiled source can never back the row-major input CB)"
+            "R_RETILE/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 5: sharded retile — the destination shard still aliases; a tiled source can never back the row-major input CB)"
           ],
           "dtypes": [
             "bfloat16",
@@ -1209,18 +1232,18 @@
   },
   "notes": {
     "L4_split_reader": "Design lamp L4 (master.md example T2 `split_reader`, ~1.7x) becomes APPLICABLE for the first time with Refinement 1: on a sharded-OUTPUT plan the writer issues no NoC work at all, so BRISC is free to take half the reader's DRAM reads on the interleaved->shard crossover. Not built here (Refinement 1 is placement only); it is Refinement 3's business. It has no Part-2 catalog ID, hence this note rather than a levers row.",
-    "phase1_stale_closure_reread": "The 10 'possibly unlocked' staleness signals are the topology block moving from interleaved-only to interleaved + three sharded plan paths. Re-read at Refinement 1 and all still hold: A1 (row_wise) is INAPPLICABLE on the sharded path (cores come from shard order, split_work_to_cores is not called); A4 (cliff cores) \u2014 derive_shard_blocking makes WT_CHUNK divide shard_wt exactly and uneven shards fall back to the accessor path; B11 \u2014 a shard row is shard_w*elem with shard_w % 32 == 0, still a 32 B multiple; B12 \u2014 destination tile regions are disjoint, so even the cross-core gather reads no byte twice; C16 \u2014 an aliased CB has no depth and the zero-copy path is compute-bound (ablation: 4901 -> 862 with compute stubbed), so there is still nothing to overlap; C17 \u2014 RM-in / TILE-out still cannot alias (the two aliased CBs sit on different tensors); D20/F23/F26/F27 are untouched by placement.",
-    "R2_xfer_gate": "Refinement 2 added the `xfer_gate` knob (LEVERS, default 1) with both arms in _bench_tilize.py (test_bench_lever_xfer_gate, test_bench_lever_xfer_gate_narrow_destination). It decides whether aliasing the DESTINATION shard is worth the read transfer the shard's width pins: 1.66x / 3.21x in favour of the grid split below the 256 B knee, no effect above it (dram->HEIGHT x8, 512 B reads: 7,983 vs 8,058 ns). It never gates a SOURCE-local plan \u2014 the writer always moves whole TILE pages, measured 0.94x (2 cores) to 3.85x (8 cores). Mechanism-wise this is B5 (transaction size) crossed with A2 (core placement); it has no catalog ID of its own.",
-    "R2_reshard_retarget": "Re-target for the reshard rows: with the destination local there is NO write traffic, so the ceiling is the SOURCE shard's L1 egress (2 cores x 256 KB in 256 B transfers ~= 14 GB/s/core), not the DRAM floor. Ablation on [1,1,1024,256] WIDTHx2->HEIGHTx8: full 18,487 -> no_compute 17,615 (-4.7%) -> sync_only 745 ns, i.e. DM-bound (95%). Remaining headroom is the source-side fan-in, which the CALLER picks (shard spec), plus L4 split_reader \u2014 now MORE applicable than at Refinement 1, since on a destination-local gather BRISC does no NoC work at all.",
-    "phase2_stale_closure_reread": "The 10 staleness signals at Refinement 2 are the topology block gaining three plan paths (padded-into-local-shard, the paged cross-spec gather, and that gather on the full grid). Re-read, and all still hold: A1 (row_wise) \u2014 still not called on a shard-pinned plan, and the GATED gather does call split_work_to_cores again but over the same round-robin DRAM/L1 page map where it measured as noise; A4 (no cliff width) \u2014 derive_shard_blocking still divides the shard width exactly, and Refinement 2's uneven grids split ROWS, not W, so the short last shard is a cliff in H that the per-shard block count absorbs (no second kernel width); B11 (32 B transactions) \u2014 now stronger, since every page slice of the gather is a 32 B multiple by construction and the one geometry that would break it is refused (test_unaddressable_shard_row_is_refused); B12 (no mcast/semaphores) \u2014 still zero, now asserted per-descriptor in test_reshard_placement_and_source_page_geometry; C16 (double_buffer) and D20 (regime_select) \u2014 unchanged on the interleaved rows they were measured on, though both now have a new consumer (the gather streams through the input CB and forces R_PAD), so they are the two rows most worth re-measuring in a perf phase; C17 / F23 / F26 / F27 \u2014 the format, precision-knob and arithmetic facts they rest on did not move.",
+    "phase1_stale_closure_reread": "The 10 'possibly unlocked' staleness signals are the topology block moving from interleaved-only to interleaved + three sharded plan paths. Re-read at Refinement 1 and all still hold: A1 (row_wise) is INAPPLICABLE on the sharded path (cores come from shard order, split_work_to_cores is not called); A4 (cliff cores) — derive_shard_blocking makes WT_CHUNK divide shard_wt exactly and uneven shards fall back to the accessor path; B11 — a shard row is shard_w*elem with shard_w % 32 == 0, still a 32 B multiple; B12 — destination tile regions are disjoint, so even the cross-core gather reads no byte twice; C16 — an aliased CB has no depth and the zero-copy path is compute-bound (ablation: 4901 -> 862 with compute stubbed), so there is still nothing to overlap; C17 — RM-in / TILE-out still cannot alias (the two aliased CBs sit on different tensors); D20/F23/F26/F27 are untouched by placement.",
+    "R2_xfer_gate": "Refinement 2 added the `xfer_gate` knob (LEVERS, default 1) with both arms in _bench_tilize.py (test_bench_lever_xfer_gate, test_bench_lever_xfer_gate_narrow_destination). It decides whether aliasing the DESTINATION shard is worth the read transfer the shard's width pins: 1.66x / 3.21x in favour of the grid split below the 256 B knee, no effect above it (dram->HEIGHT x8, 512 B reads: 7,983 vs 8,058 ns). It never gates a SOURCE-local plan — the writer always moves whole TILE pages, measured 0.94x (2 cores) to 3.85x (8 cores). Mechanism-wise this is B5 (transaction size) crossed with A2 (core placement); it has no catalog ID of its own.",
+    "R2_reshard_retarget": "Re-target for the reshard rows: with the destination local there is NO write traffic, so the ceiling is the SOURCE shard's L1 egress (2 cores x 256 KB in 256 B transfers ~= 14 GB/s/core), not the DRAM floor. Ablation on [1,1,1024,256] WIDTHx2->HEIGHTx8: full 18,487 -> no_compute 17,615 (-4.7%) -> sync_only 745 ns, i.e. DM-bound (95%). Remaining headroom is the source-side fan-in, which the CALLER picks (shard spec), plus L4 split_reader — now MORE applicable than at Refinement 1, since on a destination-local gather BRISC does no NoC work at all.",
+    "phase2_stale_closure_reread": "The 10 staleness signals at Refinement 2 are the topology block gaining three plan paths (padded-into-local-shard, the paged cross-spec gather, and that gather on the full grid). Re-read, and all still hold: A1 (row_wise) — still not called on a shard-pinned plan, and the GATED gather does call split_work_to_cores again but over the same round-robin DRAM/L1 page map where it measured as noise; A4 (no cliff width) — derive_shard_blocking still divides the shard width exactly, and Refinement 2's uneven grids split ROWS, not W, so the short last shard is a cliff in H that the per-shard block count absorbs (no second kernel width); B11 (32 B transactions) — now stronger, since every page slice of the gather is a 32 B multiple by construction and the one geometry that would break it is refused (test_unaddressable_shard_row_is_refused); B12 (no mcast/semaphores) — still zero, now asserted per-descriptor in test_reshard_placement_and_source_page_geometry; C16 (double_buffer) and D20 (regime_select) — unchanged on the interleaved rows they were measured on, though both now have a new consumer (the gather streams through the input CB and forces R_PAD), so they are the two rows most worth re-measuring in a perf phase; C17 / F23 / F26 / F27 — the format, precision-knob and arithmetic facts they rest on did not move.",
     "phase3_pipeline_lever": "NEW non-catalog lever `pipeline` (PIPELINE_BLOCKS_PER_CORE / MIN_PIPELINE_READ_BYTES): the block derivation now targets several blocks per core instead of stopping at the grid-fill floor, capped so a read transfer never drops below the B5 floor. Both constants are SWEPT, not chosen: blocks/core 1/2/4/8/16 -> 94,398 / 85,846 / 85,122 / 88,444 / 87,298 ns on [1,1,2048,2048] bf16 (4 wins, and fp32 agrees within 0.25%); MIN_PIPELINE_READ_BYTES 128/256/512/1024 -> 15,076 / 14,092 / 13,964 / 13,150 ns on [1,1,32,16384] bf16 (monotonic, so the cap correctly refuses to split that shape finer). Whole-refinement A/B (n=7 medians): [1,1,2048,2048] bf16 92,608 -> 86,235 (-6.9%), fp32 195,738 -> 181,230 (-7.4%). Both arms in _bench_tilize.py (`pipeline`, plus `pre_r3` = every Refinement-3 lever off at once).",
-    "phase3_ceiling_retarget": "The DRAM-floor target the queue quoted (288 GB/s -> 58.3 us on [1,1,2048,2048]) is a datasheet number this box cannot reach for an interleaved DRAM->DRAM stream. Measured practical ceiling with examples/dram_saturation (pure copy, NO compute kernel): 87,710 ns @64c / 86,943 @32c on 2048x2048 bf16 (191-193 GB/s), 12,078 @64c / 11,550 @32c on 32x16384, 174,772 @64c on 8192x1024. tilize now measures 86,235 / 13,606 / 171,695 ns \u2014 i.e. 1.01x, 0.89x and 1.02x of a pure copy of the same bytes. Use these, not 288 GB/s, as the target.",
+    "phase3_ceiling_retarget": "The DRAM-floor target the queue quoted (288 GB/s -> 58.3 us on [1,1,2048,2048]) is a datasheet number this box cannot reach for an interleaved DRAM->DRAM stream. Measured practical ceiling with examples/dram_saturation (pure copy, NO compute kernel): 87,710 ns @64c / 86,943 @32c on 2048x2048 bf16 (191-193 GB/s), 12,078 @64c / 11,550 @32c on 32x16384, 174,772 @64c on 8192x1024. tilize now measures 86,235 / 13,606 / 171,695 ns — i.e. 1.01x, 0.89x and 1.02x of a pure copy of the same bytes. Use these, not 288 GB/s, as the target.",
     "phase3_split_dm_ablation": "New ABLATE keys dm_read / dm_write attribute the wall to each NoC half. bf16: (a) full 86,594 | no_reads 59,482 | no_writes 43,930; (b) 12,721 | 9,364 | 8,155; (c) 169,518 | 122,680 | 93,055. The WRITE half is the larger one everywhere, which is why B8's writer twin was built rather than shipping a reader-only lever.",
     "phase4_stale_closure_reread": "Refinement 4 moves the topology in three ways (a new element WIDTH family down to 1 byte, rank 0, and the writer's optional OUTPUT-format pad stamp in a new shared header), so all 13 negative closures were re-read before their topology stamps were refreshed. All still hold, and one needed real re-checking rather than a glance: B11 (alignment) is the only row a NARROWER element could break, because the aligned read chunk is WT_CHUNK*32*elem - at 1 byte/elem the smallest possible chunk is one tile column = 32 B, exactly the DRAM alignment, so it still cannot go under. test_b11_every_transaction_is_dram_aligned is now parametrized over all three widths (1/2/4 B) to keep that pinned. The rest are untouched by an element width: A1/B10 are placement and VC, A3's page->bank residue argument is dtype-free, A4's exact-divisor W split is unchanged, B12 (nothing is read twice) and C17 (RM-in/TILE-out cannot alias) are properties of the permutation itself, C16/D20 were measured on the interleaved path this phase did not touch, F23 (no caller-supplied precision knob) still holds - tilize still exposes no ComputeKernelConfig - and F26/F27 (lossless unpack, math fidelity) are untouched: uint8 gets fp32 DEST but still Fp32Mode::Fast, and the op still does no arithmetic.",
     "R4_out_fill": "Refinement 4 added the `out_fill` knob (LEVERS, default 1) with both arms in _bench_tilize.py (test_bench_lever_out_fill). It is a CORRECTNESS mechanism, not a perf lever - it is what makes a padded WIDENING cast exact, so its off arm has no correct output on the cells it governs - but it is benched because it is the most expensive thing this refinement adds. Worst-case geometry ([1,1,1024,2048] -> [1,1,2048,2048] bf16 -> fp32, half the output tiles are WHOLE pad tiles): 386,033 ns with the stamp vs 187,130 without, i.e. 2.06x. The stamp is 2 M fp32 rv32 volatile L1 word stores at ~10 cycles each; two things were measured on it. (1) Filling the LARGEST contiguous runs the tiled face geometry allows (face-first instead of row-first) is FLAT - the cost is the store COUNT, not loop overhead. (2) Skipping the reader's now-redundant input-format fill on this path (identical fill region, and the writer's word is the exact one) is worth 28.6%: 540,314 -> 386,033 ns. Remaining idea, NOT built: stamp one tile then replicate it with local L1->L1 noc_async_write, which would trade ~1024 stores per whole-pad tile for one 4 KB NoC transfer. It needs a scratch buffer and puts the writer's NoC on a path that currently has none, and the cells that reach the stamp at all are narrow (a bf16 -> fp32 pad whose fill is not bf16-representable - 10.2 yes, 0.0 / 3.5 / -18.0 / -32.5 all exact and therefore stamp-free).",
     "R4_gate_is_the_lever": "The `out_fill` gate (needs_output_format_fill: quantize the fill through the input format, then through the output format, and compare against quantizing straight to the output format) is what keeps the 2.06x off every other cell. It is pinned by test_out_fill_gate_fires_only_when_the_round_trip_loses_the_fill over 9 dtype/fill combinations, plus test_out_fill_is_off_on_the_unpadded_hot_path, so the unpadded and same-format paths stay byte-identical to Refinement 3's kernels.",
     "R5_tile_geometry": "Refinement 5. TINY TILES needed no kernel change (every byte quantity already derived from tile_h) beyond one host gap: ttnn.allocate_tensor_on_device's shape/dtype/layout overload has no tile= parameter, so the output tensor silently carried a 32x32 tile; the TensorSpec overload fixes it. Measured on a_square bf16: tile_h 32/16/8/1 = 86,359 / 89,594 / 95,941 / 249,925 ns. The cost is inherent to the requested geometry (a 1x32 tile packs 32x as many tiles for the same bytes), and tile_h=32 is unchanged, so no supported shape regressed. On the d_smallest overhead regime a tiny tile is FASTER (tile_h=8: 1,815 vs 2,896 ns) because the finer tile-row grid spreads 8 blocks over more cores. RETILE is DM-shaped but L1-STORE-bound, like Refinement 4's pad stamp: the reader stages whole source tile pages (a face row is 16 elements = 32 B at bf16, 16 B at uint8, below the 32 B / 64 B DRAM read alignment on WH / BH, so face rows are NOT addressable in DRAM) and then moves each face row with rv32 word copies. Measured [1,1,1024,1024] bf16: 32->8 99,252 ns, 1->32 124,631 ns, 32->16 101,475 ns (~42 GB/s vs ~190 GB/s for the row-major path). NOT built, recorded for the perf tournament: a retile is a pure FACE permutation, so it could bypass the row-major round trip entirely and copy contiguous face-row RUNS page-to-page (min(in_tile_h, tile_h)*16 elements per run, e.g. 512 B for 32->16 instead of 32 copies of 32 B), with compute reduced to a pass-through. That is a scheme change (the input CB would hold tiled data, not sticks), not a knob.",
-    "phase5_stale_closure_reread": "verify_levers --phase 5 flags 14 negative closures as possibly-unlocked because the topology block gained the tile-height axis and the two R_RETILE plan paths. Every one was re-read against the new paths and still holds: A1 (row_wise) / A4 (no cliff-core width) / B11 (32 B-multiple transfers) / B12 (no operand read by two cores) \u2014 the tile height only scales the tile-row count and the page size, and a retile's transfers are whole tile PAGES, which are page-aligned and read by exactly one core. A3 (one reader \u2194 one bank) is still structurally impossible and for the SAME reason on the retile path: an interleaved page lives in bank page_id % num_banks and a block spans consecutive pages. B8 (trid double-issue) and B10 (per-reader VC) stay as measured \u2014 the retile wall is the local rv32 face permutation, not the NoC (staging is one whole-page read per source tile), so a NoC-issue lever has nothing to shorten there. C16 (depth-2 CBs) unchanged: the retile stage is depth-1 reader-private scratch and the streaming CBs keep their depth. C17 (input and output can never alias) needed the closest look, because a retile is the FIRST case where both tensors are TILE layout: it still holds, since the op allocates a distinct output tensor and the retile reader has already staged and permuted the source bytes before the packer writes. D20 (compile-time regime selector) now selects among THREE regimes rather than two, which strengthens rather than changes it. F23/F24/F26/F27 are precision rows and tile geometry does not touch them (F24's own arm was re-measured at Refinement 4 and bfloat8_b x tile_height=16 is now an EXCLUSION, so the block-float surface got smaller, not larger).",
+    "phase5_stale_closure_reread": "verify_levers --phase 5 flags 14 negative closures as possibly-unlocked because the topology block gained the tile-height axis and the two R_RETILE plan paths. Every one was re-read against the new paths and still holds: A1 (row_wise) / A4 (no cliff-core width) / B11 (32 B-multiple transfers) / B12 (no operand read by two cores) — the tile height only scales the tile-row count and the page size, and a retile's transfers are whole tile PAGES, which are page-aligned and read by exactly one core. A3 (one reader ↔ one bank) is still structurally impossible and for the SAME reason on the retile path: an interleaved page lives in bank page_id % num_banks and a block spans consecutive pages. B8 (trid double-issue) and B10 (per-reader VC) stay as measured — the retile wall is the local rv32 face permutation, not the NoC (staging is one whole-page read per source tile), so a NoC-issue lever has nothing to shorten there. C16 (depth-2 CBs) unchanged: the retile stage is depth-1 reader-private scratch and the streaming CBs keep their depth. C17 (input and output can never alias) needed the closest look, because a retile is the FIRST case where both tensors are TILE layout: it still holds, since the op allocates a distinct output tensor and the retile reader has already staged and permuted the source bytes before the packer writes. D20 (compile-time regime selector) now selects among THREE regimes rather than two, which strengthens rather than changes it. F23/F24/F26/F27 are precision rows and tile geometry does not touch them (F24's own arm was re-measured at Refinement 4 and bfloat8_b x tile_height=16 is now an EXCLUSION, so the block-float surface got smaller, not larger).",
     "R6_L4_split_reader_headroom": "Design lamp L4 / master.md example T2 (split_reader) is the run's #1 remaining opportunity and was PRICED here rather than built (it is a scheme change: a second input CB, so each CB keeps exactly one producer - not a knob). Split-DM ablation on the two destination-local plans, where the writer issues no NoC traffic at all and BRISC is idle: reshard [1,1,1024,256] WIDTHx2->HEIGHTx8 full 18,450 / no_read 2,846 (-85%) / no_write 18,101 (-1.9%) / no_compute 17,103; DRAM->HEIGHTx8 crossover [1,1,2048,256] full 14,817 / no_read 4,840 (-67%) / no_write 14,711 (-0.7%). So the read half is 85% / 67% of the wall and the write half is ~0. Perfectly halving the read issue would give 18,450 -> ~10,650 (1.73x) and 14,817 -> ~9,830 (1.51x), which is where the recorded ~1.7x comes from. CAVEAT that bounds it: Refinement 2 re-targeted the reshard row's ceiling to the SOURCE shard's L1 egress (2 cores serving 8), and a second issuing RISC cannot buy egress the source cores will not deliver - so the 1.73x is an upper bound that only materializes if the destination issue rate is what binds. The DRAM->shard crossover (12 banks, 8 issuing cores) is the better first target of the two.",
     "R6_completeness_audit": "Run-closing Mode D. Every one of the 29 catalog rows now carries evidence: 10 applied, 8 measured-no-payoff, 9 structurally-impossible, 2 deferred (D19 host-side units, E22 whole-model) - both open by construction rather than by omission, each with the harness that would be needed to close it. The two levers built this phase (B13 both halves, D21) both measured null-or-worse and ship parked at byte-identical defaults; nothing was reverted. Ranked remaining opportunities are in changelog.md.",
     "phase6_stale_closure_reread": "Every negative closure was re-read against the Refinement-6 topology before re-stamping. Refinement 6 adds no plan path, no block factor and no dtype - only two issue-path knobs parked OFF - so no disqualifier's premise moved. Specifically re-checked: A3 (still consecutive page ids per tile-row, and the B13 pin now asserts the same arithmetic from the write side too), A1 (row_wise still design-binding and free), C16 (still flat at 4 blocks/core), B8 (the trid pair is untouched; B13 was measured with write_trid=0 on both arms so the two are not confounded), B10 (still parked; B13 and B10 are mutually exclusive because the stateful API carries no VC parameter - now enforced on the host), D20, F24, F26, F27, B11, B12, C17, A4, F23."
