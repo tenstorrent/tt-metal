@@ -499,8 +499,8 @@ class DiffusionGemmaForCausalLM(HybridAttentionForCausalLM):
         #
         # This default therefore DEPENDS on that kernel fix. The residual correlation it does not
         # remove (cross-position max |r| 0.618 against 0.035 for a host IID control) is pinned by
-        # tests/ttnn/nightly/unit_tests/operations/rand/test_rand_independence.py; if that
-        # regresses, revisit this default.
+        # test_rand_independence.py, which ships with the ttnn.rand kernel-fix PR rather than
+        # this branch; if that gate regresses, revisit this default.
         #
         # WHY THERE IS NO LONGER A "host" MODE: the per-step full-vocab torch Gumbel source was
         # the suspected cause of TT language drift and was measured NOT to be -- it drifts on

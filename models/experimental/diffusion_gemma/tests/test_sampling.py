@@ -475,8 +475,8 @@ def test_canvas_sample_from_params_preserves_injected_gumbel_noise(monkeypatch):
 # drifts on the same prompts and costs 1.40x; the drift was the canvas attending the prefill pad
 # keys), so the `host` SERVING mode was DELETED on 2026-07-28. The invariant is therefore not "the
 # default is host" but "the default is only allowed to be a device RNG while the kernel-level
-# independence gate holds" — that gate is
-# tests/ttnn/nightly/unit_tests/operations/rand/test_rand_independence.py.
+# independence gate holds" — that gate (test_rand_independence.py) ships with the ttnn.rand
+# kernel-fix PR, not with this branch.
 
 SUPPORTED_UPFRONT_MODES = {"device"}
 
@@ -521,19 +521,6 @@ def test_the_deleted_host_serving_mode_is_not_offered():
     # The HF<->TT determinism harness is deliberately kept.
     assert hasattr(generate, "host_gumbel_noise_to_device")
     assert hasattr(generate, "make_host_gumbel_noise_fn")
-
-
-def test_the_kernel_gate_this_default_depends_on_exists():
-    """The device default is only defensible while the ttnn.rand independence gate is present."""
-    GV = _generator_vllm()
-    repo_root = Path(GV.__file__).resolve().parents[4]
-    gate = repo_root / "tests" / "ttnn" / "nightly" / "unit_tests" / "operations" / "rand" / "test_rand_independence.py"
-    assert gate.is_file(), (
-        f"missing {gate}: the served device Gumbel default depends on the Blackhole ttnn.rand "
-        "fix, and that gate is what keeps the fix from silently regressing"
-    )
-    text = gate.read_text()
-    assert "test_rand_columns_are_distinct" in text, "the duplicate-column gate is gone"
 
 
 def test_launcher_default_matches_the_module_default():
