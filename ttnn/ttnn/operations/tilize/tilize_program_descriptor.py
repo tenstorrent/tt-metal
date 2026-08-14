@@ -112,13 +112,21 @@ CB_OUTPUT_TILES = 16  # compute -> writer (tiled pages)
 R_ALIGNED = 0
 R_PAD = 1
 # R_RETILE (Refinement 5): the source is ALREADY tiled, at a different tile
-# height. The reader stages whole source tile pages in L1 and moves face rows out
-# of them as row-major sticks; compute then tilizes to the requested height, so
-# the retile is a reader-only change. Whole-page staging is not an optimization:
-# a face row is 16 elements (32 B at bf16, 16 B at uint8) and DRAM read alignment
-# is 32 B on Wormhole but **64 B on Blackhole**, so face rows are not directly
-# addressable in DRAM on the arch that runs these cells.
+# height. Perf 2: the reader now lands the face permutation DIRECTLY in the
+# OUTPUT TILE rather than routing it through a row-major intermediate — see
+# `retile_direct` below for the mechanism and the measured numbers.
 R_RETILE = 2
+
+# --- Perf 2: the retile-direct reader ---------------------------------------
+# DRAM NoC transfer alignment. A DRAM-sourced transfer must start on this
+# boundary; the retile-direct reader's source offsets are all multiples of its
+# run length, so `run_bytes % NOC_DRAM_ALIGN_BYTES` is the WHOLE predicate.
+NOC_DRAM_ALIGN_BYTES = 32  # wormhole_b0 (64 on blackhole — read from the hal)
+# The DRAM-direct form's transaction floor. At a 32 B run it is a measured
+# REGRESSION on every geometry tried (1->32 bf16: 99,142 vs 60,837 ns for the
+# staged form); at 64 B it is already a 1.33x win (32->2 bf16: 42,052 vs 55,839).
+# Nothing between was measured, so 64 is the lowest PROVEN floor.
+MIN_DIRECT_DRAM_RUN_BYTES = 64
 
 # --- placement regime selector, per side (op_design.md §5.2) ----------------
 # P_LOCAL_SHARD: the CB is ALIASED on the resident L1 shard
@@ -1007,8 +1015,51 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # The retile reader is not a fill regime at all — its source is tiled, so
         # neither the library stick reader nor the R_PAD row loop can address it.
         regime = R_RETILE
+        # ---- Perf 2: the RETILE-DIRECT reader ------------------------------
+        # MECHANISM. The permutation's contiguous run is min(out_face_h,
+        # src_face_h) FACE ROWS. Routing it through a ROW-MAJOR intermediate (what
+        # Refinement 5 did, and what Perf 1 sped up but kept) throws that away —
+        # stepping the destination one row steps the source a whole face, so the
+        # run collapses to ONE face row (32 B at bf16). Landing the permutation
+        # directly in the OUTPUT TILE keeps the run: 8 face rows = 256 B on a
+        # 32->8 bf16 retile, so an output tile is 2 transfers instead of 16, every
+        # byte crosses L1 once instead of twice, and the tilize compute has
+        # nothing left to do (the reader IS the op unless a cast is requested).
+        #
+        # Measured [1,1,1024,1024] bf16 32->8 DRAM->DRAM: 41,949 -> 23,982 ns.
+        # 32->16 2.00x, 32->4 2.07x, 8->32 1.97x, 16->32 2.11x, uint8 32->8 2.95x,
+        # sharded destination 4.37x, L1-interleaved source 5.38x, fp32 1.22-1.26x.
+        src_face_h = min(in_tile_h, 16)  # tile.cpp TILE_FACE_HW_CHOICES
+        out_face_h = min(tile_h, 16)
+        retile_run_bytes = min(src_face_h, out_face_h) * 16 * elem_in
+        # THE ONE CARVE-OUT, written as the exception (`if cannot: legacy`):
+        # a 1-row OUTPUT tile. out_face_h == 1 makes every run a single face row
+        # with no reuse to gain, and the direct form MEASURED 0.79-0.89x there
+        # (bf16 32->1: 79,959-89,195 vs 70,788; uint8 32->1: 20,220-24,545 vs
+        # 20,078). tile_h == 2 is already a 1.33x WIN, so the boundary is exactly
+        # 1 — not "small tiles". Everything else, tested or not, takes the new path.
+        retile_direct = tile_h > 1
     else:
         regime = R_PAD if (plan.has_pad_region or paged_src or not LEVERS["regime_select"]) else R_ALIGNED
+        retile_run_bytes, retile_direct = 0, False
+
+    # Inside the direct path, WHERE the run's bytes come from. Both forms produce
+    # byte-identical output; this is purely a transfer-efficiency choice.
+    #   DRAM-direct: one DRAM transfer per run, no L1 round trip. Needs the run to
+    #                be DRAM-alignable and at/above the transaction floor.
+    #   staged     : one DRAM transfer per whole source PAGE (always aligned) plus
+    #                a local NoC loopback per run. Wins when the write leg is gone,
+    #                i.e. a resident L1 output shard makes the DRAM read the wall:
+    #                32->8 sharded 14,818 staged vs 20,291 DRAM-direct.
+    # The alignment term fires on exactly one measured family — uint8 with a
+    # one-row face (16 B run) — and it selects the SOURCE of the same loop, not a
+    # different kernel.
+    retile_direct_dram = int(
+        retile_direct
+        and retile_run_bytes % NOC_DRAM_ALIGN_BYTES == 0
+        and retile_run_bytes >= MIN_DIRECT_DRAM_RUN_BYTES
+        and out_placement != P_LOCAL_SHARD
+    )
 
     # -- Refinement-3 read levers (interleaved aligned path only) ------------
     # All three need the custom reader loop; with all three off the reader
@@ -1073,6 +1124,12 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # has to price rather than assume.
     precomp_index = int(work_mode == W_BLOCKS and LEVERS["precomp_index"])
 
+    # A real value-preserving conversion between element formats. Derived here
+    # (not at the compute kernel) because the retile-direct reader needs it too:
+    # with no cast it produces the finished OUTPUT TILE itself; with a cast it
+    # produces an output-SHAPED tile in the INPUT dtype for compute to datacopy.
+    needs_cast = input_tensor.dtype != output_tensor.dtype
+
     # -- reader (NCRISC / NOC0) --
     reader_ct_args = [
         regime,
@@ -1105,6 +1162,15 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # Refinement 6 (master.md B13 / D21); both 0 ships the Refinement-5 kernel.
         read_state,
         precomp_index,
+        # Perf 2 (R_RETILE only): land the face permutation directly in the output
+        # tile (`retile_direct`), sourcing each run straight from DRAM rather than
+        # from a staged page (`retile_direct_dram`), and — when a cast is also
+        # requested — leave the finished tile in the INPUT dtype for compute to
+        # convert (`retile_cast`) instead of handing the writer raw bytes nobody
+        # would have packed.
+        int(retile_direct),
+        retile_direct_dram,
+        int(retile and needs_cast),
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -1139,8 +1205,10 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
-    needs_cast = input_tensor.dtype != output_tensor.dtype
-    compute_ct_args = [wt_chunk, 1 if needs_cast else 0, ABLATE["compute"]]
+    # Perf 2: on the retile-direct path the READER already produced the output
+    # tile layout, so compute either has nothing to do at all (no cast) or owns
+    # the conversion ALONE as a datacopy pass (cast) — never a tilize.
+    compute_ct_args = [wt_chunk, 1 if needs_cast else 0, ABLATE["compute"], int(retile_direct)]
 
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()

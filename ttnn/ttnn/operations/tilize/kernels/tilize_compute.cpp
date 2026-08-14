@@ -15,6 +15,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/tilize.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/copy_tile_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 // PERMANENT per-stage instrumentation (never remove — free when the profiler is
@@ -103,6 +104,12 @@ void kernel_main() {
     // Classification ablation (op_design.md §9.1): keep the per-block CB
     // handshake the helper would do, drop the tilize math. Always 0 in production.
     constexpr uint32_t ablate_compute = get_compile_time_arg_val(2);
+    // Perf 2 (R_RETILE only): the reader landed the face permutation DIRECTLY in
+    // the output tile layout. With no cast it produced cb_output_tiles itself and
+    // this kernel has nothing to do at all; with a cast it produced an
+    // output-SHAPED tile in the INPUT dtype in cb_input_sticks and this kernel
+    // owns the conversion ALONE — a datacopy, not a tilize.
+    constexpr uint32_t retile_direct = get_compile_time_arg_val(3);
 
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
@@ -113,6 +120,32 @@ void kernel_main() {
     }
 
     using namespace compute_kernel_lib::tilize_config;
+
+    if constexpr (retile_direct) {
+        if constexpr (!needs_cast) {
+            // The reader IS the op on this path — it is cb_output_tiles' producer
+            // and the writer its consumer, so this kernel must not touch either
+            // CB (an ablation arm included: there is no payload here to stub).
+            return;
+        }
+        MaybeDeviceZoneScope("compute_tilize");
+        if constexpr (ablate_compute) {
+            // Classification ablation: keep the CB handshake the datacopy would
+            // do, drop the conversion. Always 0 in production.
+            for (uint32_t b = 0; b < num_blocks; ++b) {
+                cb_wait_front(cb_input_sticks, wt_chunk);
+                cb_reserve_back(cb_output_tiles, wt_chunk);
+                cb_push_back(cb_output_tiles, wt_chunk);
+                cb_pop_front(cb_input_sticks, wt_chunk);
+            }
+        } else {
+            compute_kernel_lib::copy_tiles<
+                compute_kernel_lib::CopyInputPolicy::WaitAndPop,
+                compute_kernel_lib::CopyDataFormatReconfig::INPUT_AND_OUTPUT>(
+                cb_input_sticks, cb_output_tiles, num_blocks * wt_chunk);
+        }
+        return;
+    }
 
     if constexpr (ablate_compute) {
         MaybeDeviceZoneScope("compute_tilize");
