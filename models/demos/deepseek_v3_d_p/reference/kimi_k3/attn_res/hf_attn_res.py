@@ -56,9 +56,8 @@ it has no seam at which the device's split into sealed and live halves could be 
 And it takes `res_norm.weight` and `res_proj.weight` separately, so it cannot check a
 query that has folded them.
 
-The two shim classes exist so the vendored function can be called without importing
-`transformers` or instantiating a `KimiRMSNorm` — it only ever touches `norm.weight`,
-`norm.variance_epsilon` and `proj.weight`.
+Nothing of ours lives here — the shims that let the function be called with plain
+tensors are in `hf_walk.py` — so the license boundary above is the file boundary.
 """
 
 import torch
@@ -78,35 +77,3 @@ def _apply_attn_res(running_sum, block_residual, proj, norm):
     probs = scores.softmax(-1).unsqueeze(1)
     hidden_states = torch.matmul(probs, v_float).squeeze(1)
     return hidden_states.to(v.dtype)
-
-
-class _NormShim:
-    def __init__(self, weight, variance_epsilon):
-        self.weight = weight
-        self.variance_epsilon = variance_epsilon
-
-
-class _ProjShim:
-    def __init__(self, weight):
-        self.weight = weight
-
-
-def hf_attn_res(running_sum, block_residual, norm_weight, proj_weight, eps):
-    """Call the vendored read with plain tensors.
-
-    Args:
-        running_sum: [N, d] live residual stream.
-        block_residual: [N, S, d] sealed snapshots. S == 0 is legal.
-        norm_weight: [d] `*_res_norm.weight`.
-        proj_weight: [1, d] `*_res_proj.weight`.
-        eps: `rms_norm_eps`.
-
-    Returns:
-        [N, d] in `running_sum.dtype`, computed in fp32 regardless of that dtype.
-    """
-    return _apply_attn_res(
-        running_sum,
-        block_residual,
-        _ProjShim(proj_weight),
-        _NormShim(norm_weight, eps),
-    )

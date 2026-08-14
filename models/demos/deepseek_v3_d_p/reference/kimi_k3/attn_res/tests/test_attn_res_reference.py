@@ -43,8 +43,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import (
     attn_res_stack,
     fold_query,
 )
-from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_attn_res import hf_attn_res
-from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_walk import hf_stack
+from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_walk import hf_attn_res, hf_stack
 
 # fp32, the widest the device ever computes in, and the width `hf_attn_res` forces anyway
 # by widening with `.float()`. Every form checked here is an exact rewrite, so the only

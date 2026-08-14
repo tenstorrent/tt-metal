@@ -5,8 +5,9 @@
 
 A read mixes the live residual stream with `S` write-once sealed snapshots by a
 softmax over RMS-normalized scores, and mixes the **raw** candidates rather than
-the normalized ones. That read is `hf_attn_res`, the HuggingFace function itself,
-so nothing here re-derives it.
+the normalized ones. That read is `_apply_attn_res`, the HuggingFace function
+itself, so nothing here re-derives it — `hf_attn_res` below only restates its
+argument list in plain tensors.
 
 What this file holds is the part no HuggingFace function exposes: which layers
 seal, which reads see how many candidates, and when the live stream is absent.
@@ -20,7 +21,44 @@ unfolded, which is the whole difference between the two.
 
 import torch
 
-from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_attn_res import hf_attn_res
+from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_attn_res import _apply_attn_res
+
+
+# The underscore is upstream's own naming, kept because that function is vendored
+# byte-identical. Its module holds no Tenstorrent code, which is what makes these two
+# shims live here: they exist only so the vendored read can be called without importing
+# `transformers` or building a `KimiRMSNorm`, since it touches nothing but `norm.weight`,
+# `norm.variance_epsilon` and `proj.weight`.
+class _NormShim:
+    def __init__(self, weight, variance_epsilon):
+        self.weight = weight
+        self.variance_epsilon = variance_epsilon
+
+
+class _ProjShim:
+    def __init__(self, weight):
+        self.weight = weight
+
+
+def hf_attn_res(running_sum, block_residual, norm_weight, proj_weight, eps):
+    """Call the vendored read with plain tensors.
+
+    Args:
+        running_sum: [N, d] live residual stream.
+        block_residual: [N, S, d] sealed snapshots. S == 0 is legal.
+        norm_weight: [d] `*_res_norm.weight`.
+        proj_weight: [1, d] `*_res_proj.weight`.
+        eps: `rms_norm_eps`.
+
+    Returns:
+        [N, d] in `running_sum.dtype`, computed in fp32 regardless of that dtype.
+    """
+    return _apply_attn_res(
+        running_sum,
+        block_residual,
+        _ProjShim(proj_weight),
+        _NormShim(norm_weight, eps),
+    )
 
 
 class HfStream(object):
