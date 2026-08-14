@@ -72,10 +72,28 @@ def _decoder_state(weights_dir: str) -> dict[str, torch.Tensor]:
     return state
 
 
+# ImageNet constants the decoder's pixels are still normalized by. Duplicated from
+# `pipelines/minimax_h3/conditioning.py` rather than imported, so this driver does not drag the whole
+# pipeline module in for two tuples.
+PIXEL_MEAN = (0.485, 0.456, 0.406)
+PIXEL_STD = (0.229, 0.224, 0.225)
+
+# Each mode is one lever, so a row of this table is a measurement of that lever alone.
+MODES = {
+    # Today's readback: bf16 tiles in token space, blended and unpatchified on host.
+    "float": {},
+    # Same path, uint8 across PCIe. Halves the transfer; costs <=1 LSB at the seams.
+    "uint8": {"pixel_denorm": (PIXEL_MEAN, PIXEL_STD), "readback_uint8": True},
+    # Stitch, clamp and colour-convert on device; read one planar canvas at 1.5 bytes/pixel.
+    "yuv420": {"pixel_denorm": (PIXEL_MEAN, PIXEL_STD), "device_stitch": True},
+}
+
+
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(("mesh_device", "device_params"), MESH_4X8, indirect=["mesh_device", "device_params"])
 @pytest.mark.parametrize("seconds", [5, 15], ids=["5s", "15s"])
-def test_decode_stage(mesh_device, seconds):
+@pytest.mark.parametrize("mode", sorted(MODES), ids=sorted(MODES))
+def test_decode_stage(mesh_device, seconds, mode):
     from loguru import logger
 
     weights_dir = weights_subdir("vae")
@@ -84,7 +102,8 @@ def test_decode_stage(mesh_device, seconds):
 
     config = MiniMaxH3VaeConfig.from_pretrained(weights_dir)
     ccl_manager = CCLManager(mesh_device, num_links=2, topology=ttnn.Topology.Linear)
-    vae = MiniMaxH3Vae(config, mesh_device=mesh_device, ccl_manager=ccl_manager)
+    vae = MiniMaxH3Vae(config, mesh_device=mesh_device, ccl_manager=ccl_manager, **MODES[mode])
+    output_type = "yuv420" if mode == "yuv420" else "float"
 
     t0 = time.time()
     vae.load_decoder_state(_decoder_state(weights_dir))
@@ -101,17 +120,17 @@ def test_decode_stage(mesh_device, seconds):
     latents = torch.randn(1, config.latent_channels, LATENT_FRAMES[seconds], LATENT_HEIGHT, LATENT_WIDTH)
 
     logger.info("warming (program cache + allocator)")
-    vae.decode(warm)
+    vae.decode(warm, output_type=output_type)
 
-    logger.info(f"MEASURING {seconds}s: latents {tuple(latents.shape)}")
+    logger.info(f"MEASURING mode={mode} {seconds}s: latents {tuple(latents.shape)}")
     started = time.time()
-    video = vae.decode(latents)
+    video = vae.decode(latents, output_type=output_type)
     elapsed = time.time() - started
 
     profile = dict(vae.last_decode_profile)
-    logger.info(f"DECODE_STAGE seconds={seconds} total={elapsed:.3f}s video={tuple(video.shape)}")
+    logger.info(f"DECODE_STAGE mode={mode} seconds={seconds} total={elapsed:.3f}s video={tuple(video.shape)}")
     logger.info(
-        "DECODE_SPLIT "
+        f"DECODE_SPLIT mode={mode} seconds={seconds} "
         + " ".join(
             f"{k}={profile.get(k, 0.0):.3f}"
             for k in ("device", "readback", "stitch", "unpatchify", "tiling", "upload", "host_prep", "residual")

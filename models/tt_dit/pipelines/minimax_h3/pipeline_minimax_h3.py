@@ -317,7 +317,7 @@ class MiniMaxH3Pipeline:
         # colour-converted on device, and `_decode_video` returns planar `(T, H*3//2, W)` uint8 for
         # `export_video_audio_yuv` instead of a `(1, 3, T, H, W)` float tensor. Off by default because
         # it changes this method's return type, and every quality gate reads the float one.
-        self.vae_output_type = "float"
+        self.vae_output_type = "float"  # "float" | "uint8" | "yuv420"
         self._video_processor = None
         self._vision_tower = None
         self._vision_config = None
@@ -1057,15 +1057,17 @@ class MiniMaxH3Pipeline:
             # Used only for the wave readback, which keeps the decode off the MPI path; the VAE's
             # forward runs no collectives.
             yuv = self.vae_output_type == "yuv420"
+            unit_pixels = self.vae_output_type in ("uint8", "yuv420")
             self._vae = MiniMaxH3Vae(
                 self.vae_config,
                 mesh_device=self.mesh_device,
                 weight_loader=self._cache_submodel,
                 ccl_manager=self.ccl_manager,
                 device_stitch=yuv,
-                # Folded into `proj_out`, which is why `_decode_video` does no de-normalization on
-                # the YUV path: the decoder already emits the `[-1, 1]` the colour kernel takes.
-                pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD) if yuv else None,
+                # Folded into `proj_out`, so the decoder emits the `[-1, 1]` both the colour kernel
+                # and the uint8 cast take, and `_decode_video` is left with at most a range shift.
+                pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD) if unit_pixels else None,
+                readback_uint8=self.vae_output_type == "uint8",
             )
             state = self._read_safetensors("vae")
             self._vae.load_decoder_state(state)
@@ -1912,10 +1914,14 @@ class MiniMaxH3Pipeline:
             self.patch_size,
         )
         latents = self._denormalize(latents, self.vae_config.latents_mean, self.vae_config.latents_std)
-        video = vae.decode(latents, output_type=self.vae_output_type)
+        video = vae.decode(latents, output_type="yuv420" if self.vae_output_type == "yuv420" else "float")
         if self.vae_output_type == "yuv420":
             # De-normalized, clamped and colour-converted on device; nothing left to do on host.
             return video
+        if self.vae_output_type == "uint8":
+            # `proj_out` already carries the de-normalization, so [-1, 1] -> [0, 1] is all that is
+            # left: one pass rather than the multiply, add and clamp the reference-space path needs.
+            return video.float().add_(1.0).mul_(0.5).clamp_(0, 1)
         # The VAE emits ImageNet-normalized RGB.
         video = self._denormalize(video.float(), MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD).clamp(0, 1)
         return video
