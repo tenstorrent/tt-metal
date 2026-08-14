@@ -21,6 +21,14 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/dispatch_plan.hpp"
+
+#ifdef SPARSE_MCAST_DISPATCH
+// The grouped slot holds exactly as many destinations as the packet header has address slots.
+static_assert(
+    MCAST_MAX_DESTS == NOC_SPARSE_MCAST_WRITE_MAX_DESTS,
+    "GroupedRouteInfo destination cap must match the fabric packet header's address-slot count");
+#endif
 
 // FABRIC_2D vs 1D dispatch is handled portably via ccl_routing_utils::fabric_set_line_unicast_route
 // (templated on packet-header type). Under 1D the helper consumes route_info.distance_in_hops,
@@ -107,23 +115,9 @@ void kernel_main() {
     constexpr uint32_t writer_extra_args_base = dispatch_table_args.next_compile_time_args_offset();
     constexpr uint32_t writer_cb_size = get_compile_time_arg_val(writer_extra_args_base + 0);
     constexpr uint32_t num_workers = get_compile_time_arg_val(writer_extra_args_base + 1);
-#ifdef SPARSE_MCAST_DISPATCH
-    // Grouped record: [dir, num_dests, token_idx, page[4], dist[4], k[4]] = 15 u32, aligned up to the
-    // L1 alignment for the ring slot stride.
-    //
-    // DANGER: this is a hand-duplicated copy of grouped_route_info_u32 in dispatch_program_factory.cpp.
-    // The factory sizes the c_4 ring slots and gives the producer its stride (writer_worker_dispatch
-    // compile-arg 10); this constant is what the CONSUMER strides by. If the two ever disagree, slot 0
-    // still lines up and every later slot is read from the wrong offset — the sender then decodes
-    // garbage as direction/num_dests, fans out bogus fabric writes, and never matches
-    // ROUTE_INFO_SENTINEL, so the drain loop never terminates and the device hangs. Keep in lockstep
-    // with the factory and with the layout written by writer_worker_dispatch.
-    constexpr uint32_t grouped_route_info_u32 = 15;
-    constexpr uint32_t route_info_slot_stride =
-        ((grouped_route_info_u32 * 4u + l1_alignment - 1) / l1_alignment) * l1_alignment;
-#else
-    constexpr uint32_t route_info_slot_stride = l1_alignment;
-#endif
+    // Stride the producer was given verbatim (writer_worker_dispatch arg 10), so producer and
+    // consumer walk the route_info ring in lockstep by construction.
+    constexpr uint32_t route_info_slot_stride = get_compile_time_arg_val(writer_extra_args_base + 2);
 
     // ===== Runtime Args =====
     size_t rt_args_idx = 0;
@@ -343,22 +337,22 @@ void kernel_main() {
                     DPRINT_DISPATCH("[SND] ring={} SENTINEL (consumed={})\n", s, consumed[s]);
                 } else {
 #ifdef SPARSE_MCAST_DISPATCH
-                    // Grouped ring slot (1D Ring, any top-k): route_info carries a direction-group of up
-                    // to 4 destinations plus the fields the sender needs to rebuild each destination's
-                    // metadata locally (the producer leaves the meta ring slot unwritten for groups).
-                    // Layout (written by writer_worker_dispatch): [0]=direction, [1]=num_dests,
-                    // [2]=token_idx, [3..6]=page[4], [7..10]=dist[4], [11..14]=k[4].
-                    uint32_t direction = route_info[0];
-                    uint32_t num_dests = route_info[1];
-                    uint32_t token_idx = route_info[2];
-                    uint32_t dest_pages[4];
-                    uint32_t dest_dist[4];
-                    uint8_t counts[4] = {0, 0, 0, 0};
+                    // Grouped ring slot (1D Ring, any top-k): one direction-group of destinations plus
+                    // the fields needed to rebuild each destination's metadata here (the producer
+                    // leaves the meta ring slot unwritten for groups). Layout: GroupedRouteInfo.
+                    volatile tt_l1_ptr GroupedRouteInfo* group =
+                        reinterpret_cast<volatile tt_l1_ptr GroupedRouteInfo*>(route_info);
+                    uint32_t direction = group->direction;
+                    uint32_t num_dests = group->num_dests;
+                    uint32_t token_idx = group->token_idx;
+                    uint32_t dest_pages[MCAST_MAX_DESTS];
+                    uint32_t dest_dist[MCAST_MAX_DESTS];
+                    uint8_t counts[MCAST_MAX_DESTS] = {};
                     uint8_t num_chips = 0;
                     uint16_t hop_mask = 0;
                     for (uint32_t i = 0; i < num_dests; ++i) {
-                        dest_pages[i] = route_info[3 + i];
-                        dest_dist[i] = route_info[7 + i];
+                        dest_pages[i] = group->page_idx[i];
+                        dest_dist[i] = group->distance[i];
                         hop_mask |= static_cast<uint16_t>(1u << (dest_dist[i] - 1));  // bit (hops-1) per writing chip
                         // dest_dist is ascending with each chip's pages contiguous (producer packing), so a
                         // new distance opens a writing chip; a repeat extends the current chip's page count.
@@ -411,7 +405,7 @@ void kernel_main() {
                         // [0..2] leaves that tail intact, and the full page is forwarded below.
                         meta[0] = (int32_t)linearized_mesh_coord;
                         meta[1] = (int32_t)token_idx;
-                        meta[2] = (int32_t)route_info[11 + i];  // top-k slot
+                        meta[2] = (int32_t)group->k[i];
                         ccl_routing_utils::line_unicast_route_info_t pkt_route_info{};
                         pkt_route_info.distance_in_hops = static_cast<uint16_t>(dest_dist[i]);
                         ccl_routing_utils::fabric_set_line_unicast_route(

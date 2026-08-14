@@ -431,9 +431,11 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
         operation_attributes.num_links,
         is_1d_fabric,
         sparse_has_fabric);
-    constexpr uint32_t grouped_route_info_u32 = 15;
+    // Single source of truth for the route_info ring slot stride: sized here from the record layout
+    // and handed to both the producer (worker writer arg 10) and the consumer (sender writer arg
+    // writer_extra_args_base + 2) so neither kernel can re-derive it and drift.
     const uint32_t route_info_slot_stride_bytes =
-        enable_sparse_mcast ? (((grouped_route_info_u32 * 4u + l1_alignment - 1) / l1_alignment) * l1_alignment)
+        enable_sparse_mcast ? tt::round_up(static_cast<uint32_t>(sizeof(GroupedRouteInfo)), l1_alignment)
                             : l1_alignment;
 
     // c_15: route_info scratch. Worker writer builds the route_info entry here, then NOC-writes the
@@ -679,6 +681,8 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     std::vector<uint32_t> writer_compile_time_args = compile_time_args;
     writer_compile_time_args.push_back(writer_cb_size);  // sender writer CB depth
     writer_compile_time_args.push_back(num_workers);     // N: sizes the kernel's per-ring arrays
+    // Same value the producer gets as worker writer arg 10 — one host source for both ends of the ring.
+    writer_compile_time_args.push_back(route_info_slot_stride_bytes);
 
     tt::tt_metal::KernelDescriptor writer_kd;
     writer_kd.kernel_source =
