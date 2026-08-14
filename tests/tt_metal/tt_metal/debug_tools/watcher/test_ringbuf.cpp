@@ -73,13 +73,12 @@ std::vector<std::string> get_expected_mpsc(HalProgrammableCoreType core_type, ui
     return result;
 }
 
-// Expected strings for Quasar multi-DM test (MPSC format)
-// Verifies all 8 DMs wrote entries with matching [DMx] prefix and data
-std::vector<std::string> get_expected_multi_dm() {
+// Each thread's first push must be (thread_idx << 16) | 0.
+std::vector<std::string> get_expected_multi_writer(
+    const std::function<std::string(uint32_t)>& prefix_for_thread, uint32_t num_threads) {
     std::vector<std::string> expected = {"debug_ring_buffer="};
-    for (uint32_t dm = 0; dm < 8; dm++) {
-        // First push from each DM: (dm << 16) | 0
-        expected.push_back(fmt::format("[DM{}]0x{:08x}", dm, (dm << 16) | 0));
+    for (uint32_t thread_idx = 0; thread_idx < num_threads; thread_idx++) {
+        expected.push_back(fmt::format("[{}]0x{:08x}", prefix_for_thread(thread_idx), (thread_idx << 16) | 0));
     }
     return expected;
 }
@@ -99,6 +98,7 @@ void RunTest(
     auto& program = workload.get_programs().at(device_range);
     auto* device = mesh_device->get_devices()[0];
     bool is_quasar = device->arch() == tt::ARCH::QUASAR;
+    bool is_mpsc = is_quasar || device->arch() == tt::ARCH::BLACKHOLE;
 
     // Depending on riscv type, choose one core to run the test on
     // and set up the kernel on the correct risc
@@ -229,9 +229,11 @@ void RunTest(
     log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name);
 
     // Check log
-    if (is_quasar) {
+    if (is_mpsc) {
         if (multi_dm_test) {
-            EXPECT_TRUE(FileContainsAllStrings(fixture->log_file_name, get_expected_multi_dm()));
+            EXPECT_TRUE(FileContainsAllStrings(
+                fixture->log_file_name,
+                get_expected_multi_writer([](uint32_t dm) { return fmt::format("DM{}", dm); }, /*num_threads=*/8)));
         } else {
             // Thread index for DM is processor_type (0-7), for TRISC it's 8+ based on HAL mapping
             uint32_t thread_idx = processor.processor_type;
@@ -247,6 +249,50 @@ void RunTest(
     } else {
         EXPECT_TRUE(FileContainsAllStringsInOrder(fixture->log_file_name, get_expected_spsc()));
     }
+}
+
+void RunMultiRiscTestBH(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    workload.add_program(device_range, {});
+    auto& program = workload.get_programs().at(device_range);
+    CoreCoord logical_core{0, 0};
+    const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp";
+
+    DataMovementConfig brisc_config{};
+    brisc_config.processor = tt_metal::DataMovementProcessor::RISCV_0;
+    brisc_config.noc = tt_metal::NOC::RISCV_0_default;
+    brisc_config.compile_args = {NUM_PUSHES_MULTI};
+    CreateKernel(program, kernel_path, logical_core, brisc_config);
+
+    DataMovementConfig ncrisc_config{};
+    ncrisc_config.processor = tt_metal::DataMovementProcessor::RISCV_1;
+    ncrisc_config.noc = tt_metal::NOC::RISCV_1_default;
+    ncrisc_config.compile_args = {NUM_PUSHES_MULTI};
+    CreateKernel(program, kernel_path, logical_core, ncrisc_config);
+
+    // One ComputeConfig call builds all 3 TRISC binaries; each needs its own WATCHER_RINGBUF_TRISC{n} define.
+    CreateKernel(
+        program,
+        kernel_path,
+        logical_core,
+        ComputeConfig{
+            .compile_args = {NUM_PUSHES_MULTI},
+            .defines = {
+                {"WATCHER_RINGBUF_TRISC0", "1"}, {"WATCHER_RINGBUF_TRISC1", "1"}, {"WATCHER_RINGBUF_TRISC2", "1"}}});
+
+    fixture->RunProgram(mesh_device, workload, true);
+
+    log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name);
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    EXPECT_TRUE(FileContainsAllStrings(
+        fixture->log_file_name,
+        get_expected_multi_writer(
+            [&hal](uint32_t thread_idx) {
+                return hal.get_processor_class_name(HalProgrammableCoreType::TENSIX, thread_idx, false);
+            },
+            /*num_threads=*/5)));
 }
 
 using enum HalProgrammableCoreType;
@@ -354,6 +400,20 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferMpscMultiDM) {
         this->RunTestOnDevice(
             [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
                 RunTest(fixture, mesh_device, {TENSIX, DM, 0}, /*multi_dm_test=*/true);
+            },
+            mesh_device);
+    }
+}
+
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferMpscMultiRiscBH) {
+    for (auto& mesh_device : this->devices_) {
+        auto* device = mesh_device->get_devices()[0];
+        if (device->arch() != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "Multi-RISC MPSC test is Blackhole-only";
+        }
+        this->RunTestOnDevice(
+            [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+                RunMultiRiscTestBH(fixture, mesh_device);
             },
             mesh_device);
     }

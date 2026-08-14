@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-// SPSC (WH/BH)
+// SPSC (WH)
 constexpr int16_t DEBUG_RING_BUFFER_STARTING_INDEX = -1;
 constexpr int DEBUG_RING_BUFFER_SPSC_ELEMENTS = 32;
 
@@ -16,16 +16,14 @@ struct debug_spsc_ring_buf_msg_t {
     uint32_t data[DEBUG_RING_BUFFER_SPSC_ELEMENTS];
 };
 
-// MPSC (Quasar) - lock-free ring buffer for concurrent writes using 32-bit atomics
-// Works on both tt-qsr64 (DM) and tt-qsr32 (TRISC)
+// MPSC (Quasar, Blackhole) - lock-free ring buffer for concurrent writes using 32-bit atomics
+// Works on tt-qsr64 (DM), tt-qsr32 (TRISC), and BH BRISC/NCRISC/TRISC0-2 (Zaamo)
 constexpr int DEBUG_RING_BUFFER_MPSC_ELEMENTS = 32;
 constexpr uint32_t DEBUG_RING_BUFFER_MPSC_MASK = DEBUG_RING_BUFFER_MPSC_ELEMENTS - 1;
-constexpr uint32_t DEBUG_RING_BUFFER_MPSC_THREAD_ID_SHIFT = 27;   // Upper 5 bits for thread_idx (0-31)
-constexpr uint32_t DEBUG_RING_BUFFER_MPSC_POS_MASK = 0x07FFFFFF;  // Lower 27 bits for position
 
 struct debug_mpsc_ring_buf_slot_t {
     uint32_t data;
-    uint32_t write_id;  // [31:27] thread_idx | [26:0] (pos+1)
+    uint32_t write_id;  // thread_idx + 1; 0 means never written
 };
 
 struct debug_mpsc_ring_buf_msg_t {
@@ -34,25 +32,16 @@ struct debug_mpsc_ring_buf_msg_t {
     debug_mpsc_ring_buf_slot_t slots[DEBUG_RING_BUFFER_MPSC_ELEMENTS];
 };
 
-// Host-side MPSC helpers
-inline uint32_t debug_ring_buffer_get_thread_idx(uint32_t write_id) {
-    return write_id >> DEBUG_RING_BUFFER_MPSC_THREAD_ID_SHIFT;
-}
+inline uint32_t debug_ring_buffer_get_thread_idx(uint32_t write_id) { return write_id - 1; }
 
-inline uint32_t debug_ring_buffer_get_position(uint32_t write_id) { return write_id & DEBUG_RING_BUFFER_MPSC_POS_MASK; }
-
-inline bool debug_ring_buffer_is_slot_valid(uint32_t write_id, uint32_t expected_pos) {
-    return debug_ring_buffer_get_position(write_id) == ((expected_pos + 1) & DEBUG_RING_BUFFER_MPSC_POS_MASK);
-}
+inline bool debug_ring_buffer_is_slot_valid(uint32_t write_id) { return write_id != 0; }
 
 // Device-side constants (debug_ring_buf_size is in core_config.h for codegen)
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 
-#if defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR) || defined(ARCH_BLACKHOLE)
 constexpr int DEBUG_RING_BUFFER_ELEMENTS = DEBUG_RING_BUFFER_MPSC_ELEMENTS;
 constexpr uint32_t DEBUG_RING_BUFFER_MASK = DEBUG_RING_BUFFER_MPSC_MASK;
-constexpr uint32_t DEBUG_RING_BUFFER_THREAD_ID_SHIFT = DEBUG_RING_BUFFER_MPSC_THREAD_ID_SHIFT;
-constexpr uint32_t DEBUG_RING_BUFFER_POS_MASK = DEBUG_RING_BUFFER_MPSC_POS_MASK;
 #else
 constexpr int DEBUG_RING_BUFFER_ELEMENTS = DEBUG_RING_BUFFER_SPSC_ELEMENTS;
 #endif

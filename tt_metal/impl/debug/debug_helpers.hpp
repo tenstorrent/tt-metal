@@ -442,7 +442,7 @@ inline std::vector<std::string> FormatRingBuffer(
         return {};
     }
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const bool is_mpsc = (hal.get_arch() == tt::ARCH::QUASAR);
+    const bool is_mpsc = (hal.get_arch() == tt::ARCH::QUASAR) || (hal.get_arch() == tt::ARCH::BLACKHOLE);
 
     std::vector<std::string> lines;
     std::string line = "[";

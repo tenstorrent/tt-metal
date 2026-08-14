@@ -11,12 +11,14 @@
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_RING_BUFFER) && !defined(FORCE_WATCHER_OFF)
 
 // Ring buffer modes:
-// - Quasar: MPSC (32-bit atomics, lock-free) - works on both DM (tt-qsr64) and TRISC (tt-qsr32)
-// - WH/BH: SPSC
+// - Quasar, Blackhole: MPSC (32-bit atomics, lock-free)
+// - WH: SPSC
+
+#if defined(ARCH_QUASAR) || defined(ARCH_BLACKHOLE)
+#include "internal/hw_thread.h"
 
 #if defined(ARCH_QUASAR)
 #include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
-#include "internal/hw_thread.h"
 
 inline __attribute__((always_inline)) void flush_l2_cache_line(uintptr_t addr) {
     asm volatile("fence" ::: "memory");
@@ -24,17 +26,20 @@ inline __attribute__((always_inline)) void flush_l2_cache_line(uintptr_t addr) {
     *flush_reg = static_cast<uint64_t>(addr);
     asm volatile("fence" ::: "memory");
 }
+#endif  // ARCH_QUASAR
 
 // Must be inline - DM stack is only 1KB, can't afford function call overhead
 inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     auto* wrapper = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
     auto* buf = reinterpret_cast<debug_mpsc_ring_buf_msg_t*>(wrapper->data);
 
+#if defined(ARCH_QUASAR)
     // Remap to cached for atomics
     uintptr_t addr = reinterpret_cast<uintptr_t>(buf);
     if (addr >= MEM_L1_UNCACHED_BASE) {
         buf = reinterpret_cast<debug_mpsc_ring_buf_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
     }
+#endif  // ARCH_QUASAR
 
     // Atomically claim a slot
     uint32_t pos = __atomic_fetch_add(&buf->head, 1, __ATOMIC_RELAXED);
@@ -43,19 +48,19 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     // Write data
     buf->slots[idx].data = val;
 
-    // Publish with thread ID + position (for host validation & hole detection)
     uint32_t thread_idx = internal_::get_hw_thread_idx();
-    uint32_t write_id = (thread_idx << DEBUG_RING_BUFFER_THREAD_ID_SHIFT) | ((pos + 1) & DEBUG_RING_BUFFER_POS_MASK);
-    __atomic_store_n(&buf->slots[idx].write_id, write_id, __ATOMIC_RELEASE);
+    __atomic_store_n(&buf->slots[idx].write_id, thread_idx + 1, __ATOMIC_RELEASE);
 
+#if defined(ARCH_QUASAR)
     // Flush cache line for host visibility
     // TODO: can this be optimized by flushing only after N amount of heads
     flush_l2_cache_line(reinterpret_cast<uintptr_t>(&buf->slots[idx]));
     // Head needs to be flushed separately since it lies on a different cache line
     flush_l2_cache_line(reinterpret_cast<uintptr_t>(&buf->head));
+#endif  // ARCH_QUASAR
 }
 
-#else  // WH/BH: SPSC ring buffer
+#else  // WH: SPSC ring buffer
 
 inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     auto* wrapper = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
@@ -72,7 +77,7 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     data[++(*curr_ptr)] = val;
 }
 
-#endif  // ARCH_QUASAR
+#endif  // ARCH_QUASAR || ARCH_BLACKHOLE
 
 #define WATCHER_RING_BUFFER_PUSH(x) push_to_ring_buffer(x)
 #else  // !defined(WATCHER_ENABLED)

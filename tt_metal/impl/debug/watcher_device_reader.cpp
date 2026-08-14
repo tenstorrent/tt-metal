@@ -904,13 +904,13 @@ void WatcherDeviceReader::Core::DumpEthLinkStatus() const {
 void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
     const auto& hal = reader_.env.get_hal();
 
-    // On Quasar, use MPSC ring buffer format
-    if (hal.get_arch() == tt::ARCH::QUASAR) {
+    // On Quasar and Blackhole (Zaamo-capable), use MPSC ring buffer format
+    if (hal.get_arch() == tt::ARCH::QUASAR || hal.get_arch() == tt::ARCH::BLACKHOLE) {
         DumpMpscRingBuffer(to_stdout);
         return;
     }
 
-    // WH/BH: SPSC ring buffer - cast byte array wrapper to impl struct
+    // WH: SPSC ring buffer - cast byte array wrapper to impl struct
     const auto* ring_buf_data =
         reinterpret_cast<const debug_spsc_ring_buf_msg_t*>(mbox_data_.watcher().debug_ring_buf().data().data());
 
@@ -929,7 +929,6 @@ void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {
 }
 
 void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
-    // Quasar MPSC ring buffer
     const auto& hal = reader_.env.get_hal();
     auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type_);
     auto watcher_offset = dev_msgs_factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::watcher);
@@ -939,43 +938,21 @@ void WatcherDeviceReader::Core::DumpMpscRingBuffer(bool to_stdout) const {
     const auto* raw_ptr = reinterpret_cast<const uint8_t*>(l1_read_buf_.data());
     const auto* rb = reinterpret_cast<const debug_mpsc_ring_buf_msg_t*>(raw_ptr + ring_buf_offset);
 
-    const uint32_t head = rb->head;
     constexpr uint32_t capacity = DEBUG_RING_BUFFER_MPSC_ELEMENTS;
     constexpr uint32_t mask = DEBUG_RING_BUFFER_MPSC_MASK;
+    uint32_t head = rb->head;
+    uint32_t count = head < capacity ? head : capacity;
 
-    // Track position and buffer per core
-    uint32_t& last_pos = reader_.mpsc_last_consumed_pos_[virtual_coord_];
-    auto& entries = reader_.mpsc_ring_buf_entries_[virtual_coord_];
-
-    // If buffer overflowed, advance to oldest valid position
-    if (head > last_pos + capacity) {
-        last_pos = head - capacity;
-    }
-
-    // Collect new valid entries (oldest to newest)
-    std::vector<MpscRingBufEntry> new_entries;
-    for (uint32_t pos = last_pos; pos < head; pos++) {
-        const auto& slot = rb->slots[pos & mask];
-        if (!debug_ring_buffer_is_slot_valid(slot.write_id, pos)) {
-            break;  // Hole - in-flight write, resume next poll
+    std::vector<MpscRingBufEntry> entries;  // newest first
+    for (uint32_t i = 0; i < count; i++) {
+        const auto& slot = rb->slots[(head - 1 - i) & mask];
+        if (!debug_ring_buffer_is_slot_valid(slot.write_id)) {
+            continue;
         }
-        new_entries.push_back({slot.data, debug_ring_buffer_get_thread_idx(slot.write_id)});
-        last_pos = pos + 1;
+        entries.push_back({slot.data, debug_ring_buffer_get_thread_idx(slot.write_id)});
     }
 
-    // Insert new entries at the front (newest first)
-    if (!new_entries.empty()) {
-        // Reverse new_entries so newest is first, then prepend to existing
-        entries.insert(entries.begin(), new_entries.rbegin(), new_entries.rend());
-        // Trim to capacity
-        if (entries.size() > capacity) {
-            entries.resize(capacity);
-        }
-    }
-
-    // Output full buffer if non-empty
     if (!entries.empty()) {
-        // Extract data and thread indices for formatter
         std::vector<uint32_t> data, thread_indices;
         data.reserve(entries.size());
         thread_indices.reserve(entries.size());
