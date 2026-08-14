@@ -1,6 +1,6 @@
 {
   "hf_model_id": "meta-models/Muse-Glimmer-30B",
-  "prompt_file": "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/full_model/prompts/autoregressive_chat_prompt.txt",
+  "prompt_file": "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_full_model/prompts/autoregressive_chat_prompt.txt",
   "prompt_text": "<|start|>system<|message|>You are a helpful AI assistant.\nKnowledge cutoff: 2026-01-04.\nCurrent date: 2026-08-13.\n\nReasoning strength: high.\n\n# Valid recipients: \"self\", \"user\".<|eot|><|start|>user<|message|>Explain the difference between supervised and unsupervised learning in simple terms.<|eot|><|start|>assistant",
   "prompt_token_ids": [
     200000,

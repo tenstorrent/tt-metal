@@ -1,0 +1,210 @@
+{
+  "hf_model": "meta-models/Muse-Glimmer-30B",
+  "stages": [
+    "capacity",
+    "perf",
+    "shapes"
+  ],
+  "max_seq_len": 131072,
+  "cache_slots": 1,
+  "layers": "all",
+  "build_kwargs": {},
+  "build_seconds": 157.2,
+  "capacity": {
+    "hf_model": "meta-models/Muse-Glimmer-30B",
+    "supported_context": 131072,
+    "cache_slots": 1,
+    "decode_rows": 32,
+    "max_num_blocks": 2048,
+    "page_block_size": 64,
+    "blocks_per_seq": 2048,
+    "prefill_chunk_size": 8192,
+    "vocab_size": 202048,
+    "padded_vocab_size": 202752,
+    "num_layers": 52,
+    "layer_kinds": [
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full",
+      "sliding",
+      "sliding",
+      "sliding",
+      "full"
+    ],
+    "force_argmax": false,
+    "sampling_implementation": "models.common.sampling.SamplingGenerator",
+    "lm_head_dtype": "DataType.BFLOAT4_B",
+    "lm_head_matmul": "dram_sharded",
+    "lm_head_cores": 52,
+    "lm_head_in0_block_w": 2,
+    "lm_head_fidelity": "MathFidelity.LoFi",
+    "lm_head_fp32_acc": false,
+    "lm_head_output_dtype": "DataType.BFLOAT16",
+    "sampler_max_top_k": 32,
+    "sampler_pad_logits_to_power_of_2_requested": false,
+    "sampler_pad_logits_to_power_of_2_effective": true,
+    "sampler_topk_split_to_power_of_2": true,
+    "sampler_topk_pieces": 2,
+    "sampler_invalid_vocab_tail_width": 704,
+    "sampler_invalid_vocab_mask_built": true,
+    "sampler_candidates_per_device": 64,
+    "counters": {
+      "trace_replays": 0,
+      "token_refreshes": 0,
+      "position_refreshes": 0,
+      "page_table_refreshes": 0,
+      "synchronizations": 0,
+      "readbacks": 0,
+      "device_position_advances": 0
+    },
+    "carried_forward_decoder_contract": {
+      "activation_dtype": "DataType.BFLOAT16",
+      "kv_cache_dtype": "DataType.BFLOAT8_B",
+      "weight_dtype_wqkv": "DataType.BFLOAT8_B",
+      "weight_dtype_o_proj": "DataType.BFLOAT8_B",
+      "weight_dtype_mlp_gate": "DataType.BFLOAT4_B",
+      "weight_dtype_mlp_down": "DataType.BFLOAT4_B",
+      "prefill_ccl_impl": "async",
+      "decode_ccl_impl": "wrapper",
+      "prefill_ccl_mode": "all_reduce",
+      "decode_ccl_mode": "rs_ag",
+      "prefill_ccl_dtype": "DataType.BFLOAT8_B",
+      "decode_ccl_dtype": "None",
+      "prefill_ccl_rs_workers": 4,
+      "decode_ccl_rs_workers": 1,
+      "ccl_ag_barrier": true,
+      "ccl_persistent_buffers_rejected_and_off": true,
+      "prefill_fractured_norm": true,
+      "prefill_fractured_norm_min_rows": 256,
+      "sharded_decode_io": true,
+      "boundary_cores": 16,
+      "decode_matmul_o_proj": [
+        16,
+        2
+      ],
+      "max_cores_per_head_batch": 32
+    },
+    "per_device_layer_weight_bytes": 4327784448,
+    "per_device_kv_cache_bytes": 1853882368,
+    "per_device_rope_table_bytes": 134217728,
+    "per_device_terminal_weight_bytes": 863073536,
+    "per_device_total_bytes": 7178958080,
+    "per_device_dram_capacity_bytes": 33778699264,
+    "per_device_kv_cache_bytes_per_block": 905216.0,
+    "per_device_free_after_long_lived_bytes": 26599741184,
+    "full_context_sequences_that_fit": 15
+  },
+  "performance": {
+    "workload": {
+      "prompt_len": 128,
+      "gen_len": 128,
+      "batch": 1
+    },
+    "ttft_ms": {
+      "min": 63.66124202031642,
+      "mean": 65.37939900105509,
+      "rounds": [
+        67.44192700716667,
+        63.66124202031642,
+        65.03502797568217
+      ]
+    },
+    "token_out_decode_ms_per_token": {
+      "min": 23.315411543209603,
+      "mean": 23.333289105019816,
+      "rounds": [
+        23.315411543209603,
+        23.34453631490359,
+        23.33991945694626
+      ]
+    },
+    "token_out_decode_tok_s_u": 42.89008573349591,
+    "traced_decode_logits_only_ms_per_token": {
+      "min": 22.656718843791168,
+      "mean": 22.657105208054418,
+      "replays_per_round": 32,
+      "rounds": [
+        22.656718843791168,
+        22.657741124930908,
+        22.656855655441177
+      ]
+    },
+    "traced_decode_logits_only_tok_s_u": 44.13701767209065,
+    "sampling_trace_ms_per_token": {
+      "min": 0.631904718829901,
+      "mean": 0.6323875210606881
+    },
+    "layer_stack_lower_bound_ms_per_token": {
+      "sliding_layers": 39,
+      "full_layers": 13,
+      "sliding_ms_per_layer": 0.4473,
+      "full_ms_per_layer": 0.4164,
+      "total_ms": 22.857899999999997,
+      "tok_s_u": 43.74855082925379,
+      "source": "doc/optimized_multichip_decoder/bench/layer_ab.py --candidates tp4,tp4b --decode-context 2048, on this stage's shipped default (doc/optimized_full_model/logs/layer_ab_after.log)"
+    },
+    "baseline_arm": false,
+    "prefill_trace_arm": false,
+    "prefill_trace_buckets": []
+  },
+  "prompt_shapes": [
+    {
+      "prompt_len": 130073,
+      "tokens": [
+        26193,
+        81
+      ],
+      "seconds": 25.645,
+      "aligned": {
+        "tile": false,
+        "page": false,
+        "chunk": false
+      }
+    }
+  ]
+}

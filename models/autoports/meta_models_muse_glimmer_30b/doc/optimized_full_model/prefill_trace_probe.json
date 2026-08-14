@@ -1,0 +1,40 @@
+{
+  "length": 128,
+  "replays": 10,
+  "max_seq_len": 8192,
+  "layer_count": 52,
+  "dram_capacity_bytes": 33778699264,
+  "with_decode_traces": true,
+  "decode_trace_id": "MeshTraceId(0)",
+  "sampling_trace_captured": true,
+  "dram_free_before_capture_bytes": 28379812352,
+  "padded_len": 128,
+  "eager_ms": {
+    "min": 59.803559008287266,
+    "rounds": [
+      62.36830400303006,
+      60.02974099828862,
+      59.803559008287266
+    ]
+  },
+  "capture_ms": 98.15534899826162,
+  "dram_free_after_capture_bytes": 28376531456,
+  "capture_retained_dram_bytes": 3280896,
+  "replay_vs_eager": {
+    "pcc": 1.0,
+    "bit_identical": true,
+    "max_abs_diff": 0.0,
+    "eager_argmax": 220,
+    "replay_argmax": 220
+  },
+  "traced_ms": {
+    "min": 44.9617581005441,
+    "rounds": [
+      44.969172301352955,
+      44.9617581005441,
+      44.96727270015981
+    ]
+  },
+  "speedup": 1.3301,
+  "payback_replays": 6.61
+}

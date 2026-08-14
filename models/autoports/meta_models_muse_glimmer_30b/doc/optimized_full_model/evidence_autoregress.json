@@ -1,0 +1,31 @@
+{
+  "hf_model": "meta-models/Muse-Glimmer-30B",
+  "stages": [
+    "autoregress"
+  ],
+  "max_seq_len": 131072,
+  "cache_slots": 1,
+  "layers": "all",
+  "build_kwargs": {},
+  "build_seconds": 160.3,
+  "autoregressive": {
+    "chat": {
+      "output_dir": "readiness_autoregressive_chat",
+      "prompt_file": "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_full_model/prompts/autoregressive_chat_prompt.txt",
+      "paths": {
+        "hf_completion": "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/readiness_autoregressive_chat/hf_completion.txt",
+        "tt_completion": "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/readiness_autoregressive_chat/tt_completion.txt",
+        "meta": "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/readiness_autoregressive_chat/autoregressive_meta.json"
+      }
+    },
+    "raw": {
+      "output_dir": "readiness_autoregressive_raw",
+      "prompt_file": "/home/ttuser/dev/muse-glimmer/tt-metal/models/common/readiness_check/autoregressive_prompt.txt",
+      "paths": {
+        "hf_completion": "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/readiness_autoregressive_raw/hf_completion.txt",
+        "tt_completion": "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/readiness_autoregressive_raw/tt_completion.txt",
+        "meta": "/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/readiness_autoregressive_raw/autoregressive_meta.json"
+      }
+    }
+  }
+}

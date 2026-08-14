@@ -1,0 +1,315 @@
+{
+  "length": 128,
+  "layer_count": 52,
+  "prefill": {
+    "total_calls": 4122,
+    "total_ms": 58.563,
+    "rows": [
+      {
+        "op": "ttnn.experimental.reduce_scatter_minimal_async",
+        "calls": 104,
+        "ms": 14.596,
+        "us_per_call": 140.34,
+        "pct": 24.92
+      },
+      {
+        "op": "ttnn.experimental.all_gather_async",
+        "calls": 105,
+        "ms": 6.329,
+        "us_per_call": 60.27,
+        "pct": 10.81
+      },
+      {
+        "op": "ttnn.linear",
+        "calls": 312,
+        "ms": 5.969,
+        "us_per_call": 19.13,
+        "pct": 10.19
+      },
+      {
+        "op": "ttnn.add",
+        "calls": 104,
+        "ms": 5.193,
+        "us_per_call": 49.93,
+        "pct": 8.87
+      },
+      {
+        "op": "ttnn.rms_norm",
+        "calls": 313,
+        "ms": 5.169,
+        "us_per_call": 16.51,
+        "pct": 8.83
+      },
+      {
+        "op": "ttnn.multiply",
+        "calls": 104,
+        "ms": 4.263,
+        "us_per_call": 40.99,
+        "pct": 7.28
+      },
+      {
+        "op": "ttnn.interleaved_to_sharded",
+        "calls": 208,
+        "ms": 3.665,
+        "us_per_call": 17.62,
+        "pct": 6.26
+      },
+      {
+        "op": "ttnn.deallocate",
+        "calls": 1957,
+        "ms": 3.269,
+        "us_per_call": 1.67,
+        "pct": 5.58
+      },
+      {
+        "op": "ttnn.sharded_to_interleaved",
+        "calls": 208,
+        "ms": 2.258,
+        "us_per_call": 10.86,
+        "pct": 3.86
+      },
+      {
+        "op": "ttnn.typecast",
+        "calls": 104,
+        "ms": 1.323,
+        "us_per_call": 12.72,
+        "pct": 2.26
+      },
+      {
+        "op": "ttnn.transformer.scaled_dot_product_attention",
+        "calls": 52,
+        "ms": 1.089,
+        "us_per_call": 20.94,
+        "pct": 1.86
+      },
+      {
+        "op": "ttnn.experimental.nlp_create_qkv_heads",
+        "calls": 52,
+        "ms": 1.08,
+        "us_per_call": 20.76,
+        "pct": 1.84
+      },
+      {
+        "op": "ttnn.slice",
+        "calls": 52,
+        "ms": 0.997,
+        "us_per_call": 19.17,
+        "pct": 1.7
+      },
+      {
+        "op": "ttnn.experimental.rotary_embedding_hf",
+        "calls": 78,
+        "ms": 0.966,
+        "us_per_call": 12.38,
+        "pct": 1.65
+      },
+      {
+        "op": "ttnn.experimental.paged_fill_cache",
+        "calls": 104,
+        "ms": 0.926,
+        "us_per_call": 8.9,
+        "pct": 1.58
+      },
+      {
+        "op": "ttnn.experimental.nlp_concat_heads",
+        "calls": 52,
+        "ms": 0.621,
+        "us_per_call": 11.94,
+        "pct": 1.06
+      },
+      {
+        "op": "ttnn.reshape",
+        "calls": 208,
+        "ms": 0.472,
+        "us_per_call": 2.27,
+        "pct": 0.81
+      },
+      {
+        "op": "ttnn.from_torch",
+        "calls": 2,
+        "ms": 0.27,
+        "us_per_call": 134.82,
+        "pct": 0.46
+      },
+      {
+        "op": "ttnn.embedding",
+        "calls": 1,
+        "ms": 0.059,
+        "us_per_call": 58.95,
+        "pct": 0.1
+      },
+      {
+        "op": "ttnn.clone",
+        "calls": 1,
+        "ms": 0.048,
+        "us_per_call": 47.86,
+        "pct": 0.08
+      },
+      {
+        "op": "ttnn.unsqueeze_to_4D",
+        "calls": 1,
+        "ms": 0.004,
+        "us_per_call": 4.01,
+        "pct": 0.01
+      }
+    ],
+    "wall_issue_ms": 62.751
+  },
+  "prefill_drained_collectives": {
+    "total_calls": 4122,
+    "total_ms": 56.497,
+    "rows": [
+      {
+        "op": "ttnn.experimental.reduce_scatter_minimal_async",
+        "calls": 104,
+        "ms": 11.918,
+        "us_per_call": 114.6,
+        "pct": 21.1
+      },
+      {
+        "op": "ttnn.experimental.all_gather_async",
+        "calls": 105,
+        "ms": 6.739,
+        "us_per_call": 64.18,
+        "pct": 11.93
+      },
+      {
+        "op": "ttnn.linear",
+        "calls": 312,
+        "ms": 6.259,
+        "us_per_call": 20.06,
+        "pct": 11.08
+      },
+      {
+        "op": "ttnn.rms_norm",
+        "calls": 313,
+        "ms": 5.355,
+        "us_per_call": 17.11,
+        "pct": 9.48
+      },
+      {
+        "op": "ttnn.add",
+        "calls": 104,
+        "ms": 4.632,
+        "us_per_call": 44.54,
+        "pct": 8.2
+      },
+      {
+        "op": "ttnn.multiply",
+        "calls": 104,
+        "ms": 4.188,
+        "us_per_call": 40.27,
+        "pct": 7.41
+      },
+      {
+        "op": "ttnn.interleaved_to_sharded",
+        "calls": 208,
+        "ms": 3.837,
+        "us_per_call": 18.45,
+        "pct": 6.79
+      },
+      {
+        "op": "ttnn.deallocate",
+        "calls": 1957,
+        "ms": 3.338,
+        "us_per_call": 1.71,
+        "pct": 5.91
+      },
+      {
+        "op": "ttnn.sharded_to_interleaved",
+        "calls": 208,
+        "ms": 2.238,
+        "us_per_call": 10.76,
+        "pct": 3.96
+      },
+      {
+        "op": "ttnn.typecast",
+        "calls": 104,
+        "ms": 1.399,
+        "us_per_call": 13.45,
+        "pct": 2.48
+      },
+      {
+        "op": "ttnn.transformer.scaled_dot_product_attention",
+        "calls": 52,
+        "ms": 1.12,
+        "us_per_call": 21.55,
+        "pct": 1.98
+      },
+      {
+        "op": "ttnn.experimental.nlp_create_qkv_heads",
+        "calls": 52,
+        "ms": 1.06,
+        "us_per_call": 20.38,
+        "pct": 1.88
+      },
+      {
+        "op": "ttnn.slice",
+        "calls": 52,
+        "ms": 1.014,
+        "us_per_call": 19.51,
+        "pct": 1.8
+      },
+      {
+        "op": "ttnn.experimental.rotary_embedding_hf",
+        "calls": 78,
+        "ms": 0.961,
+        "us_per_call": 12.32,
+        "pct": 1.7
+      },
+      {
+        "op": "ttnn.experimental.paged_fill_cache",
+        "calls": 104,
+        "ms": 0.952,
+        "us_per_call": 9.15,
+        "pct": 1.68
+      },
+      {
+        "op": "ttnn.experimental.nlp_concat_heads",
+        "calls": 52,
+        "ms": 0.638,
+        "us_per_call": 12.27,
+        "pct": 1.13
+      },
+      {
+        "op": "ttnn.reshape",
+        "calls": 208,
+        "ms": 0.48,
+        "us_per_call": 2.31,
+        "pct": 0.85
+      },
+      {
+        "op": "ttnn.from_torch",
+        "calls": 2,
+        "ms": 0.265,
+        "us_per_call": 132.26,
+        "pct": 0.47
+      },
+      {
+        "op": "ttnn.embedding",
+        "calls": 1,
+        "ms": 0.055,
+        "us_per_call": 55.04,
+        "pct": 0.1
+      },
+      {
+        "op": "ttnn.clone",
+        "calls": 1,
+        "ms": 0.047,
+        "us_per_call": 46.62,
+        "pct": 0.08
+      },
+      {
+        "op": "ttnn.unsqueeze_to_4D",
+        "calls": 1,
+        "ms": 0.003,
+        "us_per_call": 3.04,
+        "pct": 0.01
+      }
+    ],
+    "drained_ops": [
+      "ttnn.experimental.reduce_scatter_minimal_async",
+      "ttnn.experimental.all_gather_async"
+    ]
+  }
+}

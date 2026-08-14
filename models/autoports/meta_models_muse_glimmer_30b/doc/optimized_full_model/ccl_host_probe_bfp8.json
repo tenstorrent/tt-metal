@@ -1,0 +1,74 @@
+[
+  {
+    "arm": "add_reference_same_payload[bfloat8_b]",
+    "rows": 128,
+    "issue_us": 29.82,
+    "drain_us": 33.25
+  },
+  {
+    "arm": "clone_reference_same_payload[bfloat8_b]",
+    "rows": 128,
+    "issue_us": 9.11,
+    "drain_us": 11.28
+  },
+  {
+    "arm": "rs_async_alloc_workers4[bfloat8_b]",
+    "rows": 128,
+    "issue_us": 72.1,
+    "drain_us": 73.52
+  },
+  {
+    "arm": "rs_async_alloc_workers1[bfloat8_b]",
+    "rows": 128,
+    "issue_us": 58.65,
+    "drain_us": 59.83
+  },
+  {
+    "arm": "ag_async_alloc_default[bfloat8_b]",
+    "rows": 128,
+    "issue_us": 56.04,
+    "drain_us": 57.57
+  },
+  {
+    "arm": "ag_async_alloc_workers1[bfloat8_b]",
+    "rows": 128,
+    "issue_us": 57.9,
+    "drain_us": 59.46
+  },
+  {
+    "arm": "rs_async_persistent_workers4[bfloat8_b]",
+    "rows": 128,
+    "issue_us": 62.12,
+    "drain_us": 63.31
+  },
+  {
+    "arm": "rs_async_persistent_workers1[bfloat8_b]",
+    "rows": 128,
+    "issue_us": 55.59,
+    "drain_us": 57.16
+  },
+  {
+    "arm": "ag_async_persistent_default[bfloat8_b]",
+    "rows": 128,
+    "issue_us": 56.18,
+    "drain_us": 57.71
+  },
+  {
+    "arm": "rs_wrapper_workers4[bfloat8_b]",
+    "rows": 128,
+    "issue_us": 58.88,
+    "drain_us": 60.38
+  },
+  {
+    "arm": "ag_wrapper[bfloat8_b]",
+    "rows": 128,
+    "issue_us": 56.31,
+    "drain_us": 57.88
+  },
+  {
+    "arm": "all_reduce_wrapper[bfloat8_b]",
+    "rows": 128,
+    "issue_us": 118.04,
+    "drain_us": 119.3
+  }
+]

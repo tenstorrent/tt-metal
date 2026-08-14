@@ -1,0 +1,95 @@
+{
+  "l1_total_bytes_per_bank": 1455232,
+  "baseline": {
+    "free_per_bank": 1455232,
+    "allocated_per_bank": 0,
+    "largest_contiguous_free_per_bank": 1455232,
+    "banks": 110
+  },
+  "softcap_in_l1": {
+    "steps": {
+      "after_lm_head_input_reshard": {
+        "free_per_bank": 1420416,
+        "allocated_per_bank": 34816,
+        "largest_contiguous_free_per_bank": 1401984,
+        "banks": 110
+      },
+      "after_matmul": {
+        "free_per_bank": 1365120,
+        "allocated_per_bank": 90112,
+        "largest_contiguous_free_per_bank": 1338496,
+        "banks": 110
+      },
+      "after_tanh": {
+        "free_per_bank": 1301632,
+        "allocated_per_bank": 153600,
+        "largest_contiguous_free_per_bank": 1275008,
+        "banks": 110
+      },
+      "after_multiply": {
+        "free_per_bank": 1238144,
+        "allocated_per_bank": 217088,
+        "largest_contiguous_free_per_bank": 1211520,
+        "banks": 110
+      },
+      "after_final_sharded_to_interleaved": {
+        "free_per_bank": 1428608,
+        "allocated_per_bank": 26624,
+        "largest_contiguous_free_per_bank": 1401984,
+        "banks": 110
+      },
+      "after_free": {
+        "free_per_bank": 1428608,
+        "allocated_per_bank": 26624,
+        "largest_contiguous_free_per_bank": 1401984,
+        "banks": 110
+      }
+    },
+    "peak_allocated_per_bank": 217088,
+    "peak_over_baseline_per_bank": 217088
+  },
+  "softcap_in_dram": {
+    "steps": {
+      "after_lm_head_input_reshard": {
+        "free_per_bank": 1420416,
+        "allocated_per_bank": 34816,
+        "largest_contiguous_free_per_bank": 1401984,
+        "banks": 110
+      },
+      "after_matmul": {
+        "free_per_bank": 1365120,
+        "allocated_per_bank": 90112,
+        "largest_contiguous_free_per_bank": 1338496,
+        "banks": 110
+      },
+      "after_sharded_to_interleaved": {
+        "free_per_bank": 1428608,
+        "allocated_per_bank": 26624,
+        "largest_contiguous_free_per_bank": 1401984,
+        "banks": 110
+      },
+      "after_tanh": {
+        "free_per_bank": 1428608,
+        "allocated_per_bank": 26624,
+        "largest_contiguous_free_per_bank": 1401984,
+        "banks": 110
+      },
+      "after_multiply": {
+        "free_per_bank": 1428608,
+        "allocated_per_bank": 26624,
+        "largest_contiguous_free_per_bank": 1401984,
+        "banks": 110
+      },
+      "after_free": {
+        "free_per_bank": 1428608,
+        "allocated_per_bank": 26624,
+        "largest_contiguous_free_per_bank": 1401984,
+        "banks": 110
+      }
+    },
+    "peak_allocated_per_bank": 90112,
+    "peak_over_baseline_per_bank": 90112
+  },
+  "l1_peak_delta_per_bank_bytes": 126976,
+  "l1_free_per_bank_at_peak_with_change": 1238144
+}

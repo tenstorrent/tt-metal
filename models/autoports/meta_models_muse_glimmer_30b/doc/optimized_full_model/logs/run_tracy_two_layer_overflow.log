@@ -1,0 +1,967 @@
+2026-08-14 03:34:03.823 | INFO     | __main__:main:412 - Using port 8086
+2026-08-14 03:34:03.824 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-14 03:34:03.914 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/ttuser/dev/muse-glimmer/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-14 03:34:03.920 | INFO     | __main__:main:430 - Test process started
+2026-08-14 03:34:04.848 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-14 03:34:06.622 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-14 03:34:06.622 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-14 03:34:06.622 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-14 03:34:06.622 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-14 03:34:25.224 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-14 03:34:25.224 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-14 03:34:25.302 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-14 03:34:25.302 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-14 03:34:25.302 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-14 03:34:25.302 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-14 03:34:25.304 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-14 03:34:25.489 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-14 03:34:25.615 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 03:34:25.615 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 03:34:25.615 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-14 03:34:25.616 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 03:34:25.616 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 03:34:25.663 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:25.663 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:25.664 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:25.664 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:25.665 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:25.665 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:25.666 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:25.666 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:25.673 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-08-14 03:34:25.679 | info     |           Metal | Profiler started on device 1 (profiler_initializer.cpp:49)
+2026-08-14 03:34:25.686 | info     |           Metal | Profiler started on device 2 (profiler_initializer.cpp:49)
+2026-08-14 03:34:25.692 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-08-14 03:34:25.692 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 03:34:25.714 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-14 03:34:25.720 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-14 03:34:25.725 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-14 03:34:25.726 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-14 03:34:25.726 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 03:34:25.726 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 03:34:42.709 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:837 - MuseGlimmerModel: built 2/2 layers
+2026-08-14 03:34:42.823 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1094 - MuseGlimmerModel built in 15.3s
+2026-08-14 03:34:42.986 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_allocate_device_inputs:339 - MuseGlimmerGenerator: persistent decode inputs allocated (batch=1, blocks=128)
+Building ncrisc, compile step:
+/home/ttuser/dev/muse-glimmer/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/ttuser/dev/muse-glimmer/tt-metal/ -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/api/ -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS=0 -DRM_INTERLEAVED=0 -DROUTING_MODE=145 -DSRC_SHARDED=0 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_unary/5895699552940666490/" -DKERNEL_COMPILE_TIME_ARGS=17,2048,1,52,31,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,67371780,100926724,168036100,201591556,17108228,50659845,84214789,117769733,184879621,218434565,33947910,67502854,101057798,168167174 -c -o /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/reader_unary/5895699552940666490/ncrisc/ncrisck.5840006475547060169_1538646.o /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/reader_unary/5895699552940666490/ncrisc/ncrisck.5840006475547060169_1538646.d
+In file included from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NCRISC-KERNEL,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/home/ttuser/dev/muse-glimmer/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/ttuser/dev/muse-glimmer/tt-metal/ -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/api/ -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DDST_SHARDED=0 -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS=0 -DRM_INTERLEAVED=0 -DROUTING_MODE=145 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_unary/12536069800585667549/" -DKERNEL_COMPILE_TIME_ARGS=17,2048,1,52,31,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,67371780,100926724,168036100,201591556,17108228,50659845,84214789,117769733,184879621,218434565,33947910,67502854,101057798,168167174 -c -o /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/writer_unary/12536069800585667549/brisc/brisck.5840006475547060169_1538646.o /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/writer_unary/12536069800585667549/brisc/brisck.5840006475547060169_1538646.d
+In file included from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-FLUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,480,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:480:17: note: in expansion of macro 'SrcLocNameToHash'
+  480 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-DRAM-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,489,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:489:17: note: in expansion of macro 'SrcLocNameToHash'
+  489 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: BRISC-KERNEL,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/home/ttuser/dev/muse-glimmer/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/ttuser/dev/muse-glimmer/tt-metal/ -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/api/ -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DBCAST_LLK=0 -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS=0 -DFILL_TILE_WITH_FIRST_COLUMN=fill_tile_with_first_column_bfloat16 -DFILL_TILE_WITH_FIRST_COLUMN_B=fill_tile_with_first_column_bfloat16 -DFILL_TILE_WITH_FIRST_COLUMN_RM=fill_tile_with_first_column_rm_bfloat16 -DFILL_TILE_WITH_FIRST_ELEMENT=fill_tile_with_first_element_bfloat16 -DFILL_TILE_WITH_FIRST_ELEMENT_B=fill_tile_with_first_element_bfloat16 -DFILL_TILE_WITH_FIRST_ROW=fill_tile_with_first_row_bfloat16 -DFILL_TILE_WITH_FIRST_ROW_B=fill_tile_with_first_row_bfloat16 -DFILL_TILE_WITH_FIRST_ROW_RM=fill_tile_with_first_row_rm_bfloat16 -DFILL_WITH_VALUE=fill_with_val_bfloat16 -DFILL_WITH_VALUE_B=fill_with_val_bfloat16 -DROUTING_MODE=145 -DSRC_SHARDED=0 -DSRC_SHARDED_B=0 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_interleaved_no_bcast/12136418615981489596/" -DKERNEL_COMPILE_TIME_ARGS=17,2048,1,52,31,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,67371780,100926724,168036100,201591556,17108228,50659845,84214789,117769733,184879621,218434565,33947910,67502854,101057798,168167174,17,2048,1,52,31,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,67371780,100926724,168036100,201591556,17108228,50659845,84214789,117769733,184879621,218434565,33947910,67502854,101057798,168167174,0 -c -o /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/reader_interleaved_no_bcast/12136418615981489596/ncrisc/ncrisck.5840006475547060169_1538646.o /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/reader_interleaved_no_bcast/12136418615981489596/ncrisc/ncrisck.5840006475547060169_1538646.d
+In file included from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NCRISC-KERNEL,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/home/ttuser/dev/muse-glimmer/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/ttuser/dev/muse-glimmer/tt-metal/ -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/api/ -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DDST_SHARDED=0 -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS=0 -DFILL_TILE_WITH_FIRST_COLUMN=fill_tile_with_first_column_bfloat16 -DFILL_TILE_WITH_FIRST_COLUMN_B=fill_tile_with_first_column_bfloat16 -DFILL_TILE_WITH_FIRST_COLUMN_RM=fill_tile_with_first_column_rm_bfloat16 -DFILL_TILE_WITH_FIRST_ELEMENT=fill_tile_with_first_element_bfloat16 -DFILL_TILE_WITH_FIRST_ELEMENT_B=fill_tile_with_first_element_bfloat16 -DFILL_TILE_WITH_FIRST_ROW=fill_tile_with_first_row_bfloat16 -DFILL_TILE_WITH_FIRST_ROW_B=fill_tile_with_first_row_bfloat16 -DFILL_TILE_WITH_FIRST_ROW_RM=fill_tile_with_first_row_rm_bfloat16 -DFILL_WITH_VALUE=fill_with_val_bfloat16 -DFILL_WITH_VALUE_B=fill_with_val_bfloat16 -DROUTING_MODE=145 -DSRC_SHARDED=0 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_interleaved_scalar/1002900973424927972/" -DKERNEL_COMPILE_TIME_ARGS=17,2048,1,52,31,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,67371780,100926724,168036100,201591556,17108228,50659845,84214789,117769733,184879621,218434565,33947910,67502854,101057798,168167174,0 -c -o /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/writer_interleaved_scalar/1002900973424927972/brisc/brisck.5840006475547060169_1538646.o /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/writer_interleaved_scalar/1002900973424927972/brisc/brisck.5840006475547060169_1538646.d
+In file included from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-FLUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,480,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:480:17: note: in expansion of macro 'SrcLocNameToHash'
+  480 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-DRAM-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,489,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:489:17: note: in expansion of macro 'SrcLocNameToHash'
+  489 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: BRISC-KERNEL,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+2026-08-14 03:34:43.699 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:34:43.707 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+Building brisc, compile step:
+/home/ttuser/dev/muse-glimmer/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/ttuser/dev/muse-glimmer/tt-metal/ -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/api/ -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS=0 -DOUTPUT_IS_SHARDED=1 -DROUTING_MODE=145 -DUSE_WORKER_MUX=1 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="minimal_default_writer/10681064725818146275/" -DKERNEL_COMPILE_TIME_ARGS=4,2,0,4,2048,2,1,2,3,1,52,1,1,208,1,1,0,0,3,1,8240,111488,111520,2,0,1,1,3,0,0,0,0,0,1,1,3,0,0,0,0,3,16,2048,208,2,13,1 -c -o /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/minimal_default_writer/10681064725818146275/brisc/brisck.5840006475547060169_1538646.o /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/minimal_default_writer/10681064725818146275/brisc/brisck.5840006475547060169_1538646.d
+In file included from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-FLUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,480,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:480:17: note: in expansion of macro 'SrcLocNameToHash'
+  480 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-DRAM-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,489,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:489:17: note: in expansion of macro 'SrcLocNameToHash'
+  489 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: BRISC-KERNEL,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/home/ttuser/dev/muse-glimmer/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/ttuser/dev/muse-glimmer/tt-metal/ -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/api/ -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS=0 -DOUTPUT_IS_SHARDED=1 -DROUTING_MODE=145 -DUSE_WORKER_MUX=1 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="minimal_default_writer/3033030302839211960/" -DKERNEL_COMPILE_TIME_ARGS=4,1,0,4,2048,2,1,2,3,1,52,1,1,208,1,1,0,0,3,1,8240,111488,111520,2,0,1,1,3,0,0,0,0,0,1,1,3,0,0,0,0,3,16,2048,208,2,13,1 -c -o /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/minimal_default_writer/3033030302839211960/brisc/brisck.5840006475547060169_1538646.o /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/minimal_default_writer/3033030302839211960/brisc/brisck.5840006475547060169_1538646.d
+In file included from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-FLUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,480,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:480:17: note: in expansion of macro 'SrcLocNameToHash'
+  480 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-DRAM-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,489,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:489:17: note: in expansion of macro 'SrcLocNameToHash'
+  489 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: BRISC-KERNEL,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/home/ttuser/dev/muse-glimmer/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/ttuser/dev/muse-glimmer/tt-metal/ -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/api/ -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS=0 -DOUTPUT_IS_SHARDED=1 -DROUTING_MODE=145 -DUSE_WORKER_MUX=1 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="minimal_default_writer/4474540090439215556/" -DKERNEL_COMPILE_TIME_ARGS=4,3,0,4,2048,2,1,2,3,1,52,1,1,208,1,1,0,0,3,1,8240,111488,111520,2,0,1,1,3,0,0,0,0,0,1,1,3,0,0,0,0,3,16,2048,208,2,13,1 -c -o /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/minimal_default_writer/4474540090439215556/brisc/brisck.5840006475547060169_1538646.o /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/minimal_default_writer/4474540090439215556/brisc/brisck.5840006475547060169_1538646.d
+In file included from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-FLUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,480,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:480:17: note: in expansion of macro 'SrcLocNameToHash'
+  480 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-DRAM-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,489,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:489:17: note: in expansion of macro 'SrcLocNameToHash'
+  489 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: BRISC-KERNEL,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/home/ttuser/dev/muse-glimmer/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/ttuser/dev/muse-glimmer/tt-metal/ -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/api/ -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS=0 -DOUTPUT_IS_SHARDED=1 -DROUTING_MODE=145 -DUSE_WORKER_MUX=1 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="minimal_default_writer/11286605820668111582/" -DKERNEL_COMPILE_TIME_ARGS=4,0,0,4,2048,2,1,2,3,1,52,1,1,208,1,1,0,0,3,1,8240,111488,111520,2,0,1,1,3,0,0,0,0,0,1,1,3,0,0,0,0,3,16,2048,208,2,13,1 -c -o /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/minimal_default_writer/11286605820668111582/brisc/brisck.5840006475547060169_1538646.o /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/minimal_default_writer/11286605820668111582/brisc/brisck.5840006475547060169_1538646.d
+In file included from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-FLUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,480,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:480:17: note: in expansion of macro 'SrcLocNameToHash'
+  480 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-DRAM-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,489,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:489:17: note: in expansion of macro 'SrcLocNameToHash'
+  489 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: BRISC-KERNEL,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+2026-08-14 03:34:44.796 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+Building ncrisc, compile step:
+/home/ttuser/dev/muse-glimmer/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/ttuser/dev/muse-glimmer/tt-metal/ -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/api/ -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reshard_reader/2206040784479369574/" -DKERNEL_COMPILE_TIME_ARGS=1,2048,1,16,160,10,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715 -DKERNEL_COMPILE_TIME_ARG_MAP={"unit_size",2048},{"page_size",2048},{"num_y_cores",10},{"num_x_cores",11}, -c -o /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/reshard_reader/2206040784479369574/ncrisc/ncrisck.5840006475547060169_1538646.o /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/reshard_reader/2206040784479369574/ncrisc/ncrisck.5840006475547060169_1538646.d
+In file included from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NCRISC-KERNEL,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/home/ttuser/dev/muse-glimmer/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/ttuser/dev/muse-glimmer/tt-metal/ -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/api/ -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reshard_reader/10438930013844936161/" -DKERNEL_COMPILE_TIME_ARGS=1,2048,1,16,160,10,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715 -DKERNEL_COMPILE_TIME_ARG_MAP={"unit_size",2048},{"page_size",2048},{"num_y_cores",10},{"num_x_cores",11}, -c -o /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/reshard_reader/10438930013844936161/brisc/brisck.5840006475547060169_1538646.o /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/reshard_reader/10438930013844936161/brisc/brisck.5840006475547060169_1538646.d
+In file included from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-FLUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,480,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:480:17: note: in expansion of macro 'SrcLocNameToHash'
+  480 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-DRAM-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,489,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:489:17: note: in expansion of macro 'SrcLocNameToHash'
+  489 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: BRISC-KERNEL,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/home/ttuser/dev/muse-glimmer/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/ttuser/dev/muse-glimmer/tt-metal/ -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/api/ -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DBCAST_LLK=0 -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS=0 -DFILL_TILE_WITH_FIRST_COLUMN=fill_tile_with_first_column_bfloat16 -DFILL_TILE_WITH_FIRST_COLUMN_B=fill_tile_with_first_column_bfloat16 -DFILL_TILE_WITH_FIRST_COLUMN_RM=fill_tile_with_first_column_rm_bfloat16 -DFILL_TILE_WITH_FIRST_ELEMENT=fill_tile_with_first_element_bfloat16 -DFILL_TILE_WITH_FIRST_ELEMENT_B=fill_tile_with_first_element_bfloat16 -DFILL_TILE_WITH_FIRST_ROW=fill_tile_with_first_row_bfloat16 -DFILL_TILE_WITH_FIRST_ROW_B=fill_tile_with_first_row_bfloat16 -DFILL_TILE_WITH_FIRST_ROW_RM=fill_tile_with_first_row_rm_bfloat16 -DFILL_WITH_VALUE=fill_with_val_bfloat16 -DFILL_WITH_VALUE_B=fill_with_val_bfloat16 -DROUTING_MODE=145 -DSRC_SHARDED=1 -DSRC_SHARDED_B=1 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reader_interleaved_no_bcast/11712225412156503323/" -DKERNEL_COMPILE_TIME_ARGS=17,2048,1,80,2,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,67371780,100926724,168036100,201591556,17108228,50659845,84214789,117769733,184879621,218434565,33947910,67502854,101057798,168167174,201722630,17239302,50790919,84345863,117900807,185010695,218565639,34078984,67633928,101188872,168298248,201853704,17370376,50921993,17,2048,1,80,2,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,67371780,100926724,168036100,201591556,17108228,50659845,84214789,117769733,184879621,218434565,33947910,67502854,101057798,168167174,201722630,17239302,50790919,84345863,117900807,185010695,218565639,34078984,67633928,101188872,168298248,201853704,17370376,50921993,1 -c -o /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/reader_interleaved_no_bcast/11712225412156503323/ncrisc/ncrisck.5840006475547060169_1538646.o /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/reader_interleaved_no_bcast/11712225412156503323/ncrisc/ncrisck.5840006475547060169_1538646.d
+In file included from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NCRISC-KERNEL,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/home/ttuser/dev/muse-glimmer/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/ttuser/dev/muse-glimmer/tt-metal/ -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/api/ -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DDST_SHARDED=1 -DFABRIC_1D_PKT_HDR_EXTENSION_WORDS=0 -DFILL_TILE_WITH_FIRST_COLUMN=fill_tile_with_first_column_bfloat16 -DFILL_TILE_WITH_FIRST_COLUMN_B=fill_tile_with_first_column_bfloat16 -DFILL_TILE_WITH_FIRST_COLUMN_RM=fill_tile_with_first_column_rm_bfloat16 -DFILL_TILE_WITH_FIRST_ELEMENT=fill_tile_with_first_element_bfloat16 -DFILL_TILE_WITH_FIRST_ELEMENT_B=fill_tile_with_first_element_bfloat16 -DFILL_TILE_WITH_FIRST_ROW=fill_tile_with_first_row_bfloat16 -DFILL_TILE_WITH_FIRST_ROW_B=fill_tile_with_first_row_bfloat16 -DFILL_TILE_WITH_FIRST_ROW_RM=fill_tile_with_first_row_rm_bfloat16 -DFILL_WITH_VALUE=fill_with_val_bfloat16 -DFILL_WITH_VALUE_B=fill_with_val_bfloat16 -DROUTING_MODE=145 -DSRC_SHARDED=1 -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="writer_interleaved_no_bcast/3357424844337243144/" -DKERNEL_COMPILE_TIME_ARGS=17,2048,1,80,2,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,67371780,100926724,168036100,201591556,17108228,50659845,84214789,117769733,184879621,218434565,33947910,67502854,101057798,168167174,201722630,17239302,50790919,84345863,117900807,185010695,218565639,34078984,67633928,101188872,168298248,201853704,17370376,50921993,1 -c -o /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/writer_interleaved_no_bcast/3357424844337243144/brisc/brisck.5840006475547060169_1538646.o /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/writer_interleaved_no_bcast/3357424844337243144/brisc/brisck.5840006475547060169_1538646.d
+In file included from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-FLUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,480,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:480:17: note: in expansion of macro 'SrcLocNameToHash'
+  480 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-DRAM-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,489,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:489:17: note: in expansion of macro 'SrcLocNameToHash'
+  489 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: BRISC-KERNEL,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building ncrisc, compile step:
+/home/ttuser/dev/muse-glimmer/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/ttuser/dev/muse-glimmer/tt-metal/ -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/api/ -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reshard_reader/17653448344748383349/" -DKERNEL_COMPILE_TIME_ARGS=1,2048,1,80,160,2,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,67371780,100926724,168036100,201591556,17108228,50659845,84214789,117769733,184879621,218434565,33947910,67502854,101057798,168167174,201722630,17239302,50790919,84345863,117900807,185010695,218565639,34078984,67633928,101188872,168298248,201853704,17370376,50921993 -DKERNEL_COMPILE_TIME_ARG_MAP={"unit_size",2048},{"page_size",2048},{"num_y_cores",10},{"num_x_cores",11}, -c -o /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/reshard_reader/17653448344748383349/ncrisc/ncrisck.5840006475547060169_1538646.o /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/reshard_reader/17653448344748383349/ncrisc/ncrisck.5840006475547060169_1538646.d
+In file included from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:17:
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc: In function 'uint32_t _start()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: NCRISC-KERNEL,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc,69,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:69:5: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   69 |     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
+      |     ^~~~~~~~~~~~~~~~~~~~~~~~~~
+Building brisc, compile step:
+/home/ttuser/dev/muse-glimmer/tt-metal/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=auto -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function -mcpu=tt-bh -fno-tree-loop-distribute-patterns -I. -I.. -I/home/ttuser/dev/muse-glimmer/tt-metal/ -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hostdevcommon/api -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/api/ -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/common -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx -I/home/ttuser/dev/muse-glimmer/tt-metal/ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DPROFILE_KERNEL=1 -DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=48000 -DPROCESSOR_INDEX=0 -DCOMPILE_FOR_BRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=1 -DNOC_MODE=0 -DFULL_KERNEL_NAME="reshard_reader/5396399215981999629/" -DKERNEL_COMPILE_TIME_ARGS=1,2048,1,80,160,2,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,67371780,100926724,168036100,201591556,17108228,50659845,84214789,117769733,184879621,218434565,33947910,67502854,101057798,168167174,201722630,17239302,50790919,84345863,117900807,185010695,218565639,34078984,67633928,101188872,168298248,201853704,17370376,50921993 -DKERNEL_COMPILE_TIME_ARG_MAP={"unit_size",2048},{"page_size",2048},{"num_y_cores",10},{"num_x_cores",11}, -c -o /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/reshard_reader/5396399215981999629/brisc/brisck.5840006475547060169_1538646.o /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc -MF /home/ttuser/.cache/tt-metal-cache/477608128499675878/kernels/reshard_reader/5396399215981999629/brisc/brisck.5840006475547060169_1538646.d
+In file included from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/api/dataflow/dataflow_api.h:27,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/inc/internal/firmware_common.h:24,
+                 from /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:17:
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::finish_profiler(bool)':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-FLUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,480,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:480:17: note: in expansion of macro 'SrcLocNameToHash'
+  480 |                 SrcLocNameToHash("PROFILER-NOC-FLUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-DRAM-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,489,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:489:17: note: in expansion of macro 'SrcLocNameToHash'
+  489 |                 SrcLocNameToHash("PROFILER-DRAM-PUSH");
+      |                 ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp: In function 'void kernel_profiler::quick_push()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: PROFILER-NOC-QUICK-PUSH,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp,632,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:41:5: note: in expansion of macro 'DO_PRAGMA'
+   41 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:632:5: note: in expansion of macro 'SrcLocNameToHash'
+  632 |     SrcLocNameToHash("PROFILER-NOC-QUICK-PUSH");
+      |     ^~~~~~~~~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc: In function 'uint32_t _start()':
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:31:22: note: '#pragma message: BRISC-KERNEL,/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc,77,KERNEL_PROFILER'
+   31 | #define DO_PRAGMA(x) _Pragma(#x)
+      |                      ^~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/tools/profiler/kernel_profiler.hpp:1045:5: note: in expansion of macro 'DO_PRAGMA'
+ 1045 |     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
+      |     ^~~~~~~~~
+/home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc:77:9: note: in expansion of macro 'DeviceZoneScopedMainChildN'
+   77 |         DeviceZoneScopedMainChildN("BRISC-KERNEL");
+      |         ^~~~~~~~~~~~~~~~~~~~~~~~~~
+2026-08-14 03:34:45.593 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 03:34:45.608 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 03:34:45.612 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 03:34:45.617 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_decode_trace:599 - MuseGlimmerGenerator: captured decode trace (positions advance on device)
+2026-08-14 03:34:45.617 | DEBUG    | models.common.sampling.generator:capture_trace:307 - Pre-compiling sampling path before trace capture (penalties=False,log_probs_on=False,force_argmax=False)
+2026-08-14 03:34:45.617 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:123)
+2026-08-14 03:34:45.618 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:34:45.618 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:34:45.622 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:34:45.622 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:34:45.626 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_sampling_trace:611 - MuseGlimmerGenerator: captured sampling trace (tt_out_tok -> decode token input)
+2026-08-14 03:34:45.640 | INFO     | tracy:signpost:49 - PERF_PREFILL
+2026-08-14 03:34:45.644 | INFO     | tracy:signpost:49 - PERF_PREFILL_END
+PERF_WINDOW_OK window=prefill iters=1
+2026-08-14 03:34:45.644 | DEBUG    | models.common.sampling.generator:reset_trace:132 - Resetting sampling trace (penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
+2026-08-14 03:34:46.104 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:46.104 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:46.104 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:46.104 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:46.105 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:46.105 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:46.105 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:46.105 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:46.105 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:46.105 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:46.106 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:46.106 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:46.106 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:46.106 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:46.106 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:34:46.106 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+nanobind: leaked 1 instances!
+ - leaked instance 0x726c980ed638 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "EnableMemoryReports"
+ - leaked function ""
+ - leaked function "UnregisterProgramRealtimeProfilerCallback"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "to_json"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-14 03:34:50.011 | info     |    BuildKernels | JIT cache stats: 526/540 hits (97.4%) [526 cached, 196 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-14 03:34:50.011 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-14 03:34:50.033 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-14 03:34:50.033 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-14 03:34:50.612 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-14 03:34:50.612 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-14 03:34:50.612 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 1:01.4
+Zones: 2,859,709
+Elapsed time: 45.83 s
+Saving trace... done!
+Trace size 28.13 MB (20.06% ratio)
+2026-08-14 03:34:50.990 | INFO     | __main__:main:469 - Copying /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/perf_window_2026_08_14_03_34_50.tracy
+2026-08-14 03:34:50.995 | INFO     | __main__:main:472 - Copied /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/perf_window_2026_08_14_03_34_50.tracy
+2026-08-14 03:34:50.995 | INFO     | __main__:main:481 - embed.tracy -> traces/perf_window_2026_08_14_03_34_50.tracy
+2026-08-14 03:34:50.995 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-14 03:34:50.995 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-14 03:34:50.995 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-14 03:34:51.956 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-08-14 03:34:52.001 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-08-14 03:34:52.001 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+/home/ttuser/dev/muse-glimmer/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-14 03:34:54.931 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-14 03:34:54.931 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-14 03:34:58.067 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-14 03:34:58.067 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-14 03:34:58.143 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-14 03:34:59.105 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/reports/2026_08_14_03_34_58/ops_perf_results_2026_08_14_03_34_58.csv
+2026-08-14 03:35:00.967 | INFO     | __main__:main:412 - Using port 8086
+2026-08-14 03:35:00.967 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-14 03:35:01.050 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/ttuser/dev/muse-glimmer/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-14 03:35:01.056 | INFO     | __main__:main:430 - Test process started
+2026-08-14 03:35:01.983 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-14 03:35:03.746 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-14 03:35:03.746 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-14 03:35:03.747 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-14 03:35:03.747 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-14 03:35:03.759 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-14 03:35:03.759 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-14 03:35:03.837 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-14 03:35:03.837 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-14 03:35:03.837 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-14 03:35:03.837 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-14 03:35:03.838 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-14 03:35:04.093 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-14 03:35:04.225 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 03:35:04.225 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 03:35:04.225 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-14 03:35:04.225 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 03:35:04.225 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 03:35:04.272 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:04.272 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:04.273 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:04.273 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:04.274 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:04.274 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:04.275 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:04.275 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:04.282 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-08-14 03:35:04.288 | info     |           Metal | Profiler started on device 1 (profiler_initializer.cpp:49)
+2026-08-14 03:35:04.294 | info     |           Metal | Profiler started on device 2 (profiler_initializer.cpp:49)
+2026-08-14 03:35:04.300 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-08-14 03:35:04.300 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 03:35:04.326 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-14 03:35:04.329 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-14 03:35:04.330 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-14 03:35:04.332 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-14 03:35:04.332 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 03:35:04.332 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 03:35:21.650 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:837 - MuseGlimmerModel: built 2/2 layers
+2026-08-14 03:35:21.767 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1094 - MuseGlimmerModel built in 15.6s
+2026-08-14 03:35:21.931 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_allocate_device_inputs:339 - MuseGlimmerGenerator: persistent decode inputs allocated (batch=1, blocks=128)
+2026-08-14 03:35:22.128 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:35:22.137 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:35:22.256 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 03:35:22.349 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 03:35:22.364 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 03:35:22.368 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 03:35:22.373 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_decode_trace:599 - MuseGlimmerGenerator: captured decode trace (positions advance on device)
+2026-08-14 03:35:22.373 | DEBUG    | models.common.sampling.generator:capture_trace:307 - Pre-compiling sampling path before trace capture (penalties=False,log_probs_on=False,force_argmax=False)
+2026-08-14 03:35:22.374 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:123)
+2026-08-14 03:35:22.374 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:35:22.374 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:35:22.378 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:35:22.378 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:35:22.382 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_sampling_trace:611 - MuseGlimmerGenerator: captured sampling trace (tt_out_tok -> decode token input)
+2026-08-14 03:35:22.397 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:35:22.398 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:35:22.402 | INFO     | tracy:signpost:49 - PERF_DECODE
+2026-08-14 03:35:22.403 | INFO     | tracy:signpost:49 - PERF_DECODE_END
+PERF_WINDOW_OK window=decode iters=1
+2026-08-14 03:35:22.404 | DEBUG    | models.common.sampling.generator:reset_trace:132 - Resetting sampling trace (penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
+2026-08-14 03:35:22.479 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 1, 2, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.479 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 2, worker core 1, 2, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.479 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 2, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.479 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 3, worker core 1, 2, Risc BRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.480 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 3, worker core 1, 2, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.480 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 2, worker core 1, 2, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.480 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 2, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.480 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 1, 2, Risc NCRISC,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.482 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 3, worker core 1, 2, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.482 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 2, worker core 1, 2, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.482 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 1, 2, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.482 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 2, Risc TRISC_0,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.482 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 3, worker core 1, 2, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.483 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 2, worker core 1, 2, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.483 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 1, 2, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.483 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 2, Risc TRISC_1,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.483 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 3, worker core 1, 2, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.483 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 0, worker core 1, 2, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.483 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 2, worker core 1, 2, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.484 | warning  |           Metal | Profiler DRAM buffers were full, markers were dropped! device 1, worker core 1, 2, Risc TRISC_2,  bufferEndIndex = 12000. Please either decrease the number of ops being profiled or run read device profiler more often (profiler.cpp:1597)
+2026-08-14 03:35:22.923 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:22.923 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:22.923 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:22.923 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:22.923 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:22.924 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:22.924 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:22.924 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:22.924 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:22.924 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:22.924 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:22.925 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:22.925 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:22.925 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:22.925 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:22.925 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+nanobind: leaked 1 instances!
+ - leaked instance 0x727990905788 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function "matmul_select_program_factory"
+ - leaked function ""
+ - leaked function "buffer_aligned_page_size"
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "get_dram_alignment"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-14 03:35:27.261 | info     |    BuildKernels | JIT cache stats: 540/540 hits (100.0%) [540 cached, 196 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-14 03:35:27.261 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-14 03:35:27.281 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-14 03:35:27.281 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-14 03:35:27.818 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-14 03:35:27.818 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-14 03:35:27.818 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 39.45 s
+Zones: 3,639,145
+Elapsed time: 25.92 s
+Saving trace... done!
+Trace size 35.64 MB (20.05% ratio)
+2026-08-14 03:35:28.259 | INFO     | __main__:main:469 - Copying /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/perf_window_2026_08_14_03_35_28.tracy
+2026-08-14 03:35:28.266 | INFO     | __main__:main:472 - Copied /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/perf_window_2026_08_14_03_35_28.tracy
+2026-08-14 03:35:28.266 | INFO     | __main__:main:481 - embed.tracy -> traces/perf_window_2026_08_14_03_35_28.tracy
+2026-08-14 03:35:28.266 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-14 03:35:28.266 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-14 03:35:28.266 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-14 03:35:29.490 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-08-14 03:35:29.546 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-08-14 03:35:29.546 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+/home/ttuser/dev/muse-glimmer/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-14 03:35:33.337 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-14 03:35:33.338 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-14 03:35:37.352 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-14 03:35:37.352 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-14 03:35:37.442 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-14 03:35:38.582 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/reports/2026_08_14_03_35_37/ops_perf_results_2026_08_14_03_35_37.csv
+2026-08-14 03:35:40.471 | INFO     | __main__:main:412 - Using port 8086
+2026-08-14 03:35:40.471 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-14 03:35:40.580 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/ttuser/dev/muse-glimmer/tt-metal/build/tools/profiler/bin/tracy-capture -o /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-14 03:35:40.586 | INFO     | __main__:main:430 - Test process started
+2026-08-14 03:35:41.512 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-14 03:35:43.273 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-14 03:35:43.273 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-14 03:35:43.273 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-14 03:35:43.273 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-14 03:35:43.285 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-14 03:35:43.285 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-14 03:35:43.363 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-14 03:35:43.363 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-14 03:35:43.363 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-14 03:35:43.363 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-14 03:35:43.365 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-14 03:35:43.598 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-14 03:35:43.724 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 03:35:43.724 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 03:35:43.724 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-14 03:35:43.725 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 03:35:43.725 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 03:35:43.772 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:43.772 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:43.773 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:43.773 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:43.774 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:43.774 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:43.775 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:43.775 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:35:43.782 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-08-14 03:35:43.787 | info     |           Metal | Profiler started on device 1 (profiler_initializer.cpp:49)
+2026-08-14 03:35:43.793 | info     |           Metal | Profiler started on device 2 (profiler_initializer.cpp:49)
+2026-08-14 03:35:43.799 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-08-14 03:35:43.799 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 03:35:43.821 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-14 03:35:43.830 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-14 03:35:43.831 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-14 03:35:43.832 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-14 03:35:43.832 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 03:35:43.832 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 03:36:00.993 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:837 - MuseGlimmerModel: built 2/2 layers
+2026-08-14 03:36:01.109 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1094 - MuseGlimmerModel built in 15.5s
+2026-08-14 03:36:01.272 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_allocate_device_inputs:339 - MuseGlimmerGenerator: persistent decode inputs allocated (batch=1, blocks=128)
+2026-08-14 03:36:01.467 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:36:01.476 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:36:01.592 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 03:36:01.683 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 03:36:01.698 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 03:36:01.702 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 03:36:01.707 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_decode_trace:599 - MuseGlimmerGenerator: captured decode trace (positions advance on device)
+2026-08-14 03:36:01.707 | DEBUG    | models.common.sampling.generator:capture_trace:307 - Pre-compiling sampling path before trace capture (penalties=False,log_probs_on=False,force_argmax=False)
+2026-08-14 03:36:01.707 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:123)
+2026-08-14 03:36:01.708 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:36:01.708 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:36:01.712 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:36:01.712 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:36:01.716 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_sampling_trace:611 - MuseGlimmerGenerator: captured sampling trace (tt_out_tok -> decode token input)
+2026-08-14 03:36:01.730 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:36:01.730 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:36:01.735 | INFO     | tracy:signpost:49 - PERF_SAMPLING
+2026-08-14 03:36:01.735 | INFO     | tracy:signpost:49 - PERF_SAMPLING_END
+PERF_WINDOW_OK window=sampling iters=1
+2026-08-14 03:36:01.736 | DEBUG    | models.common.sampling.generator:reset_trace:132 - Resetting sampling trace (penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(1))
+2026-08-14 03:36:02.225 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:36:02.225 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:36:02.225 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:36:02.225 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:36:02.226 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:36:02.226 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:36:02.226 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:36:02.226 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:36:02.227 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:36:02.227 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:36:02.227 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:36:02.227 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:36:02.228 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:36:02.228 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:36:02.228 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 03:36:02.228 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+nanobind: leaked 1 instances!
+ - leaked instance 0x75bea87099c8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "get_current_command_queue_id_for_thread"
+ - leaked function "__repr__"
+ - leaked function ""
+ - leaked function "initialize_fast_dispatch"
+ - leaked function ""
+ - leaked function "push_current_command_queue_id_for_thread"
+ - leaked function "__init__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-14 03:36:06.667 | info     |    BuildKernels | JIT cache stats: 540/540 hits (100.0%) [540 cached, 196 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-14 03:36:06.667 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-14 03:36:06.703 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-14 03:36:06.703 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-14 03:36:07.321 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-14 03:36:07.321 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-14 03:36:07.321 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 38.96 s
+Zones: 3,517,737
+Elapsed time: 25.92 s
+Saving trace... done!
+Trace size 34.43 MB (20.03% ratio)
+2026-08-14 03:36:07.781 | INFO     | __main__:main:469 - Copying /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/perf_window_2026_08_14_03_36_07.tracy
+2026-08-14 03:36:07.787 | INFO     | __main__:main:472 - Copied /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/ttuser/dev/muse-glimmer/tt-metal/build/profiler/build_wasm/traces/perf_window_2026_08_14_03_36_07.tracy
+2026-08-14 03:36:07.788 | INFO     | __main__:main:481 - embed.tracy -> traces/perf_window_2026_08_14_03_36_07.tracy
+2026-08-14 03:36:07.788 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-14 03:36:07.788 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-14 03:36:07.788 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-14 03:36:08.980 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_times.csv
+2026-08-14 03:36:09.035 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/.logs/tracy_ops_data.csv
+2026-08-14 03:36:09.036 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+/home/ttuser/dev/muse-glimmer/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-14 03:36:12.614 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-14 03:36:12.615 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-14 03:36:16.612 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-14 03:36:16.612 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-14 03:36:16.701 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-14 03:36:17.783 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /home/ttuser/dev/muse-glimmer/tt-metal/generated/profiler/reports/2026_08_14_03_36_16/ops_perf_results_2026_08_14_03_36_16.csv
+=== dropped-marker integrity check (all must be 0) ===
+tracy_decode.log: 20
+tracy_prefill_128.log: 0
+tracy_sampling.log: 0
+TRACY_INTEGRITY_FAILED: 20 dropped-marker lines; lower ITERS and re-run

@@ -1,0 +1,41 @@
+         19565 function calls in 0.064 seconds
+
+   Ordered by: internal time
+   List reduced from 80 to 35 due to restriction <35>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+     4122    0.057    0.000    0.058    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py:631(__call__)
+      312    0.001    0.000    0.029    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py:1614(_prefill_projection)
+       52    0.001    0.000    0.029    0.001 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py:1340(_prefill_attention)
+     4122    0.001    0.000    0.001    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/decorators.py:537(_requires_slow_runtime)
+       52    0.001    0.000    0.063    0.001 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py:1481(_prefill_chunk)
+      208    0.000    0.000    0.012    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py:1462(_prefill_norm)
+      312    0.000    0.000    0.001    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py:600(prefill_mcast2d_program_config)
+      104    0.000    0.000    0.021    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py:1526(_all_reduce_async)
+      312    0.000    0.000    0.000    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py:590(_out_subblock)
+      208    0.000    0.000    0.012    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py:1700(_prefill_norm)
+        2    0.000    0.000    0.000    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/operations/core.py:241(from_torch)
+       52    0.000    0.000    0.063    0.001 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/functional_decoder.py:982(prefill_forward)
+      625    0.000    0.000    0.000    0.000 {method 'get' of 'dict' objects}
+     4122    0.000    0.000    0.000    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/ttnn/ttnn/graph.py:109(is_python_io_recording_enabled)
+      104    0.000    0.000    0.002    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/fused_decoder.py:1315(_per_head_rmsnorm)
+      208    0.000    0.000    0.004    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/fused_decoder.py:521(sharded_forward)
+      926    0.000    0.000    0.000    0.000 {built-in method builtins.min}
+       52    0.000    0.000    0.016    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py:817(forward)
+      312    0.000    0.000    0.000    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py:1745(_prefill_mcast2d_spec)
+        1    0.000    0.000    0.063    0.063 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/model.py:1152(prefill_forward)
+      105    0.000    0.000    0.000    0.000 {built-in method builtins.id}
+        1    0.000    0.000    0.064    0.064 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_full_model/bench/prefill_host_probe.py:122(once)
+       39    0.000    0.000    0.001    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/functional_decoder.py:848(_prefill_sdpa_sliding)
+      104    0.000    0.000    0.021    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py:1331(_all_reduce)
+       52    0.000    0.000    0.016    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/common/lightweightmodule.py:11(__call__)
+      312    0.000    0.000    0.000    0.000 /home/ttuser/.local/share/uv/python/cpython-3.12.12-linux-x86_64-gnu/lib/python3.12/enum.py:1266(__hash__)
+       52    0.000    0.000    0.001    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/functional_decoder.py:741(_chunk_page_table)
+      624    0.000    0.000    0.000    0.000 {built-in method math.ceil}
+       52    0.000    0.000    0.000    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/fused_decoder.py:761(_prefill_program_config)
+      312    0.000    0.000    0.000    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py:1317(_row_parallel_dtype)
+       39    0.000    0.000    0.001    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py:1523(_prefill_sdpa_sliding)
+       52    0.000    0.000    0.001    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/functional_decoder.py:765(_page_table_row)
+      208    0.000    0.000    0.000    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py:1440(_prefill_norm_configs)
+      104    0.000    0.000    0.000    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py:1388(_ccl_semaphores)
+        1    0.000    0.000    0.000    0.000 /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/tt/model.py:1087(prefill_tokens_to_device)

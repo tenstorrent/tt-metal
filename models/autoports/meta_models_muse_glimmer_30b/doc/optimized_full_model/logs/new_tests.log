@@ -1,0 +1,198 @@
+2026-08-14 05:16:55.219 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+[1m============================= test session starts ==============================[0m
+platform linux -- Python 3.12.12, pytest-9.0.3, pluggy-1.6.0 -- /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ttuser/dev/muse-glimmer/tt-metal
+configfile: pytest.ini
+plugins: split-0.11.0, anyio-4.14.2, cov-7.0.0, dash-2.15.0, repeat-0.9.4, timeout-2.4.0, github-actions-annotate-failures-0.3.0, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+[1mcollecting ... [0mcollected 52 items / 44 deselected / 8 selected
+
+models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_lm_head_is_column_parallel_and_softcapped 2026-08-14 05:16:56.775 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-14 05:16:56.775 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-14 05:16:56.775 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-14 05:16:56.775 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-14 05:16:56.787 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-14 05:16:56.787 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-14 05:16:56.865 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-14 05:16:56.865 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-14 05:16:56.865 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-14 05:16:56.865 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-14 05:16:56.866 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-14 05:16:57.080 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-14 05:16:57.205 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 05:16:57.205 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 05:16:57.205 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-14 05:16:57.206 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 05:16:57.206 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 05:16:57.246 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 05:16:57.246 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 05:16:57.247 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 05:16:57.247 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 05:16:57.248 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 05:16:57.248 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 05:16:57.249 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 05:16:57.249 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 05:16:57.250 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 05:16:57.270 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-14 05:16:57.278 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-14 05:16:57.279 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-14 05:16:57.280 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-14 05:16:57.280 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 05:16:57.280 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 05:17:14.226 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:837 - MuseGlimmerModel: built 2/2 layers
+2026-08-14 05:17:14.344 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1251 - MuseGlimmerModel built in 15.2s
+[32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_steady_state_decode_does_no_per_token_host_work 2026-08-14 05:17:14.871 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_allocate_device_inputs:369 - MuseGlimmerGenerator: persistent decode inputs allocated (batch=1, blocks=64)
+2026-08-14 05:17:14.951 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:14.958 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:15.008 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 05:17:15.048 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 05:17:15.061 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 05:17:15.064 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 05:17:15.069 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_decode_trace:749 - MuseGlimmerGenerator: captured decode trace (positions advance on device)
+2026-08-14 05:17:15.069 | DEBUG    | models.common.sampling.generator:capture_trace:307 - Pre-compiling sampling path before trace capture (penalties=False,log_probs_on=False,force_argmax=False)
+2026-08-14 05:17:15.069 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:123)
+2026-08-14 05:17:15.070 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:15.070 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:15.073 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:15.073 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:15.077 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_sampling_trace:761 - MuseGlimmerGenerator: captured sampling trace (tt_out_tok -> decode token input)
+2026-08-14 05:17:15.090 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:15.090 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+[32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_lm_head_softcap_runs_in_l1_and_matches_the_dram_form 2026-08-14 05:17:15.336 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+[32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_decode_embedding_gathers_straight_into_the_boundary_layout[7] [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_decode_embedding_gathers_straight_into_the_boundary_layout[0] [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_decode_embedding_gathers_straight_into_the_boundary_layout[202047] [32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_swiglu_multiply_runs_on_the_wide_grid_and_returns_the_narrow_one 2026-08-14 05:17:16.143 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+[32mPASSED[0m
+models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_prefill_trace_is_opt_in_and_matches_the_eager_path 2026-08-14 05:17:32.488 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:837 - MuseGlimmerModel: built 2/2 layers
+2026-08-14 05:17:32.602 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1251 - MuseGlimmerModel built in 15.1s
+2026-08-14 05:17:32.735 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_allocate_device_inputs:369 - MuseGlimmerGenerator: persistent decode inputs allocated (batch=1, blocks=64)
+2026-08-14 05:17:32.789 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:32.789 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:32.791 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 05:17:32.793 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 05:17:32.796 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 05:17:32.798 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 05:17:32.803 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_decode_trace:749 - MuseGlimmerGenerator: captured decode trace (positions advance on device)
+2026-08-14 05:17:32.803 | DEBUG    | models.common.sampling.generator:capture_trace:307 - Pre-compiling sampling path before trace capture (penalties=False,log_probs_on=False,force_argmax=False)
+2026-08-14 05:17:32.804 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:32.804 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:32.805 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:32.805 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:32.808 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_sampling_trace:761 - MuseGlimmerGenerator: captured sampling trace (tt_out_tok -> decode token input)
+2026-08-14 05:17:32.822 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:32.822 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:32.878 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:32.878 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:32.885 | DEBUG    | models.common.sampling.generator:reset_trace:132 - Resetting sampling trace (penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(3))
+2026-08-14 05:17:49.510 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:837 - MuseGlimmerModel: built 2/2 layers
+2026-08-14 05:17:49.627 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1251 - MuseGlimmerModel built in 15.5s
+2026-08-14 05:17:49.764 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_allocate_device_inputs:369 - MuseGlimmerGenerator: persistent decode inputs allocated (batch=1, blocks=64)
+2026-08-14 05:17:49.780 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_prefill_trace:583 - MuseGlimmerGenerator: captured a prefill trace for padded_len=128 (1/1 buckets)
+2026-08-14 05:17:49.785 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:49.785 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:49.788 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 05:17:49.790 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 05:17:49.792 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 05:17:49.794 | warning  |              Op | Mismatch between computed MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec={"shard_shape":[32, 96],"grid":[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}}, {"start":{"x":0,"y":1},"end":{"x":2,"y":1}}],"orientation":"ShardOrientation::ROW_MAJOR","shard_distribution_strategy":"ShardDistributionStrategy::ROUND_ROBIN_1D"},created_with_nd_shard_spec=0,per_core_allocation=0) and provided MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec{grid=[{"start":{"x":0,"y":0},"end":{"x":10,"y":0}, {"start":{"x":0,"y":1},"end":{"x":4,"y":1}], shape=[32, 96], orientation=ShardOrientation::ROW_MAJOR},nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0,per_core_allocation=0) mem config. Using computed config. (matmul_device_operation.cpp:239)
+2026-08-14 05:17:49.799 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_decode_trace:749 - MuseGlimmerGenerator: captured decode trace (positions advance on device)
+2026-08-14 05:17:49.799 | DEBUG    | models.common.sampling.generator:capture_trace:307 - Pre-compiling sampling path before trace capture (penalties=False,log_probs_on=False,force_argmax=False)
+2026-08-14 05:17:49.800 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:49.800 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:49.801 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:49.802 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:49.804 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_sampling_trace:761 - MuseGlimmerGenerator: captured sampling trace (tt_out_tok -> decode token input)
+2026-08-14 05:17:49.816 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:49.816 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:49.829 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:49.830 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:49.842 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:49.842 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 05:17:49.848 | DEBUG    | models.common.sampling.generator:reset_trace:132 - Resetting sampling trace (penalties=False, log_probs=False, force_argmax=False, trace_id=MeshTraceId(6))
+[32mPASSED[0m
+
+[33m=============================== warnings summary ===============================[0m
+../muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291
+  /home/ttuser/dev/muse-glimmer/muse-glimmer_pyenv/lib/python3.12/site-packages/pydantic/_internal/_config.py:291: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.9/migration/
+    warnings.warn(DEPRECATION_MESSAGE, DeprecationWarning)
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/ttuser/dev/muse-glimmer/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+33.57s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_prefill_trace_is_opt_in_and_matches_the_eager_path
+17.91s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_lm_head_is_column_parallel_and_softcapped
+0.26s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_steady_state_decode_does_no_per_token_host_work
+0.21s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_lm_head_softcap_runs_in_l1_and_matches_the_dram_form
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_decode_embedding_gathers_straight_into_the_boundary_layout[7]
+0.20s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_prefill_trace_is_opt_in_and_matches_the_eager_path
+0.19s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_decode_embedding_gathers_straight_into_the_boundary_layout[0]
+0.18s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_decode_embedding_gathers_straight_into_the_boundary_layout[202047]
+0.18s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_steady_state_decode_does_no_per_token_host_work
+0.18s setup    models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_swiglu_multiply_runs_on_the_wide_grid_and_returns_the_narrow_one
+0.17s teardown models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_prefill_trace_is_opt_in_and_matches_the_eager_path
+0.03s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_lm_head_softcap_runs_in_l1_and_matches_the_dram_form
+0.01s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_decode_embedding_gathers_straight_into_the_boundary_layout[7]
+0.01s call     models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::test_swiglu_multiply_runs_on_the_wide_grid_and_returns_the_narrow_one
+
+(10 durations < 0.005s hidden.  Use -vv to show these durations.)
+[36m[1m=========================== short test summary info ============================[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::[1mtest_lm_head_is_column_parallel_and_softcapped[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::[1mtest_steady_state_decode_does_no_per_token_host_work[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::[1mtest_lm_head_softcap_runs_in_l1_and_matches_the_dram_form[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::[1mtest_decode_embedding_gathers_straight_into_the_boundary_layout[7][0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::[1mtest_decode_embedding_gathers_straight_into_the_boundary_layout[0][0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::[1mtest_decode_embedding_gathers_straight_into_the_boundary_layout[202047][0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::[1mtest_swiglu_multiply_runs_on_the_wide_grid_and_returns_the_narrow_one[0m
+[32mPASSED[0m models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py::[1mtest_prefill_trace_is_opt_in_and_matches_the_eager_path[0m
+[33m================ [32m8 passed[0m, [33m[1m44 deselected[0m, [33m[1m3 warnings[0m[33m in 54.23s[0m[33m =================[0m
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x7195daa4d4e8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x7195da609328 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "extract_shard"
+ - leaked function "__init__"
+ - leaked function "create_descriptor"
+ - leaked function "__init__"
+ - leaked function "sfpu_eps"
+ - leaked function "__eq__"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-14 05:17:51.762 | info     |    BuildKernels | JIT cache stats: 709/709 hits (100.0%) [709 cached, 385 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-14 05:17:51.762 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-14 05:17:51.779 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-14 05:17:51.779 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-14 05:17:52.307 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-14 05:17:52.307 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-14 05:17:52.307 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

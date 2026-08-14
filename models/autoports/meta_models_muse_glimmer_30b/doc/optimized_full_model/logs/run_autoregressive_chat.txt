@@ -1,0 +1,18 @@
+Prompt (68 tokens):
+<|start|>system<|message|>You are a helpful AI assistant.
+Knowledge cutoff: 2026-01-04.
+Current date: 2026-08-13.
+
+Reasoning strength: high.
+
+# Valid recipients: "self", "user".<|eot|><|start|>user<|message|>Explain the difference between supervised and unsupervised learning in simple terms.<|eot|><|start|>assistant
+
+Running HF reference on cpu...
+HF produced 128 tokens.
+Building TT generator...
+Running TT autoregressive generation...
+TT produced 128 tokens.
+
+Saved HF completion → /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/readiness_autoregressive_chat/hf_completion.txt
+Saved TT completion → /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/readiness_autoregressive_chat/tt_completion.txt
+Saved metadata     → /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/readiness_autoregressive_chat/autoregressive_meta.json

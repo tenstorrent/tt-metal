@@ -1,0 +1,28 @@
+=== watcher verdict, re-derived from the committed logs ===
+$ check_watcher.py watcher/watcher.log.gz
+watcher/watcher.log.gz: 6991 lines
+  dump boundaries: 12 (min 2)
+  kernel id lines: 3169 (min 100)
+  stack usage rows: 100 (min 10)
+  device attach: 4 (min 1)
+  device detach: 4 (min 1)
+  fatal watcher messages: 0
+WATCHER_CLEAN
+$ check_watcher.py watcher_prefill_trace_optin/watcher.log.gz
+watcher_prefill_trace_optin/watcher.log.gz: 4557 lines
+  dump boundaries: 8 (min 2)
+  kernel id lines: 2113 (min 100)
+  stack usage rows: 60 (min 10)
+  device attach: 4 (min 1)
+  device detach: 4 (min 1)
+  fatal watcher messages: 0
+WATCHER_CLEAN
+$ check_watcher.py watcher_prefill_trace_rebind/watcher.log.gz
+watcher_prefill_trace_rebind/watcher.log.gz: 2247 lines
+  dump boundaries: 4 (min 2)
+  kernel id lines: 1057 (min 100)
+  stack usage rows: 20 (min 10)
+  device attach: 4 (min 1)
+  device detach: 4 (min 1)
+  fatal watcher messages: 0
+WATCHER_CLEAN

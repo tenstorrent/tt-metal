@@ -1,0 +1,33 @@
+{
+  "prefill_misses": {
+    "gen_len": 100,
+    "prompt_len": 204,
+    "non_top1_positions": 1,
+    "outside_top_k_positions": 0,
+    "k": 100,
+    "rows": [
+      {
+        "gen_index": 64,
+        "absolute_position": 268,
+        "tt_token": 220,
+        "hf_rank_of_tt_token": 1,
+        "hf_top1": 341,
+        "tt_top5": [
+          220,
+          341,
+          1226,
+          584,
+          319
+        ],
+        "tt_top5_values": [
+          16.375,
+          14.375,
+          1.3203,
+          -0.0659,
+          -0.3008
+        ],
+        "tt_top1_minus_top2": 2.0
+      }
+    ]
+  }
+}

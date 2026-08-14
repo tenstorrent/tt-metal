@@ -1,0 +1,151 @@
+2026-08-14 05:52:19.140 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ttuser/.cache/ttnn,model_cache_path=/home/ttuser/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-14 05:52:20.491 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-14 05:52:20.491 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-14 05:52:20.491 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-14 05:52:20.491 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-14 05:52:52.154 | info     |             UMD | Established firmware bundle version: 19.11.0 (topology_discovery.cpp:575)
+2026-08-14 05:52:52.155 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-14 05:52:52.232 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-14 05:52:52.232 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-14 05:52:52.232 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-14 05:52:52.232 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-14 05:52:52.234 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-14 05:52:52.419 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-14 05:52:52.545 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 05:52:52.545 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 05:52:52.546 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-14 05:52:52.546 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 05:52:52.546 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 05:52:52.606 | info     |       LLRuntime | Watcher log file: /home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_full_model/watcher_probe_capture/generated/watcher/watcher.log (watcher_server.cpp:296)
+2026-08-14 05:52:52.606 | info     |       LLRuntime | Watcher attached device 0 (watcher_server.cpp:133)
+2026-08-14 05:52:52.606 | info     |       LLRuntime | Watcher attached device 1 (watcher_server.cpp:133)
+2026-08-14 05:52:52.606 | info     |       LLRuntime | Watcher attached device 2 (watcher_server.cpp:133)
+2026-08-14 05:52:52.606 | info     |       LLRuntime | Watcher attached device 3 (watcher_server.cpp:133)
+2026-08-14 05:52:52.606 | info     |       LLRuntime | Watcher server initialized, disabled features: None (watcher_server.cpp:565)
+2026-08-14 05:52:52.606 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-14 05:52:52.608 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 05:52:52.608 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 05:52:52.609 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 05:52:52.609 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 05:52:52.610 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 05:52:52.610 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 05:52:52.611 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 05:52:52.611 | warning  |           Metal | Unable to set process priority to 0, error code: -1 (thread_pool.cpp:107)
+2026-08-14 05:52:52.612 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-14 05:52:52.612 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 05:52:52.621 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-14 05:52:52.626 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-14 05:52:52.645 | info     |           Metal | Fabric initialized on Device 0 (device.cpp:550)
+2026-08-14 05:52:52.648 | info     |           Metal | Fabric initialized on Device 1 (device.cpp:550)
+2026-08-14 05:52:52.649 | info     |           Metal | Fabric initialized on Device 2 (device.cpp:550)
+2026-08-14 05:52:52.650 | info     |           Metal | Fabric initialized on Device 3 (device.cpp:550)
+2026-08-14 05:52:52.650 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 05:52:52.650 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 05:53:02.737 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-14 05:53:02.743 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-14 05:53:02.748 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-14 05:53:02.754 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-14 05:53:09.828 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.model:from_pretrained:837 - MuseGlimmerModel: built 2/2 layers
+2026-08-14 05:53:09.945 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:build_generator:1300 - MuseGlimmerModel built in 15.3s
+2026-08-14 05:53:10.199 | INFO     | models.autoports.meta_models_muse_glimmer_30b.tt.generator:_capture_prefill_trace:587 - MuseGlimmerGenerator: captured a prefill trace for padded_len=96 (1/1 buckets)
+2026-08-14 05:53:10.240 | warning  |           Metal | Allocating device buffers is unsafe due to the existence of an active trace. These buffers may be corrupted once a trace is executed. (allocator.cpp:123)
+PR captured [96]
+PR replayed
+PR_OK arm=capture
+nanobind: leaked 1 instances!
+ - leaked instance 0x752feefc17b8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function "__init__"
+ - leaked function "synchronize_device"
+ - leaked function ""
+ - leaked function "quiesce_devices"
+ - leaked function "get_submeshes"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "__ne__"
+ - leaked function "from_json"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-14 05:53:11.177 | info     |    BuildKernels | JIT cache stats: 270/270 hits (100.0%) [270 cached, 86 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-14 05:53:11.177 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-14 05:53:11.178 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:613)
+2026-08-14 05:53:11.178 | info     |       LLRuntime | Watcher detached device 0 (watcher_server.cpp:191)
+2026-08-14 05:53:11.178 | info     |       LLRuntime | Watcher detached device 1 (watcher_server.cpp:191)
+2026-08-14 05:53:11.178 | info     |       LLRuntime | Watcher detached device 2 (watcher_server.cpp:191)
+2026-08-14 05:53:11.178 | info     |       LLRuntime | Watcher detached device 3 (watcher_server.cpp:191)
+2026-08-14 05:53:31.180 | critical |           Metal | Device 0: Virtual core 29-25, Port status: 0x1, Retrain count: 0x0, Rx link up: 0x1, Train status: 0x2, PCS status: 0x1, SerDes reset status: 0x1, Postcode: 0xc0dea000, ERISC0 reset PC: 0x3650, ERISC1 reset PC: 0x9330, RISC soft reset: 0x0, Heartbeat start: 0xdcba62c0, Heartbeat end: 0xdcba62c0, Heartbeat changed: false (llrt.cpp:347)
+2026-08-14 05:53:31.180 | critical |          Always | TT_THROW: Device 0: Timed out while waiting for active ethernet core 29-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0 (assert.hpp:104)
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  TT_THROW @ /home/ttuser/dev/muse-glimmer/tt-metal/tt_metal/llrt/llrt.cpp:594: tt::exception
+info:
+Device 0: Timed out while waiting for active ethernet core 29-25 to become active again. Try resetting the board. Minimum tt-firmware version is 18.10.0
+backtrace:
+ --- /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0xc4cd88) [0x75303f84cd88]
+ --- tt::llrt::internal_::return_to_base_firmware_and_wait_for_heartbeat(int, tt::xy_pair const&, int)
+ --- tt::tt_metal::RiscFirmwareInitializer::assert_active_ethernet_cores_to_reset(int)
+ --- tt::tt_metal::RiscFirmwareInitializer::teardown(std::unordered_set<tt::tt_metal::InitializerKey, std::hash<tt::tt_metal::InitializerKey>, std::equal_to<tt::tt_metal::InitializerKey>, std::allocator<tt::tt_metal::InitializerKey> >&)
+ --- tt::tt_metal::MetalContext::teardown()
+ --- tt::tt_metal::MetalContext::~MetalContext()
+ --- tt::tt_metal::MetalContext::destroy_instance(bool, ttsl::StrongType<int, tt::tt_metal::ContextIdTag>)
+ --- tt::tt_metal::MetalContext::destroy_all_instances(bool)
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x47a76) [0x753086c47a76]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x47bbe) [0x753086c47bbe]
+ --- python() [0x17054d9]
+ --- python() [0x19bb365]
+ --- python() [0x17ae9df]
+ --- python(_PyRun_SimpleFileObject+0x1b1) [0x17af445]
+ --- python(_PyRun_AnyFileObject+0x42) [0x17af282]
+ --- python() [0x17af1c4]
+ --- python() [0x17af0d8]
+ --- python(Py_RunMain+0x2e5) [0x171f33b]
+ --- python() [0x17406fa]
+ --- python() [0x17404ed]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x753086c2a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x753086c2a28b]
+ --- python(_start+0x29) [0x1795ced]
+
+[tt-quietbox:1574902] *** Process received signal ***
+[tt-quietbox:1574902] Signal: Aborted (6)
+[tt-quietbox:1574902] Signal code:  (-6)
+[tt-quietbox:1574902] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x753086c45330]
+[tt-quietbox:1574902] [ 1] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x753086c9ec0c]
+[tt-quietbox:1574902] [ 2] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x753086c4527e]
+[tt-quietbox:1574902] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x753086c288ff]
+[tt-quietbox:1574902] [ 4] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xac2b5)[0x75306eeac2b5]
+[tt-quietbox:1574902] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xc31ea)[0x75306eec31ea]
+[tt-quietbox:1574902] [ 6] /lib/x86_64-linux-gnu/libstdc++.so.6(_ZSt10unexpectedv+0x0)[0x75306eeabcac]
+[tt-quietbox:1574902] [ 7] /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0x6b37ce)[0x75303f2b37ce]
+[tt-quietbox:1574902] [ 8] /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(+0xb60e61)[0x75303f760e61]
+[tt-quietbox:1574902] [ 9] /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(_ZN2tt8tt_metal12MetalContext16destroy_instanceEbN4ttsl10StrongTypeIiNS0_12ContextIdTagEEE+0x90)[0x75303f760450]
+[tt-quietbox:1574902] [10] /home/ttuser/dev/muse-glimmer/tt-metal/build_Release/lib/libtt_metal.so(_ZN2tt8tt_metal12MetalContext21destroy_all_instancesEb+0xf)[0x75303f76052f]
+[tt-quietbox:1574902] [11] /lib/x86_64-linux-gnu/libc.so.6(+0x47a76)[0x753086c47a76]
+[tt-quietbox:1574902] [12] /lib/x86_64-linux-gnu/libc.so.6(+0x47bbe)[0x753086c47bbe]
+[tt-quietbox:1574902] [13] python[0x17054d9]
+[tt-quietbox:1574902] [14] python[0x19bb365]
+[tt-quietbox:1574902] [15] python[0x17ae9df]
+[tt-quietbox:1574902] [16] python(_PyRun_SimpleFileObject+0x1b1)[0x17af445]
+[tt-quietbox:1574902] [17] python(_PyRun_AnyFileObject+0x42)[0x17af282]
+[tt-quietbox:1574902] [18] python[0x17af1c4]
+[tt-quietbox:1574902] [19] python[0x17af0d8]
+[tt-quietbox:1574902] [20] python(Py_RunMain+0x2e5)[0x171f33b]
+[tt-quietbox:1574902] [21] python[0x17406fa]
+[tt-quietbox:1574902] [22] python[0x17404ed]
+[tt-quietbox:1574902] [23] /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca)[0x753086c2a1ca]
+[tt-quietbox:1574902] [24] /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b)[0x753086c2a28b]
+[tt-quietbox:1574902] [25] python(_start+0x29)[0x1795ced]
+[tt-quietbox:1574902] *** End of error message ***
+timeout: the monitored command dumped core

@@ -1,0 +1,44 @@
+[
+  {
+    "id": "p0",
+    "identical_text": true,
+    "first_char_divergence": null,
+    "prev_len": 406,
+    "new_len": 406
+  },
+  {
+    "id": "p1",
+    "identical_text": true,
+    "first_char_divergence": null,
+    "prev_len": 716,
+    "new_len": 716
+  },
+  {
+    "id": "p2",
+    "identical_text": true,
+    "first_char_divergence": null,
+    "prev_len": 638,
+    "new_len": 638
+  },
+  {
+    "id": "p3",
+    "identical_text": true,
+    "first_char_divergence": null,
+    "prev_len": 609,
+    "new_len": 609
+  },
+  {
+    "id": "p4",
+    "identical_text": true,
+    "first_char_divergence": null,
+    "prev_len": 556,
+    "new_len": 556
+  },
+  {
+    "id": "p5",
+    "identical_text": true,
+    "first_char_divergence": null,
+    "prev_len": 682,
+    "new_len": 682
+  }
+]
