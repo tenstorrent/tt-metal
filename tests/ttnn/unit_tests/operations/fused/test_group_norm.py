@@ -1680,6 +1680,10 @@ def test_group_norm_auto_negative_mask_synthesis(device, N, C, H, W, num_groups)
         frobenius_threshold=0.016,
     )
 
+    # Holding tt_input_synth leaves two 320 KB/core shards across the second call,
+    # which does not fit on Wormhole's L1.
+    ttnn.deallocate(tt_input_synth)
+
     # The path this replaces: the same computation driven by caller-supplied bf16
     # positive and negative mask tensors read from DRAM. Run it from the identical
     # input and compare the two device outputs directly, since agreeing with torch
