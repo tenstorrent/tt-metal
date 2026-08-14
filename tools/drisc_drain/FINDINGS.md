@@ -5035,3 +5035,40 @@ Four reasons not to equalise the counters:
 would appear as DRISC-vs-worker zone SPAN disagreement beyond the drain tail. It did not occur in any of the five
 captures here (bh-05 x2 ResNet, bh-26 x1 synthetic, plus the two probe series) — the residual is fully accounted
 for by the tail. **Span disagreement is the trigger to revisit this decision.**
+
+### RESOLVED: a chip reset does NOT fix the gating — it is a property of the PART
+
+The discriminating experiment, run on bh-05 on 2026-08-14: probe, `tt-smi -r`, then re-probe the **duty ratio**
+(not the totals — the totals necessarily reset, which is the trap this measurement avoids).
+
+| bh-05 | worker advance | DRAM advance | **duty ratio** |
+|---|---|---|---|
+| pre-reset | +1.82 s / 32 s | +19.75 s / 32 s | **0.090** |
+| **post-reset, B→C** | +1.81 s / 32 s | +19.73 s / 32 s | **0.092** |
+| **post-reset, C→D** | +1.82 s / 32 s | +19.74 s / 32 s | **0.092** |
+| bh-26, for reference | +19.60 s / 34 s | +19.60 s / 34 s | **1.0000** |
+
+**Unchanged across a chip reset.** So bh-05's Tensix wall clock being ~94% stopped is **a property of that
+part**, not a recoverable state and not a consequence of its wedge/degradation history. Two same-SKU,
+same-firmware p100a boards, one at 0.092 and one at 1.0000, and a reset does not move it. **This belongs in a
+card/CMFW bug report; it is not a software defect and no profiler change can address it.**
+
+Three results fall out of the same run:
+
+1. **Both counters DO share a zero point at chip reset — now measured, not inferred.** 3 s after `tt-smi -r`
+   they read **2.394 s and 2.555 s**. Every earlier statement about a shared origin rested on bh-26's equal
+   totals plus the 9.367 s datum; this is direct.
+2. **The offset regrows linearly at ~0.56 s per second of wall time** (`DRAM 0.617 of wall − worker 0.057 of
+   wall`). Measured: **+161 ms → +18.08 s → +36.01 s** over the three probes.
+3. **That kills the reset-discipline workaround quantitatively**, not just structurally. Earlier this section
+   argued the gap "can never be smaller than the window" from device-open duration. Now with a rate: a device
+   open takes 9-12 s, so by the time the workload starts the offset is already **5.0-6.7 s against a 0.77 s
+   window — 7-9x too large**, for the tightest reset-then-run cadence physically available. There is no cadence
+   that works.
+
+Useful closed form for anyone reading a capture from this card: **offset ≈ 0.56 x (seconds since last chip
+reset)**. Checked against the earlier runs — the 17:18 probe implies a reset at ~17:08, predicting 605 s of
+offset at the 17:26 capture against 649.7 s measured (7% high, because the card was not uniformly idle and
+activity changes both duty cycles).
+
+Card healthy after the reset: a `driscz` ResNet rep gives 0.0016321 s, 0 stalls, 0 dropped, 0 ts regressions.
