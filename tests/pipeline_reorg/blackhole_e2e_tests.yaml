@@ -142,6 +142,26 @@
   owner_id: U084DDYSWCW # Adrian Morrison
   team: ttnn
 
+# --- kokoro ---
+- id: bh-p150-kokoro-trace-e2e
+  name: kokoro-82m trace e2e (capture + replay)
+  model-name: kokoro-82m
+  cmd: |
+    set -e
+    # espeak-ng (G2P backend) must be on PATH; not bundled in the tt-metal image.
+    apt-get update && apt-get install -y espeak-ng
+    uv pip install -r models/experimental/kokoro/requirements.txt
+    # The trace e2e test skips if the checkpoint is not found locally (it does not
+    # self-download), and the P150 CIv2 (lfc) runner mounts no HF cache — so fetch
+    # hexgrad/Kokoro-82M into the default HF cache (~/.cache/huggingface) first.
+    python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='hexgrad/Kokoro-82M')"
+    TT_LOGGER_LEVEL=Error pytest models/experimental/kokoro/tests/test_tt_kmodel_trace_e2e.py --timeout=600
+  skus:
+    bh_p150b_civ2:
+      timeout: 20
+  owner_id: TODO_KOKORO_OWNER # TODO: replace with Kokoro owner Slack member ID (U...) before merge
+  team: models
+
 # --- deepseek_prefill ---
 - id: bh-lb-deepseek-prefill
   name: bh_lb_DeepSeek_PREFILL

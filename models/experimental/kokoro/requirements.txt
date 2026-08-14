@@ -1,0 +1,9 @@
+# Kokoro-82M TTNN demo/test dependencies (installed on top of the tt-metal venv).
+# Core inference + G2P
+kokoro>=0.9.2          # upstream Kokoro pipeline + grapheme-to-phoneme (espeak-ng backend)
+soundfile>=0.12        # WAV read/write in the demo
+# Perceptual / quality-metric tests (tests/pcc/)
+librosa>=0.10          # log-mel spectrogram for mel-PCC (demo + tests)
+transformers>=4.40     # Whisper ASR (WER gate) + speaker/wav2vec2 feature models
+# NOTE: torch, ttnn and numpy come from the tt-metal build/venv and are intentionally not pinned here.
+# espeak-ng must be present on the system PATH (apt-get install espeak-ng) for G2P.

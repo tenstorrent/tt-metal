@@ -16,6 +16,7 @@ on:
         options:
           - all
           - z-image-turbo
+          - kokoro-82m
       system-type:
         description: "Select system type to test"
         required: false
@@ -24,6 +25,7 @@ on:
         options:
           - all
           - bh_quietbox_2
+          - bh_p150
       build-type:
         required: false
         type: choice
