@@ -67,13 +67,14 @@ def _run(*command) -> str:
         return ""
 
 
-def environment(arch: str, site_mode: str, filler: str) -> dict:
+def environment(arch: str, site_mode: str, filler: str, drift: bool = True) -> dict:
     sfpi_version = _sfpi_bin().parents[1] / "sfpi.version"
     boards = sorted(Path("/sys/class/tenstorrent").glob("*/device/device"))
     return {
         "arch": arch,
         "site_mode": site_mode,
         "filler_policy": filler,
+        "drift": "on (frozen stimuli)" if drift else "off (rolling stimuli)",
         "commit": _run("git", "-C", str(HERE), "rev-parse", "--short", "HEAD"),
         "sfpi": (
             sfpi_version.read_text().strip() if sfpi_version.exists() else "unknown"
@@ -147,6 +148,15 @@ def _by_site(records: list):
     return sites, labels, len(case_number)
 
 
+def _pcc_cell(rows: list) -> str:
+    """Worst (lowest) PCC vs the clean run in this group; empty if none recorded."""
+    pccs = [record["pcc"] for record in rows if "pcc" in record]
+    if not pccs:
+        return ""
+    worst = min(pccs)
+    return f"{worst:.6f} (Δ {1.0 - worst:.2g})"
+
+
 def _by_filler(group: list):
     """Split one site's records by filler, strongest cliff first.
 
@@ -175,12 +185,20 @@ def render(report_dir: Path, env: dict) -> str:
     out += [f"| {key} | `{value}` |" for key, value in env.items()]
     out += [
         "",
-        f"{len(records)} failing variant(s) at {len(sites)} site(s) across {cases} case(s).",
+        "Stimuli are frozen: the clean (no-NOP) run and every NOP run see the same input.",
+        "A **mismatch** is the NOP run failing the test's own golden check "
+        "(per-element tolerance or PCC vs golden).",
+        "A **drift** is the NOP run still passing that check, but its result "
+        "differing from the clean run.",
+        "**PCC vs clean** is the Pearson correlation of those two hardware tensors "
+        "(`Δ` = `1 − pcc`). It is not PCC vs golden.",
         "",
-        "## Failing sites",
+        f"{len(records)} recorded variant(s) at {len(sites)} site(s) across {cases} case(s).",
         "",
-        "| # | thread | site | NOP_TYPE | failing NOP counts | how |",
-        "| --- | --- | --- | --- | --- | --- |",
+        "## Sites",
+        "",
+        "| # | thread | site | NOP_TYPE | NOP counts | how | PCC vs clean |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for key in sorted(sites):
         group = sites[key]
@@ -189,7 +207,8 @@ def render(report_dir: Path, env: dict) -> str:
             tags = sorted({record["tag"] for record in rows})
             out.append(
                 f"| {labels[key]} | {key[1]} | {site} | `{filler}` | "
-                f"{as_ranges(record['delay'] for record in rows)} | {', '.join(tags)} |"
+                f"{as_ranges(record['delay'] for record in rows)} | {', '.join(tags)} | "
+                f"{_pcc_cell(rows)} |"
             )
 
     for key in sorted(sites):
@@ -208,21 +227,22 @@ def render(report_dir: Path, env: dict) -> str:
             (record["error"] for record in group if record.get("error")), ""
         )
         if first_error:
-            out.append(f"- first error: `{first_error}`")
+            out.append(f"- first finding: `{first_error}`")
 
         out += [
             "",
             "### NOP types",
             "",
-            "| NOP_TYPE | word | failing NOP counts | how |",
-            "| --- | --- | --- | --- |",
+            "| NOP_TYPE | word | NOP counts | how | PCC vs clean |",
+            "| --- | --- | --- | --- | --- |",
         ]
         for filler, rows in fillers:
             tags = sorted({record["tag"] for record in rows})
             delays = [record["delay"] for record in rows]
             out.append(
                 f"| `{filler}` | `0x{rows[0]['filler_word']:08x}` | "
-                f"{as_ranges(delays)} ({len(set(delays))}) | {', '.join(tags)} |"
+                f"{as_ranges(delays)} ({len(set(delays))}) | {', '.join(tags)} | "
+                f"{_pcc_cell(rows)} |"
             )
 
         # Only a depth run repeats a variant, and only then is a rate meaningful.

@@ -105,8 +105,42 @@ in bands tens of counts wide, and sampling powers of two walks past most of them
 | `TTNOP_FILLER` | `auto`, a name from the table, or a raw word |
 | `TTNOP_SITES` | e.g. `unpack:3,math:7` |
 | `TTNOP_REPEATS` | runs per variant; >1 adds the delay-0 control |
+| `TTNOP_DRIFT` | compare each variant's output to the baseline's, default on |
 | `TTNOP_REPORT_DIR` | one per machine when sharding |
 | `TTNOP_VERBOSE` | print each detour as it is applied |
+
+## Drift: the failures that still pass
+
+A delay that shifts a mantissa bit is not a failure to this suite. `passed_test`
+gates on per-element tolerance and a PCC floor (0.99, lower for the block floats),
+and skips PCC entirely for MX formats and for goldens with no signal — so a
+variant can change the answer and still go green.
+
+Drift asks the question the golden cannot: **did the output change at all** from
+the clean run. That needs no threshold, because the baseline carries the same
+approximation error as the variant, and for a race-free kernel the answer is "no
+change" whatever the format. Any difference is recorded as a `drift` tag, with the
+PCC *against the baseline* and the number of elements that moved.
+
+It costs the stimulus lottery. To make the two runs the same problem, the RNG is
+rewound to the baseline's state before every variant, so all variants share one
+stimulus set — `TTNOP_DRIFT=0` restores the rolling stream instead, at the price
+of having nothing to compare. Freezing also makes a breadth finding exactly
+reproducible, which the reproduce line in `report.md` could not promise before.
+
+Two guards keep it honest, because a case that cannot reproduce its own output
+would otherwise report drift on every variant:
+
+- The harness already knows which variants are not bit-reproducible —
+  `TestConfig._bit_exact_unsupported_reason()` names l1_acc, coverage builds and
+  deliberately-undefined state — and drift takes its word for it.
+- Every other case runs its body one extra time, same stimuli and no detour, and
+  has to reproduce itself before any drift verdict is believed. That control also
+  proves the rewind worked, so a test drawing from outside torch's global RNG
+  cannot invent findings.
+
+A drift-only case stays **green**: the variant passed the test's own golden, so the
+finding lives in `report.md` and `failures.jsonl` rather than in the exit code.
 
 A case that loses a variant goes red and names it, so a sweep reads like an
 ordinary pytest run:
@@ -115,13 +149,13 @@ ordinary pytest run:
 >> delays=1-100 threads=unpack,math,pack sites=sync filler=auto
 >> [3/3] sweeping
 ⨯ test_bcast.py::test_unpack_bcast[...] 47 perturbation(s) failed: unpack ATGETM@0x05550 n=54 unpacr1 mismatch (+46 more)
->> 47 failing variant(s) -> reports/report.md
+>> 69 recorded variant(s) (22 drift) -> reports/report.md
 ```
 
 Output is `failures.jsonl` plus a `report.md` rendered from it, written only when
-there is something to report. Each failing site lists the exact counts that broke
-it, its addr2line inline chain (resolved during the sweep, while the ELF still
-exists) and a copy-paste `focus.sh` line that re-runs just those counts as a rate.
+there is something to report. Each site lists the exact counts that broke it, its
+addr2line inline chain (resolved during the sweep, while the ELF still exists) and
+a copy-paste `focus.sh` line that re-runs just those counts as a rate.
 
 A supervised run also writes `junit.xml`, covering every case it reached. The
 supervisor builds it rather than pytest, because pytest writes its junit file at
@@ -152,9 +186,11 @@ python3 scanner.py /tmp/tt-llk-build/<test>/<hash>/elf/*.elf
   a case it never does — so the image stays put and a variant is a couple of word
   writes. `LAST_LOADED_ELFS` is cleared once at the end of the case, because the
   cave bytes outlive the restore and the next case must not inherit them.
-- Stimuli come from a global RNG seeded once per test. Variants keep that stream
-  going (no re-seed): some races only show up on later draws, and re-seeding to a
-  fixed value made every variant share one stimulus set.
+- Stimuli come from a global RNG seeded once per test. Under `TTNOP_DRIFT=1` (the
+  default) every variant is rewound to the state the baseline drew from, so they
+  share one stimulus set and their outputs are comparable. `TTNOP_DRIFT=0` lets the
+  stream run on instead: different data per variant, and some races only show up on
+  later draws, but no two runs can be compared.
 - Variants are meant to fail, so the harness's logging is muted while one runs;
   otherwise every mismatch dumps the offending tiles in colour. The baseline pass
   runs outside that, so a genuinely broken test still says why.

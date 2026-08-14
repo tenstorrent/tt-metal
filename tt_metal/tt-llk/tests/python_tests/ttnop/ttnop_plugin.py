@@ -24,6 +24,7 @@ import pytest
 import report
 import scanner
 import sweep as sweep_module
+import torch
 from cave import DetourError, Injector
 from helpers.device import (
     LLKAssertException,
@@ -97,6 +98,27 @@ class Perturber:
         self._item = None
         self._kwargs = {}
         self._injector = None
+        self._rng_state = None
+        # Result of every run() the body just made, and the same list from the
+        # clean pass to compare it against.
+        self._results = []
+        self._baseline_results = None
+        self._comparable = True
+        self._last_pcc = None
+
+    def begin(self) -> None:
+        """Reset the per-test state and remember the RNG the baseline will draw from.
+
+        Called from the hook before the body runs, which is after conftest's autouse
+        seed fixture — so restoring this state hands every variant byte-for-byte the
+        stimuli the baseline saw.
+        """
+        self.baseline = _Baseline()
+        self._results = []
+        self._baseline_results = None
+        self._comparable = True
+        self._last_pcc = None
+        self._rng_state = torch.get_rng_state() if self.config.drift else None
 
     # -- device plumbing ---------------------------------------------------
 
@@ -126,7 +148,11 @@ class Perturber:
     # -- baseline capture --------------------------------------------------
 
     def watch_baseline(self):
-        """Wrap both loaders. Suites like SDPA never call run(), only run_elf_files()."""
+        """Wrap both loaders. Suites like SDPA never call run(), only run_elf_files().
+
+        Stays installed for the whole case, not just the clean pass: the variants
+        need their results collected through the same seam to be comparable.
+        """
         original_run, original_load = TestConfig.run, TestConfig.run_elf_files
         baseline = self.baseline
 
@@ -137,6 +163,20 @@ class Perturber:
             baseline.had_result = (
                 baseline.had_result or getattr(outcome, "result", None) is not None
             )
+            # The harness already knows which variants are not bit-reproducible —
+            # l1_acc adds onto the previous run, coverage builds and deliberately
+            # undefined state never repeat — so reuse its answer rather than
+            # rediscovering it, and compare nothing when it says no.
+            if config_self._bit_exact_unsupported_reason() is not None:
+                self._comparable = False
+            # ponytail: the decoded result is already in hand, so drift costs no
+            # extra device traffic — but nothing clears the result buffer between
+            # variants, so a delay that makes the packer write *fewer* tiles leaves
+            # the tail holding the previous variant's identical bytes and reads as
+            # no change. Closing that means clear_result_buffer() before each run
+            # and comparing _read_output_regions() instead, at one extra L1 write
+            # and read per variant.
+            self._results.append(getattr(outcome, "result", None))
             return outcome
 
         def wrapped_load(config_self, *args, **kwargs):
@@ -198,14 +238,25 @@ class Perturber:
         )
         if self.verbose:
             print(f">> {variant.label()}", flush=True)
-        # Keep the baseline's RNG stream across variants (no re-seed); some races
-        # only show up on later draws.
+        # Rewind to the stimuli the baseline drew, so a difference in the output is
+        # the delay and not the data. With drift off the RNG stream instead runs on
+        # across variants, which samples different data per variant but leaves the
+        # runs incomparable: some races only show up on later draws.
+        if self._rng_state is not None:
+            torch.set_rng_state(self._rng_state)
+        self._results = []
         try:
             # Call the body, not item.runtest: we are already inside pytest_runtest_call,
             # and re-entering that hook nests another full sweep.
             with quiet_harness():
                 self._item.obj(**self._kwargs)
-            return None, ""
+            moved, pcc = self._output_moved()
+            # A depth run repeats a variant; keep the worst score across its runs
+            # rather than whichever repeat happened to go last. _record clears it.
+            if moved and pcc is not None:
+                if self._last_pcc is None or pcc < self._last_pcc:
+                    self._last_pcc = pcc
+            return ("drift", moved) if moved else (None, "")
         except _SKIPPED:
             return None, ""
         except DetourError:
@@ -218,6 +269,42 @@ class Perturber:
             return "mismatch", str(err)
         except Exception as err:
             return "error", f"{type(err).__name__}: {err}"
+
+    def _output_moved(self):
+        """How this run's output differs from the baseline's.
+
+        Returns (message, pcc). Message is "" when nothing moved.
+        """
+        if not self._comparable or self._baseline_results is None:
+            return "", None
+        return sweep_module.describe_drift(self._baseline_results, self._results)
+
+    def _prove_reproducible(self, item) -> None:
+        """Run the body once more, same stimuli, no detour, and check it agrees.
+
+        A case that cannot reproduce its own output is non-deterministic for reasons
+        that have nothing to do with a delay, and every variant of it would otherwise
+        be reported as drift.
+        """
+        if not self.config.drift or not self._comparable:
+            return
+        self._baseline_results, self._results = self._results, []
+        torch.set_rng_state(self._rng_state)
+        try:
+            with quiet_harness():
+                item.obj(**self._kwargs)
+        # pytest's outcomes derive from BaseException; a body that just passed and
+        # now skips or fails is as unreproducible as one that raised, and letting
+        # either escape would rewrite the case's result.
+        except (*_SKIPPED, _FAILED, Exception) as err:
+            self._comparable, reason = False, f"{type(err).__name__}: {err}"
+        else:
+            reason, _ = self._output_moved()
+        if reason:
+            self._comparable = False
+            print(
+                f">> {item.nodeid}: not reproducible, drift off ({reason})", flush=True
+            )
 
     def recover(self) -> bool:
         """Soft reset after a hang. False means the device needs a manual reset."""
@@ -251,7 +338,7 @@ class Perturber:
     # -- driving one test --------------------------------------------------
 
     def sweep(self, item) -> list:
-        """Perturb every planned variant of one test. Returns a label per failure."""
+        """Perturb every planned variant of one test. Returns (label, tags) per finding."""
         config = self.baseline.config
         self.scans = {
             thread: scanner.scan(path, self.config.site_mode)
@@ -279,6 +366,7 @@ class Perturber:
 
         self._item = item
         self._kwargs = _test_kwargs(item)
+        self._prove_reproducible(item)
         try:
             return sweep_module.run(
                 self.config,
@@ -291,6 +379,8 @@ class Perturber:
         finally:
             self._item = None
             self._kwargs = {}
+            self._baseline_results = None
+            self._results = []
             try:
                 injector.restore()
             except Exception:
@@ -323,8 +413,18 @@ class Perturber:
                 # behind it, and none of that survives a rebuild anyway.
                 "error": error.strip().splitlines()[0][:200] if error.strip() else "",
                 "chain": list(report.source_chain(scan.elf, variant.site.addr)),
+                **(
+                    {
+                        "pcc": round(self._last_pcc, 6),
+                        "pcc_delta": round(1.0 - self._last_pcc, 6),
+                    }
+                    if self._last_pcc is not None
+                    else {}
+                ),
             },
         )
+        # One variant's score must not be attributed to the next one.
+        self._last_pcc = None
 
 
 _perturber = None
@@ -340,42 +440,43 @@ def _get() -> Perturber:
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_call(item):
     perturber = _get()
-    perturber.baseline = _Baseline()
+    perturber.begin()
     unwatch = perturber.watch_baseline()
-    # The clean pass touches the device too, so it needs covering before the
-    # first variant beat does.
     _hb().beat(item.nodeid)
     try:
         outcome = yield
+
+        # A test that was already red tells us nothing about timing.
+        if outcome.excinfo is not None:
+            _hb().mark_done(item.nodeid)
+            return
+        # Reconfig tests compare TensixState in the body, so they have no result
+        # buffer; still sweep them if the baseline loaded ELFs.
+        if not perturber.baseline.worth_sweeping() and not (
+            perturber.baseline.saw_load and "z_state/reconfig/" in item.nodeid
+        ):
+            _hb().mark_done(item.nodeid)
+            return
+        findings = perturber.sweep(item)
+        # After sweep(), not in a finally: a case that died with the device
+        # must stay on the resume list, not be recorded as covered.
+        _hb().mark_done(item.nodeid)
+        # Drift is report-only: the variant still passed the test's own golden, so
+        # the case stays green and the record lives in report.md.
+        failures = [label for label, tags in findings if tags - {"drift"}]
+        if failures:
+            # Hang the finding on the case itself so a sweep reads like an ordinary
+            # pytest run: the case goes red and names the variant that broke it.
+            head = (
+                failures[0]
+                if len(failures) == 1
+                else f"{failures[0]} (+{len(failures) - 1} more)"
+            )
+            outcome.force_exception(
+                AssertionError(f"{len(failures)} perturbation(s) failed: {head}")
+            )
     finally:
         unwatch()
-
-    # A test that was already red tells us nothing about timing.
-    if outcome.excinfo is not None:
-        _hb().mark_done(item.nodeid)
-        return
-    # Reconfig tests compare TensixState in the body, so they have no result
-    # buffer; still sweep them if the baseline loaded ELFs.
-    if not perturber.baseline.worth_sweeping() and not (
-        perturber.baseline.saw_load and "z_state/reconfig/" in item.nodeid
-    ):
-        _hb().mark_done(item.nodeid)
-        return
-    failures = perturber.sweep(item)
-    # Deliberately after sweep() rather than in a finally: a case that died with
-    # the device must stay on the resume list, not be recorded as covered.
-    _hb().mark_done(item.nodeid)
-    if failures:
-        # Hang the finding on the case itself so a sweep reads like an ordinary
-        # pytest run: the case goes red and names the variant that broke it.
-        head = (
-            failures[0]
-            if len(failures) == 1
-            else f"{failures[0]} (+{len(failures) - 1} more)"
-        )
-        outcome.force_exception(
-            AssertionError(f"{len(failures)} perturbation(s) failed: {head}")
-        )
 
 
 # The argument has to be named `report` for pytest to bind it, which shadows the
@@ -420,6 +521,10 @@ def pytest_sessionfinish(session, exitstatus):
         return
     path = report.write_markdown(
         config.report_dir,
-        report.environment(config.arch, config.site_mode, config.filler),
+        report.environment(config.arch, config.site_mode, config.filler, config.drift),
     )
-    print(f"\n>> {len(records)} failing variant(s) -> {path}", flush=True)
+    drifted = sum(1 for record in records if "drift" in record["tag"])
+    print(
+        f"\n>> {len(records)} recorded variant(s) ({drifted} drift) -> {path}",
+        flush=True,
+    )
