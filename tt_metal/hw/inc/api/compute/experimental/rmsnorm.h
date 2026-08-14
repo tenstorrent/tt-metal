@@ -32,7 +32,8 @@ ALWI void rmsnorm_bcast_scalar_reuse_tiles_init(uint32_t icb0) {
 template <
     EltwiseBinaryType eltwise_binary_type = EltwiseBinaryType::ELWADD,
     uint32_t num_tiles,
-    bool clear_dest = false>
+    bool clear_dest = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rmsnorm_bcast_scalar_reuse_tiles(
     uint32_t in_cb_id, uint32_t in_tile_index, uint32_t src_tile_index, uint32_t dst_tile_index) {
     UNPACK(
@@ -40,7 +41,7 @@ ALWI void rmsnorm_bcast_scalar_reuse_tiles(
     MATH((llk_math_rmsnorm_bcast_scalar_dest_reuse<
           eltwise_binary_type,
           num_tiles,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           MATH_FIDELITY,
           clear_dest>(src_tile_index, dst_tile_index)));
 }
@@ -64,7 +65,8 @@ template <
     EltwiseBinaryType eltwise_binary_type,
     uint32_t num_tiles,
     MathFidelity math_fidelity,
-    bool clear_dest = false>
+    bool clear_dest = false,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rmsnorm_bcast_scalar_reuse_tiles_fidelity(
     uint32_t in_cb_id, uint32_t in_tile_index, uint32_t src_tile_index, uint32_t dst_tile_index) {
     UNPACK(
@@ -72,7 +74,7 @@ ALWI void rmsnorm_bcast_scalar_reuse_tiles_fidelity(
     MATH((llk_math_rmsnorm_bcast_scalar_dest_reuse<
           eltwise_binary_type,
           num_tiles,
-          DST_ACCUM_MODE,
+          is_fp32_dest_acc_en,
           math_fidelity,
           clear_dest>(src_tile_index, dst_tile_index)));
 }
@@ -82,10 +84,10 @@ ALWI void rmsnorm_mul_bcast_scalar_reuse_tiles_init(uint32_t icb0) {
     rmsnorm_bcast_scalar_reuse_tiles_init<EltwiseBinaryType::ELWMUL, num_tiles>(icb0);
 }
 
-template <uint32_t num_tiles, bool clear_dest = false>
+template <uint32_t num_tiles, bool clear_dest = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void rmsnorm_mul_bcast_scalar_reuse_tiles(
     uint32_t in_cb_id, uint32_t in_tile_index, uint32_t src_tile_index, uint32_t dst_tile_index) {
-    rmsnorm_bcast_scalar_reuse_tiles<EltwiseBinaryType::ELWMUL, num_tiles, clear_dest>(
+    rmsnorm_bcast_scalar_reuse_tiles<EltwiseBinaryType::ELWMUL, num_tiles, clear_dest, is_fp32_dest_acc_en>(
         in_cb_id, in_tile_index, src_tile_index, dst_tile_index);
 }
 
@@ -101,12 +103,16 @@ ALWI void rmsnorm_mul_bcast_scalar_reuse_tiles(
  * The reduce pack mask remains configured; call
  * mul_reduce_scalar_uninit() before normal packing.
  */
-template <uint32_t num_tiles, uint32_t dst_capacity, PoolType reduce_type = PoolType::SUM>
+template <
+    uint32_t num_tiles,
+    uint32_t dst_capacity,
+    PoolType reduce_type = PoolType::SUM,
+    bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t ocb, float scaler = 1.0f) {
     static_assert(reduce_type == PoolType::SUM, "Only SUM reduction is currently supported");
     static_assert(dst_capacity >= 2 && dst_capacity <= 8, "Chunked reduction requires 2 to 8 DST slots");
     static_assert(
-        dst_capacity <= get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
+        dst_capacity <= get_dest_max_tiles<DST_SYNC_MODE, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(),
         "dst_capacity exceeds the DST tiles available in this sync/accum mode");
     static_assert(num_tiles > dst_capacity, "Use mul_reduce_scalar_tile when the row fits DST");
 
@@ -128,15 +134,15 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
         }
         for (uint32_t j = 0; j < count; ++j) {
             UNPACK((llk_unpack_AB(icb0, icb1, input_start + j, input_start + j)));
-            MATH((llk_math_eltwise_mul_reduce_scalar<DST_ACCUM_MODE, MATH_FIDELITY>(j, icb0)));
+            MATH((llk_math_eltwise_mul_reduce_scalar<is_fp32_dest_acc_en, MATH_FIDELITY>(j, icb0)));
         }
 
         UNPACK((llk_unpack_mul_reduce_scalar_switch_to_reduce()));
-        MATH((llk_math_mul_reduce_scalar_reduce_init<DST_ACCUM_MODE, MATH_FIDELITY>()));
+        MATH((llk_math_mul_reduce_scalar_reduce_init<is_fp32_dest_acc_en, MATH_FIDELITY>()));
         MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(0)));
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
+            is_fp32_dest_acc_en,
             _calculate_fill_,
             (APPROX, 2 /*ITERATIONS*/),
             0 /*dst_index*/,
@@ -145,7 +151,7 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
         MATH((llk_math_mul_reduce_scalar_move_dest_to_src<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(0)));
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
-            DST_ACCUM_MODE,
+            is_fp32_dest_acc_en,
             _calculate_fill_,
             (APPROX, 2 /*ITERATIONS*/),
             0 /*dst_index*/,
@@ -162,7 +168,7 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
         }
         MATH((llk_math_mul_reduce_scalar<MATH_FIDELITY>()));
         MATH((llk_math_mul_reduce_scalar_clear_dvalid()));
-        add_binary_tile(accumulator, 0, accumulator);
+        add_binary_tile<DstRoundingMode::Default, is_fp32_dest_acc_en>(accumulator, 0, accumulator);
     }
 }
 
