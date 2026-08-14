@@ -39,7 +39,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, PrefillRunParams, get_adapter
-from models.demos.common.prefill.runners.migration import serialize_device_map
+from models.demos.common.prefill.runners.migration import migration_file_export_enabled, serialize_device_map
 from models.demos.common.prefill.runners.runner_utils import (
     activation_global_spec,
     build_h2d_service,
@@ -664,6 +664,11 @@ def _print_config() -> None:
             os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb"),
         ),
         ("PREFILL_MIGRATION_WAIT_READY_MS", os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000")),
+        ("PREFILL_MIGRATION_EXPORT_TO_FILE", os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "0")),
+        (
+            "PREFILL_MIGRATION_DEVICE_MAP_PATH",
+            os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "<transport-dependent default>"),
+        ),
         ("MIGRATION_DONE_FILE", os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")),
     ]
     sep = "=" * 70
@@ -698,6 +703,7 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
         "max_seq_len": MAX_SEQ_LEN,
         "num_users": NUM_USERS,
         "mesh_shape": GLOBAL_MESH_SHAPE,
+        "PREFILL_MIGRATION_EXPORT_TO_FILE": migration_file_export_enabled(),
     }
     fingerprint = "|".join(f"{k}={v}" for k, v in fields.items())
     digest = zlib.crc32(fingerprint.encode()) & 0x7FFFFFFF
@@ -895,6 +901,17 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     _migration_enabled = os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1" or _selftest
     _interleaved = os.environ.get("PREFILL_MIGRATION_INTERLEAVED", "0") == "1"
 
+    _file_export = migration_file_export_enabled()
+    # The selftest/interleaved paths drive migrate()/wait_complete() through the MigrationLayerClient,
+    # which file-export mode never creates — reject the combination up front (rank-invariant:
+    # env-only) rather than fail an assert after bring-up.
+    if _file_export and (_selftest or _interleaved):
+        raise ValueError(
+            "PREFILL_MIGRATION_EXPORT_TO_FILE=1 is incompatible with PREFILL_MIGRATION_SELFTEST=1 / "
+            "PREFILL_MIGRATION_INTERLEAVED=1: file-export mode has no MigrationLayerClient, "
+            "so the runner cannot issue migrate() itself."
+        )
+
     # Both flags put a scheduler stand-in on the master's ack channel, and try_consume_all() is a
     # destructive read against one shared cursor -- two consumers split the ack stream instead of each
     # seeing it whole. Rank-invariant (env + num_ranks only) and checked before the bring-up all-gather,
@@ -943,9 +960,13 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
         #   * The model RUNTIME builds + serializes the model-specific KV chunk table and returns its
         #     path (runtime.build_kv_chunk_table — the model owns the cache layout / address math).
         #   * RANK 0 ONLY publishes that serialized table to the worker and blocks on WORKER_READY.
+        # With PREFILL_MIGRATION_EXPORT_TO_FILE=1 the device map goes to a host-local text file
+        # and the table stays on disk instead; no worker handshake.
         from models.demos.common.prefill.runners.migration import (
             allgather_kv_stage_layout,
             deliver_device_map_and_gather_stage_layout,
+            export_device_map_file_and_gather_stage_layout,
+            migration_device_map_file_path,
             publish_serialized_table_and_wait_ready,
         )
 
@@ -993,6 +1014,15 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
             stage_layout = allgather_kv_stage_layout(
                 mesh_device, kv_base_addr, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers
             )
+        elif _file_export:
+            stage_layout = export_device_map_file_and_gather_stage_layout(
+                mesh_device,
+                kv_base_addr,
+                GLOBAL_MESH_SHAPE,
+                first_layer_idx,
+                num_my_layers,
+                migration_device_map_file_path(),
+            )
         else:
             stage_layout = deliver_device_map_and_gather_stage_layout(
                 mesh_device, kv_base_addr, GLOBAL_MESH_SHAPE, first_layer_idx, num_my_layers, rank
@@ -1025,25 +1055,49 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
                 )
                 logger.info(f"[mock-migration] merged KV chunk table -> {table_path} (no migration worker)")
             logger.info(f"[mock-migration] rank {rank}: local device map -> {device_map_path}")
-        elif is_first_rank:
-            # RANK 0: model runtime builds + serializes the merged table (spanning all gathered
-            # stages), then publish the serialized path + block on WORKER_READY.
-            table_path = runtime.build_kv_chunk_table(
-                kv_caches,
-                table_path,
-                first_layer_idx=first_layer_idx,
-                num_my_layers=num_my_layers,
-                stage_layout=stage_layout,
-            )
-            migration_endpoint = publish_serialized_table_and_wait_ready(
-                table_path=table_path,
-                wait_ready_timeout_ms=wait_ready_ms,
-            )
+        elif _file_export:
+            # The files on disk are the handoff: no SET_TABLE, no WORKER_READY.
+            if is_first_rank:
+                table_path = runtime.build_kv_chunk_table(
+                    kv_caches,
+                    table_path,
+                    first_layer_idx=first_layer_idx,
+                    num_my_layers=num_my_layers,
+                    stage_layout=stage_layout,
+                )
+                logger.info(f"[migration] merged KV chunk table -> {table_path} (file export; no worker handshake)")
+            logger.info(f"[migration] rank {rank}: exported local device map -> {migration_device_map_file_path()}")
         else:
-            logger.info(
-                f"[migration] rank {rank}: delivered local device map + contributed stage "
-                f"(first_layer={first_layer_idx}, count={num_my_layers}); rank 0 sends the merged table."
-            )
+            # EVERY rank serializes its own local fabric_node -> ASIC unique_id map, exactly as the
+            # mock path above does. The real path used to skip this, which silently disabled every
+            # device-less reader downstream: migration_driver's destination verification
+            # (--verify-migration, both dst-bytes and dst-golden) and prefill_producer's source-KV
+            # PCC each resolve chips through this file, log "device map ... not found", and FAIL —
+            # so a real migration run could never verify what it copied. Host-local by design (one
+            # file per host, each rank overwriting its own).
+            device_map_path = os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", "/tmp/prefill_kv_device_map.json")
+            serialize_device_map(mesh_device, device_map_path)
+            logger.info(f"[migration] rank {rank}: local device map -> {device_map_path}")
+
+            if is_first_rank:
+                # RANK 0: model runtime builds + serializes the merged table (spanning all gathered
+                # stages), then publish the serialized path + block on WORKER_READY.
+                table_path = runtime.build_kv_chunk_table(
+                    kv_caches,
+                    table_path,
+                    first_layer_idx=first_layer_idx,
+                    num_my_layers=num_my_layers,
+                    stage_layout=stage_layout,
+                )
+                migration_endpoint = publish_serialized_table_and_wait_ready(
+                    table_path=table_path,
+                    wait_ready_timeout_ms=wait_ready_ms,
+                )
+            else:
+                logger.info(
+                    f"[migration] rank {rank}: delivered local device map + contributed stage "
+                    f"(first_layer={first_layer_idx}, count={num_my_layers}); rank 0 sends the merged table."
+                )
 
     elif os.environ.get("PREFILL_MOCK_MIGRATION", "0") == "1":
         # Mock integration (prefill_producer.py): serialize the KV chunk table so an external
