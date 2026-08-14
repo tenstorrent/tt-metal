@@ -51,13 +51,13 @@ def _reference(torch_input, torch_weight):
         # S=8, with the token count cut to keep the test cheap, then at full size.
         "attnres_short",
         "attnres_full",
-        # C=8 takes the granularity cap; C=12 takes 6; C=5 and C=13 are prime to
-        # 8 and fall back to a granularity of 1, which is the path where the
-        # candidate loop runs one tile at a time.
-        "c8_granularity_8",
-        "c12_granularity_6",
-        "c5_granularity_5",
-        "c13_granularity_1",
+        # C is not blocked — the candidate loop always runs the whole axis one
+        # tile at a time, and C sets both CB depths along with it. These are a
+        # spread of counts against that sizing, not distinct branches.
+        "c8",
+        "c12",
+        "c5",
+        "c13",
         # C=1 makes the reduction a plain scale.
         "c1_degenerate",
         # Wt=1: every output tile starts a new token row, so the weight set turns
@@ -124,6 +124,25 @@ def test_attn_res_weighted_reduce_nc_weight_batch_matches_per_site(device):
             tt_input, _place(torch_weight[site : site + 1], device), dim=1
         )
         assert_with_pcc(ttnn.to_torch(alone).float(), got[site : site + 1], PCC)
+
+
+def test_attn_res_weighted_reduce_nc_negative_dim(device):
+    """`dim=-3` is the rank-4 alias for `dim=1` and must reach the same op.
+
+    Normalization happens in the host wrapper, above the validation that accepts
+    only dim 1, so a broken alias surfaces as a rejection rather than a wrong
+    answer — but only if something calls it."""
+    torch.manual_seed(2026)
+    shape = [1, 9, 128, 256]
+
+    tt_input = _place(torch.randn(shape, dtype=torch.bfloat16), device)
+    tt_weight = _place(torch.randn([1, 9, 128, 1], dtype=torch.bfloat16), device)
+
+    aliased = ttnn.experimental.attn_res_weighted_reduce_nc(tt_input, tt_weight, dim=-3)
+    direct = ttnn.experimental.attn_res_weighted_reduce_nc(tt_input, tt_weight, dim=1)
+
+    assert list(aliased.shape) == list(direct.shape)
+    assert torch.equal(ttnn.to_torch(aliased), ttnn.to_torch(direct))
 
 
 def test_attn_res_weighted_reduce_nc_unaligned_rows(device):
@@ -212,6 +231,7 @@ def test_attn_res_weighted_reduce_nc_matches_composed(device):
         ("dim", "supports dim == 1 only"),
         ("weight_width", "weight must carry one scalar per row"),
         ("leading_dims", "the candidate and row dims must match"),
+        ("rows_same_tile_bucket", "the candidate and row dims must match"),
         ("input_batch", "takes an unbatched input"),
         ("rank", "requires rank-4 operands"),
         ("input_dtype", "input only supports specific data types"),
@@ -234,6 +254,11 @@ def test_attn_res_weighted_reduce_nc_rejects(bad, message, device, expect_error)
         tt_weight = _place(torch.randn([1, 9, 128, 128], dtype=torch.bfloat16), device)
     elif bad == "leading_dims":
         tt_weight = _place(torch.randn([1, 8, 128, 1], dtype=torch.bfloat16), device)
+    elif bad == "rows_same_tile_bucket":
+        # 100 and 120 rows both pad to 128, so a padded-only check lets this
+        # through and the shorter operand's padding becomes output data.
+        tt_input = _place(torch.randn([1, 9, 120, 128], dtype=torch.bfloat16), device)
+        tt_weight = _place(torch.randn([1, 9, 100, 1], dtype=torch.bfloat16), device)
     elif bad == "input_batch":
         # Dim 0 belongs to the weight. A batched input would need its own read per
         # plane, which is the reuse the op is built on.

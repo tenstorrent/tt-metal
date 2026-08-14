@@ -70,12 +70,21 @@ void AttnResWeightedReduceNCDeviceOperation::validate_on_program_cache_miss(
         weight.logical_shape()[-1] == 1,
         "AttnResWeightedReduceNC weight must carry one scalar per row, i.e. a logical last dim of 1, got {}",
         weight.logical_shape()[-1]);
+    // Logical, not just padded. The row dim is tile-padded, so two different token
+    // counts in one tile bucket — 100 and 120, both padding to 128 — compare equal
+    // padded. The kernel would then weight the shorter operand's padding into rows
+    // the output still reports as logical, and return them as data.
+    const auto& input_logical = input.logical_shape();
+    const auto& weight_logical = weight.logical_shape();
     for (int i = 1; i < 3; ++i) {
         TT_FATAL(
-            input_shape[i] == weight_shape[i],
-            "AttnResWeightedReduceNC weight dim {} is {} but input's is {}; the candidate and row dims must match",
+            input_logical[i] == weight_logical[i] && input_shape[i] == weight_shape[i],
+            "AttnResWeightedReduceNC weight dim {} is {} ({} padded) but input's is {} ({} padded); the candidate "
+            "and row dims must match",
             i,
+            weight_logical[i],
             weight_shape[i],
+            input_logical[i],
             input_shape[i]);
     }
     // The weight's dim 0 is the output's batch, so the input carries none. The
