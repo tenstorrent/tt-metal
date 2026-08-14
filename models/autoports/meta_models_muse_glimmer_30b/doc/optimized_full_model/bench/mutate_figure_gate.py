@@ -129,8 +129,8 @@ MUTATIONS = [
     (
         "device time in the accounting section",
         "doc/optimized_full_model/README.md",
-        "| device-time decode | **22.908 ms/token**",
-        "| device-time decode | **12.908 ms/token**",
+        "| device-time decode | **23.099 ms/token**",
+        "| device-time decode | **13.099 ms/token**",
     ),
     (
         "fallback synchronizations counter",
@@ -178,8 +178,8 @@ MUTATIONS = [
     (
         "work log accounting device figure",
         "doc/optimized_full_model/work_log.md",
-        "device time **22.908 ms/token**",
-        "device time **12.908 ms/token**",
+        "device time **23.099 ms/token**",
+        "device time **13.099 ms/token**",
     ),
     (
         "work log per-layer floor row",
@@ -389,14 +389,51 @@ MUTATIONS = [
     (
         "the terminal term",
         "doc/optimized_full_model/README.md",
-        "terminal term is now derived from a named id list: **3145**",
-        "terminal term is now derived from a named id list: **3146**",
+        "terminal term is derived from a named id list: **3145**",
+        "terminal term is derived from a named id list: **3146**",
     ),
     (
         "the mutation count in the Artifacts table",
         "doc/optimized_full_model/README.md",
-        "mutation-tests that gate: 65 mutations,",
+        "mutation-tests that gate: 71 mutations,",
         "mutation-tests that gate: 96 mutations,",
+    ),
+    # Round 13's set: the seven in-perimeter survivors, plus the mis-classified terminal id.
+    (
+        "a TTFT phase cell",
+        "doc/optimized_full_model/README.md",
+        "| terminal norm + LM head + softcap | 0.85 | |",
+        "| terminal norm + LM head + softcap | 0.65 | |",
+    ),
+    (
+        "another TTFT phase cell",
+        "doc/optimized_full_model/README.md",
+        "| token staging + page table | 0.65 | host tensors + H2D |",
+        "| token staging + page table | 0.85 | host tensors + H2D |",
+    ),
+    (
+        "the residual shard geometry",
+        "doc/optimized_full_model/README.md",
+        "`WIDTH_SHARDED` L1, 16 cores, `[32, 416]` shards",
+        "`WIDTH_SHARDED` L1, 16 cores, `[32, 1024]` shards",
+    ),
+    (
+        "a dtype-table shape",
+        "doc/optimized_full_model/README.md",
+        "| `wqkv` | 32 x 6656 x 1280 |",
+        "| `wqkv` | 32 x 6656 x 1024 |",
+    ),
+    (
+        "the checklist's terminal price",
+        "doc/optimized_full_model/README.md",
+        "terminal priced at 685.949 µs",
+        "terminal priced at 632.000 µs",
+    ),
+    (
+        "the terminal id list, with a per-layer op put back in it",
+        "doc/optimized_full_model/bench/check_reported_figures.py",
+        '        "3145",  # token embedding lookup\n        "3201",  # embedding all-gather',
+        '        "3145",  # token embedding lookup\n        "3158",  # RoPE cos table\n        "3161",  # RoPE sin table\n        "3201",  # embedding all-gather',
     ),
     (
         "the fail-closed negative control's discriminating assertion",
@@ -446,8 +483,14 @@ def reset():
     _bootstrap_scratch_log()
 
 
-def run_gate() -> bool:
+def run_gate(explain: bool = False) -> bool:
     out = subprocess.run([sys.executable, str(GATE)], capture_output=True, text=True, cwd=str(SCRATCH))
+    if explain and "FIGURES_OK" not in out.stdout:
+        for line in out.stdout.splitlines():
+            if line.startswith("FAIL"):
+                say(f"  gate says: {line[:160]}")
+        if not out.stdout:
+            say(f"  gate crashed: {out.stderr.strip().splitlines()[-1][:160] if out.stderr else 'no output'}")
     return "FIGURES_OK" in out.stdout
 
 
@@ -481,7 +524,7 @@ def _bootstrap_scratch_log() -> None:
 
 def main() -> int:
     reset()
-    if not run_gate():
+    if not run_gate(explain=True):
         say("BASELINE FAILS -- the scratch copy is not clean; aborting")
         LOG.write_text("\n".join(transcript) + "\n")
         return 2

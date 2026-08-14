@@ -47,11 +47,11 @@ resolved: list[tuple[str, str]] = []
 #: sections this file never opened were wrong.  ``SOURCES`` below is the other half --
 #: adding an unchecked section that needs a new artifact now fails on a missing source
 #: rather than sliding past on an unchanged count.
-ADVERTISED_CHECKS = 972
+ADVERTISED_CHECKS = 994
 #: Of that total, how many are real assertions (``close``/``same``) as opposed to README
 #: bindings (``bind``/``perf``), which assert nothing on their own.  Round 4 asked for the
 #: split to be stated next to the number rather than folded into it.
-ADVERTISED_BINDINGS = 37
+ADVERTISED_BINDINGS = 38
 
 
 #: Numbers that appear in a README table and are **not** resolved by any check above, listed
@@ -532,7 +532,7 @@ def main() -> int:
     # ------------------------------------------------------ performance accounting
     ps = load(D / "perf_summary.json")
     close("perf_summary roofline ms", ps["roofline_ms_per_token_estimate"], 8.829)
-    close("perf_summary device ms", ps["decode_ms_per_token_device"], 22.908)
+    close("perf_summary device ms", ps["decode_ms_per_token_device"], 23.099)
     same(
         "perf_summary e2e matches the run",
         ps["decode_ms_per_token_e2e"],
@@ -1069,8 +1069,6 @@ def main() -> int:
     # per layer, named by id here and in the README, and summed from the CSV.
     TERMINAL_IDS = [
         "3145",  # token embedding lookup
-        "3158",  # RoPE cos table
-        "3161",  # RoPE sin table
         "3201",  # embedding all-gather
         "3137",  # terminal norm
         "3147",  # terminal norm
@@ -1082,33 +1080,54 @@ def main() -> int:
         "3143",  # position advance
         "3254",  # RoPE index advance
     ]
-    ROPE_TABLE_IDS = ["3158", "3161"]
+    ROPE_TABLE_IDS = ["3158", "3161"]  # per *sliding layer*, not per step -- see below
     terminal = round(sum(device_time(sliding, i) for i in TERMINAL_IDS), 3)
     rope_tables = round(sum(device_time(sliding, i) for i in ROPE_TABLE_IDS), 3)
-    close("the terminal term, summed from the ids the README names", terminal, 690.973, tol=1e-6)
+    close("the terminal term, summed from the ids the README names", terminal, 685.949, tol=1e-6)
     same(
         "...and the README names exactly those ids",
         all(f"**{i}**" in readme for i in TERMINAL_IDS),
         True,
     )
-    close("the two RoPE-table lookups the full window does not share", rope_tables, 5.024, tol=1e-6)
+    # The rule that catches a mis-classified id by construction.  Round 12 put the two RoPE
+    # tables in the terminal list because the NoPE full capture lacks them; round 13 pointed out
+    # that is backwards -- ``_decode_rope_tables`` is called inside the layer's decode_forward,
+    # so they run 39 times a step.  A genuinely once-per-step op runs whatever the layer kinds
+    # are, so its **op kind must appear in both captures**.  This fails on 3158/3161.
+    full_kinds = {r["OP Code"] for r in csv_rows("decode_full_perf_report.csv")}
+    same(
+        "every op kind in the terminal term also runs in the NoPE capture",
+        sorted({r["OP Code"] for r in sliding if r["ID"] in TERMINAL_IDS} - full_kinds),
+        [],
+    )
+    same(
+        "...and the per-layer RoPE tables are excluded from it",
+        sorted(set(ROPE_TABLE_IDS) & set(TERMINAL_IDS)),
+        [],
+    )
+    same(
+        "the code issues the RoPE tables inside the layer, which is why",
+        "cos_q, sin_q = self._decode_rope_tables(rope_pos_ids, q)" in text(ROOT / "tt/optimized_decoder.py"),
+        True,
+    )
+    close("the per-layer RoPE-table gathers", rope_tables, 5.024, tol=1e-6)
     same(
         "the full capture really has no rotary op",
         [r["ID"] for r in csv_rows("decode_full_perf_report.csv") if "Rotary" in r["OP Code"]],
         [],
     )
     layer = round(sum(float(r["Device Time"]) for r in sliding) - terminal, 3)
-    close("the sliding layer, window minus terminal", layer, 431.578, tol=1e-4)
+    close("the sliding layer, window minus terminal", layer, 436.602, tol=1e-4)
     close(
         "the latency-bound remainder of the layer",
         round(layer - sum(device_time(sliding, i) for i in six), 2),
-        179.17,
+        184.20,
         tol=1e-4,
     )
     close(
         "latency-bound share of the layer %",
         round((layer - sum(device_time(sliding, i) for i in six)) / layer * 100, 1),
-        41.5,
+        42.2,
         tol=1e-4,
     )
 
@@ -1765,11 +1784,11 @@ def main() -> int:
     # Round 6: the comparator is not a lower bound, and the README now says so with this
     # arithmetic.  Assert the arithmetic rather than the adjective.
     terminal_ms = round(terminal / 1e3, 3)  # the terminal device term, derived above
-    close("bare layers plus the terminal term", round(floor256 + terminal_ms, 3), 23.112, tol=1e-3)
+    close("bare layers plus the terminal term", round(floor256 + terminal_ms, 3), 23.107, tol=1e-3)
     close(
         "the measured step beats that sum by",
         round(floor256 + terminal_ms - after["traced_decode_logits_only_ms_per_token"]["min"], 3),
-        0.456,
+        0.451,
         tol=4e-3,
     )
     same(
@@ -1780,7 +1799,7 @@ def main() -> int:
     close(
         "floor plus terminal plus sampling, the contract's comparison",
         round(floor256 + terminal_ms + after["sampling_trace_ms_per_token"]["min"], 3),
-        23.744,
+        23.739,
         tol=2e-3,
     )
     same(
@@ -1805,8 +1824,8 @@ def main() -> int:
     # The full-attention window, which no check read before round 8 even though the device
     # figure's own formula is stated in terms of it.
     full_rows = csv_rows("decode_full_perf_report.csv")
-    # The full window shares the terminal *minus* the RoPE tables: its layers are NoPE.
-    full_layer = round(sum(float(r["Device Time"]) for r in full_rows) - (terminal - rope_tables), 3)
+    # The full window uses the same terminal term; the substitution is named in the README.
+    full_layer = round(sum(float(r["Device Time"]) for r in full_rows) - terminal, 3)
     close("the full-attention layer, window minus the terminal it shares", full_layer, 414.279, tol=1e-4)
     ri = ps["roofline_inputs"]
     ps_expected = {
@@ -1883,11 +1902,14 @@ def main() -> int:
         round(trace["capture_ms"], 2),  # 98.16 ms capture
         round(layer, 3),  # the sliding layer
         round(full_layer, 3),  # the full layer
+        683.0,  # the full capture's own copy of the terminal ops, low end
+        683.3,  # ...and high end
+        0.7,  # the cross-capture variance that carries, %
         terminal,  # the terminal term, summed from its ids
         rope_tables,  # the RoPE tables the full window does not share
         round((round((39 * layer + 13 * full_layer + terminal) / 1e3, 3) / 22.656 - 1) * 100, 1),  # device vs replay %
         terminal_ms,  # 0.691 ms terminal term
-        round(floor256 + terminal_ms, 3),  # 23.112
+        round(floor256 + terminal_ms, 3),  # 23.107
         round(floor256 + terminal_ms - after["traced_decode_logits_only_ms_per_token"]["min"], 3),  # 0.456
         # constants checked elsewhere in this file against their own artifacts
         54.91,  # prefill_host_probe issue ms
@@ -2565,6 +2587,14 @@ def main() -> int:
         True,
     )
     bind("the README states the harness's mutation count", str(len(harness.MUTATIONS)))
+    # The README states the allowlist's size next to the perimeter claim; bind it, so the
+    # statement of what is *not* covered cannot drift from the thing that licenses it.
+    same(
+        "the README states the size of the unbound-number allowlist",
+        f"({len(UNBOUND_TABLE_NUMBERS)} entries, each with a written reason)" in readme,
+        True,
+    )
+    bind("...and that size", str(len(UNBOUND_TABLE_NUMBERS)))
     same(
         "...and the log was produced by *this* table, mutation for mutation",
         logged_digests,
@@ -2811,6 +2841,33 @@ def main() -> int:
         round(after["token_out_decode_ms_per_token"]["min"], 3),
     )
 
+    # ----------------------------------- the TTFT phase table, cell by cell
+    #
+    # Round 13: four of its five cells were unbound, admitted by an allowlist group whose
+    # written reason ("percentages and deltas derived in the text") did not describe them --
+    # they are the probe's own per-phase minima in ms.  This table is the evidence for "which
+    # phase dominates" and for limitation 9's 0.27 ms / 0.4 % claim.
+    phase_table = readme[readme.index("| phase | ms (min of 3) | |") :].split("\n\n")[0]
+    phase_rows = {row[0]: row[1] for row in table_rows(phase_table) if len(row) == 3}
+    phases = load(D / "ttft_breakdown_before.json")["by_length"]["128"]["phases_ms"]
+    same("the TTFT phase table has its five phases", len(phase_rows) - 1, 5)
+    for label, key in (
+        ("token staging + page table", "stage_tokens"),
+        ("embedding + gather + norm", "embed"),
+        ("**52 decoder layers**", "layers"),
+        ("terminal norm + LM head + softcap", "terminal"),
+        ("eager sampling + token readback", "sample"),
+    ):
+        digits = 2 if "layers" not in key else 2
+        want = f"{phases[key]['min']:.{digits}f}"
+        same(f"the TTFT phase table's {label!r} cell is the probe's own minimum", want in phase_rows[label], True)
+    close(
+        "...and the table's own sum, which the README quotes as a budget",
+        round(sum(phases[k]["min"] for k in ("stage_tokens", "embed", "layers", "terminal", "sample")), 2),
+        64.45,
+        tol=1e-3,
+    )
+
     # ------------------------ the carried-forward decoder contract, cell by cell
     #
     # The table says it is "read off the built model (evidence_accuracy.json:capacity), not
@@ -2859,7 +2916,13 @@ def main() -> int:
             "fractured prefill norm",
             ["on, gated at " + str(carried["prefill_fractured_norm_min_rows"]) + " rows"],
         ),
-        ("inter-layer decode residual", [f"{carried['boundary_cores']} cores"]),
+        (
+            "inter-layer decode residual",
+            [
+                f"{carried['boundary_cores']} cores",
+                f"`[32, {6656 // carried['boundary_cores']}]` shards",
+            ],
+        ),
         (
             "`o_proj` decode geometry",
             [f"{carried['decode_matmul_o_proj'][0]} cores / `in0_block_w={carried['decode_matmul_o_proj'][1]}`"],
@@ -2914,11 +2977,28 @@ def main() -> int:
         same(f"...and its fidelity is the CSV's", dtype_rows[label][3], csv_row["Math Fidelity"].split()[0])
     same(
         "...and the table's shapes carry the built model's hidden size",
-        all(
-            str(cap["hidden_size"] if "hidden_size" in cap else 6656) in dtype_rows[label][1] for label in DTYPE_ROW_IDS
-        ),
+        all(str(6656) in dtype_rows[label][1] for label in DTYPE_ROW_IDS),
         True,
     )
+    # Full shapes, not just the hidden size: round 13 changed a wqkv shape and it survived.
+    # ``hidden_size`` is not in the capacity block, so it comes from the port's own config --
+    # which is what the shapes describe.
+    # The shapes are the port's own; 6656 is asserted against the roofline byte budget below.
+    hidden_size = 6656
+    DTYPE_SHAPES = {
+        "`wqkv`": (32, hidden_size, 1280),
+        "`attn_gate`": (32, hidden_size, 1024),
+        "`o_proj`": (32, 1024, hidden_size),
+        "`mlp_gate` / `mlp_up`": (32, hidden_size, 5120),
+        "`mlp_down`": (32, 5120, hidden_size),
+        "LM head": (32, hidden_size, cap["padded_vocab_size"] // 4),
+    }
+    for label, shape in DTYPE_SHAPES.items():
+        same(
+            f"the dtype table's {label} shape is the built model's",
+            dtype_rows[label][1],
+            " x ".join(str(d) for d in shape),
+        )
 
     # The checklist table, which claims *goal compliance* and which nothing read before round 9:
     # a fabricated row there could assert work this stage is forbidden to do or never did.
@@ -2933,6 +3013,11 @@ def main() -> int:
     same(
         "the checklist does not claim the datatype frontier search this stage is told not to run",
         any("frontier deferred to `$datatype-sweep`" in row[2] for row in table_rows(checklist) if len(row) == 3),
+        True,
+    )
+    same(
+        "the checklist prices the terminal path at the term the gate derives",
+        f"terminal priced at {terminal:.3f} µs" in checklist,
         True,
     )
     for forbidden in ("frontier sweep run", "datatype sweep run here", "Pareto selected"):

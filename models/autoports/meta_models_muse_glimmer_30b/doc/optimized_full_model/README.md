@@ -247,7 +247,7 @@ Three numbers from the same configuration, reconciled
 | | value | source |
 | --- | --- | --- |
 | roofline | **8.829 ms/token** | 4,520,382,464 B/device ÷ 512 GB/s |
-| device-time decode | **22.908 ms/token** | 39 x 431.578 µs + 13 x 414.279 µs + 690.973 µs |
+| device-time decode | **23.099 ms/token** | 39 x 436.602 µs + 13 x 414.279 µs + 685.949 µs |
 | end-to-end token-out | **23.298 ms/token** | `evidence_perf.json`, min of 3 |
 | end-to-end logits-only | **22.656 ms/token** | same run, decode trace alone |
 
@@ -266,35 +266,46 @@ construction. What it establishes is that one peak is assumed for every row, and
 GB/s is the number the tool's own model uses for this part.
 
 **The roofline fraction is 37.9 %, and the reason is structural rather than a missing
-knob.** Of the 431.578 µs sliding layer (the 1122.551 µs window minus the 690.973 µs
+knob.** Of the 436.602 µs sliding layer (the 1122.551 µs window minus the 685.949 µs
 terminal term), **252.41 µs is the six DRAM-sharded projections** — `wqkv` 21.577,
 `o_proj` 21.368, `attn_gate` 19.195 and MLP gate/up/down 63.208 / 63.393 / 63.665 — and
-the remaining **179.17 µs is everything else**: 8.7 µs hidden-size RMSNorms and 4.6 µs
+the remaining **184.20 µs is everything else**: 8.7 µs hidden-size RMSNorms and 4.6 µs
 per-head norms, a 15.136 µs `SdpaDecode`, two reduce-scatter + all-gather pairs at
 54.886 µs together, 3.7–3.9 µs paged cache updates, 2.7–2.8 µs rotary applications, head
 create/concat, and the layout conversions. None of that moves DRAM bytes for the roofline
 to count, and the projections themselves run at 52.27–77.12 % of peak. A model built from
 many small ops sits lower on the roofline; the requirement is the explanation, and the
-explanation is that **41.5 %** of the layer is latency-bound rather than bandwidth-bound
+explanation is that **42.2 %** of the layer is latency-bound rather than bandwidth-bound
 work. Every *projection* figure in this paragraph is a row of the audit table below, which
 is a partition of the cited CSV — but the layer/terminal **split** is not one of its groups,
 because the audit groups ops by kind, not by whether they run once per step. Round 12 of the
 stage review caught this paragraph claiming otherwise, and the terminal term being a hardcoded
-constant behind it. The terminal term is now derived from a named id list: **3145** (token
-lookup), **3158**/**3161** (the two RoPE tables), **3201** (embedding all-gather), **3137** and
-**3147** (the two terminal norms), **3139** (LM head), **3140**/**3196** (softcap), **3193**/
-**3197** (its input reshard and output unshard) and **3143**/**3254** (the position and RoPE
-advance) — **690.973 µs**, which the figure gate sums from the CSV rather than storing. The
-previous constant, 691.07, was 0.097 µs above that sum and supported by nothing.
+constant behind it. The terminal term is derived from a named id list: **3145** (token
+lookup), **3201** (embedding all-gather), **3137** and **3147** (the two terminal norms),
+**3139** (LM head), **3140**/**3196** (softcap), **3193**/**3197** (its input reshard and output
+unshard) and **3143**/**3254** (the position and RoPE advance) — **685.949 µs**, which the
+figure gate sums from the CSV rather than storing. The constant it replaced, 691.07, was
+supported by nothing.
 
-**The full-attention window does not share all of it.** The full layers are NoPE
-(`tt/optimized_decoder.py`: `rope_theta` is set for the sliding kind only), so
-`decode_full_perf_report.csv` contains no `RotaryEmbeddingHfDeviceOperation` and only one
-`EmbeddingsDeviceOperation` against the sliding capture's three. The two RoPE-table lookups
-(**5.024 µs**) are therefore sliding-path work, not shared terminal work, and the full layer is
-its own window minus the terminal *without* them: 1100.228 − (690.973 − 5.024) = **414.279 µs**.
-The earlier accounting subtracted the whole term from both windows, which understated the full
-layer by 5.024 µs each and the step by 65 µs.
+**What belongs in it is settled by where the op is issued, not by where it sits in the
+capture.** Round 12 put the two RoPE-table gathers (ids 3158/3161) in this list on the strength
+of the NoPE full capture not containing them; round 13 pointed out that this gets the
+multiplicity backwards. `_decode_rope_tables` is called *inside* the layer's `decode_forward`
+(`tt/optimized_decoder.py`, under `if cfg.uses_rope`), so those two gathers run **once per
+sliding layer** — 39 times a step, not once — and the full capture lacks them because its
+layers are NoPE, not because they are terminal. They are layer work, the terminal term is
+**5.024 µs smaller**, the sliding layer is that much larger, and the step is **0.191 ms**
+larger. The figure gate now enforces the rule that caught it: **every op kind in the terminal
+list must appear in the full capture too**, because a per-step op runs whatever the layer kinds
+are. That check fails on 3158/3161 by construction.
+
+**The full-attention layer uses the same terminal term**, which is a cross-capture
+substitution and is named as one: the full capture measures its own copy of those eleven ops at
+683.0–683.3 µs (its two terminal norms are not individually identifiable, and the six
+hidden-size norms in either capture differ by at most 0.13 µs), against the 685.949 µs imported
+from the sliding capture. So the full layer, 1100.228 − 685.949 = **414.279 µs**, carries about
+**0.7 %** of cross-capture variance — ~35 µs on the step, inside the ±0.5 µs-per-row spread
+these captures show and well inside the gap between device time and the replay it explains.
 
 One row in the committed profile looks like it contradicts "no host gap" and does not.
 It is restated from *this* capture, and the first version of this paragraph got both the
@@ -316,13 +327,13 @@ the first op of the graph, so its "previous operation" is the last op of the *wa
 replay that ran before the signpost, across a profiler flush.
 
 What bounds it is arithmetic rather than the mechanism: summed device time is
-**22.908 ms** against a measured logits-only replay of **22.656 ms**, so there is no room
+**23.099 ms** against a measured logits-only replay of **22.656 ms**, so there is no room
 for a real 311 µs per-step bubble in the un-profiled run — and the steady-state loop's
 token, position and synchronisation counters are all zero per token
 ([`evidence_accuracy.json`](evidence_accuracy.json)`:fallback_audit`). Every percentage
 in this document comes from device-time sums, which exclude gap entirely.
 
-**Device time is 1.1 % *above* the traced replay it is meant to explain** (22.908 ms
+**Device time is 2.0 % *above* the traced replay it is meant to explain** (23.099 ms
 against 22.656 ms of logits-only replay), which is worth naming rather than hiding.
 `tt-perf-report` merges a 4-device capture by taking the **max** per op, so a step
 where different devices peak on different ops sums higher than any one device's
@@ -368,7 +379,7 @@ Both arms report identical PCC — prefill 0.993700, decode 0.993488 (sliding) a
 * the model decode trace is **22.656 ms**, i.e. **-0.9 %** against the 22.858 ms
   context-2048 floor;
 * token-out is **23.298 ms**, i.e. **+1.9 %** on that floor and **-3.7 %** on
-  floor-plus-terminal (22.858 + 0.691 device terminal + 0.632 sampling = 24.181).
+  floor-plus-terminal (22.858 + 0.686 device terminal + 0.632 sampling = 24.176).
 
 The gate is 10–15 % over floor-plus-terminal, and on those numbers there is no gap to
 split. But round 5 was right that the comparison as stated could not *fail*: the floor was
@@ -390,15 +401,15 @@ Against that tighter comparator:
   at a time;
 * token-out is **23.298 ms**, **+3.91 %** on it, of which the sampling trace is 632 µs
   (2.8 %);
-* the goal's comparison is against floor **plus terminal work**: 22.421 + 0.691 device
-  terminal + 0.632 sampling = **23.744 ms**, and token-out is **1.9 % below** that.
+* the goal's comparison is against floor **plus terminal work**: 22.421 + 0.686 device
+  terminal + 0.632 sampling = **23.739 ms**, and token-out is **1.9 % below** that.
 
 **It is a comparator, not a lower bound, and round 6 was right that calling it "not
-conservative" overstated it.** The proof is in the document's own numbers: 22.421 + 0.691 =
-**23.112 ms** for 52 bare layers plus the terminal device term, against a **22.656 ms**
+conservative" overstated it.** The proof is in the document's own numbers: 22.421 + 0.686 =
+**23.107 ms** for 52 bare layers plus the terminal device term, against a **22.656 ms**
 measured 52-layer traced replay that also contains the embedding, the gather, the terminal
 norm, the LM head, the softcap and two `plus_one`s. The real step beats the sum of its
-separately-measured parts by **0.456 ms**, so the per-layer harness overprices the stack by
+separately-measured parts by **0.451 ms**, so the per-layer harness overprices the stack by
 about **2 %** — it isolates one layer with its own warm-up, dispatch and drain rather than
 measuring it inside a 52-layer pipeline. Measuring at context 256 rather than the window's
 ~192 mean adds a further +0.07 %, which is negligible but is conservatism in the same
@@ -1324,7 +1335,7 @@ Twelve cases are new (three of them parametrizations of one test) and each pins 
 | fused matmul-CCL used or rejected with an adapted attempt | inherited | decoder stage's `fused_ccl_probe.py` |
 | repeated decode CCLs use persistent buffers, or the reason is recorded | recorded | refuted twice: correctness (decoder stage) and host cost (this stage, `ccl_host_probe.json`) |
 | MoE-specific items | n/a | dense MLP model |
-| LM head + sampling in the optimized token-out path, terminal costs profiled separately | yes | terminal priced at 691 µs and sampling at 632 µs in `tracy/`; padded vocab masked; split TopK on power-of-two pieces; no `ArgMaxDeviceOperation`, no full-vocab all-gather, no host argmax |
+| LM head + sampling in the optimized token-out path, terminal costs profiled separately | yes | terminal priced at 685.949 µs and sampling at 632 µs in `tracy/`; padded vocab masked; split TopK on power-of-two pieces; no `ArgMaxDeviceOperation`, no full-vocab all-gather, no host argmax |
 | LM head optimized for DRAM-sharded matmul | yes | `dram_sharded`, cores=52, `in0_block_w=2`, BFP4 |
 | reduced precision/fidelity experiments appropriate to this stage | yes | see [Performance accounting](#performance-accounting); frontier deferred to `$datatype-sweep` |
 | performance accounting reconciled, `perf_summary.json` written | yes | [`perf_summary.json`](perf_summary.json) |
@@ -1332,7 +1343,7 @@ Twelve cases are new (three of them parametrizations of one test) and each pins 
 | watcher clean, separate from profiler | yes | `WATCHER_CLEAN` on the ten-case gated set and on both opt-in prefill-trace cases run together; Tracy ran after a reset, in its own process. The one configuration that trips is limitation 6, it trips after every test has passed, and it is recorded with its positive control rather than excluded |
 | context contract preserved | yes | 131072, unreduced, rebuilt from this stage's evidence |
 | `$qualitative-check` after the selected optimization, with a control | yes | byte-identical to the previous-stage control on all six prompts |
-| every reported figure **in a table** resolves to a committed artifact, and the named prose figures with it | yes, with the perimeter stated | `bench/check_reported_figures.py`, which also compares every literal it resolves back to the README text (digit-bounded, so `1.0` no longer matches `21.05`) and asserts its check count, the assertion/binding split within it, and the set of artifacts it actually **opened** — recorded by its readers, not tested with `is_file()`, which round 4 pointed out is an existence check wearing a coverage label (it caught two: `work_log.md` was read past the recorder, and `watcher_probe_rebuild/watcher.log.gz` was listed but never opened). Round 3 was right that a frozen count is not coverage: the gate passed 328/328 with six wrong figures in sections it never read, and the sections it missed — the prefill-128 capture, the audit table's µs column, the teacher-forcing rates and `work_log.md` — are all bound now. Round 8 was right that a *document-wide* search is not binding either: a figure that appears twice can be changed in one place and found in the other, and swapping a table's before/after columns leaves both literals present. The headline table is bound cell by cell with the columns asserted not interchanged, the audit table's `ids` and `µs` columns are parsed from the README and checked against the CSV, and the duplicated figures are bound to the section that claims them. `perf_summary.json` and `doc/context_contract.json` — where round 8 found the staleness, because the gate read four fields of one and one string of the other — are now exhausted field by field, with `refresh_context_contract.py --check` run as part of this gate. The rule was made structural in a later round rather than enumerated: **every numeric cell of every table** must resolve to an artifact, be an op id in a committed CSV, be a capacity value of the built model, or sit in `UNBOUND_TABLE_NUMBERS` with a written reason. The perimeter that leaves, stated so it can be checked rather than assumed: **numerals inside tables**, plus the prose figures and the four units that are bound by name. Prose figures not on that list, numbers spelled as words, and unit swaps outside the four are **not** covered — round 12 demonstrated all three. `bench/mutate_figure_gate.py` is the standing evidence: 65 mutations, every one a defeat some round demonstrated, each required to make this gate fail |
+| every reported figure **in a table** resolves to a committed artifact, and the named prose figures with it | yes, with the perimeter stated | `bench/check_reported_figures.py`, which also compares every literal it resolves back to the README text (digit-bounded, so `1.0` no longer matches `21.05`) and asserts its check count, the assertion/binding split within it, and the set of artifacts it actually **opened** — recorded by its readers, not tested with `is_file()`, which round 4 pointed out is an existence check wearing a coverage label (it caught two: `work_log.md` was read past the recorder, and `watcher_probe_rebuild/watcher.log.gz` was listed but never opened). Round 3 was right that a frozen count is not coverage: the gate passed 328/328 with six wrong figures in sections it never read, and the sections it missed — the prefill-128 capture, the audit table's µs column, the teacher-forcing rates and `work_log.md` — are all bound now. Round 8 was right that a *document-wide* search is not binding either: a figure that appears twice can be changed in one place and found in the other, and swapping a table's before/after columns leaves both literals present. The headline table is bound cell by cell with the columns asserted not interchanged, the audit table's `ids` and `µs` columns are parsed from the README and checked against the CSV, and the duplicated figures are bound to the section that claims them. `perf_summary.json` and `doc/context_contract.json` — where round 8 found the staleness, because the gate read four fields of one and one string of the other — are now exhausted field by field, with `refresh_context_contract.py --check` run as part of this gate. The rule was made structural in a later round rather than enumerated: **every numeric cell of every table** must resolve to an artifact, be an op id in a committed CSV, be a capacity value of the built model, or sit in `UNBOUND_TABLE_NUMBERS` with a written reason. The perimeter that leaves, stated so it can be checked rather than assumed — and corrected in the round after, which found the first statement of it over-claiming: covered are **numerals in table cells that a check positively binds** (the headline, reconciliation, audit, accuracy, item, dtype/fidelity, carried-forward-contract, TTFT-phase and floor tables, cell by cell), plus the named prose figures and four units. **Not** covered, and each demonstrated by a review round: numerals admitted only by membership in `UNBOUND_TABLE_NUMBERS` (189 entries, each with a written reason) or by colliding with a committed CSV's op id; prose figures outside the named list; numbers spelled as words; and unit swaps outside the four. The by-construction rule is what makes the *uncovered* set enumerable rather than unknown: a number no artifact supports and no reason licenses fails whether or not anyone thought to bind it. `bench/mutate_figure_gate.py` is the standing evidence: 71 mutations, every one a defeat some round demonstrated, each required to make this gate fail |
 
 ## How to reproduce
 
@@ -1564,7 +1575,7 @@ Evidence:
 | `logs/decode_rebind_prefix_negative_control.log`, `logs/trace_release_failclosed_negative_control.log`, `logs/deferred_free_negative_control.log` | the three committed negative controls: each new trace-lifecycle test failing against the code it replaced, on the assertion that separates them. The third was asked for by the round after the fix it controls — round 9 had shipped a test that *looked* like it pinned its property and did not, which is what round 10 found, so inference is not enough here |
 | `logs/` | every console log named above |
 | `bench/check_reported_figures.py` | resolves the figures in this document against the artifacts above, and asserts its advertised check count, its assertion/binding split and the artifacts it opened; `FIGURES_OK` |
-| `bench/mutate_figure_gate.py` | mutation-tests that gate: 65 mutations, each one a defeat a stage review demonstrated (a stale contract figure, a swapped before/after column, a fabricated arm row, an id moved between audit groups, a prose-only tally, a falsified Bonferroni value, …), each applied alone to a scratch copy and each required to make the gate fail — [`logs/mutate_figure_gate.log`](logs/mutate_figure_gate.log) |
+| `bench/mutate_figure_gate.py` | mutation-tests that gate: 71 mutations, each one a defeat a stage review demonstrated (a stale contract figure, a swapped before/after column, a fabricated arm row, an id moved between audit groups, a prose-only tally, a falsified Bonferroni value, …), each applied alone to a scratch copy and each required to make the gate fail — [`logs/mutate_figure_gate.log`](logs/mutate_figure_gate.log) |
 
 ## Stage review
 
