@@ -7,7 +7,7 @@
 //   mask_tail_block         -> eltwise_chain (BinaryFpu Mul, bcast Row, strided, in place)
 //   square_accumulate_block -> compute_kernel_lib::sum_of_squares
 //   collapse_partial_block  -> compute_kernel_lib::reduce<SUM, REDUCE_ROW> (s == 1)
-//   combine_block (root)    -> compute_kernel_lib::reduce<SUM, REDUCE_ROW> over (B, s)
+//   combine_block (owner)   -> compute_kernel_lib::reduce<SUM, REDUCE_ROW> over (own_rows, s)
 //   scale_block             -> compute_kernel_lib::mul (bcast Col)
 //   apply_gamma_block       -> compute_kernel_lib::mul (bcast Row)
 //   untilize_block          -> compute_kernel_lib::untilize          (ROW_MAJOR only)
@@ -50,6 +50,7 @@ namespace ckl = compute_kernel_lib;
 constexpr uint32_t cb_input_tiles = 0;
 constexpr uint32_t cb_gamma_tiles = 1;
 constexpr uint32_t cb_sq_partials = 2;
+constexpr uint32_t cb_slice_stat = 3;  // the OWNER's reduce output (reduce-scatter combine)
 constexpr uint32_t cb_gathered_partials = 4;
 constexpr uint32_t cb_rms_bcast = 5;
 constexpr uint32_t cb_rms_recip = 6;
@@ -131,6 +132,25 @@ void kernel_main() {
     // clamps this to DEST_AUTO_LIMIT at runtime, so an oversized value only costs
     // extra outer iterations.
     constexpr uint32_t DEST_BLOCK_TILES = get_compile_time_arg_val(9);
+    // Reduce-scatter combine (Perf 1).  The block's BLOCK_ROWS rows are reduced by
+    // NUM_OWNERS cores of the row-group, OWN_ROWS rows each, instead of all by the
+    // root — the root was the group's critical path (measured: 56 of 64 cores idle
+    // 61.3 us of a 73.6 us wall in ReceiverPipe::receive(), with 42.0 us of that
+    // wall attributable by ablation to the root's own reduce over s*B float32 stat
+    // tiles).  An owner reduces s*OWN_ROWS tiles instead of s*BLOCK_ROWS, and the
+    // s*B-tile incast is spread over NUM_OWNERS destinations instead of one.
+    //
+    // NUM_OWNERS == 1 is the pre-Perf-1 flat root, selected by the host only where
+    // scattering measured SLOWER (min(s, B) == 1, i.e. the single-tile-row decode
+    // regime: -9% at s=8, -5% at s=32 — there is nothing to scatter, so the scheme
+    // would degenerate to the flat root plus one funnel hop).  It is the same code
+    // below with OWN_ROWS == BLOCK_ROWS and cb_combine_out == cb_rms_bcast.
+    constexpr uint32_t NUM_OWNERS = get_compile_time_arg_val(10);
+    constexpr uint32_t OWN_ROWS = get_compile_time_arg_val(11);
+    // Where the owner's reduce lands: straight into the broadcast source when the
+    // owner IS the root (NUM_OWNERS == 1), else into the per-owner buffer its
+    // reader funnels to the root.
+    constexpr uint32_t cb_combine_out = (NUM_OWNERS > 1) ? cb_slice_stat : cb_rms_bcast;
 
     constexpr uint32_t BLOCK_TILES = BLOCK_ROWS * SLICE_HIDDEN_TILES;
 
@@ -157,7 +177,9 @@ void kernel_main() {
                                            : ckl::ReduceAlgorithm::Auto;
 
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
-    const uint32_t is_root = get_arg_val<uint32_t>(1);
+    // Owner 0 of a row-group IS the broadcast root, so at NUM_OWNERS == 1 this is
+    // exactly the old `is_root`.
+    const uint32_t is_owner = get_arg_val<uint32_t>(1);
     const uint32_t mask_local_col = get_arg_val<uint32_t>(2);
     const uint32_t inv_w_bits = get_arg_val<uint32_t>(3);
     const uint32_t eps_bits = get_arg_val<uint32_t>(4);
@@ -344,16 +366,16 @@ void kernel_main() {
             //      compute phase disappears from every non-root core.
             //      cb_slice_stat is therefore not created at all; cb_sq_partials'
             //      single consumer is the writer.
-            if (is_root) {
+            if (is_owner) {
                 // Hoist the reduce helper's own BulkWait out into its own zone:
                 // the helper's ReduceInputPolicy::BulkWaitBulkPop waits on
                 // cb_gathered_partials INTERNALLY, so an un-split zone would
                 // charge the whole gather incast to the reduce's math.  With the
                 // wait hoisted the helper's internal wait is already satisfied
-                // and `cp_combine` is the root's reduce PAYLOAD alone.
+                // and `cp_combine` is this owner's reduce PAYLOAD alone.
                 {
                     MaybeDeviceZoneScope("cp_combine_wait");
-                    cb_wait_front(cb_gathered_partials, NUM_HIDDEN_SLICES * BLOCK_ROWS);
+                    cb_wait_front(cb_gathered_partials, NUM_HIDDEN_SLICES * OWN_ROWS);
                 }
                 MaybeDeviceZoneScope("cp_combine");
                 ckl::reduce<
@@ -361,14 +383,14 @@ void kernel_main() {
                     ckernel::ReduceDim::REDUCE_ROW,
                     cb_gathered_partials,
                     cb_scaler,
-                    cb_rms_bcast,
+                    cb_combine_out,
                     ckl::ReduceInputPolicy::BulkWaitBulkPop,
                     ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                     ReduceFp32Mode::Fast,
                     COMBINE_ALGORITHM,
                     ckl::NoAccumulation,
                     decltype(finalize)>(
-                    ckl::ReduceInputBlockShape::of(BLOCK_ROWS, NUM_HIDDEN_SLICES),
+                    ckl::ReduceInputBlockShape::of(OWN_ROWS, NUM_HIDDEN_SLICES),
                     ckl::ReduceInputMemoryLayout::contiguous(),
                     ckl::NoAccumulation{},
                     finalize);

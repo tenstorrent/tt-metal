@@ -3,7 +3,12 @@
 //
 // rms_norm reader (NoC0).  Realizes op_design.md's `prepare_stat_constants`,
 // `load_gamma_once`, `load_block`, and the *reader half* of `combine_block`
-// (the gather landing + the stat multicast).
+// (the gather landing, the reduce-scatter funnel, and the stat multicast).
+//
+// Perf 1 made the combine reduce-scattered: NUM_OWNERS cores of the row-group
+// each own OWN_ROWS of the block's rows, gather only those, reduce+finalize them
+// and funnel the result to the root, which still performs the single broadcast.
+// At NUM_OWNERS == 1 this file is the pre-Perf-1 flat root.
 //
 // Raw-API notes (deviations from "prefer helpers"):
 //  * `load_block` / `load_gamma_once` use TensorAccessor + noc_async_read
@@ -39,6 +44,7 @@ using namespace dataflow_kernel_lib;
 // Semantic CB names (the numeric slot is only the buffer index).
 constexpr uint32_t cb_input_tiles = 0;
 constexpr uint32_t cb_gamma_tiles = 1;
+constexpr uint32_t cb_slice_stat = 3;  // the OWNER's reduce output (reduce-scatter combine)
 constexpr uint32_t cb_gathered_partials = 4;
 constexpr uint32_t cb_rms_bcast = 5;
 constexpr uint32_t cb_rms_recip = 6;
@@ -122,7 +128,16 @@ void kernel_main() {
     // ragged hidden tail must cover ALL of it — every buffer is written by some
     // later block, and those tail columns are never touched again.
     constexpr uint32_t IN_CAPACITY_TILES = get_compile_time_arg_val(CT + 20);
-    constexpr auto in_args = TensorAccessorArgs<CT + 21>();
+    // Reduce-scatter combine (Perf 1).  NUM_OWNERS cores of the row-group each
+    // reduce OWN_ROWS = BLOCK_ROWS / NUM_OWNERS of the block's rows and funnel
+    // their finished stat tiles to the root, which still performs the single
+    // broadcast.  NUM_OWNERS == 1 is the pre-Perf-1 flat root (the measured
+    // carve-out at min(s, B) == 1): the owner's reduce then packs straight into
+    // cb_rms_bcast and there is no funnel at all.
+    constexpr uint32_t NUM_OWNERS = get_compile_time_arg_val(CT + 21);
+    constexpr uint32_t OWN_ROWS = get_compile_time_arg_val(CT + 22);
+    constexpr uint32_t STAT_READY_SEM_ID = get_compile_time_arg_val(CT + 23);
+    constexpr auto in_args = TensorAccessorArgs<CT + 24>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t BLOCK_TILES = BLOCK_ROWS * SLICE_HIDDEN_TILES;
@@ -159,6 +174,10 @@ void kernel_main() {
     // This core's hidden slice, in ELEMENTS.  Equals slice_base*32 everywhere
     // except a ROW_MAJOR shard, whose width granule is the L1 alignment, not 32.
     const uint32_t slice_elem_base = get_arg_val<uint32_t>(RT + 11);
+    const uint32_t is_owner = get_arg_val<uint32_t>(RT + 12);
+    const uint32_t my_first_row = get_arg_val<uint32_t>(RT + 13);
+    [[maybe_unused]] const uint32_t root_noc_x = get_arg_val<uint32_t>(RT + 14);
+    [[maybe_unused]] const uint32_t root_noc_y = get_arg_val<uint32_t>(RT + 15);
 
     Noc noc;
     CircularBuffer cb_input_obj(cb_input_tiles);
@@ -394,6 +413,15 @@ void kernel_main() {
     auto sender_pipe = mc.sender(noc);
     auto receiver_pipe = mc.receiver(noc);
     Semaphore<> gather_progress(GATHER_SEM_ID);
+    Semaphore<> stat_ready(STAT_READY_SEM_ID);
+    // cb_rms_bcast's BASE.  With the combine scattered nothing ever pushes this CB
+    // (the owners NoC-write into it), so its read pointer stays at the base for the
+    // kernel's life — and because every CB is declared on one common core set, the
+    // base is the same address on the root as it is here.
+    uint32_t rms_bcast_base = 0;
+    if constexpr (NUM_HIDDEN_SLICES > 1 && NUM_OWNERS > 1) {
+        rms_bcast_base = get_read_ptr(cb_rms_bcast);
+    }
 
     // =====================================================================
     // Block loop
@@ -512,42 +540,82 @@ void kernel_main() {
         // combine_block — reader half (only when the hidden axis is split)
         // =================================================================
         if constexpr (NUM_HIDDEN_SLICES > 1) {
-            if (is_root) {
-                // Gather landing: every core in the rect (this one included)
-                // NoC-writes its BLOCK_ROWS partials into page (row*s + c) and
-                // increments the progress counter once.
-                //
-                // `rd_gather_wait` is the ROOT's view of the incast: how long it
-                // sits waiting for all s contributors' partials to land.  It is
-                // occupancy — it charges both the contributors' own upstream
-                // Sum(x^2) latency and the NoC transfer of s*B stat tiles into
-                // this one core.  Paired with the writer's `wr_gather_issue` /
-                // `wr_gather_barrier` (the contributor's view) it separates
-                // "contributors are late" from "the incast is slow".
-                cb_reserve_back(cb_gathered_partials, NUM_HIDDEN_SLICES * BLOCK_ROWS);
+            // ---- gather landing (OWNERS): every core of the rect NoC-writes
+            //      its partial for row r into the owner of row r, at page
+            //      ((r % own_rows)*s + c), and increments that owner once.
+            //
+            // `rd_gather_wait` is an OWNER's view of the incast: how long it sits
+            // waiting for all s contributors' partials for ITS rows to land.  It
+            // is occupancy — it charges both the contributors' own upstream
+            // Sum(x^2) latency and the NoC transfer of s*own_rows stat tiles into
+            // this core.  Paired with the writer's `wr_gather_issue` /
+            // `wr_gather_barrier` (the contributor's view) it separates
+            // "contributors are late" from "the incast is slow".
+            if (is_owner) {
+                cb_reserve_back(cb_gathered_partials, NUM_HIDDEN_SLICES * OWN_ROWS);
                 {
                     MaybeDeviceZoneScope("rd_gather_wait");
                     gather_progress.wait_min((block + 1) * NUM_HIDDEN_SLICES);
                 }
-                cb_push_back(cb_gathered_partials, NUM_HIDDEN_SLICES * BLOCK_ROWS);
+                cb_push_back(cb_gathered_partials, NUM_HIDDEN_SLICES * OWN_ROWS);
+            }
 
+            // ---- the funnel: each owner's OWN_ROWS finalized 1/rms tiles into
+            //      the root's cb_rms_bcast at page `my_first_row`, then one
+            //      atomic so the root knows the block is fully assembled.  One
+            //      contiguous write of OWN_ROWS tiles, not OWN_ROWS writes.
+            if constexpr (NUM_OWNERS > 1) {
+                if (is_owner) {
+                    {
+                        // Waiting on THIS OWNER's own reduce + finalize.
+                        MaybeDeviceZoneScope("rd_stat_funnel_wait");
+                        cb_wait_front(cb_slice_stat, OWN_ROWS);
+                    }
+                    {
+                        MaybeDeviceZoneScope("rd_stat_funnel");
+                        noc_async_write(
+                            get_read_ptr(cb_slice_stat),
+                            get_noc_addr(root_noc_x, root_noc_y, rms_bcast_base + my_first_row * STAT_TILE_BYTES),
+                            OWN_ROWS * STAT_TILE_BYTES);
+                        noc_async_write_barrier();
+                        stat_ready.up(noc, root_noc_x, root_noc_y, 1);
+                    }
+                    cb_pop_front(cb_slice_stat, OWN_ROWS);
+                }
+            }
+
+            if (is_root) {
                 // Broadcast the finalized rsqrt back over the rect (loopback
                 // delivers to this core's own cb_rms_recip too).
-                {
-                    // Waiting on the root's OWN compute to finish the combine
-                    // reduce + finalize.  High here == the root's compute is the
-                    // critical path, not the NoC.
-                    MaybeDeviceZoneScope("rd_bcast_wait_stat");
-                    cb_wait_front(cb_rms_bcast, BLOCK_ROWS);
+                uint32_t bcast_src;
+                if constexpr (NUM_OWNERS > 1) {
+                    {
+                        // Waiting for all NUM_OWNERS funnels.  High here == some
+                        // owner is late, i.e. the combine is still the critical
+                        // path — but now spread over NUM_OWNERS cores.
+                        MaybeDeviceZoneScope("rd_bcast_wait_stat");
+                        stat_ready.wait_min((block + 1) * NUM_OWNERS);
+                    }
+                    bcast_src = rms_bcast_base;
+                } else {
+                    {
+                        // Waiting on the root's OWN compute to finish the combine
+                        // reduce + finalize.  High here == the root's compute is
+                        // the critical path, not the NoC.
+                        MaybeDeviceZoneScope("rd_bcast_wait_stat");
+                        cb_wait_front(cb_rms_bcast, BLOCK_ROWS);
+                    }
+                    bcast_src = get_read_ptr(cb_rms_bcast);
                 }
                 cb_reserve_back(cb_rms_recip, BLOCK_ROWS);
                 {
                     MaybeDeviceZoneScope("rd_bcast_send");
-                    sender_pipe.send(
-                        get_read_ptr(cb_rms_bcast), get_write_ptr(cb_rms_recip), BLOCK_ROWS * STAT_TILE_BYTES);
+                    sender_pipe.send(bcast_src, get_write_ptr(cb_rms_recip), BLOCK_ROWS * STAT_TILE_BYTES);
                 }
                 cb_push_back(cb_rms_recip, BLOCK_ROWS);
-                cb_pop_front(cb_rms_bcast, BLOCK_ROWS);
+                if constexpr (NUM_OWNERS == 1) {
+                    cb_pop_front(cb_rms_bcast, BLOCK_ROWS);
+                }
             } else {
                 cb_reserve_back(cb_rms_recip, BLOCK_ROWS);
                 {

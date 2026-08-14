@@ -2,9 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // rms_norm writer (NoC1).  Realizes `store_block` and the *contributor half* of
-// `combine_block` (the gather: this core's per-slice partial -> the row-group
-// root's cb_gathered_partials page (row * s + slice_index), plus one progress
-// increment).
+// `combine_block` (the gather: this core's per-slice partial for row r -> the
+// core that OWNS row r, at cb_gathered_partials page ((r % own_rows) * s +
+// slice_index), plus one progress increment per owner).
+//
+// Perf 1 made the combine reduce-scattered: the block's rows are partitioned
+// across NUM_OWNERS cores of the row-group rather than all reduced by the root,
+// because the root was the group's critical path (measured: 56 of 64 cores idle
+// 61.3 us of a 73.6 us wall waiting for it).  At NUM_OWNERS == 1 every expression
+// here collapses to the pre-Perf-1 flat-root form.
 //
 // Raw-API notes: the gather is a scatter of s DIFFERENT sources into s DIFFERENT
 // destination pages on one core — the opposite shape from mcast_pipe's
@@ -13,8 +19,8 @@
 // pointer, which is valid because every CB in this program is declared on one
 // common core set, so the L1 map is identical on every participating core.
 //
-// The root is NOT special-cased: it writes its own partial through the same NoC
-// path (a local loopback write) and increments the same counter, so the root
+// An owner is NOT special-cased: it writes its own partial through the same NoC
+// path (a local loopback write) and increments the same counter, so an owner
 // waits for exactly s arrivals and the code stays uniform.
 
 #include <cstdint>
@@ -50,7 +56,15 @@ void kernel_main() {
     // stick write (ROW_MAJOR — untilize's staging drains into the shard).
     constexpr uint32_t IS_SHARDED = get_compile_time_arg_val(10);
     constexpr uint32_t SHARD_PAGE_BYTES = get_compile_time_arg_val(11);
-    constexpr auto out_args = TensorAccessorArgs<12>();
+    // Reduce-scatter combine (Perf 1): the row-group's `own_rows`-row slices are
+    // reduced by NUM_OWNERS different cores instead of all by the root, so this
+    // core's B partials scatter to NUM_OWNERS destinations.  At NUM_OWNERS == 1
+    // every expression below collapses to the pre-Perf-1 form (owner 0 == the
+    // root, page == r*s + slice_index, one semaphore increment), so this is ONE
+    // code path, not a dispatch.
+    constexpr uint32_t NUM_OWNERS = get_compile_time_arg_val(12);
+    constexpr uint32_t OWN_ROWS = get_compile_time_arg_val(13);
+    constexpr auto out_args = TensorAccessorArgs<14>();
 
     constexpr uint32_t RM_STICK_PITCH = SLICE_HIDDEN_TILES * TILE_DIM * OUT_ELEM_BYTES;
     static_assert(RM_STICK_PITCH % 16 == 0, "ROW_MAJOR staging stick pitch must be L1-aligned");
@@ -70,11 +84,16 @@ void kernel_main() {
     const uint32_t slice_base = get_arg_val<uint32_t>(4);
     const uint32_t valid_tiles = get_arg_val<uint32_t>(5);
     const uint32_t valid_w = get_arg_val<uint32_t>(6);
-    const uint32_t root_noc_x = get_arg_val<uint32_t>(7);
-    const uint32_t root_noc_y = get_arg_val<uint32_t>(8);
+    // Kept for the ROOT's identity; the gather itself addresses OWNERS (owner 0
+    // is the root), so these are only read on paths that need the root by name.
+    [[maybe_unused]] const uint32_t root_noc_x = get_arg_val<uint32_t>(7);
+    [[maybe_unused]] const uint32_t root_noc_y = get_arg_val<uint32_t>(8);
     const uint32_t slice_index = get_arg_val<uint32_t>(9);
     const uint32_t total_sticks = get_arg_val<uint32_t>(10);
     const uint32_t slice_elem_base = get_arg_val<uint32_t>(11);
+    // The NUM_OWNERS owner cores' virtual coords, in slice order (owner 0 is the
+    // group origin == the broadcast root).
+    const uint32_t owner_xy_base = 12;
 
     Noc noc;
     const auto output_accessor = TensorAccessor(out_args, output_addr);
@@ -111,10 +130,14 @@ void kernel_main() {
                 // scales with the TRANSACTION COUNT (B per contributor).
                 MaybeDeviceZoneScope("wr_gather_issue");
                 for (uint32_t r = 0; r < BLOCK_ROWS; ++r) {
-                    const uint32_t page = r * NUM_HIDDEN_SLICES + slice_index;
+                    const uint32_t owner = r / OWN_ROWS;
+                    const uint32_t page = (r % OWN_ROWS) * NUM_HIDDEN_SLICES + slice_index;
                     noc_async_write(
                         src + r * STAT_TILE_BYTES,
-                        get_noc_addr(root_noc_x, root_noc_y, gather_base + page * STAT_TILE_BYTES),
+                        get_noc_addr(
+                            get_arg_val<uint32_t>(owner_xy_base + 2 * owner),
+                            get_arg_val<uint32_t>(owner_xy_base + 2 * owner + 1),
+                            gather_base + page * STAT_TILE_BYTES),
                         STAT_TILE_BYTES);
                 }
             }
@@ -125,7 +148,19 @@ void kernel_main() {
                 MaybeDeviceZoneScope("wr_gather_barrier");
                 noc_async_write_barrier();
             }
-            gather_progress.up(noc, root_noc_x, root_noc_y, 1);
+            // One atomic per owner.  Deliberately NOT `noc_semaphore_inc_multicast`,
+            // which is O(1) in `s` and measures 1.05x faster at s=8 but whose PATH
+            // RESERVATION serializes against every other row-group's: on a 2-D
+            // row-group it inverts the whole result (s=32: 149716 ns vs 31073 ns
+            // for these unicast atomics; s=16: 99127 vs 40524).  Same topology,
+            // same bytes, signal only.
+            for (uint32_t o = 0; o < NUM_OWNERS; ++o) {
+                gather_progress.up(
+                    noc,
+                    get_arg_val<uint32_t>(owner_xy_base + 2 * o),
+                    get_arg_val<uint32_t>(owner_xy_base + 2 * o + 1),
+                    1);
+            }
             cb_pop_front(cb_sq_partials, BLOCK_ROWS);
         }
 

@@ -65,6 +65,54 @@ def _fanin_slice_cap(hidden_tiles: int) -> int:
     return max(1, round(FANIN_BALANCE_K * (hidden_tiles**0.5)))
 
 
+def _combine_owners(num_slices: int, block_rows: int) -> int:
+    """How many cores of the row-group REDUCE the gathered partials (Perf 1).
+
+    The combine used to funnel every contributor's `block_rows` partials into ONE
+    root, which then reduced all `s * block_rows` stat tiles and broadcast the
+    result.  That makes the root the group's critical path: measured on the
+    perf-flagged BLOCK-shard prefill geometry, the 56 non-root cores of a 64-core
+    grid spent **61.3 us of a 73.6 us wall** idle in `ReceiverPipe::receive()`,
+    and a cumulative ablation attributed **42.0 us to the root's reduce** and
+    **12.0 us to the 1 MB incast converging on that one core** (which measured
+    87 GB/s, i.e. already at the single-core L1 write-port roofline, so the
+    transfer had no headroom -- only the topology did).
+
+    So the reduce is SCATTERED: owner `o` (== the o-th core of the group) owns the
+    block's rows `[o*own_rows, (o+1)*own_rows)`, gathers only those, reduces and
+    finalizes them, and funnels its `own_rows` finished tiles to the root, which
+    performs the one unchanged broadcast.  Both the per-owner reduce payload and
+    the per-owner incast shrink by this factor.
+
+    MEASURED in isolation (perf_experiments/reduce_scatter_combine, S=4):
+        s=2  B=8   46216 -> 36142  1.28x      s=8  B=4   35074 -> 20783  1.69x
+        s=4  B=8   56892 -> 30452  1.87x      s=8  B=32  L1-infeasible -> 25040
+        s=8  B=8   64965 -> 28890  2.25x      s=8  B=1   12579 -> 13754  0.91x
+        s=16 B=8   81454 -> 40709  2.00x      s=32 B=1   19586 -> 20699  0.95x
+        s=28 B=8   53146 -> 26285  2.02x
+        s=32 B=8   57169 -> 31028  1.84x
+    Arithmetic is bit-identical (sum-then-collapse == collapse-then-sum), so this
+    is a pure topology win, never a precision trade.
+
+    `min(s, block_rows) == 1` is the ONE carve-out and it is earned by that
+    measured regression: with a single owner there is nothing to scatter, so the
+    scheme degenerates to the old flat root PLUS one funnel hop and one extra
+    semaphore (-9% at s=8, -5% at s=32).  Returning 1 there selects exactly the
+    pre-Perf-1 program -- it is the same code path with `own_rows == block_rows`,
+    not a second implementation.  That case is precisely `block_rows == 1`, i.e.
+    the whole decode regime.
+
+    `own_rows` must be uniform (the gather page index and the funnel offset are
+    both derived from it on every core), so the owner count is clamped to a
+    DIVISOR of block_rows.
+    """
+    cap = min(num_slices, block_rows)
+    for d in range(cap, 0, -1):
+        if block_rows % d == 0:
+            return d
+    return 1
+
+
 # Fuse `scale_block` + `apply_gamma_block` into one DEST window (compute kernel's
 # GAMMA_FUSED).  The fused pass costs the same two FPU ops but halves the L1
 # crossings — x*rsqrt is never packed out and read back — at the price of ONE
@@ -183,8 +231,14 @@ DRAM_ALIGN_BYTES = 64
 CB_INPUT_TILES = 0
 CB_GAMMA_TILES = 1
 CB_SQ_PARTIALS = 2
-# (index 3 intentionally unused: cb_slice_stat is elided — the collapse is fused
-#  into the root's combine, so contributors ship raw cb_sq_partials tiles.)
+# The OWNER's reduce output (Perf 1's reduce-scatter combine): `own_rows` finalized
+# 1/rms tiles, which the owner's reader then funnels into the root's cb_rms_bcast.
+# Declared only when the combine is actually scattered (num_owners > 1); at
+# num_owners == 1 the reduce writes straight to cb_rms_bcast as it always did.
+# (The name is op_design.md's `cb_slice_stat`, reused for its real purpose: the
+#  contributor-side within-tile collapse it originally named is still fused into
+#  the owner's reduce, so contributors keep shipping raw cb_sq_partials tiles.)
+CB_SLICE_STAT = 3
 CB_GATHERED_PARTIALS = 4
 CB_RMS_BCAST = 5
 CB_RMS_RECIP = 6
@@ -218,6 +272,11 @@ def is_sharded(tensor) -> bool:
 SEM_MCAST_READY = 0
 SEM_MCAST_CONSUMED = 1
 SEM_GATHER_PROGRESS = 2
+# The reduce-scatter funnel's edge: each owner increments the ROOT once per block
+# after its `own_rows` finalized stat tiles have landed in the root's
+# cb_rms_bcast, so the root knows the whole block is assembled before it
+# broadcasts.  Only live when num_owners > 1.
+SEM_STAT_READY = 3
 
 
 def _div_up(a: int, b: int) -> int:
@@ -305,7 +364,12 @@ def _footprint_bytes(block_rows, slice_tiles, num_slices, *, is_row_major, has_g
         total += s_ * bytes_["gamma_tile"]  # cb_gamma_tiles
     total += b * bytes_["stat_tile"]  # cb_sq_partials
     if s > 1:
-        total += s * b * bytes_["stat_tile"]  # cb_gathered_partials
+        # The gather landing is sized by the rows ONE OWNER holds, not the whole
+        # block: the combine is reduce-scattered across `_combine_owners` cores
+        # (Perf 1).  At num_owners == 1 this is the old s*b.
+        own = b // _combine_owners(s, b)
+        total += s * own * bytes_["stat_tile"]  # cb_gathered_partials
+        total += own * bytes_["stat_tile"]  # cb_slice_stat (owner's reduce output)
         total += b * bytes_["stat_tile"]  # cb_rms_bcast
     total += b * bytes_["stat_tile"]  # cb_rms_recip
     total += 3 * bytes_["bf16_tile"]  # cb_scaler + cb_w_mask + cb_thread_sync
@@ -350,7 +414,9 @@ def _footprint_bytes_sharded(
         total += s_ * bytes_["gamma_tile"]  # cb_gamma_tiles
     total += b * bytes_["stat_tile"]  # cb_sq_partials
     if s > 1:
-        total += s * b * bytes_["stat_tile"]  # cb_gathered_partials
+        own = b // _combine_owners(s, b)
+        total += s * own * bytes_["stat_tile"]  # cb_gathered_partials
+        total += own * bytes_["stat_tile"]  # cb_slice_stat
         total += b * bytes_["stat_tile"]  # cb_rms_bcast
     total += b * bytes_["stat_tile"]  # cb_rms_recip
     total += 3 * bytes_["bf16_tile"]  # cb_scaler + cb_w_mask + cb_thread_sync
@@ -665,6 +731,11 @@ def create_program_descriptor(
     S_COUNT = plan["num_hidden_slices"]
     S = plan["slice_hidden_tiles"]
     B = plan["block_rows"]
+    # Reduce-scatter combine (Perf 1): how many cores of the row-group reduce.
+    # 1 == the pre-Perf-1 flat root, which is what the measured carve-out at
+    # min(s, B) == 1 selects; see _combine_owners.
+    NUM_OWNERS = _combine_owners(S_COUNT, B) if S_COUNT > 1 else 1
+    OWN_ROWS = B // NUM_OWNERS
     in_depth = plan["in_depth"]
     rect_w, rect_h = plan["rect_w"], plan["rect_h"]
     sharded = plan["sharded"]
@@ -864,7 +935,16 @@ def create_program_descriptor(
         )
         cbs.append(_cb(CB_GAMMA_TILES, S + gamma_scratch, gamma_tile, gamma.dtype))
     if S_COUNT > 1:
-        cbs.append(_cb(CB_GATHERED_PARTIALS, S_COUNT * B, stat_tile, ttnn.float32))
+        # Sized by the rows ONE OWNER holds: with the combine reduce-scattered
+        # this is s*B/num_owners pages, not s*B.  At the perf-flagged BLOCK
+        # prefill geometry that is 32 KB instead of 1 MB, which is also what
+        # frees the L1 the block ladder wants (see _combine_owners).
+        cbs.append(_cb(CB_GATHERED_PARTIALS, S_COUNT * OWN_ROWS, stat_tile, ttnn.float32))
+        if NUM_OWNERS > 1:
+            cbs.append(_cb(CB_SLICE_STAT, OWN_ROWS, stat_tile, ttnn.float32))
+        # cb_rms_bcast is the broadcast SOURCE on the root.  At num_owners == 1 the
+        # owner's reduce packs into it directly; above 1 it is the funnel's landing
+        # buffer, NoC-written by the owners at page `owner*own_rows`.
         cbs.append(_cb(CB_RMS_BCAST, B, stat_tile, ttnn.float32))
     if is_row_major:
         cbs.append(_cb(CB_RM_STAGE_IN, rm_in_depth * S, in_tile, input_tensor.dtype))
@@ -913,6 +993,9 @@ def create_program_descriptor(
         in_shard_page,
         1 if gamma_row0_only else 0,
         in_capacity_tiles,
+        NUM_OWNERS,
+        OWN_ROWS,
+        SEM_STAT_READY,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
@@ -934,6 +1017,8 @@ def create_program_descriptor(
         DM_CHUNK_TILES,
         1 if sharded else 0,
         out_shard_page,
+        NUM_OWNERS,
+        OWN_ROWS,
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
@@ -957,6 +1042,8 @@ def create_program_descriptor(
         in_capacity_tiles,
         1 if gamma_fused else 0,
         dest_block_tiles,
+        NUM_OWNERS,
+        OWN_ROWS,
     ]
 
     # ---- per-core runtime args ----
@@ -973,6 +1060,13 @@ def create_program_descriptor(
     for idx, g in enumerate(active_groups):
         ox, oy = g["origin"]
         root_virt = device.worker_core_from_logical_core(ttnn.CoreCoord(ox, oy))
+        # The owners are the FIRST num_owners cores of the group in slice order,
+        # so owner 0 is the group origin == the broadcast root.  Every core needs
+        # all of their coords: its writer scatters row r to owner r // own_rows.
+        owner_virt = [
+            device.worker_core_from_logical_core(ttnn.CoreCoord(cx_, cy_)) for (cx_, cy_) in g["cores"][:NUM_OWNERS]
+        ]
+        owner_xy = [v for o in owner_virt for v in (o.x, o.y)]
         mc = mcast_by_group.get(idx)
         for slice_index, (cx, cy) in enumerate(g["cores"]):
             slice_base = slice_index * S  # this core's hidden slice, in TILES
@@ -1002,6 +1096,10 @@ def create_program_descriptor(
                 mask_valid_w if (mask_enabled and owns_tail) else 0,
                 g["local_sticks"],
                 slice_elem_base,
+                1 if slice_index < NUM_OWNERS else 0,  # is_owner
+                slice_index * OWN_ROWS,  # my_first_row
+                root_virt.x,
+                root_virt.y,
             ]
 
             writer_rt[cx][cy] = [
@@ -1017,11 +1115,11 @@ def create_program_descriptor(
                 slice_index,
                 g["local_sticks"],
                 slice_elem_base,
-            ]
+            ] + owner_xy
 
             compute_rt[cx][cy] = [
                 g["num_blocks"],
-                is_root,
+                1 if slice_index < NUM_OWNERS else 0,  # is_owner (owner 0 == root)
                 mask_local_col,
                 inv_w_bits,
                 eps_bits,
@@ -1054,6 +1152,7 @@ def create_program_descriptor(
         ttnn.SemaphoreDescriptor(id=SEM_MCAST_READY, core_ranges=cb_cores_crs, initial_value=0),
         ttnn.SemaphoreDescriptor(id=SEM_MCAST_CONSUMED, core_ranges=cb_cores_crs, initial_value=0),
         ttnn.SemaphoreDescriptor(id=SEM_GATHER_PROGRESS, core_ranges=cb_cores_crs, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=SEM_STAT_READY, core_ranges=cb_cores_crs, initial_value=0),
     ]
 
     return ttnn.ProgramDescriptor(
