@@ -2752,6 +2752,16 @@ _THERMAL_WAIT_S = float(os.environ.get("PERF_MCP_THERMAL_WAIT_S", "900"))
 _THERMAL_POLL_S = float(os.environ.get("PERF_MCP_THERMAL_POLL_S", "15"))
 _THERMAL_RETRIES = int(os.environ.get("PERF_MCP_THERMAL_RETRIES", "3"))
 _THERMAL_MARGIN_C = float(os.environ.get("PERF_MCP_THERMAL_MARGIN_C", "3"))
+# AFTER A CLAMPED READING, COOL PROPERLY BEFORE TRYING AGAIN. The headroom wait is bounded and
+# GIVES UP -- it runs anyway -- so on a board that cannot reach the threshold in 900 s every retry
+# starts hotter than the last: measured on Voxtral 2026-08-14, the board went 79C -> 96C across a
+# run while each attempt "waited" and then added its own heat. Four such attempts cost an hour and
+# produced nothing. This target is ABSOLUTE and the wait is not abandoned on a timer: a retry is
+# only worth taking from a genuinely cold board, and if the board never gets there the run should
+# say so rather than burn attempts at 800 MHz.
+_COOLDOWN_TO_C = float(os.environ.get("PERF_MCP_COOLDOWN_TO_C", "60"))
+_COOLDOWN_MAX_S = float(os.environ.get("PERF_MCP_COOLDOWN_MAX_S", "1800"))
+_COOLDOWN_POLL_S = float(os.environ.get("PERF_MCP_COOLDOWN_POLL_S", "20"))
 
 # Fallback only. The real detector is agent.probes.detect_overheat, which already existed for the
 # tracy path; this list is used if that import fails, so a broken import degrades to a weaker check
@@ -2797,6 +2807,58 @@ def _load_thermal_profile():
         return doc if isinstance(doc, dict) else {}
     except Exception:  # noqa: BLE001
         return {}
+
+
+def _cooldown_after_clamp(target_c: float = 0.0) -> tuple:
+    """Hold until the board is genuinely cold, after the hardware has been observed throttling.
+
+    THE HEADROOM WAIT GIVES UP; THIS ONE DOES NOT (until its own bound). _wait_for_thermal_headroom
+    is bounded at 900 s and then runs regardless, which is right before ordinary device work -- a
+    capped profile compared against other capped profiles survives a clamp. It is wrong after a
+    reading has ALREADY been discarded for clamping: retrying from a hot board reproduces the clamp,
+    and the retry itself adds heat.
+
+    Measured on Voxtral 2026-08-14: the board climbed 79C -> 96C over one run, each attempt waiting
+    its full 900 s, giving up, measuring at 800 MHz instead of 1350, and having its reading thrown
+    away. Four attempts, one hour, nothing measured, and the board hotter at the end than the start.
+
+    The target is ABSOLUTE (default 60C) rather than "entry minus a margin", because a relative
+    target on a board sitting at 96C just asks for 91C -- still clamped. Progress is printed every
+    poll so a long cooldown is visible rather than looking like a hang, and it reports the
+    temperature it reached so the caller can say why a retry was skipped.
+    """
+    target = float(target_c or _COOLDOWN_TO_C)
+    t0 = time.time()
+    last = _read_die_temp_c()
+    if last is not None and last <= target:
+        return True, last
+    print(
+        "  [thermal-gate] cooling to %.1fC before retrying (now %s) -- the previous reading was "
+        "discarded for a clamped clock, and a retry from a hot board reproduces it"
+        % (target, ("%.1fC" % last) if last is not None else "unknown"),
+        file=sys.stderr,
+        flush=True,
+    )
+    while time.time() - t0 < _COOLDOWN_MAX_S:
+        time.sleep(_COOLDOWN_POLL_S)
+        cur = _read_die_temp_c()
+        if cur is None:
+            return True, None  # telemetry we cannot read must not become a board we refuse to use
+        if cur <= target:
+            print(
+                "  [thermal-gate] cooled to %.1fC after %.0fs" % (cur, time.time() - t0),
+                file=sys.stderr,
+                flush=True,
+            )
+            return True, cur
+        if last is None or abs(cur - last) >= 1.0:
+            print(
+                "  [thermal-gate] cooling: %.1fC (target %.1fC, %.0fs elapsed)" % (cur, target, time.time() - t0),
+                file=sys.stderr,
+                flush=True,
+            )
+            last = cur
+    return False, last
 
 
 def _record_thermal_observation(start_temp_c, clamped):
@@ -2967,6 +3029,19 @@ def _measure_full_pipeline_guarded():
                 file=sys.stderr,
                 flush=True,
             )
+            # A RETRY IS ONLY WORTH TAKING FROM A COLD BOARD. Going straight back in reproduces the
+            # clamp and adds heat; the headroom wait ahead of the next attempt is bounded and would
+            # give up again. Hold for a real cooldown instead, and stop retrying if it never comes.
+            _cool_ok, _cool_c = _cooldown_after_clamp()
+            if not _cool_ok:
+                return (
+                    None,
+                    None,
+                    "board did not cool to %.1fC within %.0fs after a clamped reading (reached %s); "
+                    "measuring again would only produce another clamped number"
+                    % (_COOLDOWN_TO_C, _COOLDOWN_MAX_S, ("%.1fC" % _cool_c) if _cool_c else "unknown"),
+                    None,
+                )
             continue
         return float(ms), method, None, path
     _lim = _clamp_threshold_c()

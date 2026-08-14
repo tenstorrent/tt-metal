@@ -52,8 +52,13 @@ def mcp(tmp_path, monkeypatch):
     return m
 
 
-def _feed(mcp, monkeypatch, readings, clamped=()):
-    """Each reading is one run; `clamped` marks which run indices report a clamped clock."""
+def _feed(mcp, monkeypatch, readings, clamped=(), cooled=True):
+    """Each reading is one run; `clamped` marks which run indices report a clamped clock.
+
+    The post-clamp cooldown is stubbed here because these tests are about WHICH reading is kept, not
+    about the wait. Left real, they read the actual die temperature and sleep against it -- on a busy
+    board that is a 30-minute test, which is how this stub came to be needed.
+    """
     seq, calls = list(readings), {"n": 0}
 
     def fake():
@@ -67,6 +72,7 @@ def _feed(mcp, monkeypatch, readings, clamped=()):
 
     monkeypatch.setattr(mcp, "_run_full_pipeline_ms", fake)
     monkeypatch.setattr(mcp, "_wait_for_thermal_headroom", lambda: (True, 65.0))
+    monkeypatch.setattr(mcp, "_cooldown_after_clamp", lambda *_a, **_k: (bool(cooled), 55.0))
     return calls
 
 
@@ -92,6 +98,17 @@ def test_an_all_clamped_board_fails_loudly(mcp, monkeypatch):
     _feed(mcp, monkeypatch, [68.3] * 12, clamped=set(range(12)))
     ms, _method, err, _path = mcp._measure_full_pipeline_guarded()
     assert ms is None and "clamped" in (err or "").lower(), (ms, err)
+
+
+def test_a_board_that_will_not_cool_stops_after_the_first_clamp(mcp, monkeypatch):
+    """THE RUN-13 CASE. Four attempts, an hour, every reading discarded, board 79C -> 96C. If the
+    board cannot get back to the cooldown target there is nothing to be gained by measuring again:
+    stop at the first clamp and say why, instead of spending three more runs proving it."""
+    calls = _feed(mcp, monkeypatch, [68.3] * 12, clamped=set(range(12)), cooled=False)
+    ms, _method, err, _path = mcp._measure_full_pipeline_guarded()
+    assert ms is None
+    assert calls["n"] == 1, "kept measuring a board that never reached the cooldown target: %s" % calls
+    assert "cool" in (err or "").lower(), err
 
 
 def test_retries_are_bounded(mcp, monkeypatch):
