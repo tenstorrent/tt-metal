@@ -1,48 +1,42 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// Expression-tree register allocation for unified.hpp.
+// Expression-tree register allocation.
 //
-// This header is deliberately domain-free: it knows nothing about circular
-// buffers, the NOC, or Tensix. It provides the tree shapes, a compile-time
-// register allocator, and the emission walk. unified.hpp supplies the policies.
+// Deliberately domain-free: it knows nothing about circular buffers, the NOC, or
+// Tensix. It provides the tree shapes, a compile-time register allocator, and the
+// emission walk; tt/unified_math.hpp supplies the policies.
 //
 // A compute expression is a tree encoded in its own type, e.g.
 //     x + y + z   ==>   Bin<AddOp, Bin<AddOp, Leaf, Leaf>, Leaf>
 // so there is no tree to *build* -- only to walk.
 //
-// ---------------------------------------------------------------------------
-// POLICIES the domain header must satisfy
+// POLICIES the domain header must satisfy:
 //
-//   Leaf node L:
-//       static constexpr uint32_t need = 1;          // DST slots it occupies
-//       void emit(uint32_t dst, uint32_t tile) const;  // materialise tile -> dst
-//
+//   Leaf node L:   static constexpr uint32_t need = 1;            // DST slots
+//                  void emit(uint32_t dst, uint32_t tile) const;  // tile -> dst
 //   Binary op Op:  static void apply(uint32_t lhs_dst, uint32_t rhs_dst, uint32_t out_dst);
 //   Unary  op Op:  static void apply(uint32_t src_dst, uint32_t out_dst);
 //
-// ---------------------------------------------------------------------------
-// ALLOCATION
-//
-// Slots are assigned by Sethi-Ullman numbering. A binary node evaluates its
-// left child into `base`; once that finishes only the child's *result* is live,
-// so the right child may start at `base + 1` and reuse everything above it.
-// The op then folds in place back into `base`:
+// ALLOCATION is Sethi-Ullman numbering. A binary node evaluates its left child
+// into `base`; once that finishes only the child's *result* is live, so the right
+// child may start at `base + 1` and reuse everything above it. The op then folds
+// in place back into `base`:
 //
 //     need(leaf)   = L::need
 //     need(unary)  = need(child)
 //     need(binary) = max(need(L), 1 + need(R))
 //
-// The consequence worth knowing: a left-associated chain of any length costs
-// two slots, because each intermediate is consumed immediately.
+// The consequence worth knowing: a left-associated chain of any length costs two
+// slots, because each intermediate is consumed immediately.
 //
 //     x + y + z + w   ->  2 slots
 //     x + (y + (z+w)) ->  4 slots
 //
-// (Evaluating the heavier child first would flatten the second case too, but
-// that requires commutativity, so it is left out.)
+// (Evaluating the heavier child first would flatten the second case too, but that
+// requires commutativity, so it is left out.)
 //
 // Every slot number is a template parameter, so the emitted code contains only
-// compile-time constants -- there is no base-offset arithmetic at run time.
+// compile-time constants -- no base-offset arithmetic at run time.
 
 #pragma once
 
@@ -66,9 +60,8 @@ struct Un {
     Child child;
 };
 
-// Tag for "this type participates in compute expressions". Domain leaf types
-// and the shapes above opt in; it keeps the operator overloads from swallowing
-// unrelated types.
+// Tag for "this type participates in compute expressions", to keep the operator
+// overloads from swallowing unrelated types.
 template <typename T, typename = void>
 struct is_expr : std::false_type {};
 
@@ -81,11 +74,11 @@ struct is_expr<Bin<Op, L, R>> : std::true_type {};
 template <typename Op, typename C>
 struct is_expr<Un<Op, C>> : std::true_type {};
 
-// ------------------------------------------------------------ kinds -------
+// ------------------------------------------------------------- kinds ------
 //
 // A fusion "kind" selects the driver strategy: how the enclosing loop is shaped
-// and who owns the DST register file. Expression trees default to TreeKind
-// (freely allocatable DST); a node may override by declaring `fusion_kind`.
+// and who owns the DST register file. Trees default to TreeKind (freely
+// allocatable DST); a node may override by declaring `fusion_kind`.
 
 struct TreeKind {};
 
@@ -104,14 +97,10 @@ using kind_of_t = typename kind_of<Node>::type;
 
 // ------------------------------------------------------- unary chains -----
 //
-// An ordered list of unary ops applied *in place* to slots that someone else
-// owns. Used by fusion kinds whose hardware unit consumes the whole register
-// file, so there is nothing to allocate and nothing to copy: the ops rewrite
-// the accumulator where it already sits.
-//
-// Ops in a chain must provide `apply_in_place(uint32_t slot)`. The chain folds
-// into the slot it is given, so a chain is exactly the right shape for an
-// epilogue on an accumulator that lives in DST.
+// An ordered list of unary ops applied *in place* to slots someone else owns.
+// Used by fusion kinds whose hardware unit consumes the whole register file, so
+// there is nothing to allocate and nothing to copy: the ops rewrite the
+// accumulator where it already sits. Ops must provide `apply_in_place(slot)`.
 
 template <typename... Ops>
 struct UnaryChain {
@@ -153,7 +142,7 @@ struct Need<Bin<Op, L, R>> {
 
 // ------------------------------------------------------------ emission ---
 //
-// Emit<Base, Node>::result is the slot holding the node's value.
+// Emit<Base, Node>::result is the slot holding the node's value;
 // Emit<Base, Node>::run(node, tile) emits the ops for one tile.
 
 template <uint32_t Base, typename Node>
