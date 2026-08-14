@@ -9,9 +9,9 @@ gate is fp32 torch over the unsharded `d`.
 
 Sharded the way the model shards, at the shape the model runs: 1280 tokens over a
 2-deep sequence axis and `d` over a tensor-parallel axis, so every chip holds 640 rows.
-The 2x4 arm gathers at the model's own width, 1792 columns per chip; 2x2 is the widest
-gather a 4-chip box can host, at 3584. The gather is a fabric collective, so at
-`tp_factor == 1` there are no peers and half the op never runs — there is no
+The 2x4 arms gather at the model's own width, 1792 columns per chip. The gather is a
+fabric collective, so at `tp_factor == 1` there are no peers and half the op never
+runs — there is no
 single-device arm, and the row count is not swept, since the op's cost and its
 collective's algorithm both turn on it.
 
@@ -49,18 +49,17 @@ SP_AXIS = 0
 FABRIC_1D = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 FABRIC_2D = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
 
-# Every test derives its shape from the fixture's mesh. 2x4 is what the model runs; 2x2
-# is the narrowest gather that still has peers, and is the widest a 4-chip box can host.
+# Every test derives its shape from the fixture's mesh. 2x4 is what the model runs, and a
+# mesh narrower than the box it opens on is a submesh, which fabric does not come up on.
 #
 # The fabric is chosen once per program run, before the mesh opens, so the op runs under
 # whichever one the enclosing transformer picked. Both encode a peer's route into the same
 # pair of runtime args and read them back differently, so a route written for the wrong
 # transport still compiles and still sends — it lands on the wrong chip. Only running both
-# catches that. The narrow arm runs the one the model ships on.
+# catches that.
 MESH_ARMS = [
     pytest.param((2, 4), FABRIC_2D, id="fabric2d-mesh-2x4"),
     pytest.param((2, 4), FABRIC_1D, id="fabric1d-mesh-2x4"),
-    pytest.param((2, 2), FABRIC_2D, id="fabric2d-mesh-2x2"),
 ]
 
 

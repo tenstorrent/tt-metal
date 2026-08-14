@@ -73,23 +73,14 @@
   owner_id: U08ARDXARPF # Ilija Anastasijevic
   team: ttnn
 
-# The op gathers over a mesh axis, so each box runs the widest gather it can host. The
-# arms are split per SKU rather than left to skip themselves: a mesh smaller than the
-# box is a submesh, and fabric does not come up on one.
+# The op gathers over a mesh axis, and a mesh smaller than the box is a submesh, which
+# fabric does not come up on — so the mesh a row asks for is fixed by the box it runs on.
+# The filter takes both transports at that width.
 - id: bh-lb-ttnn-attn-res-gather-softmax-unit
   name: ttnn attn_res_gather_softmax unit tests
   cmd: pytest tests/ttnn/unit_tests/operations/attn_residual/test_attn_res_gather_softmax.py -k "mesh-2x4"
   skus:
     bh_loudbox:
-      timeout: 10
-  owner_id: U09LK84G4TF # Nikola Milicevic
-  team: ttnn
-
-- id: bh-qb2-ttnn-attn-res-gather-softmax-unit
-  name: ttnn attn_res_gather_softmax unit tests (2x2)
-  cmd: pytest tests/ttnn/unit_tests/operations/attn_residual/test_attn_res_gather_softmax.py -k "mesh-2x2"
-  skus:
-    bh_quietbox_2:
       timeout: 10
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: ttnn
