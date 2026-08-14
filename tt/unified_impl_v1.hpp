@@ -13,13 +13,11 @@
 namespace tt {
 namespace unified {
 
-// ---------------------------------------------------------------------------
-// Geometry
+// --- Geometry ---
 //
 // Every body here names a data-movement-only symbol, so all of them are guarded.
 // On a compute projection the coordinate types still exist and can be carried
 // through a shared statement -- they just cannot be resolved to a NOC address.
-// ---------------------------------------------------------------------------
 
 inline PhysicalCoord PhysicalCoord::this_core() {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
@@ -61,19 +59,19 @@ inline PhysicalCoord LogicalCoord::to_physical(uint32_t y_offset, uint32_t x_off
 inline uint64_t LogicalCoord::get_noc_addr(uintptr_t l1_addr) const { return to_physical().get_noc_addr(l1_addr); }
 
 // A multicast rectangle is carried in ascending virtual coordinates, which is
-// what NOC 0 wants. NOC 1 runs the grid the other way round and wants the
-// corners in ITS traversal order -- high corner first -- so they swap. Nothing
-// downstream does this for us: get_noc_multicast_addr() maps each coordinate
-// through DYNAMIC_NOC_X/Y, which is NOC_0_X/Y, the identity here (the mirroring
-// variant is the separate NOC_0_X_PHYS_COORD). Handing NOC 1 an ascending
-// rectangle silently drops part of the destination set, which strands whoever
-// was dropped on the handshake.
+// what NOC 0 wants. NOC 1 runs the grid the other way round and wants the corners
+// in ITS traversal order -- high corner first -- so they swap. Nothing downstream
+// does this for us: get_noc_multicast_addr() maps each coordinate through
+// DYNAMIC_NOC_X/Y, which is NOC_0_X/Y, the identity here (the mirroring variant
+// is the separate NOC_0_X_PHYS_COORD). Handing NOC 1 an ascending rectangle
+// silently drops part of the destination set, stranding whoever was dropped on
+// the handshake.
 //
-// The swap is spelled out at each call site rather than hidden behind a helper,
-// because the same rectangle is ALSO the source of the sizes -- volume() and
-// num_dests_excluding_sender() -- and those must keep reading the original
-// ascending corners or they underflow. noc_index is constexpr in a kernel build,
-// so the branch folds at compile time.
+// Spelled out at each call site rather than hidden behind a helper, because the
+// same rectangle is ALSO the source of the sizes -- volume() and
+// num_dests_excluding_sender() -- which must keep reading the ascending corners
+// or they underflow. noc_index is constexpr in a kernel build, so the branch
+// folds away.
 inline uint64_t PhysicalMcast::get_noc_addr(uintptr_t l1_addr) const {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if (noc_index == 1) {
@@ -92,9 +90,7 @@ inline PhysicalMcast LogicalMcast::to_physical() const {
 
 inline uint64_t LogicalMcast::get_noc_addr(uintptr_t l1_addr) const { return to_physical().get_noc_addr(l1_addr); }
 
-// ---------------------------------------------------------------------------
-// Semaphore
-// ---------------------------------------------------------------------------
+// --- Semaphore ---
 
 template <int thread>
 Semaphore<thread>::Semaphore(uint32_t semaphore_id) :
@@ -172,11 +168,10 @@ Semaphore<thread>& Semaphore<thread>::inc_mcast(PhysicalMcast mcast, uint32_t va
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
-        // The destination count assumes the issuing core is the rectangle's start
-        // corner -- see num_dests_excluding_sender(). Issuing from anywhere else
-        // undercounts, and the multicast then retires before the cores it missed
-        // ever hear about it, which surfaces as a stranded handshake rather than
-        // as anything resembling a miscount.
+        // num_dests_excluding_sender() assumes the issuing core is the start
+        // corner. Issuing from anywhere else undercounts, and the multicast then
+        // retires before the cores it missed ever hear about it -- a stranded
+        // handshake rather than anything resembling a miscount.
         ASSERT(PhysicalCoord::this_core() == mcast.start);
 #endif
         // Corners in NOC order, sizes from the ascending rectangle. See
@@ -226,9 +221,7 @@ Semaphore<thread>& Semaphore<thread>::set_mcast(LogicalMcast mcast) {
     return set_mcast(mcast.to_physical());
 }
 
-// ---------------------------------------------------------------------------
-// Storage
-// ---------------------------------------------------------------------------
+// --- Storage ---
 
 template <typename Node>
 Block Storage::store(const Node& node) {
@@ -236,9 +229,7 @@ Block Storage::store(const Node& node) {
     return Block(cb_id, num_tiles);
 }
 
-// ---------------------------------------------------------------------------
-// Block
-// ---------------------------------------------------------------------------
+// --- Block ---
 
 inline Block::Block(const Storage& storage) : cb_id(storage.cb_id), num_tiles(storage.num_tiles) {}
 
@@ -300,9 +291,7 @@ inline void Block::consume() {
 #endif
 }
 
-// ---------------------------------------------------------------------------
-// Accumulator
-// ---------------------------------------------------------------------------
+// --- Accumulator ---
 
 template <AccumulatorMode Mode>
 Accumulator<Mode>::Accumulator(const Storage& acc_storage, const Storage& out_storage) :
@@ -341,9 +330,7 @@ void Accumulator<Mode>::clear() {
     reload = false;
 }
 
-// ---------------------------------------------------------------------------
-// ComputeBlock
-// ---------------------------------------------------------------------------
+// --- ComputeBlock ---
 
 inline ComputeBlock::ComputeBlock(Block block) : cb_id(block.cb_id), num_tiles(block.num_tiles) {
     block.consume();
@@ -360,9 +347,7 @@ inline ComputeBlock::~ComputeBlock() {
 
 inline expr::Un<ExpOp, TileSource> ComputeBlock::exp() const { return {TileSource{cb_id}}; }
 
-// ---------------------------------------------------------------------------
-// Expression-leaf adaptors
-// ---------------------------------------------------------------------------
+// --- Expression-leaf adaptors ---
 
 // TileSource identifies a circular buffer, so this must be the cb id.
 inline TileSource as_node(const ComputeBlock& b) { return TileSource{b.get_cb_id()}; }
@@ -376,9 +361,7 @@ auto matmul(const ComputeBlock& a, const ComputeBlock& b) {
     return matmul<Geometry>(as_node(a), as_node(b));
 }
 
-// ---------------------------------------------------------------------------
-// NocAsyncReadTx
-// ---------------------------------------------------------------------------
+// --- NocAsyncReadTx ---
 
 template <int thread>
 NocAsyncReadTx<thread>::NocAsyncReadTx(const Storage& storage) : cb_id(storage.cb_id), num_tiles(storage.num_tiles) {}
@@ -407,9 +390,7 @@ Block NocAsyncReadTx<thread>::wait() const {
     return Block(cb_id, num_tiles);
 }
 
-// ---------------------------------------------------------------------------
-// NocAsyncWriteTx
-// ---------------------------------------------------------------------------
+// --- NocAsyncWriteTx ---
 
 template <int thread>
 NocAsyncWriteTx<thread>::NocAsyncWriteTx(const Storage& storage) : cb_id(storage.cb_id), num_tiles(storage.num_tiles) {}
@@ -438,9 +419,7 @@ void NocAsyncWriteTx<thread>::wait() const {
 #endif
 }
 
-// ---------------------------------------------------------------------------
-// NocAsyncCopyTx
-// ---------------------------------------------------------------------------
+// --- NocAsyncCopyTx ---
 
 template <int thread, bool SrcIsLocal>
 NocAsyncCopyTx<thread, SrcIsLocal>::NocAsyncCopyTx(const Storage& dst, const Block& src) :
@@ -481,9 +460,7 @@ Block NocAsyncCopyTx<thread, SrcIsLocal>::wait() const {
     return Block(dst_cb, dst_tiles);
 }
 
-// ---------------------------------------------------------------------------
-// Data movement
-// ---------------------------------------------------------------------------
+// --- Data movement ---
 
 template <int thread, typename Accessor>
 NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, uint32_t block_idx) {
@@ -580,11 +557,10 @@ NocAsyncReadTx<thread> noc_load(
                 at += bytes;
             }
 
-            // A one-core rectangle -- a 1xN or Nx1 core grid gives one for the
+            // A one-core rectangle -- a 1xN or Nx1 grid gives one for the
             // degenerate axis -- has nobody to broadcast to. Read and publish,
             // skipping a handshake with no counterpart and a multicast to zero
-            // destinations. ttsim tolerates the 0-destination command; that is
-            // not a reason to issue one.
+            // destinations.
             if (num_dests == 0) {
                 noc_async_read_barrier();
                 return NocAsyncReadTx<thread>(storage);
@@ -606,12 +582,11 @@ NocAsyncReadTx<thread> noc_load(
             data_sent.set(1);
             data_sent.set_mcast(mcast);
 
-            // Put it back to 0 so BOTH semaphores read 0 on every core once this
-            // returns. The flush is what makes that safe: set_mcast sources the
-            // value from local L1, so the write has to have departed before the
-            // value can be overwritten. Without this the sender would sit at 1,
-            // and anything else sharing the pair -- synchronize_cores() -- would
-            // see a stale release and skip its wait.
+            // Back to 0 so BOTH semaphores read 0 on every core once this returns.
+            // The flush is what makes that safe: set_mcast sources the value from
+            // local L1, so the write must have departed before it is overwritten.
+            // Otherwise the sender sits at 1 and anything else sharing the pair --
+            // synchronize_cores() -- sees a stale release and skips its wait.
             noc_async_writes_flushed();
             data_sent.set(0);
         } else {
@@ -666,9 +641,7 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, LogicalMcast mcast, cons
     return noc_load<thread, pair>(storage, mcast.to_physical(), acc, block_idx);
 }
 
-// ---------------------------------------------------------------------------
-// synchronize_cores -- a barrier across CORES, for one data-movement thread
-// ---------------------------------------------------------------------------
+// --- synchronize_cores: a barrier across CORES, for one data-movement thread ---
 
 template <int thread>
 void synchronize_cores(PhysicalMcast region) {
@@ -728,9 +701,7 @@ void synchronize_cores() {
     synchronize_cores<thread>(LogicalMcast{LogicalCoord{0, 0}, Shape{kCoreGridH, kCoreGridW}});
 }
 
-// ---------------------------------------------------------------------------
-// Core-to-core movement
-// ---------------------------------------------------------------------------
+// --- Core-to-core movement ---
 
 template <int thread>
 NocAsyncCopyTx<thread, /*SrcIsLocal=*/false> noc_read(

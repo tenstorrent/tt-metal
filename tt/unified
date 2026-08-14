@@ -4,17 +4,16 @@
 //
 //     #include <tt/unified>
 //
-// A unified kernel is ONE source describing a whole Tensix pipeline. It is
-// compiled once per baby RISC-V thread, and each statement lowers to that
-// thread's half of the circular-buffer protocol. See tt/unified_api.h for the
-// surface and the protocol table.
+// A unified kernel is ONE source describing a whole Tensix pipeline, compiled
+// once per baby RISC-V thread; each statement lowers to that thread's half of
+// the circular-buffer protocol. See tt/unified_api.h for the surface.
 //
-// This header is the version selector. Today there is one target -- the Metal
-// v1 programming model (Wormhole / Blackhole) -- so it picks the v1 adaptor and
-// implementation unconditionally. As other metal language versions arrive, the
-// choice happens here and nothing above it changes:
+// This file is the version selector. Today there is one target -- Metal v1
+// (Wormhole / Blackhole) -- so it picks the v1 adaptor and implementation
+// unconditionally. As other metal versions arrive the choice happens here, and
+// nothing above it changes:
 //
-//     tt/unified                -- this file: selects a backend + implementation
+//     tt/unified                   -- this file: selects backend + implementation
 //       tt/unified_adaptor_v1.hpp  -- binds the model's intrinsics to metal v1
 //       tt/unified_api.h           -- core API declarations (version-agnostic)
 //         tt/unified_math.hpp      -- leaves, ops, fusion kinds, strategies

@@ -15,15 +15,8 @@
 //         * <-     pop          pop -> *                         read
 //                                                                 pop
 //
-// Include <tt/unified>, not this header directly -- it selects an
-// implementation and a backend binding.
-//
-// Layering:
-//   tt/unified_expr.hpp       -- domain-free expression tree + DST allocator
-//   tt/unified_math.hpp       -- leaves, ops, fusion kinds, driver strategies
-//   tt/unified_api.h          -- this file: the core API surface
-//   tt/unified_impl_v1.hpp    -- its definitions
-//   tt/unified_adaptor_v1.hpp -- metal binding
+// Include <tt/unified>, not this header directly -- it selects an implementation
+// and a backend binding, and documents the layering.
 
 #pragma once
 
@@ -41,18 +34,17 @@ class ComputeBlock;
 
 // ---------------------------------------------------------------------------
 // Geometry
-// ---------------------------------------------------------------------------
-
-// Core coordinates come in two flavours, kept as distinct types so the
-// translation between them is explicit and checked. LOGICAL coordinates are what
-// the host reasons about (0,0 is the first worker of the program's core range);
-// PHYSICAL coordinates are what the NOC addresses. Mixing them silently targets
-// the wrong core, which is why there is no implicit conversion.
 //
-// The member functions that touch NOC state are defined in the implementation
-// header behind a data-movement guard: my_x/my_y, the logical->virtual tables and
-// get_noc_addr are all data-movement-only names, and an unguarded body here
-// would be compiled on the compute projections too.
+// Core coordinates come in two flavours, kept as distinct types so the
+// translation between them is explicit and checked. LOGICAL is what the host
+// reasons about (0,0 is the first worker of the program's core range); PHYSICAL
+// is what the NOC addresses. Mixing them silently targets the wrong core, which
+// is why there is no implicit conversion.
+//
+// Members that touch NOC state are defined in the implementation header behind a
+// data-movement guard: my_x/my_y, the logical->virtual tables and get_noc_addr
+// are all data-movement-only names.
+// ---------------------------------------------------------------------------
 
 struct PhysicalCoord {
     uint32_t y;
@@ -95,11 +87,10 @@ struct PhysicalMcast {
 
     uint32_t volume() const { return (end.y - start.y + 1) * (end.x - start.x + 1); }
 
-    // Destination count for a multicast issued BY `start`, which is the only
-    // core that ever issues one: every multicast path here elects its sender
-    // with `this_core() == start`, so the sender is always the rectangle's own
-    // corner. Metal's multicast primitives exclude the sender unless
-    // NocOptions::MCAST_INCL_SRC is set, hence one less than the rectangle.
+    // Destination count for a multicast issued BY `start`, which is the only core
+    // that ever issues one: every multicast path here elects its sender with
+    // `this_core() == start`. Metal's multicast primitives exclude the sender
+    // unless NocOptions::MCAST_INCL_SRC is set, hence one less than the rectangle.
     uint32_t num_dests_excluding_sender() const { return volume() - 1; }
 };
 
@@ -126,13 +117,13 @@ struct Storage {
     Storage& operator=(Storage&&) = delete;
     Storage& operator=(const Storage&) = delete;
 
-    // Evaluate a compute fusion into this buffer. The loop shape is chosen by
-    // the fusion's kind; see Strategy in tt/unified_math.hpp.
+    // Evaluate a compute fusion into this buffer. The loop shape is chosen by the
+    // fusion's kind; see Strategy in tt/unified_math.hpp.
     template <typename Node>
     Block store(const Node& node);
 
     uint32_t cb_id;
-    uint32_t num_tiles;  // This could eventually be N dimensional (maybe via template params?)
+    uint32_t num_tiles;  // could eventually be N dimensional, here and below
 };
 
 // ---------------------------------------------------------------------------
@@ -161,24 +152,24 @@ struct Block {
 
     // Part of the CONSUMER contract, not user API: every consumer that takes a
     // Block by value must call this once, to record that the pages were really
-    // used. The destructor asserts on a Block that owed consumption and never
-    // got it, which is how a dropped output block is caught.
+    // used. The destructor asserts on a Block that owed consumption and never got
+    // it, which is how a dropped output block is caught.
     //
-    // It cannot be folded into the move, because C++17 guaranteed elision means
-    // a prvalue handed straight to a by-value parameter initializes it directly
-    // and no move ever runs. Only the consumer knows consumption happened.
+    // It cannot be folded into the move, because C++17 guaranteed elision means a
+    // prvalue handed straight to a by-value parameter initializes it directly and
+    // no move ever runs. Only the consumer knows consumption happened.
     //
     // Compiles to nothing when asserts are off.
     void consume();
 
     uint32_t cb_id;
-    uint32_t num_tiles;  // This could eventually be N dimensional (maybe via template params?)
+    uint32_t num_tiles;
 
 private:
-    // A RETAINED block: one the Accumulator hands back mid-accumulation. Its
-    // pages still belong to the accumulator, so it must neither be transferred
-    // to another thread nor consumed -- only the next accumulate() call may
-    // touch them. Only Accumulator can make one.
+    // A RETAINED block: one the Accumulator hands back mid-accumulation. Its pages
+    // still belong to the accumulator, so it must neither be transferred to
+    // another thread nor consumed -- only the next accumulate() call may touch
+    // them. Only Accumulator can make one.
     struct Retained {};
     Block(const Storage& storage, Retained);
 
@@ -189,8 +180,8 @@ private:
     // Two independent facts, deliberately not folded into one flag:
     //   must_consume -- this Block owes a consumer (false for retained blocks)
     //   consumed     -- a consumer has taken it
-    // A moved-from Block has must_consume=false and consumed=true, so it is
-    // silent at destruction and asserts if used again.
+    // A moved-from Block has must_consume=false and consumed=true, so it is silent
+    // at destruction and asserts if used again.
     bool must_consume = true;
     bool consumed = false;
 
@@ -202,10 +193,10 @@ private:
 // ---------------------------------------------------------------------------
 // Accumulator -- multi-block matmul
 //
-// The k-loop belongs to the kernel, because the operand CBs have to be waited
-// and popped per block so the reader can stream them. The Accumulator holds the
-// state that loop would otherwise have to carry: which buffer is the running
-// total, which is the destination, and whether there is anything to reload yet.
+// The k-loop belongs to the kernel, because the operand CBs have to be waited and
+// popped per block so the reader can stream them. The Accumulator holds the state
+// that loop would otherwise carry: which buffer is the running total, which is
+// the destination, and whether there is anything to reload yet.
 //
 //     Accumulator acc(partials_storage, out_storage);
 //     for (uint32_t k = 0; k < Geom::num_blocks; ++k) {
@@ -218,8 +209,8 @@ private:
 // The two Storages must be DIFFERENT circular buffers. Intermediate blocks are
 // pushed to the accumulation buffer and re-consumed by the next call; if that
 // were also the output buffer, the DM writer would drain the first intermediate
-// as though it were the answer, and two threads would be popping one CB (see
-// the warning in api/compute/cb_api.h).
+// as though it were the answer, and two threads would be popping one CB (see the
+// warning in api/compute/cb_api.h).
 // ---------------------------------------------------------------------------
 
 template <AccumulatorMode Mode>
@@ -227,22 +218,21 @@ class Accumulator {
 public:
     Accumulator(const Storage& acc_storage, const Storage& out_storage);
 
-    // Fold one k-block into the running total. `finish` selects the pack
-    // target: the accumulation buffer, or the output buffer on the last block.
+    // Fold one k-block into the running total. `finish` selects the pack target:
+    // the accumulation buffer, or the output buffer on the last block.
     //
     // The two ways of attaching SFPU work mean DIFFERENT things:
     //
-    //   accumulate(relu(mm), finish)                            per-step: relu
-    //     runs on every k-block, so the accumulator carries the transformed
-    //     value forward.
+    //   accumulate(relu(mm), finish)                          per-step: relu runs
+    //     on every k-block, so the accumulator carries the transformed value.
     //
-    //   accumulate(mm, finish, [](auto n){ return relu(n); })   finish-only:
-    //     relu runs once, on the completed accumulator.
+    //   accumulate(mm, finish, [](auto n){ return relu(n); })  finish-only: relu
+    //     runs once, on the completed accumulator.
     //
     // The lambda receives the node and returns one with a longer chain; only the
-    // ops *it* adds are deferred to the finishing call. See the note on
-    // Strategy<FPUFusion>::run for what "per-step" sees in each mode -- the
-    // contribution alone in L1 mode, the running total in Dst mode.
+    // ops *it* adds are deferred. See Strategy<FPUFusion>::run for what "per-step"
+    // sees in each mode -- the contribution alone in L1 mode, the running total in
+    // Dst mode.
     //
     // Only the Block returned on the finishing call is meaningful; earlier ones
     // describe the accumulation buffer, which the next call re-consumes.
@@ -279,7 +269,7 @@ public:
 
 private:
     uint32_t cb_id;
-    uint32_t num_tiles;  // This could eventually be N dimensional (maybe via template params?)
+    uint32_t num_tiles;
 };
 
 // ---------------------------------------------------------------------------
@@ -287,12 +277,12 @@ private:
 //
 // The multicast handshake needs two counters that mean nothing to the caller, so
 // the harness reserves them and passes their base id in as a define. Two PER DM
-// THREAD, at base + 2*thread: multicasts on one NOC serialize in hardware
-// anyway, so a pair per NOC is the natural granularity, and giving each thread
-// its own pair keeps a NOC-0 and a NOC-1 broadcast from sharing handshake state.
+// THREAD, at base + 2*thread: multicasts on one NOC serialize in hardware anyway,
+// so a pair per NOC is the natural granularity, and giving each thread its own
+// pair keeps a NOC-0 and a NOC-1 broadcast from sharing handshake state.
 //
-// The base is whatever the harness picked, chosen to sit above any semaphore the
-// caller allocated, so user ids are unconstrained.
+// The base sits above any semaphore the caller allocated, so user ids are
+// unconstrained.
 // ---------------------------------------------------------------------------
 
 #if defined(TT_UNIFIED_MCAST_SEM_BASE)
@@ -324,17 +314,15 @@ inline constexpr uint32_t kCoreGridW = 1;
 // ---------------------------------------------------------------------------
 // synchronize_cores -- barrier across the CORES of a region
 //
-// Every participating core runs the same statement; one of them (the region's
-// start corner) acts as the rendezvous point. Reuses the reserved multicast
-// handshake pair, which is why every operation that touches those semaphores
-// leaves both at 0 on every core.
+// Every participating core runs the same statement; the region's start corner is
+// the rendezvous point. Reuses the reserved multicast handshake pair, which is
+// why every operation touching those semaphores leaves both at 0 on every core.
 //
 // It synchronizes CORES, not the five threads on a core: only DM thread `thread`
 // participates, and the other projections run straight past. Two threads can
 // barrier independently, since each has its own reserved pair.
 //
-// The no-argument form spans the program's whole core grid with logical (0,0) as
-// the rendezvous point.
+// The no-argument form spans the program's whole core grid.
 // ---------------------------------------------------------------------------
 
 template <int thread>
@@ -353,8 +341,7 @@ void synchronize_cores();
 // one slot per core in a range and stamps its initial value, and `semaphore_id`
 // is the index into that reservation. This is what makes cross-core signalling
 // work at all -- every core resolves the same id to the same L1 offset, and the
-// offset is independent of which RISC is running, so a semaphore written by one
-// core's writer can be waited on by another core's reader.
+// offset is independent of which RISC is running.
 //
 // Do NOT give a Semaphore its own storage instead. A member or local would sit at
 // an address that only happens to agree across cores (and not at all across the
@@ -384,7 +371,8 @@ public:
     Semaphore& inc_remote(LogicalCoord coord, uint32_t value = 1);
 
     // Remote: atomically add to the same semaphore on every core of a rectangle.
-    // The sender is excluded from the destinations.
+    // Must be issued by the rectangle's start corner, which is excluded from the
+    // destinations.
     Semaphore& inc_mcast(PhysicalMcast mcast, uint32_t value = 1);
     Semaphore& inc_mcast(LogicalMcast mcast, uint32_t value = 1);
 
@@ -395,8 +383,8 @@ public:
     Semaphore& set_mcast(LogicalMcast mcast);
 
 private:
-    // Kept so l1_addr() can recompute the offset; metal's Semaphore keeps its
-    // own address private.
+    // Kept so l1_addr() can recompute the offset; metal's Semaphore keeps its own
+    // address private.
     uint32_t id;
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
@@ -406,9 +394,9 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// Adaptors letting a ComputeBlock stand in for an expression leaf. These are
-// the hooks tt/unified_math.hpp declares; they live here because this is the
-// only place the math layer needs to know about a core type.
+// Adaptors letting a ComputeBlock stand in for an expression leaf. These are the
+// hooks tt/unified_math.hpp declares; they live here because this is the only
+// place the math layer needs to know about a core type.
 // ---------------------------------------------------------------------------
 
 // Without this the operator+ in tt/unified_math.hpp is SFINAE'd out and
@@ -453,7 +441,7 @@ struct NocAsyncReadTx {
     Block wait() const;
 
     uint32_t cb_id;
-    uint32_t num_tiles;  // This could eventually be N dimensional (maybe via template params?)
+    uint32_t num_tiles;
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
     mutable bool waited = false;
@@ -477,17 +465,17 @@ struct NocAsyncWriteTx {
     void wait() const;
 
     uint32_t cb_id;
-    uint32_t num_tiles;  // This could eventually be N dimensional (maybe via template params?)
+    uint32_t num_tiles;
 };
 
 // A core-to-core copy has both halves: a local source Block to release and a
-// destination Storage to publish. The destination follows the read rule
-// (explicit wait()) and the source follows the write rule (the destructor).
+// destination Storage to publish. The destination follows the read rule (explicit
+// wait()) and the source follows the write rule (the destructor).
 //
 // `SrcIsLocal` is true when this core's L1 is the data source, i.e. a push to a
-// peer -- the NOC must have finished reading it before the pop, so the
-// destructor flushes first. For a pull the source is the peer's L1 and the local
-// Block is only a handle, so a bare pop is right.
+// peer -- the NOC must have finished reading it before the pop, so the destructor
+// flushes first. For a pull the source is the peer's L1 and the local Block is
+// only a handle, so a bare pop is right.
 template <int thread, bool SrcIsLocal>
 struct NocAsyncCopyTx {
     NocAsyncCopyTx(const Storage& dst, const Block& src);
@@ -532,15 +520,14 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, const Accessor& acc, uin
 // exactly storage.num_tiles consecutive pages from there: that is the count the
 // handle pushes, whatever `fn` actually wrote.
 //
-// `fn` must issue ONLY READS, and only on this thread's assigned NOC. The
-// handle releases with noc_async_read_barrier(), which covers reads on a single
-// NOC (noc_index) -- reads issued on the other NOC, or writes, are not covered,
-// and the push would then publish pages that have not landed.
+// `fn` must issue ONLY READS, and only on this thread's assigned NOC. The handle
+// releases with noc_async_read_barrier(), which covers reads on a single NOC --
+// reads issued on the other NOC, or writes, are not covered, and the push would
+// then publish pages that have not landed.
 //
 // `fn` is only CALLED on the owning data-movement thread, but its body is
 // COMPILED on all five projections, so the intrinsics it names have to resolve
-// everywhere; the binding declares them as unreachable no-ops on the compute
-// projection for exactly this reason (see tt/unified_adaptor_v1.hpp).
+// everywhere; see tt/unified_adaptor_v1.hpp.
 template <int thread, typename Fn>
 NocAsyncReadTx<thread> noc_load(const Storage& storage, Fn fn);
 
@@ -554,11 +541,10 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, Fn fn);
 //   receivers_ready -- receivers count themselves in; the sender waits for them
 //   data_sent       -- the sender announces the payload has been multicast
 //
-// The call is repeatable without host intervention, which takes deliberate
-// resets -- a semaphore that keeps its count lets the NEXT call fall straight
-// through the handshake. `receivers_ready` is cleared by the sender once it has
-// counted everyone in; `data_sent` is held at 1 on the sender (it is the constant
-// being broadcast) and cleared by each receiver after it observes it.
+// The call is repeatable without host intervention, which takes deliberate resets
+// -- a semaphore that keeps its count lets the NEXT call fall straight through
+// the handshake. `receivers_ready` is cleared by the sender once it has counted
+// everyone in; `data_sent` is cleared by each receiver after it observes it.
 template <int thread, typename Accessor>
 NocAsyncReadTx<thread> noc_load(
     const Storage& storage,
@@ -580,8 +566,6 @@ NocAsyncReadTx<thread> noc_load(
 // Same, with the handshake semaphores supplied by the harness's reservation.
 // Prefer these: the pair is protocol plumbing, and having callers allocate it
 // invites the initial-value and reset mistakes the explicit form makes possible.
-// Reach for the explicit overloads only to give a broadcast a pair of its own
-// beyond the reserved ones.
 //
 // `pair` selects which reserved pair to use, defaulting to the driving thread's.
 // Two broadcasts must never share a pair -- their ready counters would interleave
@@ -599,18 +583,15 @@ NocAsyncReadTx<thread> noc_load(const Storage& storage, LogicalMcast mcast, cons
 template <int thread, typename Accessor>
 NocAsyncWriteTx<thread> noc_store(Block block, const Accessor& acc, uint32_t block_idx);
 
-// Custom store: the mirror of the custom noc_load. `fn` is called as
+// Custom store: the mirror of the custom noc_load. `fn` is called with the
+// address of the first page of `block`, and covers block.num_tiles consecutive
+// pages -- the count the handle pops.
 //
-//     fn(uint32_t l1_addr, uint32_t page_bytes)
-//
-// with the address of the first page of `block`, and covers block.num_tiles
-// consecutive pages -- the count the handle pops.
-//
-// `fn` must issue ONLY WRITES, and only on this thread's assigned NOC. The
-// handle releases the source buffer with noc_async_writes_flushed() and pops,
-// which covers writes departing local L1 on a single NOC (noc_index). Reads
-// issued here, or writes on the other NOC, are not covered, so the pop can hand
-// the pages back while they are still being sourced.
+// `fn` must issue ONLY WRITES, and only on this thread's assigned NOC. The handle
+// releases the source buffer with noc_async_writes_flushed() and pops, which
+// covers writes departing local L1 on a single NOC. Reads issued here, or writes
+// on the other NOC, are not covered, so the pop can hand the pages back while
+// they are still being sourced.
 template <int thread, typename Fn>
 NocAsyncWriteTx<thread> noc_store(Block block, Fn fn);
 
@@ -618,11 +599,11 @@ NocAsyncWriteTx<thread> noc_store(Block block, Fn fn);
 // Core-to-core movement: pull a peer's block into this core's Storage
 // (noc_read), or push this core's block into a peer's Storage (noc_write).
 //
-// NOTE: reserve/push act on the *local* view of the destination CB. For a
-// genuine peer buffer the far side's pointers have to be advanced too -- see
+// NOTE: reserve/push act on the *local* view of the destination CB. For a genuine
+// peer buffer the far side's pointers have to be advanced too -- see
 // api/remote_circular_buffer.h (remote_cb_reserve_back /
-// remote_cb_push_back_and_write_pages, asymmetric between sender and receiver)
-// or the explicit semaphore handshake the matmul mcast kernels use.
+// remote_cb_push_back_and_write_pages, asymmetric between sender and receiver) or
+// the explicit semaphore handshake the matmul mcast kernels use.
 // ---------------------------------------------------------------------------
 
 template <int thread>
