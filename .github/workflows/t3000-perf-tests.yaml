@@ -10,7 +10,6 @@ on:
         default: all
         options:
           - all
-          - mochi
           - motif
           - qwenimage
       platform:

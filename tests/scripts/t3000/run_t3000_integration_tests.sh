@@ -165,27 +165,6 @@ run_t3000_qwenimage_tests() {
     "models/tt_dit/tests/encoders/qwen25vl/test_qwen25vl.py::test_qwen25vl_encoder_pair -k 2x4"
 }
 
-run_t3000_mochi_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_t3000_mochi_tests"
-
-  export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-  FAKE_DEVICE=T3K pytest models/tt_dit/tests/models/mochi/test_vae_mochi.py -k "(decoder and 1x8 and load_dit and small_latent) or conv3d_1x1x1 or (1x8 and l768 and bf16)" --timeout=1500; fail+=$?
-  pytest models/tt_dit/tests/models/mochi/test_attention_mochi.py -k "short_seq"; fail+=$?
-  pytest models/tt_dit/tests/models/mochi/test_transformer_mochi.py -k "1x8 or 2x4 and short_seq and not yes_load_cache and not model_caching"; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_t3000_mochi_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_t3000_tests() {
   # Run ethernet tests
   run_t3000_ethernet_tests
@@ -210,9 +189,6 @@ run_t3000_tests() {
 
   # Run trace tests
   run_t3000_trace_stress_tests
-
-  # Run mochi tests
-  run_t3000_mochi_tests
 
   # Run qwenimage tests
   run_t3000_qwenimage_tests

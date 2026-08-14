@@ -997,6 +997,29 @@
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
 
+# ── Mochi (TT-DiT) ─────────────────────────────────────────────────
+# test_tt_mochi_pipeline is named explicitly to keep the CPU-only diffusers
+# reference test in the same file out of CI.
+- name: TT-DiT Mochi e2e tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE NO_PROMPT=1
+    pytest --timeout 1500 models/tt_dit/tests/models/mochi/test_pipeline_mochi.py::test_tt_mochi_pipeline
+    pytest --timeout 1800 models/tt_dit/tests/models/mochi/test_performance_mochi.py
+  model: mochi
+  model_family: Mochi
+  skus:
+    wh_llmbox_perf:
+      timeout: 105
+      tier: 3
+      release_ready: false
+    wh_galaxy_perf:
+      timeout: 55
+      tier: 3
+      release_ready: false
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
 # ── Panoptic DeepLab ───────────────────────────────────────────────
 - name: panoptic-deeplab e2e tests
   cmd: TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/demo/demo.py::test_panoptic_deeplab_demo_pipeline --timeout=1020

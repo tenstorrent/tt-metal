@@ -14,7 +14,6 @@ on:
           - trace stress
           - motif
           - qwenimage
-          - mochi
           - deepseek-modules
       platform:
         required: false

@@ -54,7 +54,6 @@ on:
           - gpt-oss
           - motif
           - wan22
-          - mochi
           - qwen3_32b
           - qwen3_32b_long_context
           - deepseek_v3
@@ -70,7 +69,6 @@ on:
           - llama3
           - unit
           - wan22
-          - mochi
           - motif
           - qwenimage
         default: "disabled"
@@ -88,7 +86,6 @@ on:
           - motif
           #          - sentence_bert
           - wan2-2
-          - mochi
           - qwenimage
         default: "disabled"
       galaxy-e2e:

@@ -23,21 +23,6 @@
 # Exceptions: bh_p300 (LFC) entries keep file-path / HF_HUB_CACHE form because the LFC
 # server hosts checkpoints in a layout that does not match the canonical hub cache.
 
-# ─── Mochi (BH QuietBox 2) ──────────────────────────────────────────────────
-
-- name: Mochi BH QuietBox 2 performance (2x2sp0tp1)
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
-    pytest models/tt_dit/tests/models/mochi/test_performance_mochi.py -k "dit_2x2sp0tp1_vae_1x4sp0tp1_BH_QB" --timeout=1800
-  skus:
-    bh_quietbox_2:
-      timeout: 30
-  owner_id: U06BXU8RWQ2 # Kevin Mi
-  team: models
-  model-name: mochi
-
 # ─── Z-Image-Turbo ──────────────────────────────────────────────────────────
 
 - name: Z-Image-Turbo Text Encoder

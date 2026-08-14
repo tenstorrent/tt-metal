@@ -15,7 +15,6 @@ on:
           - motif
           #          - sentence_bert
           - wan2-2
-          - mochi
           - qwenimage
           - deepseek_v3
           - tinyllama_1_1b_ddp32_shakespeare
