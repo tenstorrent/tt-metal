@@ -26,6 +26,7 @@
 #include <umd/device/types/arch.hpp>
 #include "impl/kernels/kernel.hpp"
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include "llrt/hal_types.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher waypoints.

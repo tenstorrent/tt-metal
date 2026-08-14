@@ -23,6 +23,7 @@
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "impl/kernels/kernel.hpp"
+#include "llrt/hal_types.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher polling the eth link training counter.

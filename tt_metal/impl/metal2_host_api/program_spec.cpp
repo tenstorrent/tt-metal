@@ -14,6 +14,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
+#include "impl/hal/hal.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>  // fmt::formatter<tt::DataFormat> for TT_FATAL messages
 #include <tt-metalium/allocator.hpp>

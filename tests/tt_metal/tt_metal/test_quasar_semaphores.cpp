@@ -11,6 +11,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "hal.hpp"
 #include "llrt/rtoptions.hpp"
+#include "llrt/hal_types.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""

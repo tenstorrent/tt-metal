@@ -46,6 +46,7 @@
 #include "dispatch/dispatch_core_common.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "math.hpp"
 #include "mesh_device.hpp"
 #include "distributed/mesh_device_impl.hpp"

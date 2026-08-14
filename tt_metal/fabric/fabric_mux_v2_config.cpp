@@ -11,6 +11,7 @@
 #include <hostdevcommon/fabric_mux_v2_common.h>
 
 #include "impl/context/metal_context.hpp"
+#include "llrt/hal_types.hpp"
 
 namespace tt::tt_fabric {
 namespace {

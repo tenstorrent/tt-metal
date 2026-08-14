@@ -20,6 +20,7 @@
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tt_metal/impl/kernels/kernel.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
+#include "llrt/hal_types.hpp"
 
 namespace tt::tt_metal::experimental::dfb::detail {
 

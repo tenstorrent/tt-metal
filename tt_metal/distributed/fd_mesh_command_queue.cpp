@@ -32,6 +32,7 @@
 #include "dispatch/data_collection.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_workload.hpp"

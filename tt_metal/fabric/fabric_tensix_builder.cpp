@@ -21,6 +21,7 @@
 #include <bit>
 #include <algorithm>
 #include <utility>
+#include "llrt/hal_types.hpp"
 
 namespace tt::tt_fabric {
 

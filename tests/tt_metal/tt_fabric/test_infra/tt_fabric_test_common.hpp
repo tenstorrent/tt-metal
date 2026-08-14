@@ -21,6 +21,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include "llrt/hal_types.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/system_mesh.hpp>

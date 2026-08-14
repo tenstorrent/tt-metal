@@ -19,6 +19,7 @@
 #include <tt_stl/assert.hpp>
 #include "base_types.hpp"
 #include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
 #include "llrt.hpp"

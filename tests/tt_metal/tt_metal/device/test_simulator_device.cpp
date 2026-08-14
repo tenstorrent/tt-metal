@@ -28,6 +28,7 @@
 #include "device_fixture.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include "llrt/hal_types.hpp"
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_cluster.hpp"

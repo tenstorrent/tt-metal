@@ -38,6 +38,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include "eth_test_common.hpp"
+#include "llrt/hal_types.hpp"
 
 using std::vector;
 using namespace tt;

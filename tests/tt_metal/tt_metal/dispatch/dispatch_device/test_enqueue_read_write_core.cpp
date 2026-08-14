@@ -5,6 +5,7 @@
 #include "gtest/gtest.h"
 #include "command_queue_fixture.hpp"
 #include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "llrt.hpp"
 #include "dispatch_test_utils.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"

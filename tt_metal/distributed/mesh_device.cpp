@@ -1238,7 +1238,10 @@ uint32_t MeshDeviceImpl::num_virtual_eth_cores(SubDeviceId sub_device_id) const 
 // Core and worker management methods (These are OK)
 CoreRangeSet MeshDeviceImpl::worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {
     validate_sub_device_manager_tracker();
-    return sub_device_manager_tracker_->get_active_sub_device_manager()->sub_device(sub_device_id).cores(core_type);
+    return sub_device_manager_tracker_->get_active_sub_device_manager()
+        ->sub_device(sub_device_id)
+        .impl()
+        ->cores(core_type);
 }
 
 uint32_t MeshDeviceImpl::num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const {

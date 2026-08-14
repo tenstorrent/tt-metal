@@ -12,6 +12,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "debug_tools_fixture.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include "llrt/hal_types.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

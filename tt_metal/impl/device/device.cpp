@@ -47,6 +47,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/dispatch_query_manager.hpp"
 #include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include "llrt.hpp"

@@ -13,6 +13,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <enchantum/enchantum.hpp>
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+#include "llrt/hal_types.hpp"
 namespace tt::tt_fabric {
 
 // Implementation of nested MemoryRegion methods

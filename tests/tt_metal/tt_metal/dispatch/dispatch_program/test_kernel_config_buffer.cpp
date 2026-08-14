@@ -16,6 +16,7 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
 #include "tt_metal/common/env_lib.hpp"
+#include "llrt/hal_types.hpp"
 
 namespace tt::tt_metal::kernel_size_tests {
 

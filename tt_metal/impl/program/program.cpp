@@ -49,6 +49,7 @@
 #include "context/metal_env_accessor.hpp"
 #include "impl/context/context_types.hpp"
 #include "hal_types.hpp"
+#include <llrt/hal_types.hpp>
 #include "impl/device/device_impl.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
 #include "tt-metalium/mesh_device.hpp"

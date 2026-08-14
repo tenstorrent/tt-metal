@@ -9,7 +9,8 @@
 #include <cstdint>
 #include <string>
 
-#include "hal_types.hpp"
+#include "impl/hal/hal.hpp"
+#include "llrt/hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 
 // NOLINTBEGIN(misc-unused-using-decls)
@@ -25,11 +26,6 @@ tt::ARCH get_arch() { return tt::tt_metal::MetalContext::instance().hal().get_ar
 std::string get_arch_name() {
     auto arch_enum = tt::tt_metal::MetalContext::instance().hal().get_arch();
     return tt::get_string_lowercase(arch_enum);
-}
-
-uint32_t get_l1_size() {
-    return tt::tt_metal::MetalContext::instance().hal().get_dev_size(
-        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
 }
 
 uint32_t get_dram_alignment() { return tt::tt_metal::MetalContext::instance().hal().get_alignment(HalMemType::DRAM); }
