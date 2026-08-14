@@ -736,12 +736,13 @@ section is the credit half of the ledger and is the material for the comparison 
 | after the same sweep generalised to K/V (O4b) | 276.7 | 16.135 | 0.9897 |
 | after fusing Q/K/V into one decode projection (O4c) | 273.6 | 15.976 | 0.9708 |
 | after fusing RoPE into one op (O4d) | 271.9 | 15.212 | 0.9903 |
-| **run 2** — Q+K rotated in one call (O4f) | 269.5 | **14.909** | 0.9903 |
+| run 2 — Q+K rotated in one call (O4f) | 269.5 | 14.909 | 0.9903 |
+| run 2 — decode-native Q/K/V layout (O4g) | 261.9 | **13.975** | 0.9903 |
 | tool's own roofline target | 338.541 | — | gate 0.95 |
 | **hand-port, for reference** | — | **15.907** | — |
 
-**14.909 against 15.907 — the tool is 6.3% AHEAD of 74 human experiments**, autonomously, holding
-PCC 0.9903.
+**13.975 against 15.907 — the tool is 12.1% AHEAD of 74 human experiments**, autonomously, with
+PCC bit-identical across its last three wins (0.990347151783074, unchanged to every decimal).
 
 State this with the accuracy bar attached, every time it is quoted: the tool is at e2e PCC 0.9708
 against its 0.95 gate; the hand-port's p150 decode holds 0.981 (`STATUS.md`, and 0.99991 on the
@@ -1060,6 +1061,58 @@ holds, which it does. (The tool calls prefill mode with `s=1`, so it never met t
 **Status: strongest candidate of the three.** Unlike O4 (argmax, needs a re-measurement) and O4b
 (`w2` grid, needs a sweep), this one is a known quantity: exact arithmetic, a measured win on the
 identical model, and it sidesteps the specific objection that got it rejected the first time.
+
+### O4g — decode was wearing prefill's layout, and 31 of every 32 rows were padding
+
+The largest run-2 win, and the one with the most general lesson in it. The block shaped Q/K/V as
+`[1, heads, seq, hd]` because that is what a **prefill** SDPA reads — but nothing in a decode step
+reads that. `paged_update_cache` wants `[1, batch, kv_heads, hd]`; `scaled_dot_product_attention_decode`
+wants `[1, batch, q_heads, hd]`. Bridging the two cost a reshape, a permute and three slices up
+front, a permute plus a reshard before each cache write, and a permute in and out of the attention:
+
+> *19 ops per layer where 8 do the work, and the profiler tags every one of the other 11
+> `bound_by=dispatch`: their cost IS the launch.*
+
+`nlp_create_qkv_heads_decode` emits that layout directly out of the fused projection, L1-sharded, so
+K and V arrive already in the memory config the cache write takes and Q already in the one the
+decode SDPA takes — no permute at either end. **`14.909 → 13.975 ms/token` (−6.3%), device 269.45 →
+261.85, PCC bit-identical.**
+
+Note this is the op it *declined* two attempts earlier as "a contract change across the cache write
+and SDPA, so it belongs in its own attempt rather than riding along." It came back for it. The
+deferral was not avoidance.
+
+**The general lesson — and the tool has now found it twice.** Buried in that commit:
+
+> *That also drops the rotation from 160 tiles to 4: in the old layout 31 of every 32 rows were
+> tile padding.*
+
+A decode step is one row. In TILE layout one row occupies a 32-row tile, so **any decode-path op
+that has not been given a decode-shaped input does 32× the work it needs to.** This is the same
+finding as O4 (`ttnn.argmax` scanning ~32× the bytes because `ttnn.linear` handed it a TILE row).
+Two independent discoveries of one pathology in one run.
+
+**Worth a systematic pass on the hand-port:** for every op on the decode path, check whether its
+input is a padded tile row. It is a class of waste that profiles as "this op is slow" rather than
+"this op is doing nothing," which is why it survives casual inspection.
+
+#### And a fourth independent agreement — on a reversal
+
+It declined `paged_fused_update_cache`, reasoning that the op parallelises K and V across **disjoint
+cores** and rejects operands sharing one, and at batch 1 head-creation puts K and V on the same
+single core.
+
+The hand-port reached the same conclusion on Blackhole by measurement: `NOTES.md [gpt-19]` / §6.44
+**deleted** `_V_SHARD`, which existed solely to let `paged_fused_update_cache` accept K and V,
+because on Blackhole *"that fused write is 0.687 ms/step SLOWER than two plain writes."* (The
+opposite of `[gpt-24]`, which was the N150-era finding — superseded.)
+
+Two different arguments, same verdict, on hardware where the intuitive answer is wrong.
+
+**This also arms O4f's open question.** §6.44 records the silent failure mode that went with
+`_V_SHARD`: *"RoPE on a core whose cos/sin table lives elsewhere returns 3.4e38 from uninitialised
+L1."* That is precisely the hazard waiting for anyone sharding a 40-head rotation per O4f — the
+hand-port's own notes already document the trap.
 
 ### O5 — the ladder's escalation is real, and it gives up in the right place
 
