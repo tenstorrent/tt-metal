@@ -167,53 +167,64 @@ def apply_l1_accumulation(
     return accumulated
 
 
+# A block-float block shares one exponent across this many elements, so a non-finite
+# anywhere in the block takes the whole block's exponent with it.
+BFP_BLOCK_ELEMENTS = 16
+
+
+def _zero_finite_lanes_of_nonfinite_blocks(operand):
+    """Zero every finite element that shares a block with a non-finite one, in place.
+
+    The three block-float formats differ only in mantissa width, which this rule does not
+    depend on: the shared exponent is what a +/-inf or NaN destroys, so all of Bfp8_b,
+    Bfp4_b and Bfp2_b want the same pass. The non-finite lanes keep their own values --
+    only their finite neighbours are flattened.
+
+    Vectorised because it is not a cheap tail call: the callers pass the *result tensor*,
+    not the list the signatures used to claim, so the previous element-wise loop iterated a
+    torch tensor and paid a 0-dim tensor construction per element. On a [128, 256] tile it
+    was the single largest cost in the whole broad sweep -- roughly half of a variant's
+    host time, ahead of the kernel it was there to check. The inner loop also rescanned a
+    block once per non-finite element in it, so an all-inf block cost 16x what one needed.
+
+    Mutates *operand* and returns it: every caller relies on the in-place half and discards
+    the return, which the original did too.
+    """
+    if isinstance(operand, torch.Tensor):
+        values = operand
+    else:
+        values = torch.as_tensor(operand, dtype=torch.float32)
+
+    # reshape() on the boolean temporary, never on `values` itself -- a copy here is
+    # harmless, whereas reshaping `values` could silently detach the in-place write.
+    non_finite = ~torch.isfinite(values)
+    blocks = non_finite.reshape(-1, BFP_BLOCK_ELEMENTS)
+    block_is_tainted = (
+        blocks.any(dim=1, keepdim=True).expand_as(blocks).reshape(non_finite.shape)
+    )
+
+    to_zero = block_is_tainted & ~non_finite
+    if isinstance(operand, torch.Tensor):
+        operand[to_zero] = 0.0
+    else:
+        for index in to_zero.flatten().nonzero().flatten().tolist():
+            operand[index] = 0.0
+    return operand
+
+
 def check_bfp8_b(operand: list) -> list:
     """Check if datum is BFP8_B there is a +/- inf then zero out entire row of 16 elements because they inherit the same exponent and therefore get zeroed out in tensix."""
-    # tensor_bytes = pack_bfp8_b(torch.tensor(operand, dtype=torch.bfloat16))
-    # tensor = unpack_bfp8_b(tensor_bytes)
-    # return tensor
-
-    not_finite = [math.inf, -math.inf]
-    for i, x in enumerate(operand):
-        if x in not_finite or math.isnan(x):
-            # Zero out the entire row of 16 elements
-            for col in range(16):
-                row = i // 16
-                index = row * 16 + col
-                if not (operand[index] in not_finite or math.isnan(operand[index])):
-                    operand[index] = 0.0
-
-    return operand
+    return _zero_finite_lanes_of_nonfinite_blocks(operand)
 
 
 def check_bfp4_b(operand: list) -> list:
     """Check if datum is BFP4_B: if there is a +/- inf then zero out entire row of 16 elements because they share the same exponent and therefore get zeroed out in tensix."""
-    not_finite = [math.inf, -math.inf]
-    for i, x in enumerate(operand):
-        if x in not_finite or math.isnan(x):
-            # Zero out the entire row of 16 elements
-            for col in range(16):
-                row = i // 16
-                index = row * 16 + col
-                if not (operand[index] in not_finite or math.isnan(operand[index])):
-                    operand[index] = 0.0
-
-    return operand
+    return _zero_finite_lanes_of_nonfinite_blocks(operand)
 
 
 def check_bfp2_b(operand: list) -> list:
     """Check if datum is BFP2_b: if there is a +/- inf then zero out entire row of 16 elements because they share the same exponent and therefore get zeroed out in tensix."""
-    not_finite = [math.inf, -math.inf]
-    for i, x in enumerate(operand):
-        if x in not_finite or math.isnan(x):
-            # Zero out the entire row of 16 elements
-            for col in range(16):
-                row = i // 16
-                index = row * 16 + col
-                if not (operand[index] in not_finite or math.isnan(operand[index])):
-                    operand[index] = 0.0
-
-    return operand
+    return _zero_finite_lanes_of_nonfinite_blocks(operand)
 
 
 def convert_nan_to_inf(operand):
