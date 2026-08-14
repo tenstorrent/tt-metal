@@ -384,7 +384,11 @@ def prefill_linear_above_cutoff(x, weight, *, out_memory_config=None):
 
     Isolation (``test_prefill_matmul_2048_isolate``, WH 1x8, HiFi2, bfp8):
     down 2048×2688×5376 auto 1672µs → reshape 1198µs (1.42x); o_proj 2048×1024×5376
-    646µs → 576µs (1.12x). gate_up / QKV: auto already wins — do not call this.
+    646µs → 576µs (1.12x). gate_up / QKV at M=2048: auto already wins.
+
+    12B ``test_prefill_matmul_4096_12b_isolate`` (M=4096, K=N=3840): gate_up
+    reshape+LoFi 1976µs vs auto+LoFi 2199µs (1.11x, PCC 0.99985). SharedMLP
+    uses this path only for ``m >= 4096`` so 31B's 2048-chunk auto+LoFi stays.
 
     Reshape is metadata-only (tile-aligned). CBs stay sized to the cutoff so this
     is safe under a full layer, unlike pinning ``prefill_progcfg`` at full M.
