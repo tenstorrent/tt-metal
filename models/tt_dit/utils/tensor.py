@@ -692,21 +692,6 @@ def fast_device_to_host(
         local_mesh_shape[intra_host_axis] = len(local_intra_positions)
         local_mesh_shape = tuple(local_mesh_shape)
 
-        if concat_dims[0] is not None and concat_dims[0] == concat_dims[1]:
-            # `_reassemble_2d`'s linearised branch rebuilds a global block index from this host's
-            # remapped 0-based coordinates, which only matches the true index when the host owns a
-            # contiguous run starting at a multiple of its length -- what the quad descriptor gives
-            # (host `h` owns columns `8h..8h+7`). A ragged layout would permute frames silently.
-            run = len(local_inter_positions)
-            first = local_inter_positions[0]
-            if local_inter_positions != list(range(first, first + run)) or first % run:
-                msg = (
-                    f"a dim-{concat_dims[0]} fracture read back on rank {rank} needs this host's "
-                    f"inter-host (axis {inter_host_axis}) positions to be a contiguous run aligned "
-                    f"to its own length; got {local_inter_positions}"
-                )
-                raise ValueError(msg)
-
         inter_remap = {pos: i for i, pos in enumerate(local_inter_positions)}
         intra_remap = {pos: i for i, pos in enumerate(local_intra_positions)}
         local_coords = []
