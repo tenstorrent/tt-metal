@@ -112,6 +112,9 @@ class TtAttention:
         #: model's operands, so the generic layout takes over for the rest of
         #: the run instead of raising inside a captured trace.
         self._decode_heads = hasattr(ttnn.experimental, "nlp_create_qkv_heads_decode")
+        #: Cleared if head creation refuses the projection's own output shard,
+        #: which costs only the interleaved conversion it was there to avoid.
+        self._presharded_heads = True
         self._q_end = int(self.wq.shape[-1])
         self._k_end = self._q_end + int(self.wk.shape[-1])
         self._v_end = self._k_end + int(self.wv.shape[-1])
@@ -415,13 +418,7 @@ class TtAttention:
         instead of 160 (31 of every 32 rows in the old layout were tile padding).
         """
         k_cache, v_cache = kv_cache
-        fused = self.qkv_plan(hidden_states, self.wqkv, self.compute_kernel_config)
-        # [1, tile, qkv] -> [1, 1, batch=1, qkv]; the padded form keeps the tile
-        # row the projection actually wrote, so this is a view, not a copy.
-        fused = ttnn.reshape(fused, (1, 1, 1, self._v_end), (1, 1, _TILE, self._v_end))
-        query, key, value = ttnn.experimental.nlp_create_qkv_heads_decode(
-            fused, num_heads=self.n_heads, num_kv_heads=self.n_kv_heads
-        )
+        query, key, value = self._create_heads(hidden_states)
         query = self._apply_rope(query, cos, sin)
         key = self._apply_rope(key, cos, sin)
         # Two writes, not `paged_fused_update_cache`. That op parallelises K and
@@ -443,6 +440,45 @@ class TtAttention:
             attn, (1, 1, self.n_heads * self.head_dim), memory_config=self.o_plan.input_memory_config
         )
         return self.o_plan.run_presharded(merged, self.wo, self.compute_kernel_config)
+
+    def _create_heads(self, hidden_states):
+        """The fused projection, split into decode-layout Q/K/V.
+
+        Fed the WIDTH-SHARDED matmul result rather than an interleaved copy of
+        it. Head creation is batch-parallel, so at batch 1 its outputs live on
+        ONE core -- and handed an interleaved operand that one core has to pull
+        the whole fused row (192 tiles) out of DRAM by itself, which is what
+        makes this op cost ~33us for 12 tiles of output. The projection has just
+        written that row across 32 cores' L1, and the op's sharded program
+        factory reads a width-sharded operand from exactly there, so feeding it
+        directly turns a single-core DRAM read into a fan-in over L1 and drops
+        the interleaved conversion on the way.
+
+        The shard is only legal for the op when it is WIDTH_SHARDED with one
+        full tile-row per core, ROW_MAJOR -- which is what the plan builds -- so
+        a refusal falls back to the interleaved feed for the rest of the run
+        rather than raising inside a captured trace.
+        """
+        shard = self.qkv_plan.shard_input(hidden_states)
+        if self._presharded_heads:
+            try:
+                fused = self.qkv_plan.run_presharded_raw(shard, self.wqkv, self.compute_kernel_config)
+                return self._split_qkv(fused)
+            except Exception:  # noqa: BLE001 - shard refused: interleaved feed
+                self._presharded_heads = False
+        return self._split_qkv(self.qkv_plan.run_presharded(shard, self.wqkv, self.compute_kernel_config))
+
+    def _split_qkv(self, fused):
+        """[1, tile, qkv] -> decode-layout q/k/v.
+
+        The reshape only adds the leading batch axis the head-creation op reads
+        `num_users` from; the padded form keeps the tile row the projection
+        actually wrote, so it is a view, not a copy.
+        """
+        fused = ttnn.reshape(fused, (1, 1, 1, self._v_end), (1, 1, _TILE, self._v_end))
+        return ttnn.experimental.nlp_create_qkv_heads_decode(
+            fused, num_heads=self.n_heads, num_kv_heads=self.n_kv_heads
+        )
 
     def _write_cache_row(self, cache, tensor, cache_pos, cache_pos_tensor):
         """Write ONE token's K or V into the resident cache.

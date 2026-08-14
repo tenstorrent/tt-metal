@@ -143,17 +143,25 @@ class DecodeMatmulPlan:
         """Open the shard once, for a caller that will run several projections."""
         return ttnn.to_memory_config(x, self.input_memory_config)
 
-    def run_presharded(self, x_sharded, weight, compute_kernel_config=None):
-        """The matmul itself, on an activation the caller already sharded."""
+    def run_presharded_raw(self, x_sharded, weight, compute_kernel_config=None):
+        """The matmul, leaving its result IN the plan's output shard.
+
+        For a consumer that reads a width-sharded operand directly: it then
+        reads the result out of the L1 the matmul just wrote it to, and the
+        interleaved round trip below never happens.
+        """
         kwargs = {"compute_kernel_config": compute_kernel_config} if compute_kernel_config else {}
-        out = ttnn.linear(
+        return ttnn.linear(
             x_sharded,
             weight,
             program_config=self.program_config,
             memory_config=self.output_memory_config,
             **kwargs,
         )
-        return ttnn.sharded_to_interleaved(out)
+
+    def run_presharded(self, x_sharded, weight, compute_kernel_config=None):
+        """The matmul itself, on an activation the caller already sharded."""
+        return ttnn.sharded_to_interleaved(self.run_presharded_raw(x_sharded, weight, compute_kernel_config))
 
     def __call__(self, x, weight, compute_kernel_config=None):
         """Run the projection, returning an INTERLEAVED result.
