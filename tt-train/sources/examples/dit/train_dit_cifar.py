@@ -81,12 +81,14 @@ def _param_to_numpy(t, composer=None, num_devices: int = 1):
     # precision=FULL runs a device-side typecast whose fp32 view is CACHED and
     # never refreshed (tt-train issue #41657) — with it, every checkpoint/EMA
     # read after the first silently returns stale (init-time) weights.
-    arr = t.to_numpy(None, composer, ttml.autograd.PreferredPrecision.NATIVE).astype(np.float32)
     if composer is not None and num_devices > 1:
-        # Replicated param read via concat composer stacks the per-device
-        # copies along dim 0; keep the first replica.
-        arr = arr[: arr.shape[0] // num_devices]
-    return arr
+        # Replicated params: reading via a concat composer pulls ALL replicas
+        # off the mesh (~5s for a DiT-S param set). Read one shard instead.
+        import ttnn
+
+        shard = ttnn.get_device_tensors(t.get_value(ttml.autograd.PreferredPrecision.NATIVE))[0]
+        return ttnn.to_torch(shard).float().numpy()
+    return t.to_numpy(None, None, ttml.autograd.PreferredPrecision.NATIVE).astype(np.float32)
 
 
 def save_checkpoint(model, path: str, state: dict | None = None, composer=None, num_devices: int = 1):
