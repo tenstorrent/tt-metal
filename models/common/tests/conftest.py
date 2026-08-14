@@ -163,10 +163,11 @@ def ttnn_mesh_device(request):
     if (
         blackhole_selected
         and req_shape == (1, 4)
-        and ttnn.cluster.get_cluster_type() != ttnn.cluster.ClusterType.P150_X4
+        and not _is_physical_p150x4_cluster(ttnn.cluster.get_cluster_type())
     ):
         pytest.skip(
-            "Exact P150x4 hardware coverage requires a physical P150_X4 cluster; submeshes are not SKU-equivalent"
+            "Exact P150x4 hardware coverage requires a physical P150_X4 or P300_X2 cluster; "
+            "other submeshes are not SKU-equivalent"
         )
     if blackhole_selected and mesh_device_name == "P300" and req_shape == (1, 2):
         cluster_type = ttnn.cluster.get_cluster_type()
@@ -176,7 +177,7 @@ def ttnn_mesh_device(request):
                 "two-chip Blackhole cluster; "
                 f"got {cluster_type}"
             )
-    allowed = _allowed_req_shapes_for_system(sys_shape)
+    allowed = _allowed_req_shapes_for_system(sys_shape, blackhole_selected=blackhole_selected)
     if req_shape not in allowed:
         pytest.skip(
             f"{__file__}: Requested mesh {req_shape} unsupported on system {sys_shape}. "
@@ -257,7 +258,15 @@ def _default_fabric_config(mesh_shape: tuple[int, int]) -> ttnn.FabricConfig | N
     return ttnn.FabricConfig.FABRIC_1D
 
 
-def _allowed_req_shapes_for_system(sys_shape: tuple[int, int]) -> set[tuple[int, int]]:
+def _is_physical_p150x4_cluster(cluster_type) -> bool:
+    """Accept the two physical four-die BH systems that expose logical P150x4."""
+
+    return cluster_type in (ttnn.cluster.ClusterType.P150_X4, ttnn.cluster.ClusterType.P300_X2)
+
+
+def _allowed_req_shapes_for_system(
+    sys_shape: tuple[int, int], *, blackhole_selected: bool = False
+) -> set[tuple[int, int]]:
     # todo)) Different cluster has potentially different physical interconnects (in terms of number of links, topology, etc.).
     #        Thus, a tuple of ints may not be enough to fingerprint the parent/system mesh device. We need to use a more sophisticated fingerprinting mechanism so we can base the allowed list of (sub)mesh shapes on the parent/system mesh device.
     # [INFO] The most robust way to identify the underlying system is to use ttnn.cluster.get_cluster_type(), which returns a ClusterType enum that precisely identifies your hardware configuration. cluster.cpp:16-37
@@ -287,6 +296,12 @@ def _allowed_req_shapes_for_system(sys_shape: tuple[int, int]) -> set[tuple[int,
     if sys_shape in _CANDIDATE_REQ_SHAPES:
         for mesh_shape in _CANDIDATE_REQ_SHAPES[sys_shape]:
             allowed.add(mesh_shape)
+
+    # A physical 2x2 Blackhole quietbox is exposed to the in-scope 1D models
+    # as the canonical P150x4 view. Preserve generic/non-BH square requests;
+    # only the opted-in BH path rejects model-visible (2,2).
+    if blackhole_selected and sys_shape == (2, 2):
+        allowed.discard((2, 2))
 
     return allowed
 
