@@ -19,6 +19,7 @@ file(
     deepseek_moe_fast_reduce_nc/device/kernels/*.cpp
     deepseek_moe_fast_reduce_nc_fused/device/kernels/*.cpp
     fast_reduce_nc/device/kernels/*.cpp
+    attn_res_weighted_reduce_nc/device/kernels/*.cpp
     integral_image/device/kernels/*.cpp
     integral_image/device/kernels/*.hpp
 )

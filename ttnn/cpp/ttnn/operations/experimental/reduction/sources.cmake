@@ -5,6 +5,7 @@ set(TTNN_OP_EXPERIMENTAL_REDUCTION_API_HEADERS
     deepseek_grouped_gate/deepseek_grouped_gate.hpp
     deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc.hpp
     fast_reduce_nc/fast_reduce_nc.hpp
+    attn_res_weighted_reduce_nc/attn_res_weighted_reduce_nc.hpp
     integral_image/intimg.hpp
 )
 
@@ -12,6 +13,9 @@ set(TTNN_OP_EXPERIMENTAL_REDUCTION_SRCS
     fast_reduce_nc/device/fast_reduce_nc_device_operation.cpp
     fast_reduce_nc/device/fast_reduce_nc_program_factory.cpp
     fast_reduce_nc/fast_reduce_nc.cpp
+    attn_res_weighted_reduce_nc/device/attn_res_weighted_reduce_nc_device_operation.cpp
+    attn_res_weighted_reduce_nc/device/attn_res_weighted_reduce_nc_program_factory.cpp
+    attn_res_weighted_reduce_nc/attn_res_weighted_reduce_nc.cpp
     deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_device_operation.cpp
     deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_program_factory.cpp
     deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc.cpp
@@ -34,6 +38,7 @@ set(TTNN_OP_EXPERIMENTAL_REDUCTION_SRCS
 set(TTNN_OP_EXPERIMENTAL_REDUCTION_NANOBIND_SRCS
     fast_reduce_nc/fast_reduce_nc_nanobind.cpp
     fast_reduce_nc/fast_reduce_nc_nanobind.cpp
+    attn_res_weighted_reduce_nc/attn_res_weighted_reduce_nc_nanobind.cpp
     deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.cpp
     deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused_nanobind.cpp
     integral_image/intimg_nanobind.cpp
