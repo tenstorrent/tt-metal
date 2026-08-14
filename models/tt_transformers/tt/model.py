@@ -152,8 +152,15 @@ class Transformer(LightweightModule):
         )
 
         # Initialize on-device sampling if supported
-        # Sampling on device is supported only if each device has maximum logits size of 64*1024
-        sampling_splits = self.args.num_devices if list(self.mesh_device.shape) != [1, 1] else 2
+        # Sampling on device is supported only if each device has maximum logits size of 64*1024.
+        # On a single device TTSampling cuts the vocab into as many same-device chunks as needed
+        # (power-of-two, each <= 64*1024), so any vocab it can cut tile-aligned is supported (#53064).
+        if list(self.mesh_device.shape) != [1, 1]:
+            sampling_splits = self.args.num_devices
+        else:
+            sampling_splits = 2
+            while self.args.vocab_size // sampling_splits > 64 * 1024:
+                sampling_splits *= 2
         self._supports_on_device_sampling = prefetcher is None and self.args.vocab_size // sampling_splits <= 64 * 1024
         if self._supports_on_device_sampling:
             self.sampling = SamplingGenerator(
