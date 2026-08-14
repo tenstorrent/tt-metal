@@ -9,7 +9,10 @@
 #include <utility>
 
 #include <tt-metalium/base_types.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp>
+#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/operations/moreh/moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp"
@@ -24,7 +27,12 @@ namespace ttnn::operations::moreh::moreh_softmax_backward {
 // merge into one scope, where same-named constants would collide.
 namespace metal2 {
 
-using namespace tt::tt_metal::experimental;
+using tt::tt_metal::experimental::ComputeUnpackModes;
+using tt::tt_metal::experimental::DataflowBufferSpec;
+using tt::tt_metal::experimental::DFBSpecName;
+using tt::tt_metal::experimental::KernelSpec;
+using tt::tt_metal::experimental::KernelSpecName;
+using tt::tt_metal::experimental::TensorParamName;
 
 // ---------------------------------------------------------------------------------------------
 // Dataflow buffers, named for the value each one carries
