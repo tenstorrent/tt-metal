@@ -2557,7 +2557,10 @@ def test_partial_wave_primes_every_padded_child_program_before_capture(
     padded_rows,
 ):
     padded_length = 128 if prompt_length <= 128 else 1024
-    runtime = _runtime(trace_capture_prime_sequence_lengths=(padded_length,))
+    runtime = _runtime(
+        max_prefill_batch_size=32,
+        trace_capture_prime_sequence_lengths=(padded_length,),
+    )
     tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=prompt_length, rows=active_rows)
     prepared = runtime.prepare(
         tokens=tokens,
@@ -2566,6 +2569,9 @@ def test_partial_wave_primes_every_padded_child_program_before_capture(
         empty_slots=list(range(active_rows)),
         start_pos=start_pos,
     )[0]
+    assert prepared.request.kind == "batched"
+    assert len(prepared.request.source_rows) == active_rows
+    assert prepared.request.padded_batch_size == padded_rows
     operation_plan = runtime.capture_plan(prepared)
     persistent = PrefillHiddenPersistentInputs(device_inputs="persistent-inputs")
     child_programs = set()
