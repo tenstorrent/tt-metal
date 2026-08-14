@@ -222,11 +222,16 @@ def get_matmul_config(M, K, N, core_grid, default_block_size=None):
 
         M_tiles = math.ceil(M / 32)
         N_tiles = math.ceil(N / 32)
+        K_tiles = math.ceil(K / 32)
 
         if M_tiles < M_block_size:
             M_block_size = subblock_h
         if N_tiles < N_block_size:
             N_block_size = subblock_w
+        # A block cannot span more tiles than the axis has. Left unclamped, a narrow K
+        # reserves circular buffers for tiles that do not exist — enough to overflow L1 in
+        # float32 on a K of 2 tiles, which is how this was found.
+        K_block_size = min(K_block_size, K_tiles)
 
         signature = (M, K, N, grid_x, grid_y)
         if signature not in _warned_matmul_signatures:

@@ -28,6 +28,7 @@ import ttnn
 from ...layers.embeddings import TimestepEmbedding, Timesteps
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
+from ...layers.na3d import neighborhood_attention_3d as na3d_on_device
 from ...layers.normalization import RMSNorm
 
 if TYPE_CHECKING:
@@ -111,37 +112,6 @@ class DiffVAEStage5Config:
 # ---------------------------------------------------------------------------
 
 
-def _na3d_host_shim(
-    q: ttnn.Tensor,
-    k: ttnn.Tensor,
-    v: ttnn.Tensor,
-    *,
-    kernel_size: tuple[int, int, int],
-    scale: float,
-) -> ttnn.Tensor:
-    """Run neighborhood attention on the host until a device primitive exists.
-
-    Delegates to upstream's own eager NA3D so a parity failure can only come from the
-    ttnn arithmetic around it, never from a second reimplementation of the window
-    geometry. That makes ``ltx_core`` an import-time requirement of this path only --
-    once ``layers.na3d`` lands, nothing here is reached.
-    """
-    from ltx_core.model.video_vae.transformer.fallback_na.eager import na3d  # noqa: PLC0415
-
-    device = q.device()
-    dtype = q.dtype
-    out = na3d(
-        ttnn.to_torch(q),
-        ttnn.to_torch(k),
-        ttnn.to_torch(v),
-        kernel_size=kernel_size,
-        scale=scale,
-    )
-    batch, t, h, w, num_heads, head_dim = out.shape
-    out = out.reshape(batch, t, h, w, num_heads * head_dim)
-    return ttnn.from_torch(out, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
-
-
 def neighborhood_attention_3d(
     q: ttnn.Tensor,
     k: ttnn.Tensor,
@@ -156,14 +126,12 @@ def neighborhood_attention_3d(
     Returns ``(B, T, H, W, num_heads * head_dim)``. Mirrors upstream's
     ``NAAttentionCallable`` contract.
 
-    Dispatches to ``layers.na3d`` when that module exists and falls back to a host
-    round trip otherwise; this is the single swap point for the device primitive.
+    This was a swap point for a host fallback while the device primitive was being written.
+    The dispatch is now direct and unconditional on purpose: a fallback selected by
+    ``except ImportError`` would move attention to the host silently, and every parity test
+    here would still pass — slower, and no longer measuring the device.
     """
-    try:
-        from ...layers.na3d import neighborhood_attention_3d as impl  # noqa: PLC0415
-    except ImportError:
-        return _na3d_host_shim(q, k, v, kernel_size=kernel_size, scale=scale)
-    return impl(q, k, v, kernel_size=kernel_size, scale=scale)
+    return na3d_on_device(q, k, v, kernel_size=kernel_size, scale=scale)
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +272,18 @@ def _reshape_retiled(x: ttnn.Tensor, shape: Sequence[int]) -> ttnn.Tensor:
     return ttnn.to_layout(rm, ttnn.TILE_LAYOUT)
 
 
+def _reshape_row_major(x: ttnn.Tensor, shape: Sequence[int]) -> ttnn.Tensor:
+    """Reshape and leave the result in ROW_MAJOR, for consumers that want it that way.
+
+    Tilizing a shape whose second-to-last dim is small is expensive out of proportion to the
+    data: TILE rounds both of the last two dims up to 32, so a trailing ``(num_heads, head_dim)``
+    of ``(4, 64)`` costs 8x its own size — 13 GB for a 1.7 GB activation at 1920x1088. The
+    neighborhood-attention primitive gathers rows in ROW_MAJOR anyway, so tilizing here only to
+    have it undone was paying that padding for nothing.
+    """
+    return ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), tuple(shape))
+
+
 def _slice_last(x: ttnn.Tensor, start: int, stop: int) -> ttnn.Tensor:
     """Slice the channel dim. Callers keep ``start``/``stop`` tile-aligned."""
     starts = [0] * (len(x.shape) - 1) + [start]
@@ -435,9 +415,9 @@ class _NeighborhoodAttention3D(Module):
         k = self._rope(self.k_norm(k), tables)
 
         out = neighborhood_attention_3d(
-            _reshape_retiled(q, volume_shape),
-            _reshape_retiled(k, volume_shape),
-            _reshape_retiled(v, volume_shape),
+            _reshape_row_major(q, volume_shape),
+            _reshape_row_major(k, volume_shape),
+            _reshape_row_major(v, volume_shape),
             kernel_size=cfg.kernel_size,
             scale=1.0,
         )

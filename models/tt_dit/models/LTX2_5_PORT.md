@@ -7,7 +7,8 @@ Status and plan for bringing [LTX-2.5](https://github.com/Lightricks/LTX-2) (ups
 ## Status
 
 **Distilled T2V is the bring-up target.** Text path + distilled pipeline + stage-1 ancestral
-Euler are in; I2V / DiffVAE / DFR are out of scope until T2V is solid.
+Euler are in, and the DiffVAE decoder now matches upstream on device though it is not yet wired
+in; I2V and DFR are out of scope until T2V is solid.
 
 | Component | State |
 |---|---|
@@ -19,7 +20,8 @@ Euler are in; I2V / DiffVAE / DFR are out of scope until T2V is solid.
 | Transformer config flags | `ff_bias` auto-detected from checkpoint; keyframes abs-pos dropped on load (DFR later) |
 | Audio VAE | Split `*-audio-vae-bf16` wired (decoder + vocoder prefixes match loader) |
 | Duration head | Not started, optional |
-| I2V / DiffVAE / DFR | Deferred |
+| DiffVAE video decoder | Decodes latent to pixels on device, PCC 99.99 % vs upstream on shipped weights; **not yet wired into the pipeline**, and untested above 768×512 |
+| I2V / DFR | Deferred |
 
 ## Structure
 
@@ -157,12 +159,17 @@ Two tokenizer traps:
 |---|---|---|
 | Pipelines + split loading | Landed | Paths, Gemma-4, generate; smoke on 4×8 (`4x8sp1tp0nl2_ring_is_fsdp0`). |
 | Stage-1 ancestral Euler | Landed | On-device ttnn math; host only draws seeded noise (`seed+10000`) and uploads. |
-| Conv video VAE file | Blocked on HF | Gated `*-conv-bf16`; interim = 2.3 monolith (arch-identical). Do **not** use DiffVAE `video-vae-bf16`. |
+| Video decode is 2.3-era | Decoder built, not yet wired | The pipeline still calls the 2.3 monolith's conv decoder. Safe for correctness — the shipped 2.5 VAE's 84 encoder tensors and both `per_channel_statistics` are **byte-identical** to 2.3's, so the latent space is unchanged — but it forgoes 2.5's decode quality. The distilled recipe on the model card passes `--video-vae-path .../ltx-2.5-video-vae-bf16.safetensors`, the **DiffVAE**, and never lists `*-conv-bf16` (which is why the local mirror lacks it): the gated conv file was never the target. That decoder now exists on device (see [DiffVAE](#diffvae-video-decoder)); what remains is pipeline wiring and resolutions above 768×512. Do not load DiffVAE weights into the conv decoder: different architectures. |
 | Transformer `ff_bias` | Landed | Auto from checkpoint metadata. |
-| Audio VAE | Landed | Split file loads on device. |
-| Spatial upsampler | Landed | 2.5 spatial-x2 path. |
+| Audio VAE | Landed | Split file loads on device; all 1329 tensors (`audio_vae.*` + `vocoder.*`) byte-identical to 2.3. |
+| Spatial upsampler | Landed | 2.5 spatial-x2 path; all 72 tensors byte-identical to 2.3. |
 | Duration head | Optional | Empty in shipped config. |
 | I2V CRF 18 / DiffVAE / DFR / keyframes | Deferred | Not needed for distilled T2V. |
+
+Weight-level diff of the shipped files: the only genuinely new 2.5 weights on the distilled T2V
+path are the **DiT** and the **Gemma-4 text encoder + projection**. Video-VAE encoder, latent
+statistics, audio VAE, vocoder and spatial upsampler are all byte-identical to 2.3 (the new
+DiffVAE decoder and temporal upscaler are unused here).
 
 Checkpoint headers settled the expensive questions in the cheap direction:
 
@@ -181,22 +188,195 @@ so the compatibility check will hard-require the Gemma-4 encoder.
 
 ### Deferred
 
-DiffVAE (2-3 months) and the DFR pipeline. The `-conv-bf16` checkpoint is a complete decode
-path selected automatically from checkpoint metadata, so baseline 2.5 needs neither. Note
-the shipped DiffVAE is *heavier* than the audit assumed — `stage_channels=[2048, 1024, 512,
-512, 256]`, double the upstream class defaults, and `model_output_type="x0"` rather than the
-`"v"` default — which strengthens the case for shipping on the conv decoder first. The
-temporal upsampler is DFR-only and deferred with it.
+The DFR pipeline and its temporal upsampler.
+
+DiffVAE was deferred here on a 2-3 month estimate; that estimate was wrong by a wide margin
+and the decoder is built. Two assumptions behind it are worth correcting, because they are the
+reason it looked expensive: the plan expected to ship on the conv decoder, but the distilled
+recipe does not use it and the gated file was never obtainable; and NATTEN's fused kernel
+looked irreplaceable, when in fact upstream's own natten-free fallback shows the window is
+expressible as masked attention over grouped query tiles, which ttnn already has. The
+observation that the shipped config is *heavier* than the class defaults still stands
+(`stage_channels=[2048, 1024, 512, 512, 256]`, and `model_output_type="x0"` rather than the
+`"v"` default) — it just did not turn out to be the deciding cost.
+
+## DiffVAE video decoder
+
+2.5's video decoder is not a convnet. Every one of its 24 blocks is 3D neighborhood attention
+over a local window, so the port hinges on one primitive rather than on conv3d halo tuning:
+`layers/na3d.py`. Files are `models/vae/diffvae_ltx.py` (deterministic stages 1-4, plus the
+composed `DiffVAEDecoder`) and `models/vae/diffvae_ltx_stage5.py` (the diffusion stage).
+
+Shape of the thing, read from the checkpoint's own metadata rather than hardcoded
+(`decoder_config`): `stage_channels=[2048, 1024, 512, 512, 256]`, `stage_depths=[4, 6, 4, 2, 8]`,
+`stage_kernels=[(3,7,7), (3,7,7), (3,5,5), (3,5,5), (11,11,11)]`, `head_dim=64`, `patch_size=4`.
+The first four entries are the deterministic stages (16 blocks, 97.7 % of the 417 M parameters);
+the trailing 256-channel 8-block entry is the diffusion stage, which owns almost none of the
+weights and almost all of the compute — it runs on the largest grid with a 1331-element window.
+
+### Neighborhood attention as masked attention
+
+NATTEN keeps the window *size* constant and shifts it inward at boundaries, so a query at
+index 0 attends to `[0, K)`, not to a truncated `[0, K//2]`. A truncating window looks
+plausible and is wrong everywhere near an edge. Because the rule is that regular, an axis has
+only three regimes and a whole volume collapses to at most 27 distinct masks in 3D no matter
+how many tiles it has — so `plan_na3d` groups query tiles by window geometry and each group
+becomes one batched SDPA call sharing one additive mask.
+
+- **bfloat16 only.** The gathers are `ttnn.embedding`, which validates that its table is
+  bfloat16. Lifting this means replacing the gather, not casting — a quiet downcast would let
+  an fp32 caller believe it had fp32 attention. Asserted at the top of the primitive.
+- **Plans are cached** (`cached_device_plan`) on grid, kernel and dtype. They depend on no
+  weights, but they upload index tables and masks, so rebuilding per block would dominate.
+- **Waste is the tuning knob.** The dense formulation evaluates more scores than an exact
+  kernel because a tile's key span covers the union of its queries' windows. Current tile
+  search grows tiles until they hit a score budget, which minimises call count and *maximises*
+  waste: 2.9x on stage 5's big kernel but **10-26x on the deterministic stages**, where a
+  length-10 tile reads 14 keys to serve a 5-wide window. Harmless at 768×512, worth fixing
+  before full res.
+
+### RoPE: reordered, not reimplemented
+
+Upstream rotates adjacent dim pairs within each axis chunk (for `head_dim` 64 the split is
+`(16, 24, 24)`: T rotates dims 0-15, H 16-39, W 40-63). Interleaved pairs would need a stride-2
+gather per rotation. Attention only sees `q·k`, so permuting `head_dim` identically in q and k
+is invisible in the output — reorder to `[all first-of-pair, all second-of-pair]` and RoPE
+becomes the contiguous `(x1*cos - x2*sin, x1*sin + x2*cos)` with a single width-32 table. The
+permutation folds into the q/k projection rows and the `q_norm`/`k_norm` weights at load, so it
+is free at runtime, and it is **bit-identical** to upstream (verified, not approximated).
+RMSNorm tolerates it because its scale is over all dims, hence permutation-invariant, provided
+its learned weight is permuted the same way.
+
+`rope_num_tiles=4` is arithmetically a **no-op** (exactly 0 difference): upstream slabs W only
+to keep Dynamo from specializing on shape, and carries absolute offsets across slabs.
+
+### Verified against upstream, on shipped weights
+
+Ground truth comes from `capture_stages.py`, which drives upstream's own decoder one stage at a
+time with the shipped checkpoint and *injected* noise — stage 5 predicts x0 from that noise in a
+single step, so the noise is an input, and matching pixels requires the reference's own draw
+rather than a reseed. It bypasses tiling deliberately, so each stage compares against one
+contiguous tensor.
+
+| What | PCC |
+|---|---|
+| NA3D device vs host executor (5 shapes incl. axis-shorter-than-kernel) | > 99.9 % |
+| `NABlock`, blocks 0 and 1, real activations | 99.985 %, 99.987 % |
+| `conv_in` + 14 blocks + 3 upsamples | 99.976 % |
+| Latent → stage-5 context (4 stages + ghost pad + crop) | 99.988 % |
+| Stage 5, per block (8) then pixels, synthetic weights | 99.995 % → 99.993 % |
+| **Latent → pixels, whole decoder, 320×320** | **99.985 %** |
+| **Latent → pixels, whole decoder, 768×512** | **99.994 %** |
+
+bfloat16 error does not compound with depth: one block is 99.985 %, fourteen blocks plus three
+upsamples is 99.976 %, and the joined 24-block decoder is 99.99 %. Host-side exactness checks
+(`ltx25_diffvae/check_rope.py`, `check_upsample.py`, `check_na3d_plan.py`) cover the pieces where
+a silent error is possible: RoPE and pixel shuffle are exact to 0.0, plan geometry to < 1e-5.
+
+### Traps
+
+- **`per_channel_statistics` folds into `conv_in`.** The decoder's first act is
+  `conv_in(x * std + mean)`, exactly a Linear with `std` scaled into the weight columns and
+  `W @ mean` added to the bias. Free and exact, so the decoder takes the same normalized latent
+  the conv decoder takes — but it means `conv_in`'s loaded weights are not the file's weights.
+- **The ghost pad and crop are one workaround in two halves.** Before stage 1 the last latent
+  frame is replicated `(stage_kernels[0][0] // 2) * 2 = 2` times for NATTEN's trailing border;
+  after stage 4 that appendix is cropped back off (`2 * 8 = 16` pixel frames). Apply the pad
+  without the crop and the video grows 16 spurious frames. Frame arithmetic for a 4-frame
+  latent: 4 → 6 padded → 41 through four upsamples → 25.
+- **Pixel shuffle packs channels outermost.** `(c p1 p2 p3)`, so the shuffle is a
+  reshape-then-transpose, not a view. Wrong factor order still yields the right shape with
+  plausible statistics — it scrambles space against channels and survives to the video as mush.
+- **Each temporal upsample emits a duplicate leading frame** that must be dropped, and only for
+  the chunk holding the true t=0. A tiled caller decoding a later chunk must pass
+  `drop_leading_frame=False`.
+- **`model_output_type` lives at the top of the vae config, not under `decoder`**, but the
+  constructor takes it — and its default `"v"` silently changes the final step from "return x0"
+  to an Euler update. This checkpoint is `"x0"` with one inference step, so a single pass is the
+  whole decode.
+- **`decoder.type_emb`** is in the checkpoint and referenced nowhere in upstream's source
+  (repo-wide search): vestigial, not something we fail to apply.
+- **Static gates are pre-folded** into `attn.proj` / `mlp.w_down` / `context_proj` at export, so
+  the shipped file has no gate tensors and `AdaLNZero`'s 7 chunks are computed with 3 discarded.
+  The loader rejects a checkpoint that *does* carry them rather than silently decoding wrong.
+
+### Remaining
+
+Not wired into the pipeline yet, and untested above 768×512. Full res is 3.26 M stage-5 sites
+(vs 614 k at 768×512); memory has scaled without trouble so far, which is worth confirming
+before building tiling, because upstream's halos are punishing: tiling happens on the stage-4
+input grid — full res `(21, 136, 240)` — with a one-sided halo of **(22, 24, 24)** (stage-4
+depth × kernel plus stage-5's 8 × 5, scaled by `upsample3_stride`). The T halo alone exceeds
+the 21-frame axis, so a 25-frame video cannot be split temporally at all, and a 2×2 spatial
+split would compute ~2.4x the untiled work. Upstream runs stages 1-3 on the full volume and
+tiles only stages 4-5, with pixel blending on overlaps. Nothing is timed yet.
+
+Three upstream inconsistencies found while reading, worth filing:
+`AdaLNZero`'s docstring claims zero-init identity behaviour that `DiffusionNABlock` undoes (it
+discards all three gate chunks and calls `reset_parameters()` on the output projection);
+`combined/attn.py` documents a `w_chunks` contract its `full()` path never reads; and
+`ops.unpatchify` lacks `patchify`'s rank guard, so a 6D tensor passes through untouched.
+
+## Text path: what is verified
+
+An extended investigation into apparently weak prompt adherence ended in a **stale cache**, not a
+port defect. The A/B runs from that hunt are not recorded here: any comparison that hit the cache
+is uninterpretable, so treating them as evidence would mislead. What survives is the work that
+read weights or ran deterministic parity tests, which is worth keeping so it is not re-derived:
+
+- **The whole text path, numerically.** `test_gemma4_parity::test_gemma4_full_stack_matches_huggingface`
+  holds all 48 layers against HF on a padded, masked real prompt (post-norm PCC 99.9997 %), and
+  `test_gemma4_text_path` holds the aggregate projection plus both connectors against diffusers'
+  `LTX2TextConnectors` on 2.5 weights (video 99.9849 %, audio 99.9899 %). The second one is what
+  clears `_weight_to_layer_major`: the checkpoint packs the 49 states D-major (measured directly —
+  grouping the 188160 columns strided by 49 recovers a per-layer norm profile, grouping them in
+  contiguous 3840-blocks gives a flat one), and a permute that disagreed could not hold 99.98 %.
+- **Tokenization.** Upstream `LTX2Pipeline._get_gemma_prompt_embeds` encodes the raw prompt with
+  no chat template or system wrapper, left-padded, `add_special_tokens=True`, and passes
+  `scale_factor=8` to the connectors — all matching this port. The packed tokenizer's
+  post-processor injects no special tokens, so `tokenize` adds BOS by hand; local HF Gemma-3
+  tokenizes the same text to identical ids including that BOS, so the hand-added token is right.
+- **HF architecture choice.** The packed config says `model_type: gemma4_unified_text` while our
+  reference builds `Gemma4TextModel`. On this config the two are bit-identical (PCC 1.000000, max
+  abs diff 0, neither with missing or unexpected keys), because the plain model's extra features
+  (MoE, per-layer embeddings, shared KV) are all disabled here.
+- **`keyframes_abs_pos_embedding`.** A single `[1, 4096]` vector, not a positional table, so it is
+  a keyframe marker added at keyframe tokens; dropping it on the T2V path is right.
+- **Checkpoint integrity.** All six 2.5 files are structurally complete (header + tensor extents
+  equal file size exactly), so nothing is truncated. Upstream's `DistilledPipeline` expects
+  exactly the two files we use.
+
+One property of the shipped encoder is worth knowing before probing it: activation scales are
+folded into its norms (`model.norm.weight` reaches +600, layer 0's `input_layernorm` spans
+-143..+193), so its final residual stream sits at norm ~2963 versus ~132 for Gemma-3, dominated
+by a few channels. A tied LM-head probe therefore predicts one constant token (0 % next-token
+accuracy where Gemma-3 scores 44 %), and raw cosine between prompts runs high for the same
+reason. Neither is a defect — the feature extractor's per-token RMS norm removes the scale.
+
+Still unverified, though no longer suspected: **weight provenance.** We read the projection and
+connectors out of the distilled DiT file, while upstream's diffusers layout keeps `connectors/`
+as a *shared* component stored apart from `transformer/`. Our parity tests prove the math is
+right **given those weights**, not that they are the tensors upstream loads. Settling it needs a
+diff against `Lightricks/LTX-2.5-Diffusers` `connectors/` (6.3 GB), gated for the local token.
+
+Debug levers left in the code from that investigation — `LTX25_TEXT_STACK=gemma3`, `LTX25_BOS`,
+`LTX25_TEXT_PAD_SIDE` — are now dead weight and a footgun (the first silently swaps in the 2.3
+text stack). Remove them unless a use appears.
 
 ## Correctness traps
 
 - **Image-conditioning CRF (I2V only).** `_PARAMS_SINCE_VERSION` has no 2.5 row, so a 2.5
   checkpoint inherits the 2.4 row and gets **CRF 18, not 33**. Our port still hardcodes 33 —
   fix when I2V is brought up; irrelevant to distilled T2V.
-- **Euler-ancestral sampler (landed for distilled).** Stage 1 only when
-  `model_version >= (2,5)`, seeded `seed + 10000`; stage 2 deterministic. Implemented as a
-  host gather → ancestral step → write-back so changing noise stays outside the address-baked
-  `inner_step` trace (`use_ancestral_sampler=True` on `LTX25DistilledPipeline`).
+- **Euler-ancestral sampler (landed for distilled).** Stage 1 only, seeded `seed + 10000`;
+  stage 2 deterministic (`use_ancestral_sampler=True` on `LTX25DistilledPipeline`). The step
+  math runs on device (`_euler_ancestral_step_tt`); the host only draws the seeded noise and
+  uploads it, and the result is `ttnn.copy`'d back into the latent so the address-baked
+  `inner_step` trace stays valid. No parity test yet for the tt step vs the host reference
+  `_euler_ancestral_step` — worth adding.
+- **Ancestral branch ignores frame-0 pinning.** The `ancestral` path in `_denoise_no_guidance`
+  does not call `_post_process_latent_tt`, so an image-conditioned stage 1 would silently drop
+  its conditioning. T2V is unaffected; wire the pin (or assert) when 2.5 I2V is brought up.
 - **`use_prompt_adaln_single`.** Absent from the 2.5 config, so it defaults true — same as
   2.3, no work. Separately, our `None` branch skips the static `prompt_scale_shift_table`,
   which is not upstream's `false` behaviour.
@@ -224,6 +404,13 @@ it on a single chip, validate each config's L1 footprint first, and expect littl
 
 ## Test and mesh gotchas
 
+- **Use a fresh `TT_DIT_CACHE_DIR` for every run.** Reusing a warm cache is not currently
+  safe: entries are keyed on names that do not capture every shape-affecting change, so a
+  stale entry is served for a tensor whose layout has moved. It surfaces loudly when the
+  shapes disagree (`shape mismatch: expected (4096, 3072), got (4096, 3104)` on
+  `transformer_blocks.0.attn1.to_qkv.weight.tensorbin` — a tile-padding delta), and
+  silently when they happen to agree, which is the dangerous case: an extended prompt-
+  adherence investigation was ultimately chasing exactly that. Pay the reload.
 - The device broker reaps a job after 300 s of silence, and piping pytest through `tail`
   buffers everything — including the framework's own 5 s progress heartbeat — so the job
   looks dead and gets killed. Don't pipe.
