@@ -1,0 +1,109 @@
+diff --git a/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl b/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl
+index 03ea860715c..0df523d6bb9 100644
+--- a/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl
++++ b/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl
+@@ -670,9 +670,18 @@ ALWI void reduce(
+                             }
+                         } else if constexpr (waits_per_tile(input_policy)) {
+                             // One-at-a-time: wait/pop per tile
+-                            input_dfb.wait_front(onetile);
+-                            reduce_tile<reduce_type, reduce_dim>(
+-                                input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
++                            // TEMPORARY PERF INSTRUMENTATION (revert before commit).
++                            // Identical split to the HEAD-side patch: wait and math in separate
++                            // scopes so rdc_math is payload rather than occupancy.
++                            {
++                                DeviceZoneScopedN("rdc_wait");
++                                input_dfb.wait_front(onetile);
++                            }
++                            {
++                                DeviceZoneScopedN("rdc_math");
++                                reduce_tile<reduce_type, reduce_dim>(
++                                    input_dfb_id, scaler_dfb_id, 0, 0, dst_idx);
++                            }
+                             input_dfb.pop_front(onetile);
+                         } else if constexpr (waits_bulk(input_policy)) {
+                             // BulkWaitBulkPop: use indexed access
+diff --git a/ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp b/ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp
+index d7e8435f38a..4920f431a20 100644
+--- a/ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp
++++ b/ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp
+@@ -7,6 +7,8 @@
+ #include "api/compute/eltwise_binary.h"
+ #include "api/compute/mask.h"
+ #include "api/compute/reduce.h"
++// TEMPORARY PERF INSTRUMENTATION (revert before commit).
++#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+ #include "api/compute/tile_move_copy.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+ #include "ttnn/kernel/compute/moreh_common.hpp"
+@@ -40,6 +42,9 @@ void kernel_main() {
+ 
+     for (uint32_t nc = 0; nc < NC; nc++) {
+         for (uint32_t wt = 0; wt < Wt; ++wt) {
++            // TEMPORARY PERF INSTRUMENTATION (revert before commit).
++            // Same scope as the HEAD-side col_total: the whole per-column body.
++            DeviceZoneScopedN("col_total");
+             // tiles are expected to be coming in in NCWH order (H-contiguous)
+             // reducing in W means out[0][w] = sum(h=0..H-1, in[h][w])
+             // in this case we just sequentially add to accumulator all the H-tiles in a column
+@@ -53,25 +58,40 @@ void kernel_main() {
+ 
+             // Optional masking of last H tile
+             if constexpr (do_mask_h) {
+-                tile_regs_acquire();
+-                dfb_input_obj.wait_front(onetile);
+-                copy_tile_init_with_dt(dfb_input_obj);
+-                copy_tile(dfb::input, 0, reduce_dst_idx);
+-
+-                copy_tile_init_with_dt(dfb_mask_h_obj);
+-                copy_tile(dfb::mask_h, 0, mask_dst_idx);
+-
+-                mask_tile_init();
+-                mask_tile(reduce_dst_idx, mask_dst_idx);
+-                tile_regs_commit();
+-
+-                dfb_masked_input_obj.reserve_back(onetile);
+-                tile_regs_wait();
+-                pack_tile_with_dt(reduce_dst_idx, dfb_masked_input_obj);
+-                tile_regs_release();
+-                dfb_masked_input_obj.push_back(onetile);
+-
+-                dfb_input_obj.pop_front(onetile);
++                // TEMPORARY PERF INSTRUMENTATION (revert before commit).
++                // mask_phase brackets exactly the work HEAD deletes. Its internal wait
++                // (input tile) and back-pressure (masked_input reserve) are split out, so
++                // mask_work/mask_pack are payload rather than occupancy. Statement order is
++                // unchanged -- only scopes were added.
++                {
++                    DeviceZoneScopedN("mask_phase");
++                    tile_regs_acquire();
++                    {
++                        DeviceZoneScopedN("mask_wait");
++                        dfb_input_obj.wait_front(onetile);
++                    }
++                    {
++                        DeviceZoneScopedN("mask_work");
++                        copy_tile_init_with_dt(dfb_input_obj);
++                        copy_tile(dfb::input, 0, reduce_dst_idx);
++
++                        copy_tile_init_with_dt(dfb_mask_h_obj);
++                        copy_tile(dfb::mask_h, 0, mask_dst_idx);
++
++                        mask_tile_init();
++                        mask_tile(reduce_dst_idx, mask_dst_idx);
++                        tile_regs_commit();
++                    }
++                    {
++                        DeviceZoneScopedN("mask_pack");
++                        dfb_masked_input_obj.reserve_back(onetile);
++                        tile_regs_wait();
++                        pack_tile_with_dt(reduce_dst_idx, dfb_masked_input_obj);
++                        tile_regs_release();
++                        dfb_masked_input_obj.push_back(onetile);
++                    }
++                    dfb_input_obj.pop_front(onetile);
++                }
+ 
+                 // Phase 2 with masked input: Reduce final masked tile with accumulation
+                 compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::masked_input, dfb::scaler, dfb::out>(

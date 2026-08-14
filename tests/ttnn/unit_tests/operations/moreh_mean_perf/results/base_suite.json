@@ -1,0 +1,232 @@
+{
+  "label": "base_suite",
+  "csv": "generated/profiler/reports/2026_08_13_14_01_56/ops_perf_results_2026_08_13_14_01_56.csv",
+  "cases": {
+    "sum_h_ragged": 35610.0,
+    "sum_h_aligned": 24020.0,
+    "sum_w_control": 26619.0,
+    "msoftmax_small_h_ragged": 67316.0,
+    "msoftmax_small_w_ragged": 70331.0,
+    "msoftmax_small_h_aligned": 72112.0,
+    "msoftmax_small_w_aligned": 75165.0,
+    "msoftmax_large_h_ragged": 775096.0,
+    "msoftmax_large_w_ragged": 785314.0,
+    "msoftmax_large_h_aligned": 780338.0,
+    "msoftmax_large_w_aligned": 789244.0,
+    "msoftmax_large_c_control": 186215.0,
+    "msoftmax_bw_small_h_ragged": 81849.0,
+    "msoftmax_bw_small_w_ragged": 78842.0,
+    "msoftmax_bw_small_h_aligned": 87153.0,
+    "msoftmax_bw_small_w_aligned": 82898.0,
+    "msoftmax_bw_large_h_control": 112255.0,
+    "nsoftmax_small_h_ragged": 67514.0,
+    "nsoftmax_small_w_ragged": 33570.0,
+    "nsoftmax_small_h_aligned": 72313.0,
+    "nsoftmax_small_w_aligned": 38545.0,
+    "nsoftmax_large_h_ragged": 567061.0,
+    "nsoftmax_large_w_ragged": 476633.0,
+    "nsoftmax_large_h_aligned": 577515.0,
+    "nsoftmax_large_w_aligned": 480881.0,
+    "nsoftmax_large_c_control": 179937.0,
+    "layernorm_ragged": 49232.0,
+    "layernorm_aligned": 49145.0,
+    "layernorm_large_ragged": 408904.0,
+    "layernorm_large_aligned": 400199.0,
+    "bias_bw_ragged": 45912.0,
+    "bias_bw_aligned": 17826.0
+  },
+  "detail": [
+    {
+      "case": "sum_h_ragged",
+      "op": "MorehSumOperation",
+      "ns": 35610.0,
+      "logical": 113
+    },
+    {
+      "case": "sum_h_aligned",
+      "op": "MorehSumOperation",
+      "ns": 24020.0,
+      "logical": 128
+    },
+    {
+      "case": "sum_w_control",
+      "op": "MorehSumOperation",
+      "ns": 26619.0,
+      "logical": 128
+    },
+    {
+      "case": "msoftmax_small_h_ragged",
+      "op": "MorehSoftmaxOperation",
+      "ns": 67316.0,
+      "logical": 113
+    },
+    {
+      "case": "msoftmax_small_w_ragged",
+      "op": "MorehSoftmaxOperation",
+      "ns": 70331.0,
+      "logical": 113
+    },
+    {
+      "case": "msoftmax_small_h_aligned",
+      "op": "MorehSoftmaxOperation",
+      "ns": 72112.0,
+      "logical": 128
+    },
+    {
+      "case": "msoftmax_small_w_aligned",
+      "op": "MorehSoftmaxOperation",
+      "ns": 75165.0,
+      "logical": 128
+    },
+    {
+      "case": "msoftmax_large_h_ragged",
+      "op": "MorehSoftmaxOperation",
+      "ns": 775096.0,
+      "logical": 1009
+    },
+    {
+      "case": "msoftmax_large_w_ragged",
+      "op": "MorehSoftmaxOperation",
+      "ns": 785314.0,
+      "logical": 1009
+    },
+    {
+      "case": "msoftmax_large_h_aligned",
+      "op": "MorehSoftmaxOperation",
+      "ns": 780338.0,
+      "logical": 1024
+    },
+    {
+      "case": "msoftmax_large_w_aligned",
+      "op": "MorehSoftmaxOperation",
+      "ns": 789244.0,
+      "logical": 1024
+    },
+    {
+      "case": "msoftmax_large_c_control",
+      "op": "MorehSoftmaxOperation",
+      "ns": 186215.0,
+      "logical": 128
+    },
+    {
+      "case": "msoftmax_bw_small_h_ragged",
+      "op": "MorehSoftmaxBackwardOperation",
+      "ns": 81849.0,
+      "logical": 113
+    },
+    {
+      "case": "msoftmax_bw_small_w_ragged",
+      "op": "MorehSoftmaxBackwardOperation",
+      "ns": 78842.0,
+      "logical": 113
+    },
+    {
+      "case": "msoftmax_bw_small_h_aligned",
+      "op": "MorehSoftmaxBackwardOperation",
+      "ns": 87153.0,
+      "logical": 128
+    },
+    {
+      "case": "msoftmax_bw_small_w_aligned",
+      "op": "MorehSoftmaxBackwardOperation",
+      "ns": 82898.0,
+      "logical": 128
+    },
+    {
+      "case": "msoftmax_bw_large_h_control",
+      "op": "MorehSoftmaxBackwardOperation",
+      "ns": 112255.0,
+      "logical": 128
+    },
+    {
+      "case": "nsoftmax_small_h_ragged",
+      "op": "SoftmaxDeviceOperation",
+      "ns": 67514.0,
+      "logical": 113
+    },
+    {
+      "case": "nsoftmax_small_w_ragged",
+      "op": "SoftmaxDeviceOperation",
+      "ns": 33570.0,
+      "logical": 113
+    },
+    {
+      "case": "nsoftmax_small_h_aligned",
+      "op": "SoftmaxDeviceOperation",
+      "ns": 72313.0,
+      "logical": 128
+    },
+    {
+      "case": "nsoftmax_small_w_aligned",
+      "op": "SoftmaxDeviceOperation",
+      "ns": 38545.0,
+      "logical": 128
+    },
+    {
+      "case": "nsoftmax_large_h_ragged",
+      "op": "SoftmaxDeviceOperation",
+      "ns": 567061.0,
+      "logical": 2033
+    },
+    {
+      "case": "nsoftmax_large_w_ragged",
+      "op": "SoftmaxDeviceOperation",
+      "ns": 476633.0,
+      "logical": 2033
+    },
+    {
+      "case": "nsoftmax_large_h_aligned",
+      "op": "SoftmaxDeviceOperation",
+      "ns": 577515.0,
+      "logical": 2048
+    },
+    {
+      "case": "nsoftmax_large_w_aligned",
+      "op": "SoftmaxDeviceOperation",
+      "ns": 480881.0,
+      "logical": 2048
+    },
+    {
+      "case": "nsoftmax_large_c_control",
+      "op": "SoftmaxDeviceOperation",
+      "ns": 179937.0,
+      "logical": 128
+    },
+    {
+      "case": "layernorm_ragged",
+      "op": "LayerNormDeviceOperation",
+      "ns": 49232.0,
+      "logical": 1009
+    },
+    {
+      "case": "layernorm_aligned",
+      "op": "LayerNormDeviceOperation",
+      "ns": 49145.0,
+      "logical": 1024
+    },
+    {
+      "case": "layernorm_large_ragged",
+      "op": "LayerNormDeviceOperation",
+      "ns": 408904.0,
+      "logical": 8177
+    },
+    {
+      "case": "layernorm_large_aligned",
+      "op": "LayerNormDeviceOperation",
+      "ns": 400199.0,
+      "logical": 8192
+    },
+    {
+      "case": "bias_bw_ragged",
+      "op": "MorehBiasAddBackwardOperation",
+      "ns": 45912.0,
+      "logical": null
+    },
+    {
+      "case": "bias_bw_aligned",
+      "op": "MorehBiasAddBackwardOperation",
+      "ns": 17826.0,
+      "logical": null
+    }
+  ]
+}

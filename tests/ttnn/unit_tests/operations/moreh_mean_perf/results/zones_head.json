@@ -1,0 +1,35 @@
+{
+  "zragged_ht1": {
+    "TRISC_0/col_total": 7914.125,
+    "TRISC_0/rdc_math": 483.59375,
+    "TRISC_0/rdc_wait": 5483.140625,
+    "TRISC_1/col_total": 7046.65625,
+    "TRISC_1/rdc_math": 438.09375,
+    "TRISC_1/rdc_wait": 130.15625,
+    "TRISC_2/col_total": 8560.71875,
+    "TRISC_2/rdc_math": 128.140625,
+    "TRISC_2/rdc_wait": 128.046875
+  },
+  "zragged_ht4": {
+    "TRISC_0/col_total": 22038.75,
+    "TRISC_0/rdc_math": 1648.90625,
+    "TRISC_0/rdc_wait": 16208.09375,
+    "TRISC_1/col_total": 21535.671875,
+    "TRISC_1/rdc_math": 10275.078125,
+    "TRISC_1/rdc_wait": 555.875,
+    "TRISC_2/col_total": 22010.34375,
+    "TRISC_2/rdc_math": 514.859375,
+    "TRISC_2/rdc_wait": 524.4375
+  },
+  "zaligned_ht4": {
+    "TRISC_0/col_total": 21676.203125,
+    "TRISC_0/rdc_math": 1573.828125,
+    "TRISC_0/rdc_wait": 16439.828125,
+    "TRISC_1/col_total": 21194.65625,
+    "TRISC_1/rdc_math": 10078.203125,
+    "TRISC_1/rdc_wait": 561.265625,
+    "TRISC_2/col_total": 21623.015625,
+    "TRISC_2/rdc_math": 516.09375,
+    "TRISC_2/rdc_wait": 522.671875
+  }
+}

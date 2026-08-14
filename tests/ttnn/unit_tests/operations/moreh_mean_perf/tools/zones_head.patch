@@ -1,0 +1,51 @@
+diff --git a/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl b/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl
+index e6529da5070..b6ab673c4ba 100644
+--- a/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl
++++ b/ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.inl
+@@ -691,9 +691,19 @@ ALWI void reduce(
+                             }
+                         } else if constexpr (waits_per_tile(input_policy)) {
+                             // One-at-a-time: wait/pop per tile
+-                            input_dfb.wait_front(onetile);
+-                            reduce_tile<reduce_type, reduce_dim>(
+-                                input_dfb_id, scaler_dfb_id, 0, scaler_idx, dst_idx);
++                            // TEMPORARY PERF INSTRUMENTATION (revert before commit).
++                            // The wait and the math live in separate scopes so the number for
++                            // rdc_math is payload, not occupancy: a zone spanning both would be
++                            // indistinguishable from reader starvation.
++                            {
++                                DeviceZoneScopedN("rdc_wait");
++                                input_dfb.wait_front(onetile);
++                            }
++                            {
++                                DeviceZoneScopedN("rdc_math");
++                                reduce_tile<reduce_type, reduce_dim>(
++                                    input_dfb_id, scaler_dfb_id, 0, scaler_idx, dst_idx);
++                            }
+                             input_dfb.pop_front(onetile);
+                         } else if constexpr (waits_bulk(input_policy)) {
+                             // BulkWaitBulkPop: use indexed access
+diff --git a/ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp b/ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp
+index 0c0fef1191d..8bc233d0c1a 100644
+--- a/ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp
++++ b/ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp
+@@ -6,6 +6,8 @@
+ 
+ #include "api/compute/eltwise_binary.h"
+ #include "api/compute/reduce.h"
++// TEMPORARY PERF INSTRUMENTATION (revert before commit).
++#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+ #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+ #include "ttnn/kernel/compute/moreh_common.hpp"
+ #include "api/dataflow/dataflow_buffer.h"
+@@ -28,6 +30,10 @@ void kernel_main() {
+ 
+     for (uint32_t nc = 0; nc < NC; nc++) {
+         for (uint32_t wt = 0; wt < Wt; ++wt) {
++            // TEMPORARY PERF INSTRUMENTATION (revert before commit).
++            // Whole per-column body: the region the branch rewrote. Comparable against base,
++            // where the same scope also encloses the mask phase.
++            DeviceZoneScopedN("col_total");
+             compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::input, dfb::scaler, dfb::out>(
+                 compute_kernel_lib::ReduceInputBlockShape::col(Ht),
+                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),

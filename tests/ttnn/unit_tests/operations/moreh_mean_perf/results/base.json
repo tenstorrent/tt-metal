@@ -1,0 +1,96 @@
+{
+  "label": "base",
+  "csv": "generated/profiler/reports/2026_08_13_12_32_29/ops_perf_results_2026_08_13_12_32_29.csv",
+  "cases": {
+    "ragged_ht1": 21977.0,
+    "ragged_ht4": 36068.0,
+    "ragged_ht16": 90564.0,
+    "ragged_ht32": 164029.0,
+    "aligned_ht4": 24204.0,
+    "aligned_ht32": 152141.0,
+    "w_control_ragged": 39324.0,
+    "w_control_aligned": 39961.0
+  },
+  "detail": [
+    {
+      "case": "ragged_ht1",
+      "call": 1024,
+      "op": "MorehMeanOperation",
+      "ns": 21977.0,
+      "logical_h": 17,
+      "padded_h": 32,
+      "ksrc": "['ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp']",
+      "cores": "64"
+    },
+    {
+      "case": "ragged_ht4",
+      "call": 2048,
+      "op": "MorehMeanOperation",
+      "ns": 36068.0,
+      "logical_h": 113,
+      "padded_h": 128,
+      "ksrc": "['ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp']",
+      "cores": "64"
+    },
+    {
+      "case": "ragged_ht16",
+      "call": 3072,
+      "op": "MorehMeanOperation",
+      "ns": 90564.0,
+      "logical_h": 497,
+      "padded_h": 512,
+      "ksrc": "['ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp']",
+      "cores": "64"
+    },
+    {
+      "case": "ragged_ht32",
+      "call": 4096,
+      "op": "MorehMeanOperation",
+      "ns": 164029.0,
+      "logical_h": 1009,
+      "padded_h": 1024,
+      "ksrc": "['ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp']",
+      "cores": "64"
+    },
+    {
+      "case": "aligned_ht4",
+      "call": 5120,
+      "op": "MorehMeanOperation",
+      "ns": 24204.0,
+      "logical_h": 128,
+      "padded_h": 128,
+      "ksrc": "['ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp']",
+      "cores": "64"
+    },
+    {
+      "case": "aligned_ht32",
+      "call": 6144,
+      "op": "MorehMeanOperation",
+      "ns": 152141.0,
+      "logical_h": 1024,
+      "padded_h": 1024,
+      "ksrc": "['ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_h.cpp']",
+      "cores": "64"
+    },
+    {
+      "case": "w_control_ragged",
+      "call": 7168,
+      "op": "MorehMeanOperation",
+      "ns": 39324.0,
+      "logical_h": 113,
+      "padded_h": 128,
+      "ksrc": "['ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_w.cpp']",
+      "cores": "28"
+    },
+    {
+      "case": "w_control_aligned",
+      "call": 8192,
+      "op": "MorehMeanOperation",
+      "ns": 39961.0,
+      "logical_h": 128,
+      "padded_h": 128,
+      "ksrc": "['ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_w.cpp']",
+      "cores": "28"
+    }
+  ]
+}

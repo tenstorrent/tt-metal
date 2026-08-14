@@ -1,0 +1,29 @@
+{
+  "label": "base_topk",
+  "csv": "generated/profiler/reports/2026_08_13_14_02_22/ops_perf_results_2026_08_13_14_02_22.csv",
+  "cases": {
+    "topk_router_k64": 56300.0,
+    "topk_router_k2880": 62709.0,
+    "topk_router_k4096": 68951.0
+  },
+  "detail": [
+    {
+      "case": "topk_router_k64",
+      "op": "TopkRouterGptDeviceOperation",
+      "ns": 56300.0,
+      "logical": null
+    },
+    {
+      "case": "topk_router_k2880",
+      "op": "TopkRouterGptDeviceOperation",
+      "ns": 62709.0,
+      "logical": null
+    },
+    {
+      "case": "topk_router_k4096",
+      "op": "TopkRouterGptDeviceOperation",
+      "ns": 68951.0,
+      "logical": null
+    }
+  ]
+}
