@@ -514,3 +514,43 @@ verdicts on twin resources are the tell.
 
 **Running total across classes: §11 F3 (6) + §12 reconfig-escape (1 new) = 7 distinct confirmed
 gaps** (the 2 BH DEST bits are shared between the classes, counted once).
+
+---
+
+## 13. Effort to map `x̂_j` and `y'_j`
+
+Building the Sanitizer's per-operation state map means, for each op `j`: its own fields `x_j`
+and the operand fields it depends on, `y'_j` (§2.5). Estimated against the state-audit map.
+
+**Key asymmetry.** The audit records state *writes* (effects), but `y'_j` is a *read*
+dependency — "op `j` reads `φ`, so snapshot it." So the audit gives `x_j` (own writes) and
+`init`'s operand-*writes* for free, but the `y'_j` read-deps are the manual residual. That is
+why it is hard: when neither `init` nor `execute` receives `φ` as a parameter, the dependency is
+only visible by reading the body and its helpers.
+
+`x_j` — essentially auto-mapped: it is the audit's effects table (5463 rows).
+
+`y'_j` — splits by whether `init` even takes the operand field as a parameter:
+
+| arch | init fns | `init` takes an operand param (explicit `y'_j`) | `init` does not (implicit → read code) |
+|------|----------|------------------------------------------------|----------------------------------------|
+| WH   | 49 | 18 (37%) | 31 |
+| BH   | 52 | 20 (38%) | 32 |
+| QSR  | 25 | **0 (0%)** | **25** |
+
+So **~88 operation definitions** need a manual code read to recover operand dependencies. Two
+things sharpen it:
+
+- **Quasar is fully implicit** — 0/25 QSR inits take an operand-format/face param; it threads
+  `TensorShape`/`buf_desc_id` semantically, so every QSR op's `y'_j` is hidden in the body.
+- **62% of `cfg_register` effects are `parameter.kind = fixed`** (917/1479, over 146 functions,
+  median 4/fn) — a state write the parser could not attribute to any argument. That is the
+  concrete scale of "not readable from the signature."
+
+The `init-does-not` bucket (88) further splits into "execute receives it" (medium — pair
+init/execute) and "neither" (hard — trace body + helpers); QSR's 25 are all the hard kind.
+
+**Reframe.** ~88 (WH+BH implicit) + all QSR defs × one focused code read each — which is exactly
+the shape of the per-op, per-arch sage swarms used in §11–§12. So the mapping is **~1–2 swarm
+passes**, not a hand audit; the 37% where `init` takes the operand params is free from the
+signature.
