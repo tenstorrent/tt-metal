@@ -550,6 +550,11 @@ class VoxtralTtsBackbonePipeline:
         logits = self._lm_head(hidden)
         next_token = self._greedy_token(logits)
         # On-device token feed + position advance: nothing leaves the device.
+        # cache_index stays on the two-op `copy(add(x, 1), x)` form on purpose:
+        # it is ROW_MAJOR (paged_update_cache takes its row index that way) and
+        # ttnn eltwise refuses a preallocated output for row-major inputs
+        # ("Optional output tensor with Row Major input is not supported"), so
+        # the in-place one-op form position_buffer uses is not available here.
         ttnn.copy(next_token, self.token_buffer)
         ttnn.add(self.position_buffer, 1.0, output_tensor=self.position_buffer)
         ttnn.copy(ttnn.add(self.cache_index, 1), self.cache_index)

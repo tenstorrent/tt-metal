@@ -276,18 +276,33 @@ class TtAttention:
         # their plans is opened once and reused. Q wants 32 cores and K/V want
         # 16 (each measured separately), so that is two conversions rather than
         # three -- and one if a future retune brings them back onto one grid.
+        rope_applied = False
         if self.qkv_plan is not None and self.qkv_plan.matches(hidden_states):
             # ONE fused projection, then split. The three weights are contiguous
             # in one tensor, so this is a single wide read instead of three.
             fused = self.qkv_plan(hidden_states, self.wqkv, self.compute_kernel_config)
             rows = int(fused.shape[-2])
-            query = self._split_heads(ttnn.slice(fused, [0, 0, 0], [1, rows, self._q_end]), self.n_heads)
-            key = self._split_heads(
-                ttnn.slice(fused, [0, 0, self._q_end], [1, rows, self._k_end]), self.n_kv_heads
+            # Q and K are ADJACENT in the fused tensor and RoPE is applied
+            # per-head with the SAME cos/sin, so rotating the 40 q+kv heads as
+            # one tensor is arithmetically identical to two rotations -- and it
+            # is one dispatch instead of two. That matters because rotary is
+            # bound_by=dispatch here: 2 per layer x 26 layers = 52 launches per
+            # decoded token against a few KB each, so the count IS the cost.
+            # Slicing q and k apart afterwards costs 2 ops but saves 1 slice and
+            # a whole reshape+permute pair up front, so the block is 2 ops
+            # lighter overall on top of halving the rotary count.
+            qk = self._split_heads(
+                ttnn.slice(fused, [0, 0, 0], [1, rows, self._k_end]), self.n_heads + self.n_kv_heads
+            )
+            qk = self._apply_rope(qk, cos, sin)
+            query = ttnn.slice(qk, [0, 0, 0, 0], [1, self.n_heads, rows, self.head_dim])
+            key = ttnn.slice(
+                qk, [0, self.n_heads, 0, 0], [1, self.n_heads + self.n_kv_heads, rows, self.head_dim]
             )
             value = self._split_heads(
                 ttnn.slice(fused, [0, 0, self._k_end], [1, rows, self._v_end]), self.n_kv_heads
             )
+            rope_applied = True
         elif self.q_plan is not None and self.q_plan.matches(hidden_states) and self.kv_plan is not None:
             ckc = self.compute_kernel_config
             q_shard = self.q_plan.shard_input(hidden_states)
@@ -302,8 +317,9 @@ class TtAttention:
             key = self._split_heads(self._kv_proj(hidden_states, self.wk, mm), self.n_kv_heads)
             value = self._split_heads(self._kv_proj(hidden_states, self.wv, mm), self.n_kv_heads)
 
-        query = self._apply_rope(query, cos, sin)
-        key = self._apply_rope(key, cos, sin)
+        if not rope_applied:
+            query = self._apply_rope(query, cos, sin)
+            key = self._apply_rope(key, cos, sin)
 
         if kv_cache is not None and (cache_pos is not None or cache_pos_tensor is not None):
             attn = self._attend_from_cache(query, key, value, kv_cache, cache_pos, cache_pos_tensor)
