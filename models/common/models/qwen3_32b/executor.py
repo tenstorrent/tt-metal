@@ -478,9 +478,12 @@ def build_qwen3_32b_executor(llm: Qwen3_32BForCausalLM, config: Qwen3_32BExecuto
 
 
 def _resolve_trace_capture_prime_sequence_lengths(runtime_config: Any, *, num_devices: int) -> tuple[int, ...]:
-    """Select the T3K Q1024 capture-body prime independently of batching policy."""
+    """Prime every advertised T3K prefill trace body independently of batching policy."""
 
-    return (1024,) if num_devices == 8 and runtime_config.can_enable_trace(1024, 0) else ()
+    if num_devices != 8:
+        return ()
+    advertised = tuple(getattr(runtime_config, "trace_prefill_supported_seq_lens", (128,)))
+    return tuple(length for length in advertised if runtime_config.can_enable_trace(length, 0))
 
 
 def _compat_executor_config(model, *, trace_mode: str, device_sampling_enabled: bool) -> Qwen3_32BExecutorConfig:

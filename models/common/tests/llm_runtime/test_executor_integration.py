@@ -558,25 +558,26 @@ def test_qwen3_32b_binding_preserves_tp8_runtime_and_padded_vocab_defaults():
 
 
 @pytest.mark.parametrize(
-    ("cluster_shape", "disable_batched_prefill", "can_trace_q1024", "expected"),
+    ("cluster_shape", "disable_batched_prefill", "advertised_lengths", "expected"),
     [
-        ([1, 8], False, True, (1024,)),
-        ([1, 8], True, True, (1024,)),
-        ([1, 4], False, True, ()),
-        ([1, 8], False, False, ()),
+        ([1, 8], False, (128, 1024), (128, 1024)),
+        ([1, 8], True, (128, 1024), (128, 1024)),
+        ([1, 4], False, (128, 1024), ()),
+        ([1, 8], False, (128,), (128,)),
     ],
     ids=("t3k-batched", "t3k-sequential", "bh-batched", "t3k-low-ceiling"),
 )
-def test_qwen3_q1024_capture_prime_is_t3k_product_owned(
+def test_qwen3_prefill_capture_primes_are_t3k_product_owned(
     cluster_shape,
     disable_batched_prefill,
-    can_trace_q1024,
+    advertised_lengths,
     expected,
 ):
     runtime = SimpleNamespace(
         cluster_shape=cluster_shape,
         disable_batched_prefill=disable_batched_prefill,
-        can_enable_trace=lambda length, cached: can_trace_q1024 and length == 1024 and cached == 0,
+        trace_prefill_supported_seq_lens=advertised_lengths,
+        can_enable_trace=lambda length, cached: length in advertised_lengths and cached == 0,
     )
 
     num_devices = int(cluster_shape[0]) * int(cluster_shape[1])
@@ -638,7 +639,7 @@ def test_model_owned_executor_has_exact_composition_and_owner_counts(binding, mo
     assert executor.warmup.trace_compiler is executor.trace_compiler
     assert executor.eager_execution is executor.eager_executor
     assert executor.prefill_runtime.config.trace_capture_prime_sequence_lengths == (
-        (1024,) if binding.executor_module is qwen3_32b_executor else ()
+        (128, 1024) if binding.executor_module is qwen3_32b_executor else ()
     )
     if mode == "none":
         assert executor.warmup.execution is executor.eager_executor
@@ -1059,7 +1060,7 @@ def test_late_capacity_reconfigures_existing_owners_before_allocation(binding, m
     assert executor.decode_runtime.config.page_table_layout is executor.page_table_layout
     assert executor.warmup.config.page_table_layout is executor.page_table_layout
     assert executor.prefill_runtime.config.trace_capture_prime_sequence_lengths == (
-        (1024,) if binding.executor_module is qwen3_32b_executor else ()
+        (128, 1024) if binding.executor_module is qwen3_32b_executor else ()
     )
 
     def fake_allocate():

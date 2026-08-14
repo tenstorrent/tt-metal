@@ -126,6 +126,8 @@ class PrefillTraceLifecycle:
             )
 
         should_prime = (
+            prepared.request.kind == "batched"
+            and
             prepared.trace_signature.padded_sequence_length in self.hooks.trace_capture_prime_sequence_lengths
         )
         return PrefillCapturePlan(

@@ -308,7 +308,9 @@ class TraceCompiler:
                         release_failures.append(error)
                     if release_failures:
                         raise_cleanup_failures(release_failures)
-                    logger.info(f"Primed {plan.operation} trace capture body")
+                    logger.info(
+                        f"Primed {plan.operation} trace capture body: signature={plan.trace_signature!r}"
+                    )
 
                 self.program_compiler.set_trace_capture_in_progress(True)
                 trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
@@ -333,7 +335,7 @@ class TraceCompiler:
                     outputs=outputs,
                     refresh_policy=plan.refresh_policy,
                 )
-                logger.info(f"Captured {plan.operation} trace")
+                logger.info(f"Captured {plan.operation} trace: signature={plan.trace_signature!r}")
                 captured_keys.add(trace_key)
                 self.program_compiler.set_trace_capture_in_progress(False)
 

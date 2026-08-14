@@ -2530,14 +2530,40 @@ def test_opt_in_trace_capture_prime_uses_padded_body_and_releases_output(monkeyp
     assert released == ["hidden"]
 
 
-def test_q1024_partial_wave_primes_every_padded_child_program_before_capture(monkeypatch):
-    runtime = _runtime(trace_capture_prime_sequence_lengths=(1024,))
-    tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=700, rows=3)
+def test_opt_in_trace_capture_prime_does_not_expand_single_request_warmup():
+    runtime = _runtime(trace_capture_prime_sequence_lengths=(128, 1024))
+    tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=80, rows=1)
     prepared = runtime.prepare(
         tokens=tokens,
         page_table=page_table,
         prompt_lens=prompt_lens,
-        empty_slots=[0, 1, 2],
+        empty_slots=[0],
+        start_pos=start_pos,
+    )[0]
+
+    assert prepared.request.kind == "single"
+    assert runtime.capture_plan(prepared).prime is None
+
+
+@pytest.mark.parametrize(
+    ("prompt_length", "active_rows", "padded_rows"),
+    ((80, 30, 32), (700, 3, 4)),
+    ids=("q128-active30-padded32", "q1024-active3-padded4"),
+)
+def test_partial_wave_primes_every_padded_child_program_before_capture(
+    monkeypatch,
+    prompt_length,
+    active_rows,
+    padded_rows,
+):
+    padded_length = 128 if prompt_length <= 128 else 1024
+    runtime = _runtime(trace_capture_prime_sequence_lengths=(padded_length,))
+    tokens, page_table, prompt_lens, start_pos = _inputs(prompt_length=prompt_length, rows=active_rows)
+    prepared = runtime.prepare(
+        tokens=tokens,
+        page_table=page_table,
+        prompt_lens=prompt_lens,
+        empty_slots=list(range(active_rows)),
         start_pos=start_pos,
     )[0]
     operation_plan = runtime.capture_plan(prepared)
@@ -2578,7 +2604,7 @@ def test_q1024_partial_wave_primes_every_padded_child_program_before_capture(mon
     monkeypatch.setattr(trace_compiler_module, "_trim_host_allocator", lambda: None)
     compiler = ProgramCompiler("mesh", lambda: object())
     program = compiler.compile(
-        PrefillProgramSignature("regular-batched", 4, 1024, 32, None, "logits"),
+        PrefillProgramSignature("regular-batched", padded_rows, padded_length, 32, None, "logits"),
         lambda context: torch.zeros(1),
     )
     trace = TraceCompiler(compiler)
@@ -2597,9 +2623,9 @@ def test_q1024_partial_wave_primes_every_padded_child_program_before_capture(mon
     trace.capture_all()
 
     assert [event for event in events if event[0] == "body"] == [
-        ("body", 3, False),
-        ("body", 4, False),
-        ("body", 4, True),
+        ("body", active_rows, False),
+        ("body", padded_rows, False),
+        ("body", padded_rows, True),
     ]
 
 
