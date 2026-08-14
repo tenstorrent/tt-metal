@@ -20,7 +20,15 @@ import math
 import pytest
 import torch
 
-from ...layers.na3d import AxisShard, na3d_torch, plan_na3d, plan_na3d_sharded, required_halo, window_bounds
+from ...layers.na3d import (
+    AxisShard,
+    na3d_torch,
+    plan_na3d,
+    plan_na3d_sharded,
+    required_halo,
+    uniform_halo,
+    window_bounds,
+)
 
 # Kernels the DiffVAE decoder actually uses: det stages 1-2, det stages 3-4, diffusion stage.
 DIFFVAE_KERNELS = [(3, 7, 7), (3, 5, 5), (11, 11, 11)]
@@ -87,6 +95,88 @@ def test_sharded_reassembles_to_whole_volume(*, dims, mesh, kernel, heads, head_
     # block, which reassociates the sum. float64 keeps that at rounding scale, so a tolerance
     # this tight still fails on any real window-arithmetic error.
     torch.testing.assert_close(actual, expected, rtol=0, atol=1e-12)
+
+
+def _uniform_buffer(tensor: torch.Tensor, shards: tuple[AxisShard, ...], halo: tuple[int, ...]) -> torch.Tensor:
+    """What ``neighbor_pad_async`` hands every device: the same halo width on all of them.
+
+    Edge-replicated where no neighbour exists, matching ``padding_mode="replicate"``. Those
+    rows are pad, not data — a correct plan never reads them, which is what the test asserts.
+    """
+    out = tensor
+    for axis, (shard, width) in enumerate(zip(shards, halo)):
+        dim = axis + 1
+        lo, hi = shard.start - width, shard.stop + width
+        pieces = []
+        for index in range(lo, hi):
+            clamped = min(max(index, 0), shard.length - 1)
+            pieces.append(out.narrow(dim, clamped, 1))
+        out = torch.cat(pieces, dim=dim)
+    return out
+
+
+@pytest.mark.parametrize("kernel", DIFFVAE_KERNELS)
+@pytest.mark.parametrize("dims, mesh", [((8, 32, 32), (1, 4, 8)), ((8, 24, 24), (1, 6, 6))])
+def test_uniform_halo_reassembles_to_whole_volume(*, dims, mesh, kernel):
+    """One halo width for every device, as the halo-exchange op imposes.
+
+    Edge devices receive replicated pad where a neighbour would be. The result must be
+    identical to the whole-volume run, which is only true if the plan's global bounds keep it
+    out of that pad.
+    """
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(1, *dims, 2, 32, dtype=torch.float64) for _ in range(3))
+    expected = na3d_torch(q, k, v, kernel, scale=1.0)
+
+    halo = tuple(uniform_halo(d, p, kk) for d, p, kk in zip(dims, mesh, kernel))
+    grid = _grid(dims, mesh)
+    pieces = []
+    for shards in grid:
+        plan = plan_na3d_sharded(shards, kernel, halo=halo)
+        local = [_uniform_buffer(x, shards, halo) for x in (q, k, v)]
+        assert tuple(local[0].shape[1:4]) == plan.dims
+        pieces.append(na3d_torch(*local, kernel, scale=1.0, plan=plan))
+
+    actual = _reassemble(dims, grid, pieces, 2, 32, q.dtype)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=1e-12)
+
+
+def _shape_signature(plan):
+    """What a ttnn program dispatch depends on: buffer, group count, per-group work sizes."""
+    return (
+        plan.dims,
+        len(plan.groups),
+        tuple(sorted((g.n_queries, g.n_keys, len(g.query_slices)) for g in plan.groups)),
+    )
+
+
+@pytest.mark.parametrize("kernel", DIFFVAE_KERNELS)
+@pytest.mark.parametrize("dims, mesh", [((4, 32, 32), (1, 4, 4)), ((4, 32, 32), (1, 4, 8)), ((4, 24, 24), (1, 2, 2))])
+def test_uniform_spans_give_every_device_one_shape(*, dims, mesh, kernel):
+    """Without uniform spans a mesh needs several programs; with them, one.
+
+    An edge shard's windows clamp, so its key spans are shorter than an interior shard's.
+    Correct, but ttnn dispatches one program across the mesh, so the shapes have to agree.
+    Both the collapse to a single shape and the unchanged result are asserted — the surplus
+    keys a uniform span pulls in must be masked, not attended.
+    """
+    halo = tuple(uniform_halo(d, p, kk) for d, p, kk in zip(dims, mesh, kernel))
+    grid = _grid(dims, mesh)
+
+    varying = {_shape_signature(plan_na3d_sharded(s, kernel, halo=halo)) for s in grid}
+    uniform = {_shape_signature(plan_na3d_sharded(s, kernel, halo=halo, uniform_spans=True)) for s in grid}
+    assert len(uniform) == 1, f"uniform spans still produced {len(uniform)} shapes"
+    assert len(varying) >= len(uniform), "uniform spans should not increase shape count"
+
+    torch.manual_seed(0)
+    q, k, v = (torch.randn(1, *dims, 2, 16, dtype=torch.float64) for _ in range(3))
+    expected = na3d_torch(q, k, v, kernel, scale=1.0)
+    pieces = []
+    for shards in grid:
+        plan = plan_na3d_sharded(shards, kernel, halo=halo, uniform_spans=True)
+        local = [_uniform_buffer(x, shards, halo) for x in (q, k, v)]
+        pieces.append(na3d_torch(*local, kernel, scale=1.0, plan=plan))
+    torch.testing.assert_close(_reassemble(dims, grid, pieces, 2, 16, q.dtype), expected, rtol=0, atol=1e-12)
 
 
 @pytest.mark.parametrize("kernel", DIFFVAE_KERNELS)

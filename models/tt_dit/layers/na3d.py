@@ -80,8 +80,8 @@ def _tile_lengths(
     return tiles[0], tiles[1], tiles[2]
 
 
-AxisGeometry = tuple[tuple[int, ...], tuple[int, ...]]
-"""Per-axis window bounds of one query tile, relative to that tile's key span."""
+AxisGeometry = tuple[tuple[int, ...], tuple[int, ...], int]
+"""Per-axis window bounds of one query tile, relative to that tile's key span, and the span."""
 
 
 @dataclass(frozen=True)
@@ -167,6 +167,7 @@ def _axis_entries(
     step: int,
     origin: int,
     buffer_length: int,
+    span: int | None = None,
 ) -> list[tuple[slice, slice, AxisGeometry]]:
     """Tile ``[q_begin, q_end)`` of one axis, emitting slices in buffer coordinates.
 
@@ -182,9 +183,23 @@ def _axis_entries(
         assert (
             span_start >= origin and span_stop <= origin + buffer_length
         ), f"tile [{begin},{stop}) needs keys [{span_start},{span_stop}) outside buffer [{origin},{origin + buffer_length})"
+
+        if span is not None:
+            # Every tile takes the same number of keys so a mesh can run one program: slide the
+            # span inward from the buffer edge rather than shrink it, and let the mask drop the
+            # surplus. At a volume edge the surplus is halo pad, which is why the exchange's
+            # padding_mode never reaches the result.
+            assert span >= span_stop - span_start, f"span {span} cannot cover [{span_start},{span_stop})"
+            span_start = max(origin, min(span_start, origin + buffer_length - span))
+            assert (
+                span_start <= starts[begin] and span_start + span >= span_stop
+            ), f"uniform span {span} does not fit tile [{begin},{stop}) in buffer of {buffer_length}"
+            span_stop = span_start + span
+
         geometry = (
             tuple(s - span_start for s in starts[begin:stop]),
             tuple(e - span_start for e in ends[begin:stop]),
+            span_stop - span_start,
         )
         entries.append((slice(begin - origin, stop - origin), slice(span_start - origin, span_stop - origin), geometry))
     return entries
@@ -233,10 +248,26 @@ def plan_na3d(
     return NA3DPlan(dims=dims, kernels=kernels, tile=tile, groups=_assemble_groups(per_axis))
 
 
+def uniform_halo(length: int, parts: int, kernel: int) -> int:
+    """One halo width that satisfies every shard of an even split.
+
+    ``neighbor_pad_async`` pads all devices identically and fills from ``padding_mode`` where
+    no neighbour exists, so a mesh program needs a single width rather than the per-shard
+    minimum. Taking the max keeps every device's buffer the same shape; the fill an edge
+    device receives is never read, because window bounds are global and stop at the volume.
+    """
+    kernel = min(kernel, length)
+    edges = [round(i * length / parts) for i in range(parts + 1)]
+    shards = [AxisShard(length=length, start=a, stop=b) for a, b in zip(edges, edges[1:])]
+    return max(max(required_halo(s, kernel)) for s in shards)
+
+
 def plan_na3d_sharded(
     shards: tuple[AxisShard, AxisShard, AxisShard],
     kernel_size: tuple[int, int, int],
     *,
+    halo: tuple[int, int, int] | None = None,
+    uniform_spans: bool = False,
     budget: int = DEFAULT_SCORE_BUDGET,
 ) -> NA3DPlan:
     """Plan one device's share of a volume split over ``shards``.
@@ -245,18 +276,38 @@ def plan_na3d_sharded(
     a neighbour exchange delivers — so the executors consume it unchanged. Window bounds come
     from the global axis, which is what makes an interior seam behave as interior.
 
+    ``halo`` is the width actually present on each side of the buffer, per axis; it defaults
+    to the per-shard minimum. Pass :func:`uniform_halo` when a mesh program pads every device
+    alike — the surplus rows at a volume edge are pad values, and a global-bounds plan never
+    indexes them.
+
+    ``uniform_spans`` fixes every tile's key count so that all devices in a mesh produce
+    identically shaped work. Without it an edge shard's windows clamp and its spans come out
+    shorter than an interior shard's, which is correct but undispatchable as one SPMD program.
+
     ``dims`` is the buffer, ``output_dims`` the queries answered, and ``query_origin`` where
-    the queries sit inside the buffer, which is also the halo width on the leading side.
+    the queries sit inside the buffer.
     """
     lengths = tuple(s.length for s in shards)
     kernels = tuple(min(k, d) for k, d in zip(kernel_size, lengths))
-    halos = tuple(required_halo(s, k) for s, k in zip(shards, kernels))
+    needed = tuple(required_halo(s, k) for s, k in zip(shards, kernels))
+    if halo is None:
+        halos = needed
+    else:
+        halos = tuple((h, h) for h in halo)
+        for axis, ((have_l, have_r), (need_l, need_r)) in enumerate(zip(halos, needed)):
+            assert (
+                have_l >= need_l and have_r >= need_r
+            ), f"axis {axis} halo {(have_l, have_r)} is below the window rule's {(need_l, need_r)}"
     origins = tuple(s.start - hl for s, (hl, _) in zip(shards, halos))
     buffers = tuple((s.stop + hr) - (s.start - hl) for s, (hl, hr) in zip(shards, halos))
     queries = tuple(s.stop - s.start for s in shards)
 
     bounds = [window_bounds(d, k) for d, k in zip(lengths, kernels)]
     tile = _tile_lengths(queries, kernels, budget, caps=buffers)
+    # A tile's natural span is ``tile + kernel - 1``, shrinking only where the window clamps at
+    # a volume edge. Holding it fixed costs masked-out keys and buys one shape for every device.
+    spans = tuple(min(t + k - 1, b) for t, k, b in zip(tile, kernels, buffers)) if uniform_spans else (None,) * 3
 
     per_axis = [
         _axis_entries(
@@ -266,6 +317,7 @@ def plan_na3d_sharded(
             step=tile[axis],
             origin=origins[axis],
             buffer_length=buffers[axis],
+            span=spans[axis],
         )
         for axis in range(3)
     ]
@@ -282,10 +334,12 @@ def plan_na3d_sharded(
 def group_mask(group: TileGroup, *, dtype: torch.dtype, device: torch.device | str = "cpu") -> torch.Tensor:
     """Additive ``[1, 1, Nq, Nk]`` mask for one group: 0 where visible, -inf where not."""
     visible_per_axis = []
-    for starts, ends in group.geometry:
+    for starts, ends, span in group.geometry:
         start = torch.tensor(starts, device=device)
         end = torch.tensor(ends, device=device)
-        key_index = torch.arange(int(end.max()), device=device)
+        # The span, not ``end.max()``: a uniform-span tile carries surplus keys past its last
+        # window, and they must be masked rather than silently dropped from the mask's width.
+        key_index = torch.arange(span, device=device)
         visible_per_axis.append((key_index[None, :] >= start[:, None]) & (key_index[None, :] < end[:, None]))
 
     # Outer-product the three axes into [Tq,Hq,Wq, Tk,Hk,Wk], then flatten to [Nq, Nk].
