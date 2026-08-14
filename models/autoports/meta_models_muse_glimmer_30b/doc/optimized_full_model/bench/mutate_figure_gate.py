@@ -279,6 +279,81 @@ MUTATIONS = [
         "with a trace live and the cache unmoved",
         "with a trace live and the cache moved",
     ),
+    # Round 11's set: a sample of the 33 that survived the round-10 gate, chosen to cover each
+    # mechanism it exposed -- an unbound cell in a bound table, a table whose row count was not
+    # asserted, the dtype/fidelity evidence, a unit swap, and a work-log figure.
+    (
+        "the dtype table's fidelity",
+        "doc/optimized_full_model/README.md",
+        "| `mlp_down` | 32 x 5120 x 6656 | `BF16 x BFP4 => BF16` | LoFi |",
+        "| `mlp_down` | 32 x 5120 x 6656 | `BF16 x BFP4 => BF16` | HiFi4 |",
+    ),
+    (
+        "the dtype table's datatypes",
+        "doc/optimized_full_model/README.md",
+        "| LM head | 32 x 6656 x 50688 | `BF16 x BFP4 => BF16` | LoFi |",
+        "| LM head | 32 x 6656 x 50688 | `BF16 x BFP8 => BF16` | LoFi |",
+    ),
+    (
+        "the headline sampling-trace row",
+        "doc/optimized_full_model/README.md",
+        "| sampling trace | 0.632 ms | 0.632 ms | unchanged |",
+        "| sampling trace | 0.932 ms | 0.632 ms | improved |",
+    ),
+    (
+        "a headline delta cell",
+        "doc/optimized_full_model/README.md",
+        "**22.656 ms/token · 44.14 t/s/u** | **-2.19 %** |",
+        "**22.656 ms/token · 44.14 t/s/u** | **-9.19 %** |",
+    ),
+    (
+        "the fallback audit's trace-replay row",
+        "doc/optimized_full_model/README.md",
+        "| trace replays | 32 | 1.0 |",
+        "| trace replays | 96 | 3.0 |",
+    ),
+    (
+        "the @2048 layer-stack floor row",
+        "doc/optimized_full_model/README.md",
+        "| sliding x39 | 0.4473 | **0.4390** | −1.9 % |",
+        "| sliding x39 | 0.4173 | **0.4390** | −1.9 % |",
+    ),
+    (
+        "a fabricated row in the SwiGLU grid table",
+        "doc/optimized_full_model/README.md",
+        "| **80** | **1.5248** |",
+        "| **80** | **1.5248** |\n| 96 | 1.4111 |",
+    ),
+    (
+        "a unit swap in the invalidation paragraph",
+        "doc/optimized_full_model/README.md",
+        "signature itself is 7.19 µs of the 7.57",
+        "signature itself is 7.19 ms of the 7.57",
+    ),
+    (
+        "a unit swap in the sampling-trace sentence",
+        "doc/optimized_full_model/README.md",
+        "the sampling trace is 632 µs",
+        "the sampling trace is 632 ms",
+    ),
+    (
+        "the CCL host-probe table",
+        "doc/optimized_full_model/README.md",
+        "| `all_gather_async`, persistent output buffer | 56.18 | 69.09 |",
+        "| `all_gather_async`, persistent output buffer | 26.18 | 69.09 |",
+    ),
+    (
+        "the DRAM budget table",
+        "doc/optimized_full_model/README.md",
+        "| **total long-lived** | **7,178,958,080** | **7.18 GB** of 31.46 GiB |",
+        "| **total long-lived** | **9,178,958,080** | **9.18 GB** of 31.46 GiB |",
+    ),
+    (
+        "the mutation count in the Artifacts table",
+        "doc/optimized_full_model/README.md",
+        "mutation-tests that gate: 46 mutations,",
+        "mutation-tests that gate: 96 mutations,",
+    ),
     (
         "the fail-closed negative control's discriminating assertion",
         "doc/optimized_full_model/logs/trace_release_failclosed_negative_control.log",

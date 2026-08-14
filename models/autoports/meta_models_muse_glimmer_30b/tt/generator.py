@@ -693,6 +693,12 @@ class MuseGlimmerGenerator(Generator):
         # (these two fields *are* what the comparison protects), so the no-trace path is now a
         # pair of truth tests, and the with-trace cost is measured in the README.
         if not self._prefill_traces and self._trace_id is None:
+            # Nothing to invalidate -- but something may still be waiting on a retry, and after
+            # a failed release the signature matches again on every later call, so the release
+            # paths are not reached.  Round 11 pointed out that stranded a stuck orphan (and its
+            # trace-region space) for the life of the generator.  This costs a truth test.
+            if self._orphaned_traces or self._deferred_frees or self._sampling_holds_a_trace():
+                self._retry_orphaned_traces()
             return
         signature = self._kv_cache_signature()
         stale_prefill = bool(self._prefill_traces) and signature != self._prefill_trace_cache_sig
@@ -871,6 +877,7 @@ class MuseGlimmerGenerator(Generator):
             del self._prefill_traces[padded_len]
             self.model.note_trace_released()
             ttnn.synchronize_device(self.mesh_device)
+            self.counters["synchronizations"] += 1
             for key in ("tokens", "page_table", "logits"):
                 try:
                     ttnn.deallocate(entry[key])
@@ -890,30 +897,48 @@ class MuseGlimmerGenerator(Generator):
             )
 
     def _sampling_holds_a_trace(self) -> bool:
-        """Is the sampler holding a trace it could not release?
-
-        Its slot's captured *input* is this generator's ``_trace_logits``, so while one is held
-        that tensor is live device state owned jointly: the sampler cannot free it (it does not
-        own it) and this generator must not (the trace still names it).
-        """
+        """Is the sampler holding a trace it could not release?"""
         return bool(getattr(self.sampling, "orphaned_trace_count", 0))
 
+    def _tensors_a_held_sampling_trace_reads(self) -> list:
+        """The exact tensors an unreleased sampling trace was captured over.
+
+        Round 11 of the stage review pointed out that asking "is *any* sampler orphan
+        outstanding" is the wrong question: it is true for tensors no sampling trace ever
+        touched -- every later rebind's logits, and the prefill traces' tokens/page tables --
+        so a single stuck orphan pinned 3.24 MB of fresh logits per rebind, unbounded, and told
+        the operator they were held by a trace "captured over them", which was false.  The
+        question is ownership, so it is asked per tensor: identity against the slots the
+        sampler is actually holding.
+        """
+        held = []
+        for slot in getattr(self.sampling, "_orphaned_traces", []):
+            held.append(slot.get("input"))
+            output = slot.get("output")
+            held.extend(output if isinstance(output, tuple) else [output])
+        return [tensor for tensor in held if tensor is not None]
+
     def _free_or_defer(self, tensors: list, *, what: str) -> None:
-        """Deallocate ``tensors``, or hold them until the sampler's orphan clears."""
-        if self._sampling_holds_a_trace():
-            self._deferred_frees.extend(t for t in tensors if t is not None)
-            logger.warning(
-                f"MuseGlimmerGenerator: deferring the free of {what} while the sampler holds an "
-                "unreleased trace captured over them; they are freed once its release lands."
-            )
-            return
+        """Deallocate ``tensors``, except any an unreleased sampling trace still reads."""
+        held = self._tensors_a_held_sampling_trace_reads()
+        deferred = 0
         for tensor in tensors:
             if tensor is None:
+                continue
+            if any(tensor is candidate for candidate in held):
+                self._deferred_frees.append(tensor)
+                deferred += 1
                 continue
             try:
                 ttnn.deallocate(tensor)
             except Exception:  # noqa: BLE001
                 pass
+        if deferred:
+            logger.warning(
+                f"MuseGlimmerGenerator: deferring the free of {deferred} tensor(s) of {what}; an "
+                "unreleased sampling trace was captured over them and still reads them. They are "
+                "freed once its release lands, and teardown() reports any that outlive it."
+            )
 
     def _retry_orphaned_traces(self) -> int:
         """Retry every trace whose release raised, and free its tensors once it lands.
@@ -932,6 +957,7 @@ class MuseGlimmerGenerator(Generator):
             sampling_held = retry_sampling()
         if self._deferred_frees and not self._sampling_holds_a_trace():
             ttnn.synchronize_device(self.mesh_device)
+            self.counters["synchronizations"] += 1
             for tensor in self._deferred_frees:
                 try:
                     ttnn.deallocate(tensor)
@@ -942,6 +968,7 @@ class MuseGlimmerGenerator(Generator):
         if not self._orphaned_traces:
             return sampling_held
         ttnn.synchronize_device(self.mesh_device)
+        self.counters["synchronizations"] += 1
         still_held = []
         for orphan in self._orphaned_traces:
             try:
@@ -956,6 +983,7 @@ class MuseGlimmerGenerator(Generator):
             self._orphaned_traces = [held for held in self._orphaned_traces if held is not orphan]
             self.model.note_trace_released()
             ttnn.synchronize_device(self.mesh_device)
+            self.counters["synchronizations"] += 1
             # Same ownership rule as the release path: a decode orphan's tensors include the
             # logits the sampling trace was captured over.
             self._free_or_defer(orphan["tensors"], what=f"the {orphan['what']} trace's tensors")
@@ -1414,7 +1442,14 @@ class MuseGlimmerGenerator(Generator):
         if still_held:
             logger.warning(
                 f"MuseGlimmerGenerator: teardown() leaves {still_held} trace(s) unreleased after a "
-                "retry; their KV-cache buffers must not be freed while this device stays open."
+                "retry. Any decode or prefill trace among them holds KV-cache addresses, so that "
+                "cache must not be freed while this device stays open; a sampling trace among them "
+                "holds none, but does hold this generator's logits."
+            )
+        if self._deferred_frees:
+            logger.warning(
+                f"MuseGlimmerGenerator: teardown() leaves {len(self._deferred_frees)} tensor(s) "
+                "unfreed because an unreleased sampling trace still reads them."
             )
 
     # ------------------------------------------------------------- reporting

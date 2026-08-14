@@ -1226,7 +1226,14 @@ def test_a_sampling_trace_that_fails_to_release_keeps_its_logits(mesh):
     real, and it checks allocation rather than Python identity.
     """
     clear_generator_cache()
-    generator = build_generator(MODEL_DIR, mesh, max_seq_len=REDUCED_MAX_SEQ, layer_indices=REDUCED_LAYERS, reuse=False)
+    generator = build_generator(
+        MODEL_DIR,
+        mesh,
+        max_seq_len=REDUCED_MAX_SEQ,
+        layer_indices=REDUCED_LAYERS,
+        reuse=False,
+        prefill_trace=True,
+    )
     model = generator.model
     prompt = _prompt(64, seed=41)
     own = model.kv_cache
@@ -1270,7 +1277,14 @@ def test_a_sampling_trace_that_fails_to_release_keeps_its_logits(mesh):
         assert generator.sampling.orphaned_trace_count == 1
         # ...so the logits it was captured over must still be allocated, held for it.
         assert logits.is_allocated(), "a live sampling trace's captured input must not be freed"
-        assert generator._deferred_frees and any(t is logits for t in generator._deferred_frees)
+        # Exactly the logits: the prefill trace released cleanly in the same call and its
+        # tokens/page-table/logits are **not** deferred, because no sampling trace ever read
+        # them.  Round 11 found the first version deferring on "any sampler orphan is
+        # outstanding", which pinned those too and grew without bound across rebinds.
+        assert [t for t in generator._deferred_frees if t is logits] == [logits]
+        assert len(generator._deferred_frees) == 1, "only what a held sampling trace reads is deferred"
+        assert generator._orphaned_traces == [], "the prefill and decode releases both succeeded"
+        assert list(generator._prefill_traces) == [64], "and the rebind recaptured that bucket"
         assert all(
             slot["input"].is_allocated() and slot["output"][0].is_allocated()
             for slot in generator.sampling._orphaned_traces

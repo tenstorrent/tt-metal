@@ -837,6 +837,33 @@ instance of the same defect, it is outside this stage's model and outside its go
 and fixing it would put an unrelated experimental model in this stage's commits. Recorded here
 so it is a decision rather than an oversight.
 
+### Round 11 — `more-work-needed`
+
+No P1. Three P2s, and the first is the one that matters: **the gate's perimeter was still
+narrower than the document's claim about it.** Round 11 built 54 fresh mutations and 33
+survived — including the `$optimize` dtype/fidelity table (rewriting the LM head to BFP8 and
+`mlp_down` to HiFi4 both passed), headline-table cells the README said were "bound cell by
+cell", and the @2048 floor table. No figure was actually wrong; the defect was coverage
+against a claim of completeness, for the fifth round running.
+
+Pointwise patching had not converged, so the rule changed shape. **Every numeric cell of every
+README table** must now resolve to an artifact through a check, be an op id in a committed CSV,
+be a value from the built model's capacity block, or appear in `UNBOUND_TABLE_NUMBERS` with a
+written reason. A figure no artifact supports fails whether or not anyone thought to bind it,
+and changing an allowlisted number to a value that is not itself listed fails too. The
+dtype/fidelity table is separately bound to the CSV's own `Math Fidelity` and datatype columns
+— the review skill names that exact check and the gate had been parsing the same CSV for the
+audit partition without ever reading those columns.
+
+| finding | what was done |
+| --- | --- |
+| **P2** 33 of 54 fresh mutations survived; the README claimed every figure resolves | the by-construction coverage rule above, plus the dtype/fidelity table bound to the CSV, plus twelve of the 33 added to the harness as regression cases (**58 mutations, all caught**). Units remain enumerated rather than structural — the rule is digit-based and cannot see µs printed as ms — so two more unit bindings were added and the limitation is stated rather than left implicit |
+| **P2** the round-10 fix had no committed negative control, while the Artifacts table said every test in the family had one | `logs/deferred_free_negative_control.log`: the unconditional free restored, the test failing on *"a live sampling trace's captured input must not be freed"*, source restored. Bound by the gate to pytest's summary line, as the other two are. There are three controls and the table now says three |
+| **P2** `_deferred_frees` was keyed on "any sampler orphan outstanding", not on ownership | keyed per tensor now (`_tensors_a_held_sampling_trace_reads`, identity against the sampler's held slots), so a stuck orphan no longer pins every later rebind's logits or the prefill traces' buffers; the misleading warning is corrected; `teardown()` reports what it leaves unfreed; and the test asserts **exactly one** deferred tensor with a prefill trace released in the same call |
+| the retry was reachable only from a genuine stale-signature release | the no-trace short-circuit now retries first when anything is outstanding, so a stuck orphan is not stranded for the life of the generator |
+| drains were counted inconsistently | every drain in both release paths and in the retry increments `counters["synchronizations"]` |
+| the shared file's unhealthy-path effect on other callers was unrecorded | stated in the Artifacts table: they retain rather than drop, and without a `retry_orphaned_traces()` call the slot is pinned rather than silently leaked — the safer of the two |
+
 ## 11. Commits
 
 Local checkpoints on `agentic-research/hous/muse-glimmer-30b`, on top of the full-model
@@ -854,7 +881,8 @@ stage's `93adb25b7a8`. Never pushed.
 | `6cc255a19d1` | round-8 review fixes: the regenerated context contract and prefill-trace evidence arm, the fail-closed trace-release path and its injected-failure test, the exhausted `perf_summary.json` and re-pointed work log, cell-level and section-scoped gate binding, and the corrected multiplicity paragraph |
 | `20f77bb0fcd` | the negative control for the fail-closed release: the test's failure against round 7's code, committed and bound by the gate |
 | `9abea54b55b` | round-9 review fixes: the sampling trace brought inside the fail-closed policy (in `models/common/sampling/generator.py`), the bookkeeping-before-drain ordering and `try/finally` sequencing, unconditional invalidation on every entry point, atomic `set_kv_cache`, two new acceptance cases, and a figure gate that checks structure, units, cross-section consistency and its own mutation log's provenance |
-| *(this commit)* | round-10 review fixes: deferred frees so a live sampling trace's captured input is never handed back, the measured per-call invalidation cost, cell-level bindings for the thirteen figures round 10 falsified, and the corrected file inventory |
+| `bd39469e555` | round-10 review fixes: deferred frees so a live sampling trace's captured input is never handed back, the measured per-call invalidation cost, cell-level bindings for the thirteen figures round 10 falsified, and the corrected file inventory |
+| *(this commit)* | round-11 review fixes: by-construction numeric coverage over every README table, the dtype/fidelity table bound to the CSV, per-tensor deferred frees, the third negative control, and the retry reachable from the short-circuit |
 
 Nothing unrelated is in any of them: `git status` is clean at each. Outside
 `doc/optimized_full_model/`, `git diff --name-only 93adb25b7a8..HEAD` is exactly eight paths:
