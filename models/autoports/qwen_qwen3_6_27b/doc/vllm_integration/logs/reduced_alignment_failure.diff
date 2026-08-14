@@ -1,0 +1,164 @@
+diff --git a/models/autoports/qwen_qwen3_6_27b/tt/generator.py b/models/autoports/qwen_qwen3_6_27b/tt/generator.py
+index 9cfc94d1e72..69da27ac88d 100644
+--- a/models/autoports/qwen_qwen3_6_27b/tt/generator.py
++++ b/models/autoports/qwen_qwen3_6_27b/tt/generator.py
+@@ -139,6 +139,7 @@ class Qwen36Generator(ReadinessGenerator):
+         kv_cache,
+         prompt_lens: List[int],
+         return_all_logits: bool = False,
++        read_from_device: bool = True,
+         **kwargs: Any,
+     ) -> torch.Tensor:
+         page_table = self._check_state(page_table, kv_cache)
+@@ -201,7 +202,8 @@ class Qwen36Generator(ReadinessGenerator):
+                 logit_positions=None if return_all_logits else prompt_lens,
+                 cache_page_table=cache_page_table,
+             )
+-            host = self._to_host_logits(logits)
++            if read_from_device:
++                host = self._to_host_logits(logits)
+         finally:
+             # Request metadata is consumed asynchronously by every decoder
+             # layer.  Fence before clearing aliases and explicitly releasing
+@@ -214,13 +216,17 @@ class Qwen36Generator(ReadinessGenerator):
+             for chunk in selector_tensors:
+                 for tensor in chunk:
+                     ttnn.deallocate(tensor)
+-            if logits is not None:
++            if logits is not None and read_from_device:
+                 ttnn.deallocate(logits)
+             ttnn.deallocate(token_tt)
+             ttnn.deallocate(position_tt)
+             if temporary_cache_page_table is not None:
+                 ttnn.deallocate(temporary_cache_page_table)
+         self._slots_requiring_prefill.difference_update(slot for slot, length in enumerate(prompt_lens) if length > 0)
++        if not read_from_device:
++            if return_all_logits:
++                raise ValueError("device prefill output supports terminal logits only")
++            return logits
+         if return_all_logits:
+             return host.reshape(batch, physical_len, -1)
+         return host.reshape(batch, 1, -1)
+diff --git a/models/autoports/qwen_qwen3_6_27b/tt/model.py b/models/autoports/qwen_qwen3_6_27b/tt/model.py
+index 9a6d4580101..75c2a27dae8 100644
+--- a/models/autoports/qwen_qwen3_6_27b/tt/model.py
++++ b/models/autoports/qwen_qwen3_6_27b/tt/model.py
+@@ -88,6 +88,7 @@ class Qwen36Model:
+         batch: int = 1,
+         max_context: int = 262144,
+         page_size: int = 64,
++        attention_cache_blocks: int | None = None,
+         num_layers: int | None = None,
+         layer_indices: list[int] | None = None,
+         precision_config=None,
+@@ -163,6 +164,7 @@ class Qwen36Model:
+                 batch=batch,
+                 max_context=max_context,
+                 page_size=page_size,
++                attention_cache_blocks=attention_cache_blocks,
+                 candidate="default",
+                 policy_override=self.precision_config.policy_for(i, config.layer_types[i]),
+                 ccl_token_mixer_dtype=self.precision_config.ccl_dtype("token_mixer"),
+diff --git a/models/autoports/qwen_qwen3_6_27b/tt/multichip_decoder.py b/models/autoports/qwen_qwen3_6_27b/tt/multichip_decoder.py
+index 245b545a447..b2f15163f19 100644
+--- a/models/autoports/qwen_qwen3_6_27b/tt/multichip_decoder.py
++++ b/models/autoports/qwen_qwen3_6_27b/tt/multichip_decoder.py
+@@ -126,6 +126,7 @@ class MultichipDecoder(OptimizedDecoder):
+         mesh_device,
+         batch: int = 1,
+         max_context: int = ADVERTISED_CONTEXT,
++        attention_cache_blocks: int | None = None,
+         page_size: int = 64,
+         candidate: str = "default",
+         policy_override=None,
+@@ -263,7 +264,11 @@ class MultichipDecoder(OptimizedDecoder):
+             weights["o_proj_prefill"] = _shard(o_proj, -2, mesh_device=mesh_device, dtype=policy.attention_weight_dtype)
+             weights["q_norm"] = _replicate(host("self_attn.q_norm.weight", add_one=True), mesh_device=mesh_device)
+             weights["k_norm"] = _replicate(host("self_attn.k_norm.weight", add_one=True), mesh_device=mesh_device)
+-            blocks = batch * math.ceil(max_context / page_size)
++            blocks = (
++                batch * math.ceil(max_context / page_size)
++                if attention_cache_blocks is None
++                else int(attention_cache_blocks)
++            )
+             cache_shape = (blocks, kvh, page_size, hd)
+             caches["key"] = _shard(
+                 torch.zeros(cache_shape, dtype=torch.bfloat16), 1, mesh_device=mesh_device, dtype=policy.cache_dtype
+diff --git a/models/common/readiness_check/generate.py b/models/common/readiness_check/generate.py
+index 645b6c947b0..7c5249461cb 100644
+--- a/models/common/readiness_check/generate.py
++++ b/models/common/readiness_check/generate.py
+@@ -34,6 +34,7 @@ import argparse
+ import bz2
+ import json
+ import os
++from collections.abc import Mapping
+ from pathlib import Path
+ from typing import Optional
+ 
+@@ -127,6 +128,10 @@ def _chat_or_plain_prompt_tokens(tokenizer, prompt_text: str, *, chat_template:
+             add_generation_prompt=True,
+             tokenize=True,
+         )
++        # Transformers 5 tokenizers may return a BatchEncoding even without
++        # ``return_tensors``; older versions returned the input-id list.
++        if isinstance(prompt_tokens, Mapping):
++            prompt_tokens = prompt_tokens["input_ids"]
+     else:
+         prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
+ 
+diff --git a/tests/ttnn/tracy/test_process_ops_logs.py b/tests/ttnn/tracy/test_process_ops_logs.py
+index 4435bad7107..bd8da9fa2f0 100644
+--- a/tests/ttnn/tracy/test_process_ops_logs.py
++++ b/tests/ttnn/tracy/test_process_ops_logs.py
+@@ -12,6 +12,22 @@ import pytest
+ from tracy import process_ops_logs
+ 
+ 
++def test_import_tracy_logs_tolerates_partial_trace_end(tmp_path):
++    """Mid-run flushes can export END after the matching BEGIN was flushed."""
++    (tmp_path / process_ops_logs.TRACY_OPS_DATA_FILE_NAME).write_text(
++        "MessageName;total_ns\n`TT_METAL_TRACE_END: 3, 7`;123\n"
++    )
++    (tmp_path / process_ops_logs.TRACY_OPS_TIMES_FILE_NAME).write_text(
++        "name,special_parent_text,zone_text\n"
++    )
++
++    ops, signposts, trace_replays = process_ops_logs.import_tracy_op_logs(tmp_path)
++
++    assert ops == {}
++    assert signposts == {}
++    assert trace_replays == {}
++
++
+ # class for mocking creation of npe data
+ class _FakeNpeResult:
+     def __init__(self, noc_util, mcast_noc_util, dram_bw_util, cong_impact):
+diff --git a/tools/tracy/process_ops_logs.py b/tools/tracy/process_ops_logs.py
+index d1ecdd1cbec..063c19be5ce 100755
+--- a/tools/tracy/process_ops_logs.py
++++ b/tools/tracy/process_ops_logs.py
+@@ -422,9 +422,21 @@ def import_tracy_op_logs(
+                     if "BEGIN" in opDataStr:
+                         traceIDs[deviceID] = traceID
+                     elif "END" in opDataStr:
+-                        assert traceIDs[deviceID] == traceID, (
++                        active_trace_id = traceIDs.get(deviceID)
++                        if active_trace_id is None:
++                            # A mid-run device-profiler flush can make the host
++                            # export begin inside an already-active trace.  In
++                            # that case its END marker is valid but there is no
++                            # BEGIN in this partial capture to correlate.  Do
++                            # not discard subsequent named host operations.
++                            logger.warning(
++                                f"Ignoring trace END without a captured BEGIN "
++                                f"(device {deviceID}, trace {traceID})"
++                            )
++                            continue
++                        assert active_trace_id == traceID, (
+                             f"Wrong trace ID, device {deviceID} should finish on trace ID "
+-                            f"{traceIDs[deviceID]} but it is finishing on trace ID {traceID}"
++                            f"{active_trace_id} but it is finishing on trace ID {traceID}"
+                         )
+                         traceIDs[deviceID] = None
+                     elif "REPLAY" in opDataStr:

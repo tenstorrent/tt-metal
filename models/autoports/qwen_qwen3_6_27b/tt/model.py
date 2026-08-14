@@ -88,6 +88,7 @@ class Qwen36Model:
         batch: int = 1,
         max_context: int = 262144,
         page_size: int = 64,
+        attention_cache_blocks: int | None = None,
         num_layers: int | None = None,
         layer_indices: list[int] | None = None,
         precision_config=None,
@@ -163,6 +164,7 @@ class Qwen36Model:
                 batch=batch,
                 max_context=max_context,
                 page_size=page_size,
+                attention_cache_blocks=attention_cache_blocks,
                 candidate="default",
                 policy_override=self.precision_config.policy_for(i, config.layer_types[i]),
                 ccl_token_mixer_dtype=self.precision_config.ccl_dtype("token_mixer"),
@@ -283,6 +285,30 @@ class Qwen36Model:
             ttnn.multiply(layer.caches["recurrent"], recurrent_mask, output_tensor=layer.caches["recurrent"])
         ttnn.synchronize_device(self.mesh_device)
         ttnn.deallocate(mask)
+
+    def remap_slots(self, remap):
+        """Gather model-owned linear state into vLLM's new decode rows.
+
+        ``remap[new_slot] = old_slot``.  Full-attention K/V is intentionally
+        excluded: vLLM owns it and selects it through the page table.
+        """
+        remap = [int(slot) for slot in torch.as_tensor(remap).reshape(-1)[: self.batch]]
+        if sorted(remap) != list(range(self.batch)):
+            raise ValueError("linear-state slot remap must be a full permutation")
+        if all(new == old for new, old in enumerate(remap)):
+            return
+        for layer in self.layers:
+            if layer.layer_kind != "linear_attention":
+                continue
+            for name, dim in (("conv", 1), ("recurrent", 0)):
+                cache = layer.caches[name]
+                rows = [cache[:, old : old + 1] if dim == 1 else cache[old : old + 1] for old in remap]
+                reordered = ttnn.concat(rows, dim=dim, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.copy(reordered, cache)
+                for row in rows:
+                    ttnn.deallocate(row)
+                ttnn.deallocate(reordered)
+        ttnn.synchronize_device(self.mesh_device)
 
     def embed_tokens(self, token_ids):
         return ttnn.embedding(

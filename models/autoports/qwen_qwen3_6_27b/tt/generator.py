@@ -92,6 +92,7 @@ class Qwen36Generator(ReadinessGenerator):
         self._trace_logits = None
         self._trace_sampled = None
         self._trace_cache_backups = None
+        self.trace_backup_attention_cache = True
         self._compat_trace_id = None
         self._compat_token = None
         self._compat_position = None
@@ -139,6 +140,7 @@ class Qwen36Generator(ReadinessGenerator):
         kv_cache,
         prompt_lens: List[int],
         return_all_logits: bool = False,
+        read_from_device: bool = True,
         **kwargs: Any,
     ) -> torch.Tensor:
         page_table = self._check_state(page_table, kv_cache)
@@ -201,7 +203,8 @@ class Qwen36Generator(ReadinessGenerator):
                 logit_positions=None if return_all_logits else prompt_lens,
                 cache_page_table=cache_page_table,
             )
-            host = self._to_host_logits(logits)
+            if read_from_device:
+                host = self._to_host_logits(logits)
         finally:
             # Request metadata is consumed asynchronously by every decoder
             # layer.  Fence before clearing aliases and explicitly releasing
@@ -214,13 +217,17 @@ class Qwen36Generator(ReadinessGenerator):
             for chunk in selector_tensors:
                 for tensor in chunk:
                     ttnn.deallocate(tensor)
-            if logits is not None:
+            if logits is not None and read_from_device:
                 ttnn.deallocate(logits)
             ttnn.deallocate(token_tt)
             ttnn.deallocate(position_tt)
             if temporary_cache_page_table is not None:
                 ttnn.deallocate(temporary_cache_page_table)
         self._slots_requiring_prefill.difference_update(slot for slot, length in enumerate(prompt_lens) if length > 0)
+        if not read_from_device:
+            if return_all_logits:
+                raise ValueError("device prefill output supports terminal logits only")
+            return logits
         if return_all_logits:
             return host.reshape(batch, physical_len, -1)
         return host.reshape(batch, 1, -1)
@@ -308,7 +315,12 @@ class Qwen36Generator(ReadinessGenerator):
         # the trace so no post-capture deallocation can disturb traced buffer
         # addresses. Optimized high-level generation is batch 1, where this
         # temporary capacity is part of the measured trace envelope.
-        self._trace_cache_backups = [[ttnn.clone(tensor) for tensor in pair] for pair in self.kv_cache]
+        self._trace_cache_backups = [
+            [ttnn.clone(tensor) for tensor in pair]
+            if self.trace_backup_attention_cache or layer.layer_kind == "linear_attention"
+            else []
+            for layer, pair in zip(self.model.layers, self.kv_cache)
+        ]
         # Cache restoration occurs after both traces are live. Warm the exact
         # backup-to-cache copy variants now so that restore cannot compile or
         # allocate ordinary buffers while trace addresses must remain stable.
@@ -402,6 +414,11 @@ class Qwen36Generator(ReadinessGenerator):
             "kv_cache": self.kv_cache,
             "active_mask": self._trace_active_mask,
         }
+
+    def remap_decode_slots(self, remap):
+        """Release captured state, then gather model-owned request slots."""
+        self._release_traces()
+        self.model.remap_slots(remap)
 
     def token_out_decode_step(self, *, page_table=None, readback: bool = False):
         """Replay model plus common sampler traces without a logits boundary."""
