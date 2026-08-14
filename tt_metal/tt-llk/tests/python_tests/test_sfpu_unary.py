@@ -31,9 +31,11 @@ from helpers.sfpu_domains import (
     _UNARY_OPS_NOT_SWEPT,
     SHIFT_EDGE_AMOUNTS,
     SPECIALS_READY_OPS,
+    UNSPECIFIED_NAN_SIGN_SKIP_REASON,
     edge_spec,
     exclude_undefined,
     for_op_pipeline,
+    nan_sign_is_unspecified,
     negative_zero_delivered,
     op_edge_points,
     sfpu_unary_ops,
@@ -337,6 +339,27 @@ def _skip_bh_unsupported_float_combo(formats, dest_acc):
         )
     ):
         pytest.skip(reason="This combination is not supported on BH architecture")
+
+
+def _skip_unspecified_nan_sign(mathop, formats, dest_acc, specials):
+    """Drop the variants whose only disagreement is a NaN sign Wormhole does not promise.
+
+    Scoped by *specials* because a NaN only enters this sweep through the cat-B probe: with
+    specials off the stimulus is finite and none of these ops produces a NaN from it, so the
+    gate must not reach the cat-A/D variants of the same op.
+
+    Blackhole is untouched -- its SFPMAD guarantees the canonical 0x7fc00000, so the golden's
+    canonicalisation is sound there and these variants keep asserting. Reason and rationale
+    live next to the predicate, in sfpu_domains.
+    """
+    if (
+        specials
+        and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
+        and nan_sign_is_unspecified(
+            mathop, formats.input_format, formats.output_format, dest_acc
+        )
+    ):
+        pytest.skip(reason=UNSPECIFIED_NAN_SIGN_SKIP_REASON.format(op=mathop.name))
 
 
 def _skip_bh_unless_fp32(formats, dest_acc):
@@ -767,6 +790,9 @@ def test_eltwise_unary_sfpu_edges(
     specials = mathop in SPECIALS_READY_OPS and specials_safe(
         formats.input_format, formats.output_format, dest_acc
     )
+
+    _skip_unspecified_nan_sign(mathop, formats, dest_acc, specials)
+
     spec_A = edge_spec(
         mathop,
         formats.input_format,

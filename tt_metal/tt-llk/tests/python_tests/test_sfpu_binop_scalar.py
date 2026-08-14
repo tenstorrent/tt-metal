@@ -5,6 +5,7 @@ import struct
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import ScalarBinopGolden, get_golden_generator
 from helpers.llk_params import (
@@ -14,7 +15,13 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.sfpu_domains import SPECIALS_READY_OPS, edge_spec, specials_safe
+from helpers.sfpu_domains import (
+    SPECIALS_READY_OPS,
+    UNSPECIFIED_NAN_SIGN_SKIP_REASON,
+    edge_spec,
+    nan_sign_is_unspecified,
+    specials_safe,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
@@ -222,6 +229,19 @@ def test_sfpu_binop_scalar_edges(formats, dest_acc, mathop):
     specials = mathop in SPECIALS_READY_OPS and specials_safe(
         formats.input_format, formats.output_format, dest_acc
     )
+
+    # The unary sweep's gate, same cause in a second suite: ScalarRsub builds `c - x`
+    # through SFPMAD, so a NaN operand comes back out as a NaN of the kernel's own making
+    # rather than the one it was handed. See sfpu_domains.GENERATED_NAN_SIGN_OPS.
+    if (
+        specials
+        and TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
+        and nan_sign_is_unspecified(
+            mathop, formats.input_format, formats.output_format, dest_acc
+        )
+    ):
+        pytest.skip(reason=UNSPECIFIED_NAN_SIGN_SKIP_REASON.format(op=mathop.name))
+
     spec_A = edge_spec(
         mathop,
         formats.input_format,

@@ -2342,6 +2342,123 @@ def negative_zero_delivered(
     return input_format.is_32_bit() and _dest_acc_flag(dest_acc)
 
 
+def nan_survives_to_l1(
+    input_format: DataFormat,
+    output_format: DataFormat,
+    dest_acc: Optional[Union[bool, Enum]],
+) -> bool:
+    """Does a NaN the kernel produces reach L1 still a NaN, or as a signed infinity?
+
+    Mirrors UnarySFPUGolden's own rule rather than restating its result: the golden keeps a
+    NaN for (dst_format, output) in {(Float16, Float16), (Float32, Float16),
+    (Float32, Float32)} and routes everything else through convert_nan_to_inf, which
+    rewrites exponent and mantissa and leaves the sign bit alone. So wherever this is False,
+    a NaN arrives at the comparator as +/-inf and its sign is suddenly load-bearing.
+    SFPSTORE documents the hardware half on both arches ("NaN is also converted to
+    infinity, so software is advised to avoid NaN inputs for this conversion").
+
+    Note this asks about the *output* leg, where negative_zero_delivered() asks about the
+    input leg. A probe can be delivered and its result still be destroyed: of the six
+    triples specials_safe() accepts on the {Float16_b, Float32} matrix, five narrow
+    somewhere and only Float32->Float32 at dest_acc=Yes carries a NaN the whole way.
+
+    dest_acc=None means the caller does not know the pipeline, so answer the way that keeps
+    an assertion rather than the way that drops one.
+    """
+    if dest_acc is None:
+        return True
+
+    # The Dest format the golden derives from the same two inputs. Block-float and MX are
+    # not reachable here -- specials_safe() rejects them on both legs before this is asked.
+    if _dest_acc_flag(dest_acc):
+        dst_format = DataFormat.Float32
+    elif DataFormat.Float16 in (input_format, output_format):
+        dst_format = DataFormat.Float16
+    else:
+        dst_format = DataFormat.Float16_b
+
+    return (dst_format, output_format) in {
+        (DataFormat.Float16, DataFormat.Float16),
+        (DataFormat.Float32, DataFormat.Float16),
+        (DataFormat.Float32, DataFormat.Float32),
+    }
+
+
+# The ops whose NaN result is one the kernel *invents*, not one it forwards.
+#
+# IEEE 754 leaves the sign of an invalid-operation default unspecified, and the two
+# architectures make different promises about what the SFPU then emits (SFPMAD.md):
+#
+#   Blackhole  "it is always the canonical NaN with bit pattern 0x7fc00000"
+#   Wormhole   "the least significant bit of the mantissa is guaranteed to be set; other
+#               bits of the mantissa might or might not be set, and the sign bit might or
+#               might not be set"
+#
+# So a golden may assert this sign on Blackhole and may not on Wormhole. It stays invisible
+# while the NaN remains a NaN -- passed_test's both-NaN clause accepts either sign -- and
+# becomes a +inf/-inf disagreement the moment nan_survives_to_l1() is False.
+#
+# Measured on a Wormhole n300 by driving the specials set through every enrolled op: these
+# ten, and no others, emit a NaN whose sign disagrees with UnarySFPUGolden's
+# canonicalisation. ScalarRsub is the same cause in the scalar suite -- `c - x` builds its
+# NaN through SFPMAD rather than forwarding the operand's, which is why it diverges where
+# ScalarAdd/Sub/Mul/Div do not.
+#
+# Kept as a measured list rather than derived, because "does this kernel generate a NaN or
+# forward one" is a fact about the kernel that no property of the format axis predicts. It
+# is *not* a table of the observed signs: recording those would assert exactly what the ISA
+# declines to promise. See UnarySFPUGolden._NAN_SIGN_TRANSPARENT_OPS for the other side of
+# the partition -- Neg, Abs and Identity move the sign bit, so for them it means something.
+GENERATED_NAN_SIGN_OPS: FrozenSet[MathOperation] = frozenset(
+    {
+        MathOperation.Cos,
+        MathOperation.Fmod,
+        MathOperation.GeluAppx,
+        MathOperation.Hardmish,
+        MathOperation.Mish,
+        MathOperation.Rsqrt,
+        MathOperation.ScalarRsub,
+        MathOperation.Silu,
+        MathOperation.Sin,
+        MathOperation.Softsign,
+        MathOperation.Tan,
+    }
+)
+
+
+def nan_sign_is_unspecified(
+    mathop: MathOperation,
+    input_format: DataFormat,
+    output_format: DataFormat,
+    dest_acc: Optional[Union[bool, Enum]],
+) -> bool:
+    """Would this variant assert the sign of a NaN that the ISA leaves unspecified?
+
+    Both halves have to hold: the op has to be one that invents a NaN
+    (GENERATED_NAN_SIGN_OPS), and the pipeline has to turn that NaN's sign into an
+    observable +/-inf (not nan_survives_to_l1). The caller supplies the third half -- the
+    architecture, since Blackhole's SFPMAD does promise a canonical NaN and the assertion is
+    sound there.
+    """
+    return mathop in GENERATED_NAN_SIGN_OPS and not nan_survives_to_l1(
+        input_format, output_format, dest_acc
+    )
+
+
+# One string, two suites, so the two skips cannot drift apart. Deliberately a skip and not
+# an xfail: an xfail would claim the sign *is* wrong on Wormhole, and SFPMAD.md says only
+# that it may be either -- a NaN emitted with a clear sign bit is equally in spec, so the
+# same hardware could satisfy or break that claim on any given run. There is nothing here to
+# assert until the golden accepts both infinities on a substituted NaN, which is a change to
+# convert_nan_to_inf's contract rather than to this gate. See tt-metal#52938.
+UNSPECIFIED_NAN_SIGN_SKIP_REASON = (
+    "{op} emits a NaN of its own making, and this pipeline narrows it to a signed "
+    "infinity (nan_survives_to_l1 is False), so the variant would assert the NaN's sign. "
+    "SFPMAD.md leaves that sign unspecified on Wormhole -- 'the sign bit might or might "
+    "not be set' -- while guaranteeing 0x7fc00000 on Blackhole, where this still runs."
+)
+
+
 def specials_safe_formats(
     formats: List["InputOutputFormat"],  # noqa: F821 - test-side type, duck-typed
     dest_acc: Union[bool, Enum],

@@ -23,9 +23,12 @@ import pytest
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
 from helpers.sfpu_domains import (
+    GENERATED_NAN_SIGN_OPS,
     Operand,
     edge_values,
     for_op,
+    nan_sign_is_unspecified,
+    nan_survives_to_l1,
     ops_with_singularity,
     probe_spacing_format,
     sfpu_unary_ops,
@@ -113,6 +116,100 @@ def test_specials_safe_rejects_mx_outputs():
     whose shared exponent is finite is not a value the format can express."""
     for mx_output in (DataFormat.MxFp8P, DataFormat.MxFp8R, DataFormat.MxFp4):
         assert not specials_safe(DataFormat.Float32, mx_output, True)
+
+
+# The {Float16_b, Float32} matrix the two edge sweeps parametrize over, as (input, output).
+_EDGE_SWEEP_PAIRS = [
+    (DataFormat.Float16_b, DataFormat.Float16_b),
+    (DataFormat.Float16_b, DataFormat.Float32),
+    (DataFormat.Float32, DataFormat.Float16_b),
+    (DataFormat.Float32, DataFormat.Float32),
+]
+
+_EDGE_SWEEP_CELLS = [
+    (inp, out, dest_acc)
+    for inp, out in _EDGE_SWEEP_PAIRS
+    for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
+]
+
+
+def test_nan_survives_only_into_a_32_bit_dest_and_a_32_bit_pack():
+    """Both legs have to stay 32-bit, and on this matrix exactly one cell manages it.
+
+    Pinned because the gate's whole scope follows from it: five of the six triples
+    specials_safe() accepts narrow a NaN somewhere, and those five are precisely where a
+    generated NaN's sign becomes an observable +/-inf.
+    """
+    carrying = [c for c in _EDGE_SWEEP_CELLS if specials_safe(*c)]
+    assert len(carrying) == 6, "specials_safe's verdict on this matrix moved"
+
+    survives = [c for c in carrying if nan_survives_to_l1(*c)]
+    assert survives == [
+        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes)
+    ], (
+        "Float32->Float32 at dest_acc=Yes is the only cell on this matrix that carries a "
+        f"NaN to L1 as a NaN; got {[(i.name, o.name, str(d)) for i, o, d in survives]}. "
+        "If this moved, the Wormhole NaN-sign skip's scope moved with it."
+    )
+
+
+# The two suites do not share a format axis, so the gate's reach is counted per suite.
+# ScalarRsub is the scalar suite's only member of the set; the other ten are unary.
+_SCALAR_NAN_SIGN_OPS = frozenset({MathOperation.ScalarRsub})
+_UNARY_NAN_SIGN_OPS = GENERATED_NAN_SIGN_OPS - _SCALAR_NAN_SIGN_OPS
+
+# test_sfpu_binop_scalar's axis after _skip_unsupported: a Float32 tensor needs the 32-bit
+# dest and a Float16_b tensor cannot use one, so two of its eight cells survive.
+_SCALAR_SUITE_CELLS = [
+    (DataFormat.Float16_b, DataFormat.Float16_b, DestAccumulation.No),
+    (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
+]
+
+
+def test_nan_sign_gate_matches_the_measured_wormhole_failures():
+    """Pinned against the Wormhole n300 run rather than against the rule that generated it.
+
+    Unary: 50 (op, cell) pairs — the 49 recorded failures plus the one Rsqrt cell that was
+    already xfailed for the unrelated -0.0 divergence, and which this gate now skips first.
+    Scalar: 1, which is the run's single `ScalarRsub` failure.
+    """
+    unary_gated = [
+        (op, cell)
+        for op in _UNARY_NAN_SIGN_OPS
+        for cell in _EDGE_SWEEP_CELLS
+        if specials_safe(*cell) and nan_sign_is_unspecified(op, *cell)
+    ]
+    assert len(_UNARY_NAN_SIGN_OPS) == 10
+    assert (
+        len(unary_gated) == 50
+    ), f"expected 50 gated unary (op, cell) pairs, got {len(unary_gated)}"
+
+    scalar_gated = [
+        (op, cell)
+        for op in _SCALAR_NAN_SIGN_OPS
+        for cell in _SCALAR_SUITE_CELLS
+        if specials_safe(*cell) and nan_sign_is_unspecified(op, *cell)
+    ]
+    assert scalar_gated == [
+        (MathOperation.ScalarRsub, _SCALAR_SUITE_CELLS[0])
+    ], f"expected only ScalarRsub's Float16_b cell, got {scalar_gated}"
+
+    # Every enrolled op keeps the one cell where the sign is readable, so none of them is
+    # skipped out of its sweep entirely.
+    for op in GENERATED_NAN_SIGN_OPS:
+        assert not nan_sign_is_unspecified(
+            op, DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes
+        ), f"{op.name} lost its Float32->Float32 dest_acc=Yes assertion"
+
+
+def test_nan_sign_gate_ignores_ops_that_forward_a_nan():
+    """Neg, Abs and Identity move the sign bit rather than inventing one, so their NaN sign
+    is a real datum and stays asserted on every cell. They are UnarySFPUGolden's
+    _NAN_SIGN_TRANSPARENT_OPS, and this gate must never overlap that set."""
+    for op in (MathOperation.Neg, MathOperation.Abs, MathOperation.Identity):
+        assert op not in GENERATED_NAN_SIGN_OPS
+        for cell in _EDGE_SWEEP_CELLS:
+            assert not nan_sign_is_unspecified(op, *cell)
 
 
 @pytest.mark.parametrize(
