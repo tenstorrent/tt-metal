@@ -477,6 +477,12 @@ inline void _llk_math_reduce_init_(const ckernel::TensorShape& tensor_shape)
     TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
 
     math::reset_counters(p_setrwc::SET_ABD_F);
+
+    // Establish the operand-driven DEFAULT zero-flag state before the reduce's GMPOOLs, mirroring
+    // _llk_math_matmul_init_ / _llk_math_eltwise_binary_init_. A preceding copy_init that left
+    // PRESERVE (keep denormals) would otherwise leak "keep" into the pool GMPOOL — harmless on HW
+    // when fp32 DEST accumulation is enabled (the flag is ignored), but a real invariant violation.
+    math::_configure_default_zero_flag_state_(src_zero_flag_srca_fmt, src_zero_flag_srcb_fmt);
 }
 
 /**
