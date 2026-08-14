@@ -22,19 +22,17 @@ requires vConstFloatPrgm0 to be set to 2.0f. The header neither says so nor
 provides an init.
 """
 
-import struct
-from dataclasses import dataclass
-
 import torch
 from conftest import skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
-from helpers.golden_generators import ELEMENTS_PER_TILE, round_to_dest_width
+from helpers.golden_generators import TILE_DIM, round_to_dest_width
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import TILE_COUNT, TemplateParameter
+from helpers.test_variant_parameters import CLAMPED_SILU_PARAMS, TILE_COUNT
 from helpers.utils import passed_test
 
 # Same format in and out, as these are activations applied in place on Pack.
@@ -49,30 +47,6 @@ SCALED_TANH = "SCALED_TANH"
 CLAMP_OPS = [GATE, UP, CLAMP_ONLY]
 SITU_OPS = [SITU_GATE, SCALED_TANH]
 ALL_OPS = CLAMP_OPS + SITU_OPS
-
-
-def _fp32_bits(value: float) -> int:
-    return struct.unpack("<I", struct.pack("<f", value))[0]
-
-
-@dataclass
-class CLAMPED_SILU_PARAMS(TemplateParameter):
-    """Selects the entry and supplies its two scalars as raw fp32 bit patterns.
-
-    The single-scalar entries (UP, CLAMP_ONLY) ignore scalar1; it is still emitted
-    so the driver has one uniform shape.
-    """
-
-    clamped_silu_op: str = GATE
-    clamped_silu_scalar0: float = 1.0
-    clamped_silu_scalar1: float = 1.0
-
-    def convert_to_cpp(self) -> str:
-        return (
-            f"#define CLAMPED_SILU_OP_{self.clamped_silu_op}\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR0 = {_fp32_bits(self.clamped_silu_scalar0)}u;\n"
-            f"constexpr std::uint32_t CLAMPED_SILU_SCALAR1 = {_fp32_bits(self.clamped_silu_scalar1)}u;"
-        )
 
 
 # 7.0 is GPT-OSS' clamp limit, and 1.0 is just an arbitrary small value.
@@ -144,12 +118,15 @@ def _valid_dest_acc(formats):
 
 def _run(formats, dest_acc, op, scalars, input_range):
     scalar0, scalar1 = scalars
-    torch_format = format_dict[formats.input_format]
 
-    torch.manual_seed(0)
     low, high = input_range
-    src_A = torch.empty(ELEMENTS_PER_TILE, dtype=torch_format).uniform_(low, high)
-    src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=[TILE_DIM, TILE_DIM],
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=[TILE_DIM, TILE_DIM],
+        spec_A=StimuliSpec.uniform(low=low, high=high, seed=0),
+    )
 
     golden = _clamped_silu_golden(src_A, op, scalar0, scalar1, dest_acc)
 
@@ -157,11 +134,7 @@ def _run(formats, dest_acc, op, scalars, input_range):
         "sources/sfpu_clamped_silu_test.cpp",
         formats,
         templates=[
-            CLAMPED_SILU_PARAMS(
-                clamped_silu_op=op,
-                clamped_silu_scalar0=scalar0,
-                clamped_silu_scalar1=scalar1,
-            ),
+            CLAMPED_SILU_PARAMS(clamped_silu_op=op, scalar0=scalar0, scalar1=scalar1),
         ],
         runtimes=[
             TILE_COUNT(1),

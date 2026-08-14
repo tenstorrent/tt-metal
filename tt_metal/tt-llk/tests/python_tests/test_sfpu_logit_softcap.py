@@ -21,10 +21,11 @@ import torch
 from conftest import skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
 from helpers.format_config import DataFormat
-from helpers.golden_generators import ELEMENTS_PER_TILE, truncate_to_bfloat16
+from helpers.golden_generators import TILE_DIM, truncate_to_bfloat16
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import SFPU_UNARY_SCALAR, TILE_COUNT
 from helpers.utils import passed_test
@@ -89,16 +90,19 @@ def _assert_matches(golden, res, output_format, flat: bool, context: str) -> Non
     cap=CAPS,
 )
 def test_sfpu_logit_softcap(formats, dest_acc, input_range, cap):
-    torch.manual_seed(0)
-
-    torch_format = format_dict[formats.input_format]
-
     low, high = input_range
-    if low == high:
-        src_A = torch.full((ELEMENTS_PER_TILE,), low, dtype=torch_format)
-    else:
-        src_A = torch.empty(ELEMENTS_PER_TILE, dtype=torch_format).uniform_(low, high)
-    src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch_format)
+    spec_A = (
+        StimuliSpec.constant(value=low, seed=0)
+        if low == high
+        else StimuliSpec.uniform(low=low, high=high, seed=0)
+    )
+    src_A, _, src_B, _ = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=[TILE_DIM, TILE_DIM],
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=[TILE_DIM, TILE_DIM],
+        spec_A=spec_A,
+    )
 
     golden_tensor = _logit_softcap_golden(src_A, cap, dest_acc)
 

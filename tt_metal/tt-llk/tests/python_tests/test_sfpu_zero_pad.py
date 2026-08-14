@@ -11,8 +11,6 @@ tile rows.
 VALID_ROWS and TOTAL_ROWS have to be even.
 """
 
-from dataclasses import dataclass
-
 import torch
 from conftest import skip_for_wormhole
 from helpers.constraints import get_valid_dest_accumulation_modes
@@ -22,26 +20,12 @@ from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import TILE_COUNT, TemplateParameter
+from helpers.test_variant_parameters import TILE_COUNT, ZERO_PAD_ROWS
 
 FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
 
 SFPU_ROW_ELEMENTS = 32
 SFPU_ROWS_PER_TILE = ELEMENTS_PER_TILE // SFPU_ROW_ELEMENTS
-
-
-@dataclass
-class ZERO_PAD_ROWS(TemplateParameter):
-    """SFPU row bounds for _zero_pad_tile_."""
-
-    valid_rows: int = 0
-    total_rows: int = 32
-
-    def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr int ZERO_PAD_VALID_ROWS = {self.valid_rows};\n"
-            f"constexpr int ZERO_PAD_TOTAL_ROWS = {self.total_rows};"
-        )
 
 
 def _valid_dest_acc(formats):

@@ -20,8 +20,6 @@ Only even values of ITERATIONS are tested. On odd ITERATIONS, the kernel leaves
 half of the rows untouched.
 """
 
-from dataclasses import dataclass
-
 import torch
 from conftest import skip_for_wormhole
 from helpers.format_config import DataFormat, InputOutputFormat
@@ -30,30 +28,10 @@ from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import TILE_COUNT, TemplateParameter
+from helpers.test_variant_parameters import SPARSE_K_CONFIG, TILE_COUNT
 
 SFPU_ROW_ELEMENTS = 32
 FORMATS = InputOutputFormat(DataFormat.Int32, DataFormat.Int32)
-
-
-@dataclass
-class SPARSE_K_CONFIG(TemplateParameter):
-    sparse_k_iterations: int = 32
-    sparse_k_bank_mask: int = 0x3F
-    sparse_k_my_bank: int = 0
-    sparse_k_global_bank_shift: int = 14
-    sparse_k_within_bank_mask: int = 0x3FFF
-    sparse_k_out_shift: int = 0
-
-    def convert_to_cpp(self) -> str:
-        return (
-            f"constexpr int SPARSE_K_ITERATIONS = {self.sparse_k_iterations};\n"
-            f"constexpr std::uint32_t SPARSE_K_BANK_MASK = {self.sparse_k_bank_mask}u;\n"
-            f"constexpr std::uint32_t SPARSE_K_MY_BANK = {self.sparse_k_my_bank}u;\n"
-            f"constexpr std::uint32_t SPARSE_K_GLOBAL_BANK_SHIFT = {self.sparse_k_global_bank_shift}u;\n"
-            f"constexpr std::uint32_t SPARSE_K_WITHIN_BANK_MASK = {self.sparse_k_within_bank_mask}u;\n"
-            f"constexpr std::uint32_t SPARSE_K_OUT_SHIFT = {self.sparse_k_out_shift}u;"
-        )
 
 
 # (bank_mask, global_bank_shift, within_bank_mask).
@@ -136,11 +114,11 @@ def _run(layout, my_bank, out_shift, iterations):
         templates=[
             SPARSE_K_CONFIG(
                 sparse_k_iterations=iterations,
-                sparse_k_bank_mask=bank_mask,
-                sparse_k_my_bank=my_bank,
-                sparse_k_global_bank_shift=shift,
-                sparse_k_within_bank_mask=within_mask,
-                sparse_k_out_shift=out_shift,
+                bank_mask=bank_mask,
+                my_bank=my_bank,
+                global_bank_shift=shift,
+                within_bank_mask=within_mask,
+                out_shift=out_shift,
             ),
         ],
         runtimes=[
