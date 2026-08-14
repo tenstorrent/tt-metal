@@ -1,0 +1,217 @@
+name: Blaze Merge Gate
+
+# Runs tt-blaze's GPT-OSS BH Loudbox bucket against the tt-metal commit under
+# test, so a tt-metal change that breaks tt-blaze is caught before it lands
+# rather than by the next uplift.
+#
+# Scope is deliberately ONE bucket, not tt-blaze's whole merge gate: this job
+# blocks tt-metal's merge queue while it waits, and tt-blaze's full silicon
+# matrix (unit + P150 + craq-sim + every Loudbox bucket) would hold the queue for
+# hours on a runner pool it does not own. The dispatch step below is where that
+# scope is set.
+#
+# tt-blaze cannot build tt-metal itself -- its CI consumes prebuilt tarball+wheel
+# artifacts. So this workflow does NOT hand tt-blaze a branch to go resolve: it
+# hands over `metal-run-id`, the id of the caller's own run, whose `build` job has
+# already published the tarball and wheel for this exact commit. tt-blaze's
+# download-build-artifact.yaml takes that run id verbatim and skips pin
+# resolution entirely. `metal-ref` then moves tt-blaze's tt-metal submodule to the
+# same commit, so JIT-compiled kernels and the linked libraries come from one
+# tt-metal rather than two.
+#
+# The caller's build is tracy=false, so the dispatch also runs tt-blaze against
+# the plain variant (its pin-driven runs are profiler-only). Blaze tests that
+# need tracy at runtime cannot run here.
+#
+# Auth: dispatching and polling a workflow in another repo needs a PAT with
+# `actions: write` (dispatch, cancel) and `actions: read` (poll) on
+# tenstorrent/tt-blaze, stored in THIS repo as the `TT_BLAZE_PAT` secret. The
+# default GITHUB_TOKEN is scoped to tt-metal and cannot dispatch tt-blaze.
+#
+# `gh workflow run` returns no run id, so the run is correlated by echoing a
+# unique `dispatch-id` into tt-blaze's `run-name` and matching it back. That token
+# is also tt-blaze's concurrency key, which is what keeps concurrent merge-gate
+# runs from cancelling each other's blaze run.
+
+on:
+  workflow_call:
+    inputs:
+      metal-run-id:
+        description: >-
+          Run id holding the tt-metal build artifacts tt-blaze should test
+          against. Normally the caller's own `github.run_id`.
+        required: true
+        type: string
+      metal-ref:
+        description: >-
+          tt-metal commit those artifacts were built from. tt-blaze checks its
+          tt-metal submodule out here. Must be a commit fetchable from
+          tenstorrent/tt-metal for as long as the blaze run lasts.
+        required: true
+        type: string
+      blaze-ref:
+        description: "tt-blaze branch/tag/SHA to run the gate from."
+        required: false
+        type: string
+        default: main
+      wait-timeout-minutes:
+        description: >-
+          How long to wait for the tt-blaze run. The GPT-OSS bucket itself is
+          bounded by tt-blaze's own per-bucket budget; the bulk of this is queue
+          time for a free BH Loudbox.
+        required: false
+        type: number
+        default: 180
+    outputs:
+      blaze-run-url:
+        description: "URL of the tt-blaze run this gate waited on (empty if none was ever found)."
+        value: ${{ jobs.blaze-ci.outputs.blaze-run-url }}
+    secrets:
+      TT_BLAZE_PAT:
+        description: "PAT with actions:read+write on tenstorrent/tt-blaze."
+        required: true
+
+jobs:
+  blaze-ci:
+    name: tt-blaze CI (GPT-OSS Loudbox bucket)
+    runs-on: ubuntu-latest
+    # The poll loop must outlive its own deadline so it can report WHY it gave up;
+    # if the runner killed it first, the failure would read as an infra timeout.
+    timeout-minutes: ${{ inputs.wait-timeout-minutes + 15 }}
+    outputs:
+      blaze-run-url: ${{ steps.dispatch.outputs.blaze-run-url }}
+    env:
+      BLAZE_REPO: tenstorrent/tt-blaze
+      BLAZE_WORKFLOW: ci.yaml
+    steps:
+      - name: Dispatch tt-blaze ci.yaml and wait for it
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
+          METAL_RUN_ID: ${{ inputs.metal-run-id }}
+          METAL_REF: ${{ inputs.metal-ref }}
+          BLAZE_REF: ${{ inputs.blaze-ref }}
+          TIMEOUT_MINUTES: ${{ inputs.wait-timeout-minutes }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          POLL_SECONDS=60
+          # A dispatched run is not immediately visible to `gh run list`. Until this
+          # is up, "no matching run" means "not indexed yet", not "dispatch failed".
+          GRACE_SECONDS=300
+
+          # Unique per run AND per re-run of that run, so a re-run never latches
+          # onto the blaze run its previous attempt started.
+          DISPATCH_ID="metal-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "dispatch-id: ${DISPATCH_ID}"
+
+          # Scope: the GPT-OSS Loudbox bucket only, NOT tt-blaze's whole merge gate.
+          # `bh-loudbox-run-all=false` flips tt-blaze's Loudbox job from "every
+          # gate bucket" to "the ones selected below", and `bh-loudbox-gptoss`
+          # expands to gptoss + gpt-oss-temporal-multiuser on that side. tt-blaze
+          # skips its unit / P150 / craq-sim jobs on its own whenever metal-run-id
+          # is set. To widen the scope, add the sibling `bh-loudbox-*` / `p150-*`
+          # booleans from tt-blaze's ci.yaml here (its job guards need widening too).
+          gh workflow run "$BLAZE_WORKFLOW" \
+            --repo "$BLAZE_REPO" \
+            --ref "$BLAZE_REF" \
+            -f metal-run-id="$METAL_RUN_ID" \
+            -f metal-ref="$METAL_REF" \
+            -f dispatch-id="$DISPATCH_ID" \
+            -f bh-loudbox-run-all=false \
+            -f bh-loudbox-gptoss=true
+
+          echo "Dispatched ${BLAZE_REPO} ${BLAZE_WORKFLOW} on ${BLAZE_REF} (GPT-OSS bucket)"
+          echo "  tt-metal commit:  ${METAL_REF}"
+          echo "  tt-metal build:   https://github.com/${GITHUB_REPOSITORY}/actions/runs/${METAL_RUN_ID}"
+
+          started=$(date +%s)
+          deadline=$(( started + TIMEOUT_MINUTES * 60 ))
+          run_id=""
+          run_url=""
+
+          while :; do
+            elapsed=$(( $(date +%s) - started ))
+
+            if [ -z "$run_id" ]; then
+              # Correlate on the token echoed into tt-blaze's run-name. Matching on
+              # "newest dispatch" instead would be wrong: several tt-metal
+              # merge-gate runs dispatch onto the same ref at once.
+              #
+              # `displayTitle` is where a computed `run-name` lands; `name` is the
+              # workflow's own name. Both are searched so this keeps working if gh
+              # ever changes which one carries it.
+              run_id=$(gh run list --repo "$BLAZE_REPO" --workflow "$BLAZE_WORKFLOW" \
+                         --event workflow_dispatch --limit 100 \
+                         --json databaseId,displayTitle,name \
+                         --jq "[.[] | select(((.displayTitle // \"\") + \" \" + (.name // \"\")) | contains(\"${DISPATCH_ID}\"))] | .[0].databaseId // empty" \
+                       2>/dev/null || echo "")
+
+              if [ -z "$run_id" ]; then
+                if [ "$elapsed" -gt "$GRACE_SECONDS" ]; then
+                  echo "::error::Dispatched ${BLAZE_REPO} ${BLAZE_WORKFLOW} but no run carrying '${DISPATCH_ID}' appeared within ${elapsed}s. Most likely ${BLAZE_REF} does not echo dispatch-id into run-name (the tt-blaze side of this plumbing is missing or older than this workflow)."
+                  echo "- ❌ tt-blaze — dispatched run never appeared" >> "$GITHUB_STEP_SUMMARY"
+                  exit 1
+                fi
+                echo "waiting for the dispatched run to be indexed (${elapsed}s)"
+                sleep "$POLL_SECONDS"
+                continue
+              fi
+
+              run_url="https://github.com/${BLAZE_REPO}/actions/runs/${run_id}"
+              echo "tt-blaze run: ${run_url}"
+              echo "blaze-run-url=${run_url}" >> "$GITHUB_OUTPUT"
+              # Read by the cancel step below, which runs only if THIS job is
+              # cancelled and so cannot rely on any of the locals here.
+              echo "BLAZE_RUN_ID=${run_id}" >> "$GITHUB_ENV"
+              echo "- ⏳ tt-blaze — [run ${run_id}](${run_url})" >> "$GITHUB_STEP_SUMMARY"
+            fi
+
+            read -r status conclusion <<< "$(gh run view "$run_id" --repo "$BLAZE_REPO" \
+                                               --json status,conclusion \
+                                               --jq '"\(.status) \(.conclusion // "-")"')"
+
+            if [ "$status" = "completed" ]; then
+              case "$conclusion" in
+                success)
+                  echo "✅ tt-blaze CI passed: ${run_url}"
+                  echo "- ✅ tt-blaze — [run ${run_id}](${run_url})" >> "$GITHUB_STEP_SUMMARY"
+                  exit 0
+                  ;;
+                skipped)
+                  # Every job guarded off (eg. a "[SKIP CI]" title on the blaze
+                  # side). Nothing ran, so there is nothing to fail on.
+                  echo "::notice::tt-blaze CI was skipped: ${run_url}"
+                  echo "- ⏭️ tt-blaze — skipped ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
+                  exit 0
+                  ;;
+                *)
+                  echo "::error::tt-blaze CI concluded '${conclusion}' — this tt-metal change breaks tt-blaze, or the blaze run itself is broken. ${run_url}"
+                  echo "- ❌ tt-blaze — \`${conclusion}\` ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
+                  exit 1
+                  ;;
+              esac
+            fi
+
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::Timed out after ${TIMEOUT_MINUTES} min with the tt-blaze run still '${status}'. Raise wait-timeout-minutes or check runner availability. ${run_url}"
+              echo "- ⏱️ tt-blaze — timed out after ${TIMEOUT_MINUTES} min ([run ${run_id}](${run_url}))" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+
+            echo "tt-blaze run ${run_id}: ${status} (${elapsed}s elapsed)"
+            sleep "$POLL_SECONDS"
+          done
+
+      # Dequeuing a PR cancels this job but not the run it started, which would
+      # otherwise keep occupying constrained P150/Loudbox runners for hours on
+      # behalf of a merge group that no longer exists.
+      - name: Cancel the tt-blaze run if this job was cancelled
+        if: cancelled() && env.BLAZE_RUN_ID != ''
+        env:
+          GH_TOKEN: ${{ secrets.TT_BLAZE_PAT }}
+        shell: bash
+        run: |
+          echo "Cancelling tt-blaze run ${BLAZE_RUN_ID}"
+          gh run cancel "$BLAZE_RUN_ID" --repo "$BLAZE_REPO" || true

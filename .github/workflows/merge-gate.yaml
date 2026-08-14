@@ -527,8 +527,43 @@ jobs:
 
   # ===========================================================================
   # Team: blaze
-  # No merge-gate jobs yet.
+  # test list: owned by tenstorrent/tt-blaze (its ci.yaml), not by this repo
   # ===========================================================================
+
+  # Runs tt-blaze's GPT-OSS BH Loudbox bucket against this commit's build --
+  # deliberately one bucket, not tt-blaze's whole merge gate. tt-blaze does not
+  # build tt-metal, so it is handed THIS run's id: the `build` job above published
+  # the tarball and wheel there, and tt-blaze consumes them directly instead of
+  # resolving from its tt-metal pin. See blaze-merge-gate.yaml.
+  #
+  # This job waits on a BH Loudbox runner tt-blaze owns, so it is the one
+  # merge-gate job that does not fit the 15-minute budget in the header. That is
+  # deliberate and was the point of adding it: the alternative is finding out at
+  # uplift time.
+  # Unlike every other job here this one does NOT also run on pushes to main. It
+  # consumes tt-blaze's constrained P150/BH Loudbox pool, and a main push is the
+  # merge commit of a group this job already gated minutes earlier — tt-blaze
+  # declines the same post-merge re-run in its own ci.yaml for the same reason.
+  blaze-merge-gate:
+    needs: [build, find-changes]
+    if: ${{ github.event_name == 'workflow_dispatch' ||
+            (github.event_name == 'merge_group' &&
+             (needs.find-changes.outputs.cmake-changed == 'true' ||
+              needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+              needs.find-changes.outputs.tt-nn-changed == 'true'))
+        }}
+    # TT_BLAZE_PAT — the default GITHUB_TOKEN cannot dispatch another repo.
+    secrets: inherit
+    uses: ./.github/workflows/blaze-merge-gate.yaml
+    with:
+      # Artifacts from a called workflow belong to the CALLER's run, so `build`'s
+      # tarball and wheel are on this run id.
+      metal-run-id: ${{ github.run_id }}
+      # The commit `build` compiled: the merge-queue commit in the queue, the head
+      # commit otherwise. tt-blaze checks its tt-metal submodule out here so its
+      # JIT-compiled kernels match the libraries it links against.
+      metal-ref: ${{ github.sha }}
+      blaze-ref: main
 
   # ===========================================================================
   # Status
@@ -548,14 +583,14 @@ jobs:
         contains(join(needs.*.result, ','), 'failure')
       }}
 
-    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests]
+    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, blaze-merge-gate]
     runs-on: ubuntu-slim
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, blaze-merge-gate"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
