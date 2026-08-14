@@ -46,6 +46,10 @@
 
 void kernel_main() {
     constexpr uint32_t cb_output_tiles = 16;
+    // Perf 1: ONE pre-stamped whole-pad output tile, writer-private (no
+    // producer/consumer handshake — this kernel both fills it and sources from
+    // it). Allocated by the host only when `pad_scratch` is 1.
+    constexpr uint32_t cb_pad_scratch = 2;
     constexpr uint32_t TILE_W = 32;  // a tile is always 32 wide (hardware fact, not a knob)
 
     constexpr uint32_t placement = get_compile_time_arg_val(0);  // P_ACCESSOR / P_LOCAL_SHARD
@@ -98,7 +102,14 @@ void kernel_main() {
     // instead of paying a div/mod per block.
     constexpr uint32_t write_state = get_compile_time_arg_val(18);
     constexpr uint32_t precomp_index = get_compile_time_arg_val(19);
-    constexpr auto dst_args = TensorAccessorArgs<20>();
+    // --- Perf 1: whole-pad tiles come from a pre-stamped scratch tile ---------
+    // 1 = the padded target contains at least one WHOLE pad tile (every element of
+    // it is pad) AND `cb_pad_scratch` exists. The host owns this predicate (see
+    // `pad_scratch` in tilize_program_descriptor.py) so the CB allocation and this
+    // branch cannot disagree; 0 compiles the whole mechanism away, which is what
+    // keeps a ragged-tail-only geometry byte-identical to before.
+    constexpr uint32_t pad_scratch = get_compile_time_arg_val(20);
+    constexpr auto dst_args = TensorAccessorArgs<21>();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_block = get_arg_val<uint32_t>(1);
@@ -140,36 +151,130 @@ void kernel_main() {
     };
     auto first_page_of = [&](uint32_t i) -> uint32_t { return tile_row_of(i) * wt + tile_col_of(i); };
 
+    // The pad geometry of one tile — the SINGLE source for both the stamp and the
+    // whole-pad-tile test below.
+    auto valid_rows_of = [&](uint32_t i) -> uint32_t {
+        const uint32_t tile_row = tile_row_of(i);
+        const uint32_t img = tile_row / nth_per_img;
+        const uint32_t row_in_img = (tile_row % nth_per_img) * tile_h;
+        // Rows of this tile-row that carry real data (0 for a whole pad tile-row).
+        uint32_t valid_rows = 0;
+        if (img < n_img_in && row_in_img < h_in) {
+            valid_rows = h_in - row_in_img;
+            if (valid_rows > tile_h) {
+                valid_rows = tile_h;
+            }
+        }
+        return valid_rows;
+    };
+    auto valid_cols_of = [&](uint32_t i, uint32_t k) -> uint32_t {
+        const uint32_t col0 = (tile_col_of(i) + k) * TILE_W;
+        uint32_t valid_cols = 0;
+        if (col0 < w_in_elems) {
+            valid_cols = w_in_elems - col0;
+            if (valid_cols > TILE_W) {
+                valid_cols = TILE_W;
+            }
+        }
+        return valid_cols;
+    };
+
+    // ── Perf 1: the pre-stamped WHOLE-pad tile ───────────────────────────────
+    // A whole pad tile — one whose every element is the fill — used to cost
+    // ~tile_h*32 rv32 volatile L1 stores, EVERY block, and that made the padded
+    // widening cast the op's most expensive path by a wide margin: `writer_stamp`
+    // measured 172,898 of the 386,280 ns wall on
+    // [1,1,1024,2048] bf16 -> fp32 -> [1,1,2048,2048] (45%, the single largest
+    // attributable stage), and a whole-op simultaneous ablation left 94% of the
+    // wall standing with nothing but the CB handshake and the stamp.
+    //
+    // Every such tile is byte-identical, so it is built ONCE per core into
+    // `cb_pad_scratch` and then reused two ways:
+    //   * P_ACCESSOR — the outgoing page write is issued straight FROM the scratch
+    //     tile (`src_of` below). The CB slot is never touched at all: not one
+    //     store, not one byte moved.
+    //   * P_LOCAL_SHARD — there is no outgoing write (the CB *is* the tensor), so
+    //     the scratch tile is copied into the slot with ONE local L1->L1 transfer.
+    //
+    // Measured whole-op: 386,749 -> 142,761 ns (2.71x) on the focus case,
+    // 366,475 -> 22,487 ns (16.3x) on a padded HEIGHT-sharded output, and FLAT on
+    // geometries with only ragged tails.
+    //
+    // The fill is LAZY on purpose. Stamping the scratch at kernel start cost
+    // +4.3 us on a 6.7 us [1,1,50,50]->[1,1,64,64] — a pure regression on every
+    // geometry that has tails but no whole pad tile. `pad_scratch` (host-derived)
+    // additionally deletes the mechanism outright where the target cannot contain
+    // one, so those cells keep the old code byte-for-byte.
+    //
+    // RAW-DATAFLOW NOTE: the L1->L1 replicate is a local `noc_async_read` from
+    // `get_noc_addr(scratch)`, not a `noc_async_write`. The WRITE command buffer
+    // already carries the outgoing page writes and, on the B8 arm, a trid'd write
+    // that must stay in flight across the block boundary; issuing the copy on the
+    // idle READ command buffer gives it an INDEPENDENT `noc_async_read_barrier()`
+    // that orders it against the page write without touching the write-trid state.
+    constexpr bool use_scratch = out_fill && pad_scratch;
+    uint32_t scratch_addr = 0;
+    uint64_t scratch_noc = 0;
+    bool scratch_ready = false;
+    if constexpr (use_scratch) {
+        scratch_addr = get_write_ptr(cb_pad_scratch);
+        scratch_noc = get_noc_addr(scratch_addr);
+    }
+    auto ensure_scratch = [&]() {
+        if constexpr (use_scratch) {
+            if (!scratch_ready) {
+                tilize_kernels::fill_l1_with_val<out_elem_bytes>(
+                    scratch_addr, tile_h * TILE_W * out_elem_bytes, pad_word_out);
+                scratch_ready = true;
+            }
+        }
+    };
+
     // Stamp the pad region of this block's wt_chunk tiles, in the OUTPUT element
     // format. Compiles to nothing when `out_fill` is 0 (every path but a padded
     // widening cast).
     auto stamp_pad = [&](uint32_t i, uint32_t l1_addr) {
         if constexpr (out_fill) {
-            const uint32_t tile_row = tile_row_of(i);
-            const uint32_t img = tile_row / nth_per_img;
-            const uint32_t row_in_img = (tile_row % nth_per_img) * tile_h;
-            // Rows of this tile-row that carry real data (0 for a whole pad tile-row).
-            uint32_t valid_rows = 0;
-            if (img < n_img_in && row_in_img < h_in) {
-                valid_rows = h_in - row_in_img;
-                if (valid_rows > tile_h) {
-                    valid_rows = tile_h;
-                }
-            }
-            const uint32_t tile_col = tile_col_of(i);
+            const uint32_t valid_rows = valid_rows_of(i);
+            bool copied = false;
             for (uint32_t k = 0; k < wt_chunk; ++k) {
-                const uint32_t col0 = (tile_col + k) * TILE_W;
-                uint32_t valid_cols = 0;
-                if (col0 < w_in_elems) {
-                    valid_cols = w_in_elems - col0;
-                    if (valid_cols > TILE_W) {
-                        valid_cols = TILE_W;
+                const uint32_t valid_cols = valid_cols_of(i, k);
+                const uint32_t addr = l1_addr + k * out_tile_bytes;
+                const bool whole_pad_tile = (valid_rows == 0 || valid_cols == 0);
+                if constexpr (use_scratch) {
+                    if (whole_pad_tile) {
+                        ensure_scratch();
+                        if constexpr (placement == 1 /* P_LOCAL_SHARD */) {
+                            // No outgoing write to re-source: replicate into the slot.
+                            noc_async_read(scratch_noc, addr, out_tile_bytes);
+                            copied = true;
+                        }
+                        // P_ACCESSOR: nothing to do here at all — `src_of` sends the
+                        // page from the scratch tile and the slot is never read.
+                        continue;
                     }
                 }
+                // A ragged W/H tail (or a geometry with no whole pad tile at all):
+                // stamped in place, exactly as before.
                 tilize_kernels::fill_tile_pad<tile_h, TILE_W, out_elem_bytes>(
-                    l1_addr + k * out_tile_bytes, valid_rows, valid_cols, pad_word_out);
+                    addr, valid_rows, valid_cols, pad_word_out);
+            }
+            if (copied) {
+                // The replicate must LAND before anything reads the slot.
+                noc_async_read_barrier();
             }
         }
+    };
+
+    // The L1 address an outgoing page write is sourced from: the pre-stamped
+    // scratch tile for a whole pad tile, the CB slot for everything else.
+    auto src_of = [&](uint32_t i, uint32_t k, uint32_t l1_addr) -> uint32_t {
+        if constexpr (use_scratch && placement != 1) {
+            if (valid_rows_of(i) == 0 || valid_cols_of(i, k) == 0) {
+                return scratch_addr;
+            }
+        }
+        return l1_addr;
     };
 
     if constexpr (placement == 1 /* P_LOCAL_SHARD */) {
@@ -232,7 +337,7 @@ void kernel_main() {
                 MaybeDeviceZoneScope("writer_issue");
                 noc_async_write_set_trid(trid_issue);
                 for (uint32_t k = 0; k < wt_chunk; ++k) {
-                    noc_async_write(l1_addr, accessor.get_noc_addr(first_page + k), out_tile_bytes);
+                    noc_async_write(src_of(i, k, l1_addr), accessor.get_noc_addr(first_page + k), out_tile_bytes);
                     l1_addr += out_tile_bytes;
                 }
             }
@@ -285,15 +390,15 @@ void kernel_main() {
             MaybeDeviceZoneScope("writer_issue");
             for (uint32_t k = 0; k < wt_chunk; ++k) {
                 if constexpr (!ablate_dm) {
+                    const uint32_t src = src_of(i, k, l1_addr);
                     if constexpr (page_write) {
                         // B13 OFF (the default) is exactly `noc_async_write(...)`.
-                        put.write(l1_addr, accessor.get_noc_addr(first_page + k));
+                        put.write(src, accessor.get_noc_addr(first_page + k));
                     } else {
                         // OFF arm: the same bytes split into two sub-page transactions.
                         constexpr uint32_t half = out_tile_bytes / 2;
-                        noc_async_write(l1_addr, accessor.get_noc_addr(first_page + k), half);
-                        noc_async_write(
-                            l1_addr + half, accessor.get_noc_addr(first_page + k, half), out_tile_bytes - half);
+                        noc_async_write(src, accessor.get_noc_addr(first_page + k), half);
+                        noc_async_write(src + half, accessor.get_noc_addr(first_page + k, half), out_tile_bytes - half);
                     }
                 }
                 l1_addr += out_tile_bytes;

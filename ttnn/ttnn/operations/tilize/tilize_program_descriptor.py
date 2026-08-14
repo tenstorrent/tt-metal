@@ -105,6 +105,7 @@ MIN_PIPELINE_READ_BYTES = 1024
 # --- CB indices (semantic names; the numeric slot is just a buffer index) ---
 CB_INPUT_STICKS = 0  # reader -> compute  (row-major sticks, tile-sized pages)
 CB_RETILE_STAGE = 1  # reader -> reader   (R_RETILE: staged SOURCE tile pages)
+CB_PAD_SCRATCH = 2  # writer -> writer   (out_fill: ONE pre-stamped whole-pad tile)
 CB_OUTPUT_TILES = 16  # compute -> writer (tiled pages)
 
 # --- reader regime selector (op_design.md §5.1) -----------------------------
@@ -777,6 +778,49 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         num_blocks_total = sum(blocks_per_shard)
 
     # ========== 3. CIRCULAR BUFFERS =======================================
+
+    # The rank->=2 promoted view (plan.read_shape): a rank-0 scalar reads as a
+    # 1x1 source, so h_in / w_in_bytes / the image count stay well defined.
+    in_shape = list(plan.read_shape)
+    h_in = in_shape[-2]
+    w_in_bytes = in_shape[-1] * elem_in
+    n_img_in = _prod(in_shape[:-2])
+    nth_per_img = _div_up(target[-2], tile_h)
+    pad_word = _pack_pad_word(plan.pad_value, input_tensor.dtype)
+
+    # -- Refinement 4: the OUTPUT-format pad stamp (lever `out_fill`) ---------
+    # The reader's input-format fill is arithmetically exact for every path except
+    # a WIDENING cast with a fill the input format cannot hold. There the writer
+    # re-stamps the pad region of each finished tile with a second word packed in
+    # the OUTPUT format (see kernels/tilize_fill.hpp). Gated on the round-trip
+    # actually losing the value, so every other cell is byte-identical to before.
+    out_fill = int(
+        plan.has_pad_region
+        # The stamp addresses whole faces: 16 rows on a full tile, tile_h rows on a
+        # tiny one (Refinement 5). Every legal tile height satisfies one or the other.
+        and (tile_h % FACE_HEIGHT == 0 or FACE_HEIGHT % tile_h == 0)
+        and bool(LEVERS["out_fill"])
+        and needs_output_format_fill(plan.pad_value, input_tensor.dtype, output_tensor.dtype)
+    )
+    pad_word_out = _pack_pad_word(plan.pad_value, output_tensor.dtype) if out_fill else 0
+    # Perf 1: does the padded TARGET contain at least one WHOLE pad tile — a tile
+    # every element of which is pad? Those, and only those, are the ones the writer
+    # can produce from a single pre-stamped scratch tile instead of ~tile_h*32
+    # element stores. A geometry with only ragged W/H tails has none, and there the
+    # whole mechanism (and its L1 page) must not exist at all: stamping the scratch
+    # unconditionally was MEASURED at +4.3 us on a 6.7 us [1,1,50,50]->[1,1,64,64].
+    # THIS is the single source of that predicate — the writer takes it as a
+    # compile-time arg rather than re-deriving it, so the CB allocation below and
+    # the kernel branch can never disagree.
+    pad_scratch = int(
+        out_fill
+        and (
+            h_in + tile_h <= nth_per_img * tile_h  # a whole pad tile-ROW exists
+            or in_shape[-1] + tile_w <= wt * tile_w  # a whole pad tile-COLUMN exists
+            or n_img_in * nth_per_img < nt_h  # trailing whole-pad images
+        )
+    )
+
     # A streaming CB is CB_DEPTH * NT_BLK * WT_CHUNK pages — a function of the
     # knobs only, never of WT / NT_H / any tensor dimension. cb_pages() is the
     # one place that formula lives. An aliased CB is the shard itself.
@@ -841,6 +885,26 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # like every other buffer here it is a function of the block knobs only, never
     # of WT or NT_H. Off the retile path it is not created at all.
     cbs = [cb_input_sticks_descriptor, cb_output_tiles_descriptor]
+    # Perf 1 — the OUTPUT-format pad stamp's pre-stamped tile. ONE page of one
+    # output tile, writer-private (it has no producer/consumer handshake: the
+    # writer both fills it and sources from it), created ONLY when the geometry can
+    # actually contain a whole pad tile. See `pad_scratch` above for why that gate
+    # is not optional.
+    if pad_scratch:
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=out_tile_bytes,
+                core_ranges=all_cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_PAD_SCRATCH,
+                        data_format=output_tensor.dtype,
+                        page_size=out_tile_bytes,
+                        tile=ttnn.TileDescriptor(tile_h, tile_w),
+                    )
+                ],
+            )
+        )
     if retile:
         cbs.append(
             ttnn.CBDescriptor(
@@ -885,31 +949,6 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         regime = R_RETILE
     else:
         regime = R_PAD if (plan.has_pad_region or paged_src or not LEVERS["regime_select"]) else R_ALIGNED
-
-    # The rank->=2 promoted view (plan.read_shape): a rank-0 scalar reads as a
-    # 1x1 source, so h_in / w_in_bytes / the image count stay well defined.
-    in_shape = list(plan.read_shape)
-    h_in = in_shape[-2]
-    w_in_bytes = in_shape[-1] * elem_in
-    n_img_in = _prod(in_shape[:-2])
-    nth_per_img = _div_up(target[-2], tile_h)
-    pad_word = _pack_pad_word(plan.pad_value, input_tensor.dtype)
-
-    # -- Refinement 4: the OUTPUT-format pad stamp (lever `out_fill`) ---------
-    # The reader's input-format fill is arithmetically exact for every path except
-    # a WIDENING cast with a fill the input format cannot hold. There the writer
-    # re-stamps the pad region of each finished tile with a second word packed in
-    # the OUTPUT format (see kernels/tilize_fill.hpp). Gated on the round-trip
-    # actually losing the value, so every other cell is byte-identical to before.
-    out_fill = int(
-        plan.has_pad_region
-        # The stamp addresses whole faces: 16 rows on a full tile, tile_h rows on a
-        # tiny one (Refinement 5). Every legal tile height satisfies one or the other.
-        and (tile_h % FACE_HEIGHT == 0 or FACE_HEIGHT % tile_h == 0)
-        and bool(LEVERS["out_fill"])
-        and needs_output_format_fill(plan.pad_value, input_tensor.dtype, output_tensor.dtype)
-    )
-    pad_word_out = _pack_pad_word(plan.pad_value, output_tensor.dtype) if out_fill else 0
 
     # -- Refinement-3 read levers (interleaved aligned path only) ------------
     # All three need the custom reader loop; with all three off the reader
@@ -1027,6 +1066,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # Refinement 6 (master.md B13 / D21); both 0 ships the Refinement-5 kernel.
         write_state,
         precomp_index,
+        # Perf 1: 1 => CB_PAD_SCRATCH exists and whole-pad tiles are produced from
+        # it instead of being stamped element-by-element. Derived once, above.
+        pad_scratch,
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
