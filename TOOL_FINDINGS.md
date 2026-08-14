@@ -1587,6 +1587,81 @@ for the remainder of the experiment.
 
 ---
 
+## ★ TRANSFER RESULTS — what happened when the tool's findings were applied to the hand-port
+
+The reason the experiment existed. Every precision-neutral finding was implemented against the
+hand-port and measured on the same p150, with its own audio-tier gate (45 utterances, WER, MOS,
+6 PCCs, ms_per_frame) run twice in one session so nothing is judged against a stored number.
+
+Baseline, reproducing §6.71 to the noise floor: **ms_per_frame 27.751, RTF 0.3653, WER 0/894,
+MOS 4.6101, 132/132 tests, 32 metrics with no nulls.**
+
+| # | tool finding | outcome on the hand-port |
+|---|---|---|
+| O4o/O4q | residual stream kept in the norm's shard | **−0.99 ms/frame** — and **WER 0 → 2**, fails the gate |
+| O4f | Q+K rotated in one call | **refused** — `nlp_create_qkv_heads_decode` returns q/k already `HEIGHT_SHARDED`; concat-then-rotate is a TT_FATAL |
+| O4k | fused K/V cache write | **0.510 ms/token SLOWER** — §6.44 independently reproduced |
+| — | SwiGLU product → `w2` as a sharded operand | **refused** — matmul rejects a sharded in0 |
+| — | head-merge → `wo` as a sharded operand | **accepted, but slower AND wrong** (PCC 0.954, `nan` at 16 cores) |
+| — | reshard the QKV activation once | **moot** — the hand-port already fuses q/k/v into one projection |
+| O4b | per-op grid for `w2` | **~0.15 ms, under the instrument's resolution** — §6.52 stands |
+
+**Nine further findings were already in the hand-port** (§6.67 sharded norm, §6.65 traced decode,
+§6.52 program configs, fused `wqkv`, fused RoPE, `[gpt-05]` decode-native layout — worth **6.6
+ms/frame** there against the tool's 0.93 — `[gpt-21]` SDPA core count, §6.72 head split, and
+`[gpt-26]` `fused_activation`, which the hand-port does *better*, see F12).
+
+### The headline, stated plainly
+
+**Essentially nothing from this tool transfers to a mature hand-port of the same model.** That is
+not a criticism of the tool — it is a statement about where its value lies. Its wins were real and
+large *on its own output*: its `w2` sat at 96 cores, its RoPE was a seven-op chain, its Q/K/V wore a
+prefill layout, its argmax was single-cored. The hand-port had already fixed all of those. What the
+tool recovers is the distance between generated code and hand-tuned code — and by construction that
+distance is zero once someone has done the hand-tuning.
+
+### The one thing that DID transfer, and why it still failed
+
+O4o/O4q is a genuine **0.99 ms/frame** — double the gate's 0.5 ms tolerance. It failed on WER
+because the chain forced `_NORM_GRID` from 32 to 48 cores, which changes the RMSNorm's reduction
+tree (48 partials, not 32). Not bit-identical, `decode_min_pcc` 0.999316 → 0.999288, and 2 of 894
+long-form words flipped. **A variant pinning `per_core_N=3` on the two residual matmuls — which puts
+their output on 96/3 = 32 cores, matching the norm's existing grid — is under test.**
+
+### F14 — "producer emits the consumer's shard" needs to check the consumer's PROGRAM CONFIG grid
+
+The most useful mechanism the tool found is also the one most likely to misfire, and the reason is
+worth handing to the PR author directly:
+
+> `memory_config=` on a matmul carrying a program config is **only a request for the layout**. The
+> shard spec follows the matmul's OWN grid. Asking `DECODE_PRG["wo"]` (`_MM_GRID=(12,6)`,
+> `per_core_N=2`) for a 32-core shard returns a **48-core** one, and the downstream norm refuses it:
+> *"shard_spec.grid size 12x4 does not fit within program_config grid 8x4"*.
+
+So a tool applying this lever has three choices, and it should know which it is making: move the
+consumer to the producer's grid (what the tool did — and what perturbs a reduction's arithmetic),
+move the producer to the consumer's (`per_core_N`, arithmetic-preserving), or give up. **The tool
+took the first without recording that it had changed the numerics** — its PCC gate at 0.95 could not
+see a 2-word WER shift, and nothing in the ladder flags "this lever altered a reduction tree".
+
+**Suggested fix:** when a shard-chaining lever changes a *reduction's* core count (norm, softmax,
+argmax, any tree reduce), record it as a precision-affecting change rather than a layout one, and
+prefer the `per_core_N` route when it exists.
+
+### Process note — a measurement error of mine, and how it was caught
+
+My first fused-K/V-write measurement showed it **8.72 µs faster** and I nearly reported §6.44 as
+overturned. The V relocation was hoisted **out** of the timed region, so it measured the fused write
+as if V were already on a disjoint core — which it never is, because head creation puts K and V on
+the same core at batch 1. With the move inside the loop the same comparison reads **19.63 µs
+slower**, and the V move alone costs 23.49 µs. §6.44 recorded 0.687 ms/step; the corrected
+measurement says 0.510 ms/token. Same sign, same magnitude, independently reproduced.
+
+The general form: **when testing a fused op that requires an operand to be relocated, the relocation
+is part of the cost unless the producer can emit it in place.**
+
+---
+
 ## Corrections to this document
 
 - **`beat_baseline: false` on 24/24 kernel records is BY DESIGN, not a defect.** I flagged it as a
