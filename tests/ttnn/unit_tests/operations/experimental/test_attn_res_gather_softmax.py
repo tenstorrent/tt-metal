@@ -140,7 +140,7 @@ def test_matches_torch(mesh_device, device_params, fuse_add):
         0,
     )
 
-    fused = ttnn.experimental.attn_res_gather_softmax(
+    fused = ttnn.experimental.deepseek_prefill.attn_res_gather_softmax(
         tt_partial,
         tt_prefix,
         tt_shift,
@@ -215,7 +215,7 @@ def test_rejects_a_site_past_the_batch_on_a_cache_hit(mesh_device, device_params
         0,
     )
 
-    read = lambda site: ttnn.experimental.attn_res_gather_softmax(
+    read = lambda site: ttnn.experimental.deepseek_prefill.attn_res_gather_softmax(
         tt_partial,
         tt_prefix,
         tt_shift,
@@ -290,7 +290,7 @@ def test_rejects_shapes_that_only_agree_once_padded(mesh_device, device_params, 
     )
 
     with expect_error(RuntimeError, message):
-        ttnn.experimental.attn_res_gather_softmax(
+        ttnn.experimental.deepseek_prefill.attn_res_gather_softmax(
             tt_partial,
             tt_prefix,
             tt_shift,

@@ -12,7 +12,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::experimental::attn_residual {
+namespace ttnn::operations::experimental::deepseek_prefill::attn_res_gather_softmax {
 
 // One read site's whole path from a tensor-parallel-sharded residual stream to the mixed
 // hidden state, in a single dispatch. The path is three stages:
@@ -66,4 +66,4 @@ std::vector<ttnn::Tensor> attn_res_gather_softmax(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 
-}  // namespace ttnn::experimental::attn_residual
+}  // namespace ttnn::operations::experimental::deepseek_prefill::attn_res_gather_softmax

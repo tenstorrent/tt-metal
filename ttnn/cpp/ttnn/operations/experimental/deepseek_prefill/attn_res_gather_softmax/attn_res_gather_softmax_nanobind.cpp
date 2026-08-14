@@ -12,12 +12,12 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 
-#include "ttnn/operations/experimental/attn_residual/attn_res_gather_softmax.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/attn_res_gather_softmax.hpp"
 
-namespace ttnn::operations::experimental::attn_residual {
+namespace ttnn::operations::experimental::deepseek_prefill::attn_res_gather_softmax::detail {
 
 void bind_attn_res_gather_softmax(nb::module_& mod) {
-    ttnn::bind_function<"attn_res_gather_softmax", "ttnn.experimental.">(
+    ttnn::bind_function<"attn_res_gather_softmax", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
             One read site's whole path from a tensor-parallel-sharded residual stream
@@ -64,7 +64,7 @@ void bind_attn_res_gather_softmax(nb::module_& mod) {
 
             Blackhole only, and requires a ring size above 1 on `cluster_axis`.
         )doc",
-        &ttnn::experimental::attn_residual::attn_res_gather_softmax,
+        &ttnn::operations::experimental::deepseek_prefill::attn_res_gather_softmax::attn_res_gather_softmax,
         nb::arg("partial").noconvert(),
         nb::arg("running_sum").noconvert(),
         nb::arg("shift").noconvert(),
@@ -85,4 +85,4 @@ void bind_attn_res_gather_softmax(nb::module_& mod) {
         nb::arg("compute_kernel_config").noconvert() = nb::none());
 }
 
-}  // namespace ttnn::operations::experimental::attn_residual
+}  // namespace ttnn::operations::experimental::deepseek_prefill::attn_res_gather_softmax::detail

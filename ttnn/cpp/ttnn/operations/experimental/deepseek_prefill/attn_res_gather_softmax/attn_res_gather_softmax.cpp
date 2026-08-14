@@ -9,7 +9,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
-namespace ttnn::experimental::attn_residual {
+namespace ttnn::operations::experimental::deepseek_prefill::attn_res_gather_softmax {
 
 std::vector<ttnn::Tensor> attn_res_gather_softmax(
     const ttnn::Tensor& partial,
@@ -69,4 +69,4 @@ std::vector<ttnn::Tensor> attn_res_gather_softmax(
         kernel_config_val);
 }
 
-}  // namespace ttnn::experimental::attn_residual
+}  // namespace ttnn::operations::experimental::deepseek_prefill::attn_res_gather_softmax

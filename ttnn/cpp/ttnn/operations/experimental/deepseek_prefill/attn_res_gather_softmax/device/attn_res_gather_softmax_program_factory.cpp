@@ -29,7 +29,8 @@ using namespace tt::tt_metal;
 
 namespace {
 
-constexpr auto kKernelDir = "ttnn/cpp/ttnn/operations/experimental/attn_residual/device/kernels/";
+constexpr auto kKernelDir =
+    "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/attn_res_gather_softmax/device/kernels/";
 
 // The row weights `a` and `b`, and the shift and mass they are derived from.
 constexpr uint32_t kRowWeights = 2;

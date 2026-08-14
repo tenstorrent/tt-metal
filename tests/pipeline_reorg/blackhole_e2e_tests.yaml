@@ -78,7 +78,7 @@
 # The filter takes both transports at that width.
 - id: bh-lb-ttnn-attn-res-gather-softmax-unit
   name: ttnn attn_res_gather_softmax unit tests
-  cmd: pytest tests/ttnn/unit_tests/operations/attn_residual/test_attn_res_gather_softmax.py -k "mesh-2x4"
+  cmd: pytest tests/ttnn/unit_tests/operations/experimental/test_attn_res_gather_softmax.py -k "mesh-2x4"
   skus:
     bh_loudbox:
       timeout: 10
