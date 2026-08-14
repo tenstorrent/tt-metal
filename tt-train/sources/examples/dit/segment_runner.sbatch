@@ -23,6 +23,8 @@ set -euo pipefail
 SEGMENT_SECONDS=${SEGMENT_SECONDS:-900}
 
 export TT_METAL_HOME=$REPO TT_METAL_RUNTIME_ROOT=$REPO PYTHONUNBUFFERED=1
+# Optional: STAGING_DIR with fresher example code to copy over the repo copy.
+if [ -n "${STAGING_DIR:-}" ]; then cp $STAGING_DIR/*.py $REPO/tt-train/sources/examples/dit/; fi
 cd $REPO/tt-train/sources/examples/dit
 
 set +e
@@ -45,7 +47,7 @@ case "$tail" in
     TRAINING_COMPLETE*) echo "chain finished: $tail" ;;
     SEGMENT_END*)
         echo "resubmitting: $tail"
-        sbatch ${SBATCH_EXTRA:-} --export=ALL,REPO=$REPO,CONFIG=$CONFIG,RUN_NAME=$RUN_NAME,SEGMENT_SECONDS=$SEGMENT_SECONDS,SBATCH_EXTRA="${SBATCH_EXTRA:-}" "$0"
+        sbatch ${SBATCH_EXTRA:-} --export=ALL,REPO=$REPO,CONFIG=$CONFIG,RUN_NAME=$RUN_NAME,SEGMENT_SECONDS=$SEGMENT_SECONDS,STAGING_DIR=${STAGING_DIR:-},SBATCH_EXTRA="${SBATCH_EXTRA:-}" "$0"
         ;;
     *) echo "no end marker (rc=0 but unexpected output); chain stopped" ;;
 esac
