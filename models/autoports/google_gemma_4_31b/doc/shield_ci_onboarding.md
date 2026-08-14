@@ -9,8 +9,57 @@ to make that possible, and what is verified versus still open.
 
 | Run | Workflow | Outcome |
 | --- | --- | --- |
-| [31801765378](https://github.com/tenstorrent/tt-shield/actions/runs/31801765378) | `spec_tests` | build succeeded, tests failed: no applicable suites |
-| [31807380436](https://github.com/tenstorrent/tt-shield/actions/runs/31807380436) | `benchmarks` | reuses the built image, skips the build |
+| [31801765378](https://github.com/tenstorrent/tt-shield/actions/runs/31801765378) | `spec_tests` | build succeeded; tests failed, no applicable suites |
+| [31807380436](https://github.com/tenstorrent/tt-shield/actions/runs/31807380436) | `benchmarks` | image reused; **server came up in the container**, failed on the missing chat template |
+| [31824560569](https://github.com/tenstorrent/tt-shield/actions/runs/31824560569) | `benchmarks` | rebuild carrying the chat-template fix |
+
+### Run 31807380436 proved the container path end to end
+
+This is the run worth reading. Inside the Shield-built image, before it failed:
+
+```text
+Set EXTRA_MODELS_DIR to /home/container_app_user/tt-metal/models/autoports/vllm_bundles
+Registered TT model TTGemma4ForConditionalGeneration -> models.autoports.google_gemma_4_31b...
+GPU KV cache size: 103,872
+Maximum concurrency for 113,280 tokens per request: 1.00x
+```
+
+So in the container: `TT_METAL_HOME` resolved to `/home/container_app_user/tt-metal`
+and the entrypoint derived the bundle path from it, the bundle registered the
+autoport rather than `models/demos/gemma4`, the cwd-independent model-dir fix
+held (no `context_contract.json` error), and the KV pool matched the 103,872
+tokens measured locally. Weights access and `HF_TOKEN` on the runner also
+worked. Four of the risks flagged before dispatching cleared here; only the
+prompt contract remained.
+
+### The base checkpoint needs a chat template, not just a caveat
+
+Run 31807380436 then failed every request with
+
+```text
+Failed to load AutoTokenizer chat template for google/gemma-4-31B
+ChatTemplateResolutionError: As of transformers v4.44, default chat template is no longer allowed
+ERROR serving.py:311] Error in preprocessing prompt inputs
+```
+
+TTI's trace capture posts to `/v1/chat/completions` unconditionally
+(`utils/prompt_client.py::call_chat_inference`), so a checkpoint with
+`chat_template=None` cannot serve it. The spec now passes the autoport's own
+`doc/vllm_integration/chat_template.jinja`, the same file the recorded Stage 09
+serving run used: `bos_token` plus newline-joined message content, preserving
+base completion semantics rather than inventing an instruct format. The path is
+repo-relative and anchored to `TT_METAL_HOME` by
+`run_vllm_api_server.resolve_repo_relative_vllm_args`, because the checkout sits
+at a different absolute path in the container than in a local tree and spec
+values are not variable-expanded.
+
+### Changing TTI code or specs requires a rebuild
+
+`run_docker_server.py` bind-mounts `vllm-tt-metal/src`, `utils`, `tests`,
+`reference_config`, and the runtime spec JSON **only under `--dev-mode`**.
+Without it the container uses the image's baked copies, so a change to the
+entrypoint or to a model spec needs a fresh image; only passing different
+dispatch inputs can reuse one. That is why run 31824560569 rebuilds.
 
 ### Do not use `spec_tests` for this model
 
