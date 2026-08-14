@@ -16,6 +16,7 @@ import ttnn
 from models.common.models.qwen3_32b.model import (
     DEFAULT_HF_REVISION,
     QWEN3_32B_ACCURACY,
+    QWEN3_32B_BH_TP4_CLUSTER_TYPES,
     QWEN3_32B_PERFORMANCE,
     Qwen3_32B,
     Qwen3_32BPagedAttentionConfig,
@@ -171,17 +172,17 @@ def _qwen_stop_token_ids(tokenizer) -> tuple[int, ...]:
 def _trace_seq_lens(num_devices: int, max_prefill_chunk_size: int, max_seq_len: int) -> tuple[int, ...]:
     if num_devices not in (4, 8):
         raise ValueError(f"Qwen3-32B supports T3K (8 devices) or P150x4 (4 devices), got {num_devices}")
-    candidates = (128,) if num_devices == 4 else (128, 1024)
+    candidates = (128, 1024)
     return tuple(length for length in candidates if length <= min(max_prefill_chunk_size, max_seq_len))
 
 
 def _resolve_supported_sku(*, arch, cluster_type, num_devices: int) -> str:
     if arch == ttnn.device.Arch.WORMHOLE_B0 and cluster_type == ttnn.cluster.ClusterType.T3K and num_devices == 8:
         return "T3K"
-    if arch == ttnn.device.Arch.BLACKHOLE and cluster_type == ttnn.cluster.ClusterType.P150_X4 and num_devices == 4:
+    if arch == ttnn.device.Arch.BLACKHOLE and cluster_type in QWEN3_32B_BH_TP4_CLUSTER_TYPES and num_devices == 4:
         return "P150x4"
     raise ValueError(
-        "Qwen3-32B supports physical Wormhole T3K (8 devices) or BlackHole P150x4 (4 devices); "
+        "Qwen3-32B supports physical Wormhole T3K (8 devices) or BlackHole P150_X4/P300_X2 (4 devices); "
         f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_devices}"
     )
 

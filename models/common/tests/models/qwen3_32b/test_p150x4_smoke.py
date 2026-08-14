@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fail-closed one-layer Qwen3-32B execution smoke on physical P150x4."""
+"""Fail-closed one-layer Qwen3-32B execution smoke on a physical BlackHole TP4 product."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import torch
 import ttnn
 from models.common.models.qwen3_32b.executor import EagerQwen3_32BExecutor
 from models.common.models.qwen3_32b.hf_adaptor import from_pretrained
-from models.common.models.qwen3_32b.model import QWEN3_32B_ACCURACY
+from models.common.models.qwen3_32b.model import QWEN3_32B_ACCURACY, QWEN3_32B_BH_TP4_CLUSTER_TYPES
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.common.tests.demos.run_helpers import make_contiguous_page_table
 
@@ -43,11 +43,11 @@ pytestmark = [
 ]
 
 
-def _assert_physical_p150x4(mesh_device: ttnn.MeshDevice) -> None:
-    assert ttnn.device.is_blackhole(), "P150x4 smoke requires BlackHole"
+def _assert_physical_bh_tp4(mesh_device: ttnn.MeshDevice) -> None:
+    assert ttnn.device.is_blackhole(), "BlackHole TP4 smoke requires BlackHole"
     assert (
-        ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.P150_X4
-    ), "P150x4 smoke requires the physical P150_X4 cluster identity; a four-chip submesh is not equivalent"
+        ttnn.cluster.get_cluster_type() in QWEN3_32B_BH_TP4_CLUSTER_TYPES
+    ), "BlackHole TP4 smoke requires a physical P150_X4 or P300_X2 product"
     assert mesh_device.get_num_devices() == 4
     assert tuple(mesh_device.shape) == (1, 4)
 
@@ -88,7 +88,7 @@ def _assert_logits(logits: torch.Tensor, *, vocab_size: int) -> None:
 
 @pytest.fixture(scope="module")
 def production_model(ttnn_mesh_device, require_blackhole_mesh_device):
-    _assert_physical_p150x4(ttnn_mesh_device)
+    _assert_physical_bh_tp4(ttnn_mesh_device)
     ttnn_mesh_device.enable_program_cache()
     ttnn_mesh_device.clear_program_cache()
     llm = None

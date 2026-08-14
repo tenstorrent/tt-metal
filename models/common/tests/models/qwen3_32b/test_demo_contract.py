@@ -182,11 +182,85 @@ def test_eval_repeat_threads_sampling_mode_to_traced_executor():
     assert ast.unparse(ondevice_decode_loop.value) == "sampling_params is not None"
 
 
-def test_eval_repeat_uses_decode_only_trace_mode():
+def test_eval_repeat_preserves_decode_only_determinism_and_uses_full_trace_for_perf_report():
+    function = _function("_run_eval_repeat_batch32")
     call = _calls("_run_eval_repeat_batch32", "TracedQwen3_32BExecutor")[0]
     trace_mode = next(keyword for keyword in call.keywords if keyword.arg == "trace_mode")
+    configure_call = _calls("_run_eval_repeat_batch32", "_require_eval_perf_prefill_trace_parity")[0]
 
-    assert ast.unparse(trace_mode.value) == "eval_decode_trace_mode(os.environ.get('EVAL_DECODE_MODE', 'traced'))"
+    assert ast.unparse(trace_mode.value) == (
+        "'all' if perf_report else eval_decode_trace_mode(os.environ.get('EVAL_DECODE_MODE', 'traced'))"
+    )
+    assert configure_call.lineno < call.lineno
+    assert "if perf_report:\n        _require_eval_perf_prefill_trace_parity(ma)" in ast.unparse(function)
+
+
+def test_eval_perf_report_validates_bh_sequential_policy_and_model_owned_trace_coverage(expect_error):
+    namespace = {"_EVAL_PERF_TRACE_PREFILL_BUCKETS": (128, 1024)}
+    function = _function("_require_eval_perf_prefill_trace_parity")
+    exec(compile(ast.Module(body=[function], type_ignores=[]), _DEMO_PATH, "exec"), namespace)
+
+    model_args = SimpleNamespace(
+        max_prefill_chunk_size=4096,
+        max_seq_len=1024,
+        cluster_shape=(1, 4),
+        disable_batched_prefill=True,
+        trace_prefill_supported_seq_lens=(128, 1024),
+        can_enable_trace=lambda seq_len, num_cached_tokens=0: num_cached_tokens == 0 and seq_len in (128, 1024),
+    )
+    namespace["_require_eval_perf_prefill_trace_parity"](model_args)
+    assert model_args.disable_batched_prefill is True
+    assert model_args.trace_prefill_supported_seq_lens == (128, 1024)
+    assert model_args.can_enable_trace(128)
+    assert model_args.can_enable_trace(1024)
+    assert not model_args.can_enable_trace(2048)
+    assert not model_args.can_enable_trace(128, num_cached_tokens=32)
+
+    t3k = SimpleNamespace(
+        max_prefill_chunk_size=4096,
+        max_seq_len=1024,
+        cluster_shape=(1, 8),
+        disable_batched_prefill=False,
+        trace_prefill_supported_seq_lens=(128, 1024),
+        can_enable_trace=lambda seq_len, num_cached_tokens=0: num_cached_tokens == 0 and seq_len in (128, 1024),
+    )
+    namespace["_require_eval_perf_prefill_trace_parity"](t3k)
+    assert t3k.disable_batched_prefill is False
+
+    insufficient = SimpleNamespace(max_prefill_chunk_size=512, max_seq_len=1024, cluster_shape=(1, 4))
+    with expect_error(ValueError, "requires 128/1024 prefill trace coverage"):
+        namespace["_require_eval_perf_prefill_trace_parity"](insufficient)
+
+    bh_batched = SimpleNamespace(
+        max_prefill_chunk_size=4096,
+        max_seq_len=1024,
+        cluster_shape=(1, 4),
+        disable_batched_prefill=False,
+    )
+    with expect_error(RuntimeError, "requires model-owned sequential prefill on P150x4"):
+        namespace["_require_eval_perf_prefill_trace_parity"](bh_batched)
+
+    missing_bucket = SimpleNamespace(
+        max_prefill_chunk_size=4096,
+        max_seq_len=1024,
+        cluster_shape=(1, 4),
+        disable_batched_prefill=True,
+        trace_prefill_supported_seq_lens=(128,),
+        can_enable_trace=lambda seq_len, num_cached_tokens=0: seq_len == 128,
+    )
+    with expect_error(ValueError, "requires model-owned prefill trace buckets"):
+        namespace["_require_eval_perf_prefill_trace_parity"](missing_bucket)
+
+    rejecting_predicate = SimpleNamespace(
+        max_prefill_chunk_size=4096,
+        max_seq_len=1024,
+        cluster_shape=(1, 4),
+        disable_batched_prefill=True,
+        trace_prefill_supported_seq_lens=(128, 1024),
+        can_enable_trace=lambda seq_len, num_cached_tokens=0: seq_len == 128,
+    )
+    with expect_error(RuntimeError, "model predicate rejects required prefill trace coverage"):
+        namespace["_require_eval_perf_prefill_trace_parity"](rejecting_predicate)
 
 
 def test_eval_repeat_defaults_to_tttv1_slot_stable_page_table_with_diagnostic_override():
@@ -195,9 +269,21 @@ def test_eval_repeat_defaults_to_tttv1_slot_stable_page_table_with_diagnostic_ov
 
 
 def test_eval_repeat_warms_executor_before_shared_perf_runner_replay():
-    assert _calls("_run_eval_repeat_batch32", "_warmup_demo_executor")
+    warmup_call = _calls("_run_eval_repeat_batch32", "_warmup_demo_executor")[0]
+    runner_call = _calls("_run_eval_repeat_batch32", "run_eval_repeat_batch32")[0]
+    keywords = {keyword.arg: ast.unparse(keyword.value) for keyword in warmup_call.keywords}
+
+    assert keywords["prefill_compile_case"] == "representative_prefill"
+    assert keywords["prefill_sampling_params"] == "sampling_params"
+    assert keywords["prefill_compile_execution"] == (
+        "executor.traced_prefill_execution if perf_report else None"
+    )
+    assert warmup_call.lineno < runner_call.lineno
 
     helper_source = ast.unparse(_function("_warmup_demo_executor"))
+    assert helper_source.index("executor.compile_prefill") < helper_source.index(
+        "executor.warmup_model_prefill(enable_trace=True"
+    )
     assert "executor.warmup_model_decode" in helper_source
     assert "executor.warmup_model_prefill" in helper_source
 

@@ -17,6 +17,7 @@ from models.common.models.qwen3_32b.model import (
     QWEN3_32B_INTERMEDIATE_SIZE,
     QWEN3_32B_PERFORMANCE,
     Qwen3_32B,
+    _qwen3_ccl_topology,
     _qwen3_attention_config,
     _qwen3_lm_head_config,
     _qwen3_mlp_config,
@@ -32,8 +33,16 @@ from models.common.modules.rope.rope_1d import Rope1DConfig, _resolve_rope_confi
 
 
 class _FakeMesh:
-    def __init__(self, dram_grid_width=8):
+    def __init__(self, dram_grid_width=8, *, arch=ttnn.device.Arch.BLACKHOLE, num_devices=4):
         self.dram_grid_width = dram_grid_width
+        self._arch = arch
+        self._num_devices = num_devices
+
+    def arch(self):
+        return self._arch
+
+    def get_num_devices(self):
+        return self._num_devices
 
     def compute_with_storage_grid_size(self):
         return ttnn.CoreCoord(8, 8)
@@ -125,11 +134,15 @@ def test_wormhole_t3k_overlay_preserves_baseline(monkeypatch):
     assert overlay.disable_batched_prefill is False
 
 
-def test_blackhole_p150x4_overlay_and_lm_splits(monkeypatch):
+@pytest.mark.parametrize(
+    "cluster_type",
+    [ttnn.cluster.ClusterType.P150_X4, ttnn.cluster.ClusterType.P300_X2],
+)
+def test_blackhole_four_die_overlay_and_lm_splits(cluster_type, monkeypatch):
     monkeypatch.delenv("DISABLE_MINIMAL_MATMUL", raising=False)
     overlay = _resolve_qwen3_32b_sku_overlay(
         arch=ttnn.device.Arch.BLACKHOLE,
-        cluster_type=ttnn.cluster.ClusterType.P150_X4,
+        cluster_type=cluster_type,
         num_dev=4,
         mesh_device=_FakeMesh(),
     )
@@ -149,6 +162,21 @@ def test_blackhole_p150x4_overlay_and_lm_splits(monkeypatch):
     assert overlay.prefill_minimal_matmul is True
     assert overlay.disable_batched_prefill is True
     assert weight_utils.lm_head_split_sizes(151936, 4, overlay.lm_head_max_columns_per_device) == [4008] * 9 + [1912]
+
+
+@pytest.mark.parametrize(
+    "cluster_type",
+    [ttnn.cluster.ClusterType.P150_X4, ttnn.cluster.ClusterType.P300_X2],
+)
+def test_blackhole_four_die_ccl_recipe_is_model_owned_ring(cluster_type, monkeypatch):
+    monkeypatch.setattr(ttnn.cluster, "get_cluster_type", lambda: cluster_type)
+    assert _qwen3_ccl_topology(_FakeMesh()) == ttnn.Topology.Ring
+
+
+def test_qwen_ccl_recipe_rejects_unadmitted_bh_cluster(monkeypatch, expect_error):
+    monkeypatch.setattr(ttnn.cluster, "get_cluster_type", lambda: ttnn.cluster.ClusterType.P150_X8)
+    with expect_error(ValueError, "P150_X4/P300_X2"):
+        _qwen3_ccl_topology(_FakeMesh())
 
 
 def test_rope_uses_attention_decode_transformation_grid():
@@ -191,14 +219,14 @@ def test_unsupported_architecture_sku_pairs_fail_closed(arch, num_devices, expec
     cluster_type = (
         ttnn.cluster.ClusterType.T3K if arch == ttnn.device.Arch.WORMHOLE_B0 else ttnn.cluster.ClusterType.P150_X4
     )
-    with expect_error(ValueError, "supports Wormhole T3K.*BlackHole P150x4"):
+    with expect_error(ValueError, "supports Wormhole T3K.*BlackHole P150_X4/P300_X2"):
         _resolve_qwen3_32b_sku_overlay(
             arch=arch, cluster_type=cluster_type, num_dev=num_devices, mesh_device=_FakeMesh()
         )
 
 
 def test_blackhole_submesh_is_not_treated_as_physical_p150x4(expect_error):
-    with expect_error(ValueError, "supports Wormhole T3K.*BlackHole P150x4"):
+    with expect_error(ValueError, "supports Wormhole T3K.*BlackHole P150_X4/P300_X2"):
         _resolve_qwen3_32b_sku_overlay(
             arch=ttnn.device.Arch.BLACKHOLE,
             cluster_type=ttnn.cluster.ClusterType.P150_X8,

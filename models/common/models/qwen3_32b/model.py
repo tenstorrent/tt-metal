@@ -43,12 +43,43 @@ from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _dram_shard_cor
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig, _create_sharded_norm_program_config
 from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D, prepare_rot_idxs
 from models.common.modules.sampling.sampling_1d import Sampling1D
-from models.common.modules.tt_ccl import default_topology, get_tt_ccl
+from models.common.modules.tt_ccl import get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE, get_padded_hidden_dim
 
 # Pinned HF revision SHA for Qwen/Qwen3-32B (resolved 2026-06-03).
 DEFAULT_HF_REVISION = "9216db5781bf21249d130ec9da846c4624c16137"
 QWEN3_32B_INTERMEDIATE_SIZE = 25600
+
+# Both physical Blackhole four-die products expose the canonical logical
+# ``P150x4`` Qwen SKU.  Keep this product admission and its CCL recipe owned by
+# the model: the shared CCL fallback does not know that P300_X2 has a physical
+# Ring and would otherwise select Linear.
+QWEN3_32B_BH_TP4_CLUSTER_TYPES = (
+    ttnn.cluster.ClusterType.P150_X4,
+    ttnn.cluster.ClusterType.P300_X2,
+)
+
+
+def _qwen3_ccl_topology(mesh_device) -> ttnn.Topology:
+    """Return the fail-closed CCL topology for an admitted Qwen3-32B mesh."""
+
+    arch = mesh_device.arch()
+    cluster_type = ttnn.cluster.get_cluster_type()
+    num_devices = mesh_device.get_num_devices()
+    if (
+        arch == ttnn.device.Arch.WORMHOLE_B0
+        and cluster_type == ttnn.cluster.ClusterType.T3K
+        and num_devices == 8
+    ) or (
+        arch == ttnn.device.Arch.BLACKHOLE
+        and cluster_type in QWEN3_32B_BH_TP4_CLUSTER_TYPES
+        and num_devices == 4
+    ):
+        return ttnn.Topology.Ring
+    raise ValueError(
+        "Qwen3-32B CCL supports physical Wormhole T3K or BlackHole P150_X4/P300_X2; "
+        f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_devices}"
+    )
 
 
 def _lazy(
@@ -99,15 +130,17 @@ class Qwen3_32BExecutorRuntimeConfig:
     # When True (default), batched prefill runs norm+lm_head ONCE per group over the gathered last-token
     # rows (TTTv1 parity); False falls back to the bit-identical per-slot path (one lm_head per user).
     batched_prefill_batched_extract: bool = True
+    # Both supported Qwen products preserve the TTTv1 Q128/Q1024 prefill trace
+    # buckets.  Keep this material explicit because the executor snapshots it
+    # independently from ``can_enable_trace`` when constructing warmup coverage.
+    trace_prefill_supported_seq_lens: tuple[int, ...] = (128, 1024)
 
     def can_enable_trace(self, prefill_seq_len: int, num_cached_tokens: int = 0) -> bool:
-        # Only trace the seq lens TTTv1 traces; bigger ones have small op2op gaps so tracing buys
-        # nothing. T3K uses [128, 1024], while P150x4 is explicitly restricted to [128]. Decode
-        # trace stays enabled at the engine layer regardless.
-        num_devices = int(self.cluster_shape[0]) * int(self.cluster_shape[1])
-        allowed = {1: (128,), 2: (128, 1024), 4: (128,), 8: (128, 1024)}.get(num_devices, (128,))
+        # Only trace the sequence lengths retained by the model-owned product.
+        # Decode trace stays enabled at the engine layer regardless.
         return (
-            prefill_seq_len in allowed
+            num_cached_tokens == 0
+            and prefill_seq_len in self.trace_prefill_supported_seq_lens
             and prefill_seq_len <= self.max_prefill_chunk_size
             and prefill_seq_len <= self.max_seq_len
         )
@@ -338,7 +371,7 @@ def _all_gather_rmsnorm_tensor(
         dim=3,
         multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
         num_links=1,
-        topology=default_topology(cfg.mesh_device),
+        topology=_qwen3_ccl_topology(cfg.mesh_device),
         memory_config=memory_config,
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
         chunks_per_sync=24,
@@ -383,7 +416,7 @@ def _resolve_qwen3_32b_sku_overlay(*, arch, cluster_type, num_dev: int, mesh_dev
             attention_prefill_qkv_grid=(8, 8),
             attention_decode_transformation_grid=mesh_device.compute_with_storage_grid_size(),
         )
-    elif arch == ttnn.device.Arch.BLACKHOLE and cluster_type == ttnn.cluster.ClusterType.P150_X4 and num_dev == 4:
+    elif arch == ttnn.device.Arch.BLACKHOLE and cluster_type in QWEN3_32B_BH_TP4_CLUSTER_TYPES and num_dev == 4:
         overlay = _Qwen3_32BSKUOverlay(
             architecture="blackhole",
             topology=ttnn.Topology.Ring,
@@ -401,7 +434,7 @@ def _resolve_qwen3_32b_sku_overlay(*, arch, cluster_type, num_dev: int, mesh_dev
         )
     else:
         raise ValueError(
-            "Qwen3-32B supports Wormhole T3K (8 devices) or BlackHole P150x4 (4 devices); "
+            "Qwen3-32B supports Wormhole T3K (8 devices) or BlackHole P150_X4/P300_X2 (4 devices); "
             f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_dev}"
         )
     logger.info(
@@ -1249,7 +1282,7 @@ class Qwen3_32B(LightweightModule):
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
                 memory_config=logits.memory_config(),
-                topology=default_topology(self.mesh_device),
+                topology=_qwen3_ccl_topology(self.mesh_device),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=24,
                 num_workers_per_link=4,

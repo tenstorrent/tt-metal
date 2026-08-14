@@ -8,11 +8,12 @@ Uses ``EagerQwen3_32BExecutor`` / ``TracedQwen3_32BExecutor`` directly (no vLLM 
 
 **Mesh note.** Qwen3-32B has 64 attention heads and 8 KV heads. The TTTv2 composition supports
 physical Wormhole T3K (TP8) and physical BlackHole P150x4 (TP4), matching TTTv1's BH model support.
-The P150x4 path uses the 128-token prefill bucket and keeps batched prefill disabled until the
-plan's cross-cardinality experiment passes. Consequently:
+The P150x4 path keeps batched prefill disabled until the plan's cross-cardinality experiment
+passes and advertises the source Q128/Q1024 prefill-trace buckets. Consequently:
   - **T3K (8 devices): the established regression mesh.** Existing thresholds remain unchanged.
-  - **P150x4 (4 devices): the BH qualification mesh.** It uses Ring fabric and BH-specific module
-    wrappers; full-model runs require a physical P150_X4 cluster, not a device-count shortcut.
+  - **P150x4 (4 devices): the BH qualification mesh.** It uses Ring fabric through the shared
+    hardware-agnostic modules; full-model runs require a physical P150_X4 or P300_X2 product,
+    not a device-count shortcut.
   - **ci-b1-DP-*: skipped** — every DP group is a single device, which cannot hold this 32B (same
     memory limit); you cannot have both 1-device-per-user and TP4/TP8. Genuine hardware-capacity
     guard (like the qwen25_7b N150 skip), matching TTTv1's supported tensor-parallel deployments.
@@ -1341,6 +1342,41 @@ def _run_perf_benchmark(
 # ci-eval-32 determinism case: 3 rotated repeats of the batch-32 workload.
 _EVAL_REPEAT_BATCHES = 3
 _EVAL_NUM_DECODE_TOKENS = _PERF_NUM_DECODE_TOKENS
+_EVAL_PERF_TRACE_PREFILL_BUCKETS = (128, 1024)
+
+
+def _require_eval_perf_prefill_trace_parity(model_args) -> None:
+    """Validate model-owned trace coverage and the BH eval-report batching policy.
+
+    The determinism-only eval intentionally remains decode-only. The separately named
+    performance-report leg compares against TTTv1 ``performance-ci-eval-32`` and replays captured
+    prefill for both natural prompt buckets; its target-bearing BH path must also preserve the
+    model-owned sequential policy. Fail closed rather than silently timing eager prefill when the
+    model was constructed with insufficient context or incomplete model-owned trace coverage.
+    """
+    required_buckets = _EVAL_PERF_TRACE_PREFILL_BUCKETS
+    coverage_ceiling = min(int(model_args.max_prefill_chunk_size), int(model_args.max_seq_len))
+    if coverage_ceiling < max(required_buckets):
+        raise ValueError(
+            "eval-32-perf-report requires 128/1024 prefill trace coverage; "
+            f"constructed context ceiling is {coverage_ceiling}"
+        )
+
+    # TTTv1's BH policy and the failed cross-cardinality qualification both require active-batch-1
+    # prefill. Validate that construction supplied this model-owned policy; do not mutate the shared
+    # model configuration or change the established T3K batching policy from the demo.
+    num_devices = int(model_args.cluster_shape[0]) * int(model_args.cluster_shape[1])
+    if num_devices == 4 and not model_args.disable_batched_prefill:
+        raise RuntimeError("eval-32-perf-report requires model-owned sequential prefill on P150x4")
+
+    advertised_buckets = tuple(getattr(model_args, "trace_prefill_supported_seq_lens", ()))
+    if not set(required_buckets).issubset(advertised_buckets):
+        raise ValueError(
+            "eval-32-perf-report requires model-owned prefill trace buckets "
+            f"{required_buckets}, got {advertised_buckets}"
+        )
+    if not all(model_args.can_enable_trace(bucket, num_cached_tokens=0) for bucket in required_buckets):
+        raise RuntimeError("eval-32-perf-report model predicate rejects required prefill trace coverage")
 
 
 def _run_eval_repeat_batch32(
@@ -1389,6 +1425,9 @@ def _run_eval_repeat_batch32(
     ma = model.model_args
     assert ma is not None
 
+    if perf_report:
+        _require_eval_perf_prefill_trace_parity(ma)
+
     # Batched-prefill A/B knob (parity caveat #12): DISABLE_BATCHED_PREFILL=1 forces the pure per-bucket
     # sequential prefill so eval-32 can be validated both ON and OFF.
     if os.environ.get("DISABLE_BATCHED_PREFILL"):
@@ -1432,7 +1471,9 @@ def _run_eval_repeat_batch32(
             model,
             mesh_device,
             ondevice_decode_loop=sampling_params is not None,
-            trace_mode=eval_decode_trace_mode(os.environ.get("EVAL_DECODE_MODE", "traced")),
+            trace_mode=(
+                "all" if perf_report else eval_decode_trace_mode(os.environ.get("EVAL_DECODE_MODE", "traced"))
+            ),
         )
 
     def allocate_kv_cache(executor):
@@ -1443,6 +1484,10 @@ def _run_eval_repeat_batch32(
             page_table=page_table,
             prefill_compile_case=representative_prefill,
             prefill_sampling_params=sampling_params,
+            # Full-trace replay requires the exact concrete program alias to be registered before
+            # `_warmup_demo_executor` crosses the capture barrier. Decode-only determinism keeps its
+            # established eager compile path.
+            prefill_compile_execution=executor.traced_prefill_execution if perf_report else None,
         )
         return kv_cache
 
