@@ -8,10 +8,12 @@ The whole read is one program, so nothing inside it is separately observable and
 gate is fp32 torch over the unsharded `d`.
 
 Sharded the way the model shards, at the shape the model runs: 1280 tokens over a
-2-deep sequence axis and `d` over a 4-deep tensor-parallel axis, so every chip holds 640
-rows of a 1792-wide shard. `tp_factor == 1` would make the gather an identity and certify
-nothing, so there is no single-device arm, and the row count is not swept — the op's cost
-and its collective's algorithm both turn on it.
+2-deep sequence axis and `d` over a tensor-parallel axis, so every chip holds 640 rows.
+The 2x4 arm gathers at the model's own width, 1792 columns per chip; 2x2 is the widest
+gather a 4-chip box can host, at 3584. The gather is a fabric collective, so at
+`tp_factor == 1` there are no peers and half the op never runs — there is no
+single-device arm, and the row count is not swept, since the op's cost and its
+collective's algorithm both turn on it.
 
 The `settle` arms hand in a deferred residual write, which the op folds by distributing
 the row weight over the two addends rather than by summing them first. The stream it
@@ -46,6 +48,10 @@ SP_AXIS = 0
 
 FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_1D}
 
+# Every test derives its shape from the fixture's mesh. 2x4 is what the model runs; 2x2
+# is the narrowest gather that still has peers, and is the widest a 4-chip box can host.
+MESH_ARMS = [pytest.param((2, 4), FABRIC, id="mesh-2x4"), pytest.param((2, 2), FABRIC, id="mesh-2x2")]
+
 
 def _oracle(partial, running_sum, shift, mass, query):
     """The whole read in fp32, taken against the unsharded `d`."""
@@ -62,7 +68,7 @@ def _oracle(partial, running_sum, shift, mass, query):
     return (partial * rescale + running_sum * live_weight) / (mass * rescale + live_weight)
 
 
-@pytest.mark.parametrize("mesh_device, device_params", [pytest.param((2, 4), FABRIC, id="mesh-2x4")], indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", MESH_ARMS, indirect=True)
 @pytest.mark.parametrize("fuse_add", [False, True], ids=["plain", "settle"])
 def test_matches_torch(mesh_device, device_params, fuse_add):
     torch.manual_seed(2026)
@@ -166,7 +172,7 @@ def test_matches_torch(mesh_device, device_params, fuse_add):
         logger.info(f"settled stream vs torch: {vs_torch_stream}, bit-identical to ttnn.add")
 
 
-@pytest.mark.parametrize("mesh_device, device_params", [pytest.param((2, 4), FABRIC, id="mesh-2x4")], indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", MESH_ARMS, indirect=True)
 def test_rejects_a_site_past_the_batch_on_a_cache_hit(mesh_device, device_params, expect_error):
     """`site` shapes no kernel and is kept out of the program hash, so the second call
     below is a cache hit and never reaches the validation the first one passed. Without
@@ -228,7 +234,7 @@ def test_rejects_a_site_past_the_batch_on_a_cache_hit(mesh_device, device_params
         read(sites)
 
 
-@pytest.mark.parametrize("mesh_device, device_params", [pytest.param((2, 4), FABRIC, id="mesh-2x4")], indirect=True)
+@pytest.mark.parametrize("mesh_device, device_params", MESH_ARMS, indirect=True)
 @pytest.mark.parametrize(
     "bad, message",
     [
