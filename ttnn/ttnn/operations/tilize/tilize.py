@@ -154,12 +154,25 @@ INPUT_TAGGERS = {
 # multi-core, both CB depths, bf16/fp32 in, bf16/fp32/bf8b out, rank 2..5, and
 # the three pad modes.
 # Refinement 1: the SHARDED placement surface — both sharding APIs, all three
-# legacy schemes plus nd, both orientations. Tiny tiles, retile and the integer
-# dtype family are not built yet and are refused (xfail) by the axis gate.
+# legacy schemes plus nd, both orientations.
+# Refinement 4: the INTEGER dtype family (uint32 / uint16 / int32 / uint8) plus
+# rank 0. tilize is a byte permutation, so an integer datum is just a width —
+# the LLK picks its own 8-bit tilize path off the CB format (there is no host
+# knob), and every byte quantity in the descriptor already derives from
+# `element_size()`. Tiny tiles and retile are not built yet and are refused
+# (xfail) by the axis gate.
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16, ttnn.float32],
-    "output_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.uint32, ttnn.uint16, ttnn.int32, ttnn.uint8],
+    "output_dtype": [
+        ttnn.bfloat16,
+        ttnn.float32,
+        ttnn.bfloat8_b,
+        ttnn.uint32,
+        ttnn.uint16,
+        ttnn.int32,
+        ttnn.uint8,
+    ],
     "use_multicore": [False, True],
     "double_buffer": [False, True],
     "shard_api": ["none", "legacy_2d", "nd"],
@@ -171,7 +184,7 @@ SUPPORTED = {
         "nd",
     ],
     "buffer": ["dram_to_dram", "dram_to_l1", "l1_to_l1", "l1_to_dram"],
-    "rank": [2, 3, 4, 5],
+    "rank": [0, 2, 3, 4, 5],
     "orientation": ["none", ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
     "tile_height": [32],
     "in_layout": [ttnn.ROW_MAJOR_LAYOUT],
@@ -238,6 +251,8 @@ class _Plan:
         "tile_w",
         "in_shape",
         "in_padded",
+        "read_shape",
+        "read_padded",
         "target",
         "pad_mode",
         "pad_value",
@@ -259,11 +274,24 @@ class _Plan:
         `pad_value=` on an already-aligned input must take the (byte-identical)
         aligned reader.
         """
-        return list(self.target) != list(self.in_padded)
+        return list(self.target) != list(self.read_padded)
 
 
 def _round_up(value, multiple):
     return ((value + multiple - 1) // multiple) * multiple
+
+
+def _expand_rank(shape, rank):
+    """Left-expand `shape` with 1s up to `rank` (a no-op once it is long enough).
+
+    A rank < 2 input (the rank-0 scalar) has NO tile dims of its own — the pad
+    target synthesizes them (`[]` -> `[32, 32]`). Every geometry consumer (the
+    reader's `h_in` / `w_in_bytes` / image count, the source page geometry, the
+    shard plan) needs a 2-D-or-deeper view, so the promotion lives HERE, once,
+    and the kernels never see a degenerate rank.
+    """
+    shape = list(shape)
+    return [1] * (rank - len(shape)) + shape if len(shape) < rank else shape
 
 
 def _canonicalize(
@@ -287,9 +315,9 @@ def _canonicalize(
         target = list(in_padded)
     elif output_padded_shape is None:
         pad_mode = "auto"
-        if len(in_shape) < 2:
-            raise ValueError(f"tilize: rank {len(in_shape)} input requires an explicit output_padded_shape")
-        target = list(in_shape)
+        # A rank < 2 input has no tile dims to round: they are SYNTHESIZED (a
+        # scalar pads to one tile), which is the same promotion _expand_rank does.
+        target = _expand_rank(in_shape, 2)
         target[-2] = _round_up(target[-2], tile_h)
         target[-1] = _round_up(target[-1], tile_w)
     else:
@@ -306,9 +334,12 @@ def _canonicalize(
         )
 
     if pad_mode == "explicit":
-        if len(target) != len(in_shape):
+        # A rank < 2 input is the one legal rank mismatch: it carries no tile dims,
+        # so the target supplies them (`[] -> [32, 32]`). The comparison below then
+        # runs against the promoted view, so `[]` trivially fits any target.
+        if len(target) != len(in_shape) and len(in_shape) >= 2:
             raise ValueError(f"tilize: output_padded_shape {target} must have the same rank as the input {in_shape}")
-        for i, (got, want) in enumerate(zip(target, in_shape)):
+        for i, (got, want) in enumerate(zip(target, _expand_rank(in_shape, len(target)))):
             if got < want:
                 raise ValueError(
                     f"tilize: output_padded_shape {target} must be >= the input shape {in_shape} in every dim "
@@ -328,6 +359,9 @@ def _canonicalize(
         tile_w=tile_w,
         in_shape=in_shape,
         in_padded=in_padded,
+        # The geometry view every kernel-facing derivation reads (rank >= 2).
+        read_shape=_expand_rank(in_shape, len(target)),
+        read_padded=_expand_rank(in_padded, len(target)),
         target=target,
         pad_mode=pad_mode,
         pad_value=pad_value,
@@ -508,7 +542,12 @@ def tilize(
     program_descriptor = create_program_descriptor(input_tensor, output_tensor, plan)
     output_tensor = ttnn.generic_op([input_tensor, output_tensor], program_descriptor)
 
-    if list(plan.target) != list(plan.in_shape):
+    # Restore the input's LOGICAL shape (only the padded shape grows). A rank < 2
+    # input is the exception: a logical shape and a padded shape must share a rank,
+    # and a scalar has no tile dims, so its padded view IS its shape — there is no
+    # unpadded logical view to restore (the golden oracle skips that check for the
+    # same reason).
+    if len(plan.in_shape) >= 2 and list(plan.target) != list(plan.in_shape):
         output_tensor = ttnn.reshape(output_tensor, ttnn.Shape(plan.in_shape), ttnn.Shape(plan.target))
     return output_tensor
 

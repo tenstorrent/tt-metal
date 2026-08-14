@@ -481,7 +481,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # How the reader addresses a ROW_MAJOR source page (single source; §5.2).
     # `src_row_pages > 1` is the cross-spec gather: the source shard is narrower
     # than a tensor row, so a row is several pages and a span has to be split.
-    src_page_bytes, src_row_pages = src_page_geometry(input_tensor, plan.in_padded, elem_in)
+    src_page_bytes, src_row_pages = src_page_geometry(input_tensor, plan.read_padded, elem_in)
 
     # ========== 2. KNOBS + WORK DISTRIBUTION ==============================
     cb_depth = 2 if (plan.use_double_buffer and LEVERS["double_buffer"]) else 1
@@ -508,7 +508,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # over the NoC.
     shard_eligible = plan.use_multicore and bool(LEVERS["multicore"]) and bool(LEVERS["zero_copy"])
     in_shard = (
-        shard_side_plan(input_tensor, plan.in_padded, tile_h, tile_w)
+        shard_side_plan(input_tensor, plan.read_padded, tile_h, tile_w)
         if (shard_eligible and not plan.has_pad_region)
         else None
     )
@@ -686,7 +686,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         )
     regime = R_PAD if (plan.has_pad_region or paged_src or not LEVERS["regime_select"]) else R_ALIGNED
 
-    in_shape = list(plan.in_shape)
+    # The rank->=2 promoted view (plan.read_shape): a rank-0 scalar reads as a
+    # 1x1 source, so h_in / w_in_bytes / the image count stay well defined.
+    in_shape = list(plan.read_shape)
     h_in = in_shape[-2]
     w_in_bytes = in_shape[-1] * elem_in
     n_img_in = _prod(in_shape[:-2])
