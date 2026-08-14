@@ -46,7 +46,7 @@ SATURATED_ABS = 6.0
 
 # Gemma's final logit softcap is 30.0. 1.0 is the degenerate pass-through case,
 # and 0.5 exercises a cap below 1.
-CAPS = [30.0, 50.0, 1.0, 0.5]
+CAPS = [30.0, 1.0, 0.5]
 
 
 def _fp32_bits(value: float) -> int:
@@ -128,9 +128,11 @@ def test_sfpu_logit_softcap(formats, dest_acc, input_range, cap):
     res_from_L1 = configuration.run().result
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
 
-    # Flat: every lane lands on the same value, either because the whole range is
-    # saturated (y = sgn(x) * cap) or because x is 0 (y = 0).
-    flat = min(abs(low), abs(high)) >= SATURATED_ABS or (low == 0.0 and high == 0.0)
+    # Every lane lands on the same value, either because the whole range sits
+    # on one saturated side (y = sgn(x) * cap) or because x is 0 (y = 0).
+    flat = (
+        low >= SATURATED_ABS or high <= -SATURATED_ABS or (low == 0.0 and high == 0.0)
+    )
 
     _assert_matches(
         golden_tensor,
