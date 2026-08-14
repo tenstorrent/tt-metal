@@ -1251,6 +1251,19 @@ def _run_perf_benchmark(
         # get_padded_prefill_len. These sample prompts are ~90-125 tokens -> 128 bucket.
         input_tokens, prompt_lens = tokenize_prompts(prompts, tokenizer, max_prefill_len=max_prefill_len)
 
+        # Register the concrete prompt signature and capture configured traces before the shared
+        # benchmark runner attempts its first traced replay.  In particular, a natural Q128 prompt
+        # may end in any 32-token tile; compiling through the traced target associates that exact
+        # tile program with the sampling-independent Q128 trace captured by this warmup barrier.
+        _warmup_demo_executor(
+            traced_executor,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            prefill_compile_case=(input_tokens, prompt_lens),
+            prefill_sampling_params=sampling_params,
+            prefill_compile_execution=traced_executor.traced_prefill_execution,
+        )
+
         # BenchmarkProfiler brackets the timed prefill/decode regions inside run_perf_benchmark
         # (default-None ⇒ byte-inert for every other caller) so we can emit CI perf telemetry.
         is_ci_env = os.environ.get("CI") == "true"

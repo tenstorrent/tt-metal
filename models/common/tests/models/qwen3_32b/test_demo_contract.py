@@ -152,6 +152,29 @@ def test_perf_and_eval_use_traced_model_owned_wrapper():
     assert _calls("_run_eval_repeat_batch32", "TracedQwen3_32BExecutor")
 
 
+def test_perf_warms_executor_before_shared_perf_runner_replay():
+    function = _function("_run_perf_benchmark")
+    tokenize_call = _calls("_run_perf_benchmark", "tokenize_prompts")[0]
+    warmup_call = _calls("_run_perf_benchmark", "_warmup_demo_executor")[0]
+    runner_call = _calls("_run_perf_benchmark", "run_perf_benchmark")[0]
+    profiler_start = next(
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and ast.unparse(node.func) == "profiler.start"
+    )
+    keywords = {keyword.arg: ast.unparse(keyword.value) for keyword in warmup_call.keywords}
+
+    assert ast.unparse(warmup_call.args[0]) == "traced_executor"
+    assert keywords["kv_cache"] == "kv_cache"
+    assert keywords["page_table"] == "page_table"
+    assert keywords["prefill_compile_case"] == "(input_tokens, prompt_lens)"
+    assert keywords["prefill_sampling_params"] == "sampling_params"
+    assert keywords["prefill_compile_execution"] == "traced_executor.traced_prefill_execution"
+    assert tokenize_call.lineno < warmup_call.lineno < profiler_start.lineno < runner_call.lineno
+
+
 def test_eval_repeat_threads_sampling_mode_to_traced_executor():
     call = _calls("_run_eval_repeat_batch32", "TracedQwen3_32BExecutor")[0]
     ondevice_decode_loop = next(keyword for keyword in call.keywords if keyword.arg == "ondevice_decode_loop")
