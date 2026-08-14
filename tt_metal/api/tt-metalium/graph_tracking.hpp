@@ -95,6 +95,10 @@ public:
     // the pre-existing behaviour.
     virtual void track_function_abort(std::string_view /*reason*/){};
 
+    // Closes every scope this processor still holds open, marking each of them aborted.
+    // See GraphTracker::unwind_open_functions for when this is called.
+    virtual void unwind_open_functions(std::string_view /*reason*/){};
+
     virtual void begin_capture(RunMode /*mode*/){};
 
     virtual nlohmann::json end_capture();
@@ -211,6 +215,16 @@ public:
 
     // Close a tracked scope that is being left by an exception. There is no output to report.
     void track_function_abort(std::string_view reason);
+
+    // Close every scope the processors of this thread still hold open, marking each aborted.
+    //
+    // Call sites that are not guarded by ScopedTrackedFunction leak their scope when they throw:
+    // the operation never reports an end, so everything recorded afterwards is nested under an
+    // operation that is already dead. The caller of this function supplies the missing knowledge
+    // that the leak happened — a new top-level operation is starting, so nothing can legitimately
+    // still be open — and the processors drop the dead scopes instead of growing the trace inside
+    // them. `reason` is attached to each closed scope as its abort reason.
+    void unwind_open_functions(std::string_view reason);
 
     bool hook_allocate(const Buffer* buffer);
 

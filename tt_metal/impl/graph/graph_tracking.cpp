@@ -41,6 +41,15 @@ void GraphTracker::track_function_abort(std::string_view reason) {
     }
 }
 
+void GraphTracker::unwind_open_functions(std::string_view reason) {
+    if (processors.empty()) {
+        return;
+    }
+    for (auto& it : processors) {
+        it->unwind_open_functions(reason);
+    }
+}
+
 void GraphTracker::push_processor(const std::shared_ptr<IGraphProcessor>& new_processor) {
     processors.push_back(new_processor);
 }

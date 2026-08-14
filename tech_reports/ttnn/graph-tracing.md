@@ -632,10 +632,20 @@ Example device-op `function_start` params:
 - `aborted`: `"true"` when the scope was left by an exception instead of returning (optional)
 - `abort_reason`: The exception's message, when one was recoverable (optional)
 
-A `function_end` is emitted on both the success and the failure path. C++ scopes instrumented with
-`tt::tt_metal::ScopedTrackedFunction` close from its destructor, which marks the node `aborted`
-when it detects an in-flight exception. This keeps the trace balanced: operations that run after a
-failure keep their real nesting instead of being recorded as children of the operation that died.
+A `function_end` is emitted on both the success and the failure path, by one of two mechanisms:
+
+- **Scope guard.** C++ scopes instrumented with `tt::tt_metal::ScopedTrackedFunction` close from its
+  destructor, which marks the node `aborted` when it detects an in-flight exception.
+- **Unwinding at the next top-level operation.** Call sites without that guard emit nothing when
+  they throw, and the Python decorator's `finally` then closes the innermost scope rather than its
+  own, so the operation stays open for the rest of the capture. The next top-level operation, where
+  nothing can legitimately still be open, closes everything the capture is still holding
+  (`ttnn.graph.track_function_start` → `unwind_open_functions`, `ttnn/ttnn/graph.py:117-157`). Each
+  scope it closes is marked `aborted`, with an `abort_reason` naming the operation that started.
+
+Both keep the trace balanced: operations that run after a failure keep their real nesting instead of
+being recorded as children of the operation that died — which is what makes them visible in the
+report at all, since only top-level scopes become operations.
 
 ### tensor
 
@@ -694,8 +704,8 @@ The C++ graph processor does not emit error nodes directly. A failing operation 
    sees, where no Python decorator was involved. When the aborting scope is nested, the diagnostic is
    attributed to the enclosing operation that the report lists.
 3. **Orphan operation.** A `function_start` with no matching `function_end` is recorded as an
-   `incomplete_operation`. Scopes that go through `ScopedTrackedFunction` no longer produce these, so
-   this path now mainly covers older reports and un-guarded call sites.
+   `incomplete_operation`. Neither of the two mechanisms above produces these, so this path now
+   covers older reports and the last operation of a capture that ends before another one starts.
 
 Legacy JSON files with explicit error nodes are also supported.
 
