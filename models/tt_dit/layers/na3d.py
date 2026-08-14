@@ -48,18 +48,28 @@ def window_bounds(length: int, kernel: int) -> tuple[list[int], list[int]]:
     return starts, [s + kernel for s in starts]
 
 
-def _tile_lengths(dims: tuple[int, int, int], kernels: tuple[int, int, int], budget: int) -> tuple[int, int, int]:
+def _tile_lengths(
+    dims: tuple[int, int, int],
+    kernels: tuple[int, int, int],
+    budget: int,
+    caps: tuple[int, int, int] | None = None,
+) -> tuple[int, int, int]:
     """Per-axis query-tile lengths keeping one tile's score block under ``budget``.
 
     Halves whichever axis is largest relative to its kernel, since that is the axis whose
     span is cheapest to shrink: a tile of length ``t`` spans ``t + k - 1`` keys, so the waste
     factor is ``(t + k - 1) / k`` and shrinking a long axis with a small kernel helps most.
+
+    ``caps`` bounds each axis's key span; it is the buffer extent rather than the query
+    extent when the volume carries a halo. Tile size is a budget heuristic, so a loose cap
+    costs accuracy in the estimate, never correctness.
     """
     tiles = list(dims)
+    spans = caps if caps is not None else dims
 
     def score_block(candidate: list[int]) -> int:
         n_q = math.prod(candidate)
-        n_k = math.prod(min(d, t + k - 1) for t, k, d in zip(candidate, kernels, dims))
+        n_k = math.prod(min(d, t + k - 1) for t, k, d in zip(candidate, kernels, spans))
         return n_q * n_k
 
     while score_block(tiles) > budget and max(tiles) > 1:
@@ -96,6 +106,13 @@ class NA3DPlan:
     kernels: tuple[int, int, int]
     tile: tuple[int, int, int]
     groups: tuple[TileGroup, ...]
+    query_dims: tuple[int, int, int] | None = None
+    query_origin: tuple[int, int, int] = (0, 0, 0)
+
+    @property
+    def output_dims(self) -> tuple[int, int, int]:
+        """Extent this plan produces. Narrower than ``dims`` when the volume carries a halo."""
+        return self.query_dims if self.query_dims is not None else self.dims
 
     @property
     def waste_factor(self) -> float:
@@ -103,39 +120,77 @@ class NA3DPlan:
 
         1.0 is a perfect kernel; the dense formulation always pays more because a tile's key
         span covers the union of its queries' windows. Useful for choosing tile sizes.
+
+        Measured against the queries this plan answers, not its buffer, so a sharded plan's
+        factor is comparable to the whole volume's.
         """
-        ideal = math.prod(self.dims) * math.prod(min(k, d) for k, d in zip(self.kernels, self.dims))
+        out = self.output_dims
+        ideal = math.prod(out) * math.prod(min(k, d) for k, d in zip(self.kernels, self.dims))
         dense = sum(len(g.query_slices) * g.n_queries * g.n_keys for g in self.groups)
         return dense / ideal
 
 
-def plan_na3d(
-    dims: tuple[int, int, int],
-    kernel_size: tuple[int, int, int],
+@dataclass(frozen=True)
+class AxisShard:
+    """One axis of a volume split across devices: which queries this device answers.
+
+    ``start``/``stop`` are indices into the *global* axis. The halo this device needs is not
+    a free parameter — it follows from the window rule (:func:`required_halo`).
+    """
+
+    length: int
+    start: int
+    stop: int
+
+    def __post_init__(self) -> None:
+        assert 0 <= self.start < self.stop <= self.length, f"bad shard [{self.start},{self.stop}) of {self.length}"
+
+
+def required_halo(shard: AxisShard, kernel: int) -> tuple[int, int]:
+    """Neighbour rows this shard must hold on each side to answer its own queries.
+
+    Derived from the global window bounds, so it collapses to zero at a true volume edge and
+    is ``kernel // 2`` at an interior seam. A caller sizing a halo exchange asks here rather
+    than assuming ``kernel // 2`` everywhere, which would over-request at the volume border.
+    """
+    kernel = min(kernel, shard.length)
+    starts, ends = window_bounds(shard.length, kernel)
+    return shard.start - starts[shard.start], ends[shard.stop - 1] - shard.stop
+
+
+def _axis_entries(
+    starts: list[int],
+    ends: list[int],
     *,
-    budget: int = DEFAULT_SCORE_BUDGET,
-) -> NA3DPlan:
-    """Group the volume's query tiles by window geometry."""
-    kernels = tuple(min(k, d) for k, d in zip(kernel_size, dims))
-    bounds = [window_bounds(d, k) for d, k in zip(dims, kernels)]
-    tile = _tile_lengths(dims, kernels, budget)
+    q_begin: int,
+    q_end: int,
+    step: int,
+    origin: int,
+    buffer_length: int,
+) -> list[tuple[slice, slice, AxisGeometry]]:
+    """Tile ``[q_begin, q_end)`` of one axis, emitting slices in buffer coordinates.
 
-    # Per axis: for each tile, the key span it needs and its bounds relative to that span.
-    per_axis: list[list[tuple[slice, slice, AxisGeometry]]] = []
-    for axis in range(3):
-        length, step = dims[axis], tile[axis]
-        starts, ends = bounds[axis]
-        entries = []
-        for begin in range(0, length, step):
-            stop = min(begin + step, length)
-            span_start, span_stop = starts[begin], ends[stop - 1]
-            geometry = (
-                tuple(s - span_start for s in starts[begin:stop]),
-                tuple(e - span_start for e in ends[begin:stop]),
-            )
-            entries.append((slice(begin, stop), slice(span_start, span_stop), geometry))
-        per_axis.append(entries)
+    ``starts``/``ends`` are always the *global* window bounds. Recomputing them on a shard's
+    own extent is the one mistake that matters here: it would treat every interior seam as a
+    volume edge, where the window clamps inward instead of sliding, and be wrong at each one
+    without failing.
+    """
+    entries = []
+    for begin in range(q_begin, q_end, step):
+        stop = min(begin + step, q_end)
+        span_start, span_stop = starts[begin], ends[stop - 1]
+        assert (
+            span_start >= origin and span_stop <= origin + buffer_length
+        ), f"tile [{begin},{stop}) needs keys [{span_start},{span_stop}) outside buffer [{origin},{origin + buffer_length})"
+        geometry = (
+            tuple(s - span_start for s in starts[begin:stop]),
+            tuple(e - span_start for e in ends[begin:stop]),
+        )
+        entries.append((slice(begin - origin, stop - origin), slice(span_start - origin, span_stop - origin), geometry))
+    return entries
 
+
+def _assemble_groups(per_axis: list[list[tuple[slice, slice, AxisGeometry]]]) -> tuple[TileGroup, ...]:
     grouped: dict[tuple[AxisGeometry, ...], list[tuple[tuple[slice, ...], tuple[slice, ...]]]] = {}
     for t_q, t_k, t_geometry in per_axis[0]:
         for h_q, h_k, h_geometry in per_axis[1]:
@@ -157,7 +212,71 @@ def plan_na3d(
                 n_keys=n_keys,
             )
         )
-    return NA3DPlan(dims=dims, kernels=kernels, tile=tile, groups=tuple(groups))
+    return tuple(groups)
+
+
+def plan_na3d(
+    dims: tuple[int, int, int],
+    kernel_size: tuple[int, int, int],
+    *,
+    budget: int = DEFAULT_SCORE_BUDGET,
+) -> NA3DPlan:
+    """Group the volume's query tiles by window geometry."""
+    kernels = tuple(min(k, d) for k, d in zip(kernel_size, dims))
+    bounds = [window_bounds(d, k) for d, k in zip(dims, kernels)]
+    tile = _tile_lengths(dims, kernels, budget)
+
+    per_axis = [
+        _axis_entries(*bounds[axis], q_begin=0, q_end=dims[axis], step=tile[axis], origin=0, buffer_length=dims[axis])
+        for axis in range(3)
+    ]
+    return NA3DPlan(dims=dims, kernels=kernels, tile=tile, groups=_assemble_groups(per_axis))
+
+
+def plan_na3d_sharded(
+    shards: tuple[AxisShard, AxisShard, AxisShard],
+    kernel_size: tuple[int, int, int],
+    *,
+    budget: int = DEFAULT_SCORE_BUDGET,
+) -> NA3DPlan:
+    """Plan one device's share of a volume split over ``shards``.
+
+    The returned plan addresses the *local buffer* — this device's queries plus the halo rows
+    a neighbour exchange delivers — so the executors consume it unchanged. Window bounds come
+    from the global axis, which is what makes an interior seam behave as interior.
+
+    ``dims`` is the buffer, ``output_dims`` the queries answered, and ``query_origin`` where
+    the queries sit inside the buffer, which is also the halo width on the leading side.
+    """
+    lengths = tuple(s.length for s in shards)
+    kernels = tuple(min(k, d) for k, d in zip(kernel_size, lengths))
+    halos = tuple(required_halo(s, k) for s, k in zip(shards, kernels))
+    origins = tuple(s.start - hl for s, (hl, _) in zip(shards, halos))
+    buffers = tuple((s.stop + hr) - (s.start - hl) for s, (hl, hr) in zip(shards, halos))
+    queries = tuple(s.stop - s.start for s in shards)
+
+    bounds = [window_bounds(d, k) for d, k in zip(lengths, kernels)]
+    tile = _tile_lengths(queries, kernels, budget, caps=buffers)
+
+    per_axis = [
+        _axis_entries(
+            *bounds[axis],
+            q_begin=shards[axis].start,
+            q_end=shards[axis].stop,
+            step=tile[axis],
+            origin=origins[axis],
+            buffer_length=buffers[axis],
+        )
+        for axis in range(3)
+    ]
+    return NA3DPlan(
+        dims=buffers,
+        kernels=kernels,
+        tile=tile,
+        groups=_assemble_groups(per_axis),
+        query_dims=queries,
+        query_origin=tuple(hl for hl, _ in halos),
+    )
 
 
 def group_mask(group: TileGroup, *, dtype: torch.dtype, device: torch.device | str = "cpu") -> torch.Tensor:
@@ -202,7 +321,10 @@ def na3d_torch(
     if plan is None:
         plan = plan_na3d((t, h, w), kernel_size)
 
-    out = torch.empty_like(v)
+    # A sharded plan is handed the halo'd buffer but answers only its own queries, so the
+    # output is the narrower extent and slices are rebased off the halo.
+    origin = plan.query_origin
+    out = v.new_empty((batch, *plan.output_dims, heads, head_dim))
     for group in plan.groups:
         mask = group_mask(group, dtype=q.dtype, device=q.device)
         for q_slice, k_slice in zip(group.query_slices, group.key_slices):
@@ -223,7 +345,8 @@ def na3d_torch(
             attended = torch.nn.functional.scaled_dot_product_attention(
                 q_flat, k_flat, v_flat, attn_mask=mask, scale=1.0
             )
-            out[:, q_slice[0], q_slice[1], q_slice[2]] = attended.view(batch, heads, *tile_shape, head_dim).permute(
+            written = tuple(slice(s.start - o, s.stop - o) for s, o in zip(q_slice, origin))
+            out[:, written[0], written[1], written[2]] = attended.view(batch, heads, *tile_shape, head_dim).permute(
                 0, 2, 3, 4, 1, 5
             )
     return out
@@ -298,7 +421,10 @@ def build_device_plan(
     # Query tiles partition the volume, so concatenating groups visits every voxel exactly
     # once — just in plan order. argsort maps that back to volume order in one final gather.
     order = torch.cat(plan_order)
-    assert order.numel() == math.prod(plan.dims), f"plan covers {order.numel()} of {math.prod(plan.dims)} voxels"
+    expected = math.prod(plan.output_dims)
+    assert order.numel() == expected, f"plan covers {order.numel()} of {expected} voxels"
+    # Sorting by buffer-flat index is row-major order over the query box, halo'd or not, so
+    # the same argsort restores a sharded plan's output.
     restore = torch.argsort(order)
 
     return NA3DDevicePlan(
