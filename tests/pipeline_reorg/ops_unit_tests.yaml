@@ -102,10 +102,11 @@
   category: experimental
 
 - name: ttnn attn_res_weighted_reduce_nc unit tests
-  # Scoped to one SKU rather than folded into the directory-wide experimental suites above:
-  # the op is brought up and measured on Blackhole only and has never executed on Wormhole,
-  # and those suites run -x, so an untried arch there would abort the whole experimental run.
-  cmd: 'pytest tests/ttnn/unit_tests/operations/reduce/test_attn_res_weighted_reduce_nc.py -xv --timeout=600'
+  # The test file sits in a directory no group suite globs, so this row is the only thing
+  # that runs it. That is deliberate: the op is brought up and measured on Blackhole P150b
+  # alone, and every group suite that would otherwise collect it runs -x on SKUs it has
+  # never executed on, where a failure would abort tests belonging to someone else.
+  cmd: 'pytest tests/ttnn/unit_tests/operations/experimental/test_attn_res_weighted_reduce_nc.py -xv --timeout=600'
   skus:
     bh_p150b_civ2:
       timeout: 2

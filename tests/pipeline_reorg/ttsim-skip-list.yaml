@@ -65,9 +65,3 @@ blackhole:
   # Numeric mismatches, not root caused
   # https://github.com/tenstorrent/tt-metal/issues/41530
   - tests/ttnn/unit_tests/operations/reduce/test_reduction.py
-
-  # Job-level timeout: this gates AttnRes's mixture at the production widths
-  # (640x1792 and 2560x128 among them), which is the point of the shapes and also
-  # far more work than the simulator finishes inside the group budget. It carries
-  # a Blackhole-only skipif, so the wormhole_b0 section needs nothing.
-  - tests/ttnn/unit_tests/operations/reduce/test_attn_res_weighted_reduce_nc.py
