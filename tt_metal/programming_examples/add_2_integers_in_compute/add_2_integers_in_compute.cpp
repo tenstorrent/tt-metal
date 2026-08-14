@@ -153,7 +153,7 @@ int main() {
     distributed::Finish(cq);
 
     // Read the destination MeshBuffer back to host (blocking).
-    std::vector<bfloat16> result_vec(dst_dram_buffer->size() / sizeof(bfloat16));
+    std::vector<bfloat16> result_vec(dst_dram_buffer->device_local_size() / sizeof(bfloat16));
     distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((result_vec).data(), dst_dram_buffer, true);
 
     // compare the results with the expected values.

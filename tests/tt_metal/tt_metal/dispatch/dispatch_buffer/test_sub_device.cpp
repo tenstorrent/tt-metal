@@ -30,6 +30,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -134,8 +135,8 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
         distributed::MeshBuffer::create(replicated_config_1, local_config_1, mesh_device.get()), std::exception);
     EXPECT_THROW(mesh_device->clear_loaded_sub_device_manager(), std::exception);
     EXPECT_THROW(mesh_device->load_sub_device_manager(sub_device_manager_2), std::exception);
-    buffer_1->deallocate();
-    buffer_2->deallocate();
+    buffer_1->impl().deallocate();
+    buffer_2->impl().deallocate();
     mesh_device->clear_loaded_sub_device_manager();
     mesh_device->load_sub_device_manager(sub_device_manager_2);
 

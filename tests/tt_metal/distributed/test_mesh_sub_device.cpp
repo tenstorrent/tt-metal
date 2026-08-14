@@ -38,6 +38,7 @@
 #include "tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -140,7 +141,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, false);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), datacopy_mesh_workload, false);
 
-        std::vector<uint32_t> src_vec(input_buf->size() / sizeof(uint32_t));
+        std::vector<uint32_t> src_vec(input_buf->impl().size() / sizeof(uint32_t));
         std::iota(src_vec.begin(), src_vec.end(), i);
         // Block after this write on host, since the global semaphore update starting the
         // program goes through an independent path (UMD) and can go out of order wrt the

@@ -1254,14 +1254,14 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
     auto shared_mesh_buffer = tensor.impl().raw_mesh_buffer();
 
     size_t region_size = buffer.page_size();
-    while (buffer.size() % (region_size * 2) == 0) {
+    while (buffer.impl().size() % (region_size * 2) == 0) {
         region_size *= 2;
     }
 
     std::vector<uint16_t> partial_readback_data(tensor_data.size());
     std::vector<uint16_t> full_readback_data(tensor_data.size());
 
-    for (size_t region = 0; region < buffer.size() / region_size; region++) {
+    for (size_t region = 0; region < buffer.impl().size() / region_size; region++) {
         size_t region_offset = region * region_size;
         auto buffer_region = BufferRegion{region_offset, region_size};
         auto write_shard_data_transfer =

@@ -4,6 +4,7 @@
 
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
@@ -376,7 +377,7 @@ void write_socket_configs(
         const auto sender_total_size_bytes =
             sender_size.md_size_bytes +
             (max_num_downstreams * (sender_size.ack_size_bytes + sender_size.enc_size_bytes));
-        std::vector<uint32_t> config_data(config_buffer->size() / sizeof(uint32_t), 0);
+        std::vector<uint32_t> config_data(config_buffer->impl().size() / sizeof(uint32_t), 0);
 
         for (const auto& [device_coord, cores_map] : grouped_connections) {
             // Only program sockets whose sender device is on this host's local mesh. Use
@@ -439,7 +440,7 @@ void write_socket_configs(
         }
     } else {
         std::vector<receiver_socket_md> config_data(
-            config_buffer->size() / sizeof(receiver_socket_md), receiver_socket_md());
+            config_buffer->impl().size() / sizeof(receiver_socket_md), receiver_socket_md());
 
         for (const auto& [device_coord, cores_map] : grouped_connections) {
             // See the sender branch: use MeshDevice::is_local so submesh-local rank-scoped

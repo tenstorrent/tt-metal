@@ -990,16 +990,10 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     std::vector<uint32_t> out0_data(shard->page_size() * shard->num_pages() / sizeof(uint32_t));
     distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
         {distributed::ShardDataTransfer{zero_coord}.host_data(out0_data.data())}, out0_dram, false);
-    {
-        auto* shard = out1_dram->get_device_buffer(zero_coord);
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero_coord}.host_data(out1_data.data())}, out1_dram, false);
-    };
-    {
-        auto* shard = out2_dram->get_device_buffer(zero_coord);
-        distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
-            {distributed::ShardDataTransfer{zero_coord}.host_data(out2_data.data())}, out2_dram, false);
-    };
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{zero_coord}.host_data(out1_data.data())}, out1_dram, false);
+    distributed::as_mesh_command_queue_base(cq).enqueue_read_shards(
+        {distributed::ShardDataTransfer{zero_coord}.host_data(out2_data.data())}, out2_dram, false);
 
     bool pass = true;
 

@@ -251,7 +251,7 @@ int main(int argc, char** argv) {
     std::cout << "Kernel execution finished" << std::endl;
 
     // Read the output buffer.
-    std::vector<bfloat16> c_data(c->size() / sizeof(bfloat16));
+    std::vector<bfloat16> c_data(c->device_local_size() / sizeof(bfloat16));
     distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((c_data).data(), c, true);
 
     // Print partial results so we can see the output is correct (plus or minus

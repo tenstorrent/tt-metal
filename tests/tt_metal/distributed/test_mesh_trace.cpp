@@ -51,6 +51,7 @@
 #include "tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -191,8 +192,8 @@ TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
     mesh_workload_2.add_program(col_2, std::move(*programs_2[2]));
 
     // Initialize inputs
-    std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->size(), 2);
-    std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(src1_bufs[0]->size(), 3);
+    std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->impl().size(), 2);
+    std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(src1_bufs[0]->impl().size(), 3);
     // Write inputs for all cores across the Mesh
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
         for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
@@ -479,7 +480,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     for (int i = 0; i < 50; i++) {
         mesh_device_->replay_mesh_trace(0, trace_id, false);
 
-        std::vector<uint32_t> src_vec(input_buf->size() / sizeof(uint32_t));
+        std::vector<uint32_t> src_vec(input_buf->impl().size() / sizeof(uint32_t));
         std::iota(src_vec.begin(), src_vec.end(), i);
         // Block after this write on host, since the global semaphore update starting the
         // program goes through an independent path (UMD) and can go out of order wrt the

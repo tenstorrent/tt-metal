@@ -87,6 +87,9 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_on_single_device(
 
 namespace tt::tt_metal::distributed {
 
+// Internal state and implementation of `MeshBuffer`; defined in `tt_metal/distributed/mesh_buffer_impl.hpp`.
+class MeshBufferImpl;
+
 // MeshBuffer allocates a buffer across a mesh of devices according to the specified configuration: either full
 // replication, or 2D sharding. The allocation is done in lock-step across all devices in the mesh.
 class MeshBuffer {
@@ -96,6 +99,8 @@ public:
         const DeviceLocalBufferConfig& device_local_config,
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
+
+    explicit MeshBuffer(MeshBufferImpl impl);
     ~MeshBuffer();
 
     // MeshBuffer manages device memory and owns the backing allocation. Copying would create
@@ -105,26 +110,18 @@ public:
     MeshBuffer(MeshBuffer&& other) noexcept;
     MeshBuffer& operator=(MeshBuffer&& other) noexcept;
 
-    // Returns true if the MeshBuffer is allocated. Note that MeshBuffer is created in the allocated state; either the
-    // destructor or the `deallocate` method deallocate the MeshBuffer.
-    bool is_allocated() const;
-
-    // Deallocates the MeshBuffer.
-    // TODO: Re-consider a need for explicit deallocation methods, as opposed to relying on RAII to clean up the
-    // resources.
-    void deallocate();
+    // Accessors for the internal implementation. Throw if this MeshBuffer was moved from.
+    const MeshBufferImpl& impl() const;
+    MeshBufferImpl& impl();
 
     // Throws an exception if the corresponding MeshDevice is already deallocated
     MeshDevice* device() const;
-    DeviceAddr size() const;
-    DeviceAddr device_local_size() const { return device_local_size_; }
-    DeviceAddr address() const { return address_; };
+    DeviceAddr device_local_size() const;
+    DeviceAddr address() const;
 
     MeshBufferLayout global_layout() const;
-    const MeshBufferConfig& global_config() const { return config_; }
-
-    const ShardedBufferConfig& global_shard_spec() const;
-    const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
+    const MeshBufferConfig& global_config() const;
+    const DeviceLocalBufferConfig& device_local_config() const;
 
     Buffer* get_device_buffer(const MeshCoordinate& device_coord) const;
 
@@ -138,63 +135,11 @@ public:
     // into the creation API.
     Buffer* get_backing_buffer() const;
 
-    uint32_t datum_size_bytes() const;
-    Shape2D physical_shard_shape() const;
-    std::pair<bool, bool> replicated_dims() const;
-    uint32_t page_size() const { return device_local_config_.page_size; }
-    uint32_t num_pages() const { return page_size() == 0 ? 0 : device_local_size_ / page_size(); }
+    uint32_t page_size() const;
+    uint32_t num_pages() const;
 
 private:
-    // Creates an owning `MeshBuffer`, backed by an allocation made through `backing_buffer`.
-    MeshBuffer(
-        const MeshBufferConfig& config,
-        const DeviceLocalBufferConfig& device_local_config,
-        DeviceAddr device_local_size,
-        MeshDevice* mesh_device,
-        std::shared_ptr<Buffer> backing_buffer) :
-        config_(config),
-        device_local_config_(device_local_config),
-        mesh_device_(mesh_device->shared_from_this()),
-        address_(backing_buffer->address()),
-        device_local_size_(device_local_size),
-        buffers_(MeshShape(mesh_device->shape())),
-        state_(OwnedBufferState{std::move(backing_buffer)}) {}
-
-    // Creates a non-owning `MeshBuffer` as "view" over an existing `address`.
-    MeshBuffer(
-        const MeshBufferConfig& config,
-        const DeviceLocalBufferConfig& device_local_config,
-        DeviceAddr address,
-        DeviceAddr device_local_size,
-        MeshDevice* mesh_device) :
-        config_(config),
-        device_local_config_(device_local_config),
-        mesh_device_(mesh_device->shared_from_this()),
-        address_(address),
-        device_local_size_(device_local_size),
-        buffers_(MeshShape(mesh_device->shape())),
-        state_(ExternallyOwnedState{}) {}
-
-    void initialize_device_buffers();
-    MeshBufferConfig config_;
-    DeviceLocalBufferConfig device_local_config_;
-    std::weak_ptr<MeshDevice> mesh_device_;
-    DeviceAddr address_ = 0;
-    DeviceAddr device_local_size_ = 0;
-
-    DistributedMeshContainer<std::shared_ptr<Buffer>> buffers_;
-
-    // `MeshBufferState` specifies the state of the MeshBuffer. It can either be:
-    // 1. Owned - a single device buffer is responsible for providing the address for the entire mesh buffer.
-    // 2. Externally owned - the MeshBuffer was created as a view over an existing address.
-    // 3. Deallocated - the MeshBuffer is in the deallocated state.
-    struct OwnedBufferState {
-        std::shared_ptr<Buffer> backing_buffer;
-    };
-    struct ExternallyOwnedState {};
-    struct DeallocatedState {};
-    using MeshBufferState = std::variant<OwnedBufferState, ExternallyOwnedState, DeallocatedState>;
-    MeshBufferState state_;
+    std::unique_ptr<MeshBufferImpl> impl_;
 
     friend std::shared_ptr<MeshBuffer> tt::tt_metal::experimental::per_core_allocation::create_on_single_device(
         const tt::tt_metal::distributed::MeshBufferConfig&,
@@ -203,6 +148,9 @@ private:
         const tt::tt_metal::distributed::MeshCoordinate&);
 };
 
+// Owning handle over either a single-device `Buffer` or a `MeshBuffer`.
+// Still declared here because public `GlobalCircularBuffer` embeds it by value;
+// move out once that type is pimpl'd. No direct ttnn/tt-train call sites.
 class AnyBuffer {
 public:
     AnyBuffer() = default;
@@ -220,7 +168,7 @@ private:
     AnyBuffer(std::shared_ptr<MeshBuffer> buffer);
 
     Buffer* buffer_ = nullptr;
-    std::variant<std::shared_ptr<Buffer>, std::shared_ptr<distributed::MeshBuffer>> holder_;
+    std::variant<std::shared_ptr<Buffer>, std::shared_ptr<MeshBuffer>> holder_;
 };
 
 }  // namespace tt::tt_metal::distributed

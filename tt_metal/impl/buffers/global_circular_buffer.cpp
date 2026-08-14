@@ -32,8 +32,8 @@
 #include <vector>
 
 #include "distributed.hpp"
+#include <tt-metalium/mesh_buffer.hpp>
 #include "hal_types.hpp"
-#include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>
 #include "impl/context/metal_context.hpp"

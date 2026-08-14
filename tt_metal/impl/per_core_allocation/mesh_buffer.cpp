@@ -7,6 +7,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
+#include "distributed/mesh_buffer_impl.hpp"
 #include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal::experimental::per_core_allocation {
@@ -47,8 +48,8 @@ std::shared_ptr<distributed::MeshBuffer> create_on_single_device(
         mesh_buffer_config);
 
     // Create a non-owning MeshBuffer — each device buffer will own its own allocation.
-    auto mesh_buffer = std::shared_ptr<distributed::MeshBuffer>(new distributed::MeshBuffer(
-        mesh_buffer_config, device_local_config, /*address=*/0, device_local_size, mesh_device));
+    distributed::MeshBufferImpl impl(
+        mesh_buffer_config, device_local_config, /*address=*/0, device_local_size, mesh_device);
 
     // Only allocate on the target device.
     TT_FATAL(mesh_device->impl().is_local(coord), "Target device coordinate must be local");
@@ -62,8 +63,8 @@ std::shared_ptr<distributed::MeshBuffer> create_on_single_device(
         device_local_config.bottom_up,
         device_local_config.sub_device_id);
 
-    mesh_buffer->buffers_.at(coord) = distributed::MaybeRemote<std::shared_ptr<Buffer>>::local(std::move(buffer));
-    return mesh_buffer;
+    impl.buffers().at(coord) = distributed::MaybeRemote<std::shared_ptr<Buffer>>::local(std::move(buffer));
+    return std::make_shared<distributed::MeshBuffer>(std::move(impl));
 }
 
 }  // namespace tt::tt_metal::experimental::per_core_allocation

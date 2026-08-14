@@ -68,7 +68,7 @@ int main() {
             input_bank_id,
             output_dram_buffer->address(),
             output_bank_id,
-            l1_buffer->size()};
+            l1_buffer->device_local_size()};
         SetRuntimeArgs(program, dram_copy_kernel_id, core, runtime_args);
 
         workload.add_program(device_range, std::move(program));

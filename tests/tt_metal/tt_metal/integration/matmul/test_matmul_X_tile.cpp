@@ -36,6 +36,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <umd/device/types/arch.hpp>
 
@@ -202,9 +203,9 @@ static void verify_matmul_tile_output(
     EXPECT_EQ(golden_packed.size(), result_vec.size());
     EXPECT_EQ(golden_packed, result_vec);
 
-    ctx.src0_dram_buffer->deallocate();
-    ctx.src1_dram_buffer->deallocate();
-    ctx.dst_dram_buffer->deallocate();
+    ctx.src0_dram_buffer->impl().deallocate();
+    ctx.src1_dram_buffer->impl().deallocate();
+    ctx.dst_dram_buffer->impl().deallocate();
 
     log_info(
         tt::LogTest,
@@ -622,9 +623,9 @@ static void matmul_tile(
 
     if ((cfg.with_bias || cfg.test_init_short)) {
         if (cfg.test_init_short) {
-            dst1_dram_buffer->deallocate();
+            dst1_dram_buffer->impl().deallocate();
         }
-        src2_dram_buffer->deallocate();
+        src2_dram_buffer->impl().deallocate();
     }
 
     verify_matmul_tile_output(fixture, mesh_device, cfg, std::move(tensor_vals), ctx);

@@ -18,6 +18,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -193,15 +194,8 @@ TEST_F(MeshEndToEnd2x4Tests, BufferRoundtripTest) {
         mesh_buffer, src_data.data(), false);
 
     std::vector<uint32_t> read_back_data{};
-    if ((mesh_buffer)->global_layout() == MeshBufferLayout::SHARDED) {
-        (read_back_data)
-            .resize(
-                (mesh_buffer)->global_shard_spec().global_size /
-                sizeof(typename std::decay_t<decltype(read_back_data)>::value_type));
-    } else {
-        (read_back_data)
-            .resize((mesh_buffer)->size() / sizeof(typename std::decay_t<decltype(read_back_data)>::value_type));
-    }
+    (read_back_data)
+        .resize((mesh_buffer)->impl().size() / sizeof(typename std::decay_t<decltype(read_back_data)>::value_type));
     ::tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer(
         (read_back_data).data(), mesh_buffer, true /* blocking */);
 
@@ -251,14 +245,8 @@ TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
     std::vector<uint32_t> result_data(a_data.size(), 0);
-    if ((out_buffer)->global_layout() == MeshBufferLayout::SHARDED) {
-        (result_data)
-            .resize(
-                (out_buffer)->global_shard_spec().global_size /
-                sizeof(typename std::decay_t<decltype(result_data)>::value_type));
-    } else {
-        (result_data).resize((out_buffer)->size() / sizeof(typename std::decay_t<decltype(result_data)>::value_type));
-    }
+    (result_data)
+        .resize((out_buffer)->impl().size() / sizeof(typename std::decay_t<decltype(result_data)>::value_type));
     ::tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer(
         (result_data).data(), out_buffer, true /* blocking */);
 
@@ -335,14 +323,8 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
     mesh_device_->release_mesh_trace(trace_id);
 
     std::vector<uint32_t> result_data(a_data.size(), 0);
-    if ((out_buffer)->global_layout() == MeshBufferLayout::SHARDED) {
-        (result_data)
-            .resize(
-                (out_buffer)->global_shard_spec().global_size /
-                sizeof(typename std::decay_t<decltype(result_data)>::value_type));
-    } else {
-        (result_data).resize((out_buffer)->size() / sizeof(typename std::decay_t<decltype(result_data)>::value_type));
-    }
+    (result_data)
+        .resize((out_buffer)->impl().size() / sizeof(typename std::decay_t<decltype(result_data)>::value_type));
     ::tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer(
         (result_data).data(), out_buffer, true /* blocking */);
 
@@ -410,14 +392,8 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
     mesh_device_->release_mesh_trace(trace_id);
 
     std::vector<uint32_t> result_data(a_data.size(), 0);
-    if ((out_buffer)->global_layout() == MeshBufferLayout::SHARDED) {
-        (result_data)
-            .resize(
-                (out_buffer)->global_shard_spec().global_size /
-                sizeof(typename std::decay_t<decltype(result_data)>::value_type));
-    } else {
-        (result_data).resize((out_buffer)->size() / sizeof(typename std::decay_t<decltype(result_data)>::value_type));
-    }
+    (result_data)
+        .resize((out_buffer)->impl().size() / sizeof(typename std::decay_t<decltype(result_data)>::value_type));
     ::tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer(
         (result_data).data(), out_buffer, true /* blocking */);
 
@@ -534,15 +510,17 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     uint32_t workload_1_src1_val = 5;
 
     // Uniform values passed to the add operation
-    std::vector<uint32_t> add_src0_vec = create_constant_vector_of_bfloat16(add_src0_buf->size(), workload_0_src0_val);
-    std::vector<uint32_t> add_src1_vec = create_constant_vector_of_bfloat16(add_src1_buf->size(), workload_0_src1_val);
+    std::vector<uint32_t> add_src0_vec =
+        create_constant_vector_of_bfloat16(add_src0_buf->impl().size(), workload_0_src0_val);
+    std::vector<uint32_t> add_src1_vec =
+        create_constant_vector_of_bfloat16(add_src1_buf->impl().size(), workload_0_src1_val);
 
     // Uniform values passed to the multiply and subtract operations (the top row runs multiplication with subtraction
     // on the bottom row of the Virtual Mesh)
     std::vector<uint32_t> mul_sub_src0_vec =
-        create_constant_vector_of_bfloat16(mul_sub_src0_buf->size(), workload_1_src0_val);
+        create_constant_vector_of_bfloat16(mul_sub_src0_buf->impl().size(), workload_1_src0_val);
     std::vector<uint32_t> mul_sub_src1_vec =
-        create_constant_vector_of_bfloat16(mul_sub_src1_buf->size(), workload_1_src1_val);
+        create_constant_vector_of_bfloat16(mul_sub_src1_buf->impl().size(), workload_1_src1_val);
 
     ::tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
         .enqueue_write_mesh_buffer(add_src0_buf, add_src0_vec.data(), false);
@@ -564,27 +542,13 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
 
     std::vector<bfloat16> add_dst_vec = {};
     std::vector<bfloat16> mul_sub_dst_vec = {};
-    if ((add_output_buf)->global_layout() == MeshBufferLayout::SHARDED) {
-        (add_dst_vec)
-            .resize(
-                (add_output_buf)->global_shard_spec().global_size /
-                sizeof(typename std::decay_t<decltype(add_dst_vec)>::value_type));
-    } else {
-        (add_dst_vec)
-            .resize((add_output_buf)->size() / sizeof(typename std::decay_t<decltype(add_dst_vec)>::value_type));
-    }
+    (add_dst_vec)
+        .resize((add_output_buf)->impl().size() / sizeof(typename std::decay_t<decltype(add_dst_vec)>::value_type));
     ::tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
         .enqueue_read_mesh_buffer((add_dst_vec).data(), add_output_buf, true);
-    if ((mul_sub_output_buf)->global_layout() == MeshBufferLayout::SHARDED) {
-        (mul_sub_dst_vec)
-            .resize(
-                (mul_sub_output_buf)->global_shard_spec().global_size /
-                sizeof(typename std::decay_t<decltype(mul_sub_dst_vec)>::value_type));
-    } else {
-        (mul_sub_dst_vec)
-            .resize(
-                (mul_sub_output_buf)->size() / sizeof(typename std::decay_t<decltype(mul_sub_dst_vec)>::value_type));
-    }
+    (mul_sub_dst_vec)
+        .resize(
+            (mul_sub_output_buf)->impl().size() / sizeof(typename std::decay_t<decltype(mul_sub_dst_vec)>::value_type));
     ::tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
         .enqueue_read_mesh_buffer((mul_sub_dst_vec).data(), mul_sub_output_buf, true);
 

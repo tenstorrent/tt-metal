@@ -116,7 +116,7 @@ int main() {
     distributed::Finish(cq);
 
     // Data transfer back to host machine
-    std::vector<uint16_t> result_vec(dst_dram_buffer->size() / sizeof(uint16_t));
+    std::vector<uint16_t> result_vec(dst_dram_buffer->device_local_size() / sizeof(uint16_t));
     distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((result_vec).data(), dst_dram_buffer, true);
 
     fmt::print("Result = {} : Expected = {}\n", result_vec[0], input_data);

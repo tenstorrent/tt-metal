@@ -163,12 +163,12 @@ int main() {
         // NOTE: The above is equivalent to a blocking enqueue of the workload.
 
         // Read the result back. Use blocking=true to wait for completion.
-        std::vector<bfloat16> result_vec(dst_dram_buffer->size() / sizeof(bfloat16));
+        std::vector<bfloat16> result_vec(dst_dram_buffer->device_local_size() / sizeof(bfloat16));
         distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer(
             (result_vec).data(), dst_dram_buffer, true);
 
         // Compare the result with the input. The result should be the input plus val_to_add.
-        constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16
+        constexpr float eps = 1e-2f;  // loose tolerance because of the nature of bfloat16
         TT_FATAL(result_vec.size() == a_data.size(), "Result vector size mismatch");
         for (size_t i = 0; i < result_vec.size(); ++i) {
             const float expected = static_cast<float>(a_data[i]) + val_to_add;

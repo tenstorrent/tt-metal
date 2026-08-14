@@ -144,7 +144,7 @@ int main() {
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
     // Read back results
-    std::vector<uint32_t> result_data(c->size() / sizeof(uint32_t));
+    std::vector<uint32_t> result_data(distributed_buffer_config.global_size / sizeof(uint32_t));
     tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((result_data).data(), c, true);
 
     // Verify results

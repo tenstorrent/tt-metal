@@ -49,6 +49,7 @@
 #include <optional>
 #include <string>
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -92,11 +93,7 @@ void PerformDeviceWork(
     distributed::as_mesh_command_queue_base(mesh_cq).enqueue_write_mesh_buffer(mesh_buffer, write_data.data(), false);
 
     std::vector<uint32_t> read_data;
-    read_data.resize(
-        (mesh_buffer->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED)
-            ? mesh_buffer->global_shard_spec().global_size /
-                  sizeof(typename std::decay_t<decltype(read_data)>::value_type)
-            : mesh_buffer->size() / sizeof(typename std::decay_t<decltype(read_data)>::value_type));
+    read_data.resize(mesh_buffer->impl().size() / sizeof(typename std::decay_t<decltype(read_data)>::value_type));
     distributed::as_mesh_command_queue_base(mesh_cq).enqueue_read_mesh_buffer((read_data).data(), mesh_buffer, true);
 
     if (read_data != write_data) {
@@ -453,9 +450,9 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
         auto buffer = distributed::MeshBuffer::create(buffer_config, local_config, mock_device.get());
         ASSERT_GT(buffer->address(), 0);
-        ASSERT_TRUE(buffer->is_allocated());
-        buffer->deallocate();
-        ASSERT_FALSE(buffer->is_allocated());
+        ASSERT_TRUE(buffer->impl().is_allocated());
+        buffer->impl().deallocate();
+        ASSERT_FALSE(buffer->impl().is_allocated());
 
         // Test command queue operations. Source vector is sized to fill the entire buffer so
         // enqueue_write_mesh_buffer's precondition (src bytes >= mesh buffer bytes, added in #43429)
@@ -468,11 +465,7 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(buffer, write_data.data(), true);
 
         std::vector<uint32_t> read_data;
-        read_data.resize(
-            (buffer->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED)
-                ? buffer->global_shard_spec().global_size /
-                      sizeof(typename std::decay_t<decltype(read_data)>::value_type)
-                : buffer->size() / sizeof(typename std::decay_t<decltype(read_data)>::value_type));
+        read_data.resize(buffer->impl().size() / sizeof(typename std::decay_t<decltype(read_data)>::value_type));
         distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((read_data).data(), buffer, true);
 
         auto program = CreateProgram();

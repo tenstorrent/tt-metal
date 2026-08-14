@@ -29,6 +29,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -113,9 +114,7 @@ TEST_F(MeshEventsTest2x4, ShardedAsyncIO) {
             mesh_device_->mesh_command_queue(1).enqueue_wait_for_event(write_event);
         }
         // Reads on CQ 1
-        const size_t dst_num_elements = (mesh_buffer->global_layout() == MeshBufferLayout::SHARDED)
-                                            ? mesh_buffer->global_shard_spec().global_size / sizeof(uint32_t)
-                                            : mesh_buffer->size() / sizeof(uint32_t);
+        const size_t dst_num_elements = mesh_buffer->impl().size() / sizeof(uint32_t);
         std::vector<uint32_t> dst_vec(dst_num_elements);
         tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device_->mesh_command_queue(1))
             .enqueue_read_mesh_buffer(dst_vec.data(), mesh_buffer, true);
@@ -158,8 +157,8 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
     mesh_workload.add_program(devices_1, std::move(*programs[1]));
 
     for (int iter = 0; iter < num_iters; iter++) {
-        std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->size(), iter + 2);
-        std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(src1_bufs[0]->size(), iter + 3);
+        std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->impl().size(), iter + 2);
+        std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(src1_bufs[0]->impl().size(), iter + 3);
 
         // Issue writes on MeshCQ 1
         for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {

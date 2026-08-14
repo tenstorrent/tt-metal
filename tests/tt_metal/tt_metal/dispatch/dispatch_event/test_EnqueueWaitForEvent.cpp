@@ -28,6 +28,7 @@
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include <umd/device/types/arch.hpp>
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -72,7 +73,7 @@ bool RunCrossCqReadWriteWithWaitForEvent(
                 .page_size = config.page_size, .buffer_type = config.buftype};
             buffers.push_back(
                 distributed::MeshBuffer::create(global_buffer_config, device_local_config, mesh_device.get()));
-            srcs.push_back(generate_arange_vector(buffers[i]->size(), wr_data_base));
+            srcs.push_back(generate_arange_vector(buffers[i]->impl().size(), wr_data_base));
 
             cq_write.get().enqueue_write_shards(
                 buffers[i], {distributed::ShardDataTransfer{zero_coord}.host_data(srcs[i].data())}, false);
@@ -115,7 +116,7 @@ bool RunBurstWritesThenSingleCrossCqEvent(
             .page_size = config.page_size, .buffer_type = config.buftype};
         buffers.push_back(
             distributed::MeshBuffer::create(global_buffer_config, device_local_config, mesh_device.get()));
-        srcs.push_back(generate_arange_vector(buffers.back()->size(), buf_idx * 100));
+        srcs.push_back(generate_arange_vector(buffers.back()->impl().size(), buf_idx * 100));
         cq_write.get().enqueue_write_shards(
             buffers.back(), {distributed::ShardDataTransfer{zero_coord}.host_data(srcs.back().data())}, false);
     }
@@ -206,7 +207,7 @@ bool RunHeavyBurstWritesThenDeviceOnlyEvent(
             .page_size = page_size, .buffer_type = BufferType::DRAM};
         buffers.push_back(
             distributed::MeshBuffer::create(global_buffer_config, device_local_config, mesh_device.get()));
-        srcs.push_back(generate_arange_vector(buffers.back()->size(), buf_idx * 10000));
+        srcs.push_back(generate_arange_vector(buffers.back()->impl().size(), buf_idx * 10000));
         cq_write.get().enqueue_write_shards(
             buffers.back(), {distributed::ShardDataTransfer{zero_coord}.host_data(srcs.back().data())}, false);
     }
@@ -421,7 +422,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                     .page_size = config.page_size, .buffer_type = config.buftype};
                 buffers.push_back(
                     distributed::MeshBuffer::create(global_buffer_config, device_local_config, mesh_device.get()));
-                srcs.push_back(generate_arange_vector(buffers[i]->size(), wr_data_base));
+                srcs.push_back(generate_arange_vector(buffers[i]->impl().size(), wr_data_base));
                 log_debug(tt::LogTest, "buf_idx: {} Doing Write to cq_id: {} of data: {}", buf_idx, i, srcs[i]);
 
                 cqs[i].get().enqueue_write_shards(
@@ -593,7 +594,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                 for (uint j = 0; j < num_wr_rd_per_buf; j++) {
                     // Add entry in resutls vector, and construct write data, unique per loop
                     read_results.emplace_back();
-                    write_data.push_back(generate_arange_vector(buffers.back()->size(), j * 100));
+                    write_data.push_back(generate_arange_vector(buffers.back()->impl().size(), j * 100));
 
                     // Issue non-blocking write via first CQ and record event to synchronize with read on other CQ.
                     log_debug(

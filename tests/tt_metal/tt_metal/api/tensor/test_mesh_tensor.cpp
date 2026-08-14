@@ -51,6 +51,7 @@
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_metal {
@@ -111,7 +112,7 @@ TEST_F(MeshTensorDeviceTest, ConstructionWithMeshBuffer) {
 
     auto mesh_buffer = create_mesh_buffer(*mesh_device_, spec);
     ASSERT_NE(mesh_buffer, nullptr);
-    ASSERT_TRUE(mesh_buffer->is_allocated());
+    ASSERT_TRUE(mesh_buffer->impl().is_allocated());
 
     auto topology = TensorTopology();
 
@@ -246,8 +247,8 @@ TEST_F(MeshTensorDeviceTest, ConstructionWithTooSmallBufferFails) {
     // Create a buffer at half the required size (rounded to page boundary).
     auto mesh_buffer = create_mesh_buffer(*mesh_device_, spec, 0.5f);
     ASSERT_NE(mesh_buffer, nullptr);
-    ASSERT_TRUE(mesh_buffer->is_allocated());
-    ASSERT_LT(mesh_buffer->size(), required_size);
+    ASSERT_TRUE(mesh_buffer->impl().is_allocated());
+    ASSERT_LT(mesh_buffer->impl().size(), required_size);
 
     auto topology = TensorTopology();
 

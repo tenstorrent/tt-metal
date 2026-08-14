@@ -8,6 +8,7 @@
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 #include "tt_metal/distributed/named_shm.hpp"
 #include "tt_metal/distributed/hd_socket_connector_state.hpp"
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
@@ -226,7 +227,7 @@ void H2DSocket::write_socket_metadata(
     const PinnedBufferInfo& data_info) {
     // init_config_buffer hardcodes num_cores = 1, so the config buffer always has exactly one slot at index 0.
     std::vector<receiver_socket_md> config_data(
-        config_buffer_->size() / sizeof(receiver_socket_md), receiver_socket_md());
+        config_buffer_->impl().size() / sizeof(receiver_socket_md), receiver_socket_md());
 
     auto& md = config_data[0];
     md.bytes_sent = 0;

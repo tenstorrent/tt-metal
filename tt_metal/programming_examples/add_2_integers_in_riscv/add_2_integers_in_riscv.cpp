@@ -117,7 +117,7 @@ int main() {
     // Read the destination MeshBuffer back to host.
     // This time we set blocking=true since we must have the data before comparing.
     // NOTE: Everything on the command queue executes in order; a read will not run before the prior kernel finishes.
-    std::vector<uint32_t> result_vec(dst_dram_buffer->size() / sizeof(uint32_t));
+    std::vector<uint32_t> result_vec(dst_dram_buffer->device_local_size() / sizeof(uint32_t));
     distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((result_vec).data(), dst_dram_buffer, true);
     if (result_vec.size() != 1) {
         std::cout << "Error: Expected result vector size of 1, got " << result_vec.size() << std::endl;

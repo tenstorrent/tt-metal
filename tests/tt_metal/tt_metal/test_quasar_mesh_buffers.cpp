@@ -17,6 +17,7 @@
 #include <numeric>
 #include <vector>
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -53,9 +54,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferWriteReadDRAM) {
 
     distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(buf, src.data(), false);
 
-    const size_t dst_n = (buf->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED)
-                             ? buf->global_shard_spec().global_size / sizeof(uint32_t)
-                             : buf->size() / sizeof(uint32_t);
+    const size_t dst_n = buf->impl().size() / sizeof(uint32_t);
     std::vector<uint32_t> dst(dst_n);
     distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((dst).data(), buf, /*blocking=*/true);
 
@@ -78,9 +77,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferMultipleWriteReadRoundsDRAM)
 
         distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(buf, src.data(), false);
 
-        const size_t dst_n = (buf->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED)
-                                 ? buf->global_shard_spec().global_size / sizeof(uint32_t)
-                                 : buf->size() / sizeof(uint32_t);
+        const size_t dst_n = buf->impl().size() / sizeof(uint32_t);
         std::vector<uint32_t> dst(dst_n);
         distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((dst).data(), buf, /*blocking=*/true);
 
@@ -102,9 +99,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferWriteReadL1) {
 
     distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(buf, src.data(), false);
 
-    const size_t dst_n = (buf->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED)
-                             ? buf->global_shard_spec().global_size / sizeof(uint32_t)
-                             : buf->size() / sizeof(uint32_t);
+    const size_t dst_n = buf->impl().size() / sizeof(uint32_t);
     std::vector<uint32_t> dst(dst_n);
     distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((dst).data(), buf, /*blocking=*/true);
 
@@ -127,9 +122,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferMultipleWriteReadRoundsL1) {
 
         distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(buf, src.data(), false);
 
-        const size_t dst_n = (buf->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED)
-                                 ? buf->global_shard_spec().global_size / sizeof(uint32_t)
-                                 : buf->size() / sizeof(uint32_t);
+        const size_t dst_n = buf->impl().size() / sizeof(uint32_t);
         std::vector<uint32_t> dst(dst_n);
         distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((dst).data(), buf, /*blocking=*/true);
 
@@ -155,9 +148,7 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, MeshBufferCrossCQWriteReadRound
         distributed::MeshEvent write_event = cq0.enqueue_record_event();
         cq1.enqueue_wait_for_event(write_event);
 
-        const size_t dst_n = (buf->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED)
-                                 ? buf->global_shard_spec().global_size / sizeof(uint32_t)
-                                 : buf->size() / sizeof(uint32_t);
+        const size_t dst_n = buf->impl().size() / sizeof(uint32_t);
         std::vector<uint32_t> dst(dst_n);
         distributed::as_mesh_command_queue_base(cq1).enqueue_read_mesh_buffer((dst).data(), buf, /*blocking=*/true);
 

@@ -33,6 +33,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "impl/allocator/allocator.hpp"
+#include <distributed/mesh_buffer_impl.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "mesh_command_queue_base.hpp"
 
@@ -167,9 +168,10 @@ void MeshTrace::populate_mesh_buffer(
 }
 
 MeshTraceBuffer::~MeshTraceBuffer() {
-    if (this->mesh_buffer && this->mesh_buffer->is_allocated() && this->mesh_buffer->device()) {
+    if (this->mesh_buffer && this->mesh_buffer->impl().is_allocated() && this->mesh_buffer->device()) {
         auto current_trace_buffers_size = this->mesh_buffer->device()->get_trace_buffers_size();
-        this->mesh_buffer->device()->set_trace_buffers_size(current_trace_buffers_size - this->mesh_buffer->size());
+        this->mesh_buffer->device()->set_trace_buffers_size(
+            current_trace_buffers_size - this->mesh_buffer->impl().size());
     }
 }
 

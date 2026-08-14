@@ -301,7 +301,7 @@ int main(int /*argc*/, char** argv) {
 
         ////////// TILE MULTICAST VERIFICATION //////////
         // Read from shard on Device Coordinate 0,0 (unit mesh). On a 2D mesh this can target a specific device.
-        std::vector<bfloat16> received_tiles(output_dram_buffer->size() / sizeof(bfloat16));
+        std::vector<bfloat16> received_tiles(output_dram_buffer->device_local_size() / sizeof(bfloat16));
         distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer(
             (received_tiles).data(), output_dram_buffer, true);
         bool verbose_verify =

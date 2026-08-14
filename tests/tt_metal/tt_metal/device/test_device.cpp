@@ -42,6 +42,7 @@
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "tt_metal/distributed/mesh_command_queue_base.hpp"
+#include "tt_metal/distributed/mesh_buffer_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -610,9 +611,7 @@ TEST_F(MeshDeviceFixture, SlowDispatchFullGridAccess) {
             .enqueue_write_mesh_buffer(mesh_buffer, src_vec.data(), false);
         Finish(mesh_device->mesh_command_queue());
 
-        const size_t dst_vec_n = (mesh_buffer->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED)
-                                     ? mesh_buffer->global_shard_spec().global_size / sizeof(uint32_t)
-                                     : mesh_buffer->size() / sizeof(uint32_t);
+        const size_t dst_vec_n = mesh_buffer->impl().size() / sizeof(uint32_t);
         std::vector<uint32_t> dst_vec(dst_vec_n);
         tt::tt_metal::distributed::as_mesh_command_queue_base(mesh_device->mesh_command_queue())
             .enqueue_read_mesh_buffer((dst_vec).data(), mesh_buffer, true);

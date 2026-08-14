@@ -193,10 +193,7 @@ int main() {
     distributed::as_mesh_command_queue_base(cq).enqueue_write_mesh_buffer(pad_buffer, pad_vec.data(), false);
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
-    dst_vec.resize(
-        (dst_buffer->global_layout() == tt::tt_metal::distributed::MeshBufferLayout::SHARDED)
-            ? dst_buffer->global_shard_spec().global_size / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type)
-            : dst_buffer->size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+    dst_vec.resize(dst_buffer->device_local_size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
     distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((dst_vec).data(), dst_buffer, true);
     distributed::Finish(cq);
 

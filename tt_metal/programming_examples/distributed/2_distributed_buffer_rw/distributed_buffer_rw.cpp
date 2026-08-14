@@ -48,7 +48,7 @@ int main() {
         mesh_buffer, src_data.data(), false);
 
     // Enqueue a read from the distributed buffer (L1 banks across devices) to a local buffer.
-    std::vector<uint32_t> read_back_data(mesh_buffer->size() / sizeof(uint32_t));
+    std::vector<uint32_t> read_back_data(distributed_buffer_size_bytes / sizeof(uint32_t));
     tt::tt_metal::distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer(
         (read_back_data).data(), mesh_buffer, true);
 

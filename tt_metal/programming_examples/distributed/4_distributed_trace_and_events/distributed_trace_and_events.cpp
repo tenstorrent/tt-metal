@@ -236,14 +236,16 @@ int main() {
     uint32_t workload_1_src0_val = 7;
     uint32_t workload_1_src1_val = 5;
     // Uniform values passed to the add operation
-    std::vector<uint32_t> add_src0_vec = create_constant_vector_of_bfloat16(add_src0_buf->size(), workload_0_src0_val);
-    std::vector<uint32_t> add_src1_vec = create_constant_vector_of_bfloat16(add_src1_buf->size(), workload_0_src1_val);
+    std::vector<uint32_t> add_src0_vec =
+        create_constant_vector_of_bfloat16(global_buffer_config.global_size, workload_0_src0_val);
+    std::vector<uint32_t> add_src1_vec =
+        create_constant_vector_of_bfloat16(global_buffer_config.global_size, workload_0_src1_val);
     // Uniform values passed to the multiply and subtract operations (the top row runs multiplication with subtraction
     // on the bottom row of the Virtual Mesh)
     std::vector<uint32_t> mul_sub_src0_vec =
-        create_constant_vector_of_bfloat16(mul_sub_src0_buf->size(), workload_1_src0_val);
+        create_constant_vector_of_bfloat16(global_buffer_config.global_size, workload_1_src0_val);
     std::vector<uint32_t> mul_sub_src1_vec =
-        create_constant_vector_of_bfloat16(mul_sub_src1_buf->size(), workload_1_src1_val);
+        create_constant_vector_of_bfloat16(global_buffer_config.global_size, workload_1_src1_val);
 
     // =========== Step 7: Write inputs on MeshCQ1 ===========
     // IO is done through MeshCQ1 and Workload dispatch is done through MeshCQ0. Use MeshEvents to synchronize the
@@ -265,8 +267,8 @@ int main() {
     MeshEvent trace_event = workload_cq.enqueue_record_event();
     data_movement_cq.enqueue_wait_for_event(trace_event);
     // =========== Step 9: Read Outputs on MeshCQ1 ===========
-    std::vector<bfloat16> add_dst_vec(add_output_buf->size() / sizeof(bfloat16));
-    std::vector<bfloat16> mul_sub_dst_vec(mul_sub_output_buf->size() / sizeof(bfloat16));
+    std::vector<bfloat16> add_dst_vec(global_buffer_config.global_size / sizeof(bfloat16));
+    std::vector<bfloat16> mul_sub_dst_vec(global_buffer_config.global_size / sizeof(bfloat16));
     tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)
         .enqueue_read_mesh_buffer((add_dst_vec).data(), add_output_buf, true);
     tt::tt_metal::distributed::as_mesh_command_queue_base(data_movement_cq)

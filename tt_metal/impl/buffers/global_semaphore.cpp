@@ -17,6 +17,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/mesh_buffer.hpp>
 #include "global_semaphore_impl.hpp"
 #include "mesh_device.hpp"
 #include <tt_stl/reflection.hpp>

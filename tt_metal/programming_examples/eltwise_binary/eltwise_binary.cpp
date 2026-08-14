@@ -158,7 +158,7 @@ int main(int /*argc*/, char** /*argv*/) {
         // distributed::EnqueueMeshWorkload(cq, workload, true);
 
         // Read the output buffer (from shard at mesh coordinate {0,0} on a unit mesh) and validate.
-        std::vector<bfloat16> result_vec(dst_dram_buffer->size() / sizeof(bfloat16));
+        std::vector<bfloat16> result_vec(dst_dram_buffer->device_local_size() / sizeof(bfloat16));
         distributed::as_mesh_command_queue_base(cq).enqueue_read_mesh_buffer((result_vec).data(), dst_dram_buffer, true);
 
         constexpr float eps = 1e-2f; // loose tolerance because of the nature of bfloat16
