@@ -56,7 +56,6 @@ DURATIONS_S = [5, 10, 15]
 # factor measured at 16:9 / 5 s.
 EXPECTED_S_PER_VIDEO_SECOND = 77.0
 
-MESHES = GALAXY_MESHES
 
 # calibrated 2026-08-04, fox prompt, seed 0 (single sample; margins are generous)
 VBENCH_THRESHOLDS = {
@@ -80,7 +79,7 @@ SWEEP = [
 
 @pytest.mark.timeout(7200)
 @pytest.mark.parametrize(("aspect_ratio", "duration_s"), SWEEP)
-@pytest.mark.parametrize(("mesh_device", "device_params"), MESHES, indirect=["mesh_device", "device_params"])
+@pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
 def test_t2va_end_to_end(mesh_device, reset_seeds, aspect_ratio, duration_s):
     weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
     artifacts = artifact_dir("h3_t2va_artifacts")

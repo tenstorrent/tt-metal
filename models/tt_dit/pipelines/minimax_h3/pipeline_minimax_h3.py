@@ -259,10 +259,6 @@ class MiniMaxH3Pipeline:
     ) -> None:
         self.mesh_device = mesh_device
         self.weights_dir = Path(weights_dir)
-        # Anything left unset comes from the per-shape preset; anything passed wins over it, so a
-        # test can still sweep an untuned configuration on a known shape.
-        # Only consult the preset for what the caller left unset, so an untuned shape with every
-        # setting supplied runs rather than raising -- the escape hatch `create_pipeline` documents.
         # Only consult the preset for what the caller left unset, so an untuned shape with every
         # parallel setting supplied runs rather than raising -- the escape hatch `create_pipeline`
         # documents. `coresident` is residency rather than parallelism and has a safe default, so it
