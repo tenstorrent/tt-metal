@@ -67,7 +67,7 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
-      has-sim: ${{ steps.detect-sim.outputs.has-sim }}
+      sim-libs: ${{ steps.build-matrix.outputs.sim-libs }}
       skip-args-wormhole_b0: ${{ steps.skip-list.outputs.skip-args-wormhole_b0 }}
       skip-args-blackhole: ${{ steps.skip-list.outputs.skip-args-blackhole }}
     env:
@@ -105,13 +105,6 @@ jobs:
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
 
-      - name: Detect sim SKUs in matrix
-        id: detect-sim
-        run: |
-          matrix='${{ steps.build-matrix.outputs.matrix }}'
-          has_sim=$(echo "$matrix" | jq -r 'any(.[]; .sku | startswith("sim_"))')
-          echo "has-sim=$has_sim" >> "$GITHUB_OUTPUT"
-
       # Load the TTSim skip list ONCE for the whole matrix and expose per-arch --deselect
       # args. The ttnn job applies these (via PYTEST_ADDOPTS) on every sim_* entry so the
       # simulator runs the same cmd as hardware minus the tests that don't yet work on ttsim.
@@ -131,7 +124,7 @@ jobs:
   # the resolved matrix contains sim_* SKUs. Consumed by setup-ttsim below.
   fetch-ttsim:
     needs: load-test-matrix
-    if: ${{ needs.load-test-matrix.outputs.has-sim == 'true' }}
+    if: ${{ needs.load-test-matrix.outputs.sim-libs != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout fetch-ttsim action and pinned ttsim version
@@ -146,11 +139,13 @@ jobs:
       - name: ⬇️  Fetch ttsim
         uses: ./.github/actions/fetch-ttsim
         timeout-minutes: 10
+        with:
+          libs: ${{ needs.load-test-matrix.outputs.sim-libs }}
 
   ttnn:
     needs: [load-test-matrix, fetch-ttsim]
     # fetch-ttsim is skipped when the matrix has no sim_* SKUs; allow that.
-    if: ${{ !cancelled() && (needs.fetch-ttsim.result == 'success' || needs.fetch-ttsim.result == 'skipped') }}
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' && !cancelled() && (needs.fetch-ttsim.result == 'success' || needs.fetch-ttsim.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:

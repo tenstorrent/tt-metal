@@ -286,6 +286,10 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing
             sku_entry = sku_config[concrete_sku]
             if "weights-cache-mode" in sku_entry:
                 entry["weights-cache-mode"] = sku_entry["weights-cache-mode"]
+            # Simulator SKUs name the libttsim binary they run on; carrying it here lets the
+            # impl's fetch-ttsim job download only the libs this matrix actually needs.
+            if "ttsim_lib" in sku_entry:
+                entry["ttsim_lib"] = sku_entry["ttsim_lib"]
             # Exabox multihost SKUs: runs_on contains an exabox-multihost* label
             # (e.g. exabox-multihost-ci-sc4). The multihost-ci runner hook provisions
             # workers from container.image. A legacy `allocation` block also marks
@@ -298,25 +302,30 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing
             filtered_tests.append(entry)
 
     if not filtered_tests:
-        print(f"::error::No tests selected for enabled SKUs '{','.join(enabled_skus)}'. Failing pipeline.")
-        sys.exit(1)
+        print(f"::warning::No tests selected for enabled SKUs '{','.join(enabled_skus)}'.")
 
     return filtered_tests
 
 
 def write_matrix_output(filtered_matrix):
-    """Print and optionally write matrix to GITHUB_OUTPUT."""
+    """Print and optionally write matrix + sim-libs to GITHUB_OUTPUT."""
     print(f"\nFiltered test matrix ({len(filtered_matrix)} tests):")
     json_output_pretty = json.dumps(filtered_matrix, indent=2)
     print(json_output_pretty)
 
     json_output_compact = json.dumps(filtered_matrix)
+    # Simulator binaries this matrix needs, for the caller's fetch-ttsim job. Empty when the
+    # matrix has no sim SKUs, which is also how impls tell whether to run that job at all.
+    sim_libs = ",".join(sorted({entry["ttsim_lib"] for entry in filtered_matrix if entry.get("ttsim_lib")}))
+
     github_output = os.environ.get("GITHUB_OUTPUT")
     if github_output:
         with open(github_output, "a") as f:
             f.write(f"matrix<<EOF\n{json_output_compact}\nEOF\n")
+            f.write(f"sim-libs={sim_libs}\n")
     else:
         print(f"\nmatrix={json_output_compact}")
+        print(f"sim-libs={sim_libs}")
 
 
 def main(argv=None):

@@ -4,11 +4,11 @@ description: |
   them as one artifact for the sim jobs in the same workflow to consume via
   .github/actions/setup-ttsim.
 
-  The release tag comes from tt_metal/ttsim-version, and all libttsim_*.so assets are
-  fetched rather than a named subset: which binary a SKU uses is declared by its
-  ttsim_lib in .github/sku_config.yaml, so adding a simulator topology needs no change
-  here. ttsim is a public repo, so the default GITHUB_TOKEN is enough to read its
-  releases and no third-party downloader is involved.
+  The release tag comes from tt_metal/ttsim-version, and the binaries to fetch come from
+  the caller's load-test-matrix job (its sim-libs output, derived from each selected SKU's
+  ttsim_lib in .github/sku_config.yaml), so only the libs the matrix actually needs are
+  downloaded and no workflow names one itself. ttsim is a public repo, so the default
+  GITHUB_TOKEN is enough to read its releases and no third-party downloader is involved.
 
   The caller must have checked out this action's directory and the version file, e.g.
     sparse-checkout: |
@@ -16,6 +16,9 @@ description: |
       tt_metal/ttsim-version
 
 inputs:
+  libs:
+    description: Comma-separated libttsim_*.so asset names to download
+    required: true
   artifact-name:
     description: Name of the uploaded artifact; must match what setup-ttsim downloads.
     required: false
@@ -52,26 +55,34 @@ runs:
           exit 1
         fi
 
-        echo "Downloading libttsim_*.so from tenstorrent/ttsim@$version"
+        if [[ -z "${{ inputs.libs }}" ]]; then
+          echo "::error::No simulator libs requested. This job should be gated on the matrix having sim_* SKUs."
+          exit 1
+        fi
+        # sim-libs is already a clean CSV of asset names, so a plain split is enough.
+        IFS=',' read -r -a libs <<< "${{ inputs.libs }}"
+
+        echo "Downloading ${#libs[@]} simulator binaries from tenstorrent/ttsim@$version: ${libs[*]}"
         rm -rf /tmp/ttsim
         mkdir -p /tmp/ttsim
+        pattern_args=()
+        for lib in "${libs[@]}"; do
+          pattern_args+=(--pattern "$lib")
+        done
         gh release download "$version" \
           --repo tenstorrent/ttsim \
-          --pattern 'libttsim_*.so' \
+          "${pattern_args[@]}" \
           --dir /tmp/ttsim
 
-        # The release also ships *_aarch64.so builds of each library. Every sim runner is
-        # x86_64 and sku_config's ttsim_lib names the x86 asset, so drop them instead of
-        # doubling the artifact that each sim job downloads. Sim on ARM runners would need
-        # ttsim_lib to become arch-aware first.
-        rm -f /tmp/ttsim/*_aarch64.so
-
-        # --pattern matching nothing is not an error for gh, so check before publishing an
-        # artifact that would fail every sim job later with a missing-binary error instead.
-        shopt -s nullglob
-        libs=(/tmp/ttsim/libttsim_*.so)
-        if [[ ${#libs[@]} -eq 0 ]]; then
-          echo "::error::tenstorrent/ttsim@$version has no libttsim_*.so assets."
+        # A --pattern matching no asset is not an error for gh, so verify every requested lib
+        # landed. Failing here names the missing binary; letting it through would fail each sim
+        # job later in setup-ttsim instead.
+        missing=()
+        for lib in "${libs[@]}"; do
+          [[ -f "/tmp/ttsim/$lib" ]] || missing+=("$lib")
+        done
+        if [[ ${#missing[@]} -gt 0 ]]; then
+          echo "::error::tenstorrent/ttsim@$version has no asset(s): ${missing[*]}. Check ttsim_lib in .github/sku_config.yaml against the pinned release."
           exit 1
         fi
         echo "Fetched ${#libs[@]} simulator binaries:"

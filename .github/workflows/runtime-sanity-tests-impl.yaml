@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
-      has-sim: ${{ steps.detect-sim.outputs.has-sim }}
+      sim-libs: ${{ steps.build-matrix.outputs.sim-libs }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/runtime_sanity_tests.yaml
     steps:
@@ -56,17 +56,10 @@ jobs:
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
-      - name: Detect sim SKUs in matrix
-        id: detect-sim
-        run: |
-          matrix='${{ steps.build-matrix.outputs.matrix }}'
-          has_sim=$(echo "$matrix" | jq -r 'any(.[]; .sku | startswith("sim_"))')
-          echo "has-sim=$has_sim" >> "$GITHUB_OUTPUT"
-
   # Fetch ttsim simulator binaries once; only needed when the matrix has sim_* SKUs.
   fetch-ttsim:
     needs: load-test-matrix
-    if: ${{ needs.load-test-matrix.outputs.has-sim == 'true' }}
+    if: ${{ needs.load-test-matrix.outputs.sim-libs != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout fetch-ttsim action and pinned ttsim version
@@ -81,11 +74,13 @@ jobs:
       - name: ⬇️  Fetch ttsim
         uses: ./.github/actions/fetch-ttsim
         timeout-minutes: 10
+        with:
+          libs: ${{ needs.load-test-matrix.outputs.sim-libs }}
 
   runtime-sanity-tests:
     needs: [load-test-matrix, fetch-ttsim]
     # fetch-ttsim is skipped when the matrix has no sim_* SKUs; allow that.
-    if: ${{ !cancelled() && (needs.fetch-ttsim.result == 'success' || needs.fetch-ttsim.result == 'skipped') }}
+    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' && !cancelled() && (needs.fetch-ttsim.result == 'success' || needs.fetch-ttsim.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:

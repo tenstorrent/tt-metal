@@ -680,3 +680,81 @@ def test_present_but_empty_cmd_is_always_rejected(tmp_path: Path, empty_cmd: str
     result = _run_matrix_raw(path, *extra)
     assert result.returncode != 0, result.stdout
     assert "cmd is present but empty" in result.stdout + result.stderr
+
+
+def _run_with_skus(tests_yaml: Path, enabled: str, *extra: str) -> subprocess.CompletedProcess:
+    """Invoke the script with an explicit enabled-SKU list, without asserting success."""
+    run_env = os.environ.copy()
+    run_env.pop("GITHUB_OUTPUT", None)
+    run_env.pop("MATRIX_EVENT_NAME", None)
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), str(tests_yaml), enabled, str(SKU_CONFIG), *extra],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=run_env,
+    )
+
+
+def sim_libs_line(result) -> str:
+    """The sim-libs value the script printed (stdout form, no GITHUB_OUTPUT)."""
+    for line in reversed(result.stdout.splitlines()):
+        if line.startswith("sim-libs="):
+            return line[len("sim-libs=") :]
+    raise AssertionError(f"No sim-libs= in output:\n{result.stdout}")
+
+
+def test_sim_libs_lists_only_selected_sim_skus(tmp_path: Path):
+    """sim-libs carries each selected sim SKU's ttsim_lib, deduped, and nothing for HW SKUs."""
+    path = tmp_path / "tests.yaml"
+    path.write_text(
+        textwrap.dedent(
+            """\
+            - name: sim and hw test
+              cmd: echo ok
+              skus:
+                wh_n300_civ2:
+                  timeout: 15
+                sim_wh_n300:
+                  timeout: 15
+                sim_bh_p150:
+                  timeout: 15
+              team: runtime
+              owner_id: U000
+            - name: second test on the same sim sku
+              cmd: echo ok
+              skus:
+                sim_wh_n300:
+                  timeout: 15
+              team: runtime
+              owner_id: U000
+            """
+        )
+    )
+    result = _run_with_skus(path, "wh_n300_civ2,sim_wh_n300,sim_bh_p150")
+    assert result.returncode == 0, result.stdout + result.stderr
+    # sorted + unique, despite sim_wh_n300 appearing in two entries
+    assert sim_libs_line(result) == "libttsim_bh.so,libttsim_wh_x2.so"
+
+    # Every sim leg also carries its own lib, which is what setup-ttsim installs.
+    matrix = json.loads(re.search(r"^matrix=(.*)$", result.stdout, re.M).group(1))
+    libs = {e["sku"]: e.get("ttsim_lib") for e in matrix}
+    assert libs["sim_wh_n300"] == "libttsim_wh_x2.so"
+    assert libs["sim_bh_p150"] == "libttsim_bh.so"
+    assert libs["wh_n300_civ2"] is None
+
+
+def test_sim_libs_empty_for_hardware_only_matrix(tmp_path: Path, tests_yaml: Path):
+    """No sim SKUs selected -> empty sim-libs, which is how impls skip fetch-ttsim."""
+    result = _run_with_skus(tests_yaml, "wh_n150_civ2")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert sim_libs_line(result) == ""
+
+
+def test_empty_matrix_is_not_fatal(tmp_path: Path, tests_yaml: Path):
+    """A SKU set that matches nothing warns and emits matrix=[]; impls gate on '[]'."""
+    result = _run_with_skus(tests_yaml, "bh_galaxy")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "No tests selected" in result.stdout
+    assert re.search(r"^matrix=\[\]$", result.stdout, re.M)
+    assert sim_libs_line(result) == ""

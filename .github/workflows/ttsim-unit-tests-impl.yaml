@@ -31,6 +31,7 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       matrix: ${{ steps.filter-categories.outputs.matrix }}
+      sim-libs: ${{ steps.filter-categories.outputs.sim-libs }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/ttsim_unit_tests.yaml
     steps:
@@ -69,10 +70,13 @@ jobs:
             echo "$filtered"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+          # prepare_test_matrix.py's sim-libs covers the pre-filter matrix; recompute from the
+          # filtered one so fetch-ttsim does not download libs for legs this run dropped.
+          echo "sim-libs=$(echo "$filtered" | jq -r '[.[].ttsim_lib // empty] | unique | join(",")')" >> "$GITHUB_OUTPUT"
 
   fetch-ttsim:
     needs: load-test-matrix
-    if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
+    if: ${{ needs.load-test-matrix.outputs.sim-libs != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout fetch-ttsim action and pinned ttsim version
@@ -86,6 +90,8 @@ jobs:
       - name: ⬇️  Fetch ttsim
         uses: ./.github/actions/fetch-ttsim
         timeout-minutes: 10
+        with:
+          libs: ${{ needs.load-test-matrix.outputs.sim-libs }}
 
   ttsim-unit-tests:
     needs: [load-test-matrix, fetch-ttsim]
