@@ -55,6 +55,18 @@ Env — schedule knobs (flat; the defaults describe a 1-user, 11-chunk, in-order
                                  prompt's real length (so PREFILL_PRODUCER_CHUNKS/MID_END are ignored per
                                  slot). Unset (default) => one shared PREFILL_TRACE_DIR + the synthetic
                                  schedule for all slots.
+  PREFILL_DFLASH_GOLDEN_KV_DIR   dir holding the DFlash drafter's golden context K/V
+                                 (k_cache.safetensors + v_cache.safetensors, [layers, kv_heads, S,
+                                 head_dim]). Set it to ALSO PCC the drafter's context cache per
+                                 (layer, kv-head), read back through the drafter configs of the same KV
+                                 chunk table. Unset (default) => the drafter half is skipped even when
+                                 the table carries it, because the golden is prompt-specific and this
+                                 module cannot tell whether the pushed trace is the one that produced it
+                                 — setting this is the operator asserting that pairing.
+                                 e.g. /mnt/models/deepseek-prefill-cache/golden/dflash_context_kv_55k_v3
+  PREFILL_DFLASH_PCC             per-(layer, head) bar for the drafter check (default 0.999, the
+                                 tests/dflash_prefill threshold — a bf8 cache costs ~1e-4 vs an fp32
+                                 golden, so this is not slack for a layout bug to hide in).
   PREFILL_SEND_SHUTDOWN          "1" to close the stream with an all -1 sentinel so the runner exits
                                  gracefully after the run (sent after the KV read; default 0). PR #48718.
 Scope — this module drives the RUNNER and nothing else: push, ack-drain, optional golden PCC. It issues no
@@ -86,15 +98,19 @@ import struct
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
 import torch
 from loguru import logger
+from safetensors import safe_open
 
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
+from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import dflash_config_name
+from tests.ttnn.utils_for_testing import comp_pcc
 
 
 def _apply_manifest_env(manifest_path: str) -> dict:
@@ -707,13 +723,28 @@ def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len:
     golden trace. Dispatches on the model: MLA (single merged kvpe config), M3 (multi-config triple
     cache), or GPT-OSS (multi-config K/V heads, no index_k). Returns the min PCC across layers.
 
-    The reader is NOT adapter-pluggable — a new model whose cache is neither of those two layouts needs
-    a branch here (and its own decode), not just an adapter."""
+    The reader is NOT adapter-pluggable — a new model whose cache is neither of those layouts needs
+    a branch here (and its own decode), not just an adapter.
+
+    The MODEL's own caches only. Under DFlash the drafter's context caches ride in the same table as
+    further `dflash_*` configs, but they are a sibling gate with their own golden and their own bar — see
+    _read_slot_dflash_kv_and_check_pcc, called alongside this from _verify_resident_slots."""
     if ADAPTER.name == "minimax_m3":
         return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
     if ADAPTER.name == "gpt_oss_d_p":
         return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
     return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
+
+
+def _config_names(table) -> list:
+    """Every config's name, indexed by config id."""
+    return [table.config_name(i) for i in range(table.num_configs())]
+
+
+def _num_model_configs(table) -> int:
+    """Configs describing the MODEL's own caches (KVPE + any index cache), i.e. the decimal-named ones. The
+    drafter's `dflash_*` are excluded, so `num_configs() > 1` can't read a dense+DFlash table as sparse."""
+    return sum(1 for name in _config_names(table) if name.isdigit())
 
 
 def _read_kv_slice(table, device_map, config_id, layer, slot_id, read_len, head_dim, decode):
@@ -949,7 +980,9 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     # A trace can carry the KVPE golden but no indexer-key golden (some vllm dumps store only
     # dsa/dsa_topk_indices_layer_*). There is then nothing to PCC config 1 against, so warn and return the
     # config-0 PCC rather than failing the slot: the KVPE result is still a valid check.
-    if table.num_configs() > 1:
+    # `_num_model_configs`, not `num_configs()`: under DFlash the same table also carries the drafter's
+    # `dflash_*` configs, and config 1 is only the index cache when the MODEL published two caches.
+    if _num_model_configs(table) > 1:
         if not index_golden_present(trace_dir):
             logger.warning(
                 f"[producer] slot {slot_id}: table has an index config but {trace_dir} carries no "
@@ -1026,18 +1059,157 @@ def _write_pcc_verdict(rank: int, ok: bool, min_pcc: float, checked: int, thresh
         json.dump(verdict, f)
 
 
+def _dflash_config_ids(table):
+    """``(k_ids, v_ids)`` indexed by GLOBAL kv-head, or None when the table carries no drafter configs. By
+    NAME, never ``base + head_idx``: the protobuf round-trip reassigns config ids in sorted-name order.
+    Raises when the set is not one K and one V per kv-head — a partial publish, not a non-DFlash run."""
+    present = {name for name in _config_names(table) if name.startswith("dflash_")}
+    if not present:
+        return None
+    num_kv_heads = len(present) // 2
+    expected = {dflash_config_name(kind, h) for kind in ("k", "v") for h in range(num_kv_heads)}
+    if present != expected:
+        raise RuntimeError(
+            f"drafter table configs are not one K and one V config per kv-head: got {sorted(present)}, "
+            f"expected {sorted(expected)} for {num_kv_heads} kv-heads"
+        )
+    return (
+        [table.config_id_of(dflash_config_name("k", h)) for h in range(num_kv_heads)],
+        [table.config_id_of(dflash_config_name("v", h)) for h in range(num_kv_heads)],
+    )
+
+
+def _read_slot_dflash_kv_and_check_pcc(
+    table, device_map: dict, slot_id: int, real_len: int, threshold: float
+) -> float | None:
+    """PCC the drafter's context K/V for `slot_id` over [0, real_len) through the published KV chunk table vs
+    ``$PREFILL_DFLASH_GOLDEN_KV_DIR``: min PCC, or None (NOT 1.0 — a real PCC) when there is nothing to check.
+    Same check as tests/dflash_prefill/test_dflash_trace_table.py, but from the UMD side migration actually runs on."""
+    ids = _dflash_config_ids(table)
+    if ids is None:
+        # No drafter configs in the table: DFlash was not run (or was not published). Say nothing at all —
+        # this is the common case for every other model, and it must not surface as a drafter measurement.
+        return None
+    cfg_ids = {"k": ids[0], "v": ids[1]}
+    num_kv_heads = len(ids[0])
+
+    golden_dir = os.environ.get("PREFILL_DFLASH_GOLDEN_KV_DIR", "").strip()
+    if not golden_dir:
+        logger.info(
+            f"[producer] table carries the drafter's context caches ({num_kv_heads} kv-heads x K/V) but "
+            f"PREFILL_DFLASH_GOLDEN_KV_DIR is unset, so the drafter half is NOT checked. The golden is "
+            f"prompt-specific and this module cannot tell whether the pushed trace produced it."
+        )
+        return None
+
+    cfg = table.config(cfg_ids["k"][0])
+    n_layers = cfg.num_layers  # the DRAFTER's layer count (6), not the verifier's NUM_LAYERS
+    # head_dim comes from the golden and is then cross-checked against the physical chunk size the table
+    # reports, so a golden whose head_dim disagrees with the device cache fails on the shape instead of
+    # producing a uniformly bad PCC that reads like a device bug.
+    head_dim_from_bytes = {(d // 32) * _BFP8_TILE_BYTES: d for d in (64, 128, 256)}.get(cfg.chunk_size_bytes)
+
+    if os.environ.get("PREFILL_PRODUCER_SLOT_TRACES", "").strip() and slot_id == 0:
+        logger.warning(
+            "[producer] PREFILL_PRODUCER_SLOT_TRACES is set (per-slot prompts) but the drafter golden is a "
+            "single directory: only slots that pushed THAT prompt can match it."
+        )
+
+    worst, worst_at = 1.0, None
+    failures = []
+    paths = {kind: Path(golden_dir) / f"{kind}_cache.safetensors" for kind in ("k", "v")}
+    with safe_open(str(paths["k"]), framework="pt") as fk, safe_open(str(paths["v"]), framework="pt") as fv:
+        # get_slice, not get_tensor: these are fp32 [6, 8, 56320, 128] = 1.38 GiB each, and only one
+        # (layer, head) row block is needed at a time (~29 MiB) to PCC against one read-back.
+        sl = {"k": fk.get_slice("k_cache"), "v": fv.get_slice("v_cache")}
+        shapes = {kind: list(sl[kind].get_shape()) for kind in ("k", "v")}
+        if shapes["k"] != shapes["v"]:
+            raise RuntimeError(f"drafter golden K/V shapes differ: {shapes['k']} vs {shapes['v']}")
+        g_layers, g_heads, g_seq, head_dim = shapes["k"]
+        if (g_layers, g_heads) != (n_layers, num_kv_heads):
+            raise RuntimeError(
+                f"drafter golden {shapes['k']} is (layer, head, seq, head_dim) = ({g_layers}, {g_heads}, ...) "
+                f"but the table describes {n_layers} layers x {num_kv_heads} kv-heads"
+            )
+        if head_dim_from_bytes != head_dim:
+            raise RuntimeError(
+                f"drafter golden head_dim {head_dim} does not match the table's chunk_size_bytes "
+                f"{cfg.chunk_size_bytes} (a bfp8 [32, {head_dim}] chunk is {(head_dim // 32) * _BFP8_TILE_BYTES} B)"
+            )
+
+        # The golden is one fixed prompt. A shorter push is still comparable over its own prefix — a context
+        # K/V row at position p depends only on tokens <= p — so compare the common prefix and say so.
+        cmp_len = min(real_len, g_seq)
+        if cmp_len != real_len:
+            logger.warning(
+                f"[producer] slot {slot_id} holds {real_len} tokens but the drafter golden has only {g_seq}; "
+                f"checking the common prefix [0,{cmp_len})."
+            )
+        # Reads go by whole 32-token blocks, so the ROUNDED length is what the table must cover.
+        read_len = ((cmp_len + _KV_CHUNK_TOKENS - 1) // _KV_CHUNK_TOKENS) * _KV_CHUNK_TOKENS
+        if read_len > cfg.max_sequence_length:
+            raise RuntimeError(
+                f"drafter config max_sequence_length {cfg.max_sequence_length} < {read_len} tokens to read "
+                f"({cmp_len} rounded up to whole {_KV_CHUNK_TOKENS}-token blocks)"
+            )
+
+        # V before K, and keep it that way: V never touches RoPE, so V-passes-while-K-fails localizes a fault
+        # to the rope table rather than to the taps, the cache addressing, or the projections.
+        for kind in ("v", "k"):
+            for layer in range(n_layers):
+                heads = []
+                for head, config_id in enumerate(cfg_ids[kind]):
+                    dev = _read_kv_slice(
+                        table, device_map, config_id, layer, slot_id, read_len, head_dim, _decode_bfp8_chunk
+                    )[:cmp_len]
+                    _, pcc = comp_pcc(sl[kind][layer, head, :cmp_len, :].to(torch.float32), dev)
+                    pcc = float(pcc)
+                    heads.append(pcc)
+                    if pcc < worst:
+                        worst, worst_at = pcc, (kind, layer, head)
+                    if pcc < threshold:  # same sense as the gate in _verify_resident_slots
+                        failures.append((kind, layer, head, pcc))
+                lo = min(heads)
+                logger.info(
+                    f"[producer] slot {slot_id} dflash {kind.upper()} layer {layer}: per-head min={lo:.6f} "
+                    f"(head {heads.index(lo)}) max={max(heads):.6f}"
+                )
+
+    logger.info(
+        f"[producer] slot {slot_id} dflash drafter KV PCC over [0,{cmp_len}) across {n_layers} layers x "
+        f"{num_kv_heads} kv-heads -> {worst:.6f} at {worst_at} (golden {golden_dir})"
+    )
+    if failures:
+        logger.error(
+            f"[producer] slot {slot_id}: drafter KV PCC below {threshold} for {len(failures)} of "
+            f"{2 * n_layers * num_kv_heads} (tensor, layer, head) slices, worst {worst:.6f} at {worst_at}; "
+            f"first failures {failures[:8]}"
+        )
+    return worst
+
+
 def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_traces: dict, rank: int = 0) -> bool:
     """PCC-check every slot that holds resident trace-derived KV, each against ITS OWN golden trace
-    (slot_traces[slot_id]). Returns True only if at least one slot was checked and all met the threshold."""
+    (slot_traces[slot_id]). Returns True only if at least one slot was checked and all met the threshold.
+
+    Two independent gates per slot: the model's own caches vs the trace, and — when the table carries the
+    DFlash drafter's configs and $PREFILL_DFLASH_GOLDEN_KV_DIR names its golden — the drafter's context K/V
+    vs that golden, at its own tighter bar. Whatever is measured must pass, and a drafter breach cannot hide
+    the kvpe verdict (or the marker line below) any more than a loose kvpe bar can excuse the drafter. The
+    drafter half is entirely silent when it was not measured — no field on the marker, no success line — so a
+    non-DFlash run's output is unchanged by this gate's existence."""
     device_map = _read_device_map(int(os.environ.get("PREFILL_H2D_CONNECT_TIMEOUT", "60")))
     if not device_map:
         logger.error("[producer] no device map available; skipping KV read/PCC.")
         _write_pcc_verdict(rank, ok=False, min_pcc=0.0, checked=0, threshold=threshold)
         return False
 
+    dflash_threshold = float(os.environ.get("PREFILL_DFLASH_PCC", "0.999"))
     min_pcc_overall = 1.0
+    min_dflash_overall = None  # stays None unless a drafter slice is actually measured
     checked = 0
     failures = []
+    dflash_failures = []
     for slot_id, res in sorted(stats.resident.items()):
         real_len = res.real_len
         if real_len <= 0:
@@ -1047,17 +1219,35 @@ def _verify_resident_slots(kv_table, stats: RunStats, threshold: float, slot_tra
         checked += 1
         if pcc < threshold:
             failures.append((slot_id, real_len, pcc))
+        # None on every non-DFlash run (no drafter configs in the table) and when no golden is configured.
+        dflash_pcc = _read_slot_dflash_kv_and_check_pcc(kv_table, device_map, slot_id, real_len, dflash_threshold)
+        if dflash_pcc is not None:
+            min_dflash_overall = dflash_pcc if min_dflash_overall is None else min(min_dflash_overall, dflash_pcc)
+            if dflash_pcc < dflash_threshold:
+                dflash_failures.append((slot_id, real_len, dflash_pcc))
 
-    print(f"[producer] kv_cache_pcc_complete slots_checked={checked} min_pcc={min_pcc_overall:.6f}")
-    ok = bool(checked) and not failures
+    # The drafter field appears ONLY when it was measured: on every non-DFlash run the marker line is exactly
+    # what it was before this gate existed. Keep `min_pcc=` last-but-one so a `min_pcc=([\d.]+)` reader is
+    # unaffected either way.
+    dflash_field = "" if min_dflash_overall is None else f" min_dflash_pcc={min_dflash_overall:.6f}"
+    print(f"[producer] kv_cache_pcc_complete slots_checked={checked} min_pcc={min_pcc_overall:.6f}{dflash_field}")
+    ok = bool(checked) and not failures and not dflash_failures
     _write_pcc_verdict(rank, ok=ok, min_pcc=min_pcc_overall, checked=checked, threshold=threshold)
     if failures:
         logger.error(f"[producer] KV cache PCC below {threshold} for (slot, real_len, pcc): {failures}")
+    if dflash_failures:
+        logger.error(f"[producer] drafter KV PCC below {dflash_threshold} for (slot, real_len, pcc): {dflash_failures}")
+    if failures or dflash_failures:
         return False
     if not checked:
         logger.error("[producer] verify requested but no resident slots had data to check.")
         return False
     logger.success(f"[producer] KV cache PCC PASSED (min {min_pcc_overall:.6f} >= {threshold} across {checked} slots)")
+    if min_dflash_overall is not None:
+        logger.success(
+            f"[producer] drafter KV PCC PASSED (min {min_dflash_overall:.6f} >= {dflash_threshold} "
+            f"across {checked} slots)"
+        )
     return True
 
 
