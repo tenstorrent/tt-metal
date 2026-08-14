@@ -99,4 +99,5 @@ Fresh independent rereview returned `clean-pass` after verifying the corrected s
 ## Local checkpoint
 
 - Branch: `mvasiljevic/fmf/qwen-qwen3-6-27b`
-- Stage-owned changes are committed locally without pushing. The implementation/evidence commit SHA is recorded in the final handoff because a commit cannot contain its own SHA.
+- Implementation/evidence checkpoint: `79ddee3351ea10cf49736dbb18904e802d92648f` (`models: select Qwen3.6-27B precision policy`).
+- The checkpoint is local only; nothing was pushed.
