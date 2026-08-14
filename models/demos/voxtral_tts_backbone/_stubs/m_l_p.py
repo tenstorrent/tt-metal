@@ -79,15 +79,26 @@ class TtMLP:
 
     def __call__(self, x, *_args, **_ignored):
         mm = {"compute_kernel_config": self.compute_kernel_config} if self.compute_kernel_config else {}
-        gate = ttnn.silu(ttnn.linear(x, self.w_gate, **mm))
+        # SiLU rides on the MULTIPLY, not on the gate projection. The product is
+        # the activation's only consumer, and the binary op can apply a unary to
+        # an input as it reads it -- so `silu(gate) * up` is one launch, and the
+        # standalone unary, which fetched 9216 values back out of DRAM and wrote
+        # them again, is gone. 26 launches per token.
+        #
+        # NOT via `ttnn.linear(activation="silu")`: with no program config to put
+        # it in, ttnn appends a `unary_chain` op -- the same launch renamed --
+        # and naming a core grid to reach the fused path costs far more than the
+        # unary did (gate/up 43.35 -> 57.50 ms on the same 96 cores, measured).
+        gate = ttnn.linear(x, self.w_gate, **mm)
         up = ttnn.linear(x, self.w_up, **mm)
+        swiglu = {"input_tensor_a_activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)]}
         if self.down_plan is not None and self.down_plan.is_decode_row(x):
             # The SwiGLU product is down_proj's only consumer, so it is written
             # STRAIGHT into the layout down_proj wants. Producing it interleaved
             # and converting after is the same bytes plus a whole extra op.
-            hidden = ttnn.multiply(gate, up, memory_config=self.down_plan.input_memory_config)
+            hidden = ttnn.multiply(gate, up, memory_config=self.down_plan.input_memory_config, **swiglu)
             return self.down_plan.run_presharded(hidden, self.w_down, self.compute_kernel_config)
-        hidden = ttnn.multiply(gate, up)
+        hidden = ttnn.multiply(gate, up, **swiglu)
         if self.down_plan is not None and self.down_plan.matches(hidden):
             return self.down_plan(hidden, self.w_down, self.compute_kernel_config)
         return ttnn.linear(hidden, self.w_down, **mm)
