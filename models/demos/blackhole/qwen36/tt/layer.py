@@ -72,6 +72,19 @@ class Qwen36DecoderLayer:
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
         self._fuse_ff_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices)
+        # MODEL-GATED, MLP-SCOPED. ff_norm's output is consumed by the MLP alone (forward() below
+        # deallocates it straight after feed_forward.forward), so narrowing it to bf8 cannot touch
+        # attention -- and it only takes effect on the POST-norm gather, which on a 1D mesh is
+        # is_distributed_norm == (dim > 4096 and prefill), i.e. the 27B and never the 9B. The dim
+        # test below is belt-and-braces for that (and keeps this greppable next to the other
+        # dim-gated tunings in this file); Blackhole never gathers here at all because
+        # mlp_gateup_agmm_enabled fuses the gather into the matmul there.
+        # WHY: at TP=8 that gather moves 2.62MB/device over ONE ETH link and is the single largest op
+        # in the 27B MLP block; bytes are the only lever that moves it (see prefill_norm_tuned.py).
+        # bf8 costs one ~30us typecast of [1,1,S,dim/tp] and halves what the ring carries.
+        # The accuracy trade is the same one the down-proj already takes (mlp.py: in0 bf8, PCC
+        # 0.99978) and lands on the loosest matmuls in the layer -- gate/up are LoFi with bfp4 weights.
+        _ff_gather_dtype = ttnn.bfloat8_b if (args.dim > 4096 and not is_blackhole()) else None
         self.ffn_norm = self._make_norm(
             mesh_device,
             args,
@@ -82,6 +95,7 @@ class Qwen36DecoderLayer:
             tt_ccl,
             "ff_norm",
             enable_all_gather=not self._fuse_ff_agmm,
+            prefill_gather_dtype=_ff_gather_dtype,
         )
 
         if self.num_devices > 1:
@@ -127,6 +141,7 @@ class Qwen36DecoderLayer:
         tt_ccl,
         ag_key,
         enable_all_gather=True,
+        prefill_gather_dtype=None,
     ):
         """Build the per-layer RMSNorm; wrap in DistributedNorm when TP>1.
 
@@ -151,15 +166,22 @@ class Qwen36DecoderLayer:
             ),
         )
         if self.num_devices > 1:
-            # PrefillTunedDistributedNorm == DistributedNorm except that the PREFILL pre-norm
-            # all-gather gets tuned chunks_per_sync / num_workers_per_link. Upstream only honours the
-            # per-op CCL configs for mode == "decode" and hardcodes 10/2 otherwise, which left the
-            # prefill gather at ~1,245us/layer; tuned it is ~1,015us. Decode/TG/distributed-norm all
-            # delegate to upstream unchanged. See tt/prefill_norm_tuned.py.
+            # PrefillTunedDistributedNorm == DistributedNorm except that the PREFILL all-gather gets
+            # tuned chunks_per_sync / num_workers_per_link (and, for ff_norm, a narrowed dtype).
+            # Upstream only honours the per-op CCL configs for mode == "decode" and hardcodes 10/2
+            # otherwise, which left the 9B's pre-norm gather at ~1,245us/layer; tuned it is ~1,015us.
+            # The 27B takes the other branch (post-norm gather) -- see tt/prefill_norm_tuned.py.
+            # Decode and TG delegate to upstream unchanged.
             from models.demos.blackhole.qwen36.tt.prefill_norm_tuned import PrefillTunedDistributedNorm
 
             return PrefillTunedDistributedNorm(
-                norm, args, tt_ccl=tt_ccl, TG=args.is_galaxy, ag_config_key=ag_key, enable_all_gather=enable_all_gather
+                norm,
+                args,
+                tt_ccl=tt_ccl,
+                TG=args.is_galaxy,
+                ag_config_key=ag_key,
+                enable_all_gather=enable_all_gather,
+                prefill_gather_dtype=prefill_gather_dtype,
             )
         return norm
 
