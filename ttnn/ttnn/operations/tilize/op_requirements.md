@@ -331,7 +331,7 @@ regression on any prior bench.
 
 ---
 
-### [ ] Refinement 6 — Perf completeness audit (run-closing)
+### [x] Refinement 6 — Perf completeness audit (run-closing)
 
 **Type**: perf
 
@@ -357,3 +357,39 @@ delta is surfaced as a concrete follow-up for the next run, never silently dropp
 `python3 -m eval.verify_levers ttnn/ttnn/operations/tilize/lever_ledger.json --bench
 tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py` is clean; no regression on any prior bench;
 golden suite green.
+
+**Outcome**: done. **27 of 29 catalog levers now closed with evidence** (was 24): `deferred`
+5 → 2, and the two that remain open are open *by construction* — D19's payoff is host dispatch
+time and E22's is whole-model, neither visible in the device kernel ns this op is graded in;
+each carries the harness that would close it. `verify_levers --phase 6`: 0 blocking, 0 signal,
+0 possibly-unlocked, with every negative closure re-read and re-stamped against the current
+topology. Golden slices 268 passed / 0 failed / 0 xpass drift; unit dir 333 → 338; no bench row
+outside its noise band.
+**Three levers were built and measured this phase, and all three ship parked at a
+byte-identical default** — nothing reverted, every knob still live. **B13** (`set_state` /
+`with_state`) was built on **both halves** and swept across transaction size as the queue
+required: null on every real-work regime and a consistent LOSS where per-transfer cost matters
+(+12.2% on `[1,1,32,64]` over 3 non-overlapping samples, +5.0% on the cross-core gather,
++2.8…4.2% across the write sweep at 512 / 256 / 64 B pages). The premise is what the audit
+records: state amortizes the *endpoint* registers, worth one command-buffer register write per
+transfer and only while consecutive transfers reuse an endpoint — and none of this op's do (an
+interleaved tile-row is TILE_H consecutive page ids, i.e. distinct banks; a block's destination
+tile pages likewise; the gather's row span alternates source shards). Phase 0's carried "wins
+at ≤128 B" note is refuted — 128 B is where it loses most. **D21** (host-precomputed block
+index) is inside noise in both directions: the `pipeline` knob targets ~4 blocks/core, so it
+removes four divisions from a wall that is 88–95% data movement. **D18** is closed structurally
+rather than measured because its counterfactual is *unbuildable*: `ttnn.TensorAccessorArgs`
+takes no `tensor_accessor::ArgsConfig`, so `get_common_runtime_args()` is unconditionally empty
+— a tooling gap, pinned by a test that fails if the binding ever gains the config.
+**The bottleneck now, per path**: the interleaved regimes are DM-bound at or below the measured
+pure-DRAM-copy floor (nothing left to save — each byte is read once and written once);
+same-spec sharded is compute-bound at the tilize LLK's own ~63 ns/tile; the reshard is DM-bound
+against the *source* shard's L1 egress; the padded widening cast is stamp-bound; the retile is
+L1-store-bound.
+**What I would try next and did not**: design lamp **L4 `split_reader`**, priced here by
+split-DM ablation at **1.51×–1.73×** — the read half is 85% / 67% of the wall on the two
+destination-local plans while the writer issues no NoC traffic at all, so BRISC sits idle. Not
+built because it is a scheme change (a second input CB, to keep exactly one producer per CB),
+not a knob, and this heading is an audit. Start with the DRAM → shard crossover rather than the
+reshard, whose source-egress ceiling may absorb the win. It is ranked #1 of five remaining
+opportunities in `changelog.md` — recorded as a finding, not filed as work.

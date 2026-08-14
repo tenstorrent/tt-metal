@@ -277,3 +277,4 @@
 {"source":"run_safe_pytest","pid":415855,"started_at_ms":1786727722239,"wait_ms":2,"run_ms":7349,"test_path":"eval/golden_tests/tilize/test_golden.py","exit_code":3}
 {"source":"run_safe_pytest","pid":416071,"started_at_ms":1786727732751,"wait_ms":2,"run_ms":26018,"test_path":"eval/golden_tests/tilize/test_golden.py","exit_code":0}
 {"source":"run_safe_pytest","pid":417777,"started_at_ms":1786727788461,"wait_ms":2,"run_ms":11965,"test_path":"eval/golden_tests/tilize/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":420066,"started_at_ms":1786728002666,"wait_ms":2,"run_ms":16152,"test_path":"tests/ttnn/unit_tests/operations/tilize/","exit_code":0}
