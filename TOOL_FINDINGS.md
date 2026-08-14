@@ -789,11 +789,13 @@ section is the credit half of the ledger and is the material for the comparison 
 | run 2 — norm's shard chained into QKV (O4o) | — | 12.299 | 0.9903 |
 | run 2 — gate/up plan, reshard now free (O4p) | — | 12.038 | 0.9903 |
 | run 2 — residual stream kept in the norm's shard (O4q) | — | 11.928 | 0.9903 |
-| run 2 — o_proj/down_proj hand shards to the residual add (O4q) | — | **11.839** | 0.9903 |
+| run 2 — o_proj/down_proj hand shards to the residual add (O4q) | — | 11.839 | 0.9903 |
+| run 2 — LM head vocab blocks written as bf8_b (O8) | — | **11.827** | **0.9774** |
 | tool's own roofline target | 338.541 | — | gate 0.95 |
 | **hand-port, for reference** | — | **15.907** | — |
 
-**11.839 against 15.907 — the tool is 25.6% AHEAD of 74 human experiments**, autonomously, with
+**11.827 against 15.907 — the tool is 25.7% AHEAD of 74 human experiments** — but see O8: the last
+step is where the run stops being worth watching., autonomously, with
 PCC bit-identical across its last four wins (0.990347151783074, unchanged to every decimal). Every
 one of those four was a layout or dispatch result. None spent accuracy.
 
@@ -1454,6 +1456,34 @@ never leaving its shard across the depth of the model.
 Worth noting the hand-port already solved the *adjacent* problem better — `[gpt-27]` passes the
 residual as the matmul's `bias`, so the add itself costs no launch at all. That is orthogonal to
 this and the two compose.
+
+### O8 — the accept test has no exchange rate, and it shows at the end of a run
+
+The last commit bought **0.012 ms/token (0.10%)** and cost **0.0129 of PCC** — 0.9903 → 0.9774, about
+a quarter of the remaining headroom above the 0.95 gate, for a gain indistinguishable from noise.
+
+Nothing in the ladder objects, because the accept test is:
+
+```
+faster?  AND  PCC still above the floor?   ->  keep
+```
+
+There is no notion of an **exchange rate** — no "is this gain worth this much accuracy?" So once the
+structural ideas run out, a run will keep converting PCC headroom into arbitrarily small wins until
+it reaches 0.95. The run's own arc shows the transition cleanly: twelve consecutive layout and
+dispatch wins at **bit-identical PCC**, and then this.
+
+**Suggested fix, and it is small:** require a precision-spending change to clear a ratio, not just
+the floor — e.g. reject when `Δpcc / Δms` is worse than some rate, or simply require dtype-rung
+wins to exceed a materiality threshold (the tool already has `material_gap_threshold_ms = 0.25`
+for choosing targets; the same idea applied to *accepting* precision trades would have rejected
+this). Cheap to add, and it is the difference between a run that stops at its best result and one
+that grinds its accuracy down for noise.
+
+**This is the mechanised form of §6.16.** The hand-port faced the identical question, computed the
+exchange rate explicitly — *w2 costs 77% of the precision stack's accuracy for 15% of its speed* —
+and handed back 2.5 ms. That reasoning has no place to live in the current design. Together with O1
+(no per-weight dtype axis) this is the clearest gap between the tool and a careful human pass.
 
 ### O5 — the ladder's escalation is real, and it gives up in the right place
 
