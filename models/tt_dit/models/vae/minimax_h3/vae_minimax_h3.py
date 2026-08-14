@@ -100,21 +100,16 @@ class MiniMaxH3VaeConfig:
         return cls(**{k: v for k, v in cfg.items() if not k.startswith("_")})
 
 
-# Decode is host-bound (stitching, unpatchify, readback), so it raises torch's thread count from the
-# single thread a server worker pins for the denoise loop; 8 measured as the knee.
+# Decode does substantial host work (stitching, unpatchify, readback), so it raises torch's thread
+# count above the single thread a server worker pins for the denoise loop.
 _DECODE_TORCH_THREADS = 8
 
-# Split `device` into enqueue vs. post-synchronize time, to tell host dispatch cost apart from
-# actual device compute. Off by default: the sync serializes the stage, costing ~0.16 s at 768P/15s.
+# Report `dispatch` (enqueue) and `compute` (post-synchronize) separately. Off by default: the
+# synchronize serializes the stage.
 #
-# Read the two numbers carefully: `compute` is only the *tail* the sync still waits for after the
-# host has finished enqueuing, not total device time. ttnn ops start as they are enqueued, so a
-# small `compute` means the device kept up with dispatch -- not that the device was idle.
-#
-# Measured at 768P/15s, yuv420: dispatch 3.025 s, compute 1.666 s. That reads as dispatch-bound and
-# is not: tracing the same graph (which removes per-op dispatch entirely) replays at 223 ms/chunk,
-# i.e. 21 x 223 ms = 4.68 s of real device execution, with the 144 ms/chunk of dispatch hidden
-# underneath it. The stage is device-bound; see `trace_device_stitch`.
+# `compute` is only the tail the synchronize still waits for, not total device time -- ttnn ops
+# begin executing as they are enqueued, so a small `compute` means the device kept pace with
+# dispatch, not that it was idle. Reading it as total device time understates device work.
 _TIME_DISPATCH = os.environ.get("MINIMAX_H3_TIME_DISPATCH", "0") != "0"
 
 
@@ -192,7 +187,7 @@ def blend_clip_frames(a, b, extent: int):
 
     The planar branch blends already-quantized uint8. BT.601 is affine and 4:2:0 decimation is
     linear, so a convex combination commutes with the conversion and the only cost is re-rounding:
-    bounded at 1 LSB, and measured never to exceed it.
+    bounded at 1 LSB, which ``test_temporal_crossfade_survives_the_yuv_conversion`` pins.
     """
     if not isinstance(a, np.ndarray):
         return blend(a, b, extent, dim=-3)
@@ -270,31 +265,21 @@ class MiniMaxH3Vae(Module):
         self._weight_loader = weight_loader
         self._encoders: dict[tuple[int, int, int, int], MiniMaxH3Encoder3d] = {}
         self._stitcher = None
-        # Unproven, so it defaults to the host path. The projection put the stage at 4.3 -> ~2.9 s
-        # from this; `device_stitch=True` is the A/B.
+        # Blend the tile grid on device and read back the assembled canvas, instead of reading
+        # overlapping tiles and blending them on host.
         self.device_stitch = device_stitch
         # `(mean, std)` of the ImageNet normalization the decoder's pixels are still in. Set it and
         # the de-normalization is folded into `proj_out`, so `decode` emits `[-1, 1]` pixels and the
         # caller keeps no copy of the constants. Left unset the decoder emits reference-space values,
         # which is what the numerics tests compare against.
         self.pixel_denorm = pixel_denorm
-        # Independent of `device_stitch`: it shrinks the *tile* readback the host path already does,
-        # rather than replacing it with a canvas. The two compose, and each is worth measuring alone.
+        # Cast decoded tiles to uint8 before the DMA, halving what crosses PCIe. Applies to the
+        # host path only: `device_stitch` reads back a canvas and never calls `_read_wave_units`,
+        # so the two are alternatives, not a combination.
         self.readback_uint8 = readback_uint8
-        # Capture the per-chunk device graph once and replay it, instead of dispatching ~1270 ops
-        # per chunk from host. Needs a `trace_region_size` on the mesh device.
-        #
-        # Measured no win, and kept only as an opt-in probe. 768P/15s: 6.887 s traced against
-        # 6.934 s untraced. Replay is 223 ms/chunk steady, and trace replay issues no per-op host
-        # work -- so 223 ms *is* the device execution time, and the 144 ms/chunk of eager dispatch
-        # was already hiding under it. The stage is device-bound, which is what
-        # `decoder_minimax_h3_audio.forward` already reports: "the visual halves measure 1.00x
-        # traced because they are device-bound".
-        #
-        # 768P/5s came out at 8.510 s against 2.348 s, but that is *not* capture cost -- capture
-        # completes during the warm decode. It is a one-off 6405 ms first chunk in the measured run
-        # (`[6405 223 223 ...]`), absent at 15s, and unexplained. Anyone re-testing this should
-        # start there rather than trusting the 5s number.
+        # Capture the per-chunk device graph once and replay it rather than dispatching it op by op.
+        # Needs a `trace_region_size` on the mesh device. Off by default: the stage is device-bound,
+        # so removing dispatch does not shorten it, and the first replay carries a large one-off.
         self.trace_device_stitch = trace_device_stitch
         self._stitch_tracer = None
         # Synchronize after each decode forward so `device` and `readback` are separable in the
@@ -769,9 +754,9 @@ class MiniMaxH3Vae(Module):
             profile["device"] += elapsed
             profile["device_each"].append(elapsed)
 
-            # Read the *previous* wave only after this one is enqueued, so its ~281 ms of transfer
-            # overlaps this wave's ~178 ms of compute instead of following it. Two waves' device
-            # output are live at once, which is one extra tile per device.
+            # Read the previous wave only after this one is enqueued, so its transfer overlaps this
+            # wave's compute instead of following it. Two waves' device output are live at once,
+            # which is one extra tile per device.
             if pending is not None:
                 yield from read_wave(*pending)
             pending = (decoded, count)
@@ -786,12 +771,12 @@ class MiniMaxH3Vae(Module):
 
         The win is transfer volume, not compute. The host path reads back **overlapping** tiles --
         28 of 256x256 against a 768x1344 canvas, 2.51 GB over the whole video -- and then blends them
-        on host. Blending first and reading back the canvas moves ~0.77 GB instead, and the two-axis
-        all-gather that co-locates the neighbours measured 4-8 ms against a 91-231 ms readback, so
+        on host. Blending first and reading back the canvas moves far less, and the two-axis
+        all-gather that co-locates the neighbours costs little against the readback it removes, so
         the collective is nearly free.
 
         The tile -> gathered-position map comes from `gathered_tile_order`'s inverse and is **not**
-        row-major: the two-axis gather transposes dim 0 (measured), so position
+        row-major: the two-axis gather transposes dim 0, so position
         `c * rows + r` holds shard `r * cols + c`. Assuming row-major here puts tiles in the wrong
         place, which the seam gate catches loudly -- but only because something finally reads them.
         """
@@ -1073,10 +1058,9 @@ class MiniMaxH3Vae(Module):
         the reference ``_decode``; the trailing repeated latent frames produce pixel frames
         that were never asked for and are cut at the end.
 
-        Runs with raised torch threads (``_DECODE_TORCH_THREADS``). Decode is host-bound -- device
-        compute is ~10 % of the stage and the rest is tile stitching, unpatchify and readback --
-        and a server worker pins torch to one thread for the denoise loop's benefit. The previous
-        limit is restored on the way out.
+        Runs with raised torch threads (``_DECODE_TORCH_THREADS``), because a server worker pins
+        torch to one thread for the denoise loop's benefit and the host still does the tile
+        stitching, unpatchify and temporal blend. The previous limit is restored on the way out.
         """
         if output_type not in OUTPUT_TYPES:
             raise ValueError(f"output_type must be one of {OUTPUT_TYPES}, got {output_type!r}")
@@ -1119,37 +1103,24 @@ class MiniMaxH3Vae(Module):
             for i in range(num_chunks)
         ]
         if self.use_tiling and self.device_stitch and chunk_latents:
-            # Device path: each chunk's tile grid is decoded, unpatchified, all-gathered and blended on
-            # device, and only the assembled canvas is read back. One chunk at a time, which is what
-            # the host path's grouping already reduces to at 768P (32 devices // 28 tiles == 1).
-            # Enqueue chunk k+1 before reading chunk k, so the canvas DMA overlaps the next chunk's
-            # decode + gather + blend instead of following it. Measured serial at 768P/15s: device
-            # 3.055 s and readback 2.080 s of a 6.929 s stage, strictly one after the other.
-            # Two canvases are live at once, which is the same extra-buffer trade `_stream_decoder_units`
-            # already makes on the host path.
-            # Measured, not assumed: overlapping the canvas readback with the next chunk's decode
-            # is a 1.4% *pessimisation* (7.033 s vs 6.934 s at 768P/15s, both alone). The `device`
-            # and `readback` columns are not device-then-transfer -- with `profile=False` there is no
-            # sync, so `device` is host dispatch and yuv's `readback` is a host planar scatter. Both
-            # are the same saturated CPU, so there is no idle device to fill, and the pipelined form
-            # only adds a second live canvas. Kept serial.
+            # Each chunk's tile grid is decoded, unpatchified, all-gathered and blended on device,
+            # and only the assembled canvas is read back. One chunk at a time, and serial on
+            # purpose: deferring a chunk's readback until the next is enqueued does not help,
+            # because the stage is device-bound and holding two canvases live only adds allocation.
             clips = [self._decode_clip_device_stitched(latents, output_type) for latents in chunk_latents]
         elif self.use_tiling and chunk_latents:
             latent_height, latent_width = chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
             mark = time.perf_counter()
-            # Every (chunk, tile) unit in one stream. Handing the wave loop one chunk at a time
-            # gives it a single wave per call, so it can never overlap a read with the next
-            # wave's compute -- and one chunk is all a group ever holds at 768P, since
-            # 32 devices // 28 tiles == 1. Flattening also stops every wave but the last from
-            # being padded out to the mesh: 588 units is 19 full waves, not 21 partial ones.
+            # Every (chunk, tile) unit in one stream. One chunk at a time would give the wave loop
+            # a single wave per call, so it could never overlap a read with the next wave's compute,
+            # and every wave but the last would be padded out to the mesh.
             all_units = [unit for latents in chunk_latents for unit in self._latent_tiles(latents)]
             self._profile["tiling"] += time.perf_counter() - mark
             tiles_per_chunk = len(all_units) // num_chunks
 
             clips = []
-            # Decoded tiles are 22 MB, so holding the whole video would be 6.8 GB at 768P/5s
-            # (~29 GB at 1440P/10s). Stitching a chunk the moment its last tile lands caps the
-            # pile at one chunk plus the wave in flight.
+            # Holding every decoded tile would scale with the whole video. Stitching a chunk the
+            # moment its last tile lands caps the pile at one chunk plus the wave in flight.
             buffered: list[torch.Tensor] = []
             for tile in self._stream_decoder_units(all_units):
                 buffered.append(tile)

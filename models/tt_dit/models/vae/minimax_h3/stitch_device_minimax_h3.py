@@ -4,16 +4,15 @@
 
 """The video VAE's tile blend and unpatchify, on device.
 
-Why this exists: at 1344x768 the decode stage reads **2.51 GB** of *overlapping* pixel tiles back to
-host and spends ~1.3 s blending them there, against ~1.25 s of actual device compute. The final
-canvas is only ~0.77 GB in bf16, so most of that transfer is overlap that gets averaged away.
+Why this exists: the host path reads *overlapping* pixel tiles back and blends them on host. The
+assembled canvas is far smaller than the tiles that produce it, so most of that transfer is overlap
+that gets averaged away.
 
 Why it is not simply a weighted accumulation: the reference `stitch_tiles` is **sequential and
 asymmetric**. For an interior tile the corner region is `b*L + (1-b)*(a*A + (1-a)*T)` where `L` is the
-*unblended* left tile and the diagonal tile never appears. Measured against a separable ramp
-formulation at the production geometry, 11.1 % of pixels differ by up to 4.66 --- an O(1) error over a
-ninth of every frame, which surfaces as visible seams. So this mirrors the reference order exactly,
-tile by tile, rather than reformulating it.
+*unblended* left tile and the diagonal tile never appears. A separable ramp formulation gives an
+O(1) error over roughly a ninth of every frame, which surfaces as visible seams. So this mirrors the
+reference order exactly, tile by tile, rather than reformulating it.
 
 The blend runs in **float32** on device even though the decoder emits bfloat16, because the host path
 it replaces blends in float32 (`.float()` before `stitch_tiles`). Keeping the same precision is what
