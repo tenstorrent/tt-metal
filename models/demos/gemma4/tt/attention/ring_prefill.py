@@ -215,7 +215,15 @@ def ring_prefill_attention(
     """
     global RING_ATTENTION_CALLS
     RING_ATTENTION_CALLS += 1
-    program_config = program_config or ring_prefill_program_config(mesh_device, ccl_manager, head_dim)
+    if program_config is None:
+        # Global (non-sliding) layers take a wider K chunk. ring_joint SDPA's
+        # `q in {64,128}` / `k == 128` allowlist lives inside `if (args.has_sliding_window())`
+        # -- it is a structural requirement of the halo, which dense layers do not have. Swept
+        # at 32k, per-chunk device time at ring depth 7: k=256 gives 197.8 ms against 201.2 at
+        # k=128. q stays 64: it is a true optimum, worse in both directions (214.8 ms at q=32,
+        # 221.7 at q=128), and q>=256 overflows L1.
+        _k_chunk = 128 if sliding_window else 256
+        program_config = ring_prefill_program_config(mesh_device, ccl_manager, head_dim, k_chunk_size=_k_chunk)
     # Shared by every layer; the caller sets them once per chunk via set_ring_metadata.
     metadata = ccl_manager.get_ring_metadata()
     cp = cp_degree(mesh_config)
