@@ -1,0 +1,535 @@
+{
+  "op": "tilize",
+  "topology": {
+    "phase": 0,
+    "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+    "plan_paths": [
+      "R_ALIGNED/P_ACCESSOR",
+      "R_PAD/P_ACCESSOR"
+    ],
+    "dtypes": [
+      "bfloat16",
+      "float32",
+      "bfloat8_b(out)"
+    ],
+    "kernels": [
+      "tilize_compute.cpp",
+      "tilize_reader.cpp",
+      "tilize_writer.cpp"
+    ]
+  },
+  "levers": {
+    "A0": {
+      "status": "applied",
+      "knob": "w_split",
+      "reason": "Full compute grid on EVERY regime, no bandwidth-knee cap. Per-regime active-core check (interleaved: active == min(grid, total_blocks)): square 64/64, wide-short 64/64 (via the W split \u2014 see the w_split knob and test_grid_fill_on_wide_short_shape), multiblock 64/64, smallest 2/2 (= total_blocks). Sharded regimes are not in SUPPORTED yet (see A2/C14).",
+      "measured": {
+        "on_ns": 92859.0,
+        "off_ns": 382290.0,
+        "shape": "[1,1,2048,2048] bf16",
+        "topology": {
+          "phase": 0,
+          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR",
+            "R_PAD/P_ACCESSOR"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ]
+        },
+        "note": "off = single core; 4.12x. Also 4.53x on wide-short (13315 vs 60306) and 4.76x on multiblock (170508 vs 811716). The w_split arm is the per-regime grid-fill proof: on wide-short the OFF arm cannot even be BUILT (the pure height split's input CB is WT=512 tiles -> L1 OOM), pinned by the strict-xfail bench arm."
+      },
+      "phase": 0
+    },
+    "A1": {
+      "status": "measured-no-payoff",
+      "knob": "row_wise",
+      "reason": "split_work_to_cores(row_wise=True) is kept (design-binding, costs nothing), but on this interleaved DRAM path the round-robin page->bank mapping makes core placement irrelevant: the delta is inside the 2-3% noise band on every benched regime.",
+      "measured": {
+        "on_ns": 92859.0,
+        "off_ns": 95146.0,
+        "shape": "[1,1,2048,2048] bf16",
+        "topology": {
+          "phase": 0,
+          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR",
+            "R_PAD/P_ACCESSOR"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        },
+        "note": "2.4% = noise. wide-short 13315 vs 13364, multiblock 170508 vs 168659 (off marginally faster), smallest 2889 vs 2812."
+      },
+      "phase": 0
+    },
+    "A2": {
+      "status": "deferred",
+      "followup": "Launch only on the cores that own a shard once L1-sharded I/O lands (SUPPORTED[shard_api] is ['none'] at Phase 0, so there is no shard to be adjacent to). Refinement A3.",
+      "predicted_delta_pct": 0.0,
+      "reason": "No sharded cell is supported yet; on interleaved every core is equally far from every bank.",
+      "phase": 0
+    },
+    "A3": {
+      "status": "deferred",
+      "followup": "Place each reader adjacent to one DRAM bank and give it its own VC, per tech_reports/Saturating_DRAM_bandwidth. This is the single largest identified headroom: the op measures 63-68% of the 288 GB/s DRAM peak and the tech report's recipe reaches ~92%.",
+      "predicted_delta_pct": 35.0,
+      "reason": "Interleaved round-robin means every reader touches every bank -> maximal route overlap. Needs a bank-aware work split, which is a topology change, not a knob turn.",
+      "phase": 0
+    },
+    "A4": {
+      "status": "structurally-impossible",
+      "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_a4_no_cliff_core_width",
+      "reason": "There is no cliff core to specialize: n_chunks is snapped to an exact divisor of WT, so every block is the same width, and the block-count remainder is absorbed by split_work_to_cores' two groups running the SAME kernel with a different num_blocks runtime arg.",
+      "phase": 0,
+      "measured": {
+        "topology": {
+          "phase": 0,
+          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR",
+            "R_PAD/P_ACCESSOR"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        }
+      }
+    },
+    "B0": {
+      "status": "applied",
+      "knob": "block_write",
+      "reason": "Every per-core-overhead lever is counterfactualed on the SMALLEST regime (d_smallest, [1,1,32,64] = 2 tiles on 2 cores) as well as the large ones. B7's win is 8-14% on the large regimes and inside noise on the smallest \u2014 it is not gated because it never REGRESSES there.",
+      "measured": {
+        "on_ns": 2889.0,
+        "off_ns": 2942.0,
+        "shape": "[1,1,32,64] bf16",
+        "topology": {
+          "phase": 0,
+          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR",
+            "R_PAD/P_ACCESSOR"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ]
+        },
+        "note": "smallest-regime arm for the B-group levers; 1.8% = noise."
+      },
+      "phase": 0
+    },
+    "B5": {
+      "status": "applied",
+      "knob": "page_write",
+      "reason": "Writes are whole TILE pages (one noc_async_write per page); reads are whole sticks whenever n_chunks == 1 and a contiguous WT_CHUNK*32*elem byte range otherwise. The OFF arm splits each page into two half-page transactions.",
+      "measured": {
+        "on_ns": 173311.0,
+        "off_ns": 177432.0,
+        "shape": "[1,1,8192,1024] bf16",
+        "topology": {
+          "phase": 0,
+          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR",
+            "R_PAD/P_ACCESSOR"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ]
+        },
+        "note": "2.4% (wide-short 13929 vs 14311 = 2.7%; square and smallest inside noise). Small but never negative, and whole-page writes are the structural precondition for B7's per-block barrier."
+      },
+      "phase": 0
+    },
+    "B6": {
+      "status": "deferred",
+      "followup": "Sweep WT_CHUNK below its L1 cap so the per-stick read lands at <= 512 B (the WH one-packet fast path) and measure against the current coarsest-chunk choice.",
+      "predicted_delta_pct": 3.0,
+      "reason": "The derivation deliberately maximizes the chunk (B5), which pushes reads ABOVE the one-packet size on most shapes. On wide-short it already lands at exactly 512 B (WT_CHUNK=8, bf16). The two levers pull in opposite directions and only a sweep can price them.",
+      "phase": 0
+    },
+    "B7": {
+      "status": "applied",
+      "knob": "block_write",
+      "reason": "One noc_async_write_barrier per BLOCK (WT_CHUNK pages), not per transaction; the reader's per-block barrier is the library helper's.",
+      "measured": {
+        "on_ns": 170508.0,
+        "off_ns": 194762.0,
+        "shape": "[1,1,8192,1024] bf16",
+        "topology": {
+          "phase": 0,
+          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR",
+            "R_PAD/P_ACCESSOR"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ]
+        },
+        "note": "14.2% win. square 92859 vs 100553 (8.3%), wide-short 13315 vs 14990 (12.6%), smallest 2889 vs 2942 (noise, no regression)."
+      },
+      "phase": 0
+    },
+    "B8": {
+      "status": "deferred",
+      "followup": "Custom reader with NT_BLK > 1: reserve NT_BLK*WT_CHUNK pages, tag each block with a trid, issue NT_BLK*TILE_H reads and barrier on the PREVIOUS trid. NT_BLK is already a named knob and the CB formula is already written against it; the blocker is that the library reader barriers once per tile-row.",
+      "predicted_delta_pct": 12.0,
+      "reason": "Only measurable on a >=2 blocks/core shape \u2014 the bench has one (c_multiblock, 4 blocks/core), so the lever is visible to the bench and this is a real deferral, not a bench gap.",
+      "phase": 0
+    },
+    "B9": {
+      "status": "applied",
+      "knob": "noc_split",
+      "reason": "Reader on ReaderConfigDescriptor (NCRISC/NOC0), writer on WriterConfigDescriptor (BRISC/NOC1). The OFF arm swaps them.",
+      "measured": {
+        "on_ns": 93626.0,
+        "off_ns": 246415.0,
+        "shape": "[1,1,2048,2048] bf16",
+        "topology": {
+          "phase": 0,
+          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR",
+            "R_PAD/P_ACCESSOR"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ]
+        },
+        "note": "2.63x \u2014 the largest single-lever win measured. wide-short 13929 vs 32783 (2.35x), multiblock 173311 vs 357969 (2.07x), smallest noise."
+      },
+      "phase": 0
+    },
+    "B10": {
+      "status": "deferred",
+      "followup": "Assign a distinct VC per reader so DRAM responses stop serializing first-come-first-serve; pairs with A3.",
+      "predicted_delta_pct": 10.0,
+      "reason": "Needs the bank-adjacent placement of A3 to be meaningful; measured DRAM utilisation (63-68% of peak) is consistent with response-queue serialization.",
+      "phase": 0
+    },
+    "B11": {
+      "status": "structurally-impossible",
+      "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_b11_every_transaction_is_dram_aligned",
+      "reason": "Misalignment cannot occur: the read chunk is WT_CHUNK*32*elem and the write is a whole tile page, both structurally multiples of the 32 B DRAM alignment for every supported dtype.",
+      "phase": 0,
+      "measured": {
+        "topology": {
+          "phase": 0,
+          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR",
+            "R_PAD/P_ACCESSOR"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        }
+      }
+    },
+    "B12": {
+      "status": "structurally-impossible",
+      "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_b12_multicast_is_structurally_absent",
+      "reason": "tilize is a pure permutation of byte positions: every input byte belongs to exactly one block on exactly one core under either split axis. There is no reuse-shared operand and no dependent axis, so nothing is ever read by more than one core and there is nothing to fan out.",
+      "phase": 0,
+      "measured": {
+        "topology": {
+          "phase": 0,
+          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR",
+            "R_PAD/P_ACCESSOR"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        }
+      }
+    },
+    "B13": {
+      "status": "deferred",
+      "followup": "Writer set_state/with_state: the WT_CHUNK writes per block are same-shape, same-size \u2014 the natural fit. Sweep it across transaction size (a prior run found it LOSES at 512 B and WINS at <=128 B, so it must be swept, not argued).",
+      "predicted_delta_pct": 5.0,
+      "reason": "Not built this phase. Visible on d_smallest and c_multiblock, both benched.",
+      "phase": 0
+    },
+    "C14": {
+      "status": "deferred",
+      "followup": "Back cb_input_sticks / cb_output_tiles on the resident L1 shard via ttnn.cb_descriptor_from_sharded_tensor (zero NoC on the sharded side). Refinement A3.",
+      "predicted_delta_pct": 50.0,
+      "reason": "SUPPORTED[shard_api] is ['none'] at Phase 0, so there is no shard to alias yet.",
+      "phase": 0
+    },
+    "C15": {
+      "status": "deferred",
+      "followup": "Accept L1-sharded input/output so the DRAM leg disappears on one or both sides (Refinement A3/A3b).",
+      "predicted_delta_pct": 50.0,
+      "reason": "Same gate as C14: interleaved-only at Phase 0.",
+      "phase": 0
+    },
+    "C16": {
+      "status": "measured-no-payoff",
+      "knob": "double_buffer",
+      "reason": "Depth-2 CBs are kept because the public API mandates use_double_buffer=True as the default and the L1 cost is bounded by the CB budget \u2014 but the read/compute/write overlap they buy is not visible at these shapes: the op is DRAM-bandwidth-bound, so the reader cannot run ahead.",
+      "measured": {
+        "on_ns": 92859.0,
+        "off_ns": 90761.0,
+        "shape": "[1,1,2048,2048] bf16",
+        "topology": {
+          "phase": 0,
+          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR",
+            "R_PAD/P_ACCESSOR"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        },
+        "note": "depth-1 is 2.3% FASTER = inside the noise band. wide-short 13315 vs 13426, multiblock 170508 vs 172103, smallest 2889 vs 3041."
+      },
+      "phase": 0
+    },
+    "C17": {
+      "status": "structurally-impossible",
+      "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_c17_in_place_is_structurally_impossible",
+      "reason": "The input is ROW_MAJOR and the output TILE \u2014 different byte orderings of the same values, so the op can never alias one buffer onto the other.",
+      "phase": 0,
+      "measured": {
+        "topology": {
+          "phase": 0,
+          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR",
+            "R_PAD/P_ACCESSOR"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        }
+      }
+    },
+    "D18": {
+      "status": "deferred",
+      "followup": "Build the OFF arm (runtime-resolved accessor args) and price it.",
+      "predicted_delta_pct": 2.0,
+      "reason": "APPLIED in the kernels: TensorAccessorArgs are appended last as COMPILE-TIME args on both the reader and the writer, so address generation is unrolled per shape. What is deferred is the counterfactual arm, not the lever.",
+      "phase": 0
+    },
+    "D19": {
+      "status": "deferred",
+      "followup": "Build the OFF arm (pass geometry as runtime args) and price it against the program-cache hit.",
+      "predicted_delta_pct": 1.0,
+      "reason": "APPLIED: the only runtime args are the two buffer base addresses plus the per-core block range and the pad word; all geometry is compile-time. test_tilize_program_cache pins the cache hit.",
+      "phase": 0
+    },
+    "D20": {
+      "status": "measured-no-payoff",
+      "knob": "regime_select",
+      "reason": "The compile-time reader-regime selector (R_ALIGNED vs R_PAD, keyed on the pad region actually being non-empty) IS kept \u2014 it is a design contract (\u00a75.1: pad_mode='auto' on an aligned input must not take the pad reader) \u2014 but on this DRAM-bound path the pad reader's extra per-row bookkeeping is free: forcing it on the aligned path costs nothing measurable.",
+      "measured": {
+        "on_ns": 93626.0,
+        "off_ns": 92225.0,
+        "shape": "[1,1,2048,2048] bf16",
+        "topology": {
+          "phase": 0,
+          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR",
+            "R_PAD/P_ACCESSOR"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        },
+        "note": "OFF (pad reader everywhere) is 1.5% faster = noise. wide-short 13929 vs 13450, multiblock 173311 vs 172796, smallest 2843 vs 2970."
+      },
+      "phase": 0
+    },
+    "D21": {
+      "status": "deferred",
+      "followup": "Build the OFF arm (per-core indexing computed in-kernel from a global block id) and price it.",
+      "predicted_delta_pct": 1.0,
+      "reason": "APPLIED: the host computes each core's [start_block, start_block+num_blocks) range; the kernel only does the block -> (wc, row) divmod. The counterfactual arm is what is deferred.",
+      "phase": 0
+    },
+    "E22": {
+      "status": "deferred",
+      "followup": "Whole-model concern (Metal Trace + multiple command queues + events); revisit when tilize is measured inside a model, not standalone.",
+      "predicted_delta_pct": 0.0,
+      "reason": "Outside a single op's scope. The op-level number measured here is device kernel time, which trace does not change.",
+      "phase": 0
+    },
+    "F23": {
+      "status": "structurally-impossible",
+      "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_f27_no_math_fidelity_sensitive_op",
+      "reason": "The rule F23 protects (never downgrade a precision knob the CALLER supplied) cannot be violated here: tilize exposes no ComputeKernelConfig, so there is no caller-supplied precision knob. The one precision decision the op does make (fp32 DEST) is gated on the dtype PAIR \u2014 see F25.",
+      "phase": 0,
+      "measured": {
+        "topology": {
+          "phase": 0,
+          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR",
+            "R_PAD/P_ACCESSOR"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        }
+      }
+    },
+    "F24": {
+      "status": "missed",
+      "regime": "float32 -> bfloat8_b and bfloat16 -> bfloat8_b casts (the only bf8b-emitting cells). bfp8_pack_precise is left at its CHEAP default (False), which is the optimal setting, so nothing expensive is inherited \u2014 but the arm was not measured this phase.",
+      "reason": "bfloat8_b IS in SUPPORTED[output_dtype], so the lever is applicable and cannot be closed structurally. No bf8b bench arm exists yet.",
+      "phase": 0
+    },
+    "F25": {
+      "status": "applied",
+      "knob": "fp32_dest",
+      "reason": "fp32_dest_acc_en (+ UnpackToDestFp32 on the input CB) is enabled ONLY when the datums really are 32-bit on both sides (fp32 -> fp32), which is exactly F25's rule. It is what makes that transition bit-exact rather than tf32-truncated; every other dtype pair leaves DEST cheap.",
+      "measured": {
+        "on_ns": 191169.0,
+        "off_ns": 192594.0,
+        "shape": "[1,1,2048,2048] fp32",
+        "topology": {
+          "phase": 0,
+          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR",
+            "R_PAD/P_ACCESSOR"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ]
+        },
+        "note": "the exactness costs 0.7% here and <=3% on the other regimes (wide-short 27737 vs 26903, multiblock 363494 vs 359438) \u2014 i.e. the knob is nearly free where it is needed, and off everywhere else."
+      },
+      "phase": 0
+    },
+    "F26": {
+      "status": "structurally-impossible",
+      "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_f26_lossless_fp32_tilize_is_never_requested",
+      "reason": "A lossless unpack path buys nothing downstream of an FPU phase, and tilize IS one: the tiled output is re-read through SrcA/SrcB by every FPU consumer. The kernel always requests Fp32Mode::Fast.",
+      "phase": 0,
+      "measured": {
+        "topology": {
+          "phase": 0,
+          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR",
+            "R_PAD/P_ACCESSOR"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        }
+      }
+    },
+    "F27": {
+      "status": "structurally-impossible",
+      "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_levers.py::test_f27_no_math_fidelity_sensitive_op",
+      "reason": "tilize performs NO arithmetic \u2014 the LLK reinterprets byte positions. There is no multiply whose math_fidelity could be lowered, and the compute kernel calls no fidelity-sensitive API.",
+      "phase": 0,
+      "measured": {
+        "topology": {
+          "phase": 0,
+          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR",
+            "R_PAD/P_ACCESSOR"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        }
+      }
+    }
+  }
+}

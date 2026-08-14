@@ -48,6 +48,50 @@ CB_OUTPUT_TILES = 16  # compute -> writer (tiled pages)
 R_ALIGNED = 0
 R_PAD = 1
 
+# --- lever counterfactual switches ------------------------------------------
+# Each applied perf lever gets an OFF arm here so its payoff can be MEASURED
+# (see _bench_tilize.py `levers=dict(...)` arms and lever_ledger.json). Production
+# never touches these — every entry is the ON (optimal) value.
+#   w_split      0 -> pure height split, no W chunking (grid collapses on a
+#                     short/wide shape). op_design.md §1.3 candidate 2.
+#   row_wise     0 -> split_work_to_cores column-wise (master.md A1's trap).
+#   block_write  0 -> writer barriers per TILE PAGE instead of per block
+#                     (master.md B7 off).
+#   page_write    0 -> each tile page written as two half-page transactions
+#                     (master.md B5 off: sub-page scatter).
+#   noc_split     0 -> reader and writer configs SWAPPED (reader on BRISC/NOC1,
+#                     writer on NCRISC/NOC0) (master.md B9 off).
+#   regime_select 0 -> always take the R_PAD reader, even on an aligned input
+#                     (master.md D20 off: no compile-time specialization).
+#   fp32_dest     0 -> do not enable fp32 DEST / lossless unpack on fp32->fp32
+#                     (master.md F25: the knob this op gates on the dtype pair).
+#   multicore     0 -> force the single-core grid regardless of use_multicore
+#                     (master.md A0 off arm; the caller kwarg stays authoritative
+#                     when this is 1).
+#   double_buffer 0 -> force CB_DEPTH 1 regardless of use_double_buffer
+#                     (master.md C16 off arm).
+LEVERS = {
+    "w_split": 1,
+    "row_wise": 1,
+    "block_write": 1,
+    "page_write": 1,
+    "noc_split": 1,
+    "regime_select": 1,
+    "fp32_dest": 1,
+    "multicore": 1,
+    "double_buffer": 1,
+}
+
+# --- classification ablation (perf-only; op_design.md §9.1) ------------------
+# Stub a stage's PAYLOAD while keeping every CB reserve/push/wait/pop, barrier
+# and loop trip count, so the duration diff attributes time to that stage.
+# Production is always {0, 0}; the bench flips these. Output is wrong by design
+# when either is set — never assert PCC on an ablated run.
+ABLATE = {
+    "compute": 0,  # 1 -> compute does the CB handshake but no tilize_block
+    "dm": 0,  # 1 -> reader/writer issue no NoC transfers
+}
+
 
 def _prod(values):
     out = 1
@@ -122,19 +166,23 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     wt = _div_up(target[-1], tile_w)  # total tile-columns
 
     # ========== 2. KNOBS + WORK DISTRIBUTION ==============================
-    cb_depth = 2 if plan.use_double_buffer else 1
+    cb_depth = 2 if (plan.use_double_buffer and LEVERS["double_buffer"]) else 1
 
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
-    if plan.use_multicore:
+    if plan.use_multicore and LEVERS["multicore"]:
         full_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
     else:
         full_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
     num_cores_available = full_grid.num_cores()
 
-    wt_chunk, n_chunks, num_blocks_total = derive_blocking(
-        nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores_available, cb_depth
-    )
+    if LEVERS["w_split"]:
+        wt_chunk, n_chunks, num_blocks_total = derive_blocking(
+            nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores_available, cb_depth
+        )
+    else:
+        # w_split OFF — the pure height split (op_design.md §1.3 candidate 2).
+        wt_chunk, n_chunks, num_blocks_total = wt, 1, nt_h
 
     # never OOM: fall back to depth-1 rather than exceed the L1 budget
     while cb_depth > 1 and cb_depth * wt_chunk * (in_tile_bytes + out_tile_bytes) > CB_L1_BUDGET:
@@ -148,10 +196,10 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         blocks_per_core_1,
         blocks_per_core_2,
     ) = ttnn.split_work_to_cores(
-        full_grid, num_blocks_total, True
+        full_grid, num_blocks_total, bool(LEVERS["row_wise"])
     )  # row_wise=True (master.md A1)
 
-    cores = ttnn.corerange_to_cores(all_cores, num_cores, True)
+    cores = ttnn.corerange_to_cores(all_cores, num_cores, bool(LEVERS["row_wise"]))
 
     # ========== 3. CIRCULAR BUFFERS =======================================
     # Both CBs are sized CB_DEPTH * NT_BLK * WT_CHUNK pages — a function of the
@@ -185,7 +233,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     )
 
     # ========== 4. KERNELS =================================================
-    regime = R_PAD if plan.has_pad_region else R_ALIGNED
+    regime = R_PAD if (plan.has_pad_region or not LEVERS["regime_select"]) else R_ALIGNED
 
     in_shape = list(plan.in_shape)
     h_in = in_shape[-2]
@@ -205,15 +253,24 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         n_img_in,
         w_in_bytes,
         elem_in,
+        ABLATE["dm"],
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
     # -- writer (BRISC / NOC1) --
-    writer_ct_args = [wt_chunk, nt_h, wt, out_tile_bytes]
+    writer_ct_args = [
+        wt_chunk,
+        nt_h,
+        wt,
+        out_tile_bytes,
+        LEVERS["block_write"],
+        ABLATE["dm"],
+        LEVERS["page_write"],
+    ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     needs_cast = input_tensor.dtype != output_tensor.dtype
-    compute_ct_args = [wt_chunk, 1 if needs_cast else 0]
+    compute_ct_args = [wt_chunk, 1 if needs_cast else 0, ABLATE["compute"]]
 
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
@@ -240,21 +297,23 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         core_ranges=all_cores,
         compile_time_args=reader_ct_args,
         runtime_args=reader_rt_args,
-        config=ttnn.ReaderConfigDescriptor(),
+        config=ttnn.ReaderConfigDescriptor() if LEVERS["noc_split"] else ttnn.WriterConfigDescriptor(),
     )
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct_args,
         runtime_args=writer_rt_args,
-        config=ttnn.WriterConfigDescriptor(),
+        config=ttnn.WriterConfigDescriptor() if LEVERS["noc_split"] else ttnn.ReaderConfigDescriptor(),
     )
 
     # fp32 -> fp32 must be BIT-EXACT: keep Dest in fp32 and stop the unpacker
     # downgrading fp32 to tf32 on its way to Dest. Only legal when the fast
     # tilize path is off (it is: fp32 OUTPUT disables it), which is exactly the
     # fp32-in/fp32-out case.
-    lossless_fp32 = input_tensor.dtype == ttnn.float32 and output_tensor.dtype == ttnn.float32
+    lossless_fp32 = (
+        input_tensor.dtype == ttnn.float32 and output_tensor.dtype == ttnn.float32 and bool(LEVERS["fp32_dest"])
+    )
     compute_config = ttnn.ComputeConfigDescriptor()
     compute_config.fp32_dest_acc_en = lossless_fp32
     if lossless_fp32:

@@ -90,7 +90,10 @@ void kernel_main() {
     constexpr uint32_t n_img_in = get_compile_time_arg_val(6);
     constexpr uint32_t w_in_bytes = get_compile_time_arg_val(7);
     constexpr uint32_t elem_bytes = get_compile_time_arg_val(8);
-    constexpr auto src_args = TensorAccessorArgs<9>();
+    // Classification ablation (op_design.md §9.1): drop the NoC payload, keep
+    // every CB reserve/push and the loop trip counts. Always 0 in production.
+    constexpr uint32_t ablate_dm = get_compile_time_arg_val(9);
+    constexpr auto src_args = TensorAccessorArgs<10>();
 
     // Every byte quantity below derives from the WT_CHUNK knob — one source.
     constexpr uint32_t row_bytes = wt_chunk * TILE_W * elem_bytes;
@@ -105,6 +108,19 @@ void kernel_main() {
     }
 
     const auto accessor = TensorAccessor(src_args, src_addr);
+
+    if constexpr (ablate_dm) {
+        // Payload removed, synchronization intact: same block count, same CB
+        // handshake, same barrier — no reads. Compute runs on whatever is in L1.
+        for (uint32_t i = 0; i < num_blocks; ++i) {
+            cb_reserve_back(cb_input_sticks, wt_chunk);
+            volatile uint32_t touch = get_write_ptr(cb_input_sticks);
+            (void)touch;
+            noc_async_read_barrier();
+            cb_push_back(cb_input_sticks, wt_chunk);
+        }
+        return;
+    }
 
     if constexpr (regime == 0) {
         // ── R_ALIGNED ────────────────────────────────────────────────────

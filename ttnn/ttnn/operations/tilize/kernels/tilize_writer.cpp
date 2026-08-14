@@ -24,7 +24,16 @@ void kernel_main() {
     constexpr uint32_t nt_h = get_compile_time_arg_val(1);
     constexpr uint32_t wt = get_compile_time_arg_val(2);
     constexpr uint32_t out_tile_bytes = get_compile_time_arg_val(3);
-    constexpr auto dst_args = TensorAccessorArgs<4>();
+    // Lever `block_write` (master.md B7): 1 = one barrier per BLOCK (optimal),
+    // 0 = one barrier per tile page (the counterfactual OFF arm the bench measures).
+    constexpr uint32_t block_write = get_compile_time_arg_val(4);
+    // Classification ablation (op_design.md §9.1): drop the NoC payload, keep the
+    // CB handshake, barriers and loop trip counts. Always 0 in production.
+    constexpr uint32_t ablate_dm = get_compile_time_arg_val(5);
+    // Lever `page_write` (master.md B5): 1 = one whole tile PAGE per transaction
+    // (optimal), 0 = two half-page transactions (the sub-page-scatter OFF arm).
+    constexpr uint32_t page_write = get_compile_time_arg_val(6);
+    constexpr auto dst_args = TensorAccessorArgs<7>();
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_block = get_arg_val<uint32_t>(1);
@@ -46,8 +55,20 @@ void kernel_main() {
         uint32_t l1_addr = get_read_ptr(cb_output_tiles);
 
         for (uint32_t k = 0; k < wt_chunk; ++k) {
-            noc_async_write(l1_addr, accessor.get_noc_addr(first_page + k), out_tile_bytes);
+            if constexpr (!ablate_dm) {
+                if constexpr (page_write) {
+                    noc_async_write(l1_addr, accessor.get_noc_addr(first_page + k), out_tile_bytes);
+                } else {
+                    // OFF arm: the same bytes split into two sub-page transactions.
+                    constexpr uint32_t half = out_tile_bytes / 2;
+                    noc_async_write(l1_addr, accessor.get_noc_addr(first_page + k), half);
+                    noc_async_write(l1_addr + half, accessor.get_noc_addr(first_page + k, half), out_tile_bytes - half);
+                }
+            }
             l1_addr += out_tile_bytes;
+            if constexpr (!block_write) {
+                noc_async_write_barrier();  // OFF arm: barrier per transaction
+            }
         }
 
         noc_async_write_barrier();
