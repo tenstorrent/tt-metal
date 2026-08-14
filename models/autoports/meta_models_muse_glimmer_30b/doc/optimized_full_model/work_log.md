@@ -921,6 +921,41 @@ made rather than a round later.
 | the full layer imports the sliding capture's terminal | named as a cross-capture substitution, with the full capture's own copy of the same eleven ops (683.0–683.3 µs) and the ~0.7 % it carries stated |
 | the harness said only "BASELINE FAILS" when its own baseline broke | it now prints the gate's failing lines, which is how the round-13 fixes were debugged |
 
+### Round 14 — `more-work-needed`
+
+The P1 was the perimeter claim again, and this time the reviewer proved it the right way: a
+**systematic sweep** — every numeric table cell mutated, one at a time — against a claim that
+nine named tables were bound cell by cell. The ctx-2048 layer-stack floor table, which carries
+the goal contract's own "decoder-layer stack lower bound", was not bound at all; its sibling at
+ctx-256 had been bound in round 10 and the perimeter statement then claimed both.
+
+Two things came out of it, and the second matters more than the first.
+
+**The floor table is bound cell by cell** — layer counts, before and after ms/layer, the
+product each row prints, and the totals — against `evidence_perf{,_before}.json`. So are the
+headline teacher-forcing before/after ranges (against the previous stage's own three runs and
+this stage's), and the five previous-stage op ids the audit table quotes.
+
+**The sweep is now part of the harness.** `mutate_figure_gate.py --sweep` generates one
+mutation per numeric table cell — 209 of them — instead of replaying the 71 curated defeats.
+That is the coverage test; the curated list is a regression suite. Both logs are committed and
+both are asserted by the gate. The sweep found four survivors on its first run and two more
+after the first fix; all six are closed, and the arm that finds the next one now exists.
+
+The other finding is the sharpest thing this round: **the README cross-check loop sat in the
+middle of the gate**, so every literal registered by a `bind()` *after* it — five rounds' worth,
+including this round's — was recorded and never searched. It runs last now. That single move
+turned 50 recorded-but-unchecked bindings into real ones, and it is why the op-id mutations
+started failing.
+
+| finding | what was done |
+| --- | --- |
+| **P1** the ctx-2048 floor table was unbound while the perimeter claimed it, and a sweep found 196 survivors | the table is bound cell by cell, the teacher-forcing ranges and the previous-stage ids with it, and the sweep is a harness arm with its log asserted — **209/209 caught** |
+| **P2** `683.0`/`683.3`/`0.7 %` were hardcoded — the defect round 12 removed as `691.07`, reintroduced by round 13's own fix | derived from `decode_full_perf_report.csv` by op kind, bracketed over every pairing of that capture's six hidden-size norms, and bound to the README sentence |
+| **P2** "the six hidden-size norms differ by at most 0.13 µs" was false | corrected to the measured spreads, 0.112 µs (sliding) and 0.162 µs (full), both derived by the gate |
+| **P2** the work log recorded an allowlist cleanup that had not happened | it has now: the four TTFT-phase minima, the shard width and the stale `691.07` are bound and out of the allowlist, which is 183 entries and bound to its own length |
+| the README cross-check ran before half the bindings were registered | moved to the end of the gate, where it means what it says |
+
 ## 11. Commits
 
 Local checkpoints on `agentic-research/hous/muse-glimmer-30b`, on top of the full-model
@@ -941,7 +976,8 @@ stage's `93adb25b7a8`. Never pushed.
 | `bd39469e555` | round-10 review fixes: deferred frees so a live sampling trace's captured input is never handed back, the measured per-call invalidation cost, cell-level bindings for the thirteen figures round 10 falsified, and the corrected file inventory |
 | `562c529f4f2` | round-11 review fixes: by-construction numeric coverage over every README table, the dtype/fidelity table bound to the CSV, per-tensor deferred frees, the third negative control, and the retry reachable from the short-circuit |
 | `d45ac8e2a0f` | round-12 review fixes: the terminal term derived from named ids with the NoPE asymmetry priced, the carried-forward decoder contract bound cell by cell, the stale mutation count, and the gate's perimeter stated rather than overclaimed |
-| *(this commit)* | round-13 review fixes: the RoPE tables moved out of the terminal term with every dependent figure recomputed, the both-captures rule that catches the class, and the perimeter statement corrected against seven surviving in-perimeter mutations |
+| `c6a85246281` | round-13 review fixes: the RoPE tables moved out of the terminal term with every dependent figure recomputed, the both-captures rule that catches the class, and the perimeter statement corrected against seven surviving in-perimeter mutations |
+| *(this commit)* | round-14 review fixes: the layer-stack floor table bound cell by cell, the generated mutation sweep as a harness arm, the cross-check loop moved to where it covers every binding, and the cross-capture bracket derived rather than stated |
 
 Nothing unrelated is in any of them: `git status` is clean at each. Outside
 `doc/optimized_full_model/`, `git diff --name-only 93adb25b7a8..HEAD` is exactly eight paths:

@@ -47,11 +47,11 @@ resolved: list[tuple[str, str]] = []
 #: sections this file never opened were wrong.  ``SOURCES`` below is the other half --
 #: adding an unchecked section that needs a new artifact now fails on a missing source
 #: rather than sliding past on an unchanged count.
-ADVERTISED_CHECKS = 994
+ADVERTISED_CHECKS = 1101
 #: Of that total, how many are real assertions (``close``/``same``) as opposed to README
 #: bindings (``bind``/``perf``), which assert nothing on their own.  Round 4 asked for the
 #: split to be stated next to the number rather than folded into it.
-ADVERTISED_BINDINGS = 38
+ADVERTISED_BINDINGS = 63
 
 
 #: Numbers that appear in a README table and are **not** resolved by any check above, listed
@@ -138,7 +138,6 @@ UNBOUND_TABLE_NUMBERS = {
     "313",
     "328",
     "383",
-    "416",
     "707",
     "975",
     "1102",
@@ -174,11 +173,8 @@ UNBOUND_TABLE_NUMBERS = {
     "0.17",
     "0.21",
     "0.45",
-    "0.51",
-    "0.65",
     "0.66",
     "0.83",
-    "0.85",
     "0.86",
     "1.02",
     "1.33",
@@ -190,7 +186,6 @@ UNBOUND_TABLE_NUMBERS = {
     "16.5",
     "17.6",
     "19.1",
-    "2.16",
     "2.19",
     "2.26",
     "2.29",
@@ -252,7 +247,6 @@ UNBOUND_TABLE_NUMBERS = {
     "17.941",
     "22.657",
     "23.811",
-    "691.07",
     "9.7294",
     "13.0082",
     # parametrization ids and index lists in test names and prompt-length tables
@@ -1826,6 +1820,63 @@ def main() -> int:
     full_rows = csv_rows("decode_full_perf_report.csv")
     # The full window uses the same terminal term; the substitution is named in the README.
     full_layer = round(sum(float(r["Device Time"]) for r in full_rows) - terminal, 3)
+
+    # The full capture's own copy of those eleven ops, derived rather than stated: the nine
+    # non-norm terminal ops are unambiguous by kind, and the two terminal norms are bracketed
+    # over every pairing of that capture's six hidden-size norms.  Round 14 found 683.0/683.3
+    # and the 0.7 % hardcoded -- the same defect round 12 removed as 691.07.
+    FULL_TERMINAL_KINDS = [
+        ("EmbeddingsDeviceOperation", 1),
+        ("AllGatherAsyncDeviceOperation", 1),
+        ("MatmulDeviceOperation 32 x 6656 x 50688", 1),
+        ("UnaryDeviceOperation", 1),
+        ("ReshardDeviceOperation", 1),
+        ("PlusOneDeviceOperation", 2),
+    ]
+    full_by_kind: dict[str, list[float]] = {}
+    for row in full_rows:
+        full_by_kind.setdefault(row["OP Code"], []).append(float(row["Device Time"]))
+    non_norm = (
+        sum(sorted(full_by_kind["EmbeddingsDeviceOperation"])[-1:])
+        + sum(full_by_kind["AllGatherAsyncDeviceOperation"])
+        + sum(v for k, v in ((r["OP Code"], float(r["Device Time"])) for r in full_rows) if "50688" in k)
+        + sum(full_by_kind["UnaryDeviceOperation"])
+        + sum(full_by_kind["PlusOneDeviceOperation"])
+        + sorted(full_by_kind["BinaryNgDeviceOperation"])[-1]  # the softcap multiply
+        + sorted(full_by_kind["ReshardDeviceOperation"])[-1]  # the LM-head input reshard
+        + sorted(full_by_kind["ShardedToInterleavedDeviceOperation"])[-1]  # its output unshard
+    )
+    wide_norms = sorted(v for v in full_by_kind["LayerNormDeviceOperation"] if v > 6.0)
+    full_terminal_low = round(non_norm + wide_norms[0] + wide_norms[1], 3)
+    full_terminal_high = round(non_norm + wide_norms[-1] + wide_norms[-2], 3)
+    cross_capture_percent = round((terminal - full_terminal_low) / full_layer * 100, 1)
+    same(
+        "the README states the full capture's own terminal bracket",
+        f"683.0–683.3 µs" in readme or f"{full_terminal_low:.1f}–{full_terminal_high:.1f} µs" in readme,
+        True,
+    )
+    same(
+        "...and the bracket it states is the one derived from that capture",
+        (round(full_terminal_low, 1), round(full_terminal_high, 1)),
+        (683.0, 683.3),
+    )
+    same(
+        "...and the cross-capture share it carries",
+        f"about\n**{cross_capture_percent:.1f} %** of cross-capture variance" in readme
+        or f"**{cross_capture_percent:.1f} %** of cross-capture variance" in readme,
+        True,
+    )
+    sliding_wide_norms = sorted(
+        float(r["Device Time"])
+        for r in sliding
+        if r["OP Code"] == "LayerNormDeviceOperation" and float(r["Device Time"]) > 6.0
+    )
+    for label, spread in (
+        ("sliding", round(sliding_wide_norms[-1] - sliding_wide_norms[0], 3)),
+        ("full", round(wide_norms[-1] - wide_norms[0], 3)),
+    ):
+        same(f"the README states the {label} capture's hidden-size norm spread", f"{spread:.3f} µs" in readme, True)
+
     close("the full-attention layer, window minus the terminal it shares", full_layer, 414.279, tol=1e-4)
     ri = ps["roofline_inputs"]
     ps_expected = {
@@ -1902,9 +1953,9 @@ def main() -> int:
         round(trace["capture_ms"], 2),  # 98.16 ms capture
         round(layer, 3),  # the sliding layer
         round(full_layer, 3),  # the full layer
-        683.0,  # the full capture's own copy of the terminal ops, low end
-        683.3,  # ...and high end
-        0.7,  # the cross-capture variance that carries, %
+        full_terminal_low,  # the full capture's own copy of the terminal ops, low end
+        full_terminal_high,  # ...and high end
+        cross_capture_percent,  # the cross-capture variance the full layer carries, %
         terminal,  # the terminal term, summed from its ids
         rope_tables,  # the RoPE tables the full window does not share
         round((round((39 * layer + 13 * full_layer + terminal) / 1e3, 3) / 22.656 - 1) * 100, 1),  # device vs replay %
@@ -2171,45 +2222,10 @@ def main() -> int:
     ):
         same(f"the gate opened {source}", source in opened, True)
 
-    # ------------------------------------------------- README cross-check
-    #
-    # Every literal resolved above, searched for in the README.  This is what turns
-    # "the artifact says 22.838" into "the artifact says 22.838 *and so does the
-    # document*".  A figure the README states in a different form is registered with an
-    # explicit ``readme=`` string above, or with ``readme=""`` to opt out; nothing is
-    # silently exempt.
-    normalised = readme.replace("\u2212", "-").replace("\u2013", "-")
-    for name, literal in resolved:
-        if literal == "":
-            continue
-        candidates = {literal}
-        # A README may print 22.858 as 22.858 or 0.4473 as 0.4473; also allow the
-        # thousands-separated form and a trailing-zero-trimmed form.
-        try:
-            value = float(literal)
-        except ValueError:
-            value = None
-        if value is not None:
-            candidates.add(f"{value:,.0f}" if value == int(value) else literal)
-            candidates.add(literal.rstrip("0").rstrip(".") if "." in literal else literal)
-            if value == int(value):
-                candidates.add(str(int(value)))
-            # A README may print the same value with a trailing zero (14.6 as "14.60").
-            decimals = len(literal.split(".")[1]) if "." in literal else 0
-            for extra_places in (1, 2):
-                candidates.add(f"{value:.{decimals + extra_places}f}")
-        # Digit-boundary match.  A plain substring search lets `1.0` match `21.05` and
-        # `128` match `1280`, which round 3 flagged as weak binding for exactly the
-        # generic values where binding matters most.
-        same(
-            f"README states the resolved figure for {name}",
-            any(re.search(rf"(?<![\d.,]){re.escape(c)}(?![\d])", normalised) for c in candidates),
-            True,
-        )
-
     # Round 6's P1 was a retracted conclusion surviving in one section while its replacement
     # shipped in another, and nothing in this gate compared sections.  Bind the arm tallies to
     # the Limitations section specifically, so a stale copy elsewhere cannot satisfy them.
+    normalised = readme.replace("\u2212", "-").replace("\u2013", "-")
     limitations = readme[readme.index("## Limitations and known issues") :]
     watcher_section = readme[readme.index("### Watcher") : readme.index("### The allocator's active-trace warning")]
     limitation6 = limitations[limitations.index("6. **Both opt-in") : limitations.index("7. **A watcher-enabled")]
@@ -2579,11 +2595,25 @@ def main() -> int:
     harness = importlib.util.module_from_spec(harness_spec)
     harness_spec.loader.exec_module(harness)
     same("the harness covers every defeat the log records", len(harness.MUTATIONS), mutation_count)
+    # The generated sweep: one mutation per numeric README table cell, which is the coverage
+    # test the curated list is not.  Round 14 made the case -- 71 curated mutations all passed
+    # while a sweep found survivors -- so the sweep's own log is evidence here too.
+    sweep_log = text(D / "logs/mutate_figure_gate_sweep.log")
+    sweep_count = len(re.findall(r"^CAUGHT ", sweep_log, re.M))
+    same("the sweep ran from a clean baseline", "baseline: FIGURES_OK" in sweep_log, True)
+    same("...over one mutation per numeric table cell", f"sweep mode: {sweep_count} generated" in sweep_log, True)
+    same("...and every one of them was caught", "MUTATION_SURVIVORS" in sweep_log, False)
+    same("...all of them", f"ALL {sweep_count} MUTATIONS CAUGHT" in sweep_log, True)
+    same(
+        "the sweep's size is the document's own, not a number the document states",
+        str(sweep_count) not in readme.split("## Artifacts")[1],
+        True,
+    )
     # ...and the README's count of them, which round 12 found stale at 46 against 58 and hidden
     # by an allowlist entry whose stated reason did not describe it.
     same(
         "the README states how many mutations the harness runs",
-        f"mutation-tests that gate: {len(harness.MUTATIONS)} mutations," in readme,
+        f"mutation-tests that gate: {len(harness.MUTATIONS)} curated mutations," in readme,
         True,
     )
     bind("the README states the harness's mutation count", str(len(harness.MUTATIONS)))
@@ -2687,6 +2717,74 @@ def main() -> int:
     # at all.  Two were load-bearing: the @256 layer-stack floor the goal's 10-15 % gate is
     # computed against, and the softcap before/after pair that is change 1's whole
     # justification.  Each is bound to its own cell or section below.
+    # The headline teacher-forcing row's before-range: the previous stage's own three runs.
+    # Round 14 falsified its upper bound (37.99 -> 37.90) because 37.9 is a resolved literal
+    # elsewhere and the padded forms admitted it.
+    prev_tf = [
+        load(PREV / "evidence_accuracy.json")["teacher_forcing"]["per_entry"][0]["decode_t/s/u"],
+        *(
+            v["per_entry"][0]["decode_t/s/u"]
+            for v in load(PREV / "evidence_fp32_gate.json")["teacher_forcing_by_reference"].values()
+        ),
+    ]
+    result_tf = result_rows["traced teacher-forcing decode"]
+    same(
+        "the headline teacher-forcing before-range is the previous stage's own spread",
+        result_tf[1],
+        f"{min(prev_tf):.2f}–{max(prev_tf):.2f} t/s/u †",
+    )
+    this_tf = [
+        acc["teacher_forcing"]["per_entry"][0]["decode_t/s/u"],
+        *(v["per_entry"][0]["decode_t/s/u"] for v in fp32_gate["teacher_forcing_by_reference"].values()),
+    ]
+    same(
+        "...and the after-range is this stage's",
+        result_tf[2],
+        f"**{min(this_tf):.2f}–{max(this_tf):.2f} t/s/u** †",
+    )
+
+    # Previous-stage op ids quoted in the audit table: bound to the row they name, so a bumped
+    # id (which the pooled op-id set would otherwise admit) fails.
+    for op_id, want in (("4187", 18.026), ("4240", 17.941), ("4283", 17.71), ("4370", 19.14), ("4289", 1.992)):
+        close(f"the previous stage's id {op_id} is the row the README names", device_time(prev, op_id), want, tol=1e-2)
+        bind(f"...and the README quotes id {op_id}", op_id)
+    # 4283/4370 appear twice in the document, so the doc-wide search finds the other copy;
+    # bind them to the audit row that prices them.  (Round 14's sweep survivor.)
+    softcap_action = next(row[4] for row in table_rows(audit_table) if row[0].startswith("softcap"))
+    same(
+        "the softcap audit row names the two previous-stage ids it prices",
+        f"ids {'4283'} + {'4370'}" in softcap_action,
+        True,
+    )
+    close(
+        "...and their sum is the pre-change value it states",
+        round(device_time(prev, "4283") + device_time(prev, "4370"), 3),
+        float(re.search(r"pre-change \*\*([0-9.]+)\*\*", softcap_action).group(1)),
+        tol=1e-4,
+    )
+
+    # The ctx-2048 floor table -- the goal contract's "decoder-layer stack lower bound from
+    # optimized multichip layer latencies".  Round 10 cell-bound its ctx-256 sibling and left
+    # this one to the document-wide search, which found the same literals elsewhere; round 14
+    # falsified every cell of it with the gate green.
+    stack_table = readme[readme.index("| | layers | ms/layer before | ms/layer after | ms after |") :].split("\n\n")[0]
+    stack_rows = {row[0]: row for row in table_rows(stack_table) if len(row) == 5}
+    same("the layer-stack table has its three rows", len(stack_rows) - 1, 3)
+    before_floor = before["layer_stack_lower_bound_ms_per_token"]
+    for label, count, before_ms, after_ms in (
+        ("sliding", floor["sliding_layers"], before_floor["sliding_ms_per_layer"], floor["sliding_ms_per_layer"]),
+        ("full attention", floor["full_layers"], before_floor["full_ms_per_layer"], floor["full_ms_per_layer"]),
+    ):
+        row = stack_rows[label]
+        same(f"the layer-stack table's {label!r} layer count", row[1], str(count))
+        same(f"...its before ms/layer", row[2], f"{before_ms:.4f}")
+        same(f"...its after ms/layer", row[3], f"**{after_ms:.4f}**")
+        same(f"...and the product it prints", row[4], f"{count * after_ms:.3f}")
+    total = stack_rows["**layer-stack lower bound**"]
+    same("the layer-stack total's layer count", total[1], str(floor["sliding_layers"] + floor["full_layers"]))
+    same("...its before total", total[2], f"{before_floor['total_ms']:.3f}")
+    same("...and its after total", total[4], f"**{floor['total_ms']:.3f}**")
+
     floor_table = readme[readme.index("| | ms/layer @2048 | ms/layer @256 | delta |") :].split("\n\n")[0]
     floor_rows = {row[0]: row for row in table_rows(floor_table) if len(row) == 4}
     for label, at2048, at256 in (
@@ -2861,6 +2959,7 @@ def main() -> int:
         digits = 2 if "layers" not in key else 2
         want = f"{phases[key]['min']:.{digits}f}"
         same(f"the TTFT phase table's {label!r} cell is the probe's own minimum", want in phase_rows[label], True)
+        bind(f"...and the README prints {want} for it", want)
     close(
         "...and the table's own sum, which the README quotes as a budget",
         round(sum(phases[k]["min"] for k in ("stage_tokens", "embed", "layers", "terminal", "sample")), 2),
@@ -2947,6 +3046,8 @@ def main() -> int:
     ):
         for needle in expected:
             same(f"the carried-forward table's {label!r} cell states {needle}", needle in contract_rows[label][1], True)
+            for number in re.findall(r"(?<![\w.])\d[\d,]*(?:\.\d+)?(?![\d])", needle):
+                bind(f"...binding {number} from that cell", number)
 
     # -------------------------------------- the dtype/fidelity table, against the CSV itself
     #
@@ -3020,6 +3121,7 @@ def main() -> int:
         f"terminal priced at {terminal:.3f} µs" in checklist,
         True,
     )
+    bind("...and that price", f"{terminal:.3f}")
     for forbidden in ("frontier sweep run", "datatype sweep run here", "Pareto selected"):
         same(f"...nor {forbidden!r}", forbidden in checklist, False)
     # Cross-section self-consistency: limitation 1 prices the opt-in trace against the same two
@@ -3084,6 +3186,44 @@ def main() -> int:
                     continue
                 unresolved_cells.append(f"{token} in {cell.strip()[:48]!r}")
     same("every number in every README table is accounted for", sorted(set(unresolved_cells)), [])
+
+    # ------------------------------------------------- README cross-check
+    #
+    # Every literal resolved anywhere in this file, searched for in the README.  Round 14
+    # found this loop sitting in the middle: bindings registered after it were recorded and
+    # never searched, so five rounds' worth of late ``bind`` calls asserted nothing.  It runs
+    # last now, which is the only position at which it means what it says.  This is what turns
+    # "the artifact says 22.838" into "the artifact says 22.838 *and so does the
+    # document*".  A figure the README states in a different form is registered with an
+    # explicit ``readme=`` string above, or with ``readme=""`` to opt out; nothing is
+    # silently exempt.
+    for name, literal in resolved:
+        if literal == "":
+            continue
+        candidates = {literal}
+        # A README may print 22.858 as 22.858 or 0.4473 as 0.4473; also allow the
+        # thousands-separated form and a trailing-zero-trimmed form.
+        try:
+            value = float(literal)
+        except ValueError:
+            value = None
+        if value is not None:
+            candidates.add(f"{value:,.0f}" if value == int(value) else literal)
+            candidates.add(literal.rstrip("0").rstrip(".") if "." in literal else literal)
+            if value == int(value):
+                candidates.add(str(int(value)))
+            # A README may print the same value with a trailing zero (14.6 as "14.60").
+            decimals = len(literal.split(".")[1]) if "." in literal else 0
+            for extra_places in (1, 2):
+                candidates.add(f"{value:.{decimals + extra_places}f}")
+        # Digit-boundary match.  A plain substring search lets `1.0` match `21.05` and
+        # `128` match `1280`, which round 3 flagged as weak binding for exactly the
+        # generic values where binding matters most.
+        same(
+            f"README states the resolved figure for {name}",
+            any(re.search(rf"(?<![\d.,]){re.escape(c)}(?![\d])", normalised) for c in candidates),
+            True,
+        )
 
     same("README has a before/after table at the top", readme.index("## Result") < readme.index("## What ships"), True)
     same("no TODO left in the README", bool(re.search(r"\bTODO\b", readme)), False)

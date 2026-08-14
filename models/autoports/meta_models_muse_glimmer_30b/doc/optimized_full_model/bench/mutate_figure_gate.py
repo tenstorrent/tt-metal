@@ -17,6 +17,7 @@ Usage::
 
 import hashlib
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -395,8 +396,8 @@ MUTATIONS = [
     (
         "the mutation count in the Artifacts table",
         "doc/optimized_full_model/README.md",
-        "mutation-tests that gate: 71 mutations,",
-        "mutation-tests that gate: 96 mutations,",
+        "mutation-tests that gate: 71 curated mutations,",
+        "mutation-tests that gate: 96 curated mutations,",
     ),
     # Round 13's set: the seven in-perimeter survivors, plus the mis-classified terminal id.
     (
@@ -462,6 +463,7 @@ MUTATIONS = [
 #: the baseline pass is checking.  Redirecting this script's stdout into that path defeats it
 #: for the same reason; run it plainly and let it write the file.
 LOG = SRC / "doc/optimized_full_model/logs/mutate_figure_gate.log"
+SWEEP_LOG = SRC / "doc/optimized_full_model/logs/mutate_figure_gate_sweep.log"
 transcript: list[str] = []
 
 
@@ -494,6 +496,9 @@ def run_gate(explain: bool = False) -> bool:
     return "FIGURES_OK" in out.stdout
 
 
+CURATED = list(MUTATIONS)
+
+
 def digest(mutation) -> str:
     """A short hash of one mutation's full content -- name, path, and both texts.
 
@@ -516,13 +521,55 @@ def _bootstrap_scratch_log() -> None:
     that the previous form bootstrapped the *committed* log, which handed anyone a one-command
     way to produce a passing log with no mutation run behind it.
     """
+    # Always the curated table, never the generated sweep: the gate imports this module fresh
+    # and compares the log against ``MUTATIONS`` as defined here, so a sweep-shaped placeholder
+    # would fail the baseline it exists to make pass.
     placeholder = ["baseline: FIGURES_OK", ""]
-    placeholder += [f"CAUGHT  {name}  [{digest(m)}]" for m in MUTATIONS for name in (m[0],)]
-    placeholder += ["", f"ALL {len(MUTATIONS)} MUTATIONS CAUGHT"]
+    placeholder += [f"CAUGHT  {name}  [{digest(m)}]" for m in CURATED for name in (m[0],)]
+    placeholder += ["", f"ALL {len(CURATED)} MUTATIONS CAUGHT"]
     (WORK / LOG.relative_to(SRC)).write_text("\n".join(placeholder) + "\n")
 
 
+def sweep_mutations() -> list:
+    """One mutation per numeric cell of every README table, generated rather than curated.
+
+    Round 14 made the case: 71 hand-written mutations, each a defeat a previous reviewer had
+    demonstrated, is a regression suite -- it re-tests yesterday's holes.  A sweep over every
+    table numeral is the coverage test, and its survivors are the honest statement of what the
+    gate does not bind.  Each mutation increments the last digit, which keeps the cell
+    well-formed and changes its value.
+    """
+    readme = (SRC / "doc/optimized_full_model/README.md").read_text()
+    seen, out = set(), []
+    for raw in readme.splitlines():
+        line = raw.strip()
+        if not line.startswith("| ") or not (set(line) - set("| -:\n")):
+            continue
+        for cell in line.strip("|").split("|"):
+            cell = cell.strip()
+            for token in re.findall(r"(?<![\w.])\d[\d,]*(?:\.\d+)?(?![\d])", cell):
+                if token in seen or readme.count(cell) != 1 or not cell or not token[-1].isdigit():
+                    continue
+                seen.add(token)
+                bumped = token[:-1] + str((int(token[-1]) + 1) % 10)
+                if bumped == token or bumped in readme:
+                    continue
+                out.append(
+                    (
+                        f"sweep: {token} in {cell[:36]}",
+                        "doc/optimized_full_model/README.md",
+                        cell,
+                        cell.replace(token, bumped, 1),
+                    )
+                )
+    return out
+
+
 def main() -> int:
+    if "--sweep" in sys.argv:
+        global MUTATIONS
+        MUTATIONS = sweep_mutations()
+        say(f"sweep mode: {len(MUTATIONS)} generated mutations over README table cells")
     reset()
     if not run_gate(explain=True):
         say("BASELINE FAILS -- the scratch copy is not clean; aborting")
@@ -553,8 +600,9 @@ def main() -> int:
             say(f"  {s}")
     else:
         say(f"ALL {len(MUTATIONS)} MUTATIONS CAUGHT")
-    LOG.write_text("\n".join(transcript) + "\n")
-    say(f"wrote {LOG}")
+    target = SWEEP_LOG if "--sweep" in sys.argv else LOG
+    target.write_text("\n".join(transcript) + "\n")
+    say(f"wrote {target}")
     return 1 if survivors else 0
 
 
