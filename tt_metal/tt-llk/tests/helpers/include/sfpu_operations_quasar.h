@@ -127,7 +127,7 @@ void init_unary_sfpu_operation_quasar()
     }
     else if constexpr (OPERATION == SfpuType::cumsum)
     {
-        cumsum_init();
+        cumsum_init<APPROX>();
     }
 }
 
@@ -319,7 +319,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     {
         // Whole-tile op: the accumulation chain spans all 32 tile rows and crosses the face-pair
         // boundary, so it runs once per tile (RC_custom), not once per face.
-        SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC, is_fp32_dest_acc_en, calculate_cumsum, dst_index, VectorMode::RC_custom, first);
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_cumsum, (APPROX, ITERATIONS), dst_index, VectorMode::RC_custom, first);
     }
     else
     {

@@ -124,6 +124,7 @@ inline void _calculate_cumsum_row_quad_() {
  * @note Call this before @ref calculate_cumsum, and again before resuming cumsum after any other
  *       SFPU op has run on this thread - the recording is what the other op's own init overwrites.
  */
+template <bool APPROXIMATION_MODE /*unused*/>
 inline void cumsum_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
 
@@ -151,13 +152,14 @@ inline void cumsum_init() {
  * @note Run this once per tile under VectorMode::RC_custom, not once per face - the chain spans the
  *       whole tile. It leaves the Dest RWC counter advanced part way into the tile, which
  *       @ref _llk_math_eltwise_sfpu_done_ resets.
- * @note On return CUMSUM_LREG_BANK_B's last register (LREG7) holds this tile's 32 column totals -
- *       the carry the next call consumes with first == false. Feed tiles top-to-bottom and write
- *       nothing to LREG4-7 in between.
+ * @note On return CUMSUM_LREG_BANK_B (LREG4-7) collectively holds this tile's 32 column totals in
+ *       store order. The next call's first transpose reconstructs the carry in LREG7. Feed tiles
+ *       top-to-bottom and write nothing to LREG4-7 in between.
  * @note Uses replay slot 0 on the math thread.
  * @note Call @ref cumsum_init before this - it programs the address mode and records the body this
  *       replays.
  */
+template <bool APPROXIMATION_MODE /*unused*/, int ITERATIONS = 8 /*unused*/>
 inline void calculate_cumsum(const bool first) {
     if (first) {
         // Zero the whole carry bank, not just its last register: SFPTRANSP swizzles lanes across the
