@@ -27,6 +27,8 @@ def main() -> None:
     parser.add_argument("--layer-indices", type=int, nargs="+", default=None)
     parser.add_argument("--profile-only-decode", action="store_true")
     parser.add_argument("--candidate-gather-greedy", action="store_true")
+    parser.add_argument("--force-argmax-greedy", action="store_true")
+    parser.add_argument("--disable-power-of-two-sampling-pad", action="store_true")
     parser.add_argument("--feedback-overwrite-probe", action="store_true")
     parser.add_argument("--gather-debug-probe", action="store_true")
     args = parser.parse_args()
@@ -42,7 +44,8 @@ def main() -> None:
             batch=1,
             num_layers=args.num_layers,
             layer_indices=args.layer_indices,
-            force_argmax_greedy=not args.candidate_gather_greedy,
+            force_argmax_greedy=args.force_argmax_greedy,
+            pad_sampling_logits_to_power_of_2=not args.disable_power_of_two_sampling_pad,
         )
         rendered = generator.tokenizer.apply_chat_template(
             [{"role": "user", "content": args.prompt.read_text().strip()}],
@@ -211,12 +214,13 @@ def main() -> None:
             signpost("FULL_MODEL_DECODE", "one reduced model + canonical sampler replay")
         started = time.perf_counter()
         for _ in range(args.decode_tokens):
-            ttnn.execute_trace(mesh, generator._decode_trace_id, cq_id=0, blocking=False)
-            generator.sampling.sample(generator._trace_logits, enable_trace=True, tt_out_tok=generator._trace_token)
-            generator.trace_counters["replays"] += 1
-            output.append(generator._read_sampled_token())
+            generator.token_out_decode_step(readback=False)
         ttnn.synchronize_device(mesh)
         decode_seconds = time.perf_counter() - started
+        # One reporting readback after the measured replay interval. The
+        # persistent token remains device-owned for every timed step.
+        final_sampled_token = generator._read_sampled_token()
+        output.append(final_sampled_token)
         if args.profile_only_decode:
             ttnn.ReadDeviceProfiler(mesh)
             signpost("FULL_MODEL_DECODE_END")
@@ -234,6 +238,8 @@ def main() -> None:
             "model_trace_id": str(generator._decode_trace_id),
             "sampler_trace_live": any(slot["id"] is not None for slot in generator.sampling._trace_states.values()),
             "feedback_overwrite_probe": feedback_probe,
+            "measured_per_token_readback": False,
+            "final_sampled_token": final_sampled_token,
             "token_ids": output,
             "text": generator.tokenizer.decode(output, skip_special_tokens=False),
         }

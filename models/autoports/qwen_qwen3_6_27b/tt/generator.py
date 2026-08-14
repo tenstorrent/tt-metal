@@ -32,6 +32,9 @@ class SamplingArgs:
     sampling_dp: int = 1
     use_topk_logprobs: bool = False
     force_argmax_active_rows: int | None = None
+    pad_logits_to_power_of_2: bool = True
+    local_topk_num_chunks: int = 2
+    mask_invalid_vocab: bool = True
     model_config: dict = field(
         default_factory=lambda: {
             "SAMPLING_AG_CONFIG": {
@@ -57,7 +60,8 @@ class Qwen36Generator(ReadinessGenerator):
         mesh_device,
         tokenizer,
         host_sampling_compatibility=False,
-        force_argmax_greedy=True,
+        force_argmax_greedy=False,
+        pad_sampling_logits_to_power_of_2=True,
     ):
         self.model, self.mesh_device, self.tokenizer = model, mesh_device, tokenizer
         self.host_sampling_compatibility = bool(host_sampling_compatibility)
@@ -69,6 +73,7 @@ class Qwen36Generator(ReadinessGenerator):
             model.padded_vocab_size,
             model.batch,
             force_argmax_active_rows=model.batch,
+            pad_logits_to_power_of_2=bool(pad_sampling_logits_to_power_of_2),
         )
         sampling_args.model_config["SAMPLING_AG_CONFIG"]["allow_force_argmax"] = bool(force_argmax_greedy)
         self.sampling = SamplingGenerator(
@@ -606,7 +611,8 @@ def build_generator(model_dir, mesh_device, **kwargs):
         kwargs.pop("snapshot", Path("/huggingface/hub/models--Qwen--Qwen3.6-27B/snapshots") / MODEL_REVISION)
     )
     host_sampling_compatibility = kwargs.pop("host_sampling_compatibility", False)
-    force_argmax_greedy = kwargs.pop("force_argmax_greedy", True)
+    force_argmax_greedy = kwargs.pop("force_argmax_greedy", False)
+    pad_sampling_logits_to_power_of_2 = kwargs.pop("pad_sampling_logits_to_power_of_2", True)
     tokenizer = AutoTokenizer.from_pretrained(snapshot, local_files_only=True)
     model = Qwen36Model.from_pretrained(mesh_device=mesh_device, snapshot=snapshot, **kwargs)
     return Qwen36Generator(
@@ -615,6 +621,7 @@ def build_generator(model_dir, mesh_device, **kwargs):
         tokenizer=tokenizer,
         host_sampling_compatibility=host_sampling_compatibility,
         force_argmax_greedy=force_argmax_greedy,
+        pad_sampling_logits_to_power_of_2=pad_sampling_logits_to_power_of_2,
     )
 
 

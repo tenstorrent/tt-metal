@@ -1,0 +1,33 @@
+{
+  "hardware": "4x Blackhole p300c",
+  "mesh": [1, 4],
+  "fabric": "FABRIC_1D_RING",
+  "workload": {"batch": 1, "prompt_tokens": 128, "decode_replays": 128},
+  "baseline": {"ttft_ms": 4036.679581, "token_out_t_s_u": 17.493443},
+  "optimized_default": {"ttft_ms": 4041.510380, "token_out_t_s_u": 17.637144, "ms_per_token": 56.698457},
+  "decoder_stack_lower_bound": {
+    "full_attention_layers": 16,
+    "full_attention_median_ms": 0.593793571,
+    "linear_attention_layers": 48,
+    "linear_attention_median_ms": 0.899718165,
+    "stack_ms": 52.687169,
+    "stack_t_s_u": 18.980,
+    "terminal_gap_ms": 4.011288,
+    "terminal_gap_percent_of_stack": 7.61
+  },
+  "reduced_profile": {
+    "tt_perf_report_modeled_dram_gb_s": 146,
+    "tt_perf_report_modeled_dram_roofline_percent": 28.5,
+    "local_topk_chunk_us": [169, 169],
+    "merge_topk_us": 15,
+    "candidate_all_gather_us": [15, 13],
+    "sampling_us": 28
+  },
+  "provenance": {
+    "baseline": "artifacts/baseline_full_force_argmax_no_readback_b1_s128_g128.json",
+    "optimized": "artifacts/final_default_split_no_readback_b1_s128_g128.json",
+    "raw_csv": "tracy/split_sampler_reduced/decode_ops.csv",
+    "machine_report": "tracy/split_sampler_reduced/decode_perf_report.csv",
+    "human_report": "tracy/split_sampler_reduced/decode_perf_report.txt"
+  }
+}

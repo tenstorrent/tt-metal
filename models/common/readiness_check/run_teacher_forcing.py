@@ -106,11 +106,20 @@ def _run_one_entry(
     _require_explicit_generate_kwarg(generator, "enable_trace")
 
     timing["start_s"] = time.perf_counter()
+    generate_kwargs: Dict[str, Any] = {}
+    if "host_sampling_compatibility" in inspect.signature(generator.generate).parameters:
+        # Optimized generators may keep normal autoregressive token feedback
+        # entirely on device.  Teacher forcing is the one readiness workflow
+        # that deliberately needs a per-step host callback, so opt into that
+        # boundary explicitly when the generator exposes it.
+        generate_kwargs["host_sampling_compatibility"] = True
+
     generator.generate(
         prompt_token_ids=prompt_ids,
         max_new_tokens=n_steps,
         next_input=next_input,
         enable_trace=True,
+        **generate_kwargs,
     )
     end_s = time.perf_counter()
 

@@ -222,6 +222,37 @@
       ]
     }
   },
+  "optimized_full_model": {
+    "status": "optimized_full_model_validation_complete",
+    "target_hardware": "4x Blackhole p300c",
+    "target_mesh": [1, 4],
+    "tensor_parallel_size": 4,
+    "fabric": "FABRIC_1D_RING",
+    "supported_context": 262144,
+    "capability_reduction": false,
+    "batch_1_supported_context": 262144,
+    "batch_32_largest_feasible_context": 72192,
+    "batch_32_smallest_failed_context": 72256,
+    "non_aligned_generator_sequences_tested": [63, 65, 161, 261],
+    "split_sampling": {
+      "default": true,
+      "greedy_device_owned": true,
+      "top_k_top_p_capable": true,
+      "local_topk_chunks": 2,
+      "local_topk_chunk_width": 32768,
+      "invalid_vocab_masked_on_device": true,
+      "full_vocab_all_gather": false
+    },
+    "persistent_token_out_state": [
+      "token",
+      "position_and_rope",
+      "page_table",
+      "kv_and_linear_state",
+      "active_fixed_slots"
+    ],
+    "performance_artifact": "doc/optimized_full_model/artifacts/final_default_split_no_readback_b1_s128_g128.json",
+    "runtime_fallback_audit": "doc/optimized_full_model/artifacts/runtime_fallback_audit.json"
+  },
   "layer_kinds": {
     "linear_attention": {
       "representative_layer": 0,

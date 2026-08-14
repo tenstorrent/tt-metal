@@ -168,6 +168,8 @@ class TTSampling(LightweightModule):
         self._line_all_gather = getattr(self.tt_ccl, "line_all_gather", None)
         self._line_all_gather_supports_buffer_key = False
         self.pad_to_power_of_2 = getattr(args, "pad_logits_to_power_of_2", False)
+        self.local_topk_num_chunks = int(getattr(args, "local_topk_num_chunks", 1))
+        self.mask_invalid_vocab = bool(getattr(args, "mask_invalid_vocab", False))
         if callable(self._line_all_gather):
             try:
                 line_all_gather_sig = inspect.signature(self._line_all_gather)
@@ -216,8 +218,35 @@ class TTSampling(LightweightModule):
                 )
         self.max_top_k = getattr(args, "max_top_k", 32)
         self.cluster_shape = args.cluster_shape
-
         self.sampling_all_gather_axis = getattr(args, "sampling_all_gather_axis", 0)
+
+        num_sampling_devices = (
+            max(self.cluster_shape) if 1 in self.cluster_shape else self.cluster_shape[self.sampling_all_gather_axis]
+        )
+        per_device_vocab_size = self.padded_vocab_size // num_sampling_devices
+        self.local_topk_chunk_width, self.local_topk_padded_width = self._plan_local_topk_chunks(
+            per_device_vocab_size, self.local_topk_num_chunks
+        )
+        if self.local_topk_num_chunks > 1 and not self.pad_to_power_of_2:
+            raise ValueError("local_topk_num_chunks > 1 requires pad_logits_to_power_of_2=True")
+
+        self.tt_invalid_vocab_mask = None
+        if self.mask_invalid_vocab and self.vocab_size < self.padded_vocab_size:
+            invalid_vocab_mask = torch.zeros(1, 1, self.max_batch_size, self.padded_vocab_size, dtype=torch.bfloat16)
+            invalid_vocab_mask[..., self.vocab_size :] = torch.finfo(torch.bfloat16).min
+            vocab_shard_dims = [None, None]
+            vocab_shard_dims[self.sampling_all_gather_axis] = 3
+            self.tt_invalid_vocab_mask = ttnn.from_torch(
+                invalid_vocab_mask,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=tuple(vocab_shard_dims), mesh_shape=self.cluster_shape
+                ),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self.sub_core_grid_topk = getattr(args, "sub_core_grid_topk", None)
         self.start_core = getattr(args, "start_core", ttnn.CoreCoord(0, 0))
@@ -974,6 +1003,18 @@ class TTSampling(LightweightModule):
                     # guarantees the greedy pick.
                     stable=False if use_routed_topk else self._topk_stable,
                 )
+                if self.local_topk_num_chunks > 1 and i:
+                    # Multi-core TopK reports indices relative to its physical
+                    # chunk.  Restore the contiguous local-vocabulary base;
+                    # all valid Qwen TP4 local IDs remain representable in u16.
+                    chunk_relative_indices = topk_indices
+                    topk_indices = ttnn.add(
+                        chunk_relative_indices,
+                        i * split_width,
+                        dtype=ttnn.uint16,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    )
+                    ttnn.deallocate(chunk_relative_indices)
                 topk_values_list.append(topk_values)
                 topk_indices_list.append(topk_indices)
                 x_bf16_list[i].deallocate()
@@ -984,6 +1025,46 @@ class TTSampling(LightweightModule):
             for i in range(len(topk_indices_list)):
                 ttnn.deallocate(topk_values_list[i])
                 ttnn.deallocate(topk_indices_list[i])
+
+            # Reduce the per-chunk candidates back to max_top_k locally.  The
+            # concatenated indices are original local-vocabulary indices, so
+            # this 64->32 merge needs no chunk-base arithmetic.
+            if self.local_topk_num_chunks > 1:
+                chunk_topk_values = topk_values_gathered_bf16_interleaved
+                chunk_topk_indices = topk_indices_gathered
+                topk_values_gathered_bf16_interleaved, merge_positions = ttnn.topk(
+                    chunk_topk_values,
+                    k=self.max_top_k,
+                    dim=-1,
+                    sub_core_grids=self.sub_core_grid_topk,
+                )
+                # The 64-wide merge uses the single-core TopK factory, which
+                # currently generates positional indices even when an
+                # indices_tensor is supplied (GH #36329).  Resolve those
+                # positions against the original per-chunk IDs explicitly.
+                topk_indices_gathered = ttnn.gather(chunk_topk_indices, dim=3, index=merge_positions)
+                ttnn.deallocate(chunk_topk_values)
+                ttnn.deallocate(chunk_topk_indices)
+                ttnn.deallocate(merge_positions)
+
+                sampling_cluster_axis = self._get_sampling_cluster_axis()
+                topk_values_gathered_bf16_interleaved = self._perform_all_gather(
+                    topk_values_gathered_bf16_interleaved,
+                    dim=3,
+                    cluster_axis=sampling_cluster_axis,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    num_links=self.num_gather_links,
+                    buffer_key="SAMPLING_VALUES",
+                )
+                topk_indices_gathered = self._perform_all_gather(
+                    topk_indices_gathered,
+                    dim=3,
+                    cluster_axis=sampling_cluster_axis,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    num_links=self.num_gather_links,
+                    buffer_key="SAMPLING_INDICES",
+                    dtype=ttnn.uint16,
+                )
 
         else:
             # apply padding to the input tensor if needed
