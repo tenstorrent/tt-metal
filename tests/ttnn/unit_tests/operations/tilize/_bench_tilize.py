@@ -82,6 +82,7 @@ def _measure(
     label="",
     in_mem_config=None,
     out_mem_config=None,
+    pad=None,
 ):
     """One warm launch (compile + program cache), then ONE measured launch.
 
@@ -104,6 +105,7 @@ def _measure(
             memory_config=in_mem_config if in_mem_config is not None else ttnn.DRAM_MEMORY_CONFIG,
         )
         call = dict(memory_config=out_mem_config, use_multicore=use_multicore, use_double_buffer=use_double_buffer)
+        call.update(pad or {})
 
         tilize(tt_input, **call)
         ttnn.synchronize_device(device)
@@ -316,3 +318,79 @@ def test_bench_sharded_ablation(device, regime, ablate, name):
 )
 def test_bench_ablation(device, regime, ablate, name):
     _measure(device, SHAPES[regime], ttnn.bfloat16, ablate=ablate, label=f"ablate:{name}/{regime}")
+
+
+# --- cross-spec reshard + padded-into-a-shard (Refinement 2) ----------------
+# Two NEW rows for the cumulative set, and both are measured against the SAME
+# `zero_copy` knob whose OFF arm is literally the pre-Refinement-2 behaviour:
+#
+#   (f) cross-spec reshard — a WIDTH-sharded RM source (page = SHARD row, so the
+#       gather splits every row span across pages) into a HEIGHT-sharded TILE
+#       destination that is packed in place. L1 -> L1, no DRAM leg at all.
+#       zero_copy=0 sends both sides through the accessor over the generic grid
+#       split (master.md C14 + C15 + A2 OFF on the reshard path).
+#   (g) padded into a local shard — the fill is materialized into the streaming
+#       input CB while the destination shard is still written in place. Before
+#       Refinement 2 a padded call disqualified BOTH sides from zero-copy, which
+#       is exactly what zero_copy=0 reproduces.
+def _width_shard(shape, num_cores):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (shape[-2], shape[-1] // num_cores), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+# (shape, source cores, destination cores)
+RESHARD_SHAPE = ([1, 1, 1024, 256], 4, 8)
+# (logical shape, pad target, destination cores)
+PAD_SHARD_SHAPE = ([1, 1, 2040, 256], [1, 1, 2048, 256], 8)
+
+
+@pytest.mark.parametrize("zero_copy", [1, 0], ids=["on", "off"])
+def test_bench_reshard_cross_spec(device, zero_copy):
+    shape, src_cores, dst_cores = RESHARD_SHAPE
+    _measure(
+        device,
+        shape,
+        ttnn.bfloat16,
+        in_mem_config=_width_shard(shape, src_cores),
+        out_mem_config=_height_shard(shape, dst_cores),
+        levers=dict(zero_copy=zero_copy),
+        label=f"reshard_cross_spec/zero_copy={zero_copy}",
+    )
+
+
+@pytest.mark.parametrize(
+    "ablate, name",
+    [({"compute": 1}, "no_compute"), ({"compute": 1, "dm": 1}, "sync_only")],
+    ids=["no_compute", "sync_only"],
+)
+def test_bench_reshard_ablation(device, ablate, name):
+    """Classify the gather: one side is L1 loopback, the other a cross-core L1
+    read, so neither the DRAM floor nor the pure-compute bound describes it."""
+    shape, src_cores, dst_cores = RESHARD_SHAPE
+    _measure(
+        device,
+        shape,
+        ttnn.bfloat16,
+        in_mem_config=_width_shard(shape, src_cores),
+        out_mem_config=_height_shard(shape, dst_cores),
+        ablate=ablate,
+        label=f"ablate:{name}/reshard_cross_spec",
+    )
+
+
+@pytest.mark.parametrize("zero_copy", [1, 0], ids=["on", "off"])
+def test_bench_padded_into_local_shard(device, zero_copy):
+    shape, target, dst_cores = PAD_SHARD_SHAPE
+    _measure(
+        device,
+        shape,
+        ttnn.bfloat16,
+        out_mem_config=_height_shard(target, dst_cores),
+        pad=dict(output_padded_shape=target, pad_value=0.0),
+        levers=dict(zero_copy=zero_copy),
+        label=f"padded_into_local_shard/zero_copy={zero_copy}",
+    )

@@ -78,3 +78,14 @@
 {"source":"tt-probe","pid":245705,"started_at_ms":1786716630296,"wait_ms":244,"run_ms":24359,"test_path":"tilize","exit_code":0}
 {"source":"run_safe_pytest","pid":246265,"started_at_ms":1786716662581,"wait_ms":2,"run_ms":15046,"test_path":"tests/ttnn/unit_tests/operations/tilize/","exit_code":0}
 {"source":"run_safe_pytest","pid":248199,"started_at_ms":1786716753372,"wait_ms":2,"run_ms":10450,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_sharded.py","exit_code":0}
+{"source":"run_safe_pytest","pid":249356,"started_at_ms":1786716783120,"wait_ms":2,"run_ms":13243,"test_path":"eval/golden_tests/tilize/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":249863,"started_at_ms":1786716801492,"wait_ms":2,"run_ms":11493,"test_path":"eval/golden_tests/tilize/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":250241,"started_at_ms":1786716818885,"wait_ms":2,"run_ms":10044,"test_path":"eval/golden_tests/tilize/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":250481,"started_at_ms":1786716828937,"wait_ms":2,"run_ms":9999,"test_path":"eval/golden_tests/tilize/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":251178,"started_at_ms":1786716906494,"wait_ms":2,"run_ms":11223,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"tt-probe","pid":251745,"started_at_ms":1786716955785,"wait_ms":179,"run_ms":22567,"test_path":"tilize","exit_code":0}
+{"source":"tt-probe","pid":252500,"started_at_ms":1786717041347,"wait_ms":216,"run_ms":21287,"test_path":"tilize","exit_code":0}
+{"source":"tt-probe","pid":253070,"started_at_ms":1786717089563,"wait_ms":161,"run_ms":21673,"test_path":"tilize","exit_code":0}
+{"source":"tt-probe","pid":254076,"started_at_ms":1786717244205,"wait_ms":336,"run_ms":16632,"test_path":"tilize","exit_code":0}
+{"source":"run_safe_pytest","pid":254652,"started_at_ms":1786717351323,"wait_ms":2,"run_ms":15397,"test_path":"tests/ttnn/unit_tests/operations/tilize/","exit_code":0}
+{"source":"run_safe_pytest","pid":255620,"started_at_ms":1786717376827,"wait_ms":3,"run_ms":21243,"test_path":"eval/golden_tests/tilize/test_golden.py","exit_code":0}

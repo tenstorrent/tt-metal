@@ -51,6 +51,19 @@ FAST_TILIZE_MAX_W = 255  # tilize_helpers.inl:95 -> block_width_tiles < 256
 # written against it.
 NT_BLK = 1
 
+# --- placement heuristic: when zero-copy on the DESTINATION actually pays ----
+# An aliased shard pins WT_CHUNK to the shard's own width, so a destination shard
+# that is narrow in W (or a source shard whose page is narrow) forces the
+# STREAMING reader into tiny per-row transfers issued by only the shard's cores.
+# Measured on Wormhole B0 (bf16, `_bench_tilize.py` + Refinement-2 probes):
+# destination-local wins 1.19x / 2.06x / 1.30x once the read transfer is >= 256 B
+# and LOSES 1.75x / 3.19x / 3.45x below it (128 B and 64 B reads), where the
+# generic full-grid split is faster even though it moves the bytes over the NoC.
+# The writer side never trips this — it always moves whole TILE pages (>= 1 KB) —
+# so the gate is read-side only, and a SOURCE-local plan is never gated (measured
+# 0.94x-3.85x, i.e. parity at worst).
+MIN_STREAM_READ_BYTES = 256
+
 # --- CB indices (semantic names; the numeric slot is just a buffer index) ---
 CB_INPUT_STICKS = 0  # reader -> compute  (row-major sticks, tile-sized pages)
 CB_OUTPUT_TILES = 16  # compute -> writer (tiled pages)
@@ -102,6 +115,9 @@ W_REGION = 1
 #                     when this is 1).
 #   double_buffer 0 -> force CB_DEPTH 1 regardless of use_double_buffer
 #                     (master.md C16 off arm).
+#   xfer_gate     0 -> alias the destination shard even when the read transfer it
+#                      pins is below MIN_STREAM_READ_BYTES (the pre-Refinement-2
+#                      behaviour: prefer local placement unconditionally).
 #   zero_copy     0 -> never alias a CB on a resident L1 shard: take the
 #                     TensorAccessor path on both sides and the generic block
 #                     split over the whole grid, i.e. re-read/re-write the local
@@ -118,6 +134,7 @@ LEVERS = {
     "multicore": 1,
     "double_buffer": 1,
     "zero_copy": 1,
+    "xfer_gate": 1,
 }
 
 # --- classification ablation (perf-only; op_design.md §9.1) ------------------
@@ -377,6 +394,11 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     nt_h = _prod(target[:-2]) * _div_up(target[-2], tile_h)  # total tile-rows
     wt = _div_up(target[-1], tile_w)  # total tile-columns
 
+    # How the reader addresses a ROW_MAJOR source page (single source; §5.2).
+    # `src_row_pages > 1` is the cross-spec gather: the source shard is narrower
+    # than a tensor row, so a row is several pages and a span has to be split.
+    src_page_bytes, src_row_pages = src_page_geometry(input_tensor, plan.in_padded, elem_in)
+
     # ========== 2. KNOBS + WORK DISTRIBUTION ==============================
     cb_depth = 2 if (plan.use_double_buffer and LEVERS["double_buffer"]) else 1
 
@@ -436,6 +458,15 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             wt_chunk, n_chunks = shard["shard_wt"], 1
         else:
             wt_chunk, n_chunks = derive_shard_blocking(shard["shard_wt"], wt_cap(cb_depth, stream_in, stream_out))
+        # Read-transfer gate (MIN_STREAM_READ_BYTES): an aliased DESTINATION pins
+        # the reader's per-row transfer to the shard's own width, and below the
+        # measured knee the generic full-grid split beats packing in place. Only
+        # the read side can trip it — the writer always moves whole tile pages.
+        if in_placement == P_ACCESSOR and LEVERS["xfer_gate"]:
+            read_bytes = min(wt_chunk * tile_w * elem_in, src_page_bytes)
+            if read_bytes < MIN_STREAM_READ_BYTES:
+                in_placement, out_placement, shard, work_mode = P_ACCESSOR, P_ACCESSOR, None, W_BLOCKS
+    if shard is not None:
         while cb_depth > 1 and cb_bytes(cb_depth, wt_chunk, stream_in, stream_out) > CB_L1_BUDGET:
             cb_depth -= 1
         if cb_bytes(1, wt_chunk, stream_in, stream_out) > CB_L1_BUDGET:
@@ -541,12 +572,10 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         )
 
     # ========== 4. KERNELS =================================================
-    # Source page geometry for the accessor path. `src_row_pages > 1` is the
-    # cross-spec gather (the source shard is narrower than a row), which the
-    # library reader cannot express — its contract walks consecutive page ids as
-    # consecutive sticks — so those calls take the general per-row loop, where an
-    # aligned source simply fills nothing (valid_bytes == row_bytes).
-    src_page_bytes, src_row_pages = src_page_geometry(input_tensor, plan.in_padded, elem_in)
+    # The gather (src_page_geometry, §1) cannot be expressed by the library
+    # reader — its contract walks consecutive page ids as consecutive sticks — so
+    # a paged source takes the general per-row loop, where an aligned source
+    # simply fills nothing (valid_bytes == row_bytes).
     if in_placement == P_LOCAL_SHARD:
         src_page_bytes, src_row_pages = in_tile_bytes, 1  # no accessor read at all
     paged_src = src_row_pages > 1

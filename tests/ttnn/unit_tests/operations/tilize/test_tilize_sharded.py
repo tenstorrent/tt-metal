@@ -112,9 +112,12 @@ _HEIGHT_4 = dict(grid=_crs(((0, 0), (3, 0))), shard_shape=(128, 64), orientation
             id="sharded_in_interleaved_out",
         ),
         pytest.param(
-            [1, 1, 128, 64],
+            # Wide enough that the shard-pinned read transfer clears
+            # MIN_STREAM_READ_BYTES (8 tiles = 512 B); see the Refinement-2 gate
+            # below for the narrow counterpart.
+            [1, 1, 128, 256],
             ttnn.DRAM_MEMORY_CONFIG,
-            _legacy(_crs(((0, 0), (3, 0))), (32, 64), _ROW, _HEIGHT),
+            _legacy(_crs(((0, 0), (3, 0))), (32, 256), _ROW, _HEIGHT),
             (pd.P_ACCESSOR, pd.P_LOCAL_SHARD),
             id="interleaved_in_sharded_out",
         ),
@@ -126,9 +129,9 @@ _HEIGHT_4 = dict(grid=_crs(((0, 0), (3, 0))), shard_shape=(128, 64), orientation
             id="interleaved_both_sides_unchanged",
         ),
         pytest.param(
-            [1, 1, 128, 64],
-            _legacy(_crs(((0, 0), (3, 0))), (32, 64), _ROW, _HEIGHT),
-            _legacy(_crs(((0, 0), (1, 0))), (64, 64), _ROW, _HEIGHT),
+            [1, 1, 128, 256],
+            _legacy(_crs(((0, 0), (3, 0))), (32, 256), _ROW, _HEIGHT),
+            _legacy(_crs(((0, 0), (1, 0))), (64, 256), _ROW, _HEIGHT),
             (pd.P_ACCESSOR, pd.P_LOCAL_SHARD),
             id="cross_spec_gathers_into_the_local_destination",
         ),
@@ -374,12 +377,14 @@ def _reshard_cases():
     """(shape, in_cfg, out_cfg, expected_placements, expected_src_row_pages)."""
     return [
         pytest.param(
+            # 128 B source pages: below MIN_STREAM_READ_BYTES, so the gate keeps
+            # the paged gather but runs it on the whole grid (measured 1.67x).
             [1, 1, 128, 128],
             _BLOCK_2x2,
             _legacy(_crs(((0, 0), (3, 0))), (32, 128), _ROW, _HEIGHT),
-            (pd.P_ACCESSOR, pd.P_LOCAL_SHARD),
+            (pd.P_ACCESSOR, pd.P_ACCESSOR),
             2,
-            id="block_in_is_gathered_page_by_page",
+            id="narrow_page_block_source_is_gathered_on_the_grid",
         ),
         pytest.param(
             [1, 1, 64, 512],
@@ -414,9 +419,9 @@ def _reshard_cases():
             id="uneven_grid_same_spec_is_still_zero_copy",
         ),
         pytest.param(
-            [1, 1, 160, 64],
+            [1, 1, 160, 256],
             ttnn.DRAM_MEMORY_CONFIG,
-            _UNEVEN_H3,
+            _legacy(_crs(((0, 0), (2, 0))), (64, 256), _ROW, _HEIGHT),  # 5 tile-rows / 3 shards
             (pd.P_ACCESSOR, pd.P_LOCAL_SHARD),
             1,
             id="uneven_grid_destination_is_local",
@@ -475,18 +480,20 @@ def test_uneven_grid_gives_the_short_shard_its_own_block_count(device):
 
 _PADDED_SHARDED = [
     pytest.param(
-        [1, 1, 50, 64],
-        [1, 1, 64, 64],
+        [1, 1, 50, 256],
+        [1, 1, 64, 256],
         ttnn.DRAM_MEMORY_CONFIG,
-        _legacy(_crs(((0, 0), (1, 0))), (32, 64), _ROW, _HEIGHT),
+        _legacy(_crs(((0, 0), (1, 0))), (32, 256), _ROW, _HEIGHT),
         (pd.P_ACCESSOR, pd.P_LOCAL_SHARD),
         id="interleaved_in_padded_sharded_out",
     ),
     pytest.param(
-        [1, 1, 100, 128],
-        [1, 1, 128, 128],
-        _legacy(_crs(((0, 0), (1, 1))), (50, 64), _ROW, _BLOCK),
-        _legacy(_crs(((0, 0), (3, 0))), (32, 128), _ROW, _HEIGHT),
+        # Both new paths at once: a 256 B-page BLOCK source gathered page-slice by
+        # page-slice, filled, and packed into a resident destination shard.
+        [1, 1, 100, 256],
+        [1, 1, 128, 256],
+        _legacy(_crs(((0, 0), (1, 1))), (50, 128), _ROW, _BLOCK),
+        _legacy(_crs(((0, 0), (3, 0))), (32, 256), _ROW, _HEIGHT),
         (pd.P_ACCESSOR, pd.P_LOCAL_SHARD),
         id="narrow_page_source_padded_into_a_local_shard",
     ),
@@ -564,3 +571,72 @@ def test_unaddressable_shard_row_is_refused(device, expect_error):
     )
     with expect_error(NotImplementedError, "(?i)aligned page"):
         tilize(tt_input, out_cfg, output_padded_shape=[1, 1, 128, 128], pad_value=1.0)
+
+
+# --- the read-transfer gate (Refinement 2, measured) ------------------------
+
+_GATED_CASES = [
+    pytest.param(
+        [1, 1, 1024, 256],
+        ttnn.DRAM_MEMORY_CONFIG,
+        _legacy(_crs(((0, 0), (7, 0))), (1024, 32), _ROW, _WIDTH),
+        id="one_tile_wide_destination_shard_64B_reads",  # measured 3.25x
+    ),
+    pytest.param(
+        [1, 1, 512, 64],
+        ttnn.DRAM_MEMORY_CONFIG,
+        _legacy(_crs(((0, 0), (3, 0))), (128, 64), _ROW, _HEIGHT),
+        id="two_tile_wide_destination_shard_128B_reads",  # measured 1.75x
+    ),
+    pytest.param(
+        [1, 1, 1024, 256],
+        _legacy(_crs(((0, 0), (3, 0))), (1024, 64), _ROW, _WIDTH),
+        _legacy(_crs(((0, 0), (7, 0))), (128, 256), _ROW, _HEIGHT),
+        id="128B_source_pages",  # measured 1.67x
+    ),
+]
+
+
+@pytest.mark.parametrize("shape, in_cfg, out_cfg", _GATED_CASES)
+def test_narrow_read_gate_prefers_the_grid_split(device, shape, in_cfg, out_cfg):
+    """Aliasing the destination pins WT_CHUNK to the shard's width, which pins the
+    reader's per-row transfer. Below MIN_STREAM_READ_BYTES that costs more than
+    the NoC write it saves — measured 1.67x / 1.75x / 3.25x in favour of the
+    generic full-grid split — so the gate takes the accessor on both sides and
+    lets `derive_blocking()` pick a coarse WT_CHUNK again.
+
+    `xfer_gate=0` is the OFF arm (the pre-Refinement-2 choice), pinned here so the
+    counterfactual the bench measures stays reachable.
+    """
+    for cfg in (in_cfg, out_cfg):
+        if cfg.is_sharded():
+            _skip_if_grid_too_small(device, _shard_grid(cfg))
+    descriptor = _descriptor(device, shape, in_cfg, out_cfg)
+    assert _placements(descriptor) == (pd.P_ACCESSOR, pd.P_ACCESSOR)
+    assert descriptor.kernels[0].core_ranges.num_cores() > out_cfg.shard_spec.grid.num_cores()
+
+    pd.LEVERS["xfer_gate"] = 0
+    try:
+        off_arm = _descriptor(device, shape, in_cfg, out_cfg)
+    finally:
+        pd.LEVERS["xfer_gate"] = 1
+    assert _placements(off_arm) == (pd.P_ACCESSOR, pd.P_LOCAL_SHARD)
+
+
+@pytest.mark.parametrize("shape, in_cfg, out_cfg", _GATED_CASES)
+def test_narrow_read_gate_keeps_identity(device, shape, in_cfg, out_cfg):
+    """Both arms of the gate are correct — it is a perf choice, not a contract."""
+    for cfg in (in_cfg, out_cfg):
+        if cfg.is_sharded():
+            _skip_if_grid_too_small(device, _shard_grid(cfg))
+    torch_input = torch.randn(shape).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg
+    )
+    for gate in (1, 0):
+        pd.LEVERS["xfer_gate"] = gate
+        try:
+            got = ttnn.to_torch(tilize(tt_input, out_cfg))
+        finally:
+            pd.LEVERS["xfer_gate"] = 1
+        assert torch.equal(got.to(torch.float32), torch_input.to(torch.float32)), f"xfer_gate={gate}"
