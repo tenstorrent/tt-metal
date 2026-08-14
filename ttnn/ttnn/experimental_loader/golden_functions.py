@@ -81,19 +81,6 @@ def _golden_function(slice, tensor, num_slices, slice_id, *args, **kwargs):
 ttnn.attach_golden_function(ttnn.sharded_to_interleaved_partial, _golden_function)
 
 
-def _golden_function(input_tensor, output_tensor, start, end, step=None, **_):
-    if step is None:
-        step = [1] * len(start)
-    output_slices = tuple(slice(int(s), int(e), int(st)) for s, e, st in zip(start, end, step))
-    # Mutate output_tensor so the caller's global golden reflects slice_write.
-    # The CPU reference copies input_tensor into the requested stepped slice.
-    output_tensor[output_slices] = input_tensor
-    return output_tensor
-
-
-ttnn.attach_golden_function(ttnn.experimental.slice_write, _golden_function)
-
-
 def _golden_function(in0, in1, math_op, dim, *args, **kwargs):
     import torch
 
