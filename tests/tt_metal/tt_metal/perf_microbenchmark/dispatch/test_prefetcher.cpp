@@ -3352,7 +3352,7 @@ private:
         };
         // The host generated the command stream, so it knows the chunk count exactly. Reported only --
         // the device no longer keeps per-chunk words; the read/publish terms arrive pre-summed.
-        const uint32_t scratch_db_half_size = Common::sd_dispatch_mem_map(this->device_).scratch_db_size() / 2;
+        const uint32_t scratch_db_half_size = Common::sd_dispatch_mem_map().scratch_db_size() / 2;
         const uint32_t num_chunks = (payload_bytes + scratch_db_half_size - 1) / scratch_db_half_size;
 
         double sum_header = 0, sum_relay_cmd = 0, sum_body = 0, sum_dram_read = 0, sum_publish = 0;
