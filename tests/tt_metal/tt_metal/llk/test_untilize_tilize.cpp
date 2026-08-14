@@ -1523,8 +1523,15 @@ TEST_F(LLKMeshDeviceFixture, TensixComputePackUntilizeDstPerfSSTvsBaseline) {
     std::uint32_t kPerfIters = 400;
     // Device-profiler mode: shrink the workload count so the profiler buffer
     // holds every run (TT_METAL_DEVICE_PROFILER=1), keeping run IDs parseable.
+    // TT_SST_PERF_SHAPE="r,c" overrides the profiled shape.
     if (std::getenv("TT_SST_PERF_PROFILE") != nullptr) {
         num_tiles = {{10, 10}};
+        if (const char* shape = std::getenv("TT_SST_PERF_SHAPE")) {
+            std::uint32_t r = 0, c = 0;
+            if (std::sscanf(shape, "%u,%u", &r, &c) == 2 && r > 0 && c > 0) {
+                num_tiles = {{r, c}};
+            }
+        }
         kPerfIters = 30;
     }
     for (auto num_tile : num_tiles) {
