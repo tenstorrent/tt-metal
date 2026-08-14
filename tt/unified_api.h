@@ -87,11 +87,23 @@ struct PhysicalMcast {
 
     uint32_t volume() const { return (end.y - start.y + 1) * (end.x - start.x + 1); }
 
-    // Destination count for a multicast issued BY `start`, which is the only core
-    // that ever issues one: every multicast path here elects its sender with
-    // `this_core() == start`. Metal's multicast primitives exclude the sender
-    // unless NocOptions::MCAST_INCL_SRC is set, hence one less than the rectangle.
+    bool contains(PhysicalCoord c) const { return c.y >= start.y && c.y <= end.y && c.x >= start.x && c.x <= end.x; }
+
+    // Destination counts. Metal's multicast primitives exclude the sender unless
+    // NocOptions::MCAST_INCL_SRC is set, and num_dests must exclude it on exactly
+    // the same terms -- but only when the sender is in range at all.
+    //
+    // Which to use depends on where the issuer sits, and the two cases are real:
+    //
+    //   ..._sender()  -- the issuer IS `start`. The handshake paths elect their
+    //                    sender with `this_core() == start`, so containment is a
+    //                    known fact and the count is a constant.
+    //
+    //   ..._excluding -- the issuer is wherever it is. A core pushing a block to
+    //                    a rectangle is usually OUTSIDE it, in which case every
+    //                    core in the rectangle is a destination. See noc_core_write.
     uint32_t num_dests_excluding_sender() const { return volume() - 1; }
+    uint32_t num_dests_excluding(PhysicalCoord sender) const { return volume() - (contains(sender) ? 1 : 0); }
 };
 
 struct LogicalMcast {
@@ -299,6 +311,13 @@ inline constexpr uint32_t kMcastReadySem = kMcastSemBase + 2 * thread;
 template <int thread>
 inline constexpr uint32_t kMcastSentSem = kMcastSemBase + 2 * thread + 1;
 
+// One more per thread, above the two pairs: the arrival flag a multicast
+// noc_core_write raises on its receivers. It gets its own slot rather than
+// borrowing the pair above, because a core-to-core push and a broadcast (or a
+// synchronize_cores) can legitimately be in flight on one thread at once.
+template <int thread>
+inline constexpr uint32_t kCopyArrivedSem = kMcastSemBase + 4 + thread;
+
 // The program's core grid, so a whole-program barrier needs no arguments. Also
 // supplied by the harness, which is the only place that knows the core range.
 #if defined(TT_UNIFIED_CORE_GRID_H) && defined(TT_UNIFIED_CORE_GRID_W)
@@ -472,20 +491,19 @@ struct NocAsyncWriteTx {
 // destination Storage to publish. The destination follows the read rule (explicit
 // wait()) and the source follows the write rule (the destructor).
 //
-// `SrcIsLocal` is true when this core's L1 is the data source, i.e. a push to a
-// peer -- the NOC must have finished reading it before the pop, so the destructor
-// flushes first. For a pull the source is the peer's L1 and the local Block is
-// only a handle, so a bare pop is right.
-template <int thread, bool SrcIsLocal>
-struct NocAsyncCopyTx {
-    NocAsyncCopyTx(const Storage& dst, const Block& src);
+// Pull: the source is the PEER's L1 and the local Block is only a handle, so the
+// destructor pops it bare, and this core's own read barrier is proof the data
+// landed -- it landed here.
+template <int thread>
+struct NocAsyncReadCoreTx {
+    NocAsyncReadCoreTx(const Storage& dst, const Block& src);
 
-    NocAsyncCopyTx(const NocAsyncCopyTx&) = delete;
-    NocAsyncCopyTx& operator=(const NocAsyncCopyTx&) = delete;
-    NocAsyncCopyTx(NocAsyncCopyTx&&) = delete;
-    NocAsyncCopyTx& operator=(NocAsyncCopyTx&&) = delete;
+    NocAsyncReadCoreTx(const NocAsyncReadCoreTx&) = delete;
+    NocAsyncReadCoreTx& operator=(const NocAsyncReadCoreTx&) = delete;
+    NocAsyncReadCoreTx(NocAsyncReadCoreTx&&) = delete;
+    NocAsyncReadCoreTx& operator=(NocAsyncReadCoreTx&&) = delete;
 
-    ~NocAsyncCopyTx();
+    ~NocAsyncReadCoreTx();
 
     Block wait() const;
 
@@ -493,6 +511,53 @@ struct NocAsyncCopyTx {
     uint32_t dst_tiles;
     uint32_t src_cb;
     uint32_t src_tiles;
+
+#if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    mutable bool waited = false;
+#endif
+};
+
+// Push: this core's L1 is the source, so the NOC must have finished reading it
+// before the pop and the destructor flushes first.
+//
+// The write side also carries the arrival handshake, which is why it is a
+// separate type. A write barrier only tells the SENDER its data landed -- it
+// waits on the destination's acks, which the receiving core cannot observe. So
+// for a push to a rectangle, wait() splits by role: the sender barriers and then
+// raises `arrived` across the rectangle, and every core inside waits on it before
+// publishing its own copy of `dst`.
+//
+// `arrived` is a member rather than a parameter: it is protocol plumbing on a
+// host-reserved slot (kCopyArrivedSem), the same argument that makes the reserved
+// broadcast pair preferable to a caller-supplied one. It sits unused on the
+// unicast form, where construction costs only an L1 address.
+template <int thread>
+struct NocAsyncWriteCoreTx {
+    NocAsyncWriteCoreTx(const Storage& dst, const Block& src);
+    NocAsyncWriteCoreTx(const Storage& dst, const Block& src, PhysicalMcast rect, bool receiving);
+
+    NocAsyncWriteCoreTx(const NocAsyncWriteCoreTx&) = delete;
+    NocAsyncWriteCoreTx& operator=(const NocAsyncWriteCoreTx&) = delete;
+    NocAsyncWriteCoreTx(NocAsyncWriteCoreTx&&) = delete;
+    NocAsyncWriteCoreTx& operator=(NocAsyncWriteCoreTx&&) = delete;
+
+    ~NocAsyncWriteCoreTx();
+
+    Block wait() const;
+
+    uint32_t dst_cb;
+    uint32_t dst_tiles;
+    uint32_t src_cb;
+    uint32_t src_tiles;
+
+    // Meaningful only when `broadcast`.
+    PhysicalMcast rect{};
+    bool broadcast = false;
+    bool receiving = false;
+
+    // mutable: wait() is const across the whole API, and signalling is what a
+    // wait on this handle does.
+    mutable Semaphore<thread> arrived;
 
 #if defined(IS_DM_THREAD) && IS_DM_THREAD && defined(ASSERT_ENABLED) && ASSERT_ENABLED
     mutable bool waited = false;
@@ -597,7 +662,12 @@ NocAsyncWriteTx<thread> noc_store(Block block, Fn fn);
 
 // ---------------------------------------------------------------------------
 // Core-to-core movement: pull a peer's block into this core's Storage
-// (noc_read), or push this core's block into a peer's Storage (noc_write).
+// (noc_core_read), or push this core's block into a peer's Storage
+// (noc_core_write). `byte_offset` shifts the PEER-side address within its buffer.
+//
+// The Physical overloads are the real ones; the Logical ones translate and
+// forward. Only the write side takes a rectangle: pushing one block to many peers
+// is meaningful, pulling from many is not.
 //
 // NOTE: reserve/push act on the *local* view of the destination CB. For a genuine
 // peer buffer the far side's pointers have to be advanced too -- see
@@ -607,12 +677,32 @@ NocAsyncWriteTx<thread> noc_store(Block block, Fn fn);
 // ---------------------------------------------------------------------------
 
 template <int thread>
-NocAsyncCopyTx<thread, /*SrcIsLocal=*/false> noc_read(
-    const Storage& storage, Block block, LogicalCoord coord, uint32_t offset);
+NocAsyncReadCoreTx<thread> noc_core_read(const Storage& dst, Block src, PhysicalCoord coord, uint32_t byte_offset = 0);
 
 template <int thread>
-NocAsyncCopyTx<thread, /*SrcIsLocal=*/true> noc_write(
-    const Storage& storage, Block block, LogicalCoord coord, uint32_t offset);
+NocAsyncWriteCoreTx<thread> noc_core_write(
+    const Storage& dst, Block src, PhysicalCoord coord, uint32_t byte_offset = 0);
+
+// Push to a rectangle of peers. EVERY core in the exchange runs this one
+// statement and takes its side from its own coordinate: the core outside `mcast`
+// sends, the cores inside receive. The handshake rides on the handle's own
+// reserved semaphore, so there is nothing to pass and nothing to reset.
+//
+// Fixes arrival notification, not addressing: the destination is still computed
+// from the SENDER's local view of `dst`, so a repeated push needs the far-side
+// pointers kept in step (see the NOTE above).
+template <int thread>
+NocAsyncWriteCoreTx<thread> noc_core_write(
+    const Storage& dst, Block src, PhysicalMcast mcast, uint32_t byte_offset = 0);
+
+template <int thread>
+NocAsyncReadCoreTx<thread> noc_core_read(const Storage& dst, Block src, LogicalCoord coord, uint32_t byte_offset = 0);
+
+template <int thread>
+NocAsyncWriteCoreTx<thread> noc_core_write(const Storage& dst, Block src, LogicalCoord coord, uint32_t byte_offset = 0);
+
+template <int thread>
+NocAsyncWriteCoreTx<thread> noc_core_write(const Storage& dst, Block src, LogicalMcast mcast, uint32_t byte_offset = 0);
 
 }  // namespace unified
 }  // namespace tt
