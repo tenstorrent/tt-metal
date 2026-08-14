@@ -124,6 +124,150 @@ def _pad_to_tile(n: int) -> int:
     return ((int(n) + TILE - 1) // TILE) * TILE
 
 
+#: Output tile-columns per core a DRAM-sharded matmul may ask for. Its circular
+#: buffers scale with this, and 128 (a whole 131072-wide vocab over 32 cores)
+#: asks for 3.8 MB against 1.5 MB of L1; 32 is the largest power of two that
+#: leaves room for the operand buffers alongside.
+_DRAM_SHARD_MAX_PER_CORE_N = 32
+
+
+class _DramShardedMatmul:
+    """A [1, K] x [K, N] projection with its weight width-sharded across banks.
+
+    The DRAM-sharded matmul kernel is the one that reads a weight BANK-LOCALLY:
+    the activation is width-sharded in L1 over `cores` cores, the weight is
+    width-sharded in DRAM over the banks, and each core streams a contiguous
+    run out of one bank instead of gathering pages an interleaved buffer
+    scattered across all of them.
+
+    It is DECODE-ONLY by construction -- the kernel asserts an in0 height of
+    exactly one tile -- so a caller keeps its general routing for any other
+    shape. `build` returns None rather than raising whenever the shape does not
+    factor onto this board's grid, so the caller simply does not get the path.
+    """
+
+    def __init__(self, weights, program_config, in_memory_config, out_memory_config, k: int):
+        self.weights = weights
+        self.program_config = program_config
+        self.in_memory_config = in_memory_config
+        self.out_memory_config = out_memory_config
+        self.k = int(k)
+
+    def matches(self, x) -> bool:
+        """One tile row of exactly this K -- the decode activation, nothing else."""
+        shape = list(x.padded_shape)
+        if int(shape[-1]) != self.k or int(shape[-2]) != TILE:
+            return False
+        batch = 1
+        for dim in shape[:-2]:
+            batch *= int(dim)
+        return batch == 1
+
+    def __call__(self, x, compute_kernel_config=None):
+        kwargs = {"compute_kernel_config": compute_kernel_config} if compute_kernel_config else {}
+        x = ttnn.to_memory_config(x, self.in_memory_config)
+        parts = [
+            ttnn.linear(
+                x,
+                weight,
+                program_config=self.program_config,
+                memory_config=self.out_memory_config,
+                **kwargs,
+            )
+            for weight in self.weights
+        ]
+        if len(parts) == 1:
+            return ttnn.sharded_to_interleaved(parts[0])
+        # One concat straight to interleaved, rather than converting each part
+        # and joining after: same bytes, one launch instead of len(parts) + 1.
+        return ttnn.concat(parts, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+def _dram_sharded_plan(device, weight_host, dtype):
+    """Stage `weight_host` bank-sharded and build the matmul that reads it.
+
+    The core count has to divide BOTH tile counts: `in0_block_w` slices K per
+    core and `per_core_N` slices N, and a remainder on either is a mis-sized
+    shard rather than an imbalance. N additionally has to fill whole tiles in
+    every bank, or the last bank holds a partial one and the matmul reads past
+    its own shard.
+    """
+    try:
+        k, n = int(weight_host.shape[0]), int(weight_host.shape[1])
+        grid = device.compute_with_storage_grid_size()
+        dram = device.dram_grid_size()
+        if dram.y != 1 or k % TILE or n % TILE:
+            return None
+        banks = int(dram.x)
+        if n % (TILE * banks):
+            return None
+        k_tiles, n_tiles = k // TILE, n // TILE
+        split = next(
+            (
+                (c, rows)
+                for c in range(min(grid.x * grid.y, k_tiles, n_tiles), 0, -1)
+                if k_tiles % c == 0 and n_tiles % c == 0
+                for rows in range(min(c, grid.y), 0, -1)
+                if c % rows == 0 and c // rows <= grid.x
+            ),
+            None,
+        )
+        if split is None:
+            return None
+        cores, rows = split
+        core_grid = ttnn.CoreGrid(y=rows, x=cores // rows)
+        # in0_block_w slices the per-core K run; it must divide both that run and
+        # the whole K, so the largest divisor of the run is the widest legal step.
+        per_core_k = k_tiles // cores
+        in0_block_w = next(b for b in range(per_core_k, 0, -1) if per_core_k % b == 0 and k_tiles % b == 0)
+        # N is split into as many calls as it takes to keep per_core_N inside L1.
+        # The kernel's circular buffers scale with per_core_N, and a vocab-wide
+        # head asks for 3.8 MB of them against 1.5 MB of L1 per core -- so the
+        # whole projection has to be issued as several column blocks and joined,
+        # which is what the reference LM head does for the same reason.
+        splits = 1
+        while n_tiles // (cores * splits) > _DRAM_SHARD_MAX_PER_CORE_N or (n // splits) % (TILE * banks):
+            splits *= 2
+            if splits > n_tiles // cores:
+                return None
+        block = n // splits
+        dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
+        weights = [
+            ttnn.from_torch(
+                weight_host[:, i * block : (i + 1) * block].contiguous(),
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+                    ttnn.BufferType.DRAM,
+                    ttnn.ShardSpec(dram_grid, (k, block // banks), ttnn.ShardOrientation.ROW_MAJOR),
+                ),
+            )
+            for i in range(splits)
+        ]
+        shard = dict(
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        return _DramShardedMatmul(
+            weights,
+            ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=in0_block_w,
+                per_core_M=1,
+                per_core_N=block // TILE // cores,
+                fused_activation=None,
+            ),
+            ttnn.create_sharded_memory_config(shape=(TILE, k // cores), **shard),
+            ttnn.create_sharded_memory_config(shape=(TILE, block // cores), **shard),
+            k,
+        )
+    except Exception:  # noqa: BLE001 - no bank-sharded path on this board/shape
+        return None
+
+
 def captured_inputs_path() -> Path:
     """Where the e2e test persists the pipeline-level golden prompt tokens."""
     return DEMO_DIR / "_captured" / "e2e_pipeline" / "input_ids.pt"
@@ -258,12 +402,26 @@ class VoxtralTtsBackbonePipeline:
         # a single projection with no depth to compound error through, and the token it feeds
         # comes from an argmax, which cares only about the ARGMAX of the logits, not their
         # exact values.
+        lm_head_host = hf_model.lm_head.weight.detach().to(torch.bfloat16).transpose(0, 1).contiguous()
         self.w_lm_head = ttnn.from_torch(
-            hf_model.lm_head.weight.detach().to(torch.bfloat16).transpose(0, 1).contiguous(),
+            lm_head_host,
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
             device=device,
         )
+        # A SECOND copy of that weight, width-sharded across the DRAM BANKS, for
+        # the decode call only. Interleaved, the head reaches 256 GB/s -- half
+        # the board's DRAM bandwidth and the worst of any matmul in the model --
+        # because an interleaved buffer round-robins its pages across banks, so
+        # each of the 128 cores gathers its 1.8 MB column slice from all eight of
+        # them. Width-sharded in DRAM the slice a core needs is contiguous in ONE
+        # bank, which is what the DRAM-sharded matmul is for.
+        #
+        # It cannot replace the interleaved copy: that kernel requires an in0
+        # height of exactly one tile, and `run_prefill_logits` is Call 2's own
+        # product (logits at EVERY prompt position), so it keeps the general
+        # routing. Two copies is 226 MB at bfloat4_b against 32 GB of board DRAM.
+        self.lm_head_dram = _dram_sharded_plan(device, lm_head_host, ttnn.bfloat4_b)
 
         # --- resident KV, one pair per layer, [1, n_kv, C, head_dim] ---------
         cache_host = torch.zeros(1, self.n_kv_heads, self.capacity, self.head_dim, dtype=torch.bfloat16)
@@ -466,6 +624,11 @@ class VoxtralTtsBackbonePipeline:
         return self._lm_head(hidden)
 
     def _lm_head(self, hidden):
+        if self.lm_head_dram is not None and self.lm_head_dram.matches(hidden):
+            try:
+                return self.lm_head_dram(hidden, self.lm_head_compute_kernel_config)
+            except Exception:  # noqa: BLE001 - bank-sharded path refused: general routing
+                self.lm_head_dram = None
         if self.lm_head_compute_kernel_config is not None:
             return ttnn.linear(hidden, self.w_lm_head, compute_kernel_config=self.lm_head_compute_kernel_config)
         return ttnn.linear(hidden, self.w_lm_head)
