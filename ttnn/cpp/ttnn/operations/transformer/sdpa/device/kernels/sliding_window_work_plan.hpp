@@ -41,19 +41,14 @@ constexpr uint32_t chunked_sliding_halo_source_start_tile(
     uint32_t logical_k_tile_rows,
     uint32_t halo_tile_rows) {
     const uint32_t q_group_tile_rows = q_local_tile_rows * ring_size;
-    // One group, matching build_sliding_q_work_plan's bound. Below one group current_group would
-    // underflow. Requiring two -- as this did -- returned 0 for EVERY source in the first group,
-    // not just the wrap, and 0 is the right start only when the halo happens to be the whole slab
-    // (halo_tile_rows == q_local_tile_rows, i.e. a window at least as long as a device's slab).
-    // With a shorter window the caller's compact index came out (q_local_tile_rows - halo_tile_rows)
-    // / k_chunk chunks too high and read the wrong tiles out of the gathered buffer.
     if (q_group_tile_rows == 0 || logical_k_tile_rows < q_group_tile_rows || halo_tile_rows > q_local_tile_rows) {
         return 0;
     }
     const uint32_t current_group = logical_k_tile_rows / q_group_tile_rows - 1;
-    // The wrap source (last device feeding device 0) lives in the PREVIOUS group, which does not
-    // exist in the first group. Device 0's window clips at token 0 there and never requests it, so
-    // this is defensive: return 0 rather than underflow to ~4e9 and read far out of bounds.
+    // The wrap source for device 0 is the prior group. It does not exist in group
+    // 0, but device 0's clipped work plan never reads the fixed-size payload sent
+    // on this edge. Clamp the origin to an in-bounds tile range and preserve the
+    // exchange length so the halo protocol remains synchronized.
     if (current_group == 0 && source_device + 1 == ring_size) {
         return 0;
     }
@@ -109,11 +104,8 @@ constexpr SlidingQWorkPlan build_sliding_q_work_plan(
     }
 
     const uint32_t q_group_tile_rows = ring_size * q_local_tile_rows;
-    // One complete group is enough. The first chunk (logical == one group) is a valid case: every
-    // device's window clips at token 0, device 0 reads only its own slab, and devices 1..n-1 read
-    // their predecessor's slab WITHIN this group, so no previous-group source is ever referenced.
-    // Requiring two groups here made the first chunk return an empty plan, and an empty plan means
-    // total_k_chunk_count == 0, so the reader never pushes Q and compute waits on it forever.
+    // A complete first group is valid: device 0 clips at token 0 and every other
+    // device can consume its predecessor within the same group.
     if (logical_k_tile_rows < q_group_tile_rows || q_local_start_tile + q_chunk_tile_rows > q_local_tile_rows) {
         return plan;
     }
