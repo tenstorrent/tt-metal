@@ -51,10 +51,15 @@ TRACED = os.environ.get("CVD_TRACED", "0") == "1"
 
 # The precision levers, which dominate both latency and PSNR. The decoder's own defaults are accurate
 # mode -- split_mode="full", tap_matmul=True, prefer_mac=True -- so leaving these unset measures what
-# ships. Setting all three to the fast values measures the configuration the earlier 281.6 ms / 49.45 dB
-# result was taken in, which is a *different operator set*, not just a different speed:
+# ships. Setting all three to the fast values selects a *different operator set*, not just a different
+# speed:
 #
 #   CVD_SPLIT_MODE=off CVD_TAP_MATMUL=0 CVD_PREFER_MAC=0     # fast
+#
+# Measured on a 4x8 mesh, t_factor=8 axis=1, traced (see README for the whole curve): all-fast is
+# 279 ms / 45.80 dB, `prefer_mac` alone is 840 ms / 49.45 dB. Those two rows are worth knowing
+# together, because pairing the first one's latency with the second one's PSNR is exactly the mistake
+# that produced the retired "281.6 ms at 49.45 dB" claim.
 #
 # `None` means "leave the constructor default alone" so a run that sets nothing cannot silently pin a
 # lever to a value that later changes upstream.
@@ -258,7 +263,8 @@ def main():
         mean_secs = sum(r[2] for r in rows) / n
         # The accuracy criterion is "no worse than the single-device path at the same levers", not a
         # fixed number: the decoder's constructed defaults are accurate mode (split_mode='full',
-        # tap_matmul, prefer_mac), which scores far above the ~49.45 dB the fast defaults used to give.
+        # tap_matmul, prefer_mac) and score ~67 dB, where all-fast scores ~45.8 dB. A bar that does not
+        # name its lever set is meaningless across that 21 dB spread.
         # So the baseline has to be *measured* on this branch -- run once without the CVD_* variables and
         # pass the mean back in via CVD_BASELINE_PSNR. Unset, this reports and asserts nothing on
         # accuracy, because a hard-coded bar from another configuration is worse than no bar.

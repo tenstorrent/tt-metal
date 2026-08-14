@@ -19,10 +19,31 @@ unsharded", which has to be measured rather than hard-coded. WAVs land in `$CVD_
 can be heard; non-default configurations tag their filenames, so a sharded decode cannot overwrite a
 single-device one.
 
-**No numbers are quoted here on purpose.** The figures from the previous base (281.6 ms at 49.45 dB) were
-measured with the *fast* levers, and the decoder's constructed defaults on main are accurate mode
-(`split_mode="full"`, `tap_matmul=True`, `prefer_mac=True`) -- a slower, much more accurate configuration.
-Re-measure before quoting anything.
+## Measured curve
+
+On a 4x8 Blackhole mesh, `CVD_T_FACTOR=8 CVD_MESH_AXIS=1 CVD_TRACED=1`, one accurate lever at a time
+with the other two fast. Latencies are medians and repeat to within ~2 %:
+
+| levers | latency | PSNR vs CPU |
+|---|---|---|
+| all fast | 279 ms | 45.80 dB |
+| `tap_matmul=True` | 296-307 ms | 46.37 dB |
+| `split_mode="full"` | 472 ms | 50.22 dB |
+| `prefer_mac=True` | 840 ms | 49.45 dB |
+| all three = the constructed defaults | 1023 ms | 67.37 dB |
+
+Same, single device, all fast: 1165 ms / 45.80 dB -- so the 8-way T-shard plus trace is worth ~4.2x,
+and it is *latency only*: the PSNR is identical to the unsharded path at the same levers.
+
+`max_c_in_block` is not a useful lever here: 256 measures 45.82 dB (no gain over the default 128) and
+512 exceeds L1 during program build. Only `conv_pre` and `dec_in_proj` could benefit, against 126 AMP
+convs whose block cannot widen.
+
+**There is no configuration that reaches both ~280 ms and ~50 dB.** An earlier "281.6 ms at 49.45 dB"
+claim circulated for this stage; it pairs the all-fast row's latency with the `prefer_mac` row's PSNR.
+A clean rebuild of the branch it came from reproduces the table above exactly, including 45.80 dB at
+its default settings. When reading these logs, take the lever set from each run's own `levers:` line --
+the filenames do not encode the precision levers, only the mesh/trace configuration.
 
 | variable | meaning |
 |---|---|
