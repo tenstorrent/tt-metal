@@ -384,14 +384,18 @@ def _reshard_cases():
     """(shape, in_cfg, out_cfg, expected_placements, expected_src_row_pages)."""
     return [
         pytest.param(
-            # 128 B source pages: below MIN_STREAM_READ_BYTES, so the gate keeps
-            # the paged gather but runs it on the whole grid (measured 1.67x).
+            # 128 B source pages. Refinement 2 pushed this onto the whole grid,
+            # because aliasing the destination pinned the reader to a 128 B
+            # PER-ROW transfer. Perf 2 moves a whole block in ONE transfer when the
+            # block width is one source shard row (here 32 rows x 128 B = 4 KB), so
+            # the gate's premise is false and the destination stays resident.
+            # MEASURED on this exact config: 6,518 -> 2,322 ns (2.81x).
             [1, 1, 128, 128],
             _BLOCK_2x2,
             _legacy(_crs(((0, 0), (3, 0))), (32, 128), _ROW, _HEIGHT),
-            (pd.P_ACCESSOR, pd.P_ACCESSOR),
+            (pd.P_ACCESSOR, pd.P_LOCAL_SHARD),
             2,
-            id="narrow_page_block_source_is_gathered_on_the_grid",
+            id="narrow_page_block_source_is_coalesced_into_a_local_shard",
         ),
         pytest.param(
             [1, 1, 64, 512],
@@ -595,13 +599,65 @@ _GATED_CASES = [
         _legacy(_crs(((0, 0), (3, 0))), (128, 64), _ROW, _HEIGHT),
         id="two_tile_wide_destination_shard_128B_reads",  # measured 1.75x
     ),
-    pytest.param(
-        [1, 1, 1024, 256],
-        _legacy(_crs(((0, 0), (3, 0))), (1024, 64), _ROW, _WIDTH),
-        _legacy(_crs(((0, 0), (7, 0))), (128, 256), _ROW, _HEIGHT),
-        id="128B_source_pages",  # measured 1.67x
-    ),
 ]
+
+# Perf 2 took one case OUT of _GATED_CASES: a 128 B-page WIDTH-sharded source
+# ([1,1,1024,256] W x4 -> H x8). The gate exists because an aliased destination
+# pins the reader's PER-ROW transfer, and that premise dies once a whole block is
+# one transfer (32 rows x 128 B = 4 KB). Keeping the destination resident there is
+# MEASURED at 21,011 -> 14,085 ns (1.49x), so the gate must NOT fire on it — which
+# is what the case below pins. The two DRAM-sourced cases above are unaffected:
+# an interleaved source has one page per stick, so there is nothing to coalesce.
+_COALESCED_CASE = (
+    [1, 1, 1024, 256],
+    _legacy(_crs(((0, 0), (3, 0))), (1024, 64), _ROW, _WIDTH),
+    _legacy(_crs(((0, 0), (7, 0))), (128, 256), _ROW, _HEIGHT),
+)
+
+
+def test_coalesced_gather_keeps_the_destination_resident(device):
+    """The read-transfer gate does not fire when the block is ONE transfer."""
+    shape, in_cfg, out_cfg = _COALESCED_CASE
+    for cfg in (in_cfg, out_cfg):
+        if cfg.is_sharded():
+            _skip_if_grid_too_small(device, _shard_grid(cfg))
+    descriptor = _descriptor(device, shape, in_cfg, out_cfg)
+    assert _placements(descriptor) == (pd.P_ACCESSOR, pd.P_LOCAL_SHARD)
+    # The block width IS one source shard row, which is what makes it one transfer.
+    wt_chunk = descriptor.kernels[2].compile_time_args[0]
+    assert wt_chunk == 64 // 32
+
+    # OFF arm: the pre-Perf-2 choice stays reachable, and the gate fires again.
+    pd.LEVERS["gather_coalesce"] = 0
+    try:
+        off_arm = _descriptor(device, shape, in_cfg, out_cfg)
+    finally:
+        pd.LEVERS["gather_coalesce"] = 1
+    assert _placements(off_arm) == (pd.P_ACCESSOR, pd.P_ACCESSOR)
+
+
+def test_coalesced_gather_keeps_identity(device):
+    """Both arms are correct — the coalesced gather is a perf choice, not a
+    contract change."""
+    shape, in_cfg, out_cfg = _COALESCED_CASE
+    for cfg in (in_cfg, out_cfg):
+        if cfg.is_sharded():
+            _skip_if_grid_too_small(device, _shard_grid(cfg))
+    torch_input = torch.randn(shape).to(torch.bfloat16)
+    for arm in (1, 0):
+        pd.LEVERS["gather_coalesce"] = arm
+        try:
+            tt_input = ttnn.from_torch(
+                torch_input,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=in_cfg,
+            )
+            got = ttnn.to_torch(tilize(tt_input, out_cfg))
+        finally:
+            pd.LEVERS["gather_coalesce"] = 1
+        assert torch.equal(got.to(torch.float32), torch_input.to(torch.float32)), f"arm={arm}"
 
 
 @pytest.mark.parametrize("shape, in_cfg, out_cfg", _GATED_CASES)

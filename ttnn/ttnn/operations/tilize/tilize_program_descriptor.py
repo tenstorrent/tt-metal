@@ -236,6 +236,9 @@ LEVERS = {
     # below subsumes it, and measured strictly better everywhere B8 was enabled.
     "read_ahead": 1,
     "read_coalesce": 1,
+    # Perf 2: move a whole block of the cross-core L1 gather in ONE transfer when
+    # the block width is one source shard row. 0 = the per-row gather.
+    "gather_coalesce": 1,
     # master.md B10 ships PARKED at its byte-identical default (every reader on
     # the default request VC). Measured over 5-sample medians on Wormhole B0 it
     # is neutral on the grid-filling square (86,136 vs 85,720 ns) and a 2.6% LOSS
@@ -742,6 +745,23 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # so `in_placement == P_ACCESSOR` follows from `src_in_dram` rather than
     # needing the placement decision.
     src_in_dram = input_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
+    # Perf 2: tiles per SOURCE shard row on the cross-core gather. Whole by
+    # construction — the op already refuses a paged source whose page is not
+    # NOC_ALIGN_BYTES-aligned, and a tile-width-aligned shard makes the page a
+    # whole number of tile-columns. 0 off the gather.
+    src_page_tiles = src_page_bytes // (tile_w * elem_in) if src_row_pages > 1 else 0
+    # Rows per SOURCE shard. A block may only be moved as ONE transfer if it stays
+    # inside a single shard — pages of one shard column are contiguous in THAT
+    # core's L1, but the next shard down lives on a different core — so the shard
+    # must hold a whole number of tile-rows. MEASURED, not assumed: with this term
+    # missing, the BLOCK-sharded sources with 50- and 64-row shards produced wrong
+    # values (tests/.../test_tilize_sharded.py::test_padded_sharded_identity and
+    # ::test_reshard_placement_and_source_page_geometry).
+    src_shard_rows = (
+        int(input_tensor.memory_config().shard_spec.shape[0])
+        if (input_tensor.memory_config().is_sharded() and input_tensor.memory_config().shard_spec is not None)
+        else 0
+    )
     wants_read_ahead = bool(
         LEVERS["read_ahead"]
         and src_in_dram
@@ -767,9 +787,27 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             # which is the full shard width and nothing else.
             wt_chunk, n_chunks = shard["shard_wt"], 1
         else:
-            wt_chunk, n_chunks = derive_shard_blocking(
-                shard["shard_wt"], wt_cap(cb_depth, stream_in, stream_out, stage_per_chunk_tile, in_extra)
-            )
+            cap = wt_cap(cb_depth, stream_in, stream_out, stage_per_chunk_tile, in_extra)
+            # Perf 2 — CROSS-CORE GATHER: a block whose width IS one source shard
+            # row is contiguous at BOTH ends (its tile_h rows are tile_h
+            # consecutive pages of one shard, and the CB slot is contiguous
+            # because the block width is the page), so the reader moves it in ONE
+            # transfer instead of tile_h. Measured end-to-end 1.27x on the reshard
+            # focus, 1.54x on the 128 B-page plan, 2.91x on a 1-tile page; flat,
+            # never slower, once the per-row transfer already saturates source L1
+            # egress. Preferring this width costs nothing elsewhere: it only
+            # applies where the source is a narrower-than-a-row shard.
+            if (
+                LEVERS["gather_coalesce"]
+                and src_page_tiles
+                and src_shard_rows
+                and src_shard_rows % tile_h == 0
+                and shard["shard_wt"] % src_page_tiles == 0
+                and src_page_tiles <= cap
+            ):
+                wt_chunk, n_chunks = src_page_tiles, shard["shard_wt"] // src_page_tiles
+            else:
+                wt_chunk, n_chunks = derive_shard_blocking(shard["shard_wt"], cap)
         # Read-transfer gate (MIN_STREAM_READ_BYTES): an aliased DESTINATION pins
         # the reader's per-row transfer to the shard's own width, and below the
         # measured knee the generic full-grid split beats packing in place. Only
@@ -780,6 +818,18 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             # the page — the per-STICK size the gate was measured on describes the
             # row-major reader only.
             read_bytes = src_page_bytes if retile else min(wt_chunk * tile_w * elem_in, src_page_bytes)
+            # Perf 2: the gate exists because an aliased destination pins the
+            # reader to a small PER-ROW transfer. Once the block is ONE contiguous
+            # transfer that premise is gone — the gated W x4 -> H x8 plan is
+            # 20,828 ns with the gate firing and 13,512 with the block kept local.
+            if (
+                LEVERS["gather_coalesce"]
+                and src_page_tiles
+                and src_shard_rows
+                and src_shard_rows % tile_h == 0
+                and wt_chunk == src_page_tiles
+            ):
+                read_bytes = tile_h * src_page_bytes
             if read_bytes < MIN_STREAM_READ_BYTES:
                 in_placement, out_placement, shard, work_mode = P_ACCESSOR, P_ACCESSOR, None, W_BLOCKS
     if shard is not None:
@@ -1153,6 +1203,17 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # which is where the crossover's 90%-of-wall read lives. B6/B10/B13 were
     # priced on W_BLOCKS only, so their gate stays narrow rather than being
     # widened by association.
+    # Perf 2: the whole-block gather transfer is expressible exactly when the
+    # block width IS one source shard row (so both ends are contiguous).
+    gather_coalesce = int(
+        src_row_pages > 1
+        and in_placement == P_ACCESSOR
+        and LEVERS["gather_coalesce"]
+        and src_shard_rows
+        and src_shard_rows % tile_h == 0
+        and wt_chunk * tile_w * elem_in == src_page_bytes
+        and not (ABLATE["dm"] or ABLATE["dm_read"])
+    )
     aligned_read = regime == R_ALIGNED and in_placement == P_ACCESSOR
     # ISSUE-AHEAD. The source must be DRAM: on a source in ANOTHER core's L1 the
     # transaction-id machinery is pure added RISC work with no fabric latency to
@@ -1178,11 +1239,6 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # the block spanning the whole row, and a shard height that is a whole number
     # of tile-rows so a block never straddles two shards. Measured 1.12-1.18x on
     # exactly the cells issue-ahead loses on.
-    src_shard_rows = (
-        int(input_tensor.memory_config().shard_spec.shape[0])
-        if (input_tensor.memory_config().is_sharded() and input_tensor.memory_config().shard_spec is not None)
-        else 0
-    )
     read_coalesce = (
         tile_h
         if (
@@ -1299,6 +1355,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # walks them itself while a read is outstanding, since get_write_ptr only
         # advances on push_back.
         cb_pages_in(cb_depth, wt_chunk, in_extra) // wt_chunk,
+        # Perf 2: the cross-core gather moves a WHOLE BLOCK in one transfer when
+        # the block width is exactly one source shard row.
+        gather_coalesce,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 

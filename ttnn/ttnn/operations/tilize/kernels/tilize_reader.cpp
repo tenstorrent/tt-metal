@@ -254,7 +254,10 @@ void kernel_main() {
     // for the issue-ahead window). get_write_ptr only advances on push_back, so
     // the reader walks the ring itself while a read is outstanding.
     constexpr uint32_t in_cb_slots = get_compile_time_arg_val(27);
-    constexpr auto src_args = TensorAccessorArgs<28>();
+    // Perf 2 (cross-core L1 gather): the block's width IS one source shard row,
+    // so a whole block is ONE contiguous transfer instead of tile_h per-row ones.
+    constexpr uint32_t gather_coalesce = get_compile_time_arg_val(28);
+    constexpr auto src_args = TensorAccessorArgs<29>();
 
     constexpr uint32_t cb_output_tiles = 16;
     // Which CB this kernel publishes. On the direct path with no cast the reader
@@ -692,7 +695,38 @@ void kernel_main() {
                 // (the fill is what makes the block whole), so they share one
                 // zone; ABLATE["dm_read"] / `skip_pad_fill` separate them.
                 MaybeDeviceZoneScope("reader_issue");
-                for (uint32_t r = 0; r < tile_h; ++r) {
+                // ── PERF 2: the WHOLE-BLOCK cross-core gather ─────────────
+                // When the block's width IS one source shard row (the host sets
+                // `gather_coalesce`), the block's tile_h source rows are tile_h
+                // CONSECUTIVE pages of ONE source shard — page p lives on shard
+                // `p % src_row_pages` at local row `p / src_row_pages` — so they
+                // are contiguous in that core's L1, and the CB slot is contiguous
+                // too because the block width is exactly the page. The whole
+                // block is then ONE transfer instead of tile_h * slices.
+                //
+                // Measured end-to-end: reshard [1,1,1024,256] W2->H8 19,488 ->
+                // 15,365 ns (1.27x); the 128 B-page gated plan 20,828 -> 13,512
+                // (1.54x); a 1-tile-page source 2.91x; padded 1.22x. Flat, never
+                // slower, once the per-row transfer is already >= 512 B (the row
+                // form saturates source L1 egress there).
+                //
+                // The guard is the PAD guard, not a new one: a block whose rows
+                // are all real and full-width takes the single transfer, and a
+                // ragged block keeps the per-row read + fill below verbatim.
+                // Raggedness is per block, so at most ONE tile-row per core ever
+                // falls back, and the fallback writes the same addresses.
+                bool coalesced = false;
+                if constexpr (gather_coalesce) {
+                    if (img < n_img_in && row_in_img + tile_h <= h_in && valid_bytes == row_bytes) {
+                        issue.read(
+                            accessor.get_noc_addr(
+                                (img * h_in + row_in_img) * src_row_pages + col_off / src_page_bytes, 0),
+                            l1_addr,
+                            tile_h * row_bytes);
+                        coalesced = true;
+                    }
+                }
+                for (uint32_t r = 0; r < tile_h && !coalesced; ++r) {
                     const uint32_t src_row = row_in_img + r;
                     // H tail and whole pad tiles: no source row at all.
                     const uint32_t n_read = (img < n_img_in && src_row < h_in) ? valid_bytes : 0;
