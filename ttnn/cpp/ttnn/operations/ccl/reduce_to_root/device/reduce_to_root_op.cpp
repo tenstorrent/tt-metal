@@ -63,6 +63,21 @@ void ReduceToRootOp::validate(const operation_attributes_t& operation_attributes
             optional_output_tensor_m.value().device() == mesh_device,
             "Output tensor must be allocated on same mesh device as input tensor");
     }
+    const auto& input_s = tensor_args.input_tensor_s;
+    const auto& input_m = tensor_args.input_tensor_m;
+
+    TT_FATAL(
+        input_l.layout() == tt::tt_metal::Layout::TILE && input_s.layout() == tt::tt_metal::Layout::TILE &&
+            input_m.layout() == tt::tt_metal::Layout::TILE,
+        "ReduceToRoot requires TILE layout for all three input tensors, got l: {}, s: {}, m: {}",
+        input_l.layout(),
+        input_s.layout(),
+        input_m.layout());
+
+    TT_FATAL(
+        input_l.is_sharded() && input_s.is_sharded() && input_m.is_sharded(),
+        "ReduceToRoot requires all three input tensors to be sharded");
+
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     const uint32_t input_page_size_bytes = input_l.tensor_spec().compute_page_size_bytes();
 

@@ -278,6 +278,18 @@ ttnn::device_operation::CachedProgram<ReduceToRootOp::ReduceToRoot::shared_varia
 
     // The writers append the s and m pages after the l payload, so a packet is 2 aligned pages larger than the payload.
     const uint32_t total_pkt_size = packet_size_bytes + (2 * aligned_input_page_size_bytes);
+
+    const uint32_t fabric_max_payload_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    TT_FATAL(
+        total_pkt_size <= fabric_max_payload_size_bytes,
+        "ReduceToRoot needs to send {} B per shard core ({} B of l payload plus 2 x {} B for the s and m pages), which "
+        "exceeds the fabric maximum payload of {} B. Use a narrower l shard or a smaller page size, or raise "
+        "max_packet_payload_size_bytes in FabricRouterConfig.",
+        total_pkt_size,
+        packet_size_bytes,
+        aligned_input_page_size_bytes,
+        fabric_max_payload_size_bytes);
+
     constexpr auto packet_cb_id = tt::CBIndex::c_7;
     tt::tt_metal::CircularBufferConfig cb_packet_config =
         tt::tt_metal::CircularBufferConfig(2 * total_pkt_size, {{packet_cb_id, input_dataformat}})
