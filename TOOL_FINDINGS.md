@@ -1662,6 +1662,106 @@ is part of the cost unless the producer can emit it in place.**
 
 ---
 
+## ★★ WHAT THE OPTIMIZER IS MISSING — the analysis this experiment was for
+
+The ladder, as defined in `run.py:102`:
+
+```
+knob:grid -> knob:fidelity -> knob:dtype -> knob:shard -> structural -> tt-lang -> cpp
+                                            structural levers named: trace | kv-cache | gather
+```
+
+### 1. Coverage map — the hand-port's shipped wins against the rung that would find them
+
+| hand-port win | worth | rung that finds it |
+|---|---|---|
+| sharded decode RMSNorm (§6.67) | **−5.399 ms/frame** | `knob:shard` ✅ found it |
+| decode matmul program configs (§6.52) | **−5.06** | `knob:grid` ✅ — but the silu half is **unreachable**, see F12 |
+| whole frame graph traced (§6.65) | **−4.244** | `structural:trace` ✅ found it |
+| sdpa for Block 2's attention interior (§6.45) | −2.555 | ❌ **no rung** — swap a hand-rolled interior for a library primitive |
+| residual as matmul bias (§6.62) | −1.918/step | ❌ **no rung** — algebraic rewrite |
+| in-place elementwise, Block 1 (§6.47) | +0.929 | ❌ **no rung** — allocation elimination |
+| two plain KV writes + 1-core qkv shard (§6.44) | +0.907 | ⚠ `knob:shard` in reverse — the rung only ever ADDS sharding |
+| in-place elementwise, Block 2 (§6.48) | +0.790 | ❌ **no rung** |
+| hand-rolled 9-op head split (§6.72) | −0.775 bit-exact | ❌ **no rung** — this is DE-fusion |
+| `_SDPA_PRG` (§6.46) | +0.197 | `knob:grid` ✅ |
+
+Plus everything inherited and still shipping — **CFG batch-fold into rows (2.23×)**, qkv weight
+fusion, `SCALE` baked into wqkv's q rows, `_trunk` projecting before it narrows, the semantic argmax
+**on the host**, the codec's gather-based pad. **None of those has a rung either.**
+
+**By magnitude the ladder reaches about two-thirds of the device-time wins and none of the algebraic
+ones.** And that is the generous reading — it assumes `knob:grid` reaches `fused_activation`, which
+F12 shows it does not.
+
+### 2. The real finding: `structural` is where the value was, and it is the least specified rung
+
+Every large win the tool itself landed in run 2 came from `structural` — fused QKV, the decode-native
+layout, one-call RoPE, the shard chain. Yet the rung names only **three** levers (trace, kv-cache,
+gather), none of which is any of those. **The agent improvised all of it.** That is why the run was
+good and also why it is not reproducible: the ladder's most valuable rung is a blank cheque.
+
+**Recommendation: populate `structural` with a named sub-catalogue**, each with a firing condition
+and a guard. Every one below is drawn from measured evidence, with both signs where they exist:
+
+| sub-lever | fires when | evidence |
+|---|---|---|
+| **`bias-fold`** | an elementwise add's only consumer is a matmul → make it that matmul's `bias` | §6.62, **−1.918 ms/step**. Guard: one tile of rows only — a bias broadcasts and is silently wrong on prefill |
+| **`in-place`** | an elementwise operand is dead immediately after → use the `_` variant | §6.47 + §6.48, **+1.72 ms** combined; allocation was ~12 µs of a ~65 µs op |
+| **`reorder project↔narrow`** | a projection is adjacent to a slice/gather/duplicate → try BOTH orders | `_trunk` projects before narrowing (**win**); §6.34 project-then-duplicate is **0.785×, a loss**. Both signs — must be measured, never assumed |
+| **`weight-bake`** | a constant scalar multiplies a projection's output → fold it into the weights at load | `SCALE` into wqkv's q rows |
+| **`weight-concat`** | sibling projections consume the same activation → concatenate at load | the tool DID find this (O4c); worth naming so it is not re-derived |
+| **`de-fuse`** | a library op can be expressed as primitives, **and trace is applied** | §6.72, **−0.775 ms bit-exact**, 9 ops beating 1. The tool found this too (O4e) — from the opposite direction, and only by accident |
+| **`library-swap`** | a hand-rolled interior matches a library primitive's contract | §6.45 sdpa, **−2.555 ms** |
+| **`revert`** | a previously-applied config → try REMOVING it | §6.43: `wo`'s tuned config was inert, and deleting it was bit-exact |
+
+### 3. Three structural blindnesses — things the design cannot express
+
+**(a) The host is forbidden as a destination.** `test_e2e_pipeline` asserts `torch_ops == 0` and
+`test_forward_fires_no_host_op` asserts zero host aten ops. So "this work belongs on the host" is
+**inexpressible**. §6.8 moved a semantic argmax to the host for **1.439×** — an 8320-value reduce
+that already ended in a D→H copy, so it added no round trip. §6.50 is the control: moving the other
+three host steps ON device is 7–29× slower. A tool that can only ever move work onto the chip will
+never find either. **Suggested fix:** allow a host fallback when the op is already adjacent to a
+transfer, and gate it on total wall time rather than on op location.
+
+**(b) Op count is treated as monotone-good.** Every lever reduces launches. §6.72 and the tool's own
+O4e both show the reverse winning once trace has removed launch cost — *"dispatches fell 3413 → 2867
+yet it got slower; these were view ops doing no work."* **De-fusion should be a scheduled rung after
+`structural:trace`, not a lucky accident.**
+
+**(c) PCC at one length is the whole correctness model.** `[gpt-21]` records SDPA settings that were
+faster and **"NOT SAFE — position sweep"**; §6.31 holds back a 2.079× bf16 semantic head because
+*"one flip redirects the whole utterance"*. Neither is visible to a single-length PCC gate. **A
+generative model needs its gate run at several positions/lengths**, and discrete outputs (argmax,
+codes) need an exact-match check, not a correlation.
+
+### 4. Already filed, restated here because they belong to this analysis
+
+- **O1** — no per-weight dtype axis. §6.16 kept `w2` in bf16 while everything else went BFP8, because
+  w2 alone was 77% of the precision stack's accuracy cost for 15% of its speed.
+- **O8** — the accept test has no exchange rate: `faster AND above the floor` keeps a 0.10% gain that
+  costs a quarter of the PCC headroom.
+- **F12** — the fusion rung reaches for a grid when it should emit a full program config, so
+  activation fusion is recorded as a loss when the lever was never pulled.
+- **F14** — shard-chaining must check the consumer's program-config grid, and must classify a change
+  to a REDUCTION's core count as precision-affecting.
+
+### 5. What to keep — the tool's genuine structural advantage
+
+Worth saying plainly, because the rest of this section is criticism. **The tool re-opened its own
+closed questions four times in a single run** (O4m, O4k, O4o→O4p, plus the stale 32-core cap) and
+that is where its best late wins came from. The hand-port did it twice in 74 experiments (§6.67,
+§6.72) and its own ledger calls the rule out: *"a rejection is stale when its premise is a cost
+someone has since removed."*
+
+**That behaviour should be promoted from emergent to designed:** when any structural change lands,
+mark every knob measured before it as stale and re-open it. The tool nearly has this already — it is
+the single thing it does better than a careful human, and it is currently an accident of the agent's
+judgement rather than a property of the ladder.
+
+---
+
 ## Corrections to this document
 
 - **`beat_baseline: false` on 24/24 kernel records is BY DESIGN, not a defect.** I flagged it as a
