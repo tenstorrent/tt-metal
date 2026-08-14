@@ -17,7 +17,7 @@
 namespace ttnn::operations::experimental::deepseek_prefill::attn_res_weighted_reduce_nc::detail {
 
 void bind_attn_res_weighted_reduce_nc(nb::module_& mod) {
-    ttnn::bind_function<"attn_res_weighted_reduce_nc", "ttnn.experimental.">(
+    ttnn::bind_function<"attn_res_weighted_reduce_nc", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
             Reduces `input` along `dim`, weighting each slice by `weight`, in a single pass:

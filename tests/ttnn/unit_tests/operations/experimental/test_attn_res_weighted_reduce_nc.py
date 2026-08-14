@@ -73,7 +73,7 @@ def test_attn_res_weighted_reduce_nc(shape, device):
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_weight = torch.randn([1, candidates, height, 1], dtype=torch.bfloat16)
 
-    output = ttnn.experimental.attn_res_weighted_reduce_nc(
+    output = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(
         _place(torch_input, device), _place(torch_weight, device), dim=1
     )
 
@@ -94,7 +94,7 @@ def test_attn_res_weighted_reduce_nc_weight_batch(num_sites, device):
     torch_input = torch.randn([1, 9, 128, 256], dtype=torch.bfloat16)
     torch_weight = torch.randn([num_sites, 9, 128, 1], dtype=torch.bfloat16)
 
-    output = ttnn.experimental.attn_res_weighted_reduce_nc(
+    output = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(
         _place(torch_input, device), _place(torch_weight, device), dim=1
     )
 
@@ -116,11 +116,13 @@ def test_attn_res_weighted_reduce_nc_weight_batch_matches_per_site(device):
     tt_input = _place(torch.randn([1, 9, 128, 256], dtype=torch.bfloat16), device)
     torch_weight = torch.randn([6, 9, 128, 1], dtype=torch.bfloat16)
 
-    batched = ttnn.experimental.attn_res_weighted_reduce_nc(tt_input, _place(torch_weight, device), dim=1)
+    batched = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(
+        tt_input, _place(torch_weight, device), dim=1
+    )
     got = ttnn.to_torch(batched).float()
 
     for site in range(torch_weight.shape[0]):
-        alone = ttnn.experimental.attn_res_weighted_reduce_nc(
+        alone = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(
             tt_input, _place(torch_weight[site : site + 1], device), dim=1
         )
         assert_with_pcc(ttnn.to_torch(alone).float(), got[site : site + 1], PCC)
@@ -138,8 +140,8 @@ def test_attn_res_weighted_reduce_nc_negative_dim(device):
     tt_input = _place(torch.randn(shape, dtype=torch.bfloat16), device)
     tt_weight = _place(torch.randn([1, 9, 128, 1], dtype=torch.bfloat16), device)
 
-    aliased = ttnn.experimental.attn_res_weighted_reduce_nc(tt_input, tt_weight, dim=-3)
-    direct = ttnn.experimental.attn_res_weighted_reduce_nc(tt_input, tt_weight, dim=1)
+    aliased = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(tt_input, tt_weight, dim=-3)
+    direct = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(tt_input, tt_weight, dim=1)
 
     assert list(aliased.shape) == list(direct.shape)
     assert torch.equal(ttnn.to_torch(aliased), ttnn.to_torch(direct))
@@ -156,7 +158,7 @@ def test_attn_res_weighted_reduce_nc_unaligned_rows(device):
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_weight = torch.randn([1, 9, 100, 1], dtype=torch.bfloat16)
 
-    output = ttnn.experimental.attn_res_weighted_reduce_nc(
+    output = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(
         _place(torch_input, device), _place(torch_weight, device), dim=1
     )
 
@@ -175,7 +177,7 @@ def test_attn_res_weighted_reduce_nc_fp32_weight(device):
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
     torch_weight = torch.randn([1, 9, 256, 1], dtype=torch.float32)
 
-    output = ttnn.experimental.attn_res_weighted_reduce_nc(
+    output = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(
         _place(torch_input, device), _place(torch_weight, device, ttnn.float32), dim=1
     )
 
@@ -201,7 +203,7 @@ def test_attn_res_weighted_reduce_nc_program_cache(device):
         torch_input = torch.randn(shape, dtype=torch.bfloat16)
         torch_weight = torch.randn([1, 9, 128, 1], dtype=torch.bfloat16)
         tt_input, tt_weight = _place(torch_input, device), _place(torch_weight, device)
-        output = ttnn.experimental.attn_res_weighted_reduce_nc(tt_input, tt_weight, dim=1)
+        output = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(tt_input, tt_weight, dim=1)
         live += [tt_input, tt_weight, output]
         assert_with_pcc(_reference(torch_input, torch_weight), ttnn.to_torch(output).float(), PCC)
 
@@ -219,7 +221,7 @@ def test_attn_res_weighted_reduce_nc_matches_composed(device):
     tt_input = _place(torch.randn(shape, dtype=torch.bfloat16), device)
     tt_weight = _place(torch.randn([1, 9, 256, 1], dtype=torch.bfloat16), device)
 
-    fused = ttnn.experimental.attn_res_weighted_reduce_nc(tt_input, tt_weight, dim=1)
+    fused = ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(tt_input, tt_weight, dim=1)
     composed = ttnn.sum(ttnn.mul(tt_input, tt_weight), dim=1, keepdim=True)
 
     assert_with_pcc(ttnn.to_torch(composed).float(), ttnn.to_torch(fused).float(), PCC)
@@ -297,4 +299,4 @@ def test_attn_res_weighted_reduce_nc_rejects(bad, message, device, expect_error)
         )
 
     with expect_error(RuntimeError, message):
-        ttnn.experimental.attn_res_weighted_reduce_nc(tt_input, tt_weight, dim=dim)
+        ttnn.experimental.deepseek_prefill.attn_res_weighted_reduce_nc(tt_input, tt_weight, dim=dim)
