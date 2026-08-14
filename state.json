@@ -1,18 +1,14 @@
 {
-  "last_run": "2026-08-14T00:43:00Z",
-  "run_id": 31758087772,
+  "last_run": "2026-08-14T06:48:00Z",
+  "run_id": 31777369825,
   "open_prs": {
-    "51999": {
-      "issue": 51420,
-      "status": "checks green; action_required maintainer gate; unchanged 2026-08-13"
-    },
     "52106": {
       "issue": 51660,
-      "status": "checks green; action_required; unchanged 2026-08-13"
+      "status": "checks green; reviewer-blocked (CodeOwners pending); already pinged 2026-08-12, within cooldown"
     },
     "51868": {
       "issue": 51866,
-      "status": "checks green; action_required; branch behind main; unchanged 2026-08-13"
+      "status": "author-blocked (branch behind main); per policy no rebase, no action this run"
     }
   },
   "issues_labeled": [
@@ -35,7 +31,8 @@
     "52607": "fix in open PR #52608",
     "52901": "fix in open PR #52902",
     "53046": "fix already in open PR #53047 (lgamma bridge-guard <= fix); overlaps in-flight #51991, needs coordination per PR body -- do not open duplicate",
-    "53078": "fix in draft PR #53103 (AI-assisted LLK triage board)"
+    "53078": "fix in draft PR #53103 (AI-assisted LLK triage board)",
+    "53106": "fix opened by repo-assist this run, see new PR (reciprocal Newton seed 0x1.554p0f)"
   },
   "dropped_fix_targets": {
     "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
@@ -64,8 +61,9 @@
   "backlog_cursor": {
     "task1_labeling": "labeled 53060 this run (performance monitoring); continue oldest-first sweep from ~53050s next",
     "task2_commenting": "commented on 53077 this run (GRPO seed replication root-cause); next resume around 53060-53099 range",
-    "task3_fix": "no new fix PRs opened -- 53046 already has fix PR #53047 from reporter; 53055/53029 need deeper hw investigation not safe to attempt blind",
-    "task6_stale_prs": "re-nudged #34933 (author) and #21584 (/codeowners ping) this run, past 3-day cooldown; #45516/#49658 skipped (nudged 2026-08-12, within cooldown)"
+    "task3_fix": "opened fix PR for #53106 (reciprocal legacy-compat Newton seed, verified against current source: byte-identical const in BH/WH rsqrt_compat.h, fp16a repr of 4/3 confirmed = 1.3330078125)",
+    "task6_stale_prs": "re-nudged #34933 (author) and #21584 (/codeowners ping) this run, past 3-day cooldown; #45516/#49658 skipped (nudged 2026-08-12, within cooldown)",
+    "task5_maintain": "PR #51999 closed (no longer open); #52106 reviewer-blocked, already pinged, cooldown active; #51868 author-blocked behind main, no rebase per policy"
   },
-  "notes": "2026-08-13 run: Task 5 - all 3 repo-assist PRs unchanged, still action_required. Task 1 - labeled #53046 (lgamma fp32 boundary bug) which already has fix PR #53047 from reporter kinginu; recorded as covered, no duplicate. Task 2 - reviewed #53055 (P3 LLK zero-flag, deliberately deferred by maintainer reporter) and #53029 (K3 AttnRes silent correctness, deep hw investigation) -- both well-documented already, no comment added to avoid redundancy. Task 6 - re-pinged #34933 and #21584 past cooldown. Task 8 - updated #51865 monthly summary with run history and refreshed suggested actions list including new PR #53047. | 2026-08-14 run: Task1 labeled #53060 perf-monitoring; Task2 commented on #53077 (traced replicate_seeds bug in SeedManager); Task3 confirmed #53078 already has draft fix PR #53103, no duplicate; reviewed #53079 already assigned, no action; Task8 updated #51865 monthly summary."
+  "notes": "2026-08-13 run: Task 5 - all 3 repo-assist PRs unchanged, still action_required. Task 1 - labeled #53046 (lgamma fp32 boundary bug) which already has fix PR #53047 from reporter kinginu; recorded as covered, no duplicate. Task 2 - reviewed #53055 (P3 LLK zero-flag, deliberately deferred by maintainer reporter) and #53029 (K3 AttnRes silent correctness, deep hw investigation) -- both well-documented already, no comment added to avoid redundancy. Task 6 - re-pinged #34933 and #21584 past cooldown. Task 8 - updated #51865 monthly summary with run history and refreshed suggested actions list including new PR #53047. | 2026-08-14 run: Task1 labeled #53060 perf-monitoring; Task2 commented on #53077 (traced replicate_seeds bug in SeedManager); Task3 confirmed #53078 already has draft fix PR #53103, no duplicate; reviewed #53079 already assigned, no action; Task8 updated #51865 monthly summary. | 2026-08-14 (run 31777369825): Task5 noted #51999 closed; #52106/#51868 unchanged blockers. Task3 opened new fix PR for #53106 (kinginu's reciprocal Newton seed accuracy report) after verifying byte-identical BH/WH constant and no existing PR via search. Task8 updated #51865 monthly summary."
 }
