@@ -858,6 +858,7 @@ class MiniMaxH3Pipeline:
             ccl_manager=self.ccl_manager,
             parallel_config=self.dit_parallel_config,
             precomputed_adaln=True,
+            cache_padding=self.trace_denoise,
         )
 
         # Cache-aware: on a hit this reads pre-sharded device tensors instead of 62 GB of

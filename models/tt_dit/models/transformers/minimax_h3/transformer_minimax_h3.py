@@ -261,10 +261,15 @@ class MiniMaxH3Transformer3DModel(Module):
         # caller must supply a `MiniMaxH3AdalnCache` per forward -- see `adaln_cache_minimax_h3` --
         # and the 26 GB of `adaln_proj` weights (6.50 GB/device at TP=4) never reach the device.
         precomputed_adaln: bool = False,
+        # Hold the sequence padding in one buffer instead of allocating it per forward. Only the
+        # traced path needs it -- `ttnn.zeros` writes to device and a capture rejects writes -- so it
+        # is off by default and the untraced path keeps its per-call allocation.
+        cache_padding: bool = False,
     ) -> None:
         super().__init__()
 
         self.precomputed_adaln = precomputed_adaln
+        self.cache_padding = cache_padding
         self.hidden_size = hidden_size
         self.freq_dim = freq_dim
         self.mesh_device = mesh_device
@@ -542,26 +547,27 @@ class MiniMaxH3Transformer3DModel(Module):
         return video_out, audio_out
 
     def _padding_rows(self, rows: int, dtype: ttnn.DataType, layout: ttnn.Layout) -> ttnn.Tensor:
-        """The zero rows that pad the packed sequence up to `padded_len`, allocated once per shape.
+        """The zero rows that pad the packed sequence up to `padded_len`.
 
-        Held rather than built per call: `ttnn.zeros` writes to device and a trace capture forbids
-        writes ("Writes are not supported during trace capture"). `padded_len - seq_len` is fixed for
-        a request and `concat` does not modify its operands, so one buffer serves every step.
+        Freshly allocated unless `cache_padding` is set, which the traced path needs: `ttnn.zeros`
+        writes to device and a trace capture forbids writes ("Writes are not supported during trace
+        capture"). `padded_len - seq_len` is fixed for a request and `concat` does not modify its
+        operands, so one buffer serves every step.
 
-        One slot, not a dict keyed by shape. `rows` is always below `sp_factor * TILE_SIZE`, so a dict
-        is bounded rather than unbounded -- but the bound is 1024 entries at SP=32, up to ~1.4 GB per
-        device of zeros that no later request reuses. The key is constant within a request, so a
-        single slot has the same hit rate and reallocates only when the shape actually changes.
+        One slot, not a dict keyed by shape: `rows` stays below `sp_factor * TILE_SIZE`, so a dict
+        would be bounded rather than unbounded -- but the bound is 1024 entries at SP=32, of zeros no
+        later request reuses. The key is constant within a request, so one slot has the same hit rate.
 
         Replacing the reference rather than deallocating: a trace captured at the old shape still
-        holds that buffer, and freeing it underneath the trace would be a use-after-free. Dropping the
-        reference frees it once nothing -- trace included -- refers to it.
+        holds that buffer, and freeing it underneath the trace would be a use-after-free.
         """
+        shape = [1, 1, rows, self.hidden_local]
+        if not self.cache_padding:
+            return ttnn.zeros(shape, dtype=dtype, layout=layout, device=self.mesh_device)
+
         key = (rows, dtype, layout)
         if self._pad_key != key:
-            self._pad_buffer = ttnn.zeros(
-                [1, 1, rows, self.hidden_local], dtype=dtype, layout=layout, device=self.mesh_device
-            )
+            self._pad_buffer = ttnn.zeros(shape, dtype=dtype, layout=layout, device=self.mesh_device)
             self._pad_key = key
         return self._pad_buffer
 
