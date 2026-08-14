@@ -31,6 +31,7 @@
 #include "hostdevcommon/common_values.hpp"
 
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 using namespace dataflow_kernel_lib;
@@ -183,10 +184,13 @@ void kernel_main() {
     // PoolType::SUM => scaler value 1.0; 1/W and epsilon are applied once, in
     // the compute kernel's post-reduce finalize (never via PoolType::AVG, whose
     // scaler would divide by the PADDED tile width).
-    calculate_and_prepare_reduce_scaler<cb_scaler, PoolType::SUM, ReduceDim::REDUCE_ROW>();
-    if constexpr (MASK_ENABLED) {
-        if (mask_valid_elems != 0) {
-            prepare_reduce_mask<cb_w_mask, ReduceDim::REDUCE_ROW>(mask_valid_elems);
+    {
+        MaybeDeviceZoneScope("rd_stat_consts");
+        calculate_and_prepare_reduce_scaler<cb_scaler, PoolType::SUM, ReduceDim::REDUCE_ROW>();
+        if constexpr (MASK_ENABLED) {
+            if (mask_valid_elems != 0) {
+                prepare_reduce_mask<cb_w_mask, ReduceDim::REDUCE_ROW>(mask_valid_elems);
+            }
         }
     }
 
@@ -203,54 +207,60 @@ void kernel_main() {
     // written once, at boot, and stay zero for the kernel's life.  Same for the
     // W-tail gap inside each ROW_MAJOR staging stick.
     // =====================================================================
-    if constexpr (IS_ROW_MAJOR) {
-        // One DM transfer, once: covers both the W-tail gap inside every staging
-        // stick and any stick slot a ragged tile-row never writes.
-        noc.async_write_zeros(cb_rm_stage_in_obj, RM_STAGE_IN_PAGES * IN_TILE_BYTES);
-        noc.write_zeros_l1_barrier();
-    } else if constexpr (IS_SHARDED) {
-        // TILE + sharded: cb_input_tiles IS the caller's resident shard, so
-        // `load_block` moves nothing.  What DOES have to happen once is neutralizing
-        // the shard's own padding: tiles past the tensor's hidden extent, and rows
-        // past its row extent, are allocated-but-never-written L1 that Sum(x^2)
-        // would otherwise fold into a real row's denominator.
-        constexpr uint32_t SHARD_ROWS = IN_WAIT_TILES / SLICE_HIDDEN_TILES;
-        bool zeroed_any = false;
-        for (uint32_t r = 0; r < SHARD_ROWS; ++r) {
-            const uint32_t row_base = r * SLICE_HIDDEN_TILES;
-            if (r >= core_row_tiles) {
-                noc.async_write_zeros(
-                    cb_input_obj, SLICE_HIDDEN_TILES * IN_TILE_BYTES, {.offset_bytes = row_base * IN_TILE_BYTES});
-                zeroed_any = true;
-            } else if (valid_tiles < SLICE_HIDDEN_TILES) {
-                noc.async_write_zeros(
-                    cb_input_obj,
-                    (SLICE_HIDDEN_TILES - valid_tiles) * IN_TILE_BYTES,
-                    {.offset_bytes = (row_base + valid_tiles) * IN_TILE_BYTES});
-                zeroed_any = true;
+    // One zone over the whole boot fixup: the pad-zeroing DM plus (on the
+    // resident-shard path) the publish of x.  It runs once per kernel, so it is
+    // read as a fixed cost against the wall, never amortized per block.
+    {
+        MaybeDeviceZoneScope("rd_boot_zero_publish");
+        if constexpr (IS_ROW_MAJOR) {
+            // One DM transfer, once: covers both the W-tail gap inside every staging
+            // stick and any stick slot a ragged tile-row never writes.
+            noc.async_write_zeros(cb_rm_stage_in_obj, RM_STAGE_IN_PAGES * IN_TILE_BYTES);
+            noc.write_zeros_l1_barrier();
+        } else if constexpr (IS_SHARDED) {
+            // TILE + sharded: cb_input_tiles IS the caller's resident shard, so
+            // `load_block` moves nothing.  What DOES have to happen once is neutralizing
+            // the shard's own padding: tiles past the tensor's hidden extent, and rows
+            // past its row extent, are allocated-but-never-written L1 that Sum(x^2)
+            // would otherwise fold into a real row's denominator.
+            constexpr uint32_t SHARD_ROWS = IN_WAIT_TILES / SLICE_HIDDEN_TILES;
+            bool zeroed_any = false;
+            for (uint32_t r = 0; r < SHARD_ROWS; ++r) {
+                const uint32_t row_base = r * SLICE_HIDDEN_TILES;
+                if (r >= core_row_tiles) {
+                    noc.async_write_zeros(
+                        cb_input_obj, SLICE_HIDDEN_TILES * IN_TILE_BYTES, {.offset_bytes = row_base * IN_TILE_BYTES});
+                    zeroed_any = true;
+                } else if (valid_tiles < SLICE_HIDDEN_TILES) {
+                    noc.async_write_zeros(
+                        cb_input_obj,
+                        (SLICE_HIDDEN_TILES - valid_tiles) * IN_TILE_BYTES,
+                        {.offset_bytes = (row_base + valid_tiles) * IN_TILE_BYTES});
+                    zeroed_any = true;
+                }
             }
-        }
-        if (zeroed_any) {
+            if (zeroed_any) {
+                noc.write_zeros_l1_barrier();
+            }
+            // Publish the whole resident shard once.  Keeping cb_input_tiles exactly
+            // FULL at every block boundary is what preserves get_write_ptr() ==
+            // get_read_ptr(), which the two in-place rewrites of x depend on; the
+            // block loop below re-publishes one block after each of compute's pops.
+            cb_reserve_back(cb_input_tiles, IN_WAIT_TILES);
+            cb_push_back(cb_input_tiles, IN_WAIT_TILES);
+        } else if (valid_tiles < SLICE_HIDDEN_TILES) {
+            // Every tile-row slot of the WHOLE capacity, not just the first block:
+            // with IN_CB_DEPTH > 1 the reader alternates between buffers and the tail
+            // columns of both must be zero before Sum(x^2) ever folds them in.
+            constexpr uint32_t IN_CAPACITY_ROWS = IN_CAPACITY_TILES / SLICE_HIDDEN_TILES;
+            const uint32_t pad_bytes = (SLICE_HIDDEN_TILES - valid_tiles) * IN_TILE_BYTES;
+            for (uint32_t r = 0; r < IN_CAPACITY_ROWS; ++r) {
+                noc.async_write_zeros(
+                    cb_input_obj, pad_bytes, {.offset_bytes = (r * SLICE_HIDDEN_TILES + valid_tiles) * IN_TILE_BYTES});
+            }
             noc.write_zeros_l1_barrier();
         }
-        // Publish the whole resident shard once.  Keeping cb_input_tiles exactly
-        // FULL at every block boundary is what preserves get_write_ptr() ==
-        // get_read_ptr(), which the two in-place rewrites of x depend on; the
-        // block loop below re-publishes one block after each of compute's pops.
-        cb_reserve_back(cb_input_tiles, IN_WAIT_TILES);
-        cb_push_back(cb_input_tiles, IN_WAIT_TILES);
-    } else if (valid_tiles < SLICE_HIDDEN_TILES) {
-        // Every tile-row slot of the WHOLE capacity, not just the first block:
-        // with IN_CB_DEPTH > 1 the reader alternates between buffers and the tail
-        // columns of both must be zero before Sum(x^2) ever folds them in.
-        constexpr uint32_t IN_CAPACITY_ROWS = IN_CAPACITY_TILES / SLICE_HIDDEN_TILES;
-        const uint32_t pad_bytes = (SLICE_HIDDEN_TILES - valid_tiles) * IN_TILE_BYTES;
-        for (uint32_t r = 0; r < IN_CAPACITY_ROWS; ++r) {
-            noc.async_write_zeros(
-                cb_input_obj, pad_bytes, {.offset_bytes = (r * SLICE_HIDDEN_TILES + valid_tiles) * IN_TILE_BYTES});
-        }
-        noc.write_zeros_l1_barrier();
-    }
+    }  // rd_boot_zero_publish
 
     // =====================================================================
     // load_gamma_once — this core's hidden slice, resident for the kernel.
@@ -267,6 +277,12 @@ void kernel_main() {
     // =====================================================================
     bool gamma_pending = false;
     if constexpr (HAS_GAMMA) {
+        // ISSUE only — gamma's barrier is deferred into the block loop and has
+        // its own zone there (`rd_gamma_barrier`).  Splitting the two is what
+        // makes "gamma is expensive" distinguishable from "gamma's DRAM round
+        // trip is hidden behind the publish": a near-zero barrier zone means the
+        // deferral worked, and the residual cost is this issue loop.
+        MaybeDeviceZoneScope("rd_gamma_issue");
         gamma_pending = true;
         const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr);
         cb_reserve_back(cb_gamma_tiles, SLICE_HIDDEN_TILES);
@@ -385,88 +401,100 @@ void kernel_main() {
     for (uint32_t block = 0; block < num_blocks; ++block) {
         const uint32_t first_row = block * BLOCK_ROWS;
 
-        if constexpr (IS_ROW_MAJOR) {
-            // load_block (ROW_MAJOR): 32 sticks per tile-row into the staging CB,
-            // each stick holding exactly this core's hidden slice.
-            for (uint32_t r = 0; r < BLOCK_ROWS; ++r) {
-                cb_reserve_back(cb_rm_stage_in, SLICE_HIDDEN_TILES);
-                const uint32_t l1 = get_write_ptr(cb_rm_stage_in);
-                const uint32_t local_row = first_row + r;
-                if (local_row < core_row_tiles) {
-                    const uint32_t stick_base = (row_start + local_row) * TILE_DIM;
-                    uint32_t pending = 0;
-                    for (uint32_t k = 0; k < TILE_DIM; ++k) {
-                        const uint32_t stick = stick_base + k;
-                        if (stick >= total_sticks) {
-                            break;
+        // ---- load_block: ISSUE + the reserve back-pressure it may sit in.
+        //      On the resident-shard paths this degenerates to bookkeeping, which
+        //      is exactly what the number should show.
+        {
+            MaybeDeviceZoneScope("rd_load_total");
+            if constexpr (IS_ROW_MAJOR) {
+                // load_block (ROW_MAJOR): 32 sticks per tile-row into the staging CB,
+                // each stick holding exactly this core's hidden slice.
+                for (uint32_t r = 0; r < BLOCK_ROWS; ++r) {
+                    cb_reserve_back(cb_rm_stage_in, SLICE_HIDDEN_TILES);
+                    const uint32_t l1 = get_write_ptr(cb_rm_stage_in);
+                    const uint32_t local_row = first_row + r;
+                    if (local_row < core_row_tiles) {
+                        const uint32_t stick_base = (row_start + local_row) * TILE_DIM;
+                        uint32_t pending = 0;
+                        for (uint32_t k = 0; k < TILE_DIM; ++k) {
+                            const uint32_t stick = stick_base + k;
+                            if (stick >= total_sticks) {
+                                break;
+                            }
+                            // Sharded: the stick already lives in THIS core's L1 and the
+                            // shard page holds exactly this core's columns, so the source
+                            // is a core-local address at column offset 0 — no NoC hop to
+                            // DRAM, no TensorAccessor.
+                            const uint64_t src =
+                                IS_SHARDED ? (self_noc + shard_in_base + stick * SHARD_PAGE_BYTES)
+                                           : input_accessor.get_noc_addr(stick, slice_elem_base * IN_ELEM_BYTES);
+                            noc_async_read(src, l1 + k * RM_STICK_PITCH, valid_w * IN_ELEM_BYTES);
+                            if (++pending == RM_CHUNK_STICKS) {
+                                noc_async_read_barrier();
+                                pending = 0;
+                            }
                         }
-                        // Sharded: the stick already lives in THIS core's L1 and the
-                        // shard page holds exactly this core's columns, so the source
-                        // is a core-local address at column offset 0 — no NoC hop to
-                        // DRAM, no TensorAccessor.
-                        const uint64_t src = IS_SHARDED
-                                                 ? (self_noc + shard_in_base + stick * SHARD_PAGE_BYTES)
-                                                 : input_accessor.get_noc_addr(stick, slice_elem_base * IN_ELEM_BYTES);
-                        noc_async_read(src, l1 + k * RM_STICK_PITCH, valid_w * IN_ELEM_BYTES);
-                        if (++pending == RM_CHUNK_STICKS) {
+                    }
+                    {
+                        MaybeDeviceZoneScope("rd_load_barrier");
+                        noc_async_read_barrier();
+                    }
+                    cb_push_back(cb_rm_stage_in, SLICE_HIDDEN_TILES);
+                }
+            } else if constexpr (IS_SHARDED) {
+                // load_block (TILE + sharded): nothing to move.  Re-publish one
+                // block's worth of pages so the resident-shard CB is FULL again at
+                // this block's start (see the boot push).  At the default
+                // block_rows == shard_rows this loop body never runs.
+                if (block > 0) {
+                    cb_reserve_back(cb_input_tiles, BLOCK_TILES);
+                    cb_push_back(cb_input_tiles, BLOCK_TILES);
+                }
+            } else {
+                // load_block (TILE): the whole (BLOCK_ROWS x S) block, one barrier
+                // per DM_CHUNK_TILES-tile burst.
+                cb_reserve_back(cb_input_tiles, BLOCK_TILES);
+                const uint32_t l1 = get_write_ptr(cb_input_tiles);
+
+                bool zeroed_any = false;
+                for (uint32_t r = 0; r < BLOCK_ROWS; ++r) {
+                    if (first_row + r >= core_row_tiles) {
+                        noc.async_write_zeros(
+                            cb_input_obj,
+                            valid_tiles * IN_TILE_BYTES,
+                            {.offset_bytes = r * SLICE_HIDDEN_TILES * IN_TILE_BYTES});
+                        zeroed_any = true;
+                    }
+                }
+                if (zeroed_any) {
+                    noc.write_zeros_l1_barrier();
+                }
+
+                uint32_t pending = 0;
+                for (uint32_t r = 0; r < BLOCK_ROWS; ++r) {
+                    const uint32_t local_row = first_row + r;
+                    if (local_row >= core_row_tiles) {
+                        continue;
+                    }
+                    const uint32_t page = (row_start + local_row) * TENSOR_HIDDEN_TILES + slice_base;
+                    for (uint32_t j = 0; j < valid_tiles; ++j) {
+                        noc_async_read(
+                            input_accessor.get_noc_addr(page + j),
+                            l1 + (r * SLICE_HIDDEN_TILES + j) * IN_TILE_BYTES,
+                            IN_TILE_BYTES);
+                        if (++pending == DM_CHUNK_TILES) {
                             noc_async_read_barrier();
                             pending = 0;
                         }
                     }
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_rm_stage_in, SLICE_HIDDEN_TILES);
-            }
-        } else if constexpr (IS_SHARDED) {
-            // load_block (TILE + sharded): nothing to move.  Re-publish one
-            // block's worth of pages so the resident-shard CB is FULL again at
-            // this block's start (see the boot push).  At the default
-            // block_rows == shard_rows this loop body never runs.
-            if (block > 0) {
-                cb_reserve_back(cb_input_tiles, BLOCK_TILES);
+                {
+                    MaybeDeviceZoneScope("rd_load_barrier");
+                    noc_async_read_barrier();
+                }
                 cb_push_back(cb_input_tiles, BLOCK_TILES);
             }
-        } else {
-            // load_block (TILE): the whole (BLOCK_ROWS x S) block, one barrier
-            // per DM_CHUNK_TILES-tile burst.
-            cb_reserve_back(cb_input_tiles, BLOCK_TILES);
-            const uint32_t l1 = get_write_ptr(cb_input_tiles);
-
-            bool zeroed_any = false;
-            for (uint32_t r = 0; r < BLOCK_ROWS; ++r) {
-                if (first_row + r >= core_row_tiles) {
-                    noc.async_write_zeros(
-                        cb_input_obj,
-                        valid_tiles * IN_TILE_BYTES,
-                        {.offset_bytes = r * SLICE_HIDDEN_TILES * IN_TILE_BYTES});
-                    zeroed_any = true;
-                }
-            }
-            if (zeroed_any) {
-                noc.write_zeros_l1_barrier();
-            }
-
-            uint32_t pending = 0;
-            for (uint32_t r = 0; r < BLOCK_ROWS; ++r) {
-                const uint32_t local_row = first_row + r;
-                if (local_row >= core_row_tiles) {
-                    continue;
-                }
-                const uint32_t page = (row_start + local_row) * TENSOR_HIDDEN_TILES + slice_base;
-                for (uint32_t j = 0; j < valid_tiles; ++j) {
-                    noc_async_read(
-                        input_accessor.get_noc_addr(page + j),
-                        l1 + (r * SLICE_HIDDEN_TILES + j) * IN_TILE_BYTES,
-                        IN_TILE_BYTES);
-                    if (++pending == DM_CHUNK_TILES) {
-                        noc_async_read_barrier();
-                        pending = 0;
-                    }
-                }
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_input_tiles, BLOCK_TILES);
-        }
+        }  // rd_load_total
 
         // gamma's barrier, deferred from the issue site above to HERE: its DRAM
         // round trip has now overlapped with the input publish (sharded) or with
@@ -474,6 +502,7 @@ void kernel_main() {
         // compute does not touch cb_gamma_tiles until `apply_gamma_block`.  One
         // block pays it; every later block finds the CB already full.
         if (gamma_pending) {
+            MaybeDeviceZoneScope("rd_gamma_barrier");
             noc_async_read_barrier();
             cb_push_back(cb_gamma_tiles, SLICE_HIDDEN_TILES);
             gamma_pending = false;
@@ -487,20 +516,49 @@ void kernel_main() {
                 // Gather landing: every core in the rect (this one included)
                 // NoC-writes its BLOCK_ROWS partials into page (row*s + c) and
                 // increments the progress counter once.
+                //
+                // `rd_gather_wait` is the ROOT's view of the incast: how long it
+                // sits waiting for all s contributors' partials to land.  It is
+                // occupancy — it charges both the contributors' own upstream
+                // Sum(x^2) latency and the NoC transfer of s*B stat tiles into
+                // this one core.  Paired with the writer's `wr_gather_issue` /
+                // `wr_gather_barrier` (the contributor's view) it separates
+                // "contributors are late" from "the incast is slow".
                 cb_reserve_back(cb_gathered_partials, NUM_HIDDEN_SLICES * BLOCK_ROWS);
-                gather_progress.wait_min((block + 1) * NUM_HIDDEN_SLICES);
+                {
+                    MaybeDeviceZoneScope("rd_gather_wait");
+                    gather_progress.wait_min((block + 1) * NUM_HIDDEN_SLICES);
+                }
                 cb_push_back(cb_gathered_partials, NUM_HIDDEN_SLICES * BLOCK_ROWS);
 
                 // Broadcast the finalized rsqrt back over the rect (loopback
                 // delivers to this core's own cb_rms_recip too).
-                cb_wait_front(cb_rms_bcast, BLOCK_ROWS);
+                {
+                    // Waiting on the root's OWN compute to finish the combine
+                    // reduce + finalize.  High here == the root's compute is the
+                    // critical path, not the NoC.
+                    MaybeDeviceZoneScope("rd_bcast_wait_stat");
+                    cb_wait_front(cb_rms_bcast, BLOCK_ROWS);
+                }
                 cb_reserve_back(cb_rms_recip, BLOCK_ROWS);
-                sender_pipe.send(get_read_ptr(cb_rms_bcast), get_write_ptr(cb_rms_recip), BLOCK_ROWS * STAT_TILE_BYTES);
+                {
+                    MaybeDeviceZoneScope("rd_bcast_send");
+                    sender_pipe.send(
+                        get_read_ptr(cb_rms_bcast), get_write_ptr(cb_rms_recip), BLOCK_ROWS * STAT_TILE_BYTES);
+                }
                 cb_push_back(cb_rms_recip, BLOCK_ROWS);
                 cb_pop_front(cb_rms_bcast, BLOCK_ROWS);
             } else {
                 cb_reserve_back(cb_rms_recip, BLOCK_ROWS);
-                receiver_pipe.receive();
+                {
+                    // The contributor's idle time: everything from "my partial is
+                    // sent" to "the root's finalized 1/rms arrived".  On a
+                    // root-serialized combine this is where every non-root core's
+                    // wall goes, and it is the number the tree/reduce-scatter
+                    // topology ideas exist to cut.
+                    MaybeDeviceZoneScope("rd_bcast_recv");
+                    receiver_pipe.receive();
+                }
                 cb_push_back(cb_rms_recip, BLOCK_ROWS);
             }
         }

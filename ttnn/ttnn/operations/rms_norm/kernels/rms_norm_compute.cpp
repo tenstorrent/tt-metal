@@ -35,6 +35,8 @@
 
 #include "api/compute/compute_kernel_hw_startup.h"
 
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
@@ -267,17 +269,24 @@ void kernel_main() {
         const uint32_t pack_base = (block * BLOCK_TILES) % IN_CAPACITY_TILES;
         // ---- tilize_block (ROW_MAJOR only) ----
         if constexpr (IS_ROW_MAJOR) {
+            MaybeDeviceZoneScope("cp_tilize");
             ckl::tilize<SLICE_HIDDEN_TILES, cb_rm_stage_in, cb_input_tiles>(BLOCK_ROWS);
         }
 
         // ---- the single cb_input_tiles window for this block ----
-        cb_wait_front(cb_input_tiles, IN_WAIT_TILES);
+        // Wait FIRST, in its own zone, so every phase zone below measures its own
+        // payload and not the reader's latency (attribution doc §3).
+        {
+            MaybeDeviceZoneScope("cp_wait_in");
+            cb_wait_front(cb_input_tiles, IN_WAIT_TILES);
+        }
 
         // ---- mask_tail_block: zero the W-pad lanes of the LAST hidden tile of
         //      each tile-row, in place. Only on the core owning the global last
         //      hidden tile, and only when W % 32 != 0 under TILE layout.
         if constexpr (MASK_ENABLED) {
             if (do_mask) {
+                MaybeDeviceZoneScope("cp_mask");
                 // Read window is relative to the READ pointer (which pops walk
                 // forward); the pack window is relative to the CB base.
                 const ckl::StridedTileRange window{mask_local_col, SLICE_HIDDEN_TILES};
@@ -303,7 +312,13 @@ void kernel_main() {
 
         // ---- square_accumulate_block: Sum over the slice of x*x, folded in DEST
         //      per tile-row (no x^2 tiles are ever materialized). x is HELD.
-        ckl::sum_of_squares<x_held, ckl::row_output(cb_sq_partials)>(block_shape);
+        {
+            // The one phase every core runs.  x is HELD (no CB wait inside), and
+            // cb_sq_partials' reserve is the only thing that can back-pressure —
+            // so this number is close to real payload on all three threads.
+            MaybeDeviceZoneScope("cp_sumsq");
+            ckl::sum_of_squares<x_held, ckl::row_output(cb_sq_partials)>(block_shape);
+        }
 
         if constexpr (NUM_HIDDEN_SLICES > 1) {
             // ---- combine_block: `collapse_partial_block` is FUSED INTO the root's
@@ -330,6 +345,17 @@ void kernel_main() {
             //      cb_slice_stat is therefore not created at all; cb_sq_partials'
             //      single consumer is the writer.
             if (is_root) {
+                // Hoist the reduce helper's own BulkWait out into its own zone:
+                // the helper's ReduceInputPolicy::BulkWaitBulkPop waits on
+                // cb_gathered_partials INTERNALLY, so an un-split zone would
+                // charge the whole gather incast to the reduce's math.  With the
+                // wait hoisted the helper's internal wait is already satisfied
+                // and `cp_combine` is the root's reduce PAYLOAD alone.
+                {
+                    MaybeDeviceZoneScope("cp_combine_wait");
+                    cb_wait_front(cb_gathered_partials, NUM_HIDDEN_SLICES * BLOCK_ROWS);
+                }
+                MaybeDeviceZoneScope("cp_combine");
                 ckl::reduce<
                     ckernel::PoolType::SUM,
                     ckernel::ReduceDim::REDUCE_ROW,
@@ -349,6 +375,7 @@ void kernel_main() {
             }
         } else {
             // ---- collapse_partial_block with the finalize fused in ----
+            MaybeDeviceZoneScope("cp_collapse");
             ckl::reduce<
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW,
@@ -371,42 +398,61 @@ void kernel_main() {
         //      then *= gamma.  A REDUCE_ROW result is column-shaped, so it
         //      broadcasts back across columns (Col); gamma is a 1D [W] operand and
         //      so is indexed per hidden column (Row).
-        if constexpr (HAS_GAMMA && GAMMA_FUSED) {
-            cb_wait_front(cb_gamma_tiles, SLICE_HIDDEN_TILES);  // deferred; see boot
-            if (block == 0) {
-                // Expand gamma from its row-0 vector form to full tiles, once.
-                ckl::eltwise_chain(
-                    ckl::IterationShape::tiles(SLICE_HIDDEN_TILES),
-                    ckl::UnaryBcast<ckl::BroadcastDim::Row, gamma_expand_in>{},
-                    ckl::PackTile<gamma_expand_out>{0});
-                sync_pack_to_unpack();  // gamma packed in place; the chain below unpacks it
-            }
-            if constexpr (IS_ROW_MAJOR) {
-                ckl::eltwise_chain(
-                    block_shape_batched,
-                    ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_held, rms_col>{},
-                    ckl::DestReuseBinary<gamma_full, ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>{},
-                    ckl::PackTile<in_place>{pack_base});
-                sync_pack_to_unpack();  // x*r*gamma packed in place; untilize unpacks it
-            } else {
-                ckl::eltwise_chain(
-                    block_shape_batched,
-                    ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_held, rms_col>{},
-                    ckl::DestReuseBinary<gamma_full, ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>{},
-                    ckl::PackTile<to_output_batched>{});
-            }
-        } else if constexpr (HAS_GAMMA || IS_ROW_MAJOR) {
-            // Spelled as an explicit chain rather than `ckl::mul<...>` only because
-            // the convenience wrappers default-construct their elements and so
-            // cannot carry the runtime `pack_base`.  Same helper, same chain.
-            ckl::eltwise_chain(
-                block_shape_batched,
-                ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_held, rms_col>{},
-                ckl::PackTile<in_place>{pack_base});
-            sync_pack_to_unpack();  // x*r packed in place; the next stage unpacks it
-        } else {
-            ckl::mul<x_held, rms_col, to_output_batched>(block_shape_batched);
+        // The hoisted twin of `rms_col`'s WaitPolicy::Upfront.  On a split hidden
+        // axis this is where a NON-ROOT core's whole wall sits: it cannot scale x
+        // until the root has gathered, reduced, finalized and broadcast 1/rms.
+        // Un-hoisted it would be charged to `cp_scale` and read as expensive math.
+        if constexpr (NUM_HIDDEN_SLICES > 1) {
+            MaybeDeviceZoneScope("cp_rms_wait");
+            cb_wait_front(cb_rms_recip, BLOCK_ROWS);
         }
+
+        {
+            MaybeDeviceZoneScope("cp_scale_total");
+            if constexpr (HAS_GAMMA && GAMMA_FUSED) {
+                {
+                    MaybeDeviceZoneScope("cp_gamma_wait");
+                    cb_wait_front(cb_gamma_tiles, SLICE_HIDDEN_TILES);  // deferred; see boot
+                }
+                if (block == 0) {
+                    MaybeDeviceZoneScope("cp_gamma_expand");
+                    // Expand gamma from its row-0 vector form to full tiles, once.
+                    ckl::eltwise_chain(
+                        ckl::IterationShape::tiles(SLICE_HIDDEN_TILES),
+                        ckl::UnaryBcast<ckl::BroadcastDim::Row, gamma_expand_in>{},
+                        ckl::PackTile<gamma_expand_out>{0});
+                    sync_pack_to_unpack();  // gamma packed in place; the chain below unpacks it
+                }
+                MaybeDeviceZoneScope("cp_scale_gamma_fused");
+                if constexpr (IS_ROW_MAJOR) {
+                    ckl::eltwise_chain(
+                        block_shape_batched,
+                        ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_held, rms_col>{},
+                        ckl::DestReuseBinary<gamma_full, ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>{},
+                        ckl::PackTile<in_place>{pack_base});
+                    sync_pack_to_unpack();  // x*r*gamma packed in place; untilize unpacks it
+                } else {
+                    ckl::eltwise_chain(
+                        block_shape_batched,
+                        ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_held, rms_col>{},
+                        ckl::DestReuseBinary<gamma_full, ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>{},
+                        ckl::PackTile<to_output_batched>{});
+                }
+            } else if constexpr (HAS_GAMMA || IS_ROW_MAJOR) {
+                // Spelled as an explicit chain rather than `ckl::mul<...>` only because
+                // the convenience wrappers default-construct their elements and so
+                // cannot carry the runtime `pack_base`.  Same helper, same chain.
+                MaybeDeviceZoneScope("cp_scale");
+                ckl::eltwise_chain(
+                    block_shape_batched,
+                    ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_held, rms_col>{},
+                    ckl::PackTile<in_place>{pack_base});
+                sync_pack_to_unpack();  // x*r packed in place; the next stage unpacks it
+            } else {
+                MaybeDeviceZoneScope("cp_scale");
+                ckl::mul<x_held, rms_col, to_output_batched>(block_shape_batched);
+            }
+        }  // cp_scale_total
 
         // ---- apply_gamma_block: gamma is a 1D [W] operand -> Row broadcast ----
         //      (unfused path only; the fused one did it above in the same DEST
@@ -414,7 +460,11 @@ void kernel_main() {
         if constexpr (HAS_GAMMA && !GAMMA_FUSED) {
             // The deferred gamma wait (see the boot comment).  Never popped, so
             // only the first block can actually block here.
-            cb_wait_front(cb_gamma_tiles, SLICE_HIDDEN_TILES);
+            {
+                MaybeDeviceZoneScope("cp_gamma_wait");
+                cb_wait_front(cb_gamma_tiles, SLICE_HIDDEN_TILES);
+            }
+            MaybeDeviceZoneScope("cp_apply_gamma");
             if constexpr (IS_ROW_MAJOR) {
                 ckl::eltwise_chain(
                     block_shape_batched,
@@ -430,6 +480,7 @@ void kernel_main() {
         if constexpr (IS_ROW_MAJOR) {
             // NoWait: compute already holds the BLOCK_TILES window; untilize's
             // per-tile-row pop IS the window's release.
+            MaybeDeviceZoneScope("cp_untilize");
             ckl::untilize<
                 SLICE_HIDDEN_TILES,
                 cb_input_tiles,
