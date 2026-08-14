@@ -118,6 +118,7 @@ Key non-secret server environment: `TT_GEMMA4_TEXT_VER=gemma4_31b_autoport`, `GE
 - No fixable handoff inconsistency remains.
 - The only material gap is the unwaived mandatory Meta reference/threshold requirement described above; `$autofix` exhausted the feasible local canonical-control path.
 - Full verdict: `stage_review_final.md`.
+- Current-source recheck on 2026-08-14: `BLOCKER_AUDIT_2026-08-14.md`; no exact reference, waiver, or product-owned replacement gate was found.
 
 ## Artifact policy
 
