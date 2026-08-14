@@ -1003,6 +1003,12 @@ class MuseGlimmerModel(LightweightModule):
             return
         if len(kv_cache) != len(self.layers):
             raise ValueError(f"kv_cache has {len(kv_cache)} entries for {len(self.layers)} layers")
+        # Validate **every** layer before binding any of them.  Round 9 of the stage review
+        # found the interleaved form: a mismatch at layer i left layers 0..i-1 already rebound
+        # and raised, and because the caller's ``_invalidate_traces_if_cache_moved`` runs after
+        # this returns, the exception skipped it -- leaving a half-rebound cache under traces
+        # whose recorded signature still described the old one.  Two passes make the failure
+        # atomic: either the whole cache is bound or none of it is.
         for layer, pair in zip(self.layers, kv_cache):
             k, v = pair
             for name, tensor, current in (("k", k, layer.k_cache), ("v", v, layer.v_cache)):
@@ -1011,7 +1017,8 @@ class MuseGlimmerModel(LightweightModule):
                         f"external {name} cache for layer {layer.config.layer_idx} is {tuple(tensor.shape)}, "
                         f"expected {tuple(current.shape)}"
                     )
-            layer.k_cache, layer.v_cache = k, v
+        for layer, pair in zip(self.layers, kv_cache):
+            layer.k_cache, layer.v_cache = pair
 
     def reset_counters(self) -> None:
         self.counters = {

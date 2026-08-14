@@ -695,12 +695,18 @@ class MuseGlimmerGenerator(Generator):
             f"{' and '.join(released)} trace(s). The next call recaptures against the new buffers; "
             "bind the cache before the first prefill to avoid paying for that."
         )
-        if stale_prefill:
-            self._release_prefill_traces()
-        if stale_decode:
-            self._release_decode_trace()
-        # A rebind is the natural retry point for anything an earlier rebind could not free.
-        self._retry_orphaned_traces()
+        # ``try/finally`` because these are two independent hazards: round 9 pointed out that a
+        # raise inside the prefill release used to skip the decode release entirely, leaving
+        # ``_trace_id`` holding the pre-rebind handle -- the trace that runs on every token of
+        # the shipped default, and the one this whole mechanism exists for.
+        try:
+            if stale_prefill:
+                self._release_prefill_traces()
+        finally:
+            if stale_decode:
+                self._release_decode_trace()
+            # A rebind is the natural retry point for anything an earlier rebind could not free.
+            self._retry_orphaned_traces()
 
     def _release_decode_trace(self) -> None:
         """Drop the decode trace, and with it the sampling trace captured over its logits.
@@ -723,9 +729,22 @@ class MuseGlimmerGenerator(Generator):
         # ``teardown()`` called it unconditionally for that reason and this keeps the
         # property.
         try:
-            self.sampling.reset_trace()
+            # Round 9: the shared ``SamplingGenerator.reset_trace`` used to swallow a failed
+            # release and clear the slot anyway, which dropped the handle *and* the ``sampled``
+            # output tensor allocated during capture while the trace was still live -- the third
+            # capture in this path was the one the fail-closed policy did not cover.  It now
+            # moves failed slots out of its lookup table and returns how many, so a failure is
+            # visible here rather than silent.  (Older revisions return ``None``.)
+            sampling_orphans = self.sampling.reset_trace()
         except Exception as exc:  # noqa: BLE001
             logger.warning(f"failed to release the sampling trace: {exc}")
+            sampling_orphans = None
+        if sampling_orphans:
+            logger.warning(
+                f"MuseGlimmerGenerator: {sampling_orphans} sampling trace(s) failed to release; they are "
+                "retained unusable with their tensors and retried at the next release and at teardown(). "
+                "They hold no KV-cache address, so live_traces_over_kv_cache does not count them."
+            )
         self._sampling_captured = False
         if self._trace_id is not None:
             released = False
@@ -821,16 +840,25 @@ class MuseGlimmerGenerator(Generator):
                 )
                 orphaned += 1
                 continue
+            # Bookkeeping *before* the drain.  Round 9 found the drain sitting between a
+            # successful release and the count decrement: if ``synchronize_device`` raises there
+            # -- it is not inside any ``try`` -- the bucket is still in ``_prefill_traces`` for
+            # ``_prefill_traced`` to replay and for the next release to double-release, and the
+            # signature still names the old cache.  The released entry leaves the lookup and the
+            # count comes down first; only then is the drain paid, and only then are the buffers
+            # freed, which is the ordering the fabric hygiene actually requires.
+            del self._prefill_traces[padded_len]
+            self.model.note_trace_released()
             ttnn.synchronize_device(self.mesh_device)
             for key in ("tokens", "page_table", "logits"):
                 try:
                     ttnn.deallocate(entry[key])
                 except Exception:  # noqa: BLE001
                     pass
-            self.model.note_trace_released()
-        # Unconditional on both counts: every entry was either released or orphaned, so no
-        # bucket is left replayable, and the signature must be cleared even when something
-        # was orphaned or a later capture would stamp the new cache over the old comparison.
+        # Unconditional on both counts: every entry was either released (and removed above) or
+        # orphaned, so no bucket is left replayable, and the signature must be cleared even when
+        # something was orphaned or a later capture would stamp the new cache over the old
+        # comparison.  The assignment also covers the entries the orphan branch skipped.
         self._prefill_traces = {}
         self._prefill_trace_cache_sig = ()
         if orphaned:
@@ -849,8 +877,14 @@ class MuseGlimmerGenerator(Generator):
         freed, and it keeps ``live_traces_over_kv_cache`` raised so
         :meth:`MuseGlimmerModel.deallocate` still warns.  Returns how many are still held.
         """
+        # The sampler owns its own handles, so its retry is delegated rather than duplicated;
+        # it is attempted even when this generator holds no orphans of its own.
+        sampling_held = 0
+        retry_sampling = getattr(self.sampling, "retry_orphaned_traces", None)
+        if retry_sampling is not None and getattr(self.sampling, "orphaned_trace_count", 0):
+            sampling_held = retry_sampling()
         if not self._orphaned_traces:
-            return 0
+            return sampling_held
         ttnn.synchronize_device(self.mesh_device)
         still_held = []
         for orphan in self._orphaned_traces:
@@ -860,16 +894,20 @@ class MuseGlimmerGenerator(Generator):
                 logger.warning(f"retrying the release of the {orphan['what']} trace failed again: {exc}")
                 still_held.append(orphan)
                 continue
+            # Same ordering as the release paths: the orphan leaves the retry list and the count
+            # comes down before the drain, so a raise in the drain cannot re-queue an id that has
+            # already been released or pin the count high forever.
+            self._orphaned_traces = [held for held in self._orphaned_traces if held is not orphan]
+            self.model.note_trace_released()
             ttnn.synchronize_device(self.mesh_device)
             for tensor in orphan["tensors"]:
                 try:
                     ttnn.deallocate(tensor)
                 except Exception:  # noqa: BLE001
                     pass
-            self.model.note_trace_released()
             logger.info(f"MuseGlimmerGenerator: the retained {orphan['what']} trace released on retry.")
         self._orphaned_traces = still_held
-        return len(still_held)
+        return len(still_held) + sampling_held
 
     def prefill_forward(
         self,
@@ -896,8 +934,14 @@ class MuseGlimmerGenerator(Generator):
         self.model.set_kv_cache(kv_cache)
         # Bind first, then invalidate only if the buffers actually moved: a serving
         # caller threading the *same* external cache every request must keep its traces.
-        if kv_cache is not None:
-            self._invalidate_traces_if_cache_moved()
+        #
+        # Unconditional, not ``if kv_cache is not None``.  Round 9: the comparison is against
+        # whatever is bound *now*, so gating it on this call passing a cache bought nothing and
+        # missed the case where a caller rebinds out of band -- ``model.set_kv_cache(B)`` is
+        # public, and this stage's own test uses it -- and then calls in with ``kv_cache=None``,
+        # which replayed both traces against the buffers it had just rebound away from.  The
+        # signature comparison is a tuple compare on the shipped default's zero traces.
+        self._invalidate_traces_if_cache_moved()
         tokens = tokens if isinstance(tokens, torch.Tensor) else torch.tensor(tokens)
         if tokens.dim() == 1:
             tokens = tokens.reshape(1, -1)
@@ -1098,8 +1142,7 @@ class MuseGlimmerGenerator(Generator):
         them, so the next call's restage simply overwrites the increment.
         """
         self.model.set_kv_cache(kv_cache)
-        if kv_cache is not None:
-            self._invalidate_traces_if_cache_moved()
+        self._invalidate_traces_if_cache_moved()  # unconditional; see prefill_forward
         self._allocate_device_inputs()
         if self._sampling_params is None:
             self._apply_sampling_params(sampling_params)
@@ -1189,6 +1232,12 @@ class MuseGlimmerGenerator(Generator):
         stop_on_eos = (next_input is None) if stop_on_eos is None else stop_on_eos
         device_loop = enable_trace and next_input is None and not host_sampling
 
+        # ``generate()`` binds no cache of its own -- it uses whatever the model holds -- so it
+        # never reached the invalidation at all.  A caller that rebinds out of band with
+        # ``model.set_kv_cache(...)`` and then calls ``generate()`` would have replayed both
+        # traces against the buffers it rebound away from.  Round 9 found that; the comparison
+        # is cheap and it belongs on every entry point, not on the two that take a cache.
+        self._invalidate_traces_if_cache_moved()
         self._allocate_device_inputs()
         self._apply_sampling_params(sampling_params)
         table = self._coerce_page_table(page_table)
@@ -1301,8 +1350,10 @@ class MuseGlimmerGenerator(Generator):
         """
         ttnn.synchronize_device(self.mesh_device)
         self.counters["synchronizations"] += 1
-        self._release_prefill_traces()
-        self._release_decode_trace()
+        try:
+            self._release_prefill_traces()
+        finally:
+            self._release_decode_trace()
         # Last chance for anything a previous release could not free.  Both release calls
         # above may themselves have orphaned something, so this runs after them.
         still_held = self._retry_orphaned_traces()

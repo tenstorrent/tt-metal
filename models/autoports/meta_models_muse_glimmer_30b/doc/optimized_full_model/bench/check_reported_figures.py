@@ -47,7 +47,7 @@ resolved: list[tuple[str, str]] = []
 #: sections this file never opened were wrong.  ``SOURCES`` below is the other half --
 #: adding an unchecked section that needs a new artifact now fails on a missing source
 #: rather than sliding past on an unchanged count.
-ADVERTISED_CHECKS = 842
+ADVERTISED_CHECKS = 887
 #: Of that total, how many are real assertions (``close``/``same``) as opposed to README
 #: bindings (``bind``/``perf``), which assert nothing on their own.  Round 4 asked for the
 #: split to be stated next to the number rather than folded into it.
@@ -632,10 +632,11 @@ def main() -> int:
             "test_decode_follows_the_cache_it_is_rebound_to_after_the_trace_is_captured",
             "test_the_live_trace_count_round_trips_over_both_trace_kinds",
             "test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried",
+            "test_a_cache_rebound_out_of_band_still_invalidates_the_traces",
         )
         if f"`{name}" in readme
     ]
-    same("the README's new-case table lists every new test", len(new_cases), 8)
+    same("the README's new-case table lists every new test", len(new_cases), 9)
     same(
         "...and the inherited/new split adds up to the suite",
         f"(46 inherited + {suite_cases - 46} new)" in readme,
@@ -1001,6 +1002,61 @@ def main() -> int:
         "the retained-in-place policy round 8 rejected is gone",
         "retaining the decode trace and its logits after a failed" in generator_src,
         False,
+    )
+    # Round 9's P1: the sampling trace is the third capture and the shared sampler owned the
+    # bug.  Assert the shared fix is present and that this port consumes it, so a revert of
+    # either half is a gate failure rather than a silent regression to clear-on-failure.
+    sampler_src = text(ROOT.parents[2] / "models/common/sampling/generator.py")
+    same(
+        "the shared sampler no longer clears a slot whose release failed",
+        "self._orphaned_traces.append(slot)" in sampler_src,
+        True,
+    )
+    same("...and exposes the retry", "def retry_orphaned_traces" in sampler_src, True)
+    same("...and reports how many it holds", "def orphaned_trace_count" in sampler_src, True)
+    same(
+        "this generator consumes the sampler's failure count",
+        "sampling_orphans = self.sampling.reset_trace()" in generator_src,
+        True,
+    )
+    same(
+        "...and delegates its retry",
+        'retry_sampling = getattr(self.sampling, "retry_orphaned_traces", None)' in generator_src,
+        True,
+    )
+    same(
+        "the README states why the sampling trace is not in the cache-trace count",
+        "it is deliberately not counted in `live_traces_over_kv_cache`" in readme,
+        True,
+    )
+    # Round 9's P2: bookkeeping before the drain, and the two releases sequenced.
+    same(
+        "the prefill release decrements the count before it drains",
+        "del self._prefill_traces[padded_len]\n            self.model.note_trace_released()\n            ttnn.synchronize_device(self.mesh_device)"
+        in generator_src,
+        True,
+    )
+    same(
+        "the two release calls are sequenced so one cannot skip the other",
+        generator_src.count("finally:\n            if stale_decode:") == 1
+        and "try:\n            self._release_prefill_traces()\n        finally:\n            self._release_decode_trace()"
+        in generator_src,
+        True,
+    )
+    same(
+        "the invalidation is not gated on the caller passing a cache",
+        "if kv_cache is not None:\n            self._invalidate_traces_if_cache_moved()" in generator_src,
+        False,
+    )
+    same(
+        "...and generate() runs it too",
+        generator_src.count("self._invalidate_traces_if_cache_moved()"),
+        3,
+    )
+    same(
+        "set_kv_cache validates every layer before binding any",
+        "for layer, pair in zip(self.layers, kv_cache):\n            layer.k_cache, layer.v_cache = pair" in model_src,
+        True,
     )
     same(
         "teardown retries what an earlier release could not free",
@@ -1553,6 +1609,30 @@ def main() -> int:
             True,
         )
 
+    # The watcher directory inventory, counted rather than described: round 9 found the
+    # Artifacts table still saying "the three watcher logs" against 18 committed directories,
+    # and the 12-case arm's named artifact overwritten by a later clean run.
+    watcher_dirs = sorted(p.name for p in D.glob("watcher*") if p.is_dir())
+    same(
+        f"the README states how many watcher directories there are ({len(watcher_dirs)})",
+        f"`watcher*/` ({len(watcher_dirs)} directories)" in readme,
+        True,
+    )
+    same(
+        "every watcher directory holds its log",
+        [d for d in watcher_dirs if not (D / d / "watcher.log.gz").is_file()],
+        [],
+    )
+    same(
+        "the README says whose run watcher/ now holds",
+        "**`watcher/` holds the most recent shipped-default run.**" in readme,
+        True,
+    )
+    same(
+        "...and that the 12-case arm's verdict therefore rests on its console log",
+        "that arm's verdict therefore rests on its console log" in readme,
+        True,
+    )
     same("the ten-case repeat control is clean", "WATCHER_CLEAN" in text(D / "logs/check_watcher_default10.log"), True)
     # The tripped run's own artifact is unusable, and that is the point: the abort lands
     # inside the watcher's dump, so the log has no detach lines and check_watcher rejects it.
@@ -1620,6 +1700,26 @@ def main() -> int:
         ("per-layer floor", [f"{floor['sliding_ms_per_layer']:.4f}", f"{floor['full_ms_per_layer']:.4f}"]),
         ("56-case suite, forward", [f"{suite_cases} passed"]),
         ("56-case suite, reverse", [f"{suite_cases} passed"]),
+        # Round 9: the work log's evidence table was bound in six rows out of twenty, so the
+        # unbound ones could be falsified freely.  These are the rest of its numeric rows.
+        (
+            "decode A/B, SwiGLU grid",
+            [
+                f"{(swiglu['base']['traced_logits_only_ms'] - swiglu['swiglu80']['traced_logits_only_ms']) / swiglu['base']['traced_logits_only_ms'] * 100:.2f} %"
+            ],
+        ),
+        (
+            "decode A/B, cumulative",
+            [
+                f"{(shipped['base']['traced_logits_only_ms'] - shipped['full_model_stage']['traced_logits_only_ms']) / shipped['full_model_stage']['traced_logits_only_ms'] * 100:.2f} %"
+            ],
+        ),
+        (
+            "TTFT by phase, 5 lengths, 52 layers",
+            [f"{tb['phases_ms']['layers']['min']:.1f} ms", f"{tb['e2e_ttft_ms']['min']:.1f} ms"],
+        ),
+        ("L1 high-water for change 1", [f"{l1['l1_peak_delta_per_bank_bytes']:,} B/bank"]),
+        ("prefill issue vs drain + cProfile", [f"{load(D / 'prefill_host_probe.json')['dispatch']['issue_ms']:.2f}"]),
     ):
         cell = work_log_rows.get(row.replace("56", str(suite_cases)))
         same(f"the work log's {row!r} row is in the table", cell is not None, True)
@@ -1931,6 +2031,10 @@ def main() -> int:
     # the README can be changed in one of its two places and still be found in the other.  Both
     # are fixed the same way -- bind the value to the cell it is claimed in, not to the file.
 
+    def normalised_units(section: str) -> str:
+        """Minus signs and non-breaking spaces normalised; units left alone, which is the point."""
+        return section.replace("−", "−").replace(" ", " ")
+
     def table_rows(section: str) -> list[list[str]]:
         rows = []
         for line in section.splitlines():
@@ -2138,6 +2242,11 @@ def main() -> int:
         f"ALL {mutation_count} MUTATIONS CAUGHT" in mutations,
         True,
     )
+    # Content-addressed, not counted.  Round 9 defeated the counted form two ways: a log of
+    # placeholder lines satisfied it with no run behind it, and *neutering* a mutation left the
+    # old log still matching.  Each logged line now carries a digest of the mutation's full
+    # content, so a log outlives neither an edit to the table nor a fabricated stand-in.
+    logged_digests = set(re.findall(r"^CAUGHT .*\[([0-9a-f]{12})\]$", mutations, re.M))
     # Counted off the harness's own table rather than off its formatting, which the repo's
     # black hook rewrites.
     harness_spec = importlib.util.spec_from_file_location(
@@ -2146,6 +2255,97 @@ def main() -> int:
     harness = importlib.util.module_from_spec(harness_spec)
     harness_spec.loader.exec_module(harness)
     same("the harness covers every defeat the log records", len(harness.MUTATIONS), mutation_count)
+    same(
+        "...and the log was produced by *this* table, mutation for mutation",
+        logged_digests,
+        {harness.digest(mutation) for mutation in harness.MUTATIONS},
+    )
+
+    # ---------------------------------------------- structure, units, and self-consistency
+    #
+    # Round 9's mutations were not figure edits at all.  A *unit* can be changed without
+    # touching a digit (`0.632 ms` -> `0.632 µs`); a whole fabricated section or an extra row in
+    # an unbound table adds claims no check reads; and one section can be made to contradict
+    # another while both halves stay individually resolvable.  Digit-level binding cannot see
+    # any of the three, so the document's shape is asserted too.
+    headings = [line.strip() for line in readme.splitlines() if line.startswith("## ")]
+    same(
+        "the README's sections are the ones this gate knows about",
+        headings,
+        [
+            "## Result",
+            "## What ships",
+            "## Carried-forward decoder contract, unchanged",
+            "## Performance accounting",
+            "## Where TTFT actually goes",
+            "## Operation-topology audit",
+            "## What each trace bakes in, and who owns it",
+            "## Split sampling, preserved",
+            "## Accuracy",
+            "## Qualitative",
+            "## Runtime fallback audit",
+            "## Capability and batch",
+            "## Prompt lengths",
+            "## Tests",
+            "## Limitations and known issues",
+            "## `$optimize` / `$multichip` checklist, with where the evidence is",
+            "## How to reproduce",
+            "## Artifacts",
+            "## Stage review",
+        ],
+    )
+    # Row counts for every table a figure is bound in, so a fabricated row cannot ride along
+    # beside a correct one.
+    reconciliation = accounting[accounting.index("| | value | source |") :].split("\n\n")[0]
+    accuracy_table = accuracy_section[accuracy_section.index("| gate | reference |") :].split("\n\n")[0]
+    for label, section_text, want_rows in (
+        ("the Result table", result_table, 11),
+        ("the reconciliation table", reconciliation, 5),
+        ("the audit table", audit_table, 16),
+        ("the accuracy table", accuracy_table, 5),
+        ("the item table", item_table, 8),
+    ):
+        same(
+            f"{label} has the rows this gate checks",
+            len([r for r in table_rows(section_text) if len(r) > 1]),
+            want_rows,
+        )
+    # Units, bound where the figure is.  Each of these is a value whose digits are checked
+    # above and whose unit was not.
+    for name, needle, where, where_name in (
+        (
+            "the sampling-trace row's unit",
+            f"| {ps['sampling_trace_ms_per_token']:.3f} ms |",
+            result_table,
+            "the Result table",
+        ),
+        ("the softcap saving's unit", "**−13.1 µs/step**", readme, "the change table"),
+        ("the L1 delta's unit", f"{l1['l1_peak_delta_per_bank_bytes']:,} B/bank", readme, "the L1 section"),
+        ("the roofline unit", "ms/token", accounting, "the reconciliation table"),
+    ):
+        same(f"{where_name} states {name}", needle in normalised_units(where), True)
+    # The checklist table, which claims *goal compliance* and which nothing read before round 9:
+    # a fabricated row there could assert work this stage is forbidden to do or never did.
+    checklist = section("## `$optimize` / `$multichip` checklist, with where the evidence is", "## How to reproduce")
+    checklist_items = [row[0] for row in table_rows(checklist) if len(row) == 3 and row[0] != "item"]
+    same("the checklist has the rows this gate knows about", len(checklist_items), 31)
+    same(
+        "every checklist verdict is one of the vocabulary this stage uses",
+        sorted({row[1] for row in table_rows(checklist) if len(row) == 3 and row[0] != "item"}),
+        ["inherited", "inherited + extended", "mostly", "n/a", "recorded", "yes"],
+    )
+    same(
+        "the checklist does not claim the datatype frontier search this stage is told not to run",
+        any("frontier deferred to `$datatype-sweep`" in row[2] for row in table_rows(checklist) if len(row) == 3),
+        True,
+    )
+    for forbidden in ("frontier sweep run", "datatype sweep run here", "Pareto selected"):
+        same(f"...nor {forbidden!r}", forbidden in checklist, False)
+    # Cross-section self-consistency: limitation 1 prices the opt-in trace against the same two
+    # TTFT figures the headline table does.  Round 9 rewrote one and left the other.
+    limitation1 = limitations[limitations.index("1. **Batch-1 TTFT") : limitations.index("2. **")]
+    for figure in (f"{after['ttft_ms']['min']:.2f}", f"{pt['ttft_ms']['min']:.2f}"):
+        same(f"limitation 1 prices the trace against the headline figure {figure}", figure in limitation1, True)
 
     same("README has a before/after table at the top", readme.index("## Result") < readme.index("## What ships"), True)
     same("no TODO left in the README", bool(re.search(r"\bTODO\b", readme)), False)

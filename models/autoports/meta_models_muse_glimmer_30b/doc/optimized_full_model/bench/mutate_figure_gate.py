@@ -15,6 +15,7 @@ Usage::
     python doc/optimized_full_model/bench/mutate_figure_gate.py
 """
 
+import hashlib
 import pathlib
 import shutil
 import subprocess
@@ -153,8 +154,8 @@ MUTATIONS = [
     (
         "suite size",
         "doc/optimized_full_model/README.md",
-        "**56** cases (46 inherited + 10 new)",
         "**57** cases (46 inherited + 11 new)",
+        "**58** cases (46 inherited + 12 new)",
     ),
     (
         "eligibility bound",
@@ -231,6 +232,13 @@ def reset():
     shutil.rmtree(WORK.parent, ignore_errors=True)
     WORK.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(SRC, WORK)
+    # The gate also reads the shared sampler (round 9 brought the sampling trace inside the
+    # fail-closed policy there), so the copy has to include it or the baseline cannot run.
+    for shared in (pathlib.Path("models/common/sampling/generator.py"),):
+        target = SCRATCH / shared
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(SRC.parents[1] / shared.relative_to("models"), target)
+    _bootstrap_scratch_log()
 
 
 def run_gate() -> bool:
@@ -238,30 +246,35 @@ def run_gate() -> bool:
     return "FIGURES_OK" in out.stdout
 
 
-def _bootstrap_log() -> None:
-    """Keep the scratch copy self-consistent when the mutation table has just grown.
+def digest(mutation) -> str:
+    """A short hash of one mutation's full content -- name, path, and both texts.
 
-    ``check_reported_figures.py`` asserts that this harness's committed log records as many
-    caught mutations as the table has entries -- so that a case cannot be quietly dropped from
-    the table while the log still advertises it.  That makes the log an input to the very gate
-    the baseline run checks, so adding a mutation would fail the baseline until the log is
-    rewritten, which only a completed run does.  Placeholder lines break the cycle; the real
-    transcript overwrites them at the end of this run, and the committed artifact is always a
-    real one.
+    The gate recomputes these from the table and requires the log to carry the same set, so a
+    log cannot outlive an edit to what it claims to have tested.  Round 9 defeated the previous
+    form by *neutering* a mutation without re-running: the gate only counted entries, so the
+    old log still satisfied it.
     """
-    wanted = len(MUTATIONS)
-    existing = LOG.read_text() if LOG.exists() else ""
-    if len([line for line in existing.splitlines() if line.startswith("CAUGHT ")]) == wanted:
-        return
+    name, rel, old_text, new_text = mutation
+    return hashlib.sha256("\x00".join((name, rel, old_text, new_text)).encode()).hexdigest()[:12]
+
+
+def _bootstrap_scratch_log() -> None:
+    """Write a self-consistent placeholder log **into the scratch copy only**.
+
+    The gate asserts that this harness's log matches the mutation table, so the log is an input
+    to the very gate the baseline run checks: adding or editing a mutation would fail the
+    baseline until a completed run rewrote the log, which cannot happen. Writing the placeholder
+    into the copy breaks the cycle without ever putting one in the repo -- round 9 pointed out
+    that the previous form bootstrapped the *committed* log, which handed anyone a one-command
+    way to produce a passing log with no mutation run behind it.
+    """
     placeholder = ["baseline: FIGURES_OK", ""]
-    placeholder += [f"CAUGHT  bootstrap placeholder {i + 1}" for i in range(wanted)]
-    placeholder += ["", f"ALL {wanted} MUTATIONS CAUGHT"]
-    LOG.write_text("\n".join(placeholder) + "\n")
-    print(f"(bootstrapped {LOG.name} to {wanted} entries; this run overwrites it)")
+    placeholder += [f"CAUGHT  {name}  [{digest(m)}]" for m in MUTATIONS for name in (m[0],)]
+    placeholder += ["", f"ALL {len(MUTATIONS)} MUTATIONS CAUGHT"]
+    (WORK / LOG.relative_to(SRC)).write_text("\n".join(placeholder) + "\n")
 
 
 def main() -> int:
-    _bootstrap_log()
     reset()
     if not run_gate():
         say("BASELINE FAILS -- the scratch copy is not clean; aborting")
@@ -270,17 +283,18 @@ def main() -> int:
     say("baseline: FIGURES_OK")
     say()
     survivors = []
-    for name, rel, old, new in MUTATIONS:
+    for mutation in MUTATIONS:
+        name, rel, old, new = mutation
         reset()
         path = WORK / rel
         text = path.read_text()
         if text.count(old) != 1:
-            say(f"SKIP  {name}: anchor found {text.count(old)} times")
+            say(f"SKIP  {name}: anchor found {text.count(old)} times  [{digest(mutation)}]")
             survivors.append(f"{name} (anchor)")
             continue
         path.write_text(text.replace(old, new))
         caught = not run_gate()
-        say(f"{'CAUGHT' if caught else 'SURVIVED'}  {name}")
+        say(f"{'CAUGHT' if caught else 'SURVIVED'}  {name}  [{digest(mutation)}]")
         if not caught:
             survivors.append(name)
     say()

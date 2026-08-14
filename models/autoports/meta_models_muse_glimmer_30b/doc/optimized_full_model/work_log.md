@@ -307,8 +307,8 @@ Each is one device job, one at a time, per `$tt-device-usage`.
 | accuracy + sampling + fallback | `evidence_accuracy.json` | top-5 1.000, top-100 1.000 |
 | fp32 control + misses | `evidence_fp32_gate.json`, `evidence_misses.json` | all four gates pass |
 | greedy sampler benchmark | `sampler_ab.json` | split still wins, 15x |
-| 56-case suite, forward | `test_results.xml` | 56 passed |
-| 56-case suite, reverse | `logs/full_test_run_reverse.log` | 56 passed |
+| 57-case suite, forward | `test_results.xml` | 57 passed |
+| 57-case suite, reverse | `logs/full_test_run_reverse.log` | 57 passed |
 | qualitative, TT + compare | `qualitative/` | byte-identical to stage 6 |
 | degeneracy gate | `logs/check_degenerate_output.log` | no degenerate output |
 | watcher, shipped-default 10 cases | `watcher/`, `logs/run_watcher.log` | `WATCHER_CLEAN`, 0 tripped asserts |
@@ -763,7 +763,7 @@ to the new cache and the stale entry could never be invalidated again.
 | the round-6 conclusion sat in this log with no supersession marker | marked, with a pointer to the round-7 restatement and to limitation 6 |
 | §8 disagreed with the README on two figures from the same partition | corrected to the README's (**179.07 µs** of a 431.48 µs layer; the projections at **52.27–77.12 %**) |
 
-The suite is **56** cases (46 inherited + 10 new), forward and reverse.
+The suite is **57** cases (46 inherited + 11 new), forward and reverse.
 
 And the thing four rounds of this have implied: the mutation testing is **committed**
 (`bench/mutate_figure_gate.py`, `logs/mutate_figure_gate.log`). Thirty-two mutations, each one a
@@ -775,6 +775,36 @@ figures appear more than once in their document, so "the literal is present" was
 the other copy. They are bound to their table cell now, and the gate asserts the harness's log
 alongside its own verdict.
 
+### Round 9 — `more-work-needed`
+
+The P1 was the third capture. Rounds 4, 6, 7 and 8 all worked on trace lifecycle and all four
+worked on the two traces *this port owns*; the sampling trace is captured by the shared
+`SamplingGenerator`, and its `reset_trace` logged a failed `ttnn.release_trace` and then ran
+`_trace_states.clear()` anyway. That drops the slot — the only reference to the handle **and**
+to the `sampled` tensor allocated during capture — while the trace is live: a freed buffer
+under a live trace, and an unreleasable handle, silently. The fail-closed policy this stage
+wrote in round 8 covered two of three captures, and the test could not see it because it never
+passed `sample_on_device=True`.
+
+`models/common/sampling/generator.py` now fails closed the same way: failed slots move to its
+own `_orphaned_traces`, out of the lookup table so `_execute_trace` cannot replay one, still
+referenced so nothing they hold is collected; `reset_trace` returns how many failed and
+`retry_orphaned_traces()` retries them, which this generator's `_retry_orphaned_traces()`
+calls. It is the one change this stage makes outside its own directory, and it is additive:
+the healthy path returns 0 and behaves exactly as before.
+
+| finding | what was done |
+| --- | --- |
+| **P1** the sampling trace was outside the fail-closed policy, and the README claimed otherwise | fixed in the shared sampler as above; the README's trace-inventory row and the fail-closed paragraph now describe all three captures, including *why* the sampling trace is deliberately **not** counted in `live_traces_over_kv_cache` (it bakes no cache address); the test now captures a sampling trace and asserts the sampler's own orphan properties |
+| **P2** the drains sat between a successful release and the bookkeeping | the count decrement and the container update now happen **before** the drain in both release paths and in the retry, so a raise in the drain cannot leave a released bucket replayable, double-release an id, or pin the count high; the two release calls are sequenced with `try/finally` in both callers, so a raise in the prefill release can no longer skip the decode one |
+| **P2** `README.md`'s Artifacts table stated a stale test count contradicting three other places | corrected, and the count is bound to `test_results.xml` |
+| **P2** invalidation was gated on `kv_cache is not None` and absent from `generate()`; `set_kv_cache` could half-rebind | the signature comparison runs on **every** entry point unconditionally, `set_kv_cache` validates every layer before binding any, and a new test (`test_a_cache_rebound_out_of_band_still_invalidates_the_traces`) drives a rebind the generator is never told about and the rejected-cache atomicity |
+| the Commits table did not record `20f77bb0fcd` | recorded, with this round's entry |
+| `watcher/` no longer holds the run `logs/check_watcher_12case_tripped.log` re-derives from | disclosed in the Artifacts table: that arm's verdict rests on its console log, which is what limitation 6 cites; the directory count (18) is stated and bound |
+| the figure gate could not see unit changes, fabricated sections or rows, or one section contradicting another | the section list and five table row-counts are asserted, four units are bound where the figure is, and limitation 1 must price the trace against the same two TTFT figures the headline table states |
+| the mutation log proved nothing: placeholder text passed, and a neutered mutation left it still passing | every logged line now carries a digest of the mutation's full content and the gate requires the log's digest set to equal the table's, so the log cannot outlive an edit to what it claims to have tested; the bootstrap writes its placeholder into the **scratch copy** only, so nothing in the tree can produce a passing log without a run |
+| the work log's evidence table was bound in 6 rows of 20 | the remaining numeric rows are bound to their artifacts |
+
 ## 11. Commits
 
 Local checkpoints on `agentic-research/hous/muse-glimmer-30b`, on top of the full-model
@@ -782,14 +812,16 @@ stage's `93adb25b7a8`. Never pushed.
 
 | SHA | what |
 | --- | --- |
-| `ee3c378a830` | `tt/model.py`, `tt/generator.py`, `tt/optimized_decoder.py`, `tests/test_full_model.py` — the three decode-path layout changes, the opt-in traced prefill, and the seven new acceptance cases |
+| `ee3c378a830` | `tt/model.py`, `tt/generator.py`, `tt/optimized_decoder.py`, `tests/test_full_model.py` — the three decode-path layout changes, the opt-in traced prefill, and the seven acceptance cases new *in that commit* (the suite has grown since; the current count is in the Tests section of the README, derived from `test_results.xml`) |
 | `3d03b5ca595` | `doc/optimized_full_model/` in full, the regenerated `doc/context_contract.json`, and the regenerated `readiness_autoregressive_{chat,raw}/` outputs |
 | `5e6022db622` | round-3 review fixes: the audit-table partition, the corrected prefill-128 and host-dispatch figures, the retracted retirement flag, the `--arm rebuild` probe and the gate's coverage extension |
 | `c28f91010d0` | round-4 review fixes: the decode-trace cache invalidation and its test, the fabric-ERISC length control, the context-contract provenance, and the gate's opened-artifact coverage |
 | `40e3fd71014` | round-5 review fixes: one trace-release path with a drain, the fixture finalizer, the model's live-trace guard and semaphore-cache cleanup, the re-measured limitation-6 arms, all three Fisher contrasts, and the contract's `tested` provenance |
 | `24cdea2f559` | round-6 review fixes: limitation 6 rewritten from current data with cross-section gate checks, the work-matched and pair-alone arms, the comparator-not-a-bound correction, the contract-substitution repair, and the trace-counter test |
 | `c675d8dc2d3` | round-7 review fixes: the derived process count, the conclusion restated to what the arms support, a parse-and-bind cross-section gate, the recoverable trace-release failure path, and the documented prefill-trace eligibility |
-| *(this commit)* | round-8 review fixes: the regenerated context contract and prefill-trace evidence arm, the fail-closed trace-release path and its injected-failure test, the exhausted `perf_summary.json` and re-pointed work log, cell-level and section-scoped gate binding, and the corrected multiplicity paragraph |
+| `6cc255a19d1` | round-8 review fixes: the regenerated context contract and prefill-trace evidence arm, the fail-closed trace-release path and its injected-failure test, the exhausted `perf_summary.json` and re-pointed work log, cell-level and section-scoped gate binding, and the corrected multiplicity paragraph |
+| `20f77bb0fcd` | the negative control for the fail-closed release: the test's failure against round 7's code, committed and bound by the gate |
+| *(this commit)* | round-9 review fixes: the sampling trace brought inside the fail-closed policy (in `models/common/sampling/generator.py`), the bookkeeping-before-drain ordering and `try/finally` sequencing, unconditional invalidation on every entry point, atomic `set_kv_cache`, two new acceptance cases, and a figure gate that checks structure, units, cross-section consistency and its own mutation log's provenance |
 
 Nothing unrelated is in any of them: `git status` is clean at each, and the
 only files touched outside `doc/optimized_full_model/` are the four implementation/test

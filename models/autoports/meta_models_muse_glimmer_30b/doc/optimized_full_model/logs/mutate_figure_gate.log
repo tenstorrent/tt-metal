@@ -1,36 +1,36 @@
 baseline: FIGURES_OK
 
-CAUGHT  contract token-out figure
-CAUGHT  contract TTFT figure
-CAUGHT  perf_summary stored roofline fraction
-CAUGHT  perf_summary logits-only field
-CAUGHT  perf_summary prose TTFT figure
-CAUGHT  perf_summary prose replay figure
-CAUGHT  work log token-out figure
-CAUGHT  work log two-trace residual
-CAUGHT  work log baseline row (two regenerations stale)
-CAUGHT  fabricated sixth arm row
-CAUGHT  prose-only contradictory tally
-CAUGHT  control-arm bullet reversed
-CAUGHT  headline table columns swapped (TTFT row)
-CAUGHT  headline table columns swapped (token-out row)
-CAUGHT  Bonferroni values falsified
-CAUGHT  audit SdpaDecode µs
-CAUGHT  audit id moved out of its group
-CAUGHT  device time in the accounting section
-CAUGHT  fallback synchronizations counter
-CAUGHT  accuracy top-5
-CAUGHT  force-argmax flipped
-CAUGHT  context reduced
-CAUGHT  suite size
-CAUGHT  eligibility bound
-CAUGHT  eligibility user_id condition dropped
-CAUGHT  arm row tally
-CAUGHT  work log accounting device figure
-CAUGHT  work log per-layer floor row
-CAUGHT  accuracy fp32 row top-100
-CAUGHT  the fail-closed negative control's discriminating assertion
-CAUGHT  the fail-closed negative control's verdict
-CAUGHT  roofline row in the reconciliation table
+CAUGHT  contract token-out figure  [decd38b4814a]
+CAUGHT  contract TTFT figure  [1f91bdee86d1]
+CAUGHT  perf_summary stored roofline fraction  [d2e60cf9bff1]
+CAUGHT  perf_summary logits-only field  [07d0ffbe579f]
+CAUGHT  perf_summary prose TTFT figure  [6eda5569e75a]
+CAUGHT  perf_summary prose replay figure  [83d55cf49df3]
+CAUGHT  work log token-out figure  [cde457d499db]
+CAUGHT  work log two-trace residual  [183c3a68b02c]
+CAUGHT  work log baseline row (two regenerations stale)  [54f355dd48ee]
+CAUGHT  fabricated sixth arm row  [1e1e907a2b34]
+CAUGHT  prose-only contradictory tally  [954547478ddd]
+CAUGHT  control-arm bullet reversed  [1d960bea38e4]
+CAUGHT  headline table columns swapped (TTFT row)  [bba1adf41619]
+CAUGHT  headline table columns swapped (token-out row)  [a5411204a0fe]
+CAUGHT  Bonferroni values falsified  [9a152496c15d]
+CAUGHT  audit SdpaDecode µs  [3af09a234f62]
+CAUGHT  audit id moved out of its group  [8381d3ed3a9e]
+CAUGHT  device time in the accounting section  [f353442d52fd]
+CAUGHT  fallback synchronizations counter  [547075303550]
+CAUGHT  accuracy top-5  [4bfa38eb76c8]
+CAUGHT  force-argmax flipped  [de043866b236]
+CAUGHT  context reduced  [ccd8f1489679]
+CAUGHT  suite size  [3ea6a47d1147]
+CAUGHT  eligibility bound  [2c80a6a350c3]
+CAUGHT  eligibility user_id condition dropped  [573e544b420e]
+CAUGHT  arm row tally  [d1be10230124]
+CAUGHT  work log accounting device figure  [004c38b2c39e]
+CAUGHT  work log per-layer floor row  [b95234a37a5b]
+CAUGHT  accuracy fp32 row top-100  [b4d50dc3c4c6]
+CAUGHT  the fail-closed negative control's discriminating assertion  [b89390ff13df]
+CAUGHT  the fail-closed negative control's verdict  [d7416bfe87a7]
+CAUGHT  roofline row in the reconciliation table  [2b948e144db9]
 
 ALL 32 MUTATIONS CAUGHT

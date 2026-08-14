@@ -1119,13 +1119,20 @@ def test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried(mesh):
     real_release = ttnn.release_trace
     try:
         generator.prefill_forward(torch.tensor([prompt_a]), kv_cache=own, prompt_lens=[len(prompt_a)])
+        # ``sample_on_device`` so the *third* capture exists too: round 9 found the sampling
+        # trace outside the fail-closed policy, and a test that never captures one cannot see
+        # that.  The sampler owns its own handle, so the properties checked for it are its own:
+        # the slot leaves ``_trace_states`` (never replayed) and is retained (nothing collected).
         generator.decode_forward(
             tokens=torch.tensor([[prompt_a[-1]]], dtype=torch.long),
             start_pos=torch.tensor([len(prompt_a)], dtype=torch.int32),
             kv_cache=own,
+            sample_on_device=True,
         )
         assert list(generator._prefill_traces) == [64]
         assert generator._trace_id is not None
+        assert generator._sampling_captured, "the sampling trace must be captured by now"
+        assert generator.sampling.orphaned_trace_count == 0
         assert model.live_traces_over_kv_cache == 2, "one prefill trace and one decode trace"
         doomed = {generator._trace_id, generator._prefill_traces[64]["id"]}
 
@@ -1151,6 +1158,15 @@ def test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried(mesh):
         assert generator._prefill_traces[64]["id"] not in doomed, "and not by finding the retained one"
         assert generator._prefill_trace_cache_sig != (), "the *new* bucket re-stamps the signature"
         assert {o["id"] for o in generator._orphaned_traces} == doomed
+        # The sampler's failed release is fail-closed in the same sense: out of the lookup
+        # table so it can never be replayed against logits this generator has moved on from,
+        # still referenced so nothing it holds is collected under a live trace.
+        assert generator.sampling.orphaned_trace_count == 1
+        assert generator.sampling._trace_states == {}
+        assert not generator._sampling_captured
+        assert all(
+            slot["output"] is not None and slot["input"] is not None for slot in generator.sampling._orphaned_traces
+        )
         # (2) Nothing was freed and the count never dropped: 2 orphans + the prefill trace
         # this rebind captured.
         assert model.live_traces_over_kv_cache == 3
@@ -1177,6 +1193,7 @@ def test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried(mesh):
         ttnn.release_trace = real_release
         assert generator._retry_orphaned_traces() == 0
         assert generator._orphaned_traces == []
+        assert generator.sampling.orphaned_trace_count == 0, "the sampler's orphan is retried too"
         assert model.live_traces_over_kv_cache == 2, "the two orphans are accounted for on retry"
     finally:
         ttnn.release_trace = real_release
@@ -1188,6 +1205,88 @@ def test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried(mesh):
             for pair in moved:
                 for tensor in pair:
                     ttnn.deallocate(tensor)
+        generator.teardown()
+        generator.model.deallocate()
+        clear_generator_cache()
+
+
+def test_a_cache_rebound_out_of_band_still_invalidates_the_traces(mesh, expect_error):
+    """``model.set_kv_cache()`` is public, so the invalidation cannot depend on the caller
+    handing the cache back to the generator.
+
+    Round 9 of the stage review found the comparison gated on ``kv_cache is not None`` at both
+    entry points and absent from ``generate()`` altogether: a caller that rebound out of band
+    and then decoded with ``kv_cache=None`` -- or called ``generate()`` at all -- replayed the
+    decode trace against the buffers it had just rebound away from.  That is round 4's silent
+    wrong-token defect through a branch round 4's guard does not cover.  The signature compare
+    is a tuple compare, so it now runs on every entry point unconditionally.
+
+    The second half pins the atomicity of ``set_kv_cache`` itself: it used to validate and
+    assign layer by layer, so a mismatch at layer *i* left ``0..i-1`` bound to the new cache and
+    raised -- and because the caller invalidates *after* it returns, the raise skipped the
+    invalidation and left a half-rebound cache under a trace whose signature still matched.
+    """
+    clear_generator_cache()
+    generator = build_generator(MODEL_DIR, mesh, max_seq_len=REDUCED_MAX_SEQ, layer_indices=REDUCED_LAYERS, reuse=False)
+    model = generator.model
+    prompt_a = _prompt(64, seed=31)
+    prompt_b = _prompt(64, seed=53)
+    own = model.kv_cache
+    moved = None
+    try:
+        generator.prefill_forward(torch.tensor([prompt_a]), kv_cache=own, prompt_lens=[len(prompt_a)])
+        generator.decode_forward(
+            tokens=torch.tensor([[prompt_a[-1]]], dtype=torch.long),
+            start_pos=torch.tensor([len(prompt_a)], dtype=torch.int32),
+            kv_cache=own,
+        )
+        assert generator._trace_id is not None and generator._decode_trace_releases == 0
+
+        moved = [
+            [ttnn.clone(k, memory_config=k.memory_config()), ttnn.clone(v, memory_config=v.memory_config())]
+            for k, v in own
+        ]
+        # Out of band: the generator is never told, and the next call passes no cache at all.
+        generator.reset()
+        model.set_kv_cache(moved)
+        generator.prefill_forward(torch.tensor([prompt_b]), kv_cache=None, prompt_lens=[len(prompt_b)])
+        assert generator._decode_trace_releases == 1, "an out-of-band rebind must release the decode trace"
+
+        eager = generator.decode_forward(
+            tokens=torch.tensor([[prompt_b[-1]]], dtype=torch.long),
+            start_pos=torch.tensor([len(prompt_b)], dtype=torch.int32),
+            kv_cache=None,
+            enable_trace=False,
+        )
+        traced = generator.decode_forward(
+            tokens=torch.tensor([[prompt_b[-1]]], dtype=torch.long),
+            start_pos=torch.tensor([len(prompt_b)], dtype=torch.int32),
+            kv_cache=None,
+        )
+        assert torch.equal(
+            traced.argmax(dim=-1), eager.argmax(dim=-1)
+        ), "the recaptured trace must answer from the cache bound out of band"
+
+        # Atomicity: a bad pair in the *last* layer must leave every layer on the cache it had.
+        # The check is shape-only, so a host tensor of the wrong shape exercises it without
+        # allocating anything on device.
+        bad = [[k, v] for k, v in own]
+        bad[-1] = [torch.zeros(1, 1, 1, 1), own[-1][1]]
+        before = [(layer.k_cache, layer.v_cache) for layer in model.layers]
+        with expect_error(ValueError, "external k cache for layer"):
+            model.set_kv_cache(bad)
+        assert [
+            (layer.k_cache, layer.v_cache) for layer in model.layers
+        ] == before, "a rejected cache must bind no layer at all"
+    finally:
+        generator._release_decode_trace()
+        generator._retry_orphaned_traces()
+        model.set_kv_cache(own)
+        if moved is not None:
+            for pair in moved:
+                for tensor in pair:
+                    if tensor.is_allocated():
+                        ttnn.deallocate(tensor)
         generator.teardown()
         generator.model.deallocate()
         clear_generator_cache()

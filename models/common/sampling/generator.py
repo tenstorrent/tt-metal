@@ -105,6 +105,10 @@ class SamplingGenerator:
         self._penalties_active = False
 
         self._trace_states: dict[_TraceKey, dict] = {}
+        #: Slots whose ``ttnn.release_trace`` raised: kept out of ``_trace_states`` so they can
+        #: never be replayed, and kept referenced so nothing they hold is collected under a
+        #: live trace.  See :meth:`reset_trace` / :meth:`retry_orphaned_traces`.
+        self._orphaned_traces: list[dict] = []
         seed_batch_size = self.tt_sampling.max_batch_size * self.tt_sampling._sampling_dp
         self.seed_manager = SeedManager(
             self.tt_sampling,
@@ -122,10 +126,24 @@ class SamplingGenerator:
             self._trace_states[key] = slot
         return key, slot
 
-    def reset_trace(self):
+    def reset_trace(self) -> int:
         """
         Drop any cached trace metadata for both penalties/no-penalties and log-probs/no-log-probs paths.
+
+        Returns the number of traces whose release **failed** and are therefore retained
+        unusable; ``0`` on the healthy path, which is every path that does not raise.
+
+        A failed release used to be logged and then dropped anyway: ``_trace_states.clear()``
+        ran unconditionally, so the slot -- the only reference to the trace's handle *and* to
+        the ``sampled`` output tensor allocated during capture -- went away while the trace was
+        still live on device.  That frees a buffer a live trace writes into (use-after-free) and
+        loses the handle (unreleasable trace), and the caller could not tell it had happened.
+        Failed slots now move to :attr:`_orphaned_traces` instead: out of the lookup table, so
+        ``_execute_trace`` can never replay one against logits the caller has since freed, but
+        still referenced, so nothing they hold is collected.  :meth:`retry_orphaned_traces`
+        retries them.
         """
+        orphaned = 0
         for key, slot in self._trace_states.items():
             if slot["id"] is None:
                 continue
@@ -135,9 +153,34 @@ class SamplingGenerator:
             try:
                 ttnn.release_trace(self.mesh_device, slot["id"])
             except Exception as e:
-                logger.warning(f"Failed to release trace {slot['id']} : {e}")
+                logger.warning(
+                    f"Failed to release trace {slot['id']} : {e}; retaining it unusable "
+                    "(it will not be replayed) and its tensors until retry_orphaned_traces() succeeds"
+                )
+                self._orphaned_traces.append(slot)
+                orphaned += 1
                 continue
         self._trace_states.clear()
+        return orphaned
+
+    def retry_orphaned_traces(self) -> int:
+        """Retry every trace whose release raised.  Returns how many are still held."""
+        still_held = []
+        for slot in self._orphaned_traces:
+            try:
+                ttnn.release_trace(self.mesh_device, slot["id"])
+            except Exception as e:
+                logger.warning(f"Retrying the release of sampling trace {slot['id']} failed again: {e}")
+                still_held.append(slot)
+                continue
+            logger.debug(f"Sampling trace {slot['id']} released on retry")
+        self._orphaned_traces = still_held
+        return len(still_held)
+
+    @property
+    def orphaned_trace_count(self) -> int:
+        """How many sampling traces are held unreleased after a failed release."""
+        return len(self._orphaned_traces)
 
     def reset_prompt_tokens(self, prompt_tokens):
         if not self._penalties_active:
