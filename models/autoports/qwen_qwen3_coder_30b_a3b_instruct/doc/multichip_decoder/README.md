@@ -11,6 +11,21 @@ context contract is not merely preserved — this is the stage that **discharges
 the forward-looking caveat stage 01 left, and it does so by allocating the whole
 model rather than by arithmetic.
 
+> **Forward pointer, added by stage 04 — no figure in this document changes.**
+> `tt/multichip_decoder.py` was optimized **in place** by stage 04, so the file
+> this document describes no longer produces the numbers below: the decode layer
+> is now 362.828 µs of device time against the 414.661 recorded here, and
+> traced decode at ctx 128 is 0.4286 ms against this directory's 0.4767.
+> Everything in this
+> directory is the frozen *before* half of that comparison and is deliberately
+> never regenerated — in particular `perf_prefill.csv`, `perf_decode.csv` and
+> the three `ops_perf_multichip_*.csv.gz`. The perf tests that used to write
+> them are now `test_optimized_multichip_*` and write into
+> `../optimized_multichip_decoder/`, which is also where stage 04's README,
+> work log and operation-topology audit live. The parallelisation, the `nnz`
+> contract, the context contract and every correctness claim below are
+> unchanged.
+
 Design, with the probe evidence behind it, is `mesh_plan.md`, written before any
 of `tt/multichip_decoder.py` existed. `work_log.md` records what happened when
 that design met the hardware, including the four places it was wrong.

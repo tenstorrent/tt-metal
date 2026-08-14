@@ -631,6 +631,60 @@ def test_multichip_decode_batch(fixture, reference, batch):
         assert (got - got[0]).abs().max().item() > 1e-3, f"batch={batch}: all users identical (broadcast bug)"
 
 
+# --- stage 04: the layer's own shape and layout contract ----------------------
+
+
+@ring_fabric
+@mesh_4
+@pytest.mark.parametrize("batch", [1, 8], ids=["b1", "b8"])
+def test_decode_output_layout_matches_input(fixture, batch):
+    """The decode layer must return exactly the tensor contract it takes.
+
+    Replicated ``[1, 1, B, 2048]``, bfloat16, TILE, DRAM-interleaved, logical
+    shape included -- that is what lets 48 layers stack with no boundary
+    conversion, and it is the *inter-layer residual layout contract* that
+    ``doc/optimized_multichip_decoder/README.md`` writes down for full-model
+    bringup.
+
+    It is asserted rather than assumed because stage 04's persistent collective
+    buffers can break it silently. A persistent output buffer imposes its own
+    logical shape on the op's result, and the layer's two all-reduces have the
+    same *padded* shape but different *logical* ones -- the attention partial is
+    32 rows out of ``wo``, the expert partial is ``batch``. Keyed on the padded
+    shape alone they collide and the layer returns a 32-row tensor; every test
+    that compares a path against itself still passes.
+    """
+    cfg = fixture.config
+    prompt = 32
+    kv = MC.create_mesh_kv_cache(fixture.mesh, cfg, batch, 128, block_size=BLOCK_SIZE)
+    hidden = _hidden(fixture.hf, prompt + 1)
+    for user in range(batch):
+        fixture.multichip_prefill(hidden[:, :, :prompt, :], kv_cache=kv, user_id=user)
+
+    token = fixture.rep(hidden[:, :, prompt, :].reshape(1, 1, 1, -1).repeat(1, 1, batch, 1))
+    pos = ttnn.from_torch(
+        torch.full((batch,), prompt, dtype=torch.int32),
+        dtype=ttnn.int32,
+        device=fixture.mesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(fixture.mesh),
+    )
+    out = MC.decoder_layer_decode_multichip(
+        token, fixture.multichip, cfg, fixture.ctx, fixture.cos, fixture.sin, kv, pos, prompt
+    )
+    assert list(out.shape) == list(token.shape), (
+        f"decode layer changed the logical shape: in {list(token.shape)}, out {list(out.shape)}. "
+        "48 of these stack, so the output contract must equal the input contract."
+    )
+    assert out.dtype == token.dtype, f"dtype changed: {token.dtype} -> {out.dtype}"
+    assert out.layout == token.layout, f"layout changed: {token.layout} -> {out.layout}"
+    assert out.memory_config() == token.memory_config(), (
+        f"memory config changed: {token.memory_config()} -> {out.memory_config()}; "
+        "there must be no inter-layer reshard"
+    )
+    spread = (fixture.dies(out) - fixture.dies(out)[0:1]).abs().max().item()
+    assert spread == 0.0, f"decode output differs across dies by {spread}"
+
+
 # --- the dynamic-nnz hazard ---------------------------------------------------
 
 
@@ -929,3 +983,64 @@ def test_no_runtime_fallbacks(fixture, batch):
     # the answer for batches 2 to 16; the swept 128 MB is chosen against the
     # measured L1-vs-DRAM crossover. See probes/l1_budget_probe.py.
     assert audit["expert_intermediate_buffer"] == ("L1" if batch == 1 else "DRAM"), audit
+    # Stage 04. The sharded residual norm writes exactly the L1 shard the
+    # DRAM-sharded qkv projection reads, which is what lets the first norm's
+    # output cross into attention with no conversion at all. If that equality
+    # ever breaks, TTNN inserts a reshard between them and the layer gets slower
+    # with no error -- the same failure mode as the three above.
+    assert audit["norm_shard_feeds_qkv_directly"], (
+        "the sharded norm's output shard no longer matches attention's qkv input shard; "
+        "a silent reshard has been reintroduced between them"
+    )
+    assert audit["norm_shard_cores"] == 8, audit
+
+
+def test_meta_rope_weights_match_hf():
+    """The Meta channel permutation is a *pair*: Q/K rows and the QK-norm vectors.
+
+    Stage 01 chose HF-style RoPE precisely so neither permutation was needed.
+    Stage 04 adopts ``rotary_embedding_llama`` on the decode path, which brings
+    both back, and crossing them "runs fine and silently produces garbage"
+    (``weight_mapping.py``). This asserts the whole convention on the host, with
+    no device, so a mismatch fails here rather than as a PCC that is merely
+    lower.
+    """
+    import torch
+
+    from ..tt.weight_mapping import hf_to_meta_channels, permute_head_vector_to_meta, permute_wqkv_to_meta
+
+    hd, nh, nkv, hidden = 128, 8, 1, 2048
+    perm = hf_to_meta_channels(hd)
+    inv = torch.argsort(perm)
+
+    # 1. The permutation is a permutation, and it is the interleave it claims.
+    assert sorted(perm.tolist()) == list(range(hd))
+    assert perm[0] == 0 and perm[1] == hd // 2 and perm[2] == 1
+
+    # 2. HF rope on HF-ordered channels == Meta rope on Meta-ordered channels.
+    torch.manual_seed(0)
+    x = torch.randn(4, hd)
+    c, s = torch.randn(hd // 2).abs(), torch.randn(hd // 2)
+    cos_hf, sin_hf = torch.cat([c, c]), torch.cat([s, s])
+    hf = x * cos_hf + torch.cat([-x[:, hd // 2 :], x[:, : hd // 2]], dim=-1) * sin_hf
+    xm = x[:, perm]
+    cos_m, sin_m = cos_hf[perm], sin_hf[perm]
+    rot = torch.stack([-xm[:, 1::2], xm[:, 0::2]], dim=-1).reshape(xm.shape)
+    meta = xm * cos_m + rot * sin_m
+    assert torch.allclose(meta[:, inv], hf, atol=1e-6), (meta[:, inv] - hf).abs().max()
+
+    # 3. permute_wqkv_to_meta touches Q and K and leaves V alone.
+    wqkv = torch.randn(1, 1, hidden, (nh + 2 * nkv) * hd)
+    out = permute_wqkv_to_meta(wqkv, n_heads=nh, n_kv_heads=nkv, head_dim=hd)
+    assert out.shape == wqkv.shape
+    v0 = (nh + nkv) * hd
+    assert torch.equal(out[..., v0:], wqkv[..., v0:]), "V was permuted"
+    for h in range(nh + nkv):
+        lo = h * hd
+        assert torch.equal(out[..., lo : lo + hd], wqkv[..., lo : lo + hd][..., perm])
+    assert not torch.equal(out[..., :hd], wqkv[..., :hd]), "Q was not permuted"
+
+    # 4. Applying it twice is not identity -- i.e. forgetting it is detectable.
+    vec = torch.randn(hd)
+    assert not torch.equal(permute_head_vector_to_meta(vec, head_dim=hd), vec)
+    assert torch.equal(permute_head_vector_to_meta(vec, head_dim=hd)[inv], vec)

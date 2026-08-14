@@ -136,6 +136,44 @@ def _apply_rope(tensor: ttnn.Tensor, cos_cache, sin_cache, token_index=None) -> 
     return out
 
 
+def rope_transformation_matrix() -> "torch.Tensor":
+    """The 32x32 matrix ``rotary_embedding_llama`` rotates a tile row with.
+
+    ``+1`` at ``(2i, 2i+1)`` and ``-1`` at ``(2i+1, 2i)`` -- i.e. the Meta
+    channel pairing, expressed as a matmul so the kernel needs no gather. This
+    is what makes the llama op cheaper than the HF one at the same core count:
+    the HF op reads a cos/sin row out of a DRAM cache per call, this one
+    multiplies by a resident 32x32 tile.
+    """
+    import torch
+
+    d = 32
+    m = torch.zeros(1, 1, d, d)
+    m[..., torch.arange(0, d, 2), torch.arange(1, d, 2)] = 1
+    m[..., torch.arange(1, d, 2), torch.arange(0, d, 2)] = -1
+    return m
+
+
+def apply_rope_llama(tensor: ttnn.Tensor, cos_shard, sin_shard, trans_mat) -> ttnn.Tensor:
+    """Meta-style rotary embedding, decode mode.
+
+    ``tensor``, ``cos_shard`` and ``sin_shard`` must all be the height-sharded
+    ``[1, batch, 32, head_dim]`` L1 config ``nlp_create_qkv_heads_decode``
+    produces, and ``tensor`` must be in **Meta** channel order -- which is a
+    property of the *weights*, established once at upload by
+    ``weight_mapping.permute_wqkv_to_meta``, not of anything done here.
+
+    Measured against ``_apply_rope`` at the shipped per-die decode shape:
+    3.84 -> 1.26 us, ``max|diff|`` exactly 0.0 and PCC 1.0000000
+    (``doc/optimized_multichip_decoder/probes/rope_probe.py``).
+
+    Unlike ``_apply_rope`` this needs **no** reshape-and-slice afterwards: the
+    op is shape-preserving in decode mode, so the dim-2 padding hazard that
+    ``_apply_rope`` documents does not arise.
+    """
+    return ttnn.experimental.rotary_embedding_llama(tensor, cos_shard, sin_shard, trans_mat, is_decode_mode=True)
+
+
 def _concat_heads_decode(attn: ttnn.Tensor, config: AttentionConfig) -> ttnn.Tensor:
     """Merge heads in decode mode. ``attn`` ``[1, batch, num_heads, head_dim]``.
 

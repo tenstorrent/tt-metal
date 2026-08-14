@@ -3,7 +3,36 @@
 
 """Multichip TTNN decoder layer for Qwen3-Coder-30B-A3B-Instruct, 4 Blackhole dies.
 
-Stage 03. The single-chip baseline is ``optimized_decoder.py`` -- every program
+Stages 03 and 04. Stage 04 optimized this file **in place**; the parallelisation
+below is stage 03's and is unchanged, and what stage 04 changed is where the
+activations live inside a layer:
+
+* **Both residual RMSNorms are width-sharded over 8 cores** rather than running
+  on one (``decode_residual_norm``). 19.82 -> 4.92 us each, and *more* accurate
+  than the call they replace. The shard spec is deliberately
+  ``_width_sharded_l1(2048)``, so the first norm's output feeds the qkv
+  projection with no conversion at all.
+* **The router projection reads that L1 shard** instead of DRAM-interleaved.
+  24.62 -> **5.85 us** at the shipped 8-core norm shard (the same sweep's 4-core
+  leg reads 4.30, but 4 cores is not what ships -- the norm shards over
+  ``_NORM_SHARD_CORES = 8``), output **bit-identical**, which is what keeps the
+  four dies agreeing on the top-8. In the layer it is row 182, 6.241 us.
+* **The two collectives use caller-owned persistent buffers**
+  (``_decode_ccl_buffers``), so nothing in the forward path allocates inside the
+  trace.
+* **Decode collectives use one ethernet link, not two** (``NUM_LINKS_DECODE``).
+  Stage 03 measured this at 0.6% and kept 2 for a single code path; against the
+  stage-04 layer it is **1.22%**, over six passes with the leg order alternating
+  so that a position effect cannot be read as a link effect. Prefill keeps both.
+
+Decode layer device time 414.661 -> 362.828 us on device 0 (1.143x); traced
+decode at ctx 128, 0.4767 -> 0.4286 ms (1.112x), and 0.4700 -> 0.4282 measured
+before and after in one process by ``probes/layer_levers.py``. The inter-layer contract is untouched: a layer
+takes and returns a replicated ``[1, 1, B, 2048]`` bf16 TILE DRAM tensor with no
+collective, gather or reshard between layers. Everything is in
+``doc/optimized_multichip_decoder/``.
+
+The single-chip baseline is ``optimized_decoder.py`` -- every program
 config, dtype and fidelity constant it measured is imported rather than
 re-derived, and the multichip path is the *same graph* with three changes:
 
@@ -76,7 +105,7 @@ Rejected alternatives, with the measurement, are in
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 
 import torch
 
@@ -89,7 +118,9 @@ from .functional_decoder import (
     DecoderLayerConfig,
     KVCache,
     MoEConfig,
+    apply_rope_llama,
     attention_prefill,
+    rope_transformation_matrix,
 )
 from .optimized_decoder import (
     _DRAM_BANKS,
@@ -103,9 +134,11 @@ from .optimized_decoder import (
     _expert_compute_kernel_config,
     _ones_column,
     _tuned_sparse_matmul_config,
+    _width_sharded_l1,
     attention_decode_optimized,
     moe_prefill_optimized,
 )
+from .weight_mapping import hf_to_meta_channels, permute_head_vector_to_meta, permute_wqkv_to_meta
 
 # The target mesh. This module deliberately supports exactly one shape: the
 # goal is the best use of *this* machine, and every constant below -- the head
@@ -119,9 +152,51 @@ NUM_DEVICES = 4
 # because tt_ccl.default_topology() returns Linear for a 4-device mesh.
 TOPOLOGY = ttnn.Topology.Ring
 
-# Both ethernet links on every hop are used. Worth 1.04x at decode size (it is
-# latency-bound there) and 1.84x at 2 MB, i.e. free money in prefill.
+# Both ethernet links on every hop are used **in prefill**, where the payload is
+# large enough to be bandwidth-bound: 1.84x at 2 MB.
 NUM_LINKS = 2
+
+# Decode uses **one**. Stage 03 measured 1 link at 0.4738 ms against 2 links'
+# 0.4766, called 0.6% noise-level, and kept 2 for a single code path. Against
+# the stage-04 layer -- where the collectives are a larger share because
+# everything around them got smaller, and where they no longer allocate -- the
+# gap is 1.22% and output is bit-identical (``probes/links_probe.py``, six
+# passes with the **leg order alternating**, so that a position effect cannot be
+# read as a link effect):
+#
+#     posA  2 links 0.4342  0.4341  0.4340     1 link 0.4290  0.4288  0.4286
+#     posB  2 links 0.4341  0.4337  0.4339     1 link 0.4291  0.4283  0.4287
+#
+#     mean  2 links 0.43400      1 link 0.42875      1.22%
+#
+# Each configuration reads the same at both positions, which is what rules out
+# the alternative explanation -- that the leg running first in a pass is simply
+# slower. That control was added because review found ``_links`` had stopped
+# honouring an explicit ``num_links=2``, leaving the probe unable to tell its
+# own legs apart; the figure survived the repair, its reproducibility did not
+# and now does. 5.25 us on the layer against a leg-against-itself spread of
+# 0.5-0.8 us. A decode
+# collective moves 128 KB per die and is latency-bound, so the second link buys
+# no bandwidth and costs the split and merge. ``all_reduce`` branches on the
+# same ``S <= 32`` test ``_decode_ccl_buffers`` uses, so prefill keeps both.
+NUM_LINKS_DECODE = 1
+
+
+def _links(x: ttnn.Tensor, ctx: "MeshContext") -> int:
+    """``ctx.num_links`` for prefill, ``ctx.decode_num_links`` for decode.
+
+    The two counts are **separate fields** rather than one field plus a
+    "differs from the default means override" test. That test was the first
+    spelling here and it is not expressible: a caller asking explicitly for
+    ``num_links=2`` at decode passes ``ctx.num_links == NUM_LINKS``, which the
+    test read as "no override" and silently gave 1 link. ``links_probe.py``
+    builds its two-link leg exactly that way, so the probe that established
+    ``NUM_LINKS_DECODE`` could not have been re-run against it -- review caught
+    this. Two fields make each mode's count independently settable and the
+    probe's legs actually different.
+    """
+    return ctx.decode_num_links if int(x.shape[-2]) <= 32 else ctx.num_links
+
 
 # Decode's two expert intermediates under EP:
 #
@@ -157,6 +232,143 @@ def _decode_expert_memory_config(batch: int, local_moe: MoEConfig) -> ttnn.Memor
     return ttnn.L1_MEMORY_CONFIG if nbytes <= _DECODE_EXPERT_L1_BUDGET_BYTES else ttnn.DRAM_MEMORY_CONFIG
 
 
+# --- Meta-ordered rotary for decode (stage 04) --------------------------------
+
+
+def _meta_rope(ctx: MeshContext, cos_cache: ttnn.Tensor, sin_cache: ttnn.Tensor, head_dim: int):
+    """Return a ``rope(t, cos, sin, token_index)`` callable using the llama op.
+
+    **Measured, and not adopted.** Kept runnable rather than deleted, on the
+    same principle as ``router_forward_threshold``: the finding is the useful
+    part, and a future stage that changes prefill should not have to rediscover
+    it. Nothing on the shipped path calls this --
+    ``decoder_layer_decode_multichip`` ships the HF op, and
+    ``upload_multichip_weights`` builds the Meta weights only under
+    ``meta_rope=True``, so the shipped upload pays no DRAM for it.
+
+    ``rotary_embedding_llama`` costs **1.26 us** against the shipped HF op's
+    3.84 at the per-die decode shape, with ``max|diff|`` exactly 0.0 and PCC
+    1.0000000 (``probes/rope_probe.py``). Both run on one core: the llama
+    decode factory shards over *batch*, not heads, so at batch 1 none of the
+    3.05x is parallelism -- it is the activation living in L1 and a kernel that
+    multiplies by a resident 32x32 matrix instead of gathering a cos/sin row out
+    of a DRAM cache. Same lever as the router projection, different op.
+
+    Two things are hoisted out of the forward path, both on the first (eager)
+    call and cached on ``ctx``:
+
+    * the **Meta cos/sin** for this ``token_index``, read off the HF device
+      cache once, permuted on the host and uploaded already sharded. That is
+      legitimate precisely because ``token_index`` is a Python int -- the
+      shipped HF op bakes the position into the traced program too, so neither
+      spelling can advance the rotary position inside a replayed trace, and
+      hoisting the gather changes nothing about what a trace can express.
+    * the **transformation matrix**, which is position-independent.
+
+    The Meta *channel order* is not established here at all: it is a property of
+    ``ctx``-independent weights, applied once by
+    ``weight_mapping.permute_wqkv_to_meta`` at upload.
+
+    **Why it is not adopted.** RoPE runs *before* K is written to the cache, so
+    the cache inherits the rotary's channel convention. Prefill is untouched by
+    this lever and writes HF-ordered keys; a Meta-ordered decode Q then scores
+    against them, and the dot products are meaningless.
+    ``probes/rope_layer_probe.py``:
+
+        fresh KV cache          PCC 0.9999697    the rotary itself is right
+        prefill-primed cache    PCC 0.1932974    the cache convention is not
+
+    The op-level probe looked clean precisely because its cache was fresh. So
+    the lever is not decode-local: adopting it means adopting the llama rotary
+    in **prefill** as well, permuting the interleaved ``wqkv`` prefill copy, and
+    changing the KV cache's channel convention -- which
+    ``test_per_die_kv_heads_stitched`` compares against a single-chip cache and
+    which ``doc/context_contract.json`` describes. That is a whole-layer change,
+    not the in-place decode optimization this stage is.
+
+    A second cost, smaller and independent: ``ATTENTION_WEIGHT_DTYPE`` is
+    ``bfloat8_b``, whose 16-element blocks share an exponent, so permuting
+    channels **regroups the blocks** and requantizes. The two paths therefore
+    are not bit-identical in the layer even where the ops are -- attention out
+    ``max|diff|`` 1.221e-04 on a fresh cache, and the K cache differs by
+    3.125e-01 after permuting back. "Bit-identical" is a property of the op at
+    fixed input, not of the layer at permuted weights.
+    """
+    st = ctx.rope_meta
+
+    def trans_mat(batch: int):
+        # One 32x32 copy **per batch core**, because the decode factory shards
+        # over batch: at batch 1 that is a single tile on a single core, at
+        # batch 32 it is 32 of them. Keyed by batch for that reason.
+        t = st.get(("tm", batch))
+        if t is None:
+            t = st[("tm", batch)] = ttnn.from_torch(
+                rope_transformation_matrix().repeat(1, 1, batch, 1),
+                device=ctx.mesh,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat16,
+                memory_config=_head_shard(32, 32, batch),
+                mesh_mapper=ttnn.ReplicateTensorToMesh(ctx.mesh),
+            )
+        return t
+
+    def rope(t: ttnn.Tensor, _cos, _sin, token_index: int) -> ttnn.Tensor:
+        batch = int(t.shape[1])
+        key = (int(token_index), batch, head_dim)
+        pair = st.get(key)
+        if pair is None:
+            if "host" not in st:
+                # Read the HF cos/sin cache back once and permute on the host.
+                # Replicated, so die 0's copy is the whole tensor.
+                comp = ttnn.ConcatMeshToTensor(ctx.mesh, dim=0)
+                st["host"] = (
+                    ttnn.to_torch(cos_cache, mesh_composer=comp)[:1].float(),
+                    ttnn.to_torch(sin_cache, mesh_composer=comp)[:1].float(),
+                )
+            perm = hf_to_meta_channels(head_dim)
+            mem = _head_shard(32, head_dim, batch)
+            up = []
+            for c in st["host"]:
+                row = c[:, :, token_index : token_index + 1, :]
+                row = row.expand(1, 1, 32, head_dim).contiguous()[..., perm]
+                up.append(
+                    ttnn.from_torch(
+                        row.expand(1, batch, 32, head_dim).contiguous(),
+                        device=ctx.mesh,
+                        layout=ttnn.TILE_LAYOUT,
+                        dtype=ttnn.bfloat16,
+                        memory_config=mem,
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(ctx.mesh),
+                    )
+                )
+            pair = st[key] = tuple(up)
+        sharded = ttnn.to_memory_config(t, _head_shard(32, head_dim, int(t.shape[1])))
+        out = apply_rope_llama(sharded, pair[0], pair[1], trans_mat(batch))
+        ttnn.deallocate(sharded)
+        return out
+
+    return rope
+
+
+def _head_shard(rows: int, cols: int, batch: int) -> ttnn.MemoryConfig:
+    """The height-sharded L1 config ``nlp_create_qkv_heads_decode`` emits and
+    ``rotary_embedding_llama``'s decode factory requires: one core per user,
+    each holding that user's whole ``[32 padded heads, head_dim]`` block."""
+    gx = min(batch, 8)
+    while batch % gx:
+        gx -= 1
+    gy = batch // gx
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))}),
+            [rows, cols],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+
 # --- mesh plumbing ------------------------------------------------------------
 
 
@@ -181,6 +393,22 @@ class MeshContext:
     num_devices: int = NUM_DEVICES
     num_links: int = NUM_LINKS
     topology: ttnn.Topology = TOPOLOGY
+    # Links for a *decode* collective, separately settable. See ``_links``.
+    decode_num_links: int = NUM_LINKS_DECODE
+    # Stage 04. Meta-ordered rotary state for the decode path: the 32x32
+    # transformation matrix, the host-side Meta cos/sin caches, and the
+    # per-position sharded cos/sin pair. Keyed by ``token_index``, which is a
+    # Python int here exactly as it is for the shipped HF op -- the rotary
+    # position is baked into a traced program either way, so the gather is
+    # hoisted out of the forward path rather than run per token. Allocated on a
+    # miss, so the first call at each position must be eager, which is the same
+    # discipline ``ccl_buffers`` below already imposes. See ``_meta_rope``.
+    rope_meta: dict = field(default_factory=dict)
+    # Stage 04. Persistent collective buffers, keyed by (logical shape, padded
+    # shape, dtype), so that neither the reduce-scatter nor the all-gather
+    # allocates inside the trace. See ``_decode_ccl_buffers``. Owned by the
+    # context and therefore by the caller, exactly like the semaphores above.
+    ccl_buffers: dict = field(default_factory=dict)
 
 
 def mesh_context(mesh_device) -> MeshContext:
@@ -236,28 +464,104 @@ def all_reduce(x: ttnn.Tensor, ctx: MeshContext) -> ttnn.Tensor:
     sequence length -- that is what keeps non-aligned S working through the
     collective without any padding of its own.
     """
+    bufs = _decode_ccl_buffers(x, ctx)
+    num_links = _links(x, ctx)
     scattered = ttnn.experimental.reduce_scatter_minimal_async(
         x,
-        persistent_output_buffers=None,
+        persistent_output_buffers=None if bufs is None else bufs[0],
         dim=3,
         multi_device_global_semaphore=ctx.ccl.get_and_cycle_rs_semaphore_handles(),
         barrier_semaphore=ctx.ccl.get_and_cycle_barrier_semaphore_handle(),
-        num_links=ctx.num_links,
+        num_links=num_links,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         topology=ctx.topology,
     )
     gathered = ttnn.experimental.all_gather_async(
         scattered,
+        persistent_output_buffer=None if bufs is None else bufs[1],
         dim=3,
         multi_device_global_semaphore=ctx.ccl.get_and_cycle_ag_semaphore_handles(),
         barrier_semaphore=ctx.ccl.get_and_cycle_barrier_semaphore_handle(),
-        num_links=ctx.num_links,
+        num_links=num_links,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         topology=ctx.topology,
     )
-    ttnn.deallocate(scattered)
-    return gathered
+    if bufs is None:
+        ttnn.deallocate(scattered)
+        return gathered
+    # ``gathered`` *is* the persistent buffer, which the caller is about to
+    # deallocate. Hand back a copy so the buffer survives the next token.
+    return ttnn.clone(gathered, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+
+def _decode_ccl_buffers(x: ttnn.Tensor, ctx: MeshContext):
+    """``([rs intermediate, rs output, penult], ag output)`` for a decode-shaped
+    ``x``, allocated once per (logical shape, padded shape, dtype) and cached on
+    the context.
+
+    ``None`` for anything taller than one 32-row tile: prefill runs at a
+    different ``S`` on every call, so caching there would allocate a set per
+    sequence length for a lever worth 0.2% at decode and nothing measurable at
+    prefill (the prefill collective is bandwidth-bound, not allocation-bound).
+
+    **Allocated on the first call at each shape, so that call must be eager.**
+    ``ttnn.from_torch`` inside ``begin_trace_capture`` raises "Writes are not
+    supported during trace capture" and leaves the trace open, which is a hung
+    mesh and a ``tt-smi -r``. Every harness here runs the layer once before
+    capturing, which is also what the semaphores in ``MeshContext`` already
+    require; the constraint is not new, only wider.
+
+    All 48 layers of the stacked model share the cache, and so does every token.
+    That is safe because the trace serialises the collectives and each result is
+    cloned out before the next one starts -- but it is exactly the property a
+    future change has to preserve, so it is exercised by
+    ``test_multichip_decode_20_steps_deterministic`` running 20 tokens through
+    the same buffers and by ``test_two_layers_stacked``.
+
+    The layer's *two* all-reduces do **not** share a set; see the key below.
+
+    Measured: 0.4343 / 0.4337 ms against the allocating path's 0.4348 / 0.4346,
+    over two interleaved passes (``probes/layer_levers3.py``), and 0.4335 /
+    0.4333 against 0.4348 / 0.4346 in ``probes/layer_levers2.py``.
+    """
+    if int(x.shape[-2]) > 32:
+        return None
+    # The key must carry the **logical** shape, not just the padded one.
+    #
+    # The layer's two all-reduces are both [1,1,batch,2048] and *do* share one
+    # set, correctly: the attention partial is ``batch`` rows because
+    # ``_concat_heads_decode`` slices the padded tile back before ``wo``, and the
+    # expert partial is ``batch`` by construction. What collides is the priming
+    # prefill: at ``S <= 32`` it takes this branch too, and a 32-token prefill
+    # and a decode at ``batch < 32`` have the same *padded* shape, one 32-row
+    # tile. A persistent output buffer imposes *its* logical shape on the op's
+    # result, so keyed on the padded shape alone the decode layer inherited the
+    # prefill's 32 rows and silently returned a 32-row tensor. Not hypothetical
+    # -- six decode tests caught it (``work_log.md`` section 5).
+    key = (tuple(int(v) for v in x.shape), tuple(int(v) for v in x.padded_shape), str(x.dtype))
+    entry = ctx.ccl_buffers.get(key)
+    if entry is None:
+        interm, penult = ttnn.experimental.reduce_scatter_minimal_async_create_intermediate_buffer(
+            x, dim=3, topology=ctx.topology, cluster_axis=None
+        )
+        shape = list(x.shape)
+        shape[3] //= ctx.num_devices
+
+        def zeros(s):
+            return ttnn.from_torch(
+                torch.zeros(s),
+                device=ctx.mesh,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=x.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(ctx.mesh),
+            )
+
+        rs_bufs = [interm, zeros(shape)] + ([penult] if penult is not None else [])
+        entry = (rs_bufs, zeros(list(x.shape)))
+        ctx.ccl_buffers[key] = entry
+    return entry
 
 
 # Kept as names so callers read as prefill/decode; both are the same collective.
@@ -375,6 +679,20 @@ class MultichipWeights:
     router: ttnn.Tensor
     expert_window: ttnn.Tensor
     experts: OptimizedWeights
+    # Stage 04. ``ttnn.rms_norm``'s sharded program factory reads its weight as a
+    # ROW_MAJOR ``[1, 1, dim/32, 32]`` tensor rather than the tiled ``[1,1,1,dim]``
+    # the interleaved factory takes, so decode carries a second copy of each of
+    # the two residual norm vectors. 4 KB each against the layer's 95.5 MB.
+    input_layernorm_rm: ttnn.Tensor | None = None
+    post_attention_layernorm_rm: ttnn.Tensor | None = None
+    # Stage 04. The same ``OptimizedWeights`` with the Q and K channels of
+    # ``wqkv_decode`` -- and of ``q_norm``/``k_norm``, which Qwen3 applies
+    # between the head split and RoPE -- reordered to the Meta convention
+    # ``rotary_embedding_llama`` requires. Decode-only: ``wqkv`` (prefill's
+    # interleaved copy), ``wo`` and the expert weights are the *same objects*,
+    # not copies, so this costs one extra DRAM-sharded qkv (11.14 MB/4 per die)
+    # and two 128-element vectors, and prefill cannot reach it.
+    experts_meta: OptimizedWeights | None = None
 
 
 # SDPA-decode's tree reduction is capped at 6 rounds, i.e. 64 cores per KV head
@@ -400,6 +718,101 @@ def _sdpa_program_config(device):
         k_chunk_size=32,
         max_cores_per_head_batch=_SDPA_MAX_CORES_PER_HEAD,
     )
+
+
+# --- decode residual RMSNorm, width-sharded (stage 04) ------------------------
+#
+# The stage-03 decode layer spent 40.21 us -- 9.7% -- in its two residual
+# RMSNorms, and the profile says why: both run on **one core**
+# (``../doc/multichip_decoder/ops_perf_multichip_decode.csv.gz``, device 0, rows
+# 134 and 159, 20.081 and 20.127 us, ``CORE COUNT`` 1). A 2048-wide bf16 norm
+# over one 32-row tile is 128 KB in 20 us, i.e. 6.5 GB/s, which is a single
+# core's share of L1 bandwidth and nothing else.
+#
+# ``ttnn.rms_norm`` has a sharded program factory that splits the row across a
+# core grid. Feeding it the same L1 width-shard the DRAM-sharded qkv projection
+# already wants -- 8 cores, one per DRAM bank, ``[32, 256]`` -- gives
+# (``probes/norm_accuracy_probe.py``, trace slope, median of 30):
+#
+#     interleaved, no compute config (shipped)   19.82 us   max|err vs fp64| 6.711e-02
+#     sharded  4 cores, HiFi4 fp32acc             7.53          1.439e-02
+#     sharded  8 cores, default                   4.26          3.586e-02
+#     sharded  8 cores, HiFi4 fp32acc             4.92          1.686e-02
+#                                        i2s 0.51 us, s2i 0.53 us
+#
+# 8 cores at HiFi4 with fp32 accumulation is **4.0x faster and 4.0x more
+# accurate** than the shipped call, which passes no compute config at all and so
+# accumulates the sum of squares in bf16. The reference is torch fp64 over the
+# bf16-rounded inputs the device actually sees, so "more accurate" is against
+# the mathematical answer rather than against the other kernel.
+#
+# 16 cores and beyond do not pay: the norm itself stops improving (a 2048-wide
+# row is 64 tiles, so 8 cores already hold 8 tiles each) while the resharding at
+# both ends grows with the core count.
+_NORM_SHARD_CORES = _DRAM_BANKS
+
+
+def _norm_shard_config(dim: int) -> ttnn.MemoryConfig:
+    """The L1 width-shard the sharded norm reads and writes.
+
+    Deliberately ``_width_sharded_l1(dim)``'s spec: at ``dim == hidden_size``
+    this is bit-for-bit the memory config ``attention_decode_optimized`` reshards
+    its input into, so the first norm's output feeds the qkv projection with no
+    conversion at all.
+    """
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(_bank_row(_NORM_SHARD_CORES), [32, dim // _NORM_SHARD_CORES], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+def _norm_program_config(dim: int):
+    block_w = dim // _NORM_SHARD_CORES // 32
+    subblock_w = next(w for w in (4, 3, 2, 1) if block_w % w == 0)
+    return ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[_NORM_SHARD_CORES, 1],
+        subblock_w=subblock_w,
+        block_h=1,  # decode's padded M is exactly one 32-row tile; batch is capped at 32
+        block_w=block_w,
+        inplace=False,
+    )
+
+
+def _norm_compute_config(device):
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+
+def decode_residual_norm(x: ttnn.Tensor, weight_rm: ttnn.Tensor, eps: float) -> ttnn.Tensor:
+    """One residual-stream RMSNorm at decode shape, width-sharded across 8 cores.
+
+    Takes a DRAM-interleaved ``[1, 1, B, H]`` (B <= 32, padded to one tile) and
+    returns an **L1 width-sharded** tensor in ``_norm_shard_config(H)``. Callers
+    that need it interleaved say so; the first norm's consumer does not.
+    """
+    dim = int(x.shape[-1])
+    assert int(x.shape[-2]) <= 32, (
+        f"decode_residual_norm shards a single 32-row tile; got {int(x.shape[-2])} rows. "
+        "Prefill uses the interleaved rms_norm."
+    )
+    mc = _norm_shard_config(dim)
+    xs = ttnn.to_memory_config(x, mc)
+    out = ttnn.rms_norm(
+        xs,
+        weight=weight_rm,
+        epsilon=eps,
+        program_config=_norm_program_config(dim),
+        memory_config=mc,
+        compute_kernel_config=_norm_compute_config(x.device()),
+    )
+    ttnn.deallocate(xs)
+    return out
 
 
 def _exact_matmul_config(device):
@@ -456,6 +869,7 @@ def upload_multichip_weights(
     mesh_device,
     config: MeshDecoderConfig,
     expert_dtype=None,
+    meta_rope: bool = False,
 ) -> MultichipWeights:
     """Shard and upload one layer's weights across the mesh.
 
@@ -554,7 +968,58 @@ def upload_multichip_weights(
         wo_decode=dram_sharded(wo, -2, k_o, n_o),
     )
 
+    # Stage 04. The Meta-ordered decode twin, built **only when asked**. It is
+    # not the shipped path (see ``_meta_rope``); it exists so
+    # ``probes/rope_layer_probe.py`` can re-measure the rejection rather than
+    # cite it. Off by default, so the shipped upload pays no extra DRAM.
+    experts_meta = None
+    if meta_rope:
+        # The channel permutation is applied to the *pre-interleave* wqkv, which
+        # is safe because it reorders channels **within** a head and
+        # ``head_interleaved_wqkv`` only reorders whole heads -- the two commute.
+        # V is untouched, and so are ``wo`` and every expert weight, which are
+        # shared objects here rather than copies.
+        wqkv_meta = head_interleaved_wqkv(
+            permute_wqkv_to_meta(
+                as_4d(torch_weights["wqkv"]),
+                n_heads=a.num_attention_heads,
+                n_kv_heads=a.num_key_value_heads,
+                head_dim=a.head_dim,
+            ),
+            a,
+            n,
+        )
+        experts_meta = replace(
+            experts,
+            attention=replace(
+                experts.attention,
+                q_norm=replicate(
+                    as_4d(permute_head_vector_to_meta(torch_weights["q_norm"], head_dim=a.head_dim), pad_to_4d=True),
+                    ttnn.bfloat16,
+                ),
+                k_norm=replicate(
+                    as_4d(permute_head_vector_to_meta(torch_weights["k_norm"], head_dim=a.head_dim), pad_to_4d=True),
+                    ttnn.bfloat16,
+                ),
+            ),
+            wqkv_decode=dram_sharded(wqkv_meta, -1, k_qkv, n_qkv),
+        )
+
     router = torch_weights["router"]
+
+    def norm_row_major(t: torch.Tensor) -> ttnn.Tensor:
+        """The same vector the tiled copy holds, in the layout the sharded
+        ``rms_norm`` program factory reads: ROW_MAJOR ``[1, 1, dim/32, 32]``."""
+        flat = t.reshape(-1)
+        return ttnn.from_torch(
+            flat.reshape(1, 1, flat.numel() // 32, 32).contiguous().float(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
     return MultichipWeights(
         input_layernorm=replicate(torch_weights["input_layernorm"].reshape(1, 1, 1, -1), ttnn.bfloat16),
         post_attention_layernorm=replicate(
@@ -563,6 +1028,9 @@ def upload_multichip_weights(
         router=replicate(router.T.contiguous().reshape(1, 1, router.shape[1], router.shape[0]), ttnn.bfloat16),
         expert_window=_expert_window_matrix(mesh_device, config.global_config.moe.num_experts, n),
         experts=experts,
+        experts_meta=experts_meta,
+        input_layernorm_rm=norm_row_major(torch_weights["input_layernorm"]),
+        post_attention_layernorm_rm=norm_row_major(torch_weights["post_attention_layernorm"]),
     )
 
 
@@ -631,6 +1099,76 @@ def build_local_sparsity(mesh_device, local_moe: MoEConfig) -> ttnn.Tensor:
 # --- router -------------------------------------------------------------------
 
 
+def router_forward_threshold(
+    x: ttnn.Tensor,
+    w_router: ttnn.Tensor,
+    window: ttnn.Tensor,
+    config: MoEConfig,
+    local_moe: MoEConfig,
+) -> ttnn.Tensor:
+    """``router_forward_multichip`` with the dense vector built by a threshold
+    comparison instead of a scatter, so nothing leaves TILE layout.
+
+    Stage 03 inherited stage 02's routing tail, whose shape is
+    ``topk -> untilize(zeros) / untilize(indices) / untilize(values) ->
+    scatter -> tilize``: ``ttnn.scatter`` only accepts ROW_MAJOR, and every
+    consumer of the dense vector (both matmuls, the divide) needs TILE. Stage 02
+    recorded that round trip as *not removable* on those grounds. It is
+    removable -- by not scattering.
+
+    ``topk(sorted=True)`` already returns the 8th-largest logit in column 7, and
+    the top-8 set is exactly ``{j : logit_j >= that}``. So the same dense vector
+    is
+
+        dense = exp(logits - top_max) * (logits >= top_logits[..., 7])
+
+    computed over all 128 columns, entirely in TILE. The surviving values are
+    ``ttnn.exp`` of the same fp32 inputs the scatter path fed it, so the result
+    is bit-identical -- **unless two logits tie exactly at rank 8**, in which
+    case this selects both and the scatter path selects one. With fp32 logits
+    accumulated over K=2048 that does not happen on real weights, and
+    ``test_router_windows_partition_global_routing`` asserts the equality at
+    ``max |diff| = 0.0``, so a tie would fail loudly rather than drift.
+
+    **Measured, and rejected.** It removes rows 190-197 of the stage-04 decode
+    profile -- ``zeros_like`` 1.210, two ``typecast`` 2.537, three ``untilize``
+    4.654, ``scatter`` 3.030, ``tilize`` 5.576 = **17.007 us** -- and is
+    nonetheless **0.8% slower on the layer**: 0.4382 / 0.4382 ms against the
+    shipped 0.4348 / 0.4346 over two interleaved passes
+    (``doc/optimized_multichip_decoder/probes/layer_levers2.py``). Widening the
+    softmax's ``sub`` and ``exp`` from 8 columns to 128, plus the ``ge`` and the
+    ``mul``, costs more than the layout conversions save. The output is
+    bit-identical on all four dies (``max|diff| 0.000e+00``), which is also the
+    evidence that no two logits tie at rank 8.
+
+    Kept rather than deleted because the arithmetic is the useful part: stage
+    02 recorded this round trip as *not removable*, and it is.
+    """
+    assert config.norm_topk_prob
+    e = config.num_experts
+
+    logits = ttnn.linear(x, w_router, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    top_logits, _idx = ttnn.topk(logits, k=config.num_experts_per_tok, dim=-1, largest=True, sorted=True)
+
+    rows = top_logits.shape[2]
+    top_max = ttnn.slice(top_logits, [0, 0, 0, 0], [1, 1, rows, 1])
+    cutoff = ttnn.slice(top_logits, [0, 0, 0, config.num_experts_per_tok - 1], [1, 1, rows, config.num_experts_per_tok])
+
+    # exp(l - max) over the whole row; every entry is in (0, 1], so nothing can
+    # overflow and the losers underflow towards zero before the mask even runs.
+    weights = ttnn.exp(ttnn.sub(logits, top_max))
+    dense = ttnn.typecast(ttnn.mul(weights, ttnn.ge(logits, cutoff)), ttnn.bfloat16)
+
+    total = ttnn.matmul(dense, _ones_column(x.device(), e), dtype=ttnn.bfloat16)
+    local = ttnn.matmul(dense, window, dtype=ttnn.bfloat16, compute_kernel_config=_exact_matmul_config(x.device()))
+    guarded = ttnn.maximum(total, 1e-30)
+    normalised = ttnn.div(local, guarded)
+    assert int(normalised.shape[-1]) == local_moe.num_experts
+    for t in (logits, top_logits, _idx, top_max, cutoff, weights, dense, total, local, guarded):
+        ttnn.deallocate(t)
+    return normalised
+
+
 def router_forward_multichip(
     x: ttnn.Tensor,
     w_router: ttnn.Tensor,
@@ -669,6 +1207,15 @@ def router_forward_multichip(
     )
 
     logits = ttnn.linear(x, w_router, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return _router_tail(logits, window, config, local_moe, x.device())
+
+
+def _router_tail(logits, window, config: MoEConfig, local_moe: MoEConfig, device) -> ttnn.Tensor:
+    """Top-8, softmax over the survivors, this die's 32-expert window.
+
+    Split out of ``router_forward_multichip`` so a probe can vary where the
+    logits are produced without duplicating the tail.
+    """
     top_logits, top_indices = ttnn.topk(logits, k=config.num_experts_per_tok, dim=-1, largest=True, sorted=True)
 
     top_max = ttnn.slice(top_logits, [0, 0, 0, 0], [1, 1, top_logits.shape[2], 1])
@@ -681,8 +1228,8 @@ def router_forward_multichip(
     # survivors, since the scatter fills a field of exact zeros -- and must stay
     # global: normalising within a window would renormalise each die's share to
     # 1 and the four contributions would sum to 4.
-    total = ttnn.matmul(dense, _ones_column(x.device(), config.num_experts), dtype=ttnn.bfloat16)
-    local = ttnn.matmul(dense, window, dtype=ttnn.bfloat16, compute_kernel_config=_exact_matmul_config(x.device()))
+    total = ttnn.matmul(dense, _ones_column(device, config.num_experts), dtype=ttnn.bfloat16)
+    local = ttnn.matmul(dense, window, dtype=ttnn.bfloat16, compute_kernel_config=_exact_matmul_config(device))
     # Same clamp as the single-chip router, and for the same reason: after the
     # scatter the divide runs over whole tiles, and the tile row-padding has a
     # zero numerator *and* a zero denominator, which unguarded ttnn.div returns
@@ -872,11 +1419,26 @@ def decoder_layer_decode_multichip(
 
     Input and output layouts are the same replicated tensor, which is the point:
     48 of these stack with no boundary conversion, and the stacked model pays
-    the two all-reduces per layer and nothing else.
+    the two all-reduces per layer and nothing else. **That is the inter-layer
+    residual layout contract**, and stage 04 keeps it unchanged while moving
+    every *intra*-layer boundary it can into L1 shards -- see
+    ``doc/optimized_multichip_decoder/README.md``.
+
+    Both residual norms are width-sharded (``decode_residual_norm``). The first
+    one's output is already in ``attention_decode_optimized``'s qkv input shard,
+    so it crosses into attention with no conversion; the second one's output
+    feeds the router projection sharded and the expert path interleaved.
     """
     eps = config.global_config.rms_norm_eps
 
-    normed = ttnn.rms_norm(x, weight=weights.input_layernorm, epsilon=eps)
+    normed = decode_residual_norm(x, weights.input_layernorm_rm, eps)
+    # The rotary stays the **HF** op. ``rotary_embedding_llama`` is 3.05x faster
+    # standalone and bit-identical there, but it cannot be adopted for decode
+    # alone: it needs Meta channel order, and the KV cache prefill already wrote
+    # is in HF order, so SDPA would score a Meta-ordered Q against HF-ordered
+    # keys. Measured, not argued -- PCC 0.193 against a prefill-primed cache
+    # where a fresh cache reads 0.99997 (``probes/rope_layer_probe.py``). See
+    # ``_meta_rope`` and ``README.md`` limitation 4.
     attn_partial = attention_decode_optimized(
         normed,
         weights.experts,
@@ -897,10 +1459,18 @@ def decoder_layer_decode_multichip(
     hidden = ttnn.add(x, attn_out)
     ttnn.deallocate(attn_out)
 
-    normed = ttnn.rms_norm(hidden, weight=weights.post_attention_layernorm, epsilon=eps)
+    normed_sharded = decode_residual_norm(hidden, weights.post_attention_layernorm_rm, eps)
+    # The router projection reads the shard directly -- N = 128 is 4 tiles, so
+    # the matmul uses 4 cores either way, but a width-sharded L1 in0 turns a
+    # 24.62 us DRAM-interleaved read into 5.85 us of L1 with bit-identical
+    # output (``probes/norm_router_probe.py``, max|diff| exactly 0.0).
     routing = router_forward_multichip(
-        normed, weights.router, weights.expert_window, config.global_config.moe, config.local_moe
+        normed_sharded, weights.router, weights.expert_window, config.global_config.moe, config.local_moe
     )
+    # ``sparse_matmul``'s in0 is DRAM-interleaved, so the expert path pays one
+    # sharded-to-interleaved (0.53 us) rather than the norm paying 15.
+    normed = ttnn.sharded_to_interleaved(normed_sharded, ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(normed_sharded)
     moe_partial = moe_decode_multichip(normed, routing, weights.experts, config.local_moe)
     ttnn.deallocate(normed)
     ttnn.deallocate(routing)
@@ -955,6 +1525,16 @@ def fallback_audit(weights: MultichipWeights, config: MeshDecoderConfig, batch: 
         else "DRAM",
         "local_heads": (a.num_attention_heads, a.num_key_value_heads),
         "local_experts": m.num_experts,
+        # Stage 04. Not a fallback in the "silently slower path" sense -- a
+        # mismatch here raises rather than degrades -- but it is the same class
+        # of risk, so it is reported as data: if the sharded norm's output shard
+        # ever stops being *exactly* the one the DRAM-sharded qkv projection
+        # wants, TTNN inserts a reshard between them and the layer gets slower
+        # with no error at all. That single equality is what removed stage-03
+        # row 135 from the profile.
+        "norm_shard_cores": _NORM_SHARD_CORES,
+        "norm_shard_feeds_qkv_directly": _norm_shard_config(m.hidden_size) == _width_sharded_l1(m.hidden_size),
+        "decode_ccl_buffers_persistent": True,
     }
 
 
@@ -962,6 +1542,7 @@ __all__ = [
     "MESH_SHAPE",
     "NUM_DEVICES",
     "NUM_LINKS",
+    "NUM_LINKS_DECODE",
     "TOPOLOGY",
     "MeshContext",
     "MeshDecoderConfig",
@@ -976,7 +1557,9 @@ __all__ = [
     "fallback_audit",
     "head_interleaved_wqkv",
     "mesh_context",
+    "decode_residual_norm",
     "moe_decode_multichip",
     "router_forward_multichip",
+    "router_forward_threshold",
     "upload_multichip_weights",
 ]

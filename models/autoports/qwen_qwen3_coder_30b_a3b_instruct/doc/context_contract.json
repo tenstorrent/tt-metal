@@ -4,7 +4,7 @@
   "current_supported_context": 262144,
   "capability_reduction": false,
   "limiting_reason": null,
-  "stage": "multichip_decoder",
+  "stage": "optimized_multichip_decoder",
   "scope": "single decoder layer (layer 0) on the full 4-die P300_X2 mesh (1x4), batch 1; the single-die stage-02 numbers below are retained unchanged",
   "device": {
     "arch": "blackhole",
@@ -55,7 +55,9 @@
     "doc/multichip_decoder/README.md and work_log.md",
     "doc/multichip_decoder/footprint_probe.log (the allocation this file quotes)",
     "doc/multichip_decoder/probes/footprint_probe.py",
-    "doc/multichip_decoder/pcc_log.txt"
+    "doc/multichip_decoder/pcc_log.txt",
+    "doc/optimized_multichip_decoder/README.md and work_log.md",
+    "doc/optimized_multichip_decoder/pcc_log.txt"
   ],
   "expert_weight_dtype": "bfloat4_b",
   "optimized_note": "Stage 02 changed expert weight dtype to bfloat4_b, attention projection dtype to bfloat8_b, the expert matmul block widths, expert math fidelity to LoFi, and the decode attention projections to a DRAM-sharded program config. None of these touches the KV cache layout, dtype, or paging, so the measured context limits carry over unchanged. Per-layer weight DRAM: expert weights shrink ~3.6x (bf16 to bfloat4_b, which is 0.5625 B/elem once each 16-element block's exponent byte is counted). Decode additionally needs a second, DRAM-width-sharded copy of wqkv/wo; at bfloat8_b (1.0625 B/elem) each copy is 20.05 MB, so the pair is 40.11 MB against the single bf16 copy stage 01 held at 37.75 MB -- a 2.36 MB increase, not a wash, and an earlier revision of this file called it one by rounding bfloat8_b to 1 B/elem. Against 24 GB of usable DRAM it changes nothing: no capability reduction.",
@@ -93,5 +95,6 @@
     "context_at_batch32": 28788,
     "context_at_batch32_basis": "~22.6 GB usable / (32 users * 48 layers * 512 B/token); arithmetic"
   },
-  "multichip_pcc_note": "Multichip PCC is validated against the single-chip TTNN optimized decoder run replicated on the same mesh, 0.99962-0.99997 across prefill S = 32/33/100/128/257/512 and decode in both cache modes, and against HF at 0.9990 (prefill) and 0.9988-0.9993 (decode). See doc/multichip_decoder/pcc_log.txt. The 512-token PCC validation ceiling of the stage-01/02 entry above is unchanged and has the same cause: a full-length torch reference does not fit in host RAM."
+  "multichip_pcc_note": "Multichip PCC is validated against the single-chip TTNN optimized decoder run replicated on the same mesh, 0.99962-0.99997 across prefill S = 32/33/100/128/257/512 and decode in both cache modes, and against HF at 0.9990 (prefill) and 0.9988-0.9993 (decode). See doc/multichip_decoder/pcc_log.txt. The 512-token PCC validation ceiling of the stage-01/02 entry above is unchanged and has the same cause: a full-length torch reference does not fit in host RAM. Stage 04 re-ran every one of those gates on the optimized path: 112 passed, 0 failed (stage 03's 111 plus the host-only test_meta_rope_weights_match_hf), with prefill 0.999620-0.999868 and decode 0.999935-0.999941 against the single-chip TTNN baseline. The one movement is decode vs single-chip, 0.99997 -> 0.99994, and it is the right sign: the reference is optimized_decoder.py, whose numerics stage 04 left unchanged (its only edit is an optional rope= seam that defaults to the shipped op) and which still accumulates its RMSNorm sum of squares in bf16, while the multichip norm now measures 1.686e-02 against a torch fp64 reference where the old one measured 6.711e-02. Against HF the four decode steps move by at most 8e-05 and in both directions (0.9992853->0.9992450, 0.9987817->0.9987388, 0.9993126->0.9993928, 0.9989592->0.9989421), i.e. three are marginally lower and one is higher; that is bf16 rounding under a changed norm, not a regression, and the earlier wording 'nothing regressed' was literally false. See doc/optimized_multichip_decoder/pcc_log.txt.",
+  "stage04_note": "Stage 04 optimized the multichip decoder in place and changed NOTHING this file measures. No capability reduction. What it changed: both residual RMSNorms now run width-sharded over 8 L1 cores instead of one core, the router projection reads that L1 shard instead of DRAM-interleaved, and the two collectives use caller-owned persistent buffers. KV cache dtype, layout, paging and bytes/token are untouched, and so is the activation sharding of the cache. Two things grew: each layer carries a second, ROW_MAJOR copy of each residual RMSNorm vector (the layout the sharded rms_norm program factory reads) at 4 KB each, i.e. 8 KB per layer and 0.384 MB per die over all 48 layers, against 4.596 GB of sharded decoder weights; and the mesh context owns two sets of persistent reduce-scatter/all-gather buffers of about 0.5 MB each, once per mesh rather than once per layer. Both are far below the 22.350 GB/die of measured headroom, so the 262144-token contract, the batch-4-at-full-context figure and the single-die comparison all stand unchanged. Evidence: doc/optimized_multichip_decoder/README.md and work_log.md section 9."
 }

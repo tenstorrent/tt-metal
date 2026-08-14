@@ -561,6 +561,7 @@ def attention_decode_optimized(
     current_pos: ttnn.Tensor,
     token_index: int,
     sdpa_program_config=None,
+    rope=None,
 ) -> ttnn.Tensor:
     """``attention_decode`` with the two projections run DRAM-sharded.
 
@@ -638,8 +639,19 @@ def attention_decode_optimized(
     k = _per_head_rms_norm(
         ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG), weights.attention.k_norm, config.rms_norm_eps
     )
-    q = _apply_rope(q, cos_cache, sin_cache, token_index=token_index)
-    k = ttnn.to_memory_config(_apply_rope(k, cos_cache, sin_cache, token_index=token_index), kv_sharded_mem)
+    # ``rope`` defaults to ``None`` and therefore to ``_apply_rope``, which is
+    # what every caller uses -- including the shipped multichip decode path --
+    # and what every number in this file was measured at. It is a seam, not a
+    # switch: stage 04 used it to build and measure a Meta-ordered
+    # ``rotary_embedding_llama`` alternative (3.05x faster standalone and
+    # bit-identical) without disturbing the 1x1 baseline the multichip documents
+    # compare against. That alternative is **rejected** -- the KV cache carries
+    # the rotary's channel convention and prefill writes HF-ordered keys, so it
+    # is not a decode-local change. See ``multichip_decoder._meta_rope`` and
+    # ``doc/optimized_multichip_decoder/README.md`` limitation 4.
+    _rope = _apply_rope if rope is None else rope
+    q = _rope(q, cos_cache, sin_cache, token_index)
+    k = ttnn.to_memory_config(_rope(k, cos_cache, sin_cache, token_index), kv_sharded_mem)
 
     ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=current_pos, page_table=page_table)
     ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=current_pos, page_table=page_table)

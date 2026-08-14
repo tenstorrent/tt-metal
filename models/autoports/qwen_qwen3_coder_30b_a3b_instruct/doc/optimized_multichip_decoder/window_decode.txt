@@ -1,0 +1,76 @@
+P|device 0  rows 82-153  72 ops  414.571 us
+P|device 0  rows 154-221  68 ops  362.828 us
+P|--- published window: device 0, rows 154-221 (last iteration) ---
+P|  154    0.887 c  8 InterleavedToShardedDeviceOperation        in0=1[1]x1[1]x32[1]x2048[2048] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  155    5.776 c  8 LayerNormDeviceOperation                   in0=1[1]x1[1]x32[1]x2048[2048] in1=1[1]x1[1]x64[64]x32[32] DEV_0_L1_WIDTH_SHARDED
+P|  156    9.430 c 80 MatmulDeviceOperation                      in0=1[1]x1[1]x32[1]x2048[2048] in1=1[1]x1[1]x2048[2048]x1280[1280] DEV_0_L1_WIDTH_SHARDED
+P|  157    0.632 c  8 ShardedToInterleavedDeviceOperation        in0=1[1]x1[1]x32[1]x1280[1280] in1=xxx DEV_0_L1_WIDTH_SHARDED
+P|  158    3.602 c  1 NLPCreateQKVHeadsDecodeDeviceOperation     in0=1[1]x1[1]x32[1]x1280[1280] in1=xxx DEV_0_L1_INTERLEAVED
+P|  159    0.496 c  1 ShardedToInterleavedDeviceOperation        in0=1[1]x1[1]x32[8]x128[128] in1=xxx DEV_0_L1_HEIGHT_SHARDE
+P|  160    3.882 c  1 LayerNormDeviceOperation                   in0=1[1]x1[1]x32[8]x128[128] in1=1[1]x1[1]x32[1]x128[128] DEV_0_DRAM_INTERLEAVED
+P|  161    0.484 c  1 ShardedToInterleavedDeviceOperation        in0=1[1]x1[1]x32[1]x128[128] in1=xxx DEV_0_L1_HEIGHT_SHARDE
+P|  162    3.853 c  1 LayerNormDeviceOperation                   in0=1[1]x1[1]x32[1]x128[128] in1=1[1]x1[1]x32[1]x128[128] DEV_0_DRAM_INTERLEAVED
+P|  163    4.699 c  1 RotaryEmbeddingDeviceOperation             in0=1[1]x1[1]x32[8]x128[128] in1=1[1]x1[1]x1024[1024]x128[128] DEV_0_DRAM_INTERLEAVED
+P|  164    4.659 c  1 RotaryEmbeddingDeviceOperation             in0=1[1]x1[1]x32[1]x128[128] in1=1[1]x1[1]x1024[1024]x128[128] DEV_0_DRAM_INTERLEAVED
+P|  165    0.613 c  1 InterleavedToShardedDeviceOperation        in0=1[1]x1[1]x32[1]x128[128] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  166    2.744 c  1 PagedUpdateCacheDeviceOperation            in0=32[32]x1[1]x32[32]x128[128] in1=1[1]x1[1]x32[1]x128[128] DEV_0_DRAM_INTERLEAVED
+P|  167    2.850 c  1 PagedUpdateCacheDeviceOperation            in0=32[32]x1[1]x32[32]x128[128] in1=1[1]x1[1]x32[1]x128[128] DEV_0_DRAM_INTERLEAVED
+P|  168    9.816 c110 SdpaDecodeDeviceOperation                  in0=1[1]x1[1]x32[8]x128[128] in1=32[32]x1[1]x32[32]x128[128] DEV_0_DRAM_INTERLEAVED
+P|  169    0.596 c  1 InterleavedToShardedDeviceOperation        in0=1[1]x1[1]x32[8]x128[128] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  170    0.444 c  8 NLPConcatHeadsDecodeDeviceOperation        in0=1[1]x1[1]x32[8]x128[128] in1=xxx DEV_0_L1_HEIGHT_SHARDE
+P|  171    0.644 c  8 ShardedToInterleavedDeviceOperation        in0=1[1]x1[1]x32[32]x1024[1024] in1=xxx DEV_0_L1_WIDTH_SHARDED
+P|  172    1.136 c 32 SliceDeviceOperation                       in0=1[1]x1[1]x32[32]x1024[1024] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  173    0.741 c  8 InterleavedToShardedDeviceOperation        in0=1[1]x1[1]x32[1]x1024[1024] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  174    8.228 c 80 MatmulDeviceOperation                      in0=1[1]x1[1]x32[1]x1024[1024] in1=1[1]x1[1]x1024[1024]x2048[2048] DEV_0_L1_WIDTH_SHARDED
+P|  175    0.851 c  8 ShardedToInterleavedDeviceOperation        in0=1[1]x1[1]x32[1]x2048[2048] in1=xxx DEV_0_L1_WIDTH_SHARDED
+P|  176   18.871 c  6 ReduceScatterMinimalAsyncDeviceOperation   in0=1[1]x1[1]x32[1]x2048[2048] in1=1[1]x1[1]x8[8]x16384[16384] DEV_0_DRAM_INTERLEAVED
+P|  177   12.932 c  6 AllGatherAsyncDeviceOperation              in0=1[1]x1[1]x32[1]x512[512] in1=1[1]x1[1]x32[1]x2048[2048] DEV_0_DRAM_INTERLEAVED
+P|  178    1.260 c 64 CloneOperation                             in0=1[1]x1[1]x32[1]x2048[2048] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  179    1.969 c110 BinaryNgDeviceOperation                    in0=1[1]x1[1]x32[32]x2048[2048] in1=1[1]x1[1]x32[32]x2048[2048] DEV_0_DRAM_INTERLEAVED
+P|  180    0.875 c  8 InterleavedToShardedDeviceOperation        in0=1[1]x1[1]x32[1]x2048[2048] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  181    5.788 c  8 LayerNormDeviceOperation                   in0=1[1]x1[1]x32[1]x2048[2048] in1=1[1]x1[1]x64[64]x32[32] DEV_0_L1_WIDTH_SHARDED
+P|  182    6.241 c  8 MatmulDeviceOperation                      in0=1[1]x1[1]x32[1]x2048[2048] in1=1[1]x1[1]x2048[2048]x128[128] DEV_0_L1_WIDTH_SHARDED
+P|  183    4.190 c  4 FillPadDeviceOperation                     in0=1[1]x1[1]x32[1]x128[128] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  184   26.356 c  1 TopKDeviceOperation                        in0=1[1]x1[1]x32[1]x128[128] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  185    0.859 c  1 SliceDeviceOperation                       in0=1[1]x1[1]x32[1]x32[32] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  186    0.872 c  1 SliceDeviceOperation                       in0=1[1]x1[1]x32[1]x32[32] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  187    0.876 c  1 SliceDeviceOperation                       in0=1[1]x1[1]x32[1]x32[8] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  188    4.488 c110 BinaryNgDeviceOperation                    in0=1[1]x1[1]x32[1]x32[8] in1=1[1]x1[1]x32[1]x32[1] DEV_0_DRAM_INTERLEAVED
+P|  189    2.193 c110 UnaryDeviceOperation                       in0=1[1]x1[1]x32[32]x32[8] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  190    1.210 c110 UnaryDeviceOperation                       in0=1[1]x1[1]x32[32]x128[128] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  191    1.296 c  4 TypecastDeviceOperation                    in0=1[1]x1[1]x32[1]x128[128] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  192    1.241 c  1 TypecastDeviceOperation                    in0=1[1]x1[1]x32[1]x32[8] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  193    2.374 c  1 UntilizeWithUnpaddingDeviceOperation       in0=1[1]x1[1]x32[1]x128[128] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  194    1.159 c  1 UntilizeWithUnpaddingDeviceOperation       in0=1[1]x1[1]x32[1]x32[8] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  195    1.121 c  1 UntilizeWithUnpaddingDeviceOperation       in0=1[1]x1[1]x32[1]x32[8] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  196    3.030 c  1 ScatterDeviceOperation                     in0=1[1]x1[1]x1[1]x128[128] in1=1[1]x1[1]x1[1]x8[8] DEV_0_DRAM_INTERLEAVED
+P|  197    5.576 c  1 TilizeWithValPaddingDeviceOperation        in0=1[1]x1[1]x1[1]x128[128] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  198    1.758 c  1 MatmulDeviceOperation                      in0=1[1]x1[1]x32[1]x128[128] in1=1[1]x1[1]x128[128]x32[1] DEV_0_DRAM_INTERLEAVED
+P|  199    1.830 c  1 MatmulDeviceOperation                      in0=1[1]x1[1]x32[1]x128[128] in1=1[1]x1[1]x128[128]x32[32] DEV_0_DRAM_INTERLEAVED
+P|  200    1.116 c110 UnaryDeviceOperation                       in0=1[1]x1[1]x32[32]x32[1] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  201    2.575 c110 BinaryNgDeviceOperation                    in0=1[1]x1[1]x32[1]x32[32] in1=1[1]x1[1]x32[1]x32[1] DEV_0_DRAM_INTERLEAVED
+P|  202    0.876 c  8 ShardedToInterleavedDeviceOperation        in0=1[1]x1[1]x32[1]x2048[2048] in1=xxx DEV_0_L1_WIDTH_SHARDED
+P|  203    1.051 c  1 UntilizeWithUnpaddingDeviceOperation       in0=1[1]x1[1]x32[1]x32[32] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  204    5.782 c110 UnaryDeviceOperation                       in0=1[1]x32[32]x32[1]x1536[1536] in1=1[1]x32[32]x32[1]x1536[1536] DEV_0_L1_INTERLEAVED
+P|  205   42.542 c 48 SparseMatmulDeviceOperation                in0=1[1]x1[1]x32[1]x2048[2048] in1=1[1]x32[32]x2048[2048]x1536[1536] DEV_0_DRAM_INTERLEAVED
+P|  206   16.221 c 48 ReshapeViewDeviceOperation                 in0=1[1]x32[32]x32[1]x1536[1536] in1=xxx DEV_0_L1_INTERLEAVED
+P|  207    0.962 c 24 SliceDeviceOperation                       in0=1[1]x1[1]x32[32]x1536[1536] in1=xxx DEV_0_L1_INTERLEAVED
+P|  208    0.968 c 24 SliceDeviceOperation                       in0=1[1]x1[1]x32[32]x1536[1536] in1=xxx DEV_0_L1_INTERLEAVED
+P|  209    1.969 c110 UnaryDeviceOperation                       in0=1[1]x1[1]x32[32]x768[768] in1=xxx DEV_0_L1_INTERLEAVED
+P|  210    1.955 c110 BinaryNgDeviceOperation                    in0=1[1]x1[1]x32[32]x768[768] in1=1[1]x1[1]x32[32]x768[768] DEV_0_L1_INTERLEAVED
+P|  211    8.691 c110 ReshapeViewDeviceOperation                 in0=1[1]x1[1]x32[32]x768[768] in1=xxx DEV_0_L1_INTERLEAVED
+P|  212    7.427 c110 UnaryDeviceOperation                       in0=1[1]x32[32]x32[1]x1536[1536] in1=1[1]x32[32]x32[1]x1536[1536] DEV_0_L1_INTERLEAVED
+P|  213   40.176 c 64 SparseMatmulDeviceOperation                in0=1[1]x32[32]x32[1]x768[768] in1=1[1]x32[32]x768[768]x2048[2048] DEV_0_L1_INTERLEAVED
+P|  214   16.401 c 64 ReshapeViewDeviceOperation                 in0=1[1]x32[32]x32[1]x2048[2048] in1=xxx DEV_0_L1_INTERLEAVED
+P|  215    3.439 c  1 ReshapeViewDeviceOperation                 in0=1[1]x1[1]x32[1]x32[32] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  216    4.307 c110 BinaryNgDeviceOperation                    in0=1[1]x1[1]x32[32]x2048[2048] in1=1[1]x1[1]x32[32]x32[1] DEV_0_L1_INTERLEAVED
+P|  217    1.451 c 64 ReduceDeviceOperation                      in0=1[1]x1[1]x32[32]x2048[2048] in1=xxx DEV_0_L1_INTERLEAVED
+P|  218   15.018 c  6 ReduceScatterMinimalAsyncDeviceOperation   in0=1[1]x1[1]x32[1]x2048[2048] in1=1[1]x1[1]x8[8]x16384[16384] DEV_0_L1_INTERLEAVED
+P|  219   11.287 c  6 AllGatherAsyncDeviceOperation              in0=1[1]x1[1]x32[1]x512[512] in1=1[1]x1[1]x32[1]x2048[2048] DEV_0_DRAM_INTERLEAVED
+P|  220    1.276 c 64 CloneOperation                             in0=1[1]x1[1]x32[1]x2048[2048] in1=xxx DEV_0_DRAM_INTERLEAVED
+P|  221    1.910 c110 BinaryNgDeviceOperation                    in0=1[1]x1[1]x32[32]x2048[2048] in1=1[1]x1[1]x32[32]x2048[2048] DEV_0_DRAM_INTERLEAVED
+P|total 362.828 us over 68 ops
+P|device 0 last-iteration window rows 154-221: 362.828 us
+P|device 1 last-iteration window rows 154-221: 349.795 us
+P|device 2 last-iteration window rows 154-221: 357.491 us
+P|device 3 last-iteration window rows 154-221: 338.760 us

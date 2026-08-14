@@ -1,0 +1,139 @@
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_determinism:test_prefill_is_deterministic:88 - prefill: 3 runs bit-identical
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_determinism:test_decode_is_deterministic:127 - decode: 2 independent prefill+decode sequences bit-identical
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=0: 4 dies bit-identical over 1024 selections
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_router_windows_partition_global_routing:319 - router windows seq=1: max |stitched - global| = 0.000e+00
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=32 vs single-chip TTNN: 0.999726173883768
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_hf:365 - multichip prefill S=128 vs HF: 0.9990883578961901
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_is_deterministic:377 - multichip prefill: 3 runs bit-identical on all 4 dies
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_local_kv_cache_layout:417 - local KV head layout: 4x[.,1,.,.] stitched vs single-chip [.,4,.,.]: 1.0
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_local_kv_cache_layout:421 - per-die KV: 512 B/token/layer (single chip: 2048)
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_vs_single_chip:474 - multichip decode [contiguous] vs single-chip TTNN: 0.9999345318510067
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 0 vs single-chip TTNN: 0.9999345318510067
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 1 vs single-chip TTNN: 0.9999371911164702
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 2 vs single-chip TTNN: 0.9998928679638549
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 3 vs single-chip TTNN: 0.9999261582329086
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 4 vs single-chip TTNN: 0.999960995305192
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 5 vs single-chip TTNN: 0.9999652958487225
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 6 vs single-chip TTNN: 0.9999615950465374
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 7 vs single-chip TTNN: 0.9999511139965788
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_multi_step_decode_vs_hf:585 - multichip decode step 0 (pos 32) vs HF: 0.999245003101615
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_multi_step_decode_vs_hf:585 - multichip decode step 1 (pos 33) vs HF: 0.998738790344711
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_multi_step_decode_vs_hf:585 - multichip decode step 2 (pos 34) vs HF: 0.9993927543473524
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_multi_step_decode_vs_hf:585 - multichip decode step 3 (pos 35) vs HF: 0.9989421079333342
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=1 user 0 vs HF: 0.9992450035600746
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_expert_window_can_be_empty:758 - empty-window partials: max |value| on dies [2, 3] = 0.0
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_expert_window_can_be_empty:799 - layer under maximally unbalanced routing vs single-chip: 0.9999411824084109
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_stacked_layer_io_contract:850 - two stacked multichip layers vs two stacked single-chip layers: 0.9994464888290773
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_stress_is_deterministic:951 - multichip decode: 20 consecutive steps bit-identical across all 4 dies
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_no_runtime_fallbacks:971 - multichip fallback audit at batch 1: {'batch': 1, 'dram_sharded_qkv': (2048, 1280), 'dram_sharded_wo': (1024, 2048), 'dram_sharded_taken': True, 'gate_up_in0_block_w': 16, 'down_in0_block_w': 12, 'expert_intermediate_buffer': 'L1', 'local_heads': (8, 1), 'local_experts': 32, 'norm_shard_cores': 8, 'norm_shard_feeds_qkv_directly': True, 'decode_ccl_buffers_persistent': True}
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_router_matches_functional:204 - router seq=1: max |functional - optimized| = 9.766e-04, weight sums in [1.00488, 1.00488]
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_router_padding_is_zero:245 - router seq=1: padded (1, 1, 32, 128), 3968 padding entries, max |pad| = 0.0
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_prefill_is_deterministic:353 - optimized prefill: 3 runs bit-identical
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=1 user 0 vs HF: 0.9993015593450881
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=1: 4 dies bit-identical over 1024 selections
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_router_windows_partition_global_routing:319 - router windows seq=33: max |stitched - global| = 0.000e+00
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=128 vs single-chip TTNN: 0.9998520985932086
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_hf:365 - multichip prefill S=33 vs HF: 0.9989603338857946
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_vs_single_chip:474 - multichip decode [paged(32)] vs single-chip TTNN: 0.999941351428888
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=2 user 0 vs HF: 0.9992450035600746
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=2 user 1 vs HF: 0.9994441043393264
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_no_runtime_fallbacks:971 - multichip fallback audit at batch 32: {'batch': 32, 'dram_sharded_qkv': (2048, 1280), 'dram_sharded_wo': (1024, 2048), 'dram_sharded_taken': True, 'gate_up_in0_block_w': 16, 'down_in0_block_w': 12, 'expert_intermediate_buffer': 'DRAM', 'local_heads': (8, 1), 'local_experts': 32, 'norm_shard_cores': 8, 'norm_shard_feeds_qkv_directly': True, 'decode_ccl_buffers_persistent': True}
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_router_matches_functional:204 - router seq=128: max |functional - optimized| = 9.766e-04, weight sums in [0.99561, 1.00635]
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_router_padding_is_zero:245 - router seq=33: padded (1, 1, 64, 128), 3968 padding entries, max |pad| = 0.0
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=2 user 0 vs HF: 0.9993015593450881
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=2 user 1 vs HF: 0.9994934633239579
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=2: 4 dies bit-identical over 1024 selections
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_router_windows_partition_global_routing:319 - router windows seq=128: max |stitched - global| = 0.000e+00
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=512 vs single-chip TTNN: 0.999620460949962
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 0 vs HF: 0.9992450035600746
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 1 vs HF: 0.9994441043393264
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 2 vs HF: 0.9994544253098209
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 3 vs HF: 0.9993312504026023
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 4 vs HF: 0.9994259776629145
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 5 vs HF: 0.999515318099617
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 6 vs HF: 0.9992655076211026
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 7 vs HF: 0.999273488138553
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_router_matches_functional:204 - router seq=33: max |functional - optimized| = 9.766e-04, weight sums in [0.99707, 1.00488]
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_router_padding_is_zero:245 - router seq=100: padded (1, 1, 128, 128), 3584 padding entries, max |pad| = 0.0
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=8 user 0 vs HF: 0.9993015593450881
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=8 user 1 vs HF: 0.9994934633239579
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=8 user 2 vs HF: 0.9994953954109504
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=8 user 3 vs HF: 0.9993687384652433
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=8 user 4 vs HF: 0.9994614571916378
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=8 user 5 vs HF: 0.9995037156374033
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=8 user 6 vs HF: 0.999314089603218
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=8 user 7 vs HF: 0.9993082972687571
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=3: 4 dies bit-identical over 1024 selections
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=33 vs single-chip TTNN: 0.9997335206043321
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 0 vs HF: 0.9992450035600746
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 1 vs HF: 0.9994441043393264
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 2 vs HF: 0.9994544253098209
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 3 vs HF: 0.9993312504026023
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 4 vs HF: 0.9994259776629145
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 5 vs HF: 0.999515318099617
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 6 vs HF: 0.9992655076211026
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 7 vs HF: 0.999273488138553
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 8 vs HF: 0.9992380168243756
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 9 vs HF: 0.999231862413366
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 10 vs HF: 0.9950797483850857
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 11 vs HF: 0.9995664786300886
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 12 vs HF: 0.9989115557076926
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 13 vs HF: 0.9939255621655199
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 14 vs HF: 0.9991591858436268
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 15 vs HF: 0.9994818980240605
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 16 vs HF: 0.9990920850604048
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 17 vs HF: 0.9992070456865015
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 18 vs HF: 0.9993522599191121
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 19 vs HF: 0.996290594339868
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 20 vs HF: 0.9993654479983222
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 21 vs HF: 0.9991977456504364
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 22 vs HF: 0.9993430125011343
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 23 vs HF: 0.9994094977078336
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 24 vs HF: 0.9994054595181203
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 25 vs HF: 0.9955135574569638
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 26 vs HF: 0.9995151746699567
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 27 vs HF: 0.9994807091508782
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 28 vs HF: 0.9992759716993211
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 29 vs HF: 0.9932161039443776
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 30 vs HF: 0.9993192265737711
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 31 vs HF: 0.9994875056071248
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_router_padding_is_zero:245 - router seq=128: padded (1, 1, 128, 128), 0 padding entries, max |pad| = 0.0
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 0 vs HF: 0.9993015593450881
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 1 vs HF: 0.9994934633239579
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 2 vs HF: 0.9994953954109504
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 3 vs HF: 0.9993687384652433
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 4 vs HF: 0.9994614571916378
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 5 vs HF: 0.9995037156374033
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 6 vs HF: 0.999314089603218
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 7 vs HF: 0.9993082972687571
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 8 vs HF: 0.9992729407309596
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 9 vs HF: 0.9992345264502666
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 10 vs HF: 0.9952653229990375
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 11 vs HF: 0.9995927071502643
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 12 vs HF: 0.9990876299953922
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 13 vs HF: 0.9940779262117728
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 14 vs HF: 0.9992491474909109
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 15 vs HF: 0.9994929016185573
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 16 vs HF: 0.999102293789881
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 17 vs HF: 0.999155995556426
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 18 vs HF: 0.9993809208861516
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 19 vs HF: 0.9996304755385592
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 20 vs HF: 0.9992465283501994
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 21 vs HF: 0.9991092847067605
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 22 vs HF: 0.9993739411447842
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 23 vs HF: 0.9994572789294301
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 24 vs HF: 0.9994350485302137
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 25 vs HF: 0.99902098239808
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 26 vs HF: 0.9995139472537292
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 27 vs HF: 0.9995086324006477
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 28 vs HF: 0.9993417577555798
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 29 vs HF: 0.9933105642442985
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 30 vs HF: 0.999319029979169
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 31 vs HF: 0.9994749254723151
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=4: 4 dies bit-identical over 1024 selections
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=100 vs single-chip TTNN: 0.9998680715538794
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=5: 4 dies bit-identical over 1024 selections
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=257 vs single-chip TTNN: 0.9997130463493856
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=6: 4 dies bit-identical over 1024 selections
+autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=7: 4 dies bit-identical over 1024 selections
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_stacked_layer_io_contract[blackhole-1x4-device_params0]

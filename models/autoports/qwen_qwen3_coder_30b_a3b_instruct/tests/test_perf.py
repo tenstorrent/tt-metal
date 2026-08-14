@@ -375,7 +375,16 @@ def test_optimized_decode_latency_traced(mesh_device, reference, torch_weights, 
 # CSVs and TT_METAL_WATCHER inflates device timings, so a watcher run must
 # deselect them.
 
-MC_DOC_DIR = Path(__file__).resolve().parents[1] / "doc" / "multichip_decoder"
+MC_DOC_DIR = Path(__file__).resolve().parents[1] / "doc" / "optimized_multichip_decoder"
+# Stage 04 note. ``tt/multichip_decoder.py`` is optimized **in place**, so the
+# four tests below now measure the stage-04 path. They therefore write into
+# ``doc/optimized_multichip_decoder/``; ``doc/multichip_decoder/perf_*.csv`` are
+# stage 03's frozen *before* numbers and are deliberately never regenerated --
+# re-pointing this constant back would overwrite the baseline half of every
+# before/after table in both READMEs. The stage-04 decode before/after is also
+# measured in one process by
+# ``doc/optimized_multichip_decoder/probes/layer_levers.py``, whose "stage 03"
+# leg is a verbatim copy of the committed stage-03 layer body.
 
 # Ring fabric must be set before the mesh opens; the conftest device_params hook
 # does that, which is why it is spelled here rather than with set_fabric_config.
@@ -440,8 +449,13 @@ def _traced_decode_median(mesh_device, step) -> tuple[float, float, float]:
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"trace_region_size": TRACE_REGION_SIZE}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
-def test_multichip_baseline_1x1_prefill(mesh_device, reference, torch_weights):
-    """Stage-03's own copy of the warmed single-chip prefill baseline."""
+def test_optimized_multichip_baseline_1x1_prefill(mesh_device, reference, torch_weights):
+    """Stage-04's own copy of the warmed single-chip prefill baseline.
+
+    ``optimized_decoder.py`` is untouched by stage 04, so this re-measures the
+    same code stage 03 did; it is re-run rather than quoted so the speedup
+    columns in this stage's README are one CSV cell divided by another taken in
+    the same session."""
     from ..tt import optimized_decoder as O
 
     _, hf_config = reference
@@ -471,8 +485,8 @@ def test_multichip_baseline_1x1_prefill(mesh_device, reference, torch_weights):
 @pytest.mark.parametrize("device_params", [{"trace_region_size": TRACE_REGION_SIZE}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=True)
 @pytest.mark.parametrize("context_len", [128, 1024, 4096], ids=["ctx128", "ctx1k", "ctx4k"])
-def test_multichip_baseline_1x1_decode(mesh_device, reference, torch_weights, context_len):
-    """Stage-03's own copy of the warmed single-chip traced decode baseline."""
+def test_optimized_multichip_baseline_1x1_decode(mesh_device, reference, torch_weights, context_len):
+    """Stage-04's own copy of the warmed single-chip traced decode baseline."""
     from ..tt import optimized_decoder as O
 
     _, hf_config = reference
@@ -511,7 +525,7 @@ def test_multichip_baseline_1x1_decode(mesh_device, reference, torch_weights, co
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [MC_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MC_MESH], ids=["1x4"], indirect=True)
-def test_multichip_prefill_latency(mesh_device, reference, torch_weights):
+def test_optimized_multichip_prefill_latency(mesh_device, reference, torch_weights):
     from ..tt import multichip_decoder as MC
 
     _, hf_config = reference
@@ -548,7 +562,7 @@ def test_multichip_prefill_latency(mesh_device, reference, torch_weights):
 @pytest.mark.parametrize("device_params", [MC_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MC_MESH], ids=["1x4"], indirect=True)
 @pytest.mark.parametrize("context_len", [128, 1024, 4096], ids=["ctx128", "ctx1k", "ctx4k"])
-def test_multichip_decode_latency_traced(mesh_device, reference, torch_weights, context_len):
+def test_optimized_multichip_decode_latency_traced(mesh_device, reference, torch_weights, context_len):
     """Warmed trace replay on the mesh. Same harness as the 1x1 baseline above."""
     from ..tt import multichip_decoder as MC
 

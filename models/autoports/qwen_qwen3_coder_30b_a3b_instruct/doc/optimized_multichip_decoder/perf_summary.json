@@ -1,0 +1,125 @@
+{
+  "devices": 4,
+  "mesh": "1x4",
+  "board": "p300 x2 (ClusterType.P300_X2), Blackhole",
+  "topology": "Ring, 2 ethernet links per hop, FABRIC_1D_RING",
+  "scope": "one decoder layer (layer 0), batch 1",
+  "baseline": "tt/optimized_decoder.py on a 1x1 mesh, same harness, same tree",
+  "stage03_sources": "../multichip_decoder/perf_prefill.csv, ../multichip_decoder/perf_decode.csv (frozen)",
+  "sources": {
+    "single_chip_prefill": "perf_baseline_1x1_prefill.csv",
+    "single_chip_decode": "perf_baseline_1x1_decode.csv",
+    "multichip_prefill": "perf_prefill.csv",
+    "multichip_decode": "perf_decode.csv"
+  },
+  "prefill": [
+    {
+      "seq_len": 128,
+      "single_chip_us_per_token": 73.01,
+      "multichip_us_per_token": 25.13,
+      "speedup": 2.905,
+      "efficiency": 0.726
+    },
+    {
+      "seq_len": 512,
+      "single_chip_us_per_token": 69.05,
+      "multichip_us_per_token": 19.43,
+      "speedup": 3.554,
+      "efficiency": 0.888
+    },
+    {
+      "seq_len": 1024,
+      "single_chip_us_per_token": 68.85,
+      "multichip_us_per_token": 18.39,
+      "speedup": 3.744,
+      "efficiency": 0.936
+    },
+    {
+      "seq_len": 2048,
+      "single_chip_us_per_token": 69.28,
+      "multichip_us_per_token": 18.02,
+      "speedup": 3.845,
+      "efficiency": 0.961
+    }
+  ],
+  "decode": [
+    {
+      "context_len": 128,
+      "single_chip_ms": 0.5638,
+      "multichip_ms": 0.4286,
+      "speedup": 1.315,
+      "efficiency": 0.329
+    },
+    {
+      "context_len": 1024,
+      "single_chip_ms": 0.6611,
+      "multichip_ms": 0.5254,
+      "speedup": 1.258,
+      "efficiency": 0.315
+    },
+    {
+      "context_len": 4096,
+      "single_chip_ms": 0.9912,
+      "multichip_ms": 0.8667,
+      "speedup": 1.144,
+      "efficiency": 0.286
+    }
+  ],
+  "stage03_prefill_us_per_token": {
+    "128": 24.57,
+    "512": 19.51,
+    "1024": 18.38,
+    "2048": 18.26
+  },
+  "stage03_decode_ms": {
+    "128": 0.4767,
+    "1024": 0.5722,
+    "4096": 0.9124
+  },
+  "stage04_vs_stage03_prefill": [
+    {
+      "seq_len": 128,
+      "stage03": 24.57,
+      "stage04": 25.13,
+      "speedup": 0.9777
+    },
+    {
+      "seq_len": 512,
+      "stage03": 19.51,
+      "stage04": 19.43,
+      "speedup": 1.0041
+    },
+    {
+      "seq_len": 1024,
+      "stage03": 18.38,
+      "stage04": 18.39,
+      "speedup": 0.9995
+    },
+    {
+      "seq_len": 2048,
+      "stage03": 18.26,
+      "stage04": 18.02,
+      "speedup": 1.0133
+    }
+  ],
+  "stage04_vs_stage03_decode": [
+    {
+      "context_len": 128,
+      "stage03": 0.4767,
+      "stage04": 0.4286,
+      "speedup": 1.1122
+    },
+    {
+      "context_len": 1024,
+      "stage03": 0.5722,
+      "stage04": 0.5254,
+      "speedup": 1.0891
+    },
+    {
+      "context_len": 4096,
+      "stage03": 0.9124,
+      "stage04": 0.8667,
+      "speedup": 1.0527
+    }
+  ]
+}
