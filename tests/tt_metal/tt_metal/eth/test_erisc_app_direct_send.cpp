@@ -29,6 +29,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include "llrt/hal_types.hpp"
 #include "llrt.hpp"
 #include "mesh_device.hpp"
 #include "multi_device_fixture.hpp"

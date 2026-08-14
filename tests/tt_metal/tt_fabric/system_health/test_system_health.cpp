@@ -18,6 +18,7 @@
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include <tt_stl/caseless_comparison.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <llrt/hal_types.hpp>
 
 namespace tt::tt_fabric::system_health_tests {
 

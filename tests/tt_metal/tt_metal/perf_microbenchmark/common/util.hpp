@@ -19,6 +19,7 @@
 
 // Access to internal API: ProgramImpl::logical_cores
 #include "impl/program/program_impl.hpp"
+#include <llrt/hal_types.hpp>
 
 inline uint64_t get_t0_to_any_riscfw_end_cycle(
     tt::tt_metal::distributed::MeshDevice& mesh_device, const tt::tt_metal::Program& program) {

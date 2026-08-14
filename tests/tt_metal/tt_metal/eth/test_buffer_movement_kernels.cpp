@@ -41,6 +41,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/xy_pair.hpp>
+#include "llrt/hal_types.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;

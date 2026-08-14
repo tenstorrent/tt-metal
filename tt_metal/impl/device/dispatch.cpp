@@ -13,6 +13,7 @@
 #include "dispatch/system_memory_manager.hpp"
 #include <tt-metalium/math.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
+#include "llrt/hal_types.hpp"
 
 namespace tt::tt_metal {
 

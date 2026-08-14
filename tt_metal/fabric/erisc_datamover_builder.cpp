@@ -41,6 +41,7 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_common.hpp"
+#include "llrt/hal_types.hpp"
 
 namespace tt::tt_metal {
 class Program;

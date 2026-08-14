@@ -13,6 +13,7 @@
 #include "debug_tools_fixture.hpp"
 #include <tt_metal/impl/dispatch/slow_dispatch.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include "llrt/hal_types.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

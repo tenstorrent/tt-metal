@@ -11,6 +11,7 @@
 #include <chrono>
 #include <llrt/tt_cluster.hpp>
 #include "tests/tt_metal/tt_fabric/common/fabric_worker_kernel_helpers.hpp"
+#include <llrt/hal_types.hpp>
 
 namespace tt::tt_fabric::test_utils {
 

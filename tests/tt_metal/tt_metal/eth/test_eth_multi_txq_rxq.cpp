@@ -18,6 +18,7 @@
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
+#include "llrt/hal_types.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;

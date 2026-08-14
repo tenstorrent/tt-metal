@@ -15,6 +15,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include "llrt/hal_types.hpp"
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"

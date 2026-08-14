@@ -21,6 +21,7 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/common.h"
+#include "llrt/hal_types.hpp"
 
 /*
  * DISPATCHER MICROBENCHMARK SUITE (Fast Dispatch + Slow Dispatch)

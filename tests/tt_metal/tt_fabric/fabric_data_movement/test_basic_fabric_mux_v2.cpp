@@ -26,6 +26,7 @@
 #include "fabric_fixture.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "llrt/hal_types.hpp"
 
 namespace tt::tt_fabric::fabric_router_tests::fabric_mux_v2_tests {
 

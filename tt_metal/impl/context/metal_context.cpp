@@ -30,6 +30,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "hal_types.hpp"
+#include <llrt/hal_types.hpp>
 #include "fabric/fabric_host_utils.hpp"
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"
@@ -173,8 +174,8 @@ void MetalContext::initialize(
     // DispatchCoreConfig{}, and comparing that against the already-resolved stored config would read as a
     // parameter change and tear down a context that in fact matches. Resolving first also leaves the stored
     // snapshot complete, which get_dispatch_core_axis() now requires.
-    DispatchCoreConfig resolved_config = dispatch_core_config;
-    resolved_config.set_dispatch_core_axis(
+    DispatchCoreConfig resolved_config(
+        dispatch_core_config.get_dispatch_core_type(),
         resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config()));
 
     if (initialized_) {

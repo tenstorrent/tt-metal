@@ -14,6 +14,7 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "llrt/hal_types.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""

@@ -28,6 +28,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/buffers/semaphore.hpp"
+#include "llrt/hal_types.hpp"
 
 namespace tt::tt_metal {
 

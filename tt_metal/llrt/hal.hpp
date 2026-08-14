@@ -12,7 +12,7 @@
 #include <sys/types.h>
 #include <cstddef>
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/hal_types.hpp>
+#include "llrt/hal_types.hpp"
 #include <tt_stl/enum.hpp>
 #include <cstdint>
 #include <functional>

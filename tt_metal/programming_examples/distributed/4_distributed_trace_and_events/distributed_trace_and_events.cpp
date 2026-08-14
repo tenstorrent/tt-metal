@@ -31,7 +31,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
     const std::shared_ptr<MeshBuffer>& src0_buf,
     const std::shared_ptr<MeshBuffer>& src1_buf,
     const std::shared_ptr<MeshBuffer>& output_buf,
-    const SubDevice& sub_device_for_program,
+    const CoreRangeSet& cores_for_program,
     uint32_t num_tiles,
     uint32_t single_tile_size,
     uint32_t eltwise_op_index) {
@@ -39,15 +39,13 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
     // on a SubDevice.
     // Requires:
     // 1. The src (input) and output buffers
-    // 2. The SubDevice being targeted
+    // 2. The cores of the SubDevice being targeted
     // 3. The number of tiles that must be processed by the op
     // 4. The size of the tile in bytes
     // The op specifier: Addition (0), Multiplication (1), Subtraction (2)
     const std::vector<std::string> op_id_to_op_define = {"add_tiles", "mul_tiles", "sub_tiles"};
     const std::vector<std::string> op_id_to_op_type_define = {
         "EltwiseBinaryType::ELWADD", "EltwiseBinaryType::ELWMUL", "EltwiseBinaryType::ELWSUB"};
-
-    const auto& cores_for_program = sub_device_for_program.cores(HalProgrammableCoreType::TENSIX);
 
     std::shared_ptr<Program> program = std::make_shared<Program>();
 
@@ -143,8 +141,10 @@ int main() {
     // =========== Step 1: Initialize and load two SubDevices ===========
     // Each SubDevice contains a single core. This SubDevice configuration is loaded on each physical device
     // in the Virtual Mesh
-    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {0, 0}))});
-    SubDevice sub_device_2(std::array{CoreRangeSet(CoreRange({1, 1}, {1, 1}))});
+    CoreRangeSet sub_device_1_cores(CoreRange({0, 0}, {0, 0}));
+    CoreRangeSet sub_device_2_cores(CoreRange({1, 1}, {1, 1}));
+    SubDevice sub_device_1(std::array{sub_device_1_cores});
+    SubDevice sub_device_2(std::array{sub_device_2_cores});
     auto sub_device_manager = mesh_device->create_sub_device_manager(
         {sub_device_1, sub_device_2}, 3200 /* size of L1 region allocated for the SubDevices */);
     mesh_device->load_sub_device_manager(sub_device_manager);
@@ -187,7 +187,7 @@ int main() {
         add_src0_buf,
         add_src1_buf,
         add_output_buf,
-        sub_device_1,  // Addition runs on the first SubDevice
+        sub_device_1_cores,  // Addition runs on the first SubDevice
         num_tiles_per_device,
         single_tile_size,
         ADD_OP_ID);
@@ -195,7 +195,7 @@ int main() {
         mul_sub_src0_buf,
         mul_sub_src1_buf,
         mul_sub_output_buf,
-        sub_device_2,  // Multiplication runs on the second SubDevice
+        sub_device_2_cores,  // Multiplication runs on the second SubDevice
         num_tiles_per_device,
         single_tile_size,
         MULTIPLY_OP_ID);
@@ -203,7 +203,7 @@ int main() {
         mul_sub_src0_buf,
         mul_sub_src1_buf,
         mul_sub_output_buf,
-        sub_device_2,  // Subtraction runs on the second SubDevice
+        sub_device_2_cores,  // Subtraction runs on the second SubDevice
         num_tiles_per_device,
         single_tile_size,
         SUBTRACT_OP_ID);

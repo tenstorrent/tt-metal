@@ -6,6 +6,7 @@
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <llrt/tt_cluster.hpp>
+#include <llrt/hal_types.hpp>
 
 namespace tt::scaleout_tools {
 
