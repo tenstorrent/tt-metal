@@ -317,6 +317,19 @@ class PerfRunFailed(TracyRunError):
         self.log_path = log_path
 
 
+class ThrottledRunError(TracyRunError):
+    """The run completed, but the device throttled its clock while it was being measured.
+
+    NOT a crash and NOT a usable measurement. The driver clamps AICLK from 1350 MHz to 800 when the
+    board is too hot, so the numbers are real timings of a slower machine. Comparing one against a
+    baseline taken at full clock is comparing two different pieces of hardware: a good edit measured
+    hot looks ~40% slower and gets reverted, and a hot BASELINE makes the next candidate look like a
+    win worth committing. Both directions corrupt the ledger silently, which is worse than failing.
+
+    Raised only after re-measuring has been tried and the board still cannot hold its clock.
+    """
+
+
 class TracyHangError(TracyRunError):
     """Watchdog killed a run that made no forward progress (stalled/deadlocked,
     e.g. an intermittent multi-chip CCL deadlock) — distinct from an edit-induced
@@ -705,6 +718,24 @@ _DEVICE_OVERHEAT_RE = re.compile(
 _COOL_MARGIN_C = float(os.environ.get("PERF_MCP_COOL_MARGIN_C", "5") or "5")
 _COOL_POLL_S = float(os.environ.get("PERF_MCP_COOL_POLL_S", "5") or "5")
 _COOL_MAX_S = float(os.environ.get("PERF_MCP_COOL_MAX_S", "120") or "120")
+_MAX_THROTTLE_RETRIES = int(os.environ.get("PERF_MCP_THROTTLE_RETRIES", "2") or "2")
+
+
+def _cool_before_remeasure():
+    """Cool the way the full-pipeline gate does: to an ABSOLUTE target, with no deadline on physics.
+
+    _await_cool below is relative (entry minus 5C) and capped at 120 s, which is fine as a courtesy
+    pause between runs and useless after a clamp -- entry-5 on a 96C board asks for 91C, still hot
+    enough to clamp again. One rule for "cool enough to measure", owned by perf_mcp, so the two
+    measurement paths cannot drift apart again.
+    """
+    try:
+        from ..cc_optimize.perf_mcp import _cooldown_after_clamp
+
+        return _cooldown_after_clamp()
+    except Exception:  # noqa: BLE001 -- never let the cooldown import stop a run
+        _await_cool()
+        return True, None
 
 
 def detect_overheat(log_text: str) -> str | None:
@@ -1055,6 +1086,7 @@ def make_run_profiled(
         t_start = time.monotonic()
         partial_reason = None
         heal_attempt = 0
+        throttle_retry = 0
         while True:
             if support_count > 0:
                 env["TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT"] = str(support_count)
@@ -1072,7 +1104,31 @@ def make_run_profiled(
                 raise TracyRunError(f"tracy run exit {code} (log: {log_path})\n{tail}")
             log_text = log_path.read_text() if log_path.is_file() else ""
             if detect_overheat(log_text):
-                _await_cool()
+                # DISCARD AND RE-MEASURE. This used to cool and then KEEP the number, which is the
+                # worst of both: it paid for the wait and still banked a reading taken at 800 MHz
+                # instead of 1350. The full-pipeline gate has always thrown these away and retried
+                # (perf_mcp._measure_full_pipeline_guarded); the path that measures every candidate
+                # -- the one whose numbers decide what gets committed -- did not.
+                if throttle_retry < _MAX_THROTTLE_RETRIES:
+                    throttle_retry += 1
+                    _cooled, _at = _cool_before_remeasure()
+                    with open(log_path, "a") as fh:
+                        fh.write(
+                            f"\n[harness] device throttled during this run; reading DISCARDED, "
+                            f"re-profiling from {_at if _at is not None else 'an unknown temperature'} "
+                            f"(attempt {throttle_retry}/{_MAX_THROTTLE_RETRIES})\n"
+                        )
+                    if _cooled:
+                        continue
+                    raise ThrottledRunError(
+                        "device throttled and the board stopped cooling at "
+                        f"{_at if _at is not None else 'an unknown temperature'}; "
+                        "no reading can be taken at full clock right now"
+                    )
+                raise ThrottledRunError(
+                    f"device throttled on all {throttle_retry + 1} attempts; every reading was taken "
+                    "at a clamped clock and none is comparable to the baseline"
+                )
             # `python -m tracy -m pytest` exits 0 even when the inner test FAILS, so a device-op
             # crash (the edit broke the model) leaves a PARTIAL CSV that would be misread as an
             # op_count_mismatch measurement. Detect the runtime crash here and raise PerfRunFailed

@@ -42,8 +42,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent.pare
 
 @pytest.fixture()
 def mcp(tmp_path, monkeypatch):
-    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(tmp_path))
-    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(tmp_path))
+    # The state dir must be a SUBdirectory: the thermal profile is a board fact and now lives one
+    # level up, so pointing the state dir straight at tmp_path would put it in pytest's shared root
+    # and let each test inherit the clamp observations recorded by the last one.
+    _sd = tmp_path / "model"
+    _sd.mkdir(exist_ok=True)
+    monkeypatch.setenv("PERF_MCP_STATE_DIR", str(_sd))
+    monkeypatch.setenv("PERF_MCP_LEDGER_DIR", str(_sd))
     monkeypatch.delenv("PERF_MCP_THERMAL_GATE", raising=False)
     monkeypatch.setenv("PERF_MCP_THERMAL_POLL_S", "0")
     import models.experimental.perf_automation.cc_optimize.perf_mcp as m

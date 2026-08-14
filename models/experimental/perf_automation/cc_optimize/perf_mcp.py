@@ -2815,16 +2815,61 @@ def _run_reported_clamp(out):
 _LAST_RUN_CLAMPED = False
 
 
+def _board_state_dir():
+    """Where facts about the MACHINE live, as opposed to facts about this model's run.
+
+    state_dir() is per-model (~/.perf_mcp/<model>), which is right for a baseline or a knob cache and
+    wrong for the clamp point: the temperature at which the driver drops AICLK to 800 MHz belongs to
+    the board and its cooling, not to whatever is being optimized on it. Kept per-model it was learned
+    from scratch every time -- gemma3 had 140 observations of this board while voxtral had 4 and no
+    clean reading at all, so the same hardware answered "what is too hot" two different ways.
+
+    Only climbs when the state dir was pointed at explicitly. On the tempdir default the parent is /,
+    which is not somewhere to write.
+    """
+    return state_dir().parent if os.environ.get("PERF_MCP_STATE_DIR") else state_dir()
+
+
 def _thermal_profile_path():
-    return state_dir() / "perf_mcp_thermal_profile.json"
+    return _board_state_dir() / "perf_mcp_thermal_profile.json"
+
+
+def _adopt_per_model_profiles(doc):
+    """Fold any per-model profiles beside the board file into it, once.
+
+    The observations are not wrong -- they were taken on this board -- they were merely filed under
+    the model that happened to be running. Dropping them would mean re-learning by clamping again,
+    which costs real runs, so they are adopted rather than discarded. A heavier model reaches a given
+    start temperature with more heat already in the package, so mixing them makes the threshold more
+    conservative, never less: the tool waits slightly longer than one model alone would demand.
+    """
+    if doc.get("clamped_at") or doc.get("clean_at"):
+        return doc
+    root = _board_state_dir()
+    merged = {"clamped_at": [], "clean_at": []}
+    try:
+        found = sorted(root.glob("*/perf_mcp_thermal_profile.json"))
+    except OSError:
+        return doc
+    for f in found:
+        try:
+            old = json.loads(f.read_text())
+        except Exception:  # noqa: BLE001
+            continue
+        for k in ("clamped_at", "clean_at"):
+            merged[k] += [float(v) for v in (old.get(k) or []) if isinstance(v, (int, float))]
+    if not (merged["clamped_at"] or merged["clean_at"]):
+        return doc
+    return {k: sorted(v)[-200:] for k, v in merged.items() if v}
 
 
 def _load_thermal_profile():
     try:
         doc = json.loads(_thermal_profile_path().read_text())
-        return doc if isinstance(doc, dict) else {}
+        doc = doc if isinstance(doc, dict) else {}
     except Exception:  # noqa: BLE001
-        return {}
+        doc = {}
+    return _adopt_per_model_profiles(doc)
 
 
 def _cooldown_after_clamp(target_c: float = 0.0) -> tuple:

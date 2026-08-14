@@ -47,7 +47,6 @@ _STATE_GLOBS = (
     "perf_mcp_fullpipe_consumed_*.json",
     "perf_mcp_knob_cache.json",
     "perf_integrity_resolve_cache.json",
-    "perf_mcp_thermal_profile.json",  # a LEARNED threshold: 68.6C, from samples its own clean reading contradicts
     "perf_mcp_fullpipe_gate.log",
     "cc_kernlog_*.json",
     "cc_kernlog_*.json.cumulative",
@@ -58,7 +57,16 @@ _STATE_GLOBS = (
 _STATE_DIRS = ("perf_mcp_profile_cache", "perf_mcp_last_profile")
 
 # The machine, not the run. Re-deriving these costs device time and answers the same thing.
-KEEP = ("perf_mcp_board_topology.json", "tt_device_recovery_model_main.json")
+KEEP = (
+    "perf_mcp_board_topology.json",
+    "tt_device_recovery_model_main.json",
+    # THE CLAMP POINT IS THE BOARD'S, NOT THE RUN'S. This was wiped until 2026-08-14, on the reasoning
+    # that a learned number can outlive the rule that produced it. But the ceiling anchor that argument
+    # was written for is a DERIVED value; these are raw observations of when this hardware dropped its
+    # clock, and re-deriving them means clamping again -- paid for in killed runs, not in CPU. The
+    # samples also now live one level up, beside the board they describe rather than inside one model.
+    "perf_mcp_thermal_profile.json",
+)
 
 # Caches the tool writes beside its own source.
 _TOOL_GLOBS = ("cc_optimize/.coverage_cache.json", "cc_optimize/.mcp_config_*.json")
