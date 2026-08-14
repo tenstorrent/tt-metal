@@ -77,7 +77,8 @@ def attention_forward(
             When ``indexed_rope`` is set these are the WHOLE-cache block-cyclic SP-sharded cos/sin
             built once by tt/rope.build_indexed_rope (not per-chunk).
         weights: Attention weights
-        kv_cache: Optional GptOssKVCache (packed K/V); may be None (e.g. the unit test)
+        kv_cache: Optional GptOssKVCache (packed K/V). Required for sequence-parallel prefill;
+            may be None only for the single-device unit-test path.
         config: Attention configuration
         mesh_config: Mesh parallelization config
         mesh_device: TTNN mesh device
@@ -176,7 +177,7 @@ def attention_forward(
     # Sequence-parallel prefill uses one cache-backed RingJointSDPA path from
     # chunk 0 onward. The first complete ring group is valid: device 0 clips its
     # left window at token zero and the remaining devices consume predecessors
-    # within that same group. Keeping chunk 0 on this path lets one trace/program
+    # within that same group. Keeping chunk 0 on this path lets one cached program
     # serve the complete prefill and avoids the former replicated Q/K/V bootstrap.
     if config.sequence_parallel and mesh_config.sp > 1:
         sp = mesh_config.sp
@@ -228,12 +229,12 @@ def attention_forward(
         # offset cached_len while K/V span [0, cached_len+seq_len) — plain is_causal SDPA (which assumes
         # Q row 0 aligns with K row 0) is off by cached_len and silently wrong. The correct paths are
         # the paged chunked_scaled_dot_product_attention (needs a paged KV cache + page table) or the
-        # ring-joint dense SDPA over the block-cyclic cache (M3 dense_sp_attention). Wired when the
-        # runtime drives multi-chunk prefill. Fail loud rather than return wrong output.
+        # ring-joint dense SDPA over the block-cyclic cache (M3 dense_sp_attention). The GPT-OSS SP
+        # runtime uses that path above; this single-device fallback fails loud rather than return wrong output.
         raise NotImplementedError(
             "gpt_oss_d_p: chunked cache-read attention (cached_len>0) is not implemented yet — needs a "
             "chunk-position-aware SDPA (paged chunked SDPA or ring-joint over the block-cyclic cache). "
-            "KV-cache storage/write is supported and validated; first-chunk (cached_len==0) works."
+            "KV-cache storage/write is supported and validated; only the single-device first chunk works."
         )
     else:
         tt_sdpa_out = _run_sdpa(tt_q, tt_k, tt_v, weights, config, program_config, mesh_device, seq_len)

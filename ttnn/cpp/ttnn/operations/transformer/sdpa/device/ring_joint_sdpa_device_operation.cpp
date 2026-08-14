@@ -440,6 +440,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         const uint32_t window_size = args.sliding_window_size.value();
         const bool supported_q_chunk = q_chunk_size == 64 || q_chunk_size == 128;
         const bool supported_k_chunk = k_chunk_size == 128;
+        // These are the only ring sizes exercised by the current one-hop compact-halo deployment.
+        // Extend the test matrix before widening this allowlist.
         TT_FATAL(
             args.ring_size == 4 || args.ring_size == 8,
             "Chunked sliding attention supports the SP4 production ring or SP8 test ring, got SP{}",
@@ -491,6 +493,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(!args.is_cross, "Ring sliding-window attention does not support cross attention");
         TT_FATAL(L == 0, "Ring sliding-window attention does not support joint tokens");
         const uint32_t halo_tokens = sliding_halo_token_count(window_size, k_chunk_size);
+        TT_FATAL(halo_tokens > 0, "Chunked sliding attention requires sliding_window_size > 1, got {}", window_size);
         TT_FATAL(
             N_local_q % q_chunk_size == 0,
             "q_chunk_size must divide the per-device Q slab for chunked sliding attention");
@@ -919,6 +922,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.has_latent_v(),
         tensor_args.v_num_heads(),
         tensor_args.v_head_dim(args.latent_v_head_dim),
+        args.sliding_window_size,
         args.all_gather_operation_attributes,
         args.all_gather_tensor_args);
 }

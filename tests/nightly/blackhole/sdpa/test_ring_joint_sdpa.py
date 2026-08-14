@@ -2699,7 +2699,12 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
     pcc_threshold=CHUNKED_PREFILL_PCC_THRESHOLD,
     rmse_threshold=DEFAULT_RMSE_THRESHOLD,
 ):
-    """Validate compact sliding attention over one fixed, garbage-padded KV cache."""
+    """Numerically validate GPT-OSS-shaped compact sliding attention over a fixed, garbage-padded KV cache.
+
+    Case 0 is the cache-backed first complete group (``logical_n == G``). It exercises the exact
+    chunk-0 physical condition used by GPT-OSS: Q is shorter than an oversized K/V cache and both
+    the ignored group-0 wrap payload and device-0 causal clipping are checked against the torch reference.
+    """
     sp_size = mesh_config.sp_size
     if sp_size < 2:
         pytest.skip(f"sliding KV-pad reuse requires at least 2 devices in ring, got SP={sp_size}")
@@ -2855,7 +2860,7 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
                 tt_k = upload(add_garbage_tail(k_host, nhk, d_k), kv_dtype, input_shard_dims)
                 tt_v = upload(add_garbage_tail(v_host, nhv, d_v), kv_dtype, input_shard_dims)
 
-                def run_device_call(logical_n_arg, kv_actual_isl_arg):
+                def run_device_call(logical_n_arg, kv_actual_isl_arg, sliding_window_size_arg=sliding_window_size):
                     return call_sdpa(
                         tt_q,
                         tt_k,
@@ -2875,10 +2880,16 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
                         worker_sub_device_id=runtime.worker_sub_device_id,
                         ccl_column=runtime.ccl_column,
                         kv_actual_isl=kv_actual_isl_arg,
-                        sliding_window_size=sliding_window_size,
+                        sliding_window_size=sliding_window_size_arg,
                     )
 
                 tt_out = run_device_call(logical_n, kv_actual_isl)
+
+                if iteration == 0 and case_index == 0:
+                    with expect_error(RuntimeError, "sliding_window_size > 1"):
+                        # Same physical tensors after a W=128 cache entry. This locks both the
+                        # early zero-halo rejection and sliding_window_size's program-cache key.
+                        run_device_call(logical_n, kv_actual_isl, sliding_window_size_arg=1)
 
                 if iteration == 0 and case_index == 2:
                     with expect_error(RuntimeError, "complete ring-group boundary"):
@@ -3505,8 +3516,10 @@ def test_ring_joint_attention_kv_pad_aware_rotation_accuracy(case_name):
     )
 
 
-def test_ring_joint_attention_sliding_kv_pad_reuse_gqa_accuracy_and_determinism(expect_error):
-    """Validate GPT-OSS sliding GQA against garbage-padded KV and cache-hit scalar updates."""
+def test_ring_joint_attention_gpt_oss_first_complete_group_sliding_kv_pad_reuse_accuracy_and_determinism(
+    expect_error,
+):
+    """GPT-OSS-shaped numerical regression for chunk 0 plus cache growth/replay."""
     batch_size = gpt_oss_native_ring_batch_size(MESH_CONFIG)
     run_ring_joint_sdpa_sliding_kv_pad_reuse_case(MESH_CONFIG, batch_size=batch_size, expect_error=expect_error)
 
