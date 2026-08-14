@@ -119,6 +119,52 @@ class TestBhRequiredCapabilities(unittest.TestCase):
         self.assertTrue(p150x4_nodes)
         self.assertTrue(all(node_id.endswith("-P150X4]") for node_id in p150x4_nodes))
 
+    def test_llama_completed_negative_disposition_is_valid_and_policy_stays_sequential(self) -> None:
+        contract = self._load_contract(0)
+        cross_rows = [
+            row for row in contract["demo_requirements"] if row["demo_case"] == "seeded-cross-cardinality"
+        ]
+        self.assertEqual(len(cross_rows), 4)
+        for row in cross_rows:
+            self.assertIn("INVARIANT", row["acceptance_condition"])
+            self.assertIn("BATCHED_PREFILL_REJECTED", row["acceptance_condition"])
+            self.assertIn("does not pass invariance", row["acceptance_condition"])
+            self.assertIn("Malformed or incomplete outputs", row["acceptance_condition"])
+
+        experiment = next(
+            row for row in contract["cross_cutting_requirements"] if row["id"] == "cross_cardinality_invariance"
+        )
+        policy = next(
+            row for row in contract["cross_cutting_requirements"] if row["id"] == "disable_batched_prefill_policy"
+        )
+        self.assertIn("either disposition satisfies", experiment["acceptance_condition"])
+        self.assertIn("does not pass invariance", experiment["acceptance_condition"])
+        self.assertIn("remains sequential after BATCHED_PREFILL_REJECTED", policy["acceptance_condition"])
+        self.assertIn("independent of completed experiment disposition", policy["acceptance_condition"])
+        validate_contract_data(contract, self.schema)
+
+        experiment["capability"] = "Only invariant execution is relevant."
+        experiment["acceptance_condition"] = "Only INVARIANT is a completed experiment."
+        self._assert_invalid(contract, "experiment disposition must preserve phrase 'BATCHED_PREFILL_REJECTED'")
+
+        contract = self._load_contract(0)
+        policy = next(
+            row for row in contract["cross_cutting_requirements"] if row["id"] == "disable_batched_prefill_policy"
+        )
+        policy["capability"] = "Execution policy is unspecified."
+        policy["acceptance_condition"] = "Any completed experiment may change production policy."
+        self._assert_invalid(contract, "batched-prefill policy must follow verdict phrase")
+
+    def test_llama_cross_cardinality_rejects_missing_malformed_execution_guard(self) -> None:
+        contract = self._load_contract(0)
+        row = next(
+            row for row in contract["demo_requirements"] if row["id"] == "p150.performance.seeded_cross_cardinality"
+        )
+        row["acceptance_condition"] = row["acceptance_condition"].replace(
+            "Malformed or incomplete outputs", "Outputs"
+        )
+        self._assert_invalid(contract, "including 'Malformed or incomplete outputs'")
+
     def test_llama_manifests_reject_missing_extra_and_renamed_rows(self) -> None:
         for index, package in ((0, "llama3_8b"), (2, "llama33_70b")):
             base = self._load_contract(index)

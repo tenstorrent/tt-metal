@@ -722,7 +722,7 @@
         "quality"
       ],
       "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
-      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, determinism, quality gates for fixed per-request seeds across batched cardinalities 1, 2, 4, and 32 plus sequential-prefill controls."
+      "acceptance_condition": "Exact canonical node completes on the real required SKU under the performance profile in cold-write and warm-read runs, with 32 true active-batch-1 sequential-prefill controls, fixed per-request seeds, and exact token-ID comparisons at batched cardinalities 1, 2, 4, and 32. A complete execution records either INVARIANT or BATCHED_PREFILL_REJECTED; the latter is a completed negative experiment disposition, does not pass invariance, and requires the sequential production policy to remain retained after rejection. Malformed or incomplete outputs, skips, xfails, or missing controls/cardinalities fail and cannot record either disposition."
     },
     {
       "id": "p150.accuracy.seeded_cross_cardinality",
@@ -748,7 +748,7 @@
         "quality"
       ],
       "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
-      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, determinism, quality gates for fixed per-request seeds across batched cardinalities 1, 2, 4, and 32 plus sequential-prefill controls."
+      "acceptance_condition": "Exact canonical node completes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with 32 true active-batch-1 sequential-prefill controls, fixed per-request seeds, and exact token-ID comparisons at batched cardinalities 1, 2, 4, and 32. A complete execution records either INVARIANT or BATCHED_PREFILL_REJECTED; the latter is a completed negative experiment disposition, does not pass invariance, and requires the sequential production policy to remain retained after rejection. Malformed or incomplete outputs, skips, xfails, or missing controls/cardinalities fail and cannot record either disposition."
     },
     {
       "id": "p150x4.performance.seeded_cross_cardinality",
@@ -774,7 +774,7 @@
         "quality"
       ],
       "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
-      "acceptance_condition": "Exact canonical node passes on the real required SKU under the performance profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, determinism, quality gates for fixed per-request seeds across batched cardinalities 1, 2, 4, and 32 plus sequential-prefill controls."
+      "acceptance_condition": "Exact canonical node completes on the real required SKU under the performance profile in cold-write and warm-read runs, with 32 true active-batch-1 sequential-prefill controls, fixed per-request seeds, and exact token-ID comparisons at batched cardinalities 1, 2, 4, and 32. A complete execution records either INVARIANT or BATCHED_PREFILL_REJECTED; the latter is a completed negative experiment disposition, does not pass invariance, and requires the sequential production policy to remain retained after rejection. Malformed or incomplete outputs, skips, xfails, or missing controls/cardinalities fail and cannot record either disposition."
     },
     {
       "id": "p150x4.accuracy.seeded_cross_cardinality",
@@ -800,7 +800,7 @@
         "quality"
       ],
       "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
-      "acceptance_condition": "Exact canonical node passes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with nonzero passes, zero unexpected skips/xfails, and required functional, determinism, quality gates for fixed per-request seeds across batched cardinalities 1, 2, 4, and 32 plus sequential-prefill controls."
+      "acceptance_condition": "Exact canonical node completes on the real required SKU under the accuracy profile in cold-write and warm-read runs, with 32 true active-batch-1 sequential-prefill controls, fixed per-request seeds, and exact token-ID comparisons at batched cardinalities 1, 2, 4, and 32. A complete execution records either INVARIANT or BATCHED_PREFILL_REJECTED; the latter is a completed negative experiment disposition, does not pass invariance, and requires the sequential production policy to remain retained after rejection. Malformed or incomplete outputs, skips, xfails, or missing controls/cardinalities fail and cannot record either disposition."
     }
   ],
   "serving_requirements": [
@@ -959,24 +959,24 @@
   "cross_cutting_requirements": [
     {
       "id": "cross_cardinality_invariance",
-      "capability": "A fixed request set with fixed per-request seeds must produce per-request invariant outputs with batched prefill at admission cardinalities 1, 2, 4, and 32, using sequential prefill as the control.",
+      "capability": "A fixed request set with fixed per-request seeds must execute exact token-ID comparisons with batched prefill at admission cardinalities 1, 2, 4, and 32, using 32 true active-batch-1 sequential-prefill controls, and record either INVARIANT or BATCHED_PREFILL_REJECTED.",
       "applies_to": [
         "p150_tp1_dp1",
         "p150x4_tp4_dp1"
       ],
       "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
-      "acceptance_condition": "Immutable qualification evidence demonstrates this capability for every listed geometry without dropping a profile, workload, or row."
+      "acceptance_condition": "For every listed geometry and both profiles, either disposition satisfies experiment completion only when every control and candidate output is complete. BATCHED_PREFILL_REJECTED is a completed negative disposition and does not pass invariance; malformed or incomplete execution, skips, xfails, or missing rows fail."
     },
     {
       "id": "disable_batched_prefill_policy",
-      "capability": "The executor must explicitly disable batched prefill whenever device sampling is enabled; BH determinism-sensitive execution must retain sequential prefill until the seeded cross-cardinality requirement proves batch invariance.",
+      "capability": "The executor must explicitly disable batched prefill whenever device sampling is enabled; BH determinism-sensitive execution follows the recorded INVARIANT or BATCHED_PREFILL_REJECTED verdict and retains sequential prefill unless batch invariance is proven.",
       "applies_to": [
         "p150_tp1_dp1",
         "p150x4_tp4_dp1",
         "p150x4_tp1_dp4"
       ],
       "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
-      "acceptance_condition": "Immutable qualification evidence demonstrates this capability for every listed geometry without dropping a profile, workload, or row."
+      "acceptance_condition": "Production remains sequential after BATCHED_PREFILL_REJECTED on any required geometry; policy may be reconsidered only after INVARIANT evidence for every required geometry and profile. This retained-policy requirement is independent of completed experiment disposition."
     },
     {
       "id": "p150x4_ring_probe",
@@ -1073,4 +1073,3 @@
     }
   ]
 }
-

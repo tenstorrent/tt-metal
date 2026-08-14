@@ -25,6 +25,7 @@ Usage:
     python_env/bin/pytest models/common/tests/demos/llama3_8b/demo.py -k "batch-32" -v
 """
 
+import json
 import math
 import os
 from dataclasses import dataclass
@@ -45,7 +46,7 @@ from models.common.models.llama3_8b.model import Llama31_8BPagedAttentionConfig
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.common.tests.demos.llama3_8b.demo_utils import (
-    assert_seeded_cross_cardinality_consistency,
+    evaluate_seeded_cross_cardinality_consistency,
     load_input_prompts,
     preprocess_llama3_8b_chat_prompts,
 )
@@ -591,7 +592,7 @@ def _run_seeded_batch1_controls(llm, prompts: list[str], *, num_decode_tokens: i
 @pytest.mark.parametrize("optimizations", ["performance", "accuracy"])
 @pytest.mark.usefixtures("silicon_arch_name")
 def test_llama3_8b_bh_seeded_cross_cardinality(ttnn_mesh_device, optimizations):
-    """BH qualification: batched 1/2/4/32 outputs must match seeded batch-1 controls.
+    """BH qualification: record exact-token invariance or a completed rejection.
 
     ``allow_batched_prefill_with_device_sampling_for_diagnostics`` is an
     intentionally narrow measurement override, not a serving policy.
@@ -612,6 +613,9 @@ def test_llama3_8b_bh_seeded_cross_cardinality(ttnn_mesh_device, optimizations):
             optimizations,
             max_batch_size=32,
             max_seq_len=1024,
+        )
+        assert llm.runtime_config.disable_batched_prefill is True, (
+            "BH qualification must enter with the production sequential-prefill policy retained"
         )
         prompts = _eval_repeat_prompts(len(_BH_CROSS_CARDINALITY_REQUEST_IDS))
         assert len(prompts) == len(_BH_CROSS_CARDINALITY_REQUEST_IDS)
@@ -639,10 +643,33 @@ def test_llama3_8b_bh_seeded_cross_cardinality(ttnn_mesh_device, optimizations):
                 )
             }
 
-        assert_seeded_cross_cardinality_consistency(
+        verdict, mismatches = evaluate_seeded_cross_cardinality_consistency(
             outputs_by_cardinality,
             sequential_controls,
             request_ids=_BH_CROSS_CARDINALITY_REQUEST_IDS,
+            expected_token_count=num_decode_tokens + 1,
+        )
+        logger.info(
+            "LLAMA3_8B_CROSS_CARDINALITY_VERDICT="
+            + json.dumps(
+                {
+                    "verdict": verdict,
+                    "policy": "sequential",
+                    "control_runs": len(sequential_controls),
+                    "batched_cardinalities": list(_BH_CROSS_CARDINALITIES),
+                    "decode_tokens": num_decode_tokens,
+                    "comparison": "exact_token_ids",
+                    "mismatch_count": len(mismatches),
+                    "mismatches": list(mismatches),
+                },
+                sort_keys=True,
+            )
+        )
+        # A completed BATCHED_PREFILL_REJECTED experiment is not an invariance
+        # pass.  Its acceptance independently requires production to retain the
+        # sequential-prefill policy; the diagnostic override above never edits it.
+        assert llm.runtime_config.disable_batched_prefill is True, (
+            "BH production must remain sequential after the experiment disposition"
         )
     finally:
         cleanup_model_case(llm.model if llm is not None else None, mesh_device)

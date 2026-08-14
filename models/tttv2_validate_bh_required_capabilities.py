@@ -126,7 +126,7 @@ _LLAMA_DEMO_MANIFESTS = {
                 "p300.performance.ci_b1_dp2",
             }
         ),
-        "sha256": "67e8a49565558dc0a0e982c960b068804863be652dcf0030c4810040107ebbaf",
+        "sha256": "da5540c50225a4e25ad7261ae9d35a5f3147c524ed0b98ceb5b659543b4bcffd",
     },
     _LLAMA33_70B_CONTRACT_ID: {
         "ids": frozenset(
@@ -727,6 +727,60 @@ def _semantic_errors(contract: Mapping[str, Any]) -> list[str]:
                 f"{model_label} demo manifest does not match immutable row/node/profile/case/geometry/"
                 "workload/trace/cache/capability/acceptance fields"
             )
+
+    if contract_id == _LLAMA3_8B_CONTRACT_ID:
+        cross_rows = [item for item in demos if item["demo_case"] == "seeded-cross-cardinality"]
+        expected_cross_ids = {
+            "p150.performance.seeded_cross_cardinality",
+            "p150.accuracy.seeded_cross_cardinality",
+            "p150x4.performance.seeded_cross_cardinality",
+            "p150x4.accuracy.seeded_cross_cardinality",
+        }
+        if {item["id"] for item in cross_rows} != expected_cross_ids:
+            errors.append("llama3_8b must preserve all four canonical seeded cross-cardinality rows")
+        for row in cross_rows:
+            acceptance = row["acceptance_condition"]
+            for required_phrase in (
+                "32 true active-batch-1 sequential-prefill controls",
+                "exact token-ID comparisons",
+                "INVARIANT",
+                "BATCHED_PREFILL_REJECTED",
+                "completed negative experiment disposition",
+                "does not pass invariance",
+                "sequential production policy to remain retained after rejection",
+                "Malformed or incomplete outputs",
+            ):
+                if required_phrase not in acceptance:
+                    errors.append(
+                        "llama3_8b seeded cross-cardinality acceptance must define complete executed "
+                        f"experiment semantics including {required_phrase!r}"
+                    )
+
+        cross_by_id = {item["id"]: item for item in cross_cutting}
+        experiment = cross_by_id.get("cross_cardinality_invariance")
+        policy = cross_by_id.get("disable_batched_prefill_policy")
+        if experiment is None or policy is None:
+            errors.append("llama3_8b must preserve experiment-disposition and batched-prefill-policy requirements")
+        else:
+            experiment_text = f"{experiment['capability']} {experiment['acceptance_condition']}"
+            policy_text = f"{policy['capability']} {policy['acceptance_condition']}"
+            for phrase in (
+                "INVARIANT",
+                "BATCHED_PREFILL_REJECTED",
+                "either disposition satisfies",
+                "does not pass invariance",
+                "malformed or incomplete execution",
+            ):
+                if phrase not in experiment_text:
+                    errors.append(f"llama3_8b experiment disposition must preserve phrase {phrase!r}")
+            for phrase in (
+                "INVARIANT",
+                "BATCHED_PREFILL_REJECTED",
+                "remains sequential after BATCHED_PREFILL_REJECTED",
+                "independent of completed experiment disposition",
+            ):
+                if phrase not in policy_text:
+                    errors.append(f"llama3_8b batched-prefill policy must follow verdict phrase {phrase!r}")
 
     if contract_id == _QWEN_CONTRACT_ID:
         actual_manifest = {

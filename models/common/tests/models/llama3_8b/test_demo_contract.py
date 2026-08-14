@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from models.common.tests.demos.llama3_8b.demo_utils import assert_seeded_cross_cardinality_consistency
+from models.common.tests.demos.llama3_8b.demo_utils import evaluate_seeded_cross_cardinality_consistency
 from models.demos.utils.trace_region_sizes import resolve_trace_region_size
 
 _DEMO_SOURCE = Path("models/common/tests/demos/llama3_8b/demo.py").read_text(encoding="utf-8")
@@ -44,6 +44,8 @@ def test_demo_exposes_seeded_bh_cross_cardinality_qualification_node():
     assert "allow_batched_prefill=True" in _DEMO_SOURCE
     assert '("DISABLE_BATCHED_PREFILL", "DISABLE_BATCHED_EXTRACT")' in _DEMO_SOURCE
     assert "not a serving policy" in _DEMO_SOURCE
+    assert "LLAMA3_8B_CROSS_CARDINALITY_VERDICT=" in _DEMO_SOURCE
+    assert "llm.runtime_config.disable_batched_prefill is True" in _DEMO_SOURCE
 
 
 def _valid_cross_cardinality_outputs():
@@ -59,21 +61,51 @@ def _valid_cross_cardinality_outputs():
 def test_seeded_cross_cardinality_contract_accepts_exact_token_matches():
     request_ids, controls, outputs = _valid_cross_cardinality_outputs()
 
-    assert_seeded_cross_cardinality_consistency(outputs, controls, request_ids=request_ids)
+    verdict, mismatches = evaluate_seeded_cross_cardinality_consistency(
+        outputs, controls, request_ids=request_ids, expected_token_count=2
+    )
+    assert verdict == "INVARIANT"
+    assert mismatches == ()
 
 
-@pytest.mark.parametrize("failure", ["token", "missing_cardinality", "wrong_request_order", "empty"])
+def test_seeded_cross_cardinality_contract_records_complete_token_mismatch_as_rejection():
+    request_ids, controls, outputs = _valid_cross_cardinality_outputs()
+    outputs[32][request_ids[0]][1] += 1
+
+    verdict, mismatches = evaluate_seeded_cross_cardinality_consistency(
+        outputs, controls, request_ids=request_ids, expected_token_count=2
+    )
+
+    assert verdict == "BATCHED_PREFILL_REJECTED"
+    assert mismatches == (
+        {
+            "cardinality": 32,
+            "request_id": request_ids[0],
+            "first_token_difference": 1,
+            "control_token_count": 2,
+            "batched_token_count": 2,
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "failure", ["missing_cardinality", "wrong_request_order", "empty", "truncated", "truncated_control"]
+)
 def test_seeded_cross_cardinality_contract_fails_closed(failure):
     request_ids, controls, outputs = _valid_cross_cardinality_outputs()
-    if failure == "token":
-        outputs[32][request_ids[0]][1] += 1
-    elif failure == "missing_cardinality":
+    if failure == "missing_cardinality":
         del outputs[4]
     elif failure == "wrong_request_order":
         first, second = tuple(outputs[2])
         outputs[2] = {second: outputs[2][second], first: outputs[2][first]}
-    else:
+    elif failure == "empty":
         outputs[1][request_ids[0]] = []
+    elif failure == "truncated":
+        outputs[32][request_ids[0]] = outputs[32][request_ids[0]][:-1]
+    else:
+        controls[request_ids[0]] = controls[request_ids[0]][:-1]
 
     with pytest.raises(AssertionError):
-        assert_seeded_cross_cardinality_consistency(outputs, controls, request_ids=request_ids)
+        evaluate_seeded_cross_cardinality_consistency(
+            outputs, controls, request_ids=request_ids, expected_token_count=2
+        )
