@@ -6,10 +6,9 @@ GPT-OSS chunked-prefill attention forward: GQA with full rotary (YaRN baked into
 attention sinks, and per-layer sliding-window vs full-causal masking. No MSA / sparse path, no
 partial rotary, no QK-norm.
 
-Sequence-parallel seam (P1 bring-up): when the sequence is sharded across the SP axis, we
-AllGather K/V so every chip holds the full K/V and then run a normal single-chip SDPA. The
-native ring SDPA (sinks + sliding + halo CCL, Pavle's op) is swapped in behind this seam later.
-See the ``config.sequence_parallel`` branch below.
+Sequence-parallel prefill is cache-backed from the first chunk: RingJointSDPA reads the
+block-cyclic SP K/V cache and exchanges only the bounded sliding halo when needed. This keeps
+chunk 0 and subsequent chunks on the same ring program.
 """
 
 import ttnn
@@ -90,7 +89,7 @@ def attention_forward(
         batch_size: number of users packed on the sequence dim
         layer_idx: this layer's index, for the per-layer cache write
         cached_len: valid prefix length already in the cache BEFORE this chunk (0 = first/only chunk).
-            >0 selects the cache-read attention path (current chunk attends the accumulated prefix).
+            All SP chunks, including chunk 0, use the cache-backed RingJointSDPA path.
         indexed_rope: use the on-device indexed RoPE (rope_mats are the whole-cache block-cyclic SP
             cos/sin; the op derives this chunk's rows from cached_len + the SP mesh coord).
 
@@ -174,92 +173,54 @@ def attention_forward(
         )
 
     # --- Attention core ---
-    # Clean sequence_parallel seam. sp==1 => single-chip SDPA (exact). sp>1 => P1 bring-up path:
-    # AllGather K/V across the SP axis so each chip holds the full K/V, then single-chip SDPA.
-    # cached_len > 0 selects the cache-read path (current chunk attends the accumulated prefix).
+    # Sequence-parallel prefill uses one cache-backed RingJointSDPA path from
+    # chunk 0 onward. The first complete ring group is valid: device 0 clips its
+    # left window at token zero and the remaining devices consume predecessors
+    # within that same group. Keeping chunk 0 on this path lets one trace/program
+    # serve the complete prefill and avoids the former replicated Q/K/V bootstrap.
     if config.sequence_parallel and mesh_config.sp > 1:
         sp = mesh_config.sp
-        if cached_len > 0:
-            # chunks 1+: ring cache-read over the accumulated block-cyclic SP KV cache. is_chunked (Q
-            # is SHORTER than the growing cache) is what the sliding op requires, so this only applies
-            # to chunks 1+; chunk 0 (Q == cache) takes the gather-Q path below. Pavle's ring-joint op
-            # (ttnn RingJointSDPA) handles sliding + sinks + the halo CCL internally. The per-layer seam
-            # already wrote this chunk's K/V into the cache, so write_chunk=False.
-            grid = mesh_device.compute_with_storage_grid_size()
-            sp_prog = ttnn.SDPAProgramConfig(
-                compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),  # carve the CCL column
-                q_chunk_size=128,
-                k_chunk_size=128,  # gpt-oss sliding op supports Q 64/128 and K 128 only (op asserts)
-                exp_approx_mode=False,
-            )
-            # Device-agnostic compute-kernel config (avoids the misleading WormholeComputeKernelConfig
-            # name on Blackhole). fp32_dest_acc_en=False is required by the ring op streaming-sink compute.
-            sp_kcfg = ttnn.init_device_compute_kernel_config(
-                mesh_device.arch(),
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            )
-            assert kv_cache is not None, "SP chunked cache-read needs a KV cache"
-            tt_sdpa_out = dense_sp_attention(
-                tt_q,
-                kv_cache.k,
-                kv_cache.v,
-                tt_k,
-                tt_v,
-                kv_actual=cached_len,
-                logical_n=cached_len + seq_len * sp,
-                n_kv=config.num_kv_heads,
-                cache_global=kv_cache.max_seq_len,
-                head_dim=config.head_dim,
-                mesh_device=mesh_device,
-                ccl_manager=ccl_manager,
-                program_config=sp_prog,
-                compute_kernel_config=sp_kcfg,
-                # config.scaling (== 1/sqrt(head_dim) by default) so QK scaling stays consistent with
-                # the sink pre-division, which also uses config.scaling (matches the non-ring path).
-                scale=config.scaling,
-                cluster_axis=mesh_config.sp_axis,
-                # Sinks on ALL layers: the ring op folds the sink once across ring iterations, so both
-                # sliding (window 128) and full-attention layers are sink-correct.
-                attention_sink=weights.sinks,
-                sliding_window_size=config.sliding_window,
-                slot_idx=user_id,
-                layer_idx=layer_idx,
-                num_layers=kv_cache.num_layers,
-                write_chunk=False,
-            )
-        else:
-            # chunk 0 / one-shot: gather-Q stand-in (non-ring). The ring sliding op requires is_chunked
-            # (Q shorter than the cache), which chunk 0 (Q == cache) is not. So AllGather Q/K/V across
-            # the SP axis, run a full causal SDPA (Sq==Sk==full seq), then reduce-scatter the (now
-            # identical on every rank) output back to each rank's contiguous shard and scale by 1/sp to
-            # recover it exactly (sp is a power of two, so 1/sp is exact in bf16, no PCC loss). Valid
-            # only at cached_len==0, where the block-cyclic reorder is the identity (contiguous shards).
-            full_seq_len = seq_len * sp
-            tt_q_full = mesh_config.allgather(tt_q, ccl_manager, axis=mesh_config.sp_axis, dim=2)
-            tt_k_full = mesh_config.allgather(tt_k, ccl_manager, axis=mesh_config.sp_axis, dim=2)
-            tt_v_full = mesh_config.allgather(tt_v, ccl_manager, axis=mesh_config.sp_axis, dim=2)
-            tt_q.deallocate(True)
-            tt_k.deallocate(True)
-            tt_v.deallocate(True)
-            tt_q, tt_k, tt_v = tt_q_full, tt_k_full, tt_v_full
-            tt_sdpa_out_full = _run_sdpa(tt_q, tt_k, tt_v, weights, config, program_config, mesh_device, full_seq_len)
-            tt_sdpa_out = ttnn.experimental.reduce_scatter_minimal_async(
-                tt_sdpa_out_full,
-                dim=2,
-                multi_device_global_semaphore=ccl_manager.get_rs_ping_pong_semaphore(),
-                num_links=ccl_manager.num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ccl_manager.topology,
-                cluster_axis=mesh_config.sp_axis,
-                barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-            )
-            tt_sdpa_out_full.deallocate(True)
-            tt_sdpa_out_scaled = ttnn.multiply(tt_sdpa_out, 1.0 / sp)
-            ttnn.deallocate(tt_sdpa_out)  # free the reduce-scatter output (leaked otherwise across 36 layers)
-            tt_sdpa_out = tt_sdpa_out_scaled
+        grid = mesh_device.compute_with_storage_grid_size()
+        sp_prog = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),  # carve the CCL column
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+        # fp32_dest_acc_en=False is required by the ring op's streaming-sink compute.
+        sp_kcfg = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+        assert kv_cache is not None, "SP cache-backed RingJointSDPA needs a KV cache"
+        tt_sdpa_out = dense_sp_attention(
+            tt_q,
+            kv_cache.k,
+            kv_cache.v,
+            tt_k,
+            tt_v,
+            kv_actual=cached_len,
+            logical_n=cached_len + seq_len * sp,
+            n_kv=config.num_kv_heads,
+            cache_global=kv_cache.max_seq_len,
+            head_dim=config.head_dim,
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            program_config=sp_prog,
+            compute_kernel_config=sp_kcfg,
+            scale=config.scaling,
+            cluster_axis=mesh_config.sp_axis,
+            attention_sink=weights.sinks,
+            sliding_window_size=config.sliding_window,
+            slot_idx=user_id,
+            layer_idx=layer_idx,
+            num_layers=kv_cache.num_layers,
+            # The per-layer seam wrote current K/V into the cache before this call.
+            write_chunk=False,
+        )
     elif cached_len > 0:
         # Chunked cache-read (current chunk attends the accumulated prefix) is not implemented yet.
         # The KV-cache STORAGE + write is done and validated (test_kv_cache_vs_ref); reading it back

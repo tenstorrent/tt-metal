@@ -20,9 +20,8 @@ Migration hooks (Gate 1–2 in ``PREFILL_MIGRATION_TESTING.md``): ``build_kv_chu
 ``set_layer_ack_channel``. Request-mode H2D delivers SP-sharded uint32 tokens; ``prefill_chunk``
 embeds them on the first rank (same path as ``make_chunk_input``).
 
-CHUNKED prefill is supported: the SP cache-READ attention path (``cached_len > 0``, chunks 1+) uses the
-ring-joint dense SDPA over the block-cyclic packed KV cache (``attention/dense_sp.py``); chunk 0 /
-one-shot (``cached_len == 0``) uses the gather-Q stand-in. The single-chip (sp==1) cache-read is still
+CHUNKED prefill is supported: the SP cache-backed RingJointSDPA path uses the block-cyclic packed KV
+cache (``attention/dense_sp.py``) from chunk 0 onward. The single-chip (sp==1) cache-read is still
 ``NotImplementedError`` (not used on the galaxy). The galaxy KV-PCC harness runs both one-shot and
 multi-chunk.
 """

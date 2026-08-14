@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RingJointSDPA chunked sliding: Gemma integration plan</title>
+  <style>
+    :root { color-scheme: light; --ink:#172033; --muted:#536077; --line:#dbe2ee; --panel:#f7f9fc; --accent:#2457c5; --warn:#8d4a00; --ok:#167347; }
+    * { box-sizing: border-box; } body { margin:0; font:16px/1.55 Inter, ui-sans-serif, system-ui, sans-serif; color:var(--ink); background:#fff; }
+    main { max-width:1050px; margin:0 auto; padding:48px 28px 72px; } h1 { font-size:2rem; line-height:1.2; margin:0 0 8px; } h2 { margin:38px 0 12px; font-size:1.35rem; } h3 { margin:24px 0 8px; font-size:1.05rem; } p, li { max-width:900px; } .lede { color:var(--muted); font-size:1.1rem; } .callout { border-left:4px solid var(--accent); background:#f3f7ff; padding:14px 18px; margin:20px 0; } .warning { border-color:#dc8a16; background:#fff8ec; } .status { display:inline-block; border-radius:999px; padding:2px 9px; font-size:.82rem; font-weight:700; } .done { background:#e8f7ef; color:var(--ok); } .open { background:#fff1dc; color:var(--warn); } code { background:#eef2f7; padding:2px 4px; border-radius:4px; font-size:.9em; } pre { overflow:auto; background:#111827; color:#e5edf9; padding:16px; border-radius:8px; } table { border-collapse:collapse; width:100%; margin:14px 0; } th, td { text-align:left; vertical-align:top; padding:10px; border:1px solid var(--line); } th { background:var(--panel); } a { color:var(--accent); } .small { color:var(--muted); font-size:.92rem; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>RingJointSDPA chunked sliding: Gemma integration plan</h1>
+  <p class="lede">Scope: make the bounded, causal RingJointSDPA sliding path usable by Gemma and GPT-OSS through one cache-backed sequence-parallel path, without treating a valid first Q group as an error or silently reading an incorrect halo.</p>
+
+  <div class="callout">
+    <strong>Outcome.</strong> The feature branch implements the operator geometry fix, Gemma structural shape support, and a unified cache-backed GPT-OSS path. The complete-group alignment assertion remains intentionally in place; partial-group support is a separate feature.
+  </div>
+
+  <h2>Problem statement</h2>
+  <p><a href="https://github.com/tenstorrent/tt-metal/commit/4b673f79015c86d9d2ec7b46e31fb1d8932d22e3">Commit 4b673f79015</a> introduced a compact, one-hop predecessor halo for chunked causal sliding attention. For a ring of <code>R</code> devices and a per-device Q slab of <code>Qlocal</code>, one logical Q group is <code>G = R × Qlocal</code>.</p>
+  <p>The original runtime validation rejects an invocation unless <code>logical_n ≥ 2G</code> and <code>logical_n % G == 0</code>:</p>
+  <pre>T_FATAL(args.logical_n &gt;= 2 * q_group_size,
+        "Chunked sliding attention requires a complete predecessor and current Q group");</pre>
+  <p>This incorrectly classifies the first complete chunk (<code>logical_n == G</code>) as invalid. The first group does not have a prior <em>group</em>, but it is still a valid causal sliding problem: device 0 clips its left window at token 0 and devices 1…R−1 obtain their predecessor from earlier devices in the same group.</p>
+
+  <h2>Root cause</h2>
+  <table>
+    <thead><tr><th>Layer</th><th>Assumption in the original specialization</th><th>Why it fails for the first group</th></tr></thead>
+    <tbody>
+      <tr><td>Host validation</td><td>Two full groups are required.</td><td>Rejects the valid first-group dispatch before program creation.</td></tr>
+      <tr><td>Q/K work-plan geometry</td><td>The current group is selected as <code>logical_n / G - 1</code>.</td><td>This is safe at one group, provided the wrap from device R−1 to device 0 is clipped rather than underflowed.</td></tr>
+      <tr><td>Halo source/layout</td><td>Halo setup is disabled below two groups.</td><td>The factory sees no neighbor halo even though devices 1…R−1 need one within the first group. A short-window geometry can also compute a wrong compact-buffer index if this is changed inconsistently.</td></tr>
+    </tbody>
+  </table>
+  <p>The constraint is therefore not a model semantic requirement and not a Gemma head-dimension/GQA limitation. It is an incomplete implementation of the compact-halo geometry.</p>
+
+  <h2>Implementation status</h2>
+  <p><span class="status done">Implemented on this feature branch</span> The three geometry consumers now use the one-group threshold and the fixed-payload first-group wrap rule. Validation now accepts Gemma’s structural GQA/tile geometry rather than GPT-OSS-only values.</p>
+  <p>The first-group change was made in:</p>
+  <ul>
+    <li><code>ttnn/.../ring_joint_sdpa_device_operation.cpp</code> — validation;</li>
+    <li><code>ttnn/.../kernels/sliding_window_work_plan.hpp</code> — source-tail calculation and first-group wrap guard;</li>
+    <li><code>ttnn/.../sliding_halo_layout.cpp</code> — enable the neighbor halo for one complete group.</li>
+  </ul>
+  <p>The shape generalization replaces GPT-OSS-only value gates with structural GQA, tile, and one-hop-halo constraints for Gemma’s 4Q:2K:2V, D256, W1024 geometry.</p>
+
+  <h2>Chosen solution: complete first group</h2>
+  <p>Make the supported contract explicit:</p>
+  <pre>G = ring_size * input_q.logical_shape()[2]
+require logical_n &gt;= G
+require logical_n % G == 0
+require ceil((window - 1) / k_chunk_size) * k_chunk_size &lt;= Qlocal</pre>
+  <p>For <code>logical_n == G</code>, retain a fixed-size halo exchange. For the device R−1 → device 0 wrap in group 0, clamp the source group to zero, keeping the fixed payload length; device 0’s clipped work plan never consumes this payload. The source-tail helper must return zero only for that wrap case, not for every source in the first group. This preserves the compact buffer layout, device kernels, and trace/program-cache behavior.</p>
+
+  <h2>Implementation record</h2>
+  <ol>
+    <li><strong>Verified the complete-group contract.</strong> The operator requires <code>logical_n ≥ G</code> and <code>logical_n % G == 0</code>; its chunked preflight still distinguishes cache-backed K/V from equal-length local K/V.</li>
+    <li><strong>Patched all first-group geometry consumers.</strong> Host validation, Q/K work planning, source-tail selection, and halo layout agree on the one-group threshold. The R−1 → 0 group-0 wrap clamps its source to zero and retains the fixed transfer payload.</li>
+    <li><strong>Generalized shape validation.</strong> Fixed GPT-OSS W=128, 8Q:1K:1V, D64 gates were replaced by structural GQA, tile, K/V, chunk, and one-hop-halo checks that admit Gemma’s 4Q:2K:2V, D256, W1024 geometry.</li>
+    <li><strong>Added focused regressions.</strong> The existing cache-replay/PCC test now covers <code>logical_n == G</code> and the W=128 short-halo case; a Gemma-geometry smoke case covers first and later groups with W=1024 and 4Q:2K:2V D256 dispatch.</li>
+    <li><strong>Unified GPT-OSS.</strong> Chunk 0 now writes K/V to cache and uses the same RingJointSDPA path as later chunks; the Q/K/V all-gather/normal-SDPA/reduce-scatter bootstrap was removed.</li>
+    <li><strong>Remaining performance follow-up.</strong> Measure unified chunk-0 latency, CCL bytes, peak DRAM/L1, and trace capture cost against the historical bootstrap path. Correctness no longer depends on retaining that fallback.</li>
+  </ol>
+
+  <h2>Why GPT-OSS now uses the same path</h2>
+  <p>GPT-OSS formerly avoided the <code>logical_n ≥ 2G</code> constraint by routing chunk 0 through an explicit all-gather Q/K/V path, and only started RingJointSDPA at chunk 1 where <code>logical_n == 2G</code>. That staging path duplicated the execution graph and prevented a single first-group trace from serving full prefill.</p>
+  <p>GPT-OSS now writes chunk-0 K/V into cache and calls RingJointSDPA at <code>logical_n == G</code>, like every later chunk. This avoids the replicated full-Q/K/V bootstrap. It should lower communication and memory for GPT-OSS W=128, whose K/V halo is small. For Gemma W=1024 the halo is a full predecessor slab, so the benefit is smaller; the remaining A/B measurement will quantify the trade-off.</p>
+
+  <h2>Do not conflate this with partial-group support</h2>
+  <div class="callout warning">
+    <strong>Do not remove <code>logical_n % G == 0</code> as part of the first-group fix.</strong> The compact plan currently positions Q as the final full group (<code>logical_n - G</code>) and emits a fixed halo. A partial current group needs different Q ownership, valid-row masks, and a halo with an explicit valid range; merely dropping the assertion risks wrong reads or a reader/compute hang.
+  </div>
+  <p>If Gemma’s real schedule supplies a partial group, make that a phase-2 operator feature:</p>
+  <ol>
+    <li>derive each device’s valid Q interval from <code>kv_actual_isl</code> and <code>logical_n</code>, rather than from a completed group;</li>
+    <li>teach the sliding work plan to use those absolute Q intervals and clip K/V by the logical end;</li>
+    <li>carry halo source base and valid-row count to the exchange/reader, masking unused rows so an incompletely populated predecessor is never read;</li>
+    <li>patch all values on cache hits and the trace-safe metadata path; and</li>
+    <li>add partial-first, partial-middle, wrap-to-device-0, and cache-replay oracle tests.</li>
+  </ol>
+  <p>If partial groups are rare prompt tails, an interim caller fallback to normal SDPA for that final dispatch is safer than weakening the RingJointSDPA contract. It is not the preferred steady-state solution because it creates divergent tracing/caching behavior.</p>
+
+  <h2>Acceptance criteria</h2>
+  <ul>
+    <li>A Gemma first chunk with <code>logical_n == G</code> runs RingJointSDPA and no longer hits the fatal assertion.</li>
+    <li>A GPT-OSS first chunk with <code>logical_n == G</code> runs the same cache-backed RingJointSDPA path as chunk 1+, with no Q/K/V bootstrap gather.</li>
+    <li>First- and later-group results agree with a causal sliding reference; no drift appears across cache/program-cache replay.</li>
+    <li>W=128 and W=1024 regression cases both pass, proving the halo source is correct beyond the full-slab coincidence.</li>
+    <li>On the host-scalar <code>kv_actual_isl</code> path, trace capture at chunk 0 replays for later complete groups. The metadata path must be tested according to its distinct program-cache keying.</li>
+    <li>Non-aligned <code>logical_n</code> remains explicitly rejected until phase 2 is implemented.</li>
+  </ul>
+
+  <h2>Risk and rollout</h2>
+  <p>The patch is low-risk because it only extends an existing one-hop layout to the first valid group; it does not change math, allocate a larger halo, or relax the one-hop bound. The important review risk was changing only the fatal, so all geometry consumers were updated together and focused hardware tests were run before enabling Gemma and GPT-OSS chunk 0. A performance comparison against the historical bootstrap is the remaining rollout follow-up.</p>
+
+  <h2>Claude review</h2>
+  <p><span class="status done">Reviewed</span> Claude independently confirmed the problem statement, root cause, and the first-group-versus-partial-group distinction. Its verdict was: <strong>approve the direction, but do not implement from the original draft without corrections</strong>.</p>
+  <ul>
+    <li>Confirmed that all three threshold consumers must change together for <code>logical_n == G</code>, and that no fourth two-group gate was found.</li>
+    <li>Confirmed the first-group wrap must clamp the source group to zero while preserving fixed transfer length; a zero-length/omitted transfer can desynchronize the protocol.</li>
+    <li>Flagged that this checkout still contains the old code, so the plan now treats the historical commits as references rather than landed fixes.</li>
+    <li>Flagged the mandatory Gemma structural gates, the compact-buffer sizing constraint, and the <code>NlocalKV</code>/<code>is_chunked()</code> preflight check; all are incorporated above.</li>
+  </ul>
+  <p class="small">Prepared from local source inspection and a read-only Claude Code review on 2026-08-14.</p>
+</main>
+</body>
+</html>
