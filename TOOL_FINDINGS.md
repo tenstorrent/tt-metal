@@ -59,7 +59,7 @@ The point of the experiment. Everything below is derived from a tool that never 
 | **1** | **Rotate Q+K in ONE call** — slice q+k out together, split heads once into a 40-head tensor, rotate once, slice apart. NOT ttnn's fused q+k rope operator (§6.23 rejected that correctly, for the interleaved convention); the *same* `rotary_embedding_hf` on a wider tensor. | exact arithmetic, PCC bit-identical, −1.99% on the identical model. 52 rotary launches/token → 26; `[gpt-24]` priced a comparable 26-launch saving at 0.405 ms | **check first:** decode mode wants cos/sin sharded to match, and §6.44 documents the trap (*"RoPE on a core whose cos/sin table lives elsewhere returns 3.4e38"*) |
 | **2** | **Give `_PRG_W2` its own grid and re-sweep it.** One `_MM_GRID` for all five decode matmuls cannot be right for both K-light projections and the deepest K-reduction in the model. | measured curve on the identical op: `96c 0.1589 / 48c 0.0960 / 32c 0.1137 / **24c 0.0934** / 16c 0.1084`, a 1.70× spread. `_PRG_W2` sits at 72c. | none — precision-neutral. Sweep and keep what wins |
 | **3** | **Audit the decode path for the batch-1 / seq-1 pathology** (see ★ THE PATTERN). Four instances in one model. | argmax 32× the bytes; rotation 160 tiles where 4 had data; head creation collapsed to one core; a join moving 8 MB where 64 KB was real | none — these are pure waste |
-| **4** | **Chain the decode norm's shard into the QKV projection.** `_norm` returns `sharded_norm(..., _L1)` — it shards internally, converts back to **L1 interleaved** on the way out, and `ttnn.linear` converts straight back in. Two launches per layer for a tensor that never needed to leave L1. | tool measured 0.80 ms of layout ops removed (`sharded→interleaved` 1152→896 calls, `interleaved→sharded` 1024→768) | **the catch:** the chain only exists if both sit on the same grid. Norm is `(8,4)`=32, `_MM_GRID` is `(12,6)`=72. The tool paid 3.72→3.98 ms moving its norm 32→48 to meet the projection. Do this **together with #2** — pick `wqkv`'s re-swept grid to be one the norm can share |
+| **4** | **Keep the decode residual stream in ONE shard, the whole way down.** `_norm` returns `sharded_norm(..., _L1)` — it shards internally, converts back to **L1 interleaved** on the way out, and `ttnn.linear` converts straight back in. The tool went further than the one handoff: both norms in a block and the next layer's are built on the same dim, so the stream *never has to leave the shard* across all 26 layers. | 0.80 ms of layout ops removed on the QKV handoff alone (`sharded→interleaved` 1152→896 calls, `interleaved→sharded` 1024→768), then a further −0.11 ms/token carrying it through the residual adds | **the catch:** the chain only exists where the grids agree. Norm is `(8,4)`=32, `_MM_GRID` is `(12,6)`=72. The tool paid 3.72→3.98 ms moving its norm 32→48 to meet the projection. Do this **together with #2** — pick `wqkv`'s re-swept grid to be one the norm can share. Note `[gpt-27]` (residual as matmul bias) already removes the *add* launches; this is about the *layout* round-trip, and the two compose |
 
 ### Re-open these, don't assume they're settled
 
@@ -787,11 +787,12 @@ section is the credit half of the ledger and is the material for the comparison 
 | run 2 — fused-QKV grid re-swept 32 -> 48 (O4m) | 229.6 | 12.427 | 0.9903 |
 | run 2 — SiLU folded into the SwiGLU multiply (O4n) | 229.0 | 12.352 | 0.9903 |
 | run 2 — norm's shard chained into QKV (O4o) | — | 12.299 | 0.9903 |
-| run 2 — gate/up plan, reshard now free (O4p) | — | **12.038** | 0.9903 |
+| run 2 — gate/up plan, reshard now free (O4p) | — | 12.038 | 0.9903 |
+| run 2 — residual stream kept in the norm's shard (O4q) | — | **11.928** | 0.9903 |
 | tool's own roofline target | 338.541 | — | gate 0.95 |
 | **hand-port, for reference** | — | **15.907** | — |
 
-**12.038 against 15.907 — the tool is 24.3% AHEAD of 74 human experiments**, autonomously, with
+**11.928 against 15.907 — the tool is 25.0% AHEAD of 74 human experiments**, autonomously, with
 PCC bit-identical across its last four wins (0.990347151783074, unchanged to every decimal). Every
 one of those four was a layout or dispatch result. None spent accuracy.
 
@@ -1433,6 +1434,23 @@ twice, when something prompts it; §6.67 and §6.72 are the hand-port's two.
 
 **For the hand-port this is the standing recommendation behind items #2, #4, #5 and #6:** the
 rejections in `STATUS.md` are dated, and the structure has moved underneath several of them.
+
+### O4q — the shard chain, extended to the whole block
+
+The last of the layout-chaining family, and the one that shows how far it goes:
+
+> *The stream is one tile row of 3072 values that every op in the block already touches in L1, but
+> it went back to interleaved between them, so each norm re-opened the same shard from DRAM — twice
+> per layer, 26 layers deep. [...] Both norms in a block are built on the same dim, and so is the
+> next layer's, so **the stream can stay in the shard the whole way down**.*
+
+`12.038 → 11.928 ms/token`. Folded into take-item #4 rather than listed separately, because for the
+hand-port it is the same recommendation carried further: not just norm→QKV, but the residual stream
+never leaving its shard across the depth of the model.
+
+Worth noting the hand-port already solved the *adjacent* problem better — `[gpt-27]` passes the
+residual as the matmul's `bias`, so the add itself costs no launch at all. That is orthogonal to
+this and the two compose.
 
 ### O5 — the ladder's escalation is real, and it gives up in the right place
 
