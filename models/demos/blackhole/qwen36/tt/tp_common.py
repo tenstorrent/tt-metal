@@ -383,6 +383,82 @@ def prefill_kpass_width(n, grid_size=None, max_waste=0.20):
     return best[2] * TILE_SIZE
 
 
+def _largest_divisor_le(n, cap):
+    """Largest divisor of n that is <= cap (1 if none, since 1 always divides)."""
+    for d in range(min(n, cap), 0, -1):
+        if n % d == 0:
+            return d
+    return 1
+
+
+# Longest prefill M the full-grid MLP config below is used at. 2048 is the production chunk-outer
+# chunk size (demo/text_demo.py PREFILL_CHUNK, model.capture_prefill_trace_chunked), so the MLP never
+# sees more than this in production -- longer prompts arrive as multiple 2048 chunks. Above it, both
+# per_core_M and therefore every CB scale linearly and the one-K-pass + in0_block_w=8 blocking
+# overflows L1: MEASURED at m=4096 (per_core_M 8 -> 16) the down-proj asks for 2,398,912 B against
+# Wormhole's 1,499,136 B limit. Rather than de-tune the shape production actually runs, fall back to
+# the shared factory above this length -- the same "gate it at the only size it was measured safe at"
+# call gdn/tp.py makes for its L1 placement. The seq4096 case in
+# tests/perf/test_profile_single_layer_prefill.py is a scaling probe, not a served shape.
+PREFILL_FULL_GRID_MAX_M = 2048
+
+
+def create_prefill_mlp_matmul_program_config_full_grid(
+    m, k, n, grid_size=None, fused_activation=None, out_subblock_h=1
+):
+    """One-K-pass prefill MLP progcfg on the FULL grid width. 27B on Wormhole; see tt/mlp.py.
+
+    Deliberately a separate factory rather than flags on create_prefill_mlp_matmul_program_config:
+    the 9B's tuned prefill configs come out of that one and must stay byte-identical, and nothing
+    but the 27B MLP's prefill arm calls this.
+
+    Two measured departures from create_prefill_mlp_matmul_program_config (both at the 27B's TP=8
+    shapes with a bf8 in0 -- tests/perf/test_mlp_prefill_matmul_sweep.py, numbers in tt/mlp.py):
+
+      * The grid width is the full device width instead of _best_prefill_cols'. That heuristic
+        maximises the output subblock, and at hidden_dim/tp = 68 tiles (17408/8/32, whose only
+        divisors <= 8 are 1/2/4) it settles on 6 columns = 48 of 64 cores. More cores wins by a wide
+        margin at this shape -- the subblock-first premise does not survive here. The 9B's
+        hidden_dim/tp is a friendlier tile count and already lands on the full width, which is why
+        this never showed up there.
+      * in0_block_w is the largest divisor of K (in tiles) up to DST_TILES, not min(4, ...). Once
+        ff_norm hands the MLP a bf8 activation the in0 CB is half its former size, so the deeper K
+        block fits -- and it is worth -10% on gate/up. Kept a divisor of K because a partial final
+        K block is not a legal blocking.
+
+    out_subblock_h is NOT derived, it is passed in. At these two shapes the measured winners
+    contradict every simple rule: gate (per_core_N=9) wants 1x3 while down (per_core_N=20) wants
+    2x4, so neither "widest w" nor "largest h*w" predicts both. Callers pass what the sweep measured.
+
+    out_subblock_h is a PREFERENCE, not a demand: it has to divide per_core_M, and per_core_M scales
+    with the prefill length. The tuned values were measured at the production chunk (m=2048 ->
+    per_core_M=8), but the same code runs short prompts and chunk tails: m=128 gives per_core_M=1,
+    which no height above 1 divides. So clamp to the largest divisor of per_core_M at or below the
+    request instead of asserting -- falling back to 1 is exactly the height the shared factory would
+    have picked anyway, so a short prefill loses only this one (unmeasured at that length) tweak.
+    """
+    if grid_size is None:
+        grid_size = prefill_grid_default()
+    per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
+    per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
+    out_subblock_h = _largest_divisor_le(per_core_M, out_subblock_h)
+    k_tiles = math.ceil(k / TILE_SIZE)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=_largest_divisor_le(k_tiles, DST_TILES),
+        out_subblock_h=out_subblock_h,
+        # DST_TILES (8) not DST_TILES_FP32_ACC (4): this path is only reached with _CKC_MLP_KPASS1,
+        # whose fp32_dest_acc_en=False is what raises the ceiling. See _get_out_subblock_w.
+        out_subblock_w=_get_out_subblock_w(per_core_N, out_subblock_h, max_hw=DST_TILES),
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        out_block_w=per_core_N,  # one K pass
+        transpose_mcast=False,
+        fused_activation=fused_activation,
+        fuse_batch=False,
+    )
+
+
 def create_prefill_matmul_program_config(
     m,
     k,
