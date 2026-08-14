@@ -59,13 +59,14 @@ The point of the experiment. Everything below is derived from a tool that never 
 | **1** | **Rotate Q+K in ONE call** — slice q+k out together, split heads once into a 40-head tensor, rotate once, slice apart. NOT ttnn's fused q+k rope operator (§6.23 rejected that correctly, for the interleaved convention); the *same* `rotary_embedding_hf` on a wider tensor. | exact arithmetic, PCC bit-identical, −1.99% on the identical model. 52 rotary launches/token → 26; `[gpt-24]` priced a comparable 26-launch saving at 0.405 ms | **check first:** decode mode wants cos/sin sharded to match, and §6.44 documents the trap (*"RoPE on a core whose cos/sin table lives elsewhere returns 3.4e38"*) |
 | **2** | **Give `_PRG_W2` its own grid and re-sweep it.** One `_MM_GRID` for all five decode matmuls cannot be right for both K-light projections and the deepest K-reduction in the model. | measured curve on the identical op: `96c 0.1589 / 48c 0.0960 / 32c 0.1137 / **24c 0.0934** / 16c 0.1084`, a 1.70× spread. `_PRG_W2` sits at 72c. | none — precision-neutral. Sweep and keep what wins |
 | **3** | **Audit the decode path for the batch-1 / seq-1 pathology** (see ★ THE PATTERN). Four instances in one model. | argmax 32× the bytes; rotation 160 tiles where 4 had data; head creation collapsed to one core; a join moving 8 MB where 64 KB was real | none — these are pure waste |
+| **4** | **Chain the decode norm's shard into the QKV projection.** `_norm` returns `sharded_norm(..., _L1)` — it shards internally, converts back to **L1 interleaved** on the way out, and `ttnn.linear` converts straight back in. Two launches per layer for a tensor that never needed to leave L1. | tool measured 0.80 ms of layout ops removed (`sharded→interleaved` 1152→896 calls, `interleaved→sharded` 1024→768) | **the catch:** the chain only exists if both sit on the same grid. Norm is `(8,4)`=32, `_MM_GRID` is `(12,6)`=72. The tool paid 3.72→3.98 ms moving its norm 32→48 to meet the projection. Do this **together with #2** — pick `wqkv`'s re-swept grid to be one the norm can share |
 
 ### Re-open these, don't assume they're settled
 
 | # | what | why |
 |---|---|---|
 | **4** | **§6.8 — device argmax rejected in favour of host.** | The A/B was scored against a **single-core** kernel that didn't have to be single-core. `ttnn.argmax` picks its path from input LAYOUT; a TILE input single-cores the scan *and* pads the row 32×. Re-run with `to_layout(ROW_MAJOR)` in front. Host may still win on a 33 KB reduce that already ends in a D→H copy — but the number you have doesn't answer that. |
-| **5** | **§6.44 — fused K/V cache write deleted as 0.687 ms/step slower.** | The tool measures it **faster** on the same board, but only *after* adopting the decode-native Q/K/V layout, where the fused path has no conversion to pay. §6.44 may be conditional on a layout you haven't adopted rather than wrong. **Unproven** — needs the A/B in both layouts. |
+| **5** | **§6.44 — fused K/V cache write deleted as 0.687 ms/step slower.** | The tool measures it **faster** on the same board: 0.402 → 0.210 ms/token, moving V one core exactly as `[gpt-24]` did. The layouts are materially similar — you already call `nlp_create_qkv_heads_decode` on a sharded operand — so I **cannot** explain the disagreement, and my first attempt to (a layout you hadn't adopted) was wrong. An unexplained 0.19 ms/token swing is still worth one A/B. |
 | **6** | **`_MM_GRID` generally.** | Tuned at §6.52, then §6.65/§6.67/§6.72 changed the structure around it. A structural change invalidates earlier knobs silently (O4m: a stale cap cost 15% on one op). |
 
 ### Explicitly do NOT take
@@ -784,11 +785,12 @@ section is the credit half of the ledger and is the material for the comparison 
 | run 2 — fused K/V cache write (O4k) | 234.1 | 12.890 | 0.9904 |
 | run 2 — decode SDPA 16 cores/head -> 2 (O4l) | 231.8 | 12.633 | 0.9904 |
 | run 2 — fused-QKV grid re-swept 32 -> 48 (O4m) | 229.6 | 12.427 | 0.9903 |
-| run 2 — SiLU folded into the SwiGLU multiply (O4n) | 229.0 | **12.352** | 0.9903 |
+| run 2 — SiLU folded into the SwiGLU multiply (O4n) | 229.0 | 12.352 | 0.9903 |
+| run 2 — norm's shard chained into QKV (O4o) | — | **12.299** | 0.9903 |
 | tool's own roofline target | 338.541 | — | gate 0.95 |
 | **hand-port, for reference** | — | **15.907** | — |
 
-**12.352 against 15.907 — the tool is 22.3% AHEAD of 74 human experiments**, autonomously, with
+**12.299 against 15.907 — the tool is 22.7% AHEAD of 74 human experiments**, autonomously, with
 PCC bit-identical across its last four wins (0.990347151783074, unchanged to every decimal). Every
 one of those four was a layout or dispatch result. None spent accuracy.
 
@@ -1253,23 +1255,21 @@ Same fix, found independently.
 the machinery. The tool measures it **faster** on Blackhole — 0.402 → 0.210 ms/token across 26
 layers. Both are Blackhole p150b. Both are this model.
 
-**The likely resolution, and why it matters.** §6.44 measured the fused write against the hand-port's
-*current* layout. The tool measured it **after O4g and O4h** — after moving K and V to
-`nlp_create_qkv_heads_decode`'s L1-sharded decode-native output. In that layout K and V arrive
-already in the memory config the cache write takes, so the fused path has no conversion to pay and
-the launch saving is the whole story. In the pre-O4g layout it did have that to pay, which is
-plausibly the 0.687 ms.
+**CORRECTION (2026-08-14).** I first proposed that §6.44 was conditional on a layout the hand-port
+had not adopted — the decode-native `nlp_create_qkv_heads_decode` output that O4g introduced — and
+called this the highest-value item to test. **That mechanism is wrong.** Reading
+`ttnn_voxtral_gpt.py::_layer_step` directly: the hand-port **already calls
+`nlp_create_qkv_heads_decode`**, and already feeds it a sharded operand
+(`to_memory_config(reshape(qkv), _QKV_SHARD)`). It has both halves of what I claimed it lacked.
 
-If that is right, then **§6.44 is not wrong — it is conditional**, and the condition is a layout the
-hand-port has not adopted. O4g would unlock it.
+So the honest position is narrower and more interesting: **two careful measurements of the same
+change, on the same hardware, against materially similar layouts, disagree.** §6.44 records the
+fused write losing 0.687 ms/step; the tool records it winning 0.402 → 0.210 ms/token. Both moved V
+one core to satisfy the disjoint-operand rule. I cannot account for the difference from the
+artifacts I have.
 
-**This is now the highest-value item to test on the hand-port**, because it is a *chain*: adopt the
-decode-native Q/K/V layout (O4g), and a previously-measured, deliberately-reversed rejection (§6.44)
-may reverse back. It also means §6.44's number should not be treated as settled the way §6.16's is —
-it was measured under an assumption that another change removes.
-
-**Caveat honestly stated:** I have not proven the resolution, only that the two measurements
-disagree and that the layouts differ. It needs the A/B on the hand-port, in both layouts.
+Still worth an A/B — a 0.19 ms/token swing is real either way — but as an *unexplained
+disagreement*, not as a mechanism I have identified. Downgraded accordingly in the ranked list.
 
 #### A fifth agreement, in the same commit's rejected attempt
 
@@ -1369,6 +1369,38 @@ catalogue records activation fusion as a **loss**, when the lever simply was not
 configs on the `grid` rung — O4b/O4m sweep `in0_block_w` and `per_core_N` directly — so the
 machinery exists; the fusion rung just does not use it. The hand-port reached +0 launches this way
 and the tool reached +1; the difference is one code path.
+
+### O4o — a local sacrifice for a global win, plus a ttnn fact worth knowing
+
+> *At decode the sharded norm converted its result back to interleaved on the way out and the
+> projection converted it straight back in — two launches per layer for a tensor that never needed
+> to leave L1.*
+
+The fix requires both to agree on a grid, so the norm **moves off its own optimum** — swept
+`8 → 4.15 / 32 → 3.72 / 96 → 4.35 ms`, an interior minimum at 32 — and pays `3.72 → 3.98 ms` at 48
+to sit on the projection's grid, against **0.80 ms of layout ops removed**. Taking a 0.26 ms local
+loss for a 0.80 ms global win is a trade a per-op ladder is not obviously able to make, and it made
+it.
+
+**The ttnn fact, which is load-bearing and not obvious:** `to_memory_config` does **not** treat
+"already in the requested config" as a no-op — **it dispatches a copy**. Any code that defensively
+normalises memory configs is paying for launches it may not need.
+
+**This is take-item #4 for the hand-port** — `_norm` returns `sharded_norm(x, gamma, NORM_EPS, _L1)`,
+i.e. it shards internally and hands back **L1 interleaved**, and `_layer_step` feeds that straight
+into `ttnn.linear(..., DECODE_PRG["wqkv"])`. Same round trip. See the ranked list for the grid catch.
+
+#### And [gpt-28] is the precedent that makes re-opening rejections reasonable
+
+The hand-port has already lived through exactly this. `NOTES.md [gpt-28]`:
+
+> *the decode RMSNorm is width-sharded again, +5.399 ms/frame. **6.39/6.40 rejected this at +4.4 ms
+> WORSE, but that cost was the RESHARD DISPATCH, which 6.65 traced away.***
+
+A rejection that was correct when measured, invalidated by a later, unrelated change, and reversed.
+That is documented precedent in the hand-port's own log for the general claim behind re-open items
+#4–#6: **a rejection is only valid under the conditions it was measured in, and structural changes
+move those conditions.** §6.67 is the proof that this repo already knows it.
 
 ### O5 — the ladder's escalation is real, and it gives up in the right place
 
