@@ -96,8 +96,8 @@ Primary before/after used the same 128/128/1 `run_vllm_server` workload, greedy 
 
 Fresh independent stage rereview: `clean-pass` in `stage_review.md`.
 
-- Nested vLLM TT-plugin observability: `6bd775d` (`Add opt-in device sampling route audit`).
-- Root stage evidence/checkpoint: `7e14ba84874` (`Record optimized Mistral vLLM serving evidence`).
+- Nested `vllm` repository, branch `dev`: `6bd775d` (`Add opt-in device sampling route audit`).
+- Root `tt-metal` repository, branch `mvasiljevic/fast-models/mistralai-mistral-small-24b-instruct-2501`: `7e14ba84874` (`Record optimized Mistral vLLM serving evidence`).
 - SHA-record update: `cf1410271de` (`Log optimized vLLM checkpoint SHAs`).
 
 No push was performed.
