@@ -61,7 +61,11 @@ def test_trace_policy_supports_t3k_and_p150x4_and_includes_fixed_chunk_invocatio
             hf_adaptor._trace_seq_lens(devices, 2048, 4096)
 
 
-def test_supported_sku_resolution_is_physical_and_fail_closed(expect_error):
+@pytest.mark.parametrize(
+    "cluster_type",
+    [ttnn.cluster.ClusterType.P150_X4, ttnn.cluster.ClusterType.P300_X2],
+)
+def test_supported_sku_resolution_is_physical_and_fail_closed(cluster_type, expect_error):
     assert (
         hf_adaptor._resolve_supported_sku(
             arch=ttnn.device.Arch.WORMHOLE_B0,
@@ -73,12 +77,12 @@ def test_supported_sku_resolution_is_physical_and_fail_closed(expect_error):
     assert (
         hf_adaptor._resolve_supported_sku(
             arch=ttnn.device.Arch.BLACKHOLE,
-            cluster_type=ttnn.cluster.ClusterType.P150_X4,
+            cluster_type=cluster_type,
             num_devices=4,
         )
         == "P150x4"
     )
-    with expect_error(ValueError, "physical Wormhole T3K.*BlackHole P150x4"):
+    with expect_error(ValueError, "physical Wormhole T3K.*BlackHole P150_X4/P300_X2.*logical P150x4"):
         hf_adaptor._resolve_supported_sku(
             arch=ttnn.device.Arch.BLACKHOLE,
             cluster_type=ttnn.cluster.ClusterType.P150_X8,

@@ -124,6 +124,7 @@ EXPECTED_METRICS = {
 
 PERF_TOLERANCE = 0.05
 DEMO_DIR = Path(__file__).parent
+_BH_DEVICE_NAMES = frozenset({"P150", "P300", "P150x4"})
 
 
 def _benchmark_model_identity(hf_model: str, fallback_model_name: str) -> tuple[str, str]:
@@ -407,10 +408,21 @@ def test_llama3_8b(test_config, ttnn_mesh_device, optimizations):
     case = DEMO_CASES[test_config]
     device_name = get_device_name(mesh_device)
     expected = EXPECTED_METRICS.get(optimizations, {}).get(device_name, {})
+    case_performance_expected = None
     llm = None
 
     try:
         _skip_unsupported_case(case, mesh_device)
+
+        if case.performance_case is not None:
+            # Qualification floors are configuration, not a post-construction
+            # concern.  In particular, do not load weights or compile a BH
+            # model only to discover that its declared perf node is ungated.
+            case_performance_expected = _expected_for_case(
+                expected,
+                case.performance_case,
+                device_name=device_name,
+            )
 
         if case.data_parallel > 1:
             _run_dp_smoke(mesh_device, optimizations, case)
@@ -430,7 +442,7 @@ def test_llama3_8b(test_config, ttnn_mesh_device, optimizations):
             _run_perf_benchmark(
                 llm,
                 mesh_device,
-                _expected_for_case(expected, case.performance_case),
+                case_performance_expected,
                 batch_size=case.batch_size,
                 case_name=f"{optimizations}/{case.name}",
                 num_decode_tokens=case.num_decode_tokens,
@@ -449,7 +461,7 @@ def test_llama3_8b(test_config, ttnn_mesh_device, optimizations):
                 _report_performance(
                     llm,
                     mesh_device,
-                    _expected_for_case(expected, case.performance_case),
+                    case_performance_expected,
                     prompts=prompts,
                     case_name=f"{optimizations}/{case.name}",
                     profiler=profiler,
@@ -614,9 +626,9 @@ def test_llama3_8b_bh_seeded_cross_cardinality(ttnn_mesh_device, optimizations):
             max_batch_size=32,
             max_seq_len=1024,
         )
-        assert llm.runtime_config.disable_batched_prefill is True, (
-            "BH qualification must enter with the production sequential-prefill policy retained"
-        )
+        assert (
+            llm.runtime_config.disable_batched_prefill is True
+        ), "BH qualification must enter with the production sequential-prefill policy retained"
         prompts = _eval_repeat_prompts(len(_BH_CROSS_CARDINALITY_REQUEST_IDS))
         assert len(prompts) == len(_BH_CROSS_CARDINALITY_REQUEST_IDS)
 
@@ -638,9 +650,7 @@ def test_llama3_8b_bh_seeded_cross_cardinality(ttnn_mesh_device, optimizations):
             )
             outputs_by_cardinality[cardinality] = {
                 request_id: token_ids
-                for request_id, token_ids in zip(
-                    _BH_CROSS_CARDINALITY_REQUEST_IDS[:cardinality], outputs, strict=True
-                )
+                for request_id, token_ids in zip(_BH_CROSS_CARDINALITY_REQUEST_IDS[:cardinality], outputs, strict=True)
             }
 
         verdict, mismatches = evaluate_seeded_cross_cardinality_consistency(
@@ -668,9 +678,9 @@ def test_llama3_8b_bh_seeded_cross_cardinality(ttnn_mesh_device, optimizations):
         # A completed BATCHED_PREFILL_REJECTED experiment is not an invariance
         # pass.  Its acceptance independently requires production to retain the
         # sequential-prefill policy; the diagnostic override above never edits it.
-        assert llm.runtime_config.disable_batched_prefill is True, (
-            "BH production must remain sequential after the experiment disposition"
-        )
+        assert (
+            llm.runtime_config.disable_batched_prefill is True
+        ), "BH production must remain sequential after the experiment disposition"
     finally:
         cleanup_model_case(llm.model if llm is not None else None, mesh_device)
 
@@ -751,20 +761,32 @@ def _warmup_demo_executor(executor, *, kv_cache, page_table, prefill_can_sample_
         executor.warmup_model_decode(enable_trace=True, **decode_kwargs)
 
 
-def _expected_for_case(expected, test_config):
+def _expected_for_case(expected, test_config, *, device_name=None):
     """Return a complete secondary in-test performance gate for one case."""
     if test_config is None:
         return None
     case_expected = expected.get(test_config)
     missing_metrics = {"tok_s_u", "ttft_ms"} - set(case_expected or {})
     if missing_metrics:
-        logger.warning(
-            f"No complete in-test performance gate for {test_config}; "
-            f"missing {', '.join(sorted(missing_metrics))}. "
-            "Centralized post-run validation remains authoritative."
-        )
+        missing_names = ", ".join(sorted(missing_metrics))
+        message = f"No complete in-test performance gate for {test_config}; missing {missing_names}."
+        if device_name in _BH_DEVICE_NAMES:
+            raise ValueError(f"{device_name}: {message} Blackhole qualification gates fail closed.")
+        logger.warning(f"{message} Centralized post-run validation remains authoritative.")
         return None
     return {metric: case_expected[metric] for metric in ("tok_s_u", "ttft_ms")}
+
+
+def _assert_performance_targets(result, expected, *, case_name: str) -> None:
+    """Fail a measured performance node when any supplied target misses."""
+
+    targets = result.meets_target(expected, PERF_TOLERANCE)
+    failures = [
+        f"{metric} did not meet target: got {getattr(result, metric)}, expected {expected[metric]}"
+        for metric, passed in targets.items()
+        if not passed
+    ]
+    assert not failures, f"{case_name}: " + "; ".join(failures)
 
 
 def _run_token_accuracy(llm, mesh_device, expected, optimizations: str):
@@ -1068,12 +1090,7 @@ def _report_performance(
         )
 
     if expected:
-        targets = result.meets_target(expected, PERF_TOLERANCE)
-        for metric, passed in targets.items():
-            if not passed:
-                logger.warning(
-                    f"{metric} did not meet target: got {getattr(result, metric)}, expected {expected[metric]}"
-                )
+        _assert_performance_targets(result, expected, case_name=case_name)
 
 
 def _run_perf_benchmark(llm, mesh_device, expected, batch_size, case_name, num_decode_tokens=None):

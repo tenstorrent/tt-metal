@@ -7,7 +7,7 @@ TTTv2 Llama-3.3-70B-Instruct demo — accuracy and performance measurement.
 Uses the model-owned ``Llama33_70BExecutor`` directly (no vLLM adapter).
 
 **Mesh note:** Llama-3.3-70B-Instruct supports Wormhole T3K (8 devices) and
-BlackHole P150x4 (4 devices). P150x4 token accuracy is gated by the existing
+BlackHole P150x4 (4 devices on physical P150_X4 or P300_X2). P150x4 token accuracy is gated by the existing
 central ``p300x2``/``bh_quietbox_2`` floor; performance qualification fails
 closed until a workload-matched independent floor exists.
 
@@ -30,7 +30,7 @@ Usage::
     MESH_DEVICE=T3K HF_MODEL=meta-llama/Llama-3.3-70B-Instruct \\
       pytest models/common/tests/demos/llama33_70b/demo.py -k "batch-32" -v
 
-    # BlackHole central-target accuracy gate (physical P150_X4 only; run serially)
+    # BlackHole central-target accuracy gate (physical P150_X4 or P300_X2; run serially)
     MESH_DEVICE=P150x4 HF_MODEL=meta-llama/Llama-3.3-70B-Instruct \\
       pytest models/common/tests/demos/llama33_70b/demo.py \\
         -k "accuracy-token-accuracy-P150x4" -v
@@ -54,6 +54,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.device_utils import get_device_name
 from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
 from models.common.models.llama33_70b.executor import Llama33_70BExecutor, Llama33_70BExecutorConfig
 from models.common.models.llama33_70b.hf_adaptor import encode_prompt, from_pretrained
@@ -353,15 +354,6 @@ def _skip_unless_heads_divide_mesh(mesh_device: ttnn.MeshDevice) -> None:
         f"Incompatible mesh for Llama-3.3-70B-Instruct: {n_dev} devices, "
         "num_attention_heads=64, num_key_value_heads=8."
     )
-
-
-def get_device_name(mesh_device: ttnn.MeshDevice) -> str:
-    if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.P150_X4:
-        return "P150x4"
-    n = mesh_device.get_num_devices()
-    if n == 8:
-        return "T3K"
-    return f"{n}dev"
 
 
 def lazy_weight_cache_dir_for_demo(mesh_device: ttnn.MeshDevice, hf_model_id: str) -> Path:

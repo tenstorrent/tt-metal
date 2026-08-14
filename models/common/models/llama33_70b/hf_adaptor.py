@@ -24,6 +24,8 @@ from models.common.models.llama33_70b.model import (
     Llama33_70BPrecisionConfig,
     Llama33_70BTransformer1D,
     Llama33_70BWeights,
+    LLAMA33_70B_BH_TP4_CLUSTER_TYPES,
+    _llama33_70b_ccl_topology,
     build_llama33_70b_transformer_1d_config,
 )
 
@@ -162,10 +164,11 @@ def _trace_warmup_seq_lens(max_prefill_chunk_size: int, max_seq_len: int) -> tup
 def _resolve_supported_sku(*, arch, cluster_type, num_devices: int) -> str:
     if arch == ttnn.device.Arch.WORMHOLE_B0 and cluster_type == ttnn.cluster.ClusterType.T3K and num_devices == 8:
         return "T3K"
-    if arch == ttnn.device.Arch.BLACKHOLE and cluster_type == ttnn.cluster.ClusterType.P150_X4 and num_devices == 4:
+    if arch == ttnn.device.Arch.BLACKHOLE and cluster_type in LLAMA33_70B_BH_TP4_CLUSTER_TYPES and num_devices == 4:
         return "P150x4"
     raise ValueError(
-        "Llama-3.3-70B supports physical Wormhole T3K (8 devices) or BlackHole P150x4 (4 devices); "
+        "Llama-3.3-70B supports physical Wormhole T3K (8 devices) or "
+        "BlackHole P150_X4/P300_X2 as logical P150x4 (4 devices); "
         f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_devices}"
     )
 
@@ -250,6 +253,7 @@ def from_pretrained(
         cluster_type=ttnn.cluster.get_cluster_type(),
         num_devices=num_devices,
     )
+    _llama33_70b_ccl_topology(mesh_device)
     ttnn.SetDefaultDevice(mesh_device)
     load_kwargs = {"local_files_only": os.getenv("CI") == "true"}
     hf_config = AutoConfig.from_pretrained(hf_model, **load_kwargs)

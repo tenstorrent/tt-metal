@@ -12,11 +12,13 @@ import torch
 import ttnn
 from models.common.models.llama33_70b.model import (
     LLAMA33_70B_ACCURACY,
+    LLAMA33_70B_BH_TP4_CLUSTER_TYPES,
     LLAMA33_70B_PERFORMANCE,
     Llama33_70BLayerWeights,
     Llama33_70BModelParameters,
     Llama33_70BPagedAttentionConfig,
     _build_decoder_layer,
+    _llama33_70b_ccl_topology,
     _resolve_llama33_70b_profile,
     build_llama33_70b_transformer_1d_config,
 )
@@ -41,10 +43,11 @@ def _cluster_type(arch):
 
 
 @pytest.mark.parametrize(
-    ("arch", "devices", "expected_attention", "cutoff", "qkv_grid", "lm_columns"),
+    ("arch", "cluster_type", "devices", "expected_attention", "cutoff", "qkv_grid", "lm_columns"),
     [
         (
             ttnn.device.Arch.WORMHOLE_B0,
+            ttnn.cluster.ClusterType.T3K,
             8,
             (ttnn.MathFidelity.HiFi2, False, False, True),
             1024,
@@ -53,6 +56,16 @@ def _cluster_type(arch):
         ),
         (
             ttnn.device.Arch.BLACKHOLE,
+            ttnn.cluster.ClusterType.P150_X4,
+            4,
+            (ttnn.MathFidelity.HiFi2, True, True, True),
+            512,
+            (8, 10),
+            4008,
+        ),
+        (
+            ttnn.device.Arch.BLACKHOLE,
+            ttnn.cluster.ClusterType.P300_X2,
             4,
             (ttnn.MathFidelity.HiFi2, True, True, True),
             512,
@@ -61,10 +74,12 @@ def _cluster_type(arch):
         ),
     ],
 )
-def test_accuracy_profile_semantic_snapshot(arch, devices, expected_attention, cutoff, qkv_grid, lm_columns):
+def test_accuracy_profile_semantic_snapshot(
+    arch, cluster_type, devices, expected_attention, cutoff, qkv_grid, lm_columns
+):
     profile = _resolve_llama33_70b_profile(
         arch=arch,
-        cluster_type=_cluster_type(arch),
+        cluster_type=cluster_type,
         num_devices=devices,
         dram_width=8,
         precision=LLAMA33_70B_ACCURACY,
@@ -89,10 +104,11 @@ def test_accuracy_profile_semantic_snapshot(arch, devices, expected_attention, c
     assert profile.sku.prefill_minimal_matmul
 
 
-def test_performance_profile_makes_all_four_mlp_slots_explicit():
+@pytest.mark.parametrize("cluster_type", LLAMA33_70B_BH_TP4_CLUSTER_TYPES)
+def test_performance_profile_makes_all_four_mlp_slots_explicit(cluster_type):
     profile = _resolve_llama33_70b_profile(
         arch=ttnn.device.Arch.BLACKHOLE,
-        cluster_type=ttnn.cluster.ClusterType.P150_X4,
+        cluster_type=cluster_type,
         num_devices=4,
         dram_width=8,
         precision=LLAMA33_70B_PERFORMANCE,
@@ -253,3 +269,37 @@ def test_blackhole_profile_rejects_non_p150x4_geometry(expect_error):
             dram_width=7,
             precision=LLAMA33_70B_ACCURACY,
         )
+
+
+@pytest.mark.parametrize("cluster_type", LLAMA33_70B_BH_TP4_CLUSTER_TYPES)
+def test_blackhole_four_die_products_use_exact_logical_tp4_ring(cluster_type, monkeypatch):
+    mesh = SimpleNamespace(
+        arch=lambda: ttnn.device.Arch.BLACKHOLE,
+        get_num_devices=lambda: 4,
+        shape=(1, 4),
+    )
+    monkeypatch.setattr(ttnn.cluster, "get_cluster_type", lambda: cluster_type)
+
+    assert _llama33_70b_ccl_topology(mesh) == ttnn.Topology.Ring
+
+
+@pytest.mark.parametrize(
+    ("cluster_type", "num_devices", "mesh_shape"),
+    [
+        (ttnn.cluster.ClusterType.P150_X8, 4, (1, 4)),
+        (ttnn.cluster.ClusterType.P150_X4, 8, (1, 8)),
+        (ttnn.cluster.ClusterType.P300_X2, 4, (2, 2)),
+    ],
+)
+def test_blackhole_ccl_rejects_product_count_and_logical_shape_mismatches(
+    cluster_type, num_devices, mesh_shape, monkeypatch, expect_error
+):
+    mesh = SimpleNamespace(
+        arch=lambda: ttnn.device.Arch.BLACKHOLE,
+        get_num_devices=lambda: num_devices,
+        shape=mesh_shape,
+    )
+    monkeypatch.setattr(ttnn.cluster, "get_cluster_type", lambda: cluster_type)
+
+    with expect_error(ValueError, "P150_X4/P300_X2.*4-device.*\\(1, 4\\).*Ring"):
+        _llama33_70b_ccl_topology(mesh)

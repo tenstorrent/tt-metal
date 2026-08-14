@@ -9,8 +9,10 @@ Architecture: standard Llama 1D transformer, same topology as Llama 3.1-8B / 3.2
   hidden=8192, layers=80, n_heads=64, n_kv_heads=8, head_dim=128,
   intermediate=28672, vocab=128256, rope_theta=500000, RoPE llama3-scaled (factor=8).
 
-Mesh compatibility: Wormhole T3K (1×8) and Blackhole P150x4. The architecture/SKU
-profile validates the exact device count and P150 DRAM width before composing modules.
+Mesh compatibility: Wormhole T3K (1×8) and Blackhole P150x4 (1×4), backed by
+either physical P150_X4 or P300_X2 hardware. The architecture/SKU profile validates
+the exact product, device count, logical mesh shape, Ring topology, and P150 DRAM
+width before composing modules.
 
 TTTv1 source for precision recipes:
   ``models/tt_transformers/tt/model_config.py :: DecodersPrecision``.
@@ -46,12 +48,44 @@ from models.common.modules.mlp.mlp_1d import MLP1D, MLP1DConfig, _dram_shard_cor
 from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1D, RMSNorm1DConfig, _create_sharded_norm_program_config
 from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D
 from models.common.modules.sampling.sampling_1d import Sampling1D, Sampling1DConfig
-from models.common.modules.tt_ccl import default_topology, get_tt_ccl
+from models.common.modules.tt_ccl import get_tt_ccl
 from models.common.tensor_utils import TILE_SIZE, get_padded_hidden_dim
 
 # =============================================================================
 # Helpers
 # =============================================================================
+
+
+LLAMA33_70B_BH_TP4_CLUSTER_TYPES = (
+    ttnn.cluster.ClusterType.P150_X4,
+    ttnn.cluster.ClusterType.P300_X2,
+)
+
+
+def _llama33_70b_ccl_topology(mesh_device) -> ttnn.Topology:
+    """Return Ring only for an exact admitted physical/logical product pairing."""
+
+    arch = mesh_device.arch()
+    cluster_type = ttnn.cluster.get_cluster_type()
+    num_devices = mesh_device.get_num_devices()
+    mesh_shape = tuple(mesh_device.shape)
+    if (
+        arch == ttnn.device.Arch.WORMHOLE_B0
+        and cluster_type == ttnn.cluster.ClusterType.T3K
+        and num_devices == 8
+        and mesh_shape == (1, 8)
+    ) or (
+        arch == ttnn.device.Arch.BLACKHOLE
+        and cluster_type in LLAMA33_70B_BH_TP4_CLUSTER_TYPES
+        and num_devices == 4
+        and mesh_shape == (1, 4)
+    ):
+        return ttnn.Topology.Ring
+    raise ValueError(
+        "Llama-3.3-70B CCL requires physical Wormhole T3K/8-device/(1, 8) or "
+        "BlackHole P150_X4/P300_X2/4-device/(1, 4) Ring geometry; "
+        f"got arch={arch}, cluster_type={cluster_type}, num_devices={num_devices}, mesh_shape={mesh_shape}"
+    )
 
 
 def _lazy(
@@ -236,7 +270,7 @@ def _all_gather_rmsnorm_tensor(
         dim=3,
         multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
         num_links=1,
-        topology=default_topology(cfg.mesh_device),
+        topology=_llama33_70b_ccl_topology(cfg.mesh_device),
         memory_config=memory_config,
         barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
         chunks_per_sync=24,
@@ -448,10 +482,10 @@ def _resolve_llama33_70b_profile(
     if not is_wh and arch != ttnn.device.Arch.BLACKHOLE:
         raise ValueError(f"Unsupported Llama-3.3-70B architecture: {arch}")
     expected_devices = 8 if is_wh else 4
-    expected_cluster = ttnn.cluster.ClusterType.T3K if is_wh else ttnn.cluster.ClusterType.P150_X4
-    if cluster_type != expected_cluster:
+    expected_clusters = (ttnn.cluster.ClusterType.T3K,) if is_wh else LLAMA33_70B_BH_TP4_CLUSTER_TYPES
+    if cluster_type not in expected_clusters:
         raise ValueError(
-            f"Llama-3.3-70B requires physical cluster {expected_cluster}, got {cluster_type}; "
+            f"Llama-3.3-70B requires physical cluster in {expected_clusters}, got {cluster_type}; "
             "a logical submesh is not SKU-equivalent"
         )
     if num_devices != expected_devices:
@@ -824,7 +858,7 @@ def build_llama33_70b_transformer_1d_config(
         raise ValueError(f"Expected {n_layers} decoder layer weight sets, got {len(weights.layers)}")
 
     tt_ccl = get_tt_ccl(mesh_device)
-    topology = default_topology(mesh_device)
+    topology = _llama33_70b_ccl_topology(mesh_device)
     embedding_config = Embedding1DConfig(
         weights=_lazy(
             weights.embedding,
@@ -1244,7 +1278,7 @@ class Llama33_70BTransformer1D(LightweightModule):
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
                 memory_config=logits.memory_config(),
-                topology=default_topology(self.mesh_device),
+                topology=_llama33_70b_ccl_topology(self.mesh_device),
                 barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                 chunks_per_sync=10,
                 num_workers_per_link=2,

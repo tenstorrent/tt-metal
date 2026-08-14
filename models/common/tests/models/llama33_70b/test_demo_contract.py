@@ -13,6 +13,9 @@ from models.demos.utils.trace_region_sizes import resolve_trace_region_size
 _DEMO_PATH = "models/common/tests/demos/llama33_70b/demo.py"
 _DEMO_SOURCE = Path(_DEMO_PATH).read_text(encoding="utf-8")
 _DEMO_TREE = ast.parse(_DEMO_SOURCE, filename=_DEMO_PATH)
+_SMOKE_PATH = "models/common/tests/models/llama33_70b/test_p150x4_smoke.py"
+_SMOKE_SOURCE = Path(_SMOKE_PATH).read_text(encoding="utf-8")
+_SMOKE_TREE = ast.parse(_SMOKE_SOURCE, filename=_SMOKE_PATH)
 
 
 def _function(name):
@@ -95,8 +98,25 @@ def test_demo_uses_model_owned_runtime_provider_and_shared_helpers():
     assert any("models.common.models.llama33_70b.executor" in statement for statement in imports)
     assert any("models.common.models.llama33_70b.hf_adaptor" in statement for statement in imports)
     assert any("models.common.tests.demos.run_helpers" in statement for statement in imports)
+    assert any("models.common.device_utils import get_device_name" in statement for statement in imports)
+    assert not any(node.name == "get_device_name" for node in _DEMO_TREE.body if isinstance(node, ast.FunctionDef))
     assert all("models.common.models.executor" not in statement for statement in imports)
     assert all("AutoConfig" not in statement and "AutoTokenizer" not in statement for statement in imports)
+
+
+def test_blackhole_tp4_smoke_uses_product_admission_and_exact_ring_geometry():
+    admission = next(
+        node
+        for node in _SMOKE_TREE.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_assert_physical_bh_tp4"
+    )
+    source = ast.unparse(admission)
+
+    assert "ttnn.cluster.get_cluster_type() in LLAMA33_70B_BH_TP4_CLUSTER_TYPES" in source
+    assert "mesh_device.get_num_devices() == 4" in source
+    assert "tuple(mesh_device.shape) == (1, 4)" in source
+    assert "ttnn.FabricConfig.FABRIC_1D_RING" in _SMOKE_SOURCE
+    assert 'ids=["physical-BH-TP4-ring"]' in _SMOKE_SOURCE
 
 
 def test_supported_tp8_model_build_failures_are_not_converted_to_skips():

@@ -1,14 +1,30 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+import ast
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from models.common.tests.demos.llama3_8b.demo_utils import evaluate_seeded_cross_cardinality_consistency
 from models.demos.utils.trace_region_sizes import resolve_trace_region_size
 
-_DEMO_SOURCE = Path("models/common/tests/demos/llama3_8b/demo.py").read_text(encoding="utf-8")
+_DEMO_PATH = "models/common/tests/demos/llama3_8b/demo.py"
+_DEMO_SOURCE = Path(_DEMO_PATH).read_text(encoding="utf-8")
+_DEMO_TREE = ast.parse(_DEMO_SOURCE, filename=_DEMO_PATH)
+
+
+def _function(name):
+    return next(node for node in _DEMO_TREE.body if isinstance(node, ast.FunctionDef) and node.name == name)
+
+
+def _calls(function_name, called_name):
+    return [
+        node
+        for node in ast.walk(_function(function_name))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == called_name
+    ]
 
 
 def test_demo_exposes_p300_as_ring_two_chip_mesh():
@@ -34,7 +50,7 @@ def test_p150_batch32_uses_dynamic_trace_allocation():
 def test_demo_exposes_seeded_bh_cross_cardinality_qualification_node():
     assert "def test_llama3_8b_bh_seeded_cross_cardinality(ttnn_mesh_device, optimizations):" in _DEMO_SOURCE
     assert '@pytest.mark.parametrize("optimizations", ["performance", "accuracy"])' in _DEMO_SOURCE
-    assert '_BH_CROSS_CARDINALITIES = (1, 2, 4, 32)' in _DEMO_SOURCE
+    assert "_BH_CROSS_CARDINALITIES = (1, 2, 4, 32)" in _DEMO_SOURCE
     assert 'device_name not in {"P150", "P150x4"}' in _DEMO_SOURCE
     assert "_BH_CROSS_CARDINALITY_SEEDS" in _DEMO_SOURCE
     assert "_install_cross_cardinality_device_seeds" not in _DEMO_SOURCE
@@ -46,6 +62,84 @@ def test_demo_exposes_seeded_bh_cross_cardinality_qualification_node():
     assert "not a serving policy" in _DEMO_SOURCE
     assert "LLAMA3_8B_CROSS_CARDINALITY_VERDICT=" in _DEMO_SOURCE
     assert "llm.runtime_config.disable_batched_prefill is True" in _DEMO_SOURCE
+
+
+def test_bh_performance_targets_fail_closed_when_missing_or_incomplete():
+    warnings = []
+    namespace = {
+        "_BH_DEVICE_NAMES": frozenset({"P150", "P300", "P150x4"}),
+        "logger": SimpleNamespace(warning=warnings.append),
+    }
+    exec(
+        compile(ast.Module(body=[_function("_expected_for_case")], type_ignores=[]), _DEMO_PATH, "exec"),
+        namespace,
+    )
+
+    with pytest.raises(ValueError, match="P150.*missing tok_s_u, ttft_ms.*fail closed"):
+        namespace["_expected_for_case"]({}, "batch-1", device_name="P150")
+    with pytest.raises(ValueError, match="P150x4.*missing ttft_ms.*fail closed"):
+        namespace["_expected_for_case"](
+            {"batch-32": {"tok_s_u": 1.0}},
+            "batch-32",
+            device_name="P150x4",
+        )
+    assert warnings == []
+
+
+def test_performance_target_preflight_preserves_wormhole_missing_target_semantics_and_accepts_valid_targets():
+    warnings = []
+    namespace = {
+        "_BH_DEVICE_NAMES": frozenset({"P150", "P300", "P150x4"}),
+        "logger": SimpleNamespace(warning=warnings.append),
+    }
+    exec(
+        compile(ast.Module(body=[_function("_expected_for_case")], type_ignores=[]), _DEMO_PATH, "exec"),
+        namespace,
+    )
+
+    assert namespace["_expected_for_case"]({}, "batch-1", device_name="N150") is None
+    assert warnings and "Centralized post-run validation remains authoritative" in warnings[0]
+    assert namespace["_expected_for_case"](
+        {"batch-32": {"tok_s_u": 12.5, "ttft_ms": 150.0, "unused": 1}},
+        "batch-32",
+        device_name="P150",
+    ) == {"tok_s_u": 12.5, "ttft_ms": 150.0}
+
+
+def test_performance_target_preflight_runs_before_model_construction():
+    preflight = _calls("test_llama3_8b", "_expected_for_case")
+    create = _calls("test_llama3_8b", "create_llama3_for_causal_lm")
+    assert len(preflight) == 1
+    assert len(create) == 1
+    assert preflight[0].lineno < create[0].lineno
+    assert "case_performance_expected" in ast.unparse(_function("test_llama3_8b"))
+
+
+def test_supplied_performance_targets_fail_on_any_miss_and_accept_all_passes():
+    namespace = {"PERF_TOLERANCE": 0.05}
+    exec(
+        compile(ast.Module(body=[_function("_assert_performance_targets")], type_ignores=[]), _DEMO_PATH, "exec"),
+        namespace,
+    )
+    expected = {"tok_s_u": 10.0, "ttft_ms": 100.0}
+    passed = SimpleNamespace(
+        tok_s_u=10.0,
+        ttft_ms=100.0,
+        meets_target=lambda targets, tolerance: {"tok_s_u": True, "ttft_ms": True},
+    )
+    namespace["_assert_performance_targets"](passed, expected, case_name="performance/batch-32")
+
+    failed = SimpleNamespace(
+        tok_s_u=9.0,
+        ttft_ms=120.0,
+        meets_target=lambda targets, tolerance: {"tok_s_u": False, "ttft_ms": False},
+    )
+    with pytest.raises(AssertionError, match="tok_s_u.*ttft_ms"):
+        namespace["_assert_performance_targets"](failed, expected, case_name="performance/batch-32")
+
+    report_source = ast.unparse(_function("_report_performance"))
+    assert "_assert_performance_targets(result, expected, case_name=case_name)" in report_source
+    assert "logger.warning" not in report_source
 
 
 def _valid_cross_cardinality_outputs():
