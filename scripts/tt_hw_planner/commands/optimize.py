@@ -662,6 +662,33 @@ def cmd_optimize(args) -> int:
             os.environ.setdefault("PERF_MCP_STATE_DIR", str(_persist_dir))
             os.environ.setdefault("PERF_MCP_LEDGER_DIR", str(_persist_dir))
             print(f"  [optimize/cc] --persist: run memory in {_persist_dir} (survives reboots; /tmp does not)")
+        # --fresh: FORGET, then run. State is carried forward on purpose -- a baseline is expensive, a
+        # coverage window costs device probes, and the ceiling anchor is write-once so the report and
+        # the stop gate cannot score one run against two ceilings. That is right while the tool is
+        # unchanged, and wrong the moment it changes: a pinned value records WHAT it is and never
+        # WHICH RULE produced it, so a number from a superseded formula outlives the fix.
+        #
+        # Measured on Voxtral 2026-08-14: the anchor held active_bytes = 3611.48 MB
+        # ("checkpoint bytes + HF config"), which is total_params x 1.0 -- the placeholder width from
+        # before the ceiling learned to divide by the width the loader actually chose. compute_target
+        # takes that anchor ahead of every other source, so the corrected rule never ran and the run
+        # published 141.8 tok/s/u against a true ~71, making the model read as twice as close to the
+        # wall as it is -- the input to can_stop. Clearing the coverage and knob caches did not touch
+        # it: it lives in the persistent ledger.
+        if getattr(args, "fresh", False):
+            try:
+                sys.path.insert(0, str(tt_root / "models" / "experimental" / "perf_automation"))
+                from agent.fresh_start import describe as _fresh_describe, wipe as _fresh_wipe
+
+                _sd = os.environ.get("PERF_MCP_STATE_DIR") or tempfile.gettempdir()
+                _removed = _fresh_wipe(
+                    _sd,
+                    tool_root=tt_root / "models" / "experimental" / "perf_automation",
+                    model_dir=run_demo,
+                )
+                print("  [optimize/cc] --fresh: %s" % _fresh_describe(_removed))
+            except Exception as _fe:  # noqa: BLE001 -- a clear that cannot run must not take the run down
+                print("  [optimize/cc] --fresh skipped: %s" % str(_fe)[:160])
         result = run_cc(
             run_demo,
             run_root,

@@ -11186,6 +11186,19 @@ def main(argv: Optional[List[str]] = None) -> int:
     popt.add_argument("--matmul-sweep-iters", type=int, default=5, help="matmul-sweep timed reps per config")
     popt.add_argument("--matmul-sweep-max-shapes", type=int, default=0, help="matmul-sweep distinct-shape cap (0=all)")
     popt.add_argument(
+        "--fresh",
+        action="store_true",
+        dest="fresh",
+        help="FORGET this model's run memory before starting: the measurement ledger (including the "
+        "write-once ceiling anchor), the cached baseline, the full-pipeline best-so-far, the coverage "
+        "and knob caches, the kernel log and the learned thermal profile. Use it after changing the "
+        "tool: a pinned value records what it is and never which RULE produced it, so a number from a "
+        "superseded formula outlives the fix -- voxtral kept publishing a ceiling of 141.8 tok/s/u "
+        "(params x 1.0, from before the ceiling divided by the measured width) against a true ~71, "
+        "and clearing the other caches did not touch it. Board topology and device-recovery records "
+        "are KEPT: they describe the machine, not the run. Nothing tracked by git is touched.",
+    )
+    popt.add_argument(
         "--persist",
         action="store_true",
         help="keep this run's MEMORY -- which knobs and rungs have been tried, and the full-pipeline "
