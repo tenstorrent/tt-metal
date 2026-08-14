@@ -740,11 +740,12 @@ section is the credit half of the ledger and is the material for the comparison 
 | run 2 — decode-native Q/K/V layout (O4g) | 261.9 | 13.975 | 0.9903 |
 | run 2 — head creation fed the projection's shard (O4h) | 254.5 | 13.277 | 0.9903 |
 | run 2 — DRAM-sharded LM head weight (O4i) | — | 13.228 | 0.9904 |
-| run 2 — untilize vocab blocks before joining (O4j) | — | **13.139** | 0.9904 |
+| run 2 — untilize vocab blocks before joining (O4j) | — | 13.139 | 0.9904 |
+| run 2 — fused K/V cache write (O4k) | 234.1 | **12.890** | 0.9904 |
 | tool's own roofline target | 338.541 | — | gate 0.95 |
 | **hand-port, for reference** | — | **15.907** | — |
 
-**13.139 against 15.907 — the tool is 17.4% AHEAD of 74 human experiments**, autonomously, with
+**12.890 against 15.907 — the tool is 19.0% AHEAD of 74 human experiments**, autonomously, with
 PCC bit-identical across its last four wins (0.990347151783074, unchanged to every decimal). Every
 one of those four was a layout or dispatch result. None spent accuracy.
 
@@ -1100,18 +1101,15 @@ Two independent discoveries of one pathology in one run.
 input is a padded tile row. It is a class of waste that profiles as "this op is slow" rather than
 "this op is doing nothing," which is why it survives casual inspection.
 
-#### And a fourth independent agreement — on a reversal
+#### An apparent fourth agreement — WITHDRAWN two commits later, by the tool itself
 
-It declined `paged_fused_update_cache`, reasoning that the op parallelises K and V across **disjoint
-cores** and rejects operands sharing one, and at batch 1 head-creation puts K and V on the same
-single core.
+It initially declined `paged_fused_update_cache`, reasoning that the op parallelises K and V across
+**disjoint cores** and rejects operands sharing one, and at batch 1 head-creation puts K and V on
+the same single core. That matched `NOTES.md [gpt-19]` / §6.44, which **deleted** `_V_SHARD` —
+existing solely to let that op accept K and V — because on Blackhole *"that fused write is 0.687
+ms/step SLOWER than two plain writes."* I recorded it as a fourth independent agreement.
 
-The hand-port reached the same conclusion on Blackhole by measurement: `NOTES.md [gpt-19]` / §6.44
-**deleted** `_V_SHARD`, which existed solely to let `paged_fused_update_cache` accept K and V,
-because on Blackhole *"that fused write is 0.687 ms/step SLOWER than two plain writes."* (The
-opposite of `[gpt-24]`, which was the N150-era finding — superseded.)
-
-Two different arguments, same verdict, on hardware where the intuitive answer is wrong.
+**It is not. See O4k — the tool came back and landed the fused write.**
 
 **This also arms O4f's open question.** §6.44 records the silent failure mode that went with
 `_V_SHARD`: *"RoPE on a core whose cos/sin table lives elsewhere returns 3.4e38 from uninitialised
@@ -1196,6 +1194,51 @@ and Block 1's LM head is not even on the hand-port's critical path (Block 2 cons
 state, per §6.8's semantic head). Recorded as a **bandwidth lesson worth keeping and a change worth
 declining** — the placement insight generalises to any large interleaved weight; the duplication
 does not.
+
+### O4k — §6.44's reversal may itself be CONDITIONAL, and this is the finding with the most at stake
+
+**`12.890 ms/token` (−1.9%), PCC unchanged.** The tool went back to the fused cache write it had
+declined, and its solution is verbatim the hand-port's own N150-era trick:
+
+> *Moving V one core over is enough to make it legal, and a 2 KB shard move is far cheaper than the
+> launch it buys back.*
+
+Compare `NOTES.md [gpt-24]`: *"V is moved to core (1,0) first because the op refuses an overlap."*
+Same fix, found independently.
+
+**The conflict.** §6.44 measured the fused write **0.687 ms/step SLOWER** on Blackhole and deleted
+the machinery. The tool measures it **faster** on Blackhole — 0.402 → 0.210 ms/token across 26
+layers. Both are Blackhole p150b. Both are this model.
+
+**The likely resolution, and why it matters.** §6.44 measured the fused write against the hand-port's
+*current* layout. The tool measured it **after O4g and O4h** — after moving K and V to
+`nlp_create_qkv_heads_decode`'s L1-sharded decode-native output. In that layout K and V arrive
+already in the memory config the cache write takes, so the fused path has no conversion to pay and
+the launch saving is the whole story. In the pre-O4g layout it did have that to pay, which is
+plausibly the 0.687 ms.
+
+If that is right, then **§6.44 is not wrong — it is conditional**, and the condition is a layout the
+hand-port has not adopted. O4g would unlock it.
+
+**This is now the highest-value item to test on the hand-port**, because it is a *chain*: adopt the
+decode-native Q/K/V layout (O4g), and a previously-measured, deliberately-reversed rejection (§6.44)
+may reverse back. It also means §6.44's number should not be treated as settled the way §6.16's is —
+it was measured under an assumption that another change removes.
+
+**Caveat honestly stated:** I have not proven the resolution, only that the two measurements
+disagree and that the layouts differ. It needs the A/B on the hand-port, in both layouts.
+
+#### A fifth agreement, in the same commit's rejected attempt
+
+It tried fusing the MLP's SiLU into the gate projection and reverted it (+13 ms):
+
+> *`activation=` alone does not fuse — with no program config ttnn appends a `unary_chain` op, which
+> is the same launch under another name.*
+
+`NOTES.md [gpt-26]` says exactly this: *"`activation="silu"` never fused; `fused_activation` does."*
+Independently confirmed. It also added a detail the hand-port's note does not have: naming a core
+grid to reach the fused path made gate/up **43.35 → 57.50 ms on the same 96 cores**, because *"the
+router's auto-derived config for a named grid is not the one it picks for itself."*
 
 ### O5 — the ladder's escalation is real, and it gives up in the right place
 
