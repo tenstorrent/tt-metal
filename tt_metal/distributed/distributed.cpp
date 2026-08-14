@@ -5,8 +5,12 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <future>
+#include <mutex>
 #include <utility>
+#include <vector>
 
+#include "common/executor.hpp"
 #include "device.hpp"
 #include "mesh_device.hpp"
 #include "mesh_device_impl.hpp"
@@ -20,6 +24,45 @@
 #include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal::distributed {
+
+namespace {
+
+// Collector for the async kernel compiles issued by EnqueueMeshWorkload in compile-only mode.
+// Only touched when RunTimeOptions::compile_only is set; the normal execution path never uses it.
+std::mutex g_pending_compiles_mutex;
+std::vector<std::shared_future<void>> g_pending_compiles;
+
+void add_pending_compile(std::shared_future<void> compile_future) {
+    std::lock_guard<std::mutex> lock(g_pending_compiles_mutex);
+    g_pending_compiles.push_back(std::move(compile_future));
+}
+
+}  // namespace
+
+void WaitForPendingCompiles() {
+    // Move the pending set out under the lock, then join outside it so compiles issued concurrently
+    // are not blocked by this wait.
+    std::vector<std::shared_future<void>> pending;
+    {
+        std::lock_guard<std::mutex> lock(g_pending_compiles_mutex);
+        pending.swap(g_pending_compiles);
+    }
+    // Join every compile before returning, even if one throws (mirrors jit_build's sync_build_steps):
+    // stash the first error and rethrow only once nothing is still running against captured state.
+    std::exception_ptr first_error;
+    for (auto& compile_future : pending) {
+        try {
+            compile_future.get();
+        } catch (...) {
+            if (!first_error) {
+                first_error = std::current_exception();
+            }
+        }
+    }
+    if (first_error) {
+        std::rethrow_exception(first_error);
+    }
+}
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking) {
     // Short-circuit for inactive MeshDevices (no-op)
@@ -113,15 +156,24 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     }
 
     auto& ctx = tt::tt_metal::MetalContext::instance();
-    // Compile-only mode pre-compiles kernels without executing: build the workload's kernels, then
-    // skip binary load + dispatch. Compilation is a distinct step from the enqueue below, so we can
-    // stop after it. See RunTimeOptions::compile_only.
-    const bool compile_only = ctx.rtoptions().get_compile_only();
+    if (ctx.rtoptions().get_compile_only()) {
+        // Compile-only mode: build this workload's kernels WITHOUT executing, and do so
+        // ASYNCHRONOUSLY so that many programs' compiles run concurrently across host cores rather
+        // than one blocking compile per op (a single mesh_workload.impl().compile() only parallelizes
+        // across its own few kernels). The compile is submitted to the shared build executor; join
+        // all pending compiles with WaitForPendingCompiles() before the workloads are destroyed or
+        // before switching back to normal execution. The captured workload is the caller's (in the
+        // ttnn op path, a program-cache entry that outlives the join). This branch is only entered
+        // when the compile_only flag is set; the normal path below is unchanged.
+        auto* workload_ptr = &mesh_workload;
+        auto* device_ptr = mesh_cq.device();
+        add_pending_compile(
+            tt::tt_metal::detail::async([workload_ptr, device_ptr]() { workload_ptr->impl().compile(device_ptr); }));
+        return;
+    }
+
     if (ctx.rtoptions().get_fast_dispatch()) {
         mesh_workload.impl().compile(mesh_cq.device());
-        if (compile_only) {
-            return;
-        }
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
     } else if (ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
@@ -130,14 +182,6 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         // kernel artifacts are still produced; the SD CQ then no-ops the skipped dispatch.
         // Mock only, not is_mock_or_emulated(): Emule builds kernels via its own host-JIT path.
         mesh_workload.impl().compile(mesh_cq.device());
-        if (compile_only) {
-            return;
-        }
-    } else if (compile_only) {
-        // Slow dispatch (non-mock) JIT-compiles inside enqueue_mesh_workload/LaunchProgram; for
-        // compile-only we must build the kernels explicitly here and then skip the dispatch.
-        mesh_workload.impl().compile(mesh_cq.device());
-        return;
     }
     mesh_cq.enqueue_mesh_workload(mesh_workload, blocking);
 }
