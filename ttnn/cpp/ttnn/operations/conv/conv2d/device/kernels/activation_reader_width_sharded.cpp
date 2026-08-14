@@ -190,9 +190,9 @@ void kernel_main() {
                 act_dfb.reserve_back(act_block_num_tiles);
                 if (act_w_outer_i == this_core_id) {
                     // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
-                    // Restrict progressive sends to the large multi-tap blocks where producer overlap is material;
-                    // use one whole-block transfer where per-burst scheduling overhead is not recovered.
-                    if constexpr (ntile_height >= 16 && weight_size_h * weight_size_w > 1) {
+                    // Tall blocks have enough row publications to amortize progressive multicast; short blocks are
+                    // faster as one transfer after the complete block is available.
+                    if constexpr (ntile_height >= 8) {
                         act_send_pipe.send_from_cb<act_block_num_tiles, tilized_in0_tile_size>(
                             tilized_in0_dfb, act_dfb.get_write_ptr());
                     } else {
