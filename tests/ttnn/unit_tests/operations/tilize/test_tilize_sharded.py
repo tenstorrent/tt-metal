@@ -342,3 +342,225 @@ def test_single_core_sharded_is_refused(device, expect_error):
     )
     with expect_error(ExcludedCell, "(?i)use_multicore"):
         tilize(tt_input, shard_cfg, use_multicore=False)
+
+
+# ===========================================================================
+# Refinement 2 — cross-spec reshard (general cross-core L1 gather) and padding
+# on top of a sharded placement.
+#
+# Three mechanisms are pinned, in the same spirit as the block above:
+#
+# a. A source shard NARROWER than a tensor row makes an RM page one SHARD row,
+#    not one stick. The gather has to split each row span across pages —
+#    addressing it as `page == row` reads the right *number* of bytes from the
+#    wrong places, which is a silent PCC failure, so the geometry is asserted
+#    (`src_row_pages`) as well as the identity.
+# b. Padding no longer disqualifies the OUTPUT side from zero-copy: the fill is
+#    materialized into the input CB, so only the input may not be aliased.
+# c. The shard grid may split a ROW dim UNEVENLY — the short last shard gets its
+#    own block count instead of forcing the whole call onto the accessor path.
+# ===========================================================================
+
+# Reader compile-time slots (see tilize_program_descriptor's reader_ct_args).
+_CT_REGIME = 0
+_CT_SRC_ROW_PAGES = 14
+
+_BLOCK_2x2 = _legacy(_crs(((0, 0), (1, 1))), (64, 64), _ROW, _BLOCK)
+_WIDTH_4 = _legacy(_crs(((0, 0), (3, 0))), (64, 128), _ROW, _WIDTH)
+_UNEVEN_H3 = _legacy(_crs(((0, 0), (2, 0))), (64, 64), _ROW, _HEIGHT)  # 160 rows -> 64/64/32
+
+
+def _reshard_cases():
+    """(shape, in_cfg, out_cfg, expected_placements, expected_src_row_pages)."""
+    return [
+        pytest.param(
+            [1, 1, 128, 128],
+            _BLOCK_2x2,
+            _legacy(_crs(((0, 0), (3, 0))), (32, 128), _ROW, _HEIGHT),
+            (pd.P_ACCESSOR, pd.P_LOCAL_SHARD),
+            2,
+            id="block_in_is_gathered_page_by_page",
+        ),
+        pytest.param(
+            [1, 1, 64, 512],
+            _WIDTH_4,
+            _legacy(_crs(((0, 0), (1, 0))), (32, 512), _ROW, _HEIGHT),
+            (pd.P_ACCESSOR, pd.P_LOCAL_SHARD),
+            4,
+            id="width_in_height_out",
+        ),
+        pytest.param(
+            [1, 1, 64, 512],
+            _WIDTH_4,
+            _legacy(_crs(((0, 0), (1, 0))), (64, 256), _ROW, _WIDTH),
+            (pd.P_ACCESSOR, pd.P_LOCAL_SHARD),
+            4,
+            id="width_in_wider_width_out",
+        ),
+        pytest.param(
+            [1, 1, 64, 512],
+            _legacy(_crs(((0, 0), (1, 0))), (32, 512), _ROW, _HEIGHT),
+            _WIDTH_4,
+            (pd.P_ACCESSOR, pd.P_LOCAL_SHARD),
+            1,  # a full-width source shard: one page IS one stick
+            id="full_width_source_keeps_the_stick_identity",
+        ),
+        pytest.param(
+            [1, 1, 160, 64],
+            _UNEVEN_H3,
+            _UNEVEN_H3,
+            (pd.P_LOCAL_SHARD, pd.P_LOCAL_SHARD),
+            1,
+            id="uneven_grid_same_spec_is_still_zero_copy",
+        ),
+        pytest.param(
+            [1, 1, 160, 64],
+            ttnn.DRAM_MEMORY_CONFIG,
+            _UNEVEN_H3,
+            (pd.P_ACCESSOR, pd.P_LOCAL_SHARD),
+            1,
+            id="uneven_grid_destination_is_local",
+        ),
+    ]
+
+
+@pytest.mark.parametrize("shape, in_cfg, out_cfg, expected, src_row_pages", _reshard_cases())
+def test_reshard_placement_and_source_page_geometry(device, shape, in_cfg, out_cfg, expected, src_row_pages):
+    for cfg in (in_cfg, out_cfg):
+        if cfg.is_sharded():
+            _skip_if_grid_too_small(device, _shard_grid(cfg))
+    descriptor = _descriptor(device, shape, in_cfg, out_cfg)
+    assert _placements(descriptor) == expected
+    assert descriptor.kernels[0].compile_time_args[_CT_SRC_ROW_PAGES] == src_row_pages
+    # No DRAM staging and no cross-core combine: two CBs, no semaphores.
+    assert len(descriptor.cbs) == 2 and len(descriptor.semaphores) == 0
+
+
+def test_interleaved_hot_path_keeps_the_stick_identity(device):
+    """The general gather must not leak into the interleaved path: one page per
+    stick, and still the batched library reader (R_ALIGNED)."""
+    descriptor = _descriptor(device, [1, 1, 64, 128], ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)
+    reader = descriptor.kernels[0]
+    assert reader.compile_time_args[_CT_SRC_ROW_PAGES] == 1
+    assert reader.compile_time_args[_CT_REGIME] == pd.R_ALIGNED
+
+
+@pytest.mark.parametrize("shape, in_cfg, out_cfg, expected, src_row_pages", _reshard_cases())
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_reshard_identity(device, shape, in_cfg, out_cfg, expected, src_row_pages, dtype):
+    """A reshard is still a permutation: exact identity, L1 -> L1, no DRAM."""
+    for cfg in (in_cfg, out_cfg):
+        if cfg.is_sharded():
+            _skip_if_grid_too_small(device, _shard_grid(cfg))
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    torch_input = torch.randn(shape).to(torch_dtype)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg
+    )
+    got = ttnn.to_torch(tilize(tt_input, out_cfg, dtype=dtype))
+    assert torch.equal(got.to(torch.float32), torch_input.to(torch.float32))
+
+
+def test_uneven_grid_gives_the_short_shard_its_own_block_count(device):
+    """160 rows over 3 shards of 64 is 64/64/32: the last core owns 1 tile-row,
+    not 2. A uniform per-core count would over-run the tensor."""
+    _skip_if_grid_too_small(device, _shard_grid(_UNEVEN_H3))
+    descriptor = _descriptor(device, [1, 1, 160, 64], _UNEVEN_H3, _UNEVEN_H3)
+    reader = descriptor.kernels[0]
+    blocks = [reader.runtime_args[core.x][core.y][2] for core in (ttnn.CoreCoord(x, 0) for x in range(3))]
+    assert blocks == [2, 2, 1]
+
+
+# --- padding on top of a sharded placement ---------------------------------
+
+_PADDED_SHARDED = [
+    pytest.param(
+        [1, 1, 50, 64],
+        [1, 1, 64, 64],
+        ttnn.DRAM_MEMORY_CONFIG,
+        _legacy(_crs(((0, 0), (1, 0))), (32, 64), _ROW, _HEIGHT),
+        (pd.P_ACCESSOR, pd.P_LOCAL_SHARD),
+        id="interleaved_in_padded_sharded_out",
+    ),
+    pytest.param(
+        [1, 1, 100, 128],
+        [1, 1, 128, 128],
+        _legacy(_crs(((0, 0), (1, 1))), (50, 64), _ROW, _BLOCK),
+        _legacy(_crs(((0, 0), (3, 0))), (32, 128), _ROW, _HEIGHT),
+        (pd.P_ACCESSOR, pd.P_LOCAL_SHARD),
+        id="narrow_page_source_padded_into_a_local_shard",
+    ),
+    pytest.param(
+        [1, 1, 100, 64],
+        [1, 1, 128, 64],
+        _legacy(_crs(((0, 0), (1, 0))), (50, 64), _ROW, _HEIGHT),
+        ttnn.L1_MEMORY_CONFIG,
+        (pd.P_ACCESSOR, pd.P_ACCESSOR),
+        id="sharded_in_padded_interleaved_out",
+    ),
+]
+
+
+@pytest.mark.parametrize("shape, padded_shape, in_cfg, out_cfg, expected", _PADDED_SHARDED)
+def test_padded_sharded_keeps_the_destination_local(device, shape, padded_shape, in_cfg, out_cfg, expected):
+    """Padding disqualifies only the INPUT side from zero-copy — the fill is
+    materialized into the input CB. Compute still packs whole (padded) tiles, so
+    a resident destination shard is written in place, not over the NoC."""
+    for cfg in (in_cfg, out_cfg):
+        if cfg.is_sharded():
+            _skip_if_grid_too_small(device, _shard_grid(cfg))
+    tt_input = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=in_cfg,
+    )
+    plan = validate(tt_input, out_cfg, dtype=ttnn.bfloat16, output_padded_shape=padded_shape, pad_value=10.2)
+    tt_output = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(plan.target), plan.out_dtype, ttnn.TILE_LAYOUT, device, plan.out_memory_config
+    )
+    descriptor = pd.create_program_descriptor(tt_input, tt_output, plan)
+    assert _placements(descriptor) == expected
+    assert descriptor.cbs[0].has_buffer() is False  # the fill needs a streaming CB
+    assert descriptor.cbs[1].has_buffer() == (expected[1] == pd.P_LOCAL_SHARD)
+    assert descriptor.kernels[0].compile_time_args[_CT_REGIME] == pd.R_PAD
+
+
+@pytest.mark.parametrize("shape, padded_shape, in_cfg, out_cfg, expected", _PADDED_SHARDED)
+@pytest.mark.parametrize("pad_value", [0.0, -7.5])
+def test_padded_sharded_identity(device, shape, padded_shape, in_cfg, out_cfg, expected, pad_value):
+    """Data region identical, pad region EXACTLY the fill, on the sharded paths."""
+    for cfg in (in_cfg, out_cfg):
+        if cfg.is_sharded():
+            _skip_if_grid_too_small(device, _shard_grid(cfg))
+    torch_input = torch.randn(shape).to(torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_cfg
+    )
+    tt_output = tilize(tt_input, out_cfg, dtype=ttnn.bfloat16, output_padded_shape=padded_shape, pad_value=pad_value)
+    got = tt_output.cpu().to_torch_with_padded_shape()
+    pads = tuple(j for i in reversed(range(len(shape))) for j in (0, padded_shape[i] - shape[i]))
+    expected_padded = torch.nn.functional.pad(torch_input, pads, value=pad_value)
+    assert torch.equal(got.to(torch.float32), expected_padded.to(torch.float32))
+    # The logical view must not have been promoted to the padded shape.
+    assert list(ttnn.to_torch(tt_output).shape) == list(shape)
+
+
+def test_unaddressable_shard_row_is_refused(device, expect_error):
+    """A cross-core gather splits every row span at page boundaries, so the page
+    itself has to be 32B-alignable. A shard row of 100 B (W=50 bf16) cannot be —
+    refuse it rather than return a silently shifted gather."""
+    in_cfg = _legacy(_crs(((0, 0), (1, 1))), (50, 50), _ROW, _BLOCK)
+    out_cfg = _legacy(_crs(((0, 0), (3, 0))), (32, 128), _ROW, _HEIGHT)
+    for cfg in (in_cfg, out_cfg):
+        _skip_if_grid_too_small(device, _shard_grid(cfg))
+    tt_input = ttnn.from_torch(
+        torch.zeros([1, 1, 100, 100], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=in_cfg,
+    )
+    with expect_error(NotImplementedError, "(?i)aligned page"):
+        tilize(tt_input, out_cfg, output_padded_shape=[1, 1, 128, 128], pad_value=1.0)
