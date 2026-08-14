@@ -65,6 +65,49 @@ def _fanin_slice_cap(hidden_tiles: int) -> int:
     return max(1, round(FANIN_BALANCE_K * (hidden_tiles**0.5)))
 
 
+# Fuse `scale_block` + `apply_gamma_block` into one DEST window (compute kernel's
+# GAMMA_FUSED).  The fused pass costs the same two FPU ops but halves the L1
+# crossings — x*rsqrt is never packed out and read back — at the price of ONE
+# up-front pass that expands gamma from its row-0 vector form to full tiles
+# (DEST-reuse has no intra-tile broadcast).
+#
+# MEASURED and PARKED OFF (0 = never fuse), on the pinned BLOCK-shard prefill
+# geometry (8192x1024, [1024,128] on 8x8 = 32 tile-rows per core, 4 blocks), which
+# is the geometry with the most to gain:
+#     unfused  74417 ns   |   fused (min_row_tiles=2)  78635 ns   +5.7%
+# The saving is real (half the L1 crossings) but it is bought with a slower math
+# datapath: `mul_reuse_dest_tiles` must copy DEST back into srcA before the second
+# multiply, and that copy sits on the MATH thread between two dependent ops, while
+# the unfused pair runs as two independent DEST windows that pipeline against the
+# packer.  On this op the math thread binds and the L1 crossings do not, so the
+# trade goes the wrong way.  The lever is CORRECT (the whole sharded suite passes
+# with it on) and stays as a live knob: set it to 2 to fuse wherever a core owns
+# more than one tile-row.  At 0 the program is byte-identical to Refinement 4.
+GAMMA_FUSE_MIN_ROW_TILES = 0
+
+# Tiles per DEST window on the streaming eltwise passes (compute's DEST_BLOCK_TILES).
+# At 1 -- the Phase 0 value, implicit in a bare IterationShape -- every tile pays a
+# whole tile_regs acquire/commit/wait/release round trip, which is a hard MATH<->PACK
+# barrier per tile.  Batching lets the packer drain tile i while math runs tile i+1.
+# The chain clamps the value to DEST_AUTO_LIMIT (4 with fp32 DEST accumulation, 8
+# without) at runtime, and the kernel further clamps it to the largest DIVISOR of
+# S (the grid walk groups row-wise, so a group wider than the row leaves a short
+# tail whose per-tile output lifecycle under-pushes -- measured as a writer hang).
+#
+# MEASURED (sharded perf geometries, device kernel ns):
+#     geometry                 block_size 1   batched
+#     (1,1,8192,1024) BLOCK          74417     72063   -3.2%
+#     (1,1,32,1024)   WIDTH           3819      3870   +1.3%
+#     (1,1,32,2304)   WIDTH           4513      4644   +2.9%
+#     (1,1,32,5120)   WIDTH           5690      5760   +1.2%
+#     (1,1,32,7168)   WIDTH           5716      5823   +1.9%
+# It wins only where a core owns many tile-rows: a batched window costs one extra
+# fill/drain of the DEST pipeline per group, which a single-tile-row block (the
+# whole decode regime -- one group in total) pays without ever amortizing.  Hence
+# the row-tile gate below, which keeps that regime byte-identical to Refinement 4.
+DEST_BLOCK_TILES = 8
+DEST_BLOCK_MIN_ROW_TILES = 2
+
 OUT_CB_DEPTH = 2  # cb_output_tiles double buffer (2.78x overlap, double_buffer/report.md)
 RM_IN_DEPTH = 2  # cb_rm_stage_in  tile-row window
 RM_OUT_DEPTH = 2  # cb_rm_stage_out tile-row window
@@ -894,6 +937,15 @@ def create_program_descriptor(
     ]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
+    # The gamma fusion rung (see GAMMA_FUSE_MIN_ROW_TILES): worth its one-off gamma
+    # expansion only where a core owns more than one tile-row.  `max_core_row_tiles`
+    # is the deepest per-core row count in this program, so the whole grid runs one
+    # kernel variant (a per-core CT arg does not exist).
+    max_core_row_tiles = max((g["core_row_tiles"] for g in active_groups), default=0)
+    gamma_fused = has_gamma and GAMMA_FUSE_MIN_ROW_TILES > 0 and max_core_row_tiles >= GAMMA_FUSE_MIN_ROW_TILES
+
+    dest_block_tiles = DEST_BLOCK_TILES if max_core_row_tiles >= DEST_BLOCK_MIN_ROW_TILES else 1
+
     compute_ct = [
         S,
         B,
@@ -903,6 +955,8 @@ def create_program_descriptor(
         1 if mask_enabled else 0,
         in_wait_tiles,
         in_capacity_tiles,
+        1 if gamma_fused else 0,
+        dest_block_tiles,
     ]
 
     # ---- per-core runtime args ----

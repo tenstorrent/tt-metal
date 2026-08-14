@@ -35,7 +35,8 @@ Knob / ablation switches are FILES, not env vars: under `--profile` the measured
 run lives in a `python -m tracy` child and an ad-hoc env var does not reach it.
 
     echo 32   > /tmp/rms_norm_dm_chunk       # DM_CHUNK_TILES
-    echo 0    > /tmp/rms_norm_tree_min       # COMBINE_TREE_MIN_SLICES (0 disables the tree)
+    echo 0    > /tmp/rms_norm_gamma_fuse      # GAMMA_FUSE_MIN_ROW_TILES (0 disables the fusion)
+    echo 1    > /tmp/rms_norm_dest_block      # DEST_BLOCK_TILES (1 = one DEST window per tile)
     echo no_gamma > /tmp/rms_norm_ablate     # gamma=None: costs out the gamma DRAM read + apply
 
 The patch target is `create_program_descriptor.__globals__`, NOT the module
@@ -81,6 +82,8 @@ def _read(path, cast, default=None):
 
 DM_CHUNK = _read("/tmp/rms_norm_dm_chunk", int)
 TREE_MIN = _read("/tmp/rms_norm_tree_min", int)
+GAMMA_FUSE = _read("/tmp/rms_norm_gamma_fuse", int)  # GAMMA_FUSE_MIN_ROW_TILES (0 = off)
+DEST_BLOCK = _read("/tmp/rms_norm_dest_block", int)  # DEST_BLOCK_TILES
 ABLATE = _read("/tmp/rms_norm_ablate", str, "none")
 # Fidelity probe: a zero-code compute-cost classifier.  If the wall does not move
 # between LoFi and HiFi4 the shape is not compute-bound.
@@ -99,7 +102,11 @@ def knobs(monkeypatch):
         monkeypatch.setitem(PLAN_GLOBALS, "DM_CHUNK_TILES", DM_CHUNK)
     if TREE_MIN is not None:
         monkeypatch.setitem(PLAN_GLOBALS, "COMBINE_TREE_MIN_SLICES", TREE_MIN)
-    return (DM_CHUNK, TREE_MIN, ABLATE)
+    if GAMMA_FUSE is not None:
+        monkeypatch.setitem(PLAN_GLOBALS, "GAMMA_FUSE_MIN_ROW_TILES", GAMMA_FUSE)
+    if DEST_BLOCK is not None:
+        monkeypatch.setitem(PLAN_GLOBALS, "DEST_BLOCK_TILES", DEST_BLOCK)
+    return (DM_CHUNK, TREE_MIN, GAMMA_FUSE, DEST_BLOCK, ABLATE)
 
 
 def target_compute_config():

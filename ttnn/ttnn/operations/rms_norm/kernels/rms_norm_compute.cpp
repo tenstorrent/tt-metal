@@ -36,6 +36,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/broadcast/bcast.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
@@ -58,6 +59,16 @@ constexpr uint32_t cb_rm_stage_out = 11;
 constexpr uint32_t cb_thread_sync = 12;
 
 constexpr uint32_t NO_MASK_COL = 0xFFFFFFFFu;
+
+// Largest d <= cap that divides `width`.  See DEST_BLOCK below.
+constexpr uint32_t dest_block_divisor(uint32_t width, uint32_t cap) {
+    for (uint32_t d = (cap < width ? cap : width); d > 1; --d) {
+        if (width % d == 0) {
+            return d;
+        }
+    }
+    return 1;
+}
 
 // PACK -> UNPACK ordering edge for an in-place handoff.
 //
@@ -98,6 +109,26 @@ void kernel_main() {
     // 2) or a double-buffered input (IN_CB_DEPTH > 1).  Always a whole multiple of
     // BLOCK_TILES, so the read window never wraps mid-block.
     constexpr uint32_t IN_CAPACITY_TILES = get_compile_time_arg_val(7);
+    // Fuse `scale_block` and `apply_gamma_block` into ONE pass over the block.
+    //
+    // Unfused, x*rsqrt is packed to L1 and unpacked again purely to meet gamma:
+    // two FPU ops but FOUR L1 crossings per tile, plus a PACK->UNPACK sync per
+    // block.  Fused, the gamma multiply happens on the DEST tile the scale just
+    // produced (`DestReuseBinary`), so the block costs two FPU ops and TWO
+    // crossings.  The price is that DEST-reuse has no intra-tile broadcast, so
+    // gamma must be a FULL tile: the row-0-only vector is expanded once, in place,
+    // by a `UnaryBcast<Row>` pass over its S tiles (paid once per kernel, against
+    // a saving of B*S packs + B*S unpacks per BLOCK).  The host therefore turns
+    // this on only where a core owns more than one tile-row — see
+    // GAMMA_FUSE_MIN_ROW_TILES; the single-tile-row decode regime stays
+    // byte-identical to Refinement 3/4.
+    constexpr uint32_t GAMMA_FUSED = get_compile_time_arg_val(8);
+    // Tiles per DEST window on the streaming eltwise passes (scale / apply_gamma).
+    // At 1 every tile pays a full tile_regs acquire/commit/wait/release round trip,
+    // which serializes MATH against PACK; batching lets the two pipeline.  The chain
+    // clamps this to DEST_AUTO_LIMIT at runtime, so an oversized value only costs
+    // extra outer iterations.
+    constexpr uint32_t DEST_BLOCK_TILES = get_compile_time_arg_val(9);
 
     constexpr uint32_t BLOCK_TILES = BLOCK_ROWS * SLICE_HIDDEN_TILES;
 
@@ -169,6 +200,17 @@ void kernel_main() {
         ckl::PopPolicy::None,
         ckl::OperandKind::Row,
         ckl::TileOffset::Unset);
+    // The fused path's gamma operand: a FULL tile (no intra-tile broadcast — that
+    // is what DEST-reuse cannot do), still indexed per hidden column (Row).
+    constexpr auto gamma_full = ckl::input(
+        cb_gamma_tiles, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Row, ckl::TileOffset::Unset);
+    // ...and the in-place expansion that produces it, once: read tile i with a Row
+    // broadcast, write tile i back full.  Legal in place per tile — the chain's
+    // unpack of tile i completes inside the dst-sync window before its pack.
+    constexpr auto gamma_expand_in = ckl::input(
+        cb_gamma_tiles, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::OperandKind::Block, ckl::TileOffset::Unset);
+    constexpr auto gamma_expand_out =
+        ckl::output(cb_gamma_tiles, ckl::ReservePolicy::None, ckl::PushPolicy::None, ckl::TileOffset::Set);
     // In-place pack window.  TileOffset::Set (base 0) is REQUIRED, not cosmetic:
     // with TileOffset::Unset the chain emits `pack_tile<out_of_order_output=false>`,
     // whose LLK path derives the write address from an internal running counter and
@@ -184,7 +226,21 @@ void kernel_main() {
     // lifecycle.  The writer still drains a whole tile-row (S pages) at a time,
     // so cb_output_tiles' out_cb_depth window is what buys the overlap.
     constexpr auto to_output = ckl::output(cb_output_tiles);
+    // The batched twin: a DEST window of DEST_BLOCK tiles must synchronize the
+    // output CB once per GROUP, not once per tile — a per-tile lifecycle inside a
+    // grouped walk under-pushes and the writer hangs waiting for the rest of the
+    // tile-row (measured).  Mirrors kernel_lib's own block_size example.
+    constexpr auto to_output_batched =
+        ckl::output(cb_output_tiles, ckl::ReservePolicy::PerBlockSize, ckl::PushPolicy::PerBlockSize);
     constexpr auto block_shape = ckl::IterationShape::grid(BLOCK_ROWS, SLICE_HIDDEN_TILES);
+    // Same walk, batched into DEST windows.  The grid walk blocks ROW-WISE, so the
+    // group must divide the row width: a block wider than S leaves the row's tail
+    // group short and the per-tile output lifecycle never completes it (measured:
+    // the writer hangs in cb_wait_front).  Taking the largest divisor of S that
+    // fits the knob keeps every group full and needs no tail contract.
+    constexpr uint32_t DEST_BLOCK = dest_block_divisor(SLICE_HIDDEN_TILES, DEST_BLOCK_TILES);
+    constexpr auto block_shape_batched =
+        ckl::IterationShape::grid(BLOCK_ROWS, SLICE_HIDDEN_TILES).block_size(DEST_BLOCK);
 
     auto finalize = [inv_w_bits, eps_bits](uint32_t dst_idx) {
         binop_with_scalar_tile_init();
@@ -311,34 +367,62 @@ void kernel_main() {
                 finalize);
         }
 
-        // ---- scale_block: x *= rsqrt(mean + eps). A REDUCE_ROW result is
-        //      column-shaped, so it broadcasts back across columns (Col).
-        if constexpr (HAS_GAMMA || IS_ROW_MAJOR) {
+        // ---- scale_block (+ apply_gamma_block, fused): x *= rsqrt(mean + eps),
+        //      then *= gamma.  A REDUCE_ROW result is column-shaped, so it
+        //      broadcasts back across columns (Col); gamma is a 1D [W] operand and
+        //      so is indexed per hidden column (Row).
+        if constexpr (HAS_GAMMA && GAMMA_FUSED) {
+            cb_wait_front(cb_gamma_tiles, SLICE_HIDDEN_TILES);  // deferred; see boot
+            if (block == 0) {
+                // Expand gamma from its row-0 vector form to full tiles, once.
+                ckl::eltwise_chain(
+                    ckl::IterationShape::tiles(SLICE_HIDDEN_TILES),
+                    ckl::UnaryBcast<ckl::BroadcastDim::Row, gamma_expand_in>{},
+                    ckl::PackTile<gamma_expand_out>{0});
+                sync_pack_to_unpack();  // gamma packed in place; the chain below unpacks it
+            }
+            if constexpr (IS_ROW_MAJOR) {
+                ckl::eltwise_chain(
+                    block_shape_batched,
+                    ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_held, rms_col>{},
+                    ckl::DestReuseBinary<gamma_full, ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>{},
+                    ckl::PackTile<in_place>{pack_base});
+                sync_pack_to_unpack();  // x*r*gamma packed in place; untilize unpacks it
+            } else {
+                ckl::eltwise_chain(
+                    block_shape_batched,
+                    ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_held, rms_col>{},
+                    ckl::DestReuseBinary<gamma_full, ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>{},
+                    ckl::PackTile<to_output_batched>{});
+            }
+        } else if constexpr (HAS_GAMMA || IS_ROW_MAJOR) {
             // Spelled as an explicit chain rather than `ckl::mul<...>` only because
             // the convenience wrappers default-construct their elements and so
             // cannot carry the runtime `pack_base`.  Same helper, same chain.
             ckl::eltwise_chain(
-                block_shape,
+                block_shape_batched,
                 ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_held, rms_col>{},
                 ckl::PackTile<in_place>{pack_base});
             sync_pack_to_unpack();  // x*r packed in place; the next stage unpacks it
         } else {
-            ckl::mul<x_held, rms_col, to_output>(block_shape);
+            ckl::mul<x_held, rms_col, to_output_batched>(block_shape_batched);
         }
 
         // ---- apply_gamma_block: gamma is a 1D [W] operand -> Row broadcast ----
-        if constexpr (HAS_GAMMA) {
+        //      (unfused path only; the fused one did it above in the same DEST
+        //      window, so nothing is packed between the two multiplies).
+        if constexpr (HAS_GAMMA && !GAMMA_FUSED) {
             // The deferred gamma wait (see the boot comment).  Never popped, so
             // only the first block can actually block here.
             cb_wait_front(cb_gamma_tiles, SLICE_HIDDEN_TILES);
             if constexpr (IS_ROW_MAJOR) {
                 ckl::eltwise_chain(
-                    block_shape,
+                    block_shape_batched,
                     ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_held, gamma_row>{},
                     ckl::PackTile<in_place>{pack_base});
                 sync_pack_to_unpack();  // x*r*gamma packed in place; untilize unpacks it
             } else {
-                ckl::mul<x_held, gamma_row, to_output>(block_shape);
+                ckl::mul<x_held, gamma_row, to_output_batched>(block_shape_batched);
             }
         }
 
