@@ -34,6 +34,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     create_fabric_router_config,
     create_gate_weights,
+    create_latent_weights,
     create_shared_expert_weights,
     create_torch_expert_weights,
     extract_mesh_config,
@@ -223,17 +224,9 @@ def run_model(
             all_routed_weights = None
             shared_expert_weights = None
         gate_weights = create_gate_weights(num_routed_experts, emb_dim, seed=9012)
-        # LatentMoE projections. Distinct fixed seeds for the same reason as above: each tensor must
+        # LatentMoE projections. Distinct fixed seed for the same reason as above: each tensor must
         # be a pure function of (shape, seed) so a perf-built cache matches the PCC reference.
-        latent_weights = None
-        if use_latent:
-            g = torch.Generator().manual_seed(3456)
-            latent_weights = {
-                "down_proj": torch.randn(routed_emb, emb_dim, generator=g, dtype=torch.float32) * 0.02,
-                "up_proj": torch.randn(emb_dim, routed_emb, generator=g, dtype=torch.float32) * 0.02,
-                # Non-trivial gamma, so a dropped or mis-sharded norm weight cannot pass as identity.
-                "norm": 1.0 + torch.randn(routed_emb, generator=g, dtype=torch.float32) * 0.02,
-            }
+        latent_weights = create_latent_weights(emb_dim, routed_emb, seed=3456) if use_latent else None
         profiler.end("weights_creation")
 
         # Build TTNN cache if not already complete
@@ -940,6 +933,18 @@ def test_kimi_moe(
         # one fabric outlier in the pipeline. The smaller meshes above stay 1D -- they are local
         # proxies no pipeline selects, and 2D routing on a single-row mesh is meaningless.
         pytest.param(
+            (2, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4",
+        ),
+        pytest.param(
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
@@ -1017,27 +1022,5 @@ def test_kimi_k3_moe(
         shared_hidden_dim=KimiK3Config.SHARED_EXPERT_INTERMEDIATE_SIZE,
         latent_use_norm=KimiK3Config.LATENT_MOE_USE_NORM,
         rms_norm_eps=KimiK3Config.RMS_NORM_EPS,
-        # 0.96, not the 0.982 the other variants use, and NOT because K3's routed path is worse --
-        # measured on 8x4 with the same golden-trace input, K3 is marginally BETTER there:
-        #
-        #                     shared_output   routed_output   final_output
-        #   Kimi-K2.6           0.999779        0.967471        0.983272
-        #   Kimi-K3             0.999759        0.969424        0.969454
-        #
-        # final = routed + shared, so its PCC is a magnitude-weighted blend of the two. K2.6's
-        # near-exact shared expert pulls final up to 0.983; K3 sums 16 experts (not 8) and pushes the
-        # result through a 7168-wide up-projection, so the routed term dominates and final collapses
-        # onto routed (0.96945 vs 0.96942). Holding K3 to 0.982 would therefore be demanding a
-        # routed-path accuracy that K2.6 does not itself achieve. 0.96 matches the routed_output bar
-        # this suite already accepts.
-        #
-        # That the residual is accumulation and not the new code is pinned by latent_routed_output:
-        # 0.969778 before the latent norm + up-projection vs 0.969424 after, i.e. those two stages
-        # cost 0.0004. Expect this to move once #51335 lands SiTU and the comparison runs in fp32
-        # dest accumulate.
-        # 0.965, not 0.96: tied to K3's measured 0.969454 with ~0.0045 of margin now that a baseline
-        # exists. A bar at 0.96 would let a real ~0.009 regression through all three of
-        # latent_routed_output / routed_output / final_output, which are three views of one
-        # accumulation chain rather than independent checks.
         final_output_pcc=0.965,
     )

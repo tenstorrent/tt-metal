@@ -799,6 +799,10 @@ class TtMoe(LightweightModule):
         # Under LatentMoE these are two distinct tensors -- x (full width, consumed by the shared
         # expert) and routed_x (latent, consumed by dispatch) -- so both must be freed. Without the
         # latent path they alias, and deallocating twice would be an error, hence the branch.
+        # Bound before the branch, as latent_routed_output is below: without the latent path nothing
+        # assigns it, and only the conditional expression at the intermediates call keeps that from
+        # being an UnboundLocalError.
+        latent_input = None
         if self.use_latent_moe:
             # Same treatment gate_logits gets above: when intermediates are requested, park the
             # post-down-projection tensor in DRAM instead of freeing it, so latent_input can be PCC'd
@@ -807,9 +811,18 @@ class TtMoe(LightweightModule):
             latent_input = (
                 ttnn.to_memory_config(routed_x, ttnn.DRAM_MEMORY_CONFIG)
                 if return_intermediates
-                else ttnn.deallocate(routed_x)
+                else ttnn.deallocate(routed_x, force=True)
             )
-        x = ttnn.deallocate(x)
+        # Drop routed_x before x is freed. Without the latent path the two names are one tensor, so
+        # this leaves the deallocate below a single reference rather than relying on its force=True
+        # default to free a buffer that something else still names. Under LatentMoE it drops either a
+        # name already freed above, or -- with return_intermediates -- the last reference to the L1
+        # original the DRAM copy supersedes, which would otherwise be held until this frame exits.
+        if not self.use_latent_moe:
+            routed_x = None
+        elif not return_intermediates:
+            routed_x = ttnn.deallocate(routed_x, force=True)
+        x = ttnn.deallocate(x, force=True)
         scores = ttnn.to_memory_config(scores, ttnn.DRAM_MEMORY_CONFIG)
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
         logger.debug(f"[TtMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}")
@@ -967,7 +980,7 @@ class TtMoe(LightweightModule):
                 combined_output=combined_output,
                 routed_output=routed_output,
                 latent_routed_output=latent_routed_output,
-                latent_input=latent_input if self.use_latent_moe else None,
+                latent_input=latent_input,
                 expert_token_counts=tt_expert_token_counts,
             )
 
