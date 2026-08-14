@@ -104,3 +104,80 @@
   exact config pinned as a named cell at its tighter 0.9995 gate, so a later perf phase cannot
   silently substitute an `fp32_dest_acc_en=True` proxy). Skips are exactly the op's refusal
   surface: `{float32, False}` (EXCLUSIONS) and `bfloat8_b` on a non-tile-aligned shape (INVALID).
+
+## Refinement 2 — Sharded placement: HEIGHT / WIDTH / BLOCK
+
+- **Date**: 2026-08-14
+- **What was done**: `HEIGHT_SHARDED` / `WIDTH_SHARDED` / `BLOCK_SHARDED` added to
+  `SUPPORTED["memory_layout"]` and consumed **natively**, plus the `memory_config` kwarg on the entry
+  point (the output inherits the input's placement; a mismatched request raises a `ValueError`).
+
+  *Reused, not rebuilt.* All three flavours are the Phase 0 logical scheme with the geometry pinned by
+  the caller, exactly as `op_design.md`'s "Physical shard placement" lamp says: HEIGHT is the
+  `num_hidden_slices == 1` corner (the reduce stays core-local), WIDTH is the already-built
+  gather-to-root + `Mcast2D` combine over one row-group, BLOCK is the Phase 0 2D partition with one
+  row-group per grid row. So the kernels' block schedule, combine, W-mask and ragged-tail accounting
+  are untouched. The delta is:
+  - `_plan_sharded()` **reads** `num_row_groups` / `num_hidden_slices` / `slice_hidden_tiles` /
+    `shard_rows` off the shard spec instead of running the rect search (`HIDDEN_TILES_PER_CORE_FLOOR`
+    does not apply on this path); `block_rows` is then the largest **divisor** of `shard_rows` that
+    fits, a divisor so every block is the same size.
+  - **Zero-copy CB placement.** TILE: `cb_input_tiles` / `cb_output_tiles` ARE the caller's resident
+    shards (`ttnn.cb_descriptor_from_sharded_tensor`), so `load_block` moves nothing and the writer's
+    pop *is* `store_block`. ROW_MAJOR: the shards bind to `cb_shard_in` / `cb_shard_out` and the
+    tilize/untilize staging the layout already needs reads and writes them **core-locally** (L1→L1),
+    never through a `TensorAccessor`.
+  - **A ragged WIDTH shard grid is supported, not refused.** The verifier's constraint (a) proposed
+    excluding a non-rectangular grid; on an 11-wide grid almost every `Wt` lands as "N full rows + a
+    partial row", so that would have dropped ~90 % of the WIDTH cells. Instead the row-group's
+    **bounding box** is the mcast rect, with `Mcast2D(num_active = s−1)` — the helper's documented
+    divergent ack count ("the mcast box holds inactive cores that receive but never ack"). The
+    non-member cores carry the CBs, so the broadcast lands in reserved L1 and the sender still waits
+    for exactly the real receivers.
+  - Buffer-depth knobs stay live and are now **turned by the L1 solve** on the ROW_MAJOR-sharded path
+    (`rm_in_depth`, `rm_out_depth`: 2 → 1 → and only then the smallest configuration), because a shard
+    pins `slice_hidden_tiles` and the depths are the only remaining slack.
+- **Accuracy achieved**: PCC ≥ 0.9999, rel-RMS ≈ 0.005 — i.e. at the interleaved path's own level — on
+  11 adversarial shapes × 3 placements × 2 layouts × {bf16, fp32, bfloat8_b} × {gamma, no_gamma},
+  including `(1,1,256,512)`, `(1,1,3232,96)`, `(1,1,4064,160)`, `(1,1,32,4064)`, `(7136,736)`,
+  `(13,777,1023)` and the poisoned-padding shapes. bfloat8_b sharded: PCC 0.99986 / rel-RMS 0.018
+  against a 0.99 / 0.10 gate. All five **pinned sharded perf geometries** run green, including the
+  block-sharded prefill `(1,1,8192,1024)` `[1024,128]`/(8,8) — the first case ever to exercise
+  `block_rows < shard_rows`.
+- **Golden test progress**: sharded `pad_poison` 18/18; sharded `perf` 5/5; a 52-cell sharded
+  `resilience` slice 48/52. Unit directory 317 passed / 36 skipped, with the 107 interleaved
+  regression tests unchanged.
+- **Issues encountered**: three real bugs, every one of them invisible to the interleaved suite.
+  1. `buffer_num_pages()` counts *shard* pages, so on a width/block-sharded ROW_MAJOR tensor it
+     reports (sticks × width-shards) rather than the stick count — the row-group count came out
+     N× too large. `total_sticks` now comes from the padded shape.
+  2. A ROW_MAJOR shard's **width granule is the L1 alignment (8 elements at bf16), not the tile**, so
+     a width/block shard's slice can start off the 64 B DRAM boundary. The per-core gamma stick read
+     then silently returned the wrong bytes — PCC 0.23–0.57, and correlating *exactly* with
+     `slice_elem_base·elem % 64 != 0` across every shape. Fixed with one DRAM-aligned burst covering
+     the whole slice into scratch pages, then hand-placing only the 32 row-0 lanes each tile actually
+     uses (`BroadcastDim::Row` reads nothing else).
+  3. **The in-place pack indexed from the read window instead of the CB base.** A resident-shard
+     `cb_input_tiles` has capacity = the whole shard, so once the L1 solve cut `block_rows` below
+     `shard_rows` the read pointer stopped wrapping to base each block — and because only
+     reserve/push move a *consumer's* write pointer, and compute never pushes that CB, every block
+     after the first rewrote block 0's pages and dropped its own `1/rms` factor. Diagnosed by
+     magnitude rather than by instrumentation: the error tracked `1/sqrt(2W)` — precisely the row-rms
+     spread, i.e. "the scale is missing" — across W = 96/160/736/1184/3072, and vanished with
+     `gamma=None` (which takes the non-in-place branch). Fixed with a runtime
+     `pack_base = (block·B·S) % IN_WAIT_TILES`, which is 0 whenever the CB holds exactly one block, so
+     the interleaved path is byte-identical. `(1,1,3232,96)` WIDTH: rel-RMS 0.0717 → 0.0050.
+- **Left failing on purpose (the next refinement's baseline)**: 4 cells, one class — wide-W
+  `HEIGHT_SHARDED`. A HEIGHT shard pins `slice_hidden_tiles = Wt` on *every* core, so x + out + gamma
+  alone are ≈ 3·W·2 B and the CBs reach 1.7–3.0 MB against this part's 1.57 MB L1 (W = 6144 and
+  11008, and `(3104,4064)`). There is no knob left: the shard spec fixes the hidden extent. The exit
+  is the design's lamped **TwoPassStreaming** regime — sub-chunk the hidden axis and re-read x with
+  `Accumulate::at` across chunks — which is a scheme change, so per the OOM rule these are left
+  failing rather than silenced with an `EXCLUSIONS` entry.
+- **Tests added**: `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_sharded.py` — 3 placements
+  × 2 layouts × 3 shapes for placement correctness; `test_rms_norm_sharded_multi_block_keeps_the_scale`,
+  which asserts the plan really is `block_rows < shard_rows` before bounding rel-RMS well under the
+  dropped-scale signature (so the pin cannot silently stop testing what it names); and
+  `test_rms_norm_sharded_is_zero_copy`, a **structural** check that the input/output CBs carry the
+  tensors' buffers — because a `TensorAccessor` re-read of a core's own shard is numerically correct
+  and so is invisible to every value-based test.

@@ -84,13 +84,53 @@ are `*_SHARDED`, which is Refinement 2's scope.
 
 ---
 
-### [ ] Refinement 2 — Sharded placement: HEIGHT / WIDTH / BLOCK
+### [x] Refinement 2 — Sharded placement: HEIGHT / WIDTH / BLOCK
 
 **Goal**: add `HEIGHT_SHARDED`, `WIDTH_SHARDED` and `BLOCK_SHARDED` to `SUPPORTED["memory_layout"]`, consumed **natively** — the caller's shard is already resident in each core's L1, so it must be read through a CB backed on the sharded buffer (`ttnn.cb_descriptor_from_sharded_tensor`, zero-copy), never re-read through a `TensorAccessor`. Also add the `memory_config: Optional[ttnn.MemoryConfig] = None` kwarg to the entry point (the golden runner passes the input's shard spec for every sharded cell and expects a matching sharded output) and allocate the output accordingly.
 
 **Verifier notes**: no skill covers placement yet, so the mechanism is named here. Ordered second because it is the hardest generality work left (the difficulty ranking puts block-sharding at the top) and because every later phase is perf that would otherwise be re-tuned on top of it. What makes this a *placement* refinement rather than a new scheme is that **all three flavours are already the Phase 0 logical scheme**: `HEIGHT_SHARDED` cuts the independent row axis (the reduce stays core-local — the `num_hidden_slices == 1` regime), `WIDTH_SHARDED` cuts the dependent hidden axis (exactly the gather-to-root + `Mcast2D` combine that is already built), and `BLOCK_SHARDED` cuts both (the Phase 0 2D partition with the geometry pinned by the caller). So the work is: read `num_row_groups` / `num_hidden_slices` / `slice_hidden_tiles` / `core_row_tiles` **off the shard spec** instead of computing them in `_plan`, and swap `load_block` / `store_block` for CB placement on the sharded buffers. Three constraints to respect: (a) `Mcast2D` takes the *bounding box* of the core set as the rect, so a shard grid whose cores are not a rectangle must be refused via `EXCLUSIONS` rather than silently multicast into non-members; (b) the shard grid replaces the rect search, so `HIDDEN_TILES_PER_CORE_FLOOR` no longer applies on this path; (c) the ROW_MAJOR + sharded + TILE-gamma corners are already `INVALID` in `feature_spec.py` and will not appear. The five sharded perf loose cases (`_perf_case(..., _ML.WIDTH_SHARDED, ...)` and the block-sharded prefill) become measurable only after this lands — they are Refinement 5's targets.
 
 **Done when**: the three sharded values are in SUPPORTED, the sharded `resilience` (44 shapes × 3 placements) and `pad_poison` (6 shapes × 3 placements) loose cases pass or are covered by a named `EXCLUSIONS` entry, no sharded cell reaches the kernel through a `TensorAccessor` read of its **own** local shard, and `verify_supported` stays clean on all three loud categories.
+
+**Result**: all three values are in SUPPORTED and consumed **natively** — `cb_input_tiles` /
+`cb_output_tiles` are bound to the caller's resident L1 buffers on the TILE path (zero copy, zero DRAM
+crossings for x and out); ROW_MAJOR binds the shards to `cb_shard_in` / `cb_shard_out` and the
+(mandatory) tilize staging reads them **core-locally**. No sharded cell touches a `TensorAccessor` for
+its own shard — pinned structurally by `test_rms_norm_sharded.py::test_rms_norm_sharded_is_zero_copy`,
+because an accessor re-read is numerically *correct* and therefore invisible to any value check.
+`_plan_sharded` reads `num_row_groups` / `num_hidden_slices` / `slice_hidden_tiles` / `shard_rows` off
+the shard spec instead of searching; the rect search and `HIDDEN_TILES_PER_CORE_FLOOR` do not apply
+there. Constraint (a) was **not** met by refusal: instead of excluding a non-rectangular WIDTH shard
+grid, the row-group's **bounding box** is the mcast rect with `Mcast2D(num_active = s−1)` — the few
+non-member cores hold the CB (so the landing L1 is reserved) and receive but never ack. That keeps
+~90 % of the WIDTH resilience cells, which a rectangularity refusal would have dropped (on an 11-wide
+grid almost every `Wt` lands as "N full rows + a partial row"). `memory_config` is on the entry point
+and the output inherits the input's placement.
+
+Three real bugs, all invisible to the interleaved suite: (1) `buffer_num_pages()` counts *shard* pages
+for a width/block-sharded ROW_MAJOR tensor, so `total_sticks` now comes from the padded shape;
+(2) a ROW_MAJOR shard's width granule is the L1 alignment, not the tile, so a slice can start
+mid-DRAM-burst and the per-core gamma read silently returned the wrong bytes (PCC 0.23–0.57) — now one
+DRAM-aligned burst plus hand-placed row-0 lanes; (3) **the in-place pack indexed from the read window
+instead of the CB base.** A resident-shard CB's capacity is the whole shard, so when the L1 solve cuts
+`block_rows` below `shard_rows` the read pointer stops wrapping, and since only reserve/push move a
+consumer's write pointer (compute never pushes that CB) every block after the first rewrote block 0's
+pages and dropped its own `1/rms`. Found by magnitude, not by a debugger: the error tracked
+`1/sqrt(2W)` — the row-rms spread — exactly across W = 96…3072. Fixed with a runtime
+`pack_base = (block·B·S) % IN_WAIT_TILES`, which is 0 for a one-block CB, so the interleaved path is
+byte-identical.
+
+Measured: 317 passed / 36 skipped over the whole unit directory (107 interleaved regression tests
+unchanged); a golden `-k` slice of 52 sharded resilience cells → 48 passed / 4 failed; sharded
+`pad_poison` 18/18 and all 5 pinned sharded `perf` geometries green (incl. the block-sharded prefill,
+the first case ever to run `block_rows < shard_rows`); PCC ≥ 0.9999 / rel-RMS ≈ 0.005 across 11
+adversarial shapes × 3 placements × 2 layouts × {bf16, fp32, bfloat8_b} × {gamma, no_gamma}. **The 4
+remaining failures are one class and are left failing on purpose** (per the OOM rule): wide-W
+`HEIGHT_SHARDED` (W ∈ {4064·97 rows, 6144, 11008}), where the shard pins `slice_hidden_tiles = Wt` on
+every core so x + out + gamma alone are ≈ 3·W·2 B and the CBs reach 1.7–3.0 MB against a 1.57 MB L1.
+That is the design's lamped **TwoPassStreaming** regime (sub-chunk the hidden axis, re-read x,
+`Accumulate::at` across chunks) — a scheme change, not a knob, so it is the next refinement's baseline
+rather than an `EXCLUSIONS` entry.
 
 ---
 
