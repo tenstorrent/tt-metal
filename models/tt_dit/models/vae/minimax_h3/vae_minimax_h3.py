@@ -46,7 +46,7 @@ from loguru import logger
 import ttnn
 
 from ....layers.module import Module
-from ....utils.tensor import fast_device_to_host, local_device_to_torch
+from ....utils.tensor import fast_device_to_host, float_to_uint8, local_device_to_torch
 from ....utils.yuv_d2h import fast_device_to_host_yuv
 from .encoder_minimax_h3 import MiniMaxH3Encoder3d
 
@@ -235,6 +235,7 @@ class MiniMaxH3Vae(Module):
         profile: bool = False,
         ccl_manager=None,
         pixel_denorm: tuple[Sequence[float], Sequence[float]] | None = None,
+        readback_uint8: bool = False,
     ) -> None:
         super().__init__()
         self.config = config
@@ -262,6 +263,9 @@ class MiniMaxH3Vae(Module):
         # caller keeps no copy of the constants. Left unset the decoder emits reference-space values,
         # which is what the numerics tests compare against.
         self.pixel_denorm = pixel_denorm
+        # Independent of `device_stitch`: it shrinks the *tile* readback the host path already does,
+        # rather than replacing it with a canvas. The two compose, and each is worth measuring alone.
+        self.readback_uint8 = readback_uint8
         # Synchronize after each decode forward so `device` and `readback` are separable in the
         # profile -- which also serializes them, so it is opt-in.
         self.profile = profile
@@ -302,10 +306,18 @@ class MiniMaxH3Vae(Module):
         shards. ``concat_dims=[0, 0]`` is one dim fractured over the whole mesh, which
         ``_reassemble_2d`` handles in its ``d0 == d1`` branch; the two are pinned bit-for-bit by
         ``tests/unit/test_fast_device_to_host.py::TestLinearisedShardReadback``.
+
+        ``readback_uint8`` casts on device first, halving what crosses PCIe. The tiles it returns are
+        quantized *before* the host cross-fade rather than after, which costs at most 1 LSB: the blend
+        is a convex combination, so blending quantized values and quantizing a blend differ only by
+        the rounding. It needs ``pixel_denorm``, since the cast maps ``[-1, 1]``.
         """
         if self.ccl_manager is None:
             return ttnn.to_torch(wave, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))
-        return fast_device_to_host(wave, self.mesh_device, [0, 0], ccl_manager=self.ccl_manager)
+        pre_fn = float_to_uint8 if self.readback_uint8 else None
+        return fast_device_to_host(
+            wave, self.mesh_device, [0, 0], ccl_manager=self.ccl_manager, pre_transfer_fn=pre_fn
+        )
 
     def _report_profile(self, total: float) -> None:
         """Log where a decode's wall time went, and stash it on `last_decode_profile`."""
@@ -955,6 +967,8 @@ class MiniMaxH3Vae(Module):
         """
         if output_type not in OUTPUT_TYPES:
             raise ValueError(f"output_type must be one of {OUTPUT_TYPES}, got {output_type!r}")
+        if self.readback_uint8 and self.pixel_denorm is None:
+            raise ValueError("readback_uint8 needs pixel_denorm; the uint8 cast maps [-1, 1]")
         if output_type == "yuv420":
             if not self.device_stitch:
                 raise ValueError("output_type='yuv420' needs device_stitch=True; it reads back the stitched canvas")
