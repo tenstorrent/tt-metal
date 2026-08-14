@@ -24,8 +24,8 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
-#include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -33,7 +33,6 @@ using NamedArgsTest = GenericMeshDeviceFixture;
 
 TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -66,9 +65,9 @@ TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results_core0;
-    detail::ReadFromDeviceL1(device, core0, write_addr, 2 * sizeof(uint32_t), results_core0);
+    slow_dispatch::ReadFromL1(*mesh_device, core0, write_addr, 2 * sizeof(uint32_t), results_core0);
     std::vector<uint32_t> results_core1;
-    detail::ReadFromDeviceL1(device, core1, write_addr, 2 * sizeof(uint32_t), results_core1);
+    slow_dispatch::ReadFromL1(*mesh_device, core1, write_addr, 2 * sizeof(uint32_t), results_core1);
 
     EXPECT_EQ(results_core0[0], expected_marker) << "Core (0,0): marker should be 0xCAFE";
     EXPECT_EQ(results_core1[0], expected_marker) << "Core (1,0): marker should be 0xCAFE";
@@ -78,7 +77,6 @@ TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
 
 TEST_F(NamedArgsTest, TensixTestNamedArrayRuntimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -121,7 +119,7 @@ TEST_F(NamedArgsTest, TensixTestNamedArrayRuntimeArgs) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    detail::ReadFromDeviceL1(device, core, write_addr, sizeof(uint32_t), results);
+    slow_dispatch::ReadFromL1(*mesh_device, core, write_addr, sizeof(uint32_t), results);
 
     EXPECT_EQ(results[0], expected_sum) << "Sum should be prefix(" << prefix_val << ") + sum(data) = " << expected_sum
                                         << ", got " << results[0];
@@ -129,7 +127,6 @@ TEST_F(NamedArgsTest, TensixTestNamedArrayRuntimeArgs) {
 
 TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -160,7 +157,7 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
+    slow_dispatch::ReadFromL1(*mesh_device, core, write_addr, 4 * sizeof(uint32_t), results);
 
     EXPECT_EQ(results[2], param_a) << "blaze_ct_args::my_kernel::param_a should be 42";
     EXPECT_EQ(results[3], param_b) << "blaze_ct_args::my_kernel::param_b should be 0xBEEF";
@@ -168,7 +165,6 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
 
 TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -213,9 +209,9 @@ TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results_core0;
-    detail::ReadFromDeviceL1(device, core0, write_addr, sizeof(uint32_t), results_core0);
+    slow_dispatch::ReadFromL1(*mesh_device, core0, write_addr, sizeof(uint32_t), results_core0);
     std::vector<uint32_t> results_core1;
-    detail::ReadFromDeviceL1(device, core1, write_addr, sizeof(uint32_t), results_core1);
+    slow_dispatch::ReadFromL1(*mesh_device, core1, write_addr, sizeof(uint32_t), results_core1);
 
     EXPECT_EQ(results_core0[0], expected_sum_core0)
         << "Core (0,0): sum should be " << expected_sum_core0 << ", got " << results_core0[0];
@@ -233,7 +229,6 @@ TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
 // exercises the relocated, presence-gated prolog #include on the compute path.
 TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -260,7 +255,7 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    detail::ReadFromDeviceL1(device, core, write_addr, 2 * sizeof(uint32_t), results);
+    slow_dispatch::ReadFromL1(*mesh_device, core, write_addr, 2 * sizeof(uint32_t), results);
 
     EXPECT_EQ(results[0], param_a) << "blaze_ct_args::my_kernel::param_a should be 42 (compute path)";
     EXPECT_EQ(results[1], param_b) << "blaze_ct_args::my_kernel::param_b should be 0xBEEF (compute path)";
@@ -273,7 +268,6 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
 // is correct: positional at [0..N-1], named at [N..].
 TEST_F(NamedArgsTest, TensixTestMixedPositionalAndNamedRuntimeArgs) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -311,7 +305,7 @@ TEST_F(NamedArgsTest, TensixTestMixedPositionalAndNamedRuntimeArgs) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
+    slow_dispatch::ReadFromL1(*mesh_device, core, write_addr, 4 * sizeof(uint32_t), results);
 
     EXPECT_EQ(results[0], positional_per_core) << "Positional per-core RT arg at index 0";
     EXPECT_EQ(results[1], positional_common) << "Positional common RT arg at index 0";
@@ -323,7 +317,6 @@ TEST_F(NamedArgsTest, TensixTestMixedPositionalAndNamedRuntimeArgs) {
 // Two entries with the same name and value should be silently deduplicated.
 TEST_F(NamedArgsTest, TensixTestCTArgDedupSameValue) {
     auto mesh_device = get_mesh_device();
-    auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     auto device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
@@ -356,7 +349,7 @@ TEST_F(NamedArgsTest, TensixTestCTArgDedupSameValue) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
+    slow_dispatch::ReadFromL1(*mesh_device, core, write_addr, 4 * sizeof(uint32_t), results);
 
     EXPECT_EQ(results[2], param_a) << "Deduplicated blaze_ct_args::my_kernel::param_a should be 42";
     EXPECT_EQ(results[3], param_b) << "blaze_ct_args::my_kernel::param_b should be 0xBEEF";

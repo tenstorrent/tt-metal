@@ -22,6 +22,7 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "device_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "jit_build/build.hpp"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/jit_build/build_cache_telemetry.hpp"
@@ -240,13 +241,11 @@ TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineEmitsExpectedSubtree
 
 }  // namespace
 
-TEST_F(MeshDeviceFixture, RuntimePrecompiledHitLoadsWithoutJit) {
+TEST_F(UnitMeshAnyDispatchFixture, RuntimePrecompiledHitLoadsWithoutJit) {
     if (offline_compile_unsupported_under_simulator()) {
         GTEST_SKIP() << "CompileKernelOffline has no precompiled firmware for the simulator build_key "
                         "(multi-erisc disabled); skipping under TT_METAL_SIMULATOR.";
     }
-    auto* device = this->devices_.at(0)->get_devices().at(0);
-
     ScopedTempDir precompiled_root("tt_metal_precompiled_seed_hit");
     seed_precompiled_root(precompiled_root.path_, kReaderKernelPath, kReaderDmConfig);
 
@@ -255,11 +254,11 @@ TEST_F(MeshDeviceFixture, RuntimePrecompiledHitLoadsWithoutJit) {
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(slow_dispatch::CompileProgram(this->device(), program));
     EXPECT_EQ(jit_srcs.delta(), 0u);
 }
 
-TEST_F(MeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWithoutJit) {
+TEST_F(UnitMeshAnyDispatchFixture, RuntimePrecompiledHitWithCbMetadataLoadsWithoutJit) {
     if (offline_compile_unsupported_under_simulator()) {
         GTEST_SKIP() << "CompileKernelOffline has no precompiled firmware for the simulator build_key "
                         "(multi-erisc disabled); skipping under TT_METAL_SIMULATOR.";
@@ -270,7 +269,6 @@ TEST_F(MeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWithoutJit) {
     // hlk_desc contributions diverge, this test fails as `jit_srcs.delta() > 0` (runtime
     // falls through to JIT) rather than as a layout assertion, which is exactly the
     // failure mode that justifies surfacing CBCompileConfigsFromProgram in the public API.
-    auto* device = this->devices_.at(0)->get_devices().at(0);
 
     constexpr uint32_t kPageSize = 2048;
     constexpr DataFormat kCbFormat = DataFormat::Float16_b;
@@ -303,30 +301,28 @@ TEST_F(MeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWithoutJit) {
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
-    EXPECT_NO_THROW(detail::CompileProgram(device, runtime_program));
+    EXPECT_NO_THROW(slow_dispatch::CompileProgram(this->device(), runtime_program));
     EXPECT_EQ(jit_srcs.delta(), 0u);
 }
 
-TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledFallsBackToJit) {
+TEST_F(UnitMeshAnyDispatchFixture, RuntimeMissingPrecompiledFallsBackToJit) {
     const auto precompiled_config = make_precompiled_config(kMissingPrecompiledRoot, BinaryPolicy::JitCompile);
     Program program = create_precompiled_program(precompiled_config);
-    auto* device = this->devices_.at(0)->get_devices().at(0);
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
-    EXPECT_NO_THROW(detail::CompileProgram(device, program));
+    EXPECT_NO_THROW(slow_dispatch::CompileProgram(this->device(), program));
     EXPECT_GT(jit_srcs.delta(), 0u);
 }
 
-TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
+TEST_F(UnitMeshAnyDispatchFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
     const auto precompiled_config = make_precompiled_config(kMissingPrecompiledRoot, BinaryPolicy::Error);
     Program program = create_precompiled_program(precompiled_config);
-    auto* device = this->devices_.at(0)->get_devices().at(0);
 
     jit_build_cache_clear();
     JitSrcsBaseline jit_srcs;
     try {
-        detail::CompileProgram(device, program);
+        slow_dispatch::CompileProgram(this->device(), program);
         FAIL() << "Expected PrecompiledKernelNotFoundError";
     } catch (const experimental::PrecompiledKernelNotFoundError& ex) {
         EXPECT_EQ(ex.kernel_name(), kReaderKernelName);
