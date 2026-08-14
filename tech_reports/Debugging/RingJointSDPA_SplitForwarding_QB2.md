@@ -629,6 +629,33 @@ Treat it as flaky/state-dependent, not a reproducer. To see it fail as the night
 whole suite: `CI=true pytest tests/nightly/blackhole/sdpa/ -svv` (~16 min, expect 5 failed / 119
 passed / 99 skipped).
 
+### The ORIGINAL failures from §3 — now fixed, use these as the regression check
+
+These are the two tests whose hang took the device down on the as-merged implementation
+(`c080ab0cfc94`) and triggered the #53076 revert. **They now pass**, so they are the check that the
+two fixes on this branch actually work:
+
+```bash
+export CI=true TT_METAL_OPERATION_TIMEOUT_SECONDS=300
+T=tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py
+# the two original hangs
+python3 -m pytest \
+  "$T::test_ring_mla_chunked_accuracy[kimi_k3-all-qk-chunk2560]" \
+  "$T::test_ring_mla_chunked_accuracy[kimi50k-all-qk-chunk2560]" -v
+# the two original PCC failures
+python3 -m pytest \
+  "$T::test_ring_joint_attention_chunked_nd_sharded_indexed_kv_cache_accuracy[fp32_acc]" \
+  "$T::test_ring_joint_attention_chunked_nd_sharded_indexed_kv_cache_accuracy[bf16_acc]" -v
+```
+
+Expected now: **2 passed in ~125 s** for the hangs, **2 passed** for the PCC pair. On the as-merged
+implementation these were `TIMEOUT: device is unrecoverable` and PCC 0.9794/0.9796 respectively.
+
+> **`CI=true` is mandatory for the hang pair.** Without it the `-all-qk` ids **do not exist** and
+> pytest reports `no tests collected` — verified. See §12: `_generate_chunked_test_configs` collapses
+> each model to one `-all-qk` test under CI and expands it to per-(q,k) tests otherwise. Running the
+> hang repro without `CI=true` silently tests a different execution pattern.
+
 ### The control that proves these are the feature's fault
 
 ```bash
