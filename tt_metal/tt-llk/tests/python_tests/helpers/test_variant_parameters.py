@@ -384,6 +384,31 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
 
 
 @dataclass
+class SAMPLING_PRGM0_HAZARD(TemplateParameter):
+    """Cross-op vConstFloatPrgm0 hazard switches for ``sfpu_sampling_test.cpp``.
+
+    Emits ``#define SAMPLING_POLLUTE_PRGM0`` and/or ``#define SAMPLING_SKIP_RECIP_INIT``.
+
+    ``pollute``  run ``log_init`` first, standing in for an earlier op in the same kernel
+                 that owns vConstFloatPrgm0 (log sets it to ~8.3e-8; the non-legacy
+                 reciprocal needs 2.0f).
+    ``skip_init`` drop ``sampling_recip_init``. Not a supported call -- it exists so the
+                 test can show the init is load-bearing rather than merely present.
+    """
+
+    pollute: bool = False
+    skip_init: bool = False
+
+    def convert_to_cpp(self) -> str:
+        lines = []
+        if self.pollute:
+            lines.append("#define SAMPLING_POLLUTE_PRGM0")
+        if self.skip_init:
+            lines.append("#define SAMPLING_SKIP_RECIP_INIT")
+        return "\n".join(lines)
+
+
+@dataclass
 class SORT_DST_WRITE_OFFSET(TemplateParameter):
     """Dst-row offset passed to the shared ``set_dst_write_addr_offset`` helper.
 
