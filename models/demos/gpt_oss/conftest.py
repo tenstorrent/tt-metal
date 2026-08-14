@@ -10,6 +10,30 @@ import pytest
 
 def pytest_addoption(parser):
     parser.addoption("--skip-model-load", action="store_true", default=False, help="Skip loading the model state dict")
+    # Profiling-only overrides (used by gpt_logs/scripts/tracy.sh). Do not affect default runs.
+    parser.addoption(
+        "--gpt-oss-decode-trace-off",
+        action="store_true",
+        default=False,
+        help="Force enable_decode_trace=False so device profiler (tracy) captures per-op decode timings",
+    )
+    parser.addoption(
+        "--gpt-oss-decode-trace-on",
+        action="store_true",
+        default=False,
+        help=(
+            "Force enable_decode_trace=True. For the uninstrumented wall-clock run: untraced, every "
+            "op is dispatched from the host, so a wall clock taken that way reports host cost the "
+            "served model does not pay."
+        ),
+    )
+    parser.addoption(
+        "--gpt-oss-max-tokens",
+        action="store",
+        type=int,
+        default=0,
+        help="Override max_generated_tokens (0 = use parametrized value). Small values speed up profiling.",
+    )
 
 
 @pytest.fixture(scope="session")
