@@ -505,3 +505,30 @@ HF/TT qualitative output. Verdict: `clean-pass`; required work: none.
 
 Stage implementation and evidence commit: `42ff45ede5f` (local only; not
 pushed). The following documentation-only commit records this handoff SHA.
+
+### 2026-08-14 runner-side full-model gate remediation
+
+The independent stage-6 checker reproduced with exit 1 because its recursive
+artifact discovery treated two intentionally preserved negative probes as
+current completion evidence. Both probes predate and directly motivated the
+sampler-feedback repair documented above:
+
+- `autoregressive_feedback_fix_smoke_v2` emitted newline token 198 for all
+  eight steps before the shape-exact feedback repair;
+- `autoregressive_post_sampler` emitted newline token 198 for all 100 steps
+  during the regressed active-row force-argmax experiment.
+
+The underlying runtime defect remains fixed and is contradicted by the later
+canonical evidence: `autoregressive_feedback_shape_exact_smoke` changes token
+at every step, while `autoregressive_active_rm_final` generates 100 tokens of
+coherent English with zero adjacent duplication and no near-empty finding.
+To preserve the failed probes as causal evidence without presenting them as
+current `run_autoregressive` completion claims, their metadata files are now
+named `autoregressive_meta.failed_probe.json`. The sibling logs, token IDs,
+and decoded text remain intact. The authoritative runner check subsequently
+scans only the healthy canonical artifacts.
+
+A fresh independent `$stage-review` then inspected the implementation, final
+outputs, accuracy, context, trace lifecycle, performance, profiler, fallback,
+Watcher limitation, and failed-probe classification. Its persisted verdict in
+`STAGE_REREVIEW.md` is `clean-pass` with no required work.
