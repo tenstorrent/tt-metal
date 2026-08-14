@@ -1027,7 +1027,7 @@ TEST_F(D2HStreamServiceTest, DISABLED_MetadataOnly_Microbench) {
         // Timed: full mesh barrier + the same metadata read.
         std::vector<std::byte> out(md);
         auto t2 = std::chrono::high_resolution_clock::now();
-        tt::tt_metal::distributed::Synchronize(this->mesh_device_.get(), /*cq_id=*/std::nullopt);
+        tt::tt_metal::distributed::Synchronize(*this->mesh_device_, /*mesh_cq=*/std::nullopt);
         service.read_metadata(out);
         auto t3 = std::chrono::high_resolution_clock::now();
         b_ns += std::chrono::duration<double, std::nano>(t3 - t2).count();
