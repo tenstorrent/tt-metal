@@ -298,7 +298,7 @@ is not bf16-representable). Recorded in `lever_ledger.json` (`notes.R4_out_fill`
 
 ---
 
-### [ ] Refinement 5 — Tile geometry: tiny tiles and (arch-gated) retile
+### [x] Refinement 5 — Tile geometry: tiny tiles and (arch-gated) retile
 
 **Goal**: `tile_height += [16, 8, 4, 2, 1]` for a ROW_MAJOR input (the tile stays 32 wide; the packer's
 face geometry changes, so this is a distinct LLK path, not a reshape), interleaved **and** sharded; then

@@ -84,6 +84,8 @@ def _measure(
     out_mem_config=None,
     pad=None,
     out_dtype=None,
+    tile_h=None,
+    in_tile_h=None,
 ):
     """One warm launch (compile + program cache), then ONE measured launch.
 
@@ -103,14 +105,23 @@ def _measure(
             torch_input = torch.randint(0, 100, shape, dtype=torch.int32)
         else:
             torch_input = torch.randn(shape).to(torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32)
+        # `in_tile_h` set => the RETILE path: the SOURCE is already TILE layout at
+        # that height (Refinement 5). Otherwise the input is ROW_MAJOR as always.
+        source_kwargs = (
+            dict(layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile([in_tile_h, 32]))
+            if in_tile_h is not None
+            else dict(layout=ttnn.ROW_MAJOR_LAYOUT)
+        )
         tt_input = ttnn.from_torch(
             torch_input,
             dtype=dtype,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
             memory_config=in_mem_config if in_mem_config is not None else ttnn.DRAM_MEMORY_CONFIG,
+            **source_kwargs,
         )
         call = dict(memory_config=out_mem_config, use_multicore=use_multicore, use_double_buffer=use_double_buffer)
+        if tile_h is not None:
+            call["tile"] = ttnn.Tile([tile_h, 32])
         if out_dtype is not None:
             call["dtype"] = out_dtype
         call.update(pad or {})
@@ -743,4 +754,45 @@ def test_bench_widening_pad_ablation(device, ablate, name):
         pad=dict(output_padded_shape=_OUT_FILL_SHAPE[1], pad_value=10.2),
         ablate=ablate,
         label=f"ablate:{name}/widening_pad",
+    )
+
+
+# --- Refinement 5: tile geometry --------------------------------------------
+# Two new data paths get cumulative rows here. TILE HEIGHT is a shape-dependent
+# code path (it sets the CB page size, and through the L1 cap the W block factor
+# and the block count), so it is benched across the RANGE of the axis rather than
+# at one point. RETILE is a different reader entirely (whole-page staging + a
+# local face permutation), so its cost is recorded separately from the row-major
+# path it shares a compute kernel with.
+
+
+@pytest.mark.parametrize("tile_height", [32, 16, 8, 1])
+def test_bench_tile_height(device, tile_height):
+    """Tiny tiles on the grid-filling square: same bytes, more/smaller pages."""
+    _measure(device, SHAPES["a_square"], ttnn.bfloat16, tile_h=tile_height, label=f"tile_h={tile_height}/a_square")
+
+
+@pytest.mark.parametrize("tile_height", [32, 8])
+def test_bench_tile_height_smallest(device, tile_height):
+    """master.md B0: the per-core-overhead regime, where a finer tile could only
+    ever cost (there is not enough work to amortize anything)."""
+    _measure(device, SHAPES["d_smallest"], ttnn.bfloat16, tile_h=tile_height, label=f"tile_h={tile_height}/d_smallest")
+
+
+_RETILE_SHAPE = [1, 1, 1024, 1024]
+
+
+@pytest.mark.parametrize("in_tile_h,tile_height", [(32, 8), (1, 32), (32, 16)], ids=["32to8", "1to32", "32to16"])
+def test_bench_retile(device, in_tile_h, tile_height):
+    """The retile path (R_RETILE). The face permutation is a CPU-side L1 copy, so
+    this row is expected to sit WELL above the row-major path's DRAM-bound number —
+    it is recorded as the baseline a later phase would have to beat, not as a
+    claim that it is near any ceiling."""
+    _measure(
+        device,
+        _RETILE_SHAPE,
+        ttnn.bfloat16,
+        tile_h=tile_height,
+        in_tile_h=in_tile_h,
+        label=f"retile/{in_tile_h}to{tile_height}",
     )

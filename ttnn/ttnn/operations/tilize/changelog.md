@@ -1084,3 +1084,170 @@ and the two `out_fill`-gate pins. `test_tilize_levers.py`'s B11 alignment pin is
 parametrized over all three element widths (1/2/4 B) — the only closure a narrower datum
 could have broken. `_bench_tilize.py` +11 arms: the integer-dtype baselines, the
 `out_fill` and `pack_fast` on/off pairs, and the widening-pad 4-way ablation.
+
+---
+
+## Refinement 5 — Tile geometry: tiny tiles and (arch-gated) retile
+
+- **Date**: 2026-08-14
+- **Status**: complete. Golden `test_golden.py` **324 → 346 passed**, 24 → **2 xfail**,
+  0 failed, 0 xpass drift, 592 INVALID-skipped. `test_regression.py` unchanged at 26 passed /
+  0 failed. Whole tilize unit directory **255 → 333 passed** (plain *and* `--dev`).
+  `verify_levers --phase 5`: **0 blocking**, 14 staleness signals (the topology block gained the
+  tile-height axis and the two R_RETILE plan paths; every flagged closure re-read and recorded in
+  the ledger's `phase5_stale_closure_reread`).
+
+### What was done
+
+Two axes, one shared data path — no new kernel file, no second program-descriptor branch.
+
+**Reused**: `derive_blocking()` / `cb_pages()` / `cb_bytes()` / `wt_cap()`, the CB
+`TileDescriptor`, the `W_BLOCKS` / `W_REGION` work assignments, the placement machinery, the
+writer, and the **compute kernel — byte-identical on both new paths** (it only ever sees
+`WT_CHUNK` and `num_blocks`, and it tilizes row-major sticks into whatever tile height the CB
+declares).
+
+| Piece | Where |
+|---|---|
+| `_allocate_output()` — the requested tile threaded into the OUTPUT TENSOR SPEC | `tilize.py` |
+| `fill_tile_pad()` face geometry derived from `tile_h` (a tiny tile's face height IS its tile height) | `kernels/tilize_fill.hpp` |
+| `copy_l1_words()` — the retile path's local face-row move | `kernels/tilize_fill.hpp` |
+| Reader regime `R_RETILE` (whole-page staging + local face permutation) | `kernels/tilize_reader.cpp` |
+| `CB_RETILE_STAGE` + `stage_tile_bytes()` (one source for the scratch size AND the L1 ceiling) | `tilize_program_descriptor.py` |
+| Retile × padding refusal; `in_shard = None` on a tiled source (structural) | `tilize.py`, `tilize_program_descriptor.py` |
+| SUPPORTED `tile_height += [16,8,4,2,1]`, `in_layout += TILE`, `in_tile_height += [32,…,1]` | `tilize.py` |
+| EXCLUSIONS `{tile_height: 16, output_dtype: bfloat8_b}` (a PLATFORM pack gap) | `tilize.py` |
+
+**Tiny tiles needed exactly one host-side fix.** Every kernel byte quantity already derived from
+`tile_h`, and the library reader takes its own tile height from `unpack_tile_r_dim[cb]`, so the
+kernels were already correct — but
+`ttnn.allocate_tensor_on_device(shape, dtype, layout, device, mem_config)` **has no `tile=`
+parameter** and therefore always built a 32×32 output tile, so the kernels' tiny pages landed in a
+buffer laid out for 32-row tiles. The `TensorSpec` overload carries the tile; it is byte-equivalent
+to the old call at the default geometry for all four placements (interleaved / L1 / legacy-2D /
+ND — verified by comparing specs), so this is one path, not a tiny-tile branch.
+
+**Retile is a reader-only change, and whole-page staging is the load-bearing decision.** A retile
+looks like a face-row gather: output row *r* of a tile column is two contiguous 16-element runs
+inside the source tile's faces. Reading those runs straight out of DRAM is **not addressable on the
+arch these cells run on** — a face row is 32 B at bf16 and 16 B at uint8, while DRAM read alignment
+is 32 B on Wormhole and **64 B on Blackhole** (`noc_parameters.h`,
+`LOG_BASE_2_OF_DRAM_ALIGNMENT` 5 vs 6). So the reader stages whole source tile **pages** (always
+page-aligned, one `noc_async_read` each, one barrier per staged block) into a reader-private L1
+scratch CB and permutes face rows locally with word copies. Consecutive blocks of a core share a W
+chunk and march up the tile-rows, so the staged pages are cached across blocks — that is what stops
+a 32 → 1 retile fetching each source page 32 times.
+
+### Accuracy achieved
+
+Exact — a permutation op has no error budget. `torch.equal` bit-for-bit (PCC = 1.0, rtol = atol = 0):
+
+| family | coverage | result |
+|---|---|---|
+| tiny tiles, interleaved | `tile_height` 16/8/4/2/1 × bf16/fp32/uint32/uint8 × `[1,1,128,256]`, `[2,3,32,64]` | exact |
+| tiny tiles, local shard | 16/8/4/2/1 × WIDTH-sharded `[1,1,32,1024]` ×32 cores (both CBs aliased) | exact |
+| tiny tiles, padded + widening cast | `[1,1,50,50]` → tile-rounded, `tile_height` 16 and 4, fill 10.2 | exact |
+| retile | 32→8, 1→32, 32→16, 16→32, 8→4, 2→16 and the 32→32 no-op, `[1,1,128,256]` | exact |
+| retile × element width | bf16 / fp32 / uint32 / uint8 (a 16 B face row — below both DRAM alignments) | exact |
+| retile, sharded | BLOCK-sharded 32→16, same spec, 8×8 grid, `[1,1,256,256]` | exact |
+| bf8b out at tiny heights 8/4/2/1 | `[1,1,64,64]` | within block-float tolerance |
+
+### Golden test progress
+
+`test_golden.py` **346 passed / 2 xfail / 592 skipped / 0 failed**. The +22 are the tiny-tile
+scenarios (16, 1, and the WIDTH-sharded 8) across their dtype pairs; the 2 xfail are the
+`tile_height=16 × bfloat8_b` EXCLUSION below. The 24 retile cells still **skip** on this Wormhole
+box, which is the correct outcome (`helpers.skip_if_retile_unsupported`) — but the path is
+implemented and was verified directly on this box by `test_tilize_tile_geometry.py`, which is
+stronger evidence than the skipped cells could give.
+
+### Issues encountered
+
+1. **`tile_height=16` × a block-float output is a PLATFORM pack gap, not a tilize bug.** Metal
+   flags every sub-32-row tile as `partial_face` (`tile.cpp`: `partial_face = tile_shape[0] <
+   TILE_HEIGHT`), but a 16×32 tile's two faces are **full 16-row faces**. That routes the packer to
+   the partial-face BFP MOP (`llk_pack.h::_llk_pack_mop_config_`: `PACKCNT=1`, PACR `ADDR_MOD_0` +
+   `INCADCXY` + PACR `ADDR_MOD_1`), whose DEST walk advances by `face_r_dim` and then by another
+   16 — correct for a genuinely partial face (8/4/2/1 rows), one face-row too far at
+   `face_r_dim == 16`. Measured signature: every datum returns as `src[i + 32] / 4`. The
+   disqualifier is a passing test, not an argument: a plain **`ttnn.mul`** on a 16×32 `bfloat8_b`
+   tile — no tilize anywhere — returns the same wrong bytes, while the 32-row control is fine
+   (`test_bfp8_16x32_is_a_platform_pack_gap`, which FAILS if the platform is ever fixed, so the
+   EXCLUSION cannot outlive its cause). Neither `fp32_dest_acc_en`, `dst_full_sync_en` nor
+   `bfp8_pack_precise` changes it, and no CB knob can override `partial_face`
+   (`FaceGeometry(16, 2)` maps back to the same 16×32 tile). Every OTHER tiny height packs
+   block-float correctly, and 16 is correct for every non-block-float dtype.
+2. **`if constexpr` in a non-template function still requires the discarded branch to compile.**
+   `in_tile_h` is 0 off the retile path, so `(tile_h + in_tile_h - 1) / in_tile_h` was a
+   division-by-zero *compile* error on every other cell — caught by the unit suite, not by the
+   retile probes. Every retile constant is now written against a guarded `src_tile_h`.
+3. Refinement 4's `test_exclusions_is_empty` guard had to be narrowed: it asserts there is no
+   **numeric-surface** EXCLUSION, and the new row is a tile-geometry refusal that happens to name a
+   dtype (at the default 32-row tile every dtype is supported).
+4. The `xfer_gate` heuristic prices the reader's per-**stick** transfer, which does not describe a
+   retile (whose transfers are whole tile pages). It now reads the page size on that path, so a
+   narrow sharded retile is not pushed off its destination-local plan for the wrong reason.
+
+### Perf gate
+
+Box: Wormhole B0, 8×8 grid, AICLK 0.985 GHz. `DEVICE KERNEL DURATION [ns]`, in-process profiler,
+one warm launch then one measured launch.
+
+**Non-regression across the cumulative bench set** (every row any prior phase recorded):
+
+| shape | prior | now | Δ |
+|---|---|---|---|
+| (a) `[1,1,2048,2048]` bf16 / fp32 | 86,619 / 181,925 (R4) | 87,586 / 180,045 | +1.1% / −1.0% |
+| (b) `[1,1,32,16384]` bf16 / fp32 | 13,346 / 26,876 (R4) | 12,681 / 25,707 | −5.0% / −4.3% |
+| (c) `[1,1,8192,1024]` bf16 / fp32 | 172,072 / 357,000 (R4) | 174,817 / 356,875 | +1.6% / 0.0% |
+| (d) `[1,1,32,64]` bf16 / fp32 | 2,882 / 3,114 (R4) | 2,928 / 3,103 | +1.6% / −0.4% |
+| shard same-spec `[1,1,512,64]` bf16 / fp32 | 1,407 / 2,211 | 1,387 / 2,203 | −1.4% / −0.4% |
+| shard same-spec `[1,1,2048,256]` bf16 / fp32 | 4,878 / 12,360 | 4,895 / 12,358 | +0.3% / 0.0% |
+| crossover `[1,1,512,64]` / `[1,1,2048,256]` | 4,242 / 14,766 (R2) | 4,248 / 14,748 | flat |
+| reshard cross-spec `[1,1,1024,256]` | 18,053 (R4) | 18,288 | +1.3% |
+| padded → local shard `[1,1,2040,256]` | 22,365, 1.35× vs `zero_copy=0` (R4) | 22,421, **1.36×** | flat |
+| uint32 (a) / uint8 (a) | 183,165 / 44,810 (R4) | 177,712 / 44,551 | −3.0% / −0.6% |
+
+Nothing outside the ±3% band except improvements. The interleaved hot path compiles the same
+kernel code — the two new reader compile-time args are unused there and the R_RETILE branch is
+compiled out.
+
+**New cumulative rows (this phase's own bench shapes).** `tile_height` is a shape-dependent code
+path (it sets the CB page size and, through the L1 cap, the W block factor and the block count), so
+it is benched across the **range** of the axis rather than at one point:
+
+| row | ns | note |
+|---|---|---|
+| `tile_h=32` / a_square bf16 | 86,359 | the unchanged reference |
+| `tile_h=16` / a_square | 89,594 | +3.7% |
+| `tile_h=8` / a_square | 95,941 | +11% |
+| `tile_h=1` / a_square | 249,925 | 2.9× — 32× as many tiles for the same bytes |
+| `tile_h=32` / d_smallest | 2,896 | the B0 per-core-overhead regime |
+| `tile_h=8` / d_smallest | **1,815** | −37%: the finer tile-row grid spreads 8 blocks over more cores |
+| retile 32→8 / `[1,1,1024,1024]` bf16 | 99,252 | 42.3 GB/s |
+| retile 1→32 | 124,631 | 33.7 GB/s |
+| retile 32→16 | 101,475 | 41.3 GB/s |
+
+**Bound classification of the new paths.** Tiny tiles stay on the Phase-0 **DM-bound** verdict —
+same bytes, same transfers, more (smaller) pages; the cost curve above is the requested geometry
+(a 1×32 tile asks the packer for 32× as many tiles), and `tile_h=32` is untouched, so no supported
+shape regressed. **Retile is L1-store-bound**, the same class as Refinement 4's pad stamp: ~42 GB/s
+against the row-major path's ~190, because every output byte is moved once by an rv32 word copy
+(a 32 B face row = 8 load/store pairs at ~10 cycles each ≈ 0.2 B/cycle/core, which is what the
+measurement shows). Recorded, **not built**: a retile is a pure FACE permutation, so it could skip
+the row-major round trip entirely and copy contiguous face-row **runs** page-to-page
+(`min(in_tile_h, tile_h) * 16` elements per run — 512 B for 32→16 instead of 32 copies of 32 B),
+with compute reduced to a pass-through. That is a scheme change (the input CB would hold tiled
+data, not sticks), not a knob, so it belongs to the perf tournament rather than to this heading.
+
+### Tests added
+
+`tests/ttnn/unit_tests/operations/tilize/test_tilize_tile_geometry.py` — **78 cases**: the
+output-tensor-spec pin (page size per tile height), tiny-tile identity over 5 heights × 4 dtypes ×
+2 shapes, tiny tiles on a local shard, the padded tiny-tile widening-cast exactness (which is what
+exercises the generalized face geometry), the alignment-tagger pin, the platform-pack-gap
+disqualifier + the one-cell-wide EXCLUSION check, the CB-geometry-tracks-tile-height pin, retile
+identity over 7 (in, out) height pairs and 4 element widths, sharded retile, the whole-page-staging
+mechanism pin (`stage_tile_bytes()` is the single source), and the retile × padding refusal.
+`_bench_tilize.py` +9 arms (the tile-height sweep on two regimes, including the B0 smallest-regime
+check, and three retile rows); `_measure()` gained `tile_h=` / `in_tile_h=`.
