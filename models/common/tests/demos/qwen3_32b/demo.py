@@ -57,10 +57,7 @@ from models.common.models.qwen3_32b.model import QWEN3_32B_ACCURACY, QWEN3_32B_P
 from models.common.sampling.sampling_params import SamplingParams
 from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.common.tests.demos.run_helpers import (
-    assert_cross_cardinality_consistency,
-    decode_eval_output,
     eval_decode_trace_mode,
-    hf_stop_ids,
     load_eval_repeat_prompts_batch32,
     require_canonical_eval_modes_in_ci,
     run_eval_repeat_batch32,
@@ -941,23 +938,180 @@ def test_qwen3_32b(test_config, mesh_device, optimizations):
 
 
 _CROSS_CARDINALITY_REQUEST_IDS = tuple(f"qwen3-32b-request-{index:02d}" for index in range(32))
+_CROSS_CARDINALITY_SEEDS = tuple(2_026_081_701 + 104_729 * index for index in range(32))
+# Keep the two longest corpus requests last. Prefixes 2 and 4 must contain multiple Q128 requests so
+# those cardinalities exercise an actual batched prefill group rather than unrelated buckets.
+_CROSS_CARDINALITY_PROMPT_ORDER = (*range(2, 32), 0, 1)
 _CROSS_CARDINALITIES = (1, 2, 4, 32)
+_CROSS_CARDINALITY_DECODE_TOKENS = 32
 
 
-@pytest.mark.parametrize("prefill_mode", ["batched", "sequential"])
-def test_qwen3_32b_p150x4_cross_cardinality(mesh_device, prefill_mode):
-    """Plan experiment: fixed requests must not change at cardinalities 1/2/4/32.
+def _compare_cross_cardinality_token_ids(
+    controls: dict[str, tuple[int, ...]],
+    prefixes: dict[int, dict[str, tuple[int, ...]]],
+) -> tuple[str, tuple[dict[str, object], ...]]:
+    """Return an executed experiment verdict; token mismatch is a valid negative result."""
 
-    Host argmax is intentionally used, so the experiment has no stochastic sampler and therefore
-    needs no per-request seeds. Each cardinality gets a fresh executor and KV cache. This standalone
-    node cannot weaken the canonical eval gate or silently change the P150x4 construction default.
+    expected_requests = set(_CROSS_CARDINALITY_REQUEST_IDS)
+    if set(controls) != expected_requests:
+        raise AssertionError("cross-cardinality controls must contain all 32 fixed request IDs")
+    if tuple(prefixes) != _CROSS_CARDINALITIES:
+        raise AssertionError(f"cross-cardinality prefixes must be {_CROSS_CARDINALITIES}")
+    expected_token_count = _CROSS_CARDINALITY_DECODE_TOKENS + 1
+    bad_controls = {
+        request_id: len(token_ids)
+        for request_id, token_ids in controls.items()
+        if len(token_ids) != expected_token_count
+    }
+    if bad_controls:
+        raise AssertionError(
+            f"cross-cardinality controls must each return {expected_token_count} generated tokens: {bad_controls}"
+        )
+
+    mismatches = []
+    for cardinality, outputs in prefixes.items():
+        expected_ids = _CROSS_CARDINALITY_REQUEST_IDS[:cardinality]
+        if tuple(outputs) != expected_ids:
+            raise AssertionError(f"cardinality {cardinality} did not preserve fixed request order")
+        bad_candidates = {
+            request_id: len(outputs[request_id])
+            for request_id in expected_ids
+            if len(outputs[request_id]) != expected_token_count
+        }
+        if bad_candidates:
+            raise AssertionError(
+                f"cardinality {cardinality} candidates must each return {expected_token_count} generated tokens: "
+                f"{bad_candidates}"
+            )
+        for request_id in expected_ids:
+            expected = controls[request_id]
+            actual = outputs[request_id]
+            if actual != expected:
+                first_difference = next(
+                    (index for index, pair in enumerate(zip(expected, actual)) if pair[0] != pair[1]),
+                    min(len(expected), len(actual)),
+                )
+                mismatches.append(
+                    {
+                        "cardinality": cardinality,
+                        "request_id": request_id,
+                        "first_token_difference": first_difference,
+                        "control_token_count": len(expected),
+                        "batched_token_count": len(actual),
+                    }
+                )
+    verdict = "INVARIANT" if not mismatches else "BATCHED_PREFILL_REJECTED"
+    return verdict, tuple(mismatches)
+
+
+def _snapshot_cross_cardinality_prefill(executor, tokens, page_table, prompt_lens) -> tuple[dict[str, object], ...]:
+    """Snapshot the same immutable prepared requests that execution will plan."""
+
+    prepared = executor.prefill_runtime.prepare(
+        tokens=tokens,
+        page_table=page_table[: len(prompt_lens)],
+        prompt_lens=prompt_lens,
+        empty_slots=list(range(len(prompt_lens))),
+        sampling_params=None,
+    )
+    return tuple(
+        {
+            "kind": item.request.kind,
+            "source_rows": item.request.source_rows,
+            "active_batch_size": len(item.request.source_rows),
+            "padded_batch_size": item.request.padded_batch_size,
+            "padded_sequence_length": item.request.padded_sequence_length,
+            "operation_variants": tuple(signature.operation_variant for signature in item.program_signatures),
+        }
+        for item in prepared
+    )
+
+
+def _require_cross_cardinality_prefill_geometry(
+    geometry: tuple[dict[str, object], ...], *, cardinality: int, batched_candidate: bool
+) -> None:
+    """Fail unless prepared requests prove the intended control/candidate geometry."""
+
+    regular_single = {
+        "kind": "single",
+        "source_rows": (0,),
+        "active_batch_size": 1,
+        "padded_batch_size": 1,
+        "padded_sequence_length": 128,
+        "operation_variants": ("regular-single",),
+    }
+    if not batched_candidate:
+        if (
+            len(geometry) != 1
+            or geometry[0]["kind"] != "single"
+            or geometry[0]["source_rows"] != (0,)
+            or geometry[0]["active_batch_size"] != 1
+            or geometry[0]["padded_batch_size"] != 1
+            or geometry[0]["padded_sequence_length"] not in (128, 1024)
+            or geometry[0]["operation_variants"] != ("regular-single",)
+        ):
+            raise AssertionError(f"batch-1 control must prepare one regular-single request: {geometry}")
+        return
+    if cardinality == 1:
+        if geometry != (regular_single,):
+            raise AssertionError(f"cardinality {cardinality} must prepare one regular-single Q128 request: {geometry}")
+        return
+
+    if cardinality in (2, 4):
+        expected = (
+            {
+                "kind": "batched",
+                "source_rows": tuple(range(cardinality)),
+                "active_batch_size": cardinality,
+                "padded_batch_size": cardinality,
+                "padded_sequence_length": 128,
+                "operation_variants": ("regular-batched",),
+            },
+        )
+    elif cardinality == 32:
+        expected = (
+            {
+                "kind": "batched",
+                "source_rows": tuple(range(31)),
+                "active_batch_size": 31,
+                "padded_batch_size": 32,
+                "padded_sequence_length": 128,
+                "operation_variants": ("regular-batched",),
+            },
+            {
+                "kind": "single",
+                "source_rows": (31,),
+                "active_batch_size": 1,
+                "padded_batch_size": 1,
+                "padded_sequence_length": 1024,
+                "operation_variants": ("regular-single",),
+            },
+        )
+    else:
+        raise AssertionError(f"unsupported cross-cardinality candidate {cardinality}")
+    if geometry != expected:
+        raise AssertionError(f"cardinality {cardinality} prepared-prefill geometry disagrees: {geometry}")
+
+
+def _require_cross_cardinality_environment() -> None:
+    conflicts = [name for name in ("DISABLE_BATCHED_PREFILL", "DISABLE_BATCHED_EXTRACT") if name in os.environ]
+    if conflicts:
+        raise RuntimeError(f"cross-cardinality qualification requires unset environment controls: {conflicts}")
+
+
+def test_qwen3_32b_p150x4_seeded_cross_cardinality(mesh_device):
+    """Compare true batch-1 controls with exact tokens from batched prefixes 1/2/4/32.
+
+    A mismatch is a completed negative experiment, not a missing test: it emits the
+    ``BATCHED_PREFILL_REJECTED`` verdict and retains P150x4's sequential-prefill policy. Only an
+    invariant result emits ``INVARIANT``; neither verdict silently changes the checked-in policy.
     """
     if get_device_name(mesh_device) != "P150x4":
         pytest.skip("cross-cardinality qualification requires a physical P150x4")
 
+    _require_cross_cardinality_environment()
     hf_model = os.environ.get("HF_MODEL", "Qwen/Qwen3-32B")
     cache_dir = lazy_weight_cache_dir_for_demo(mesh_device, hf_model)
-    disable_batched_prefill = prefill_mode == "sequential"
     model = None
     try:
         model = create_model(
@@ -966,18 +1120,16 @@ def test_qwen3_32b_p150x4_cross_cardinality(mesh_device, prefill_mode):
             cache_dir,
             max_batch_size=32,
             max_seq_len=1024,
-            disable_batched_prefill=disable_batched_prefill,
         )
         ma = model.model_args
         assert ma is not None
-        assert (
-            ma.disable_batched_prefill is disable_batched_prefill
-        ), "DISABLE_BATCHED_PREFILL must be unset for the explicit experiment mode"
+        assert ma.disable_batched_prefill is True, "P150x4 must enter qualification with sequential policy retained"
+        assert ma.batched_prefill_batched_extract is True, "batched qualification requires batched last-token extract"
 
         tokenizer = _load_tokenizer(hf_model)
-        prompts = load_eval_repeat_prompts_batch32()
+        corpus_prompts = load_eval_repeat_prompts_batch32()
+        prompts = [corpus_prompts[index] for index in _CROSS_CARDINALITY_PROMPT_ORDER]
         assert len(prompts) == len(_CROSS_CARDINALITY_REQUEST_IDS) == 32
-        stop_ids = hf_stop_ids(tokenizer, hf_model)
         block_size = 32
         blocks_per_user = ma.max_seq_len // block_size
         num_blocks = blocks_per_user * ma.max_batch_size
@@ -988,45 +1140,262 @@ def test_qwen3_32b_p150x4_cross_cardinality(mesh_device, prefill_mode):
             block_size,
             ma.head_dim,
         )
-        outputs_by_cardinality: dict[int, dict[str, str]] = {}
-        for cardinality in _CROSS_CARDINALITIES:
-            input_tokens, prompt_lens = tokenize_prompts(prompts[:cardinality], tokenizer)
+
+        def make_executor(*, expected_disable_batched_prefill):
             executor = TracedQwen3_32BExecutor(
                 model,
                 mesh_device,
-                ondevice_decode_loop=False,
+                ondevice_decode_loop=True,
+                # Prefill stays eager, isolating cardinality, while decode trace is a silicon canary
+                # for production's per-request seed refresh. Reuse limits the test to two captures.
                 trace_mode=eval_decode_trace_mode("traced"),
             )
-            try:
-                kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-                # Compile this cardinality's regular-batched prefill signature before decode trace
-                # activation. The executor deliberately rejects new program keys after tracing.
-                _warmup_demo_executor(
-                    executor,
-                    kv_cache=kv_cache,
-                    page_table=page_table[:cardinality],
-                    prefill_compile_case=(input_tokens, prompt_lens),
+            assert (
+                executor.prefill_runtime.config.disable_batched_prefill is expected_disable_batched_prefill
+            ), "executor prefill policy snapshot disagrees with the requested experiment arm"
+            kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
+            return executor, kv_cache
+
+        def prepare_requests(executor, request_prompts, request_seeds, *, batched_candidate):
+            input_tokens, prompt_lens = tokenize_prompts(request_prompts, tokenizer)
+            if len(request_seeds) > 1:
+                q128_group = prompt_lens[: min(4, len(request_seeds))]
+                if not all(0 < int(length) <= 128 for length in q128_group):
+                    raise RuntimeError(
+                        "cross-cardinality prompt order must keep the first 2/4 requests in one Q128 batch"
+                    )
+            sampling_params = SamplingParams(
+                temperature=[0.8] * len(request_seeds),
+                top_k=[32] * len(request_seeds),
+                top_p=[0.95] * len(request_seeds),
+                seed=list(request_seeds),
+            )
+            geometry = _snapshot_cross_cardinality_prefill(
+                executor, input_tokens, page_table, prompt_lens
+            )
+            _require_cross_cardinality_prefill_geometry(
+                geometry,
+                cardinality=len(request_seeds),
+                batched_candidate=batched_candidate,
+            )
+            return input_tokens, prompt_lens, sampling_params, geometry
+
+        def compile_prefill_case(executor, kv_cache, prepared_case):
+            input_tokens, prompt_lens, _sampling_params, _geometry = prepared_case
+            executor.compile_prefill(
+                tokens=input_tokens,
+                page_table=page_table[: len(prompt_lens)],
+                kv_cache=kv_cache,
+                prompt_lens=prompt_lens,
+                empty_slots=list(range(len(prompt_lens))),
+                sampling_params=None,
+            )
+
+        def activate_decode_trace(executor, kv_cache):
+            assert executor.config.warmup.include_decode_top_k is True
+            decode_kwargs = {
+                "kv_cache": kv_cache,
+                "max_batch_size": ma.max_batch_size,
+                "num_blocks": page_table.shape[-1],
+                "can_sample_on_device": True,
+            }
+            # Register eager decode programs (including the representative top-k alias), then
+            # register and capture the same decode coverage exactly once. Prefill remains eager.
+            executor.warmup_model_decode(enable_trace=False, **decode_kwargs)
+            executor.warmup_model_decode(enable_trace=True, **decode_kwargs)
+            compiler = executor.trace_compiler
+            traced = executor.traced_executor
+            assert compiler is not None and traced is not None
+            coverage = compiler.registered_coverage("decode")
+            assert executor.warmup.trace_activated is True
+            assert compiler.trace_active is True
+            assert compiler.trace_count == len(coverage) >= 1
+            records = tuple(compiler.get(trace_key) for trace_key, _signature in coverage)
+            assert all(record is not None and record.artifact is not None for record in records)
+            topk_coverage = tuple(
+                (trace_key, signature) for trace_key, signature in coverage if signature.sampling_path == "topk"
+            )
+            assert len(topk_coverage) == 1
+            topk_trace_key, _topk_signature = topk_coverage[0]
+            assert compiler.get(topk_trace_key).artifact is not None
+            assert compiler.trace_association_count >= 1
+            assert compiler.replay_count == 0
+            assert traced.coverage_miss_count == 0
+            return {
+                "semantic_trace_count": compiler.trace_count,
+                "trace_association_count": compiler.trace_association_count,
+                "captured_decode_trace_count": len(coverage),
+                "captured_topk_trace_count": len(topk_coverage),
+                "topk_trace_key": topk_trace_key.digest,
+                "trace_active": compiler.trace_active,
+                "replay_count_before_requests": compiler.replay_count,
+            }, topk_trace_key
+
+        def run_requests(
+            executor, kv_cache, prepared_case, *, expected_topk_trace_key, expected_semantic_trace_count
+        ):
+            input_tokens, prompt_lens, sampling_params, geometry = prepared_case
+            compiler = executor.trace_compiler
+            traced = executor.traced_executor
+            assert compiler is not None and traced is not None and compiler.trace_active
+            prepared_decode = executor.decode_runtime.prepare(
+                torch.zeros(ma.max_batch_size, dtype=torch.long),
+                torch.zeros(ma.max_batch_size, dtype=torch.long),
+                page_table,
+                sampling_params=sampling_params,
+                reset_batch=True,
+            )
+            assert prepared_decode.sampling_path == "topk"
+            decode_program_key = executor.program_compiler.key_for(
+                executor.decode_runtime.program_signature(prepared_decode)
+            )
+            assert compiler.trace_key_for_program(decode_program_key) == expected_topk_trace_key
+            assert compiler.get(expected_topk_trace_key).artifact is not None
+            replay_before = compiler.replay_count
+            decode_replays_before = compiler.replay_counts["decode"]
+            result = run_perf_benchmark(
+                executor,
+                tokens=input_tokens,
+                kv_cache=kv_cache,
+                page_table=page_table,
+                num_decode_tokens=_CROSS_CARDINALITY_DECODE_TOKENS,
+                max_batch_size=ma.max_batch_size,
+                prompt_lens=prompt_lens,
+                sampling_params=sampling_params,
+                prefill_sampling_params=None,
+            )
+            generated = tuple(tuple(int(token) for token in output) for output in result.generated_token_ids)
+            if len(generated) != len(prompt_lens):
+                raise AssertionError(
+                    f"cardinality {len(prompt_lens)} returned {len(generated)} outputs before token comparison"
                 )
-                result = run_perf_benchmark(
-                    executor,
-                    tokens=input_tokens,
-                    kv_cache=kv_cache,
-                    page_table=page_table,
-                    num_decode_tokens=32,
-                    max_batch_size=ma.max_batch_size,
-                    prompt_lens=prompt_lens,
-                    sampling_params=None,
+            replay_delta = compiler.replay_count - replay_before
+            decode_replay_delta = compiler.replay_counts["decode"] - decode_replays_before
+            if replay_delta != _CROSS_CARDINALITY_DECODE_TOKENS or decode_replay_delta != replay_delta:
+                raise AssertionError(
+                    f"cardinality {len(prompt_lens)} expected {_CROSS_CARDINALITY_DECODE_TOKENS} decode trace "
+                    f"replays, observed total={replay_delta}, decode={decode_replay_delta}"
                 )
-            finally:
-                executor.cleanup()
-            outputs_by_cardinality[cardinality] = {
-                request_id: decode_eval_output(tokenizer, token_ids, stop_ids)
-                for request_id, token_ids in zip(
-                    _CROSS_CARDINALITY_REQUEST_IDS[:cardinality], result.generated_token_ids, strict=True
-                )
+            assert compiler.replay_counts["prefill"] == 0
+            assert compiler.trace_count == expected_semantic_trace_count and compiler.trace_active
+            assert compiler.get(expected_topk_trace_key).artifact is not None
+            assert traced.coverage_miss_count == 0
+            assert executor.program_compiler.post_activation_compile_rejections == 0
+            return generated, geometry, {
+                "cardinality": len(prompt_lens),
+                "decode_trace_replays": decode_replay_delta,
+                "trace_key": expected_topk_trace_key.digest,
+                "coverage_misses": traced.coverage_miss_count,
+                "post_activation_compile_rejections": executor.program_compiler.post_activation_compile_rejections,
             }
 
-        assert_cross_cardinality_consistency(outputs_by_cardinality)
+        controls = {}
+        control_geometry = []
+        sequential_executor, sequential_kv_cache = make_executor(expected_disable_batched_prefill=True)
+        try:
+            control_cases = [
+                prepare_requests(sequential_executor, [prompt], [seed], batched_candidate=False)
+                for prompt, seed in zip(prompts, _CROSS_CARDINALITY_SEEDS, strict=True)
+            ]
+            # Decode trace activation seals the shared program compiler. Register every eager
+            # prefill signature first so later controls cannot request unseen programs.
+            for prepared_case in control_cases:
+                compile_prefill_case(sequential_executor, sequential_kv_cache, prepared_case)
+            control_trace_lifecycle, control_topk_trace_key = activate_decode_trace(
+                sequential_executor, sequential_kv_cache
+            )
+            control_replay_evidence = []
+            for request_id, prepared_case in zip(
+                _CROSS_CARDINALITY_REQUEST_IDS, control_cases, strict=True
+            ):
+                generated, geometry, replay_evidence = run_requests(
+                    sequential_executor,
+                    sequential_kv_cache,
+                    prepared_case,
+                    expected_topk_trace_key=control_topk_trace_key,
+                    expected_semantic_trace_count=control_trace_lifecycle["semantic_trace_count"],
+                )
+                (controls[request_id],) = generated
+                control_geometry.append(geometry)
+                control_replay_evidence.append(replay_evidence)
+            control_trace_lifecycle["replay_count_after_requests"] = sequential_executor.trace_compiler.replay_count
+            assert control_trace_lifecycle["replay_count_after_requests"] == (
+                len(_CROSS_CARDINALITY_REQUEST_IDS) * _CROSS_CARDINALITY_DECODE_TOKENS
+            )
+        finally:
+            sequential_executor.cleanup()
+
+        prefixes = {}
+        candidate_geometry = {}
+        ma.disable_batched_prefill = False
+        try:
+            candidate_executor, candidate_kv_cache = make_executor(expected_disable_batched_prefill=False)
+            try:
+                candidate_cases = {
+                    cardinality: prepare_requests(
+                        candidate_executor,
+                        prompts[:cardinality],
+                        _CROSS_CARDINALITY_SEEDS[:cardinality],
+                        batched_candidate=True,
+                    )
+                    for cardinality in _CROSS_CARDINALITIES
+                }
+                for prepared_case in candidate_cases.values():
+                    compile_prefill_case(candidate_executor, candidate_kv_cache, prepared_case)
+                candidate_trace_lifecycle, candidate_topk_trace_key = activate_decode_trace(
+                    candidate_executor, candidate_kv_cache
+                )
+                candidate_replay_evidence = []
+                for cardinality, prepared_case in candidate_cases.items():
+                    generated, geometry, replay_evidence = run_requests(
+                        candidate_executor,
+                        candidate_kv_cache,
+                        prepared_case,
+                        expected_topk_trace_key=candidate_topk_trace_key,
+                        expected_semantic_trace_count=candidate_trace_lifecycle["semantic_trace_count"],
+                    )
+                    candidate_geometry[cardinality] = geometry
+                    candidate_replay_evidence.append(replay_evidence)
+                    prefixes[cardinality] = {
+                        request_id: tokens
+                        for request_id, tokens in zip(
+                            _CROSS_CARDINALITY_REQUEST_IDS[:cardinality], generated, strict=True
+                        )
+                    }
+                candidate_trace_lifecycle["replay_count_after_requests"] = candidate_executor.trace_compiler.replay_count
+                assert candidate_trace_lifecycle["replay_count_after_requests"] == (
+                    len(_CROSS_CARDINALITIES) * _CROSS_CARDINALITY_DECODE_TOKENS
+                )
+            finally:
+                candidate_executor.cleanup()
+        finally:
+            ma.disable_batched_prefill = True
+
+        verdict, mismatches = _compare_cross_cardinality_token_ids(controls, prefixes)
+        logger.info(
+            "QWEN3_32B_CROSS_CARDINALITY_VERDICT="
+            + json.dumps(
+                {
+                    "verdict": verdict,
+                    "policy": "sequential",
+                    "control_runs": len(controls),
+                    "batched_cardinalities": list(_CROSS_CARDINALITIES),
+                    "decode_tokens": _CROSS_CARDINALITY_DECODE_TOKENS,
+                    "comparison": "exact_token_ids",
+                    "execution": "eager_prefill_decode_traced",
+                    "control_prefill_geometry": control_geometry,
+                    "candidate_prefill_geometry": candidate_geometry,
+                    "control_trace_lifecycle": control_trace_lifecycle,
+                    "candidate_trace_lifecycle": candidate_trace_lifecycle,
+                    "control_replay_evidence": control_replay_evidence,
+                    "candidate_replay_evidence": candidate_replay_evidence,
+                    "mismatch_count": len(mismatches),
+                    "mismatches": list(mismatches),
+                },
+                sort_keys=True,
+            )
+        )
+        assert ma.disable_batched_prefill is True, "qualification must retain sequential P150x4 policy"
     finally:
         cleanup_model_case(model, mesh_device)
 

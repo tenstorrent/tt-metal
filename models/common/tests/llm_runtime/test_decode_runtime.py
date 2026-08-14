@@ -32,7 +32,8 @@ class FakeMesh:
 
 
 class FakeSampling:
-    config = SimpleNamespace(allow_force_argmax=True, max_batch_size=2)
+    def __init__(self, seed_buffer=None):
+        self.config = SimpleNamespace(allow_force_argmax=True, max_batch_size=2, seeds=seed_buffer)
 
     def decode_forward(self, logits, *, k=None, p=None, temp=None, tt_out_tok=None):
         return logits, None
@@ -48,9 +49,9 @@ class FakeRope:
 
 
 class FakeModel:
-    def __init__(self):
+    def __init__(self, seed_buffer=None):
         self.config = SimpleNamespace(max_batch_size=2)
-        self.sampling = FakeSampling()
+        self.sampling = FakeSampling(seed_buffer)
         self.rope_setup = FakeRope()
         self.vocab_size = 8
         self.num_devices = 1
@@ -62,9 +63,23 @@ class FakeModel:
         return None
 
 
-def make_runtime(*, sampling=True, force_greedy_top_k=False):
+class FakeLazySeedBuffer:
+    def __init__(self):
+        self.source = torch.arange(2, dtype=torch.int64)
+        self._value = object()
+        self.updates = []
+
+    def update(self, source):
+        self.source = source
+        self.updates.append(source.clone())
+
+    def get_device_buffer(self):
+        return self._value
+
+
+def make_runtime(*, sampling=True, force_greedy_top_k=False, seed_buffer=None):
     mesh = FakeMesh()
-    model = FakeModel()
+    model = FakeModel(seed_buffer)
     config = DecodeRuntimeConfig.resolve(
         model=model,
         output_reader=OutputReader(mesh),
@@ -128,6 +143,282 @@ def prepare(runtime, *, positions=(0, -1), page_table=None, sampling_params=None
         sampling_params=sampling_params,
         reset_batch=reset,
     )
+
+
+def seeded_sampling(seed0, seed1=None):
+    return SamplingParams(
+        temperature=[0.8, 0.8],
+        top_k=[32, 32],
+        top_p=[0.95, 0.95],
+        seed=[seed0, seed1],
+    )
+
+
+def stochastic_sampling(seed=None):
+    return SamplingParams(
+        temperature=[0.8, 0.8],
+        top_k=[32, 32],
+        top_p=[0.95, 0.95],
+        seed=seed,
+    )
+
+
+def test_runtime_seed_same_request_and_absolute_position_are_cardinality_independent():
+    first_buffer = FakeLazySeedBuffer()
+    first = make_runtime(seed_buffer=first_buffer)
+    first_prepared = prepare(first, positions=(41, -1), sampling_params=seeded_sampling(1234), reset=True)
+    first._refresh_sampling_seeds(first_prepared)
+
+    remapped_buffer = FakeLazySeedBuffer()
+    remapped = make_runtime(seed_buffer=remapped_buffer)
+    remapped_prepared = prepare(
+        remapped,
+        positions=(-1, 41),
+        sampling_params=seeded_sampling(None, 1234),
+        reset=True,
+    )
+    remapped._refresh_sampling_seeds(remapped_prepared)
+
+    assert int(first_buffer.updates[-1][0]) == int(remapped_buffer.updates[-1][1])
+    assert int(first_buffer.updates[-1][0]) != int(first_buffer.updates[-1][1])
+
+
+@pytest.mark.parametrize("seed", [1234, torch.tensor(1234)])
+def test_runtime_scalar_seed_broadcasts_to_every_active_lane(seed):
+    seed_buffer = FakeLazySeedBuffer()
+    runtime = make_runtime(seed_buffer=seed_buffer)
+    sampling_params = SamplingParams(
+        temperature=[0.8, 0.8],
+        top_k=[32, 32],
+        top_p=[0.95, 0.95],
+        seed=seed,
+    )
+
+    prepared = prepare(runtime, positions=(17, 17), sampling_params=sampling_params, reset=True)
+    runtime._refresh_sampling_seeds(prepared)
+
+    assert prepared.sampling_seeds == (1234, 1234)
+    assert int(seed_buffer.updates[-1][0]) == int(seed_buffer.updates[-1][1])
+
+
+@pytest.mark.parametrize("seed", [[111, 222], torch.tensor([111, 222])])
+def test_runtime_vector_seed_remains_slot_indexed(seed):
+    runtime = make_runtime(seed_buffer=FakeLazySeedBuffer())
+    sampling_params = SamplingParams(
+        temperature=[0.8, 0.8],
+        top_k=[32, 32],
+        top_p=[0.95, 0.95],
+        seed=seed,
+    )
+
+    prepared = prepare(runtime, positions=(5, 5), sampling_params=sampling_params, reset=True)
+
+    assert prepared.sampling_seeds == (111, 222)
+
+
+def test_runtime_seed_changes_with_request_seed_and_decode_position():
+    seed_buffer = FakeLazySeedBuffer()
+    runtime = make_runtime(seed_buffer=seed_buffer)
+
+    runtime._refresh_sampling_seeds(
+        prepare(runtime, positions=(7, -1), sampling_params=seeded_sampling(101), reset=True)
+    )
+    position_7 = int(seed_buffer.updates[-1][0])
+    runtime._refresh_sampling_seeds(
+        prepare(runtime, positions=(8, -1), sampling_params=seeded_sampling(101), reset=False)
+    )
+    position_8 = int(seed_buffer.updates[-1][0])
+    runtime._refresh_sampling_seeds(
+        prepare(runtime, positions=(7, -1), sampling_params=seeded_sampling(202), reset=True)
+    )
+    different_request = int(seed_buffer.updates[-1][0])
+
+    assert len({position_7, position_8, different_request}) == 3
+
+
+def test_runtime_seed_reset_restart_and_resume_use_absolute_position():
+    seed_buffer = FakeLazySeedBuffer()
+    runtime = make_runtime(seed_buffer=seed_buffer)
+    request = seeded_sampling(909)
+
+    runtime._refresh_sampling_seeds(prepare(runtime, positions=(19, -1), sampling_params=request, reset=True))
+    original = seed_buffer.updates[-1].clone()
+    runtime._refresh_sampling_seeds(prepare(runtime, positions=(20, -1), sampling_params=request, reset=False))
+    continued = seed_buffer.updates[-1].clone()
+    runtime._refresh_sampling_seeds(prepare(runtime, positions=(19, -1), sampling_params=request, reset=True))
+    restarted = seed_buffer.updates[-1].clone()
+    runtime._refresh_sampling_seeds(prepare(runtime, positions=(20, -1), sampling_params=request, reset=True))
+    resumed = seed_buffer.updates[-1].clone()
+
+    assert torch.equal(original, restarted)
+    assert torch.equal(continued, resumed)
+
+
+def test_runtime_seed_refreshes_before_eager_model_invocation(monkeypatch):
+    events = []
+    seed_buffer = FakeLazySeedBuffer()
+    original_update = seed_buffer.update
+
+    def record_update(source):
+        events.append("seed")
+        original_update(source)
+
+    seed_buffer.update = record_update
+    runtime = make_runtime(seed_buffer=seed_buffer)
+    prepared = prepare(runtime, positions=(3, -1), sampling_params=seeded_sampling(77), reset=True)
+    monkeypatch.setattr(runtime, "_prepare_inputs_host", lambda prepared: object())
+    monkeypatch.setattr(
+        runtime,
+        "_stage_inputs_and_kpt",
+        lambda host, prepared: (DecodeDeviceInputs(None, None, None, None), None),
+    )
+
+    def run_body(*args, **kwargs):
+        events.append("invoke")
+        return object()
+
+    monkeypatch.setattr(runtime, "_run_body", run_body)
+
+    runtime.invoke(prepared)
+
+    assert events == ["seed", "invoke"]
+
+
+def test_runtime_trace_captures_stable_seed_handle_and_refreshes_before_replay(monkeypatch):
+    events = []
+    seed_buffer = FakeLazySeedBuffer()
+    original_update = seed_buffer.update
+
+    def record_update(source):
+        events.append("seed")
+        original_update(source)
+
+    seed_buffer.update = record_update
+    runtime = make_runtime(seed_buffer=seed_buffer)
+    prepared = prepare(runtime, positions=(12, -1), sampling_params=seeded_sampling(88), reset=True)
+    monkeypatch.setattr(runtime, "_prepare_inputs_host", lambda prepared: object())
+    monkeypatch.setattr(
+        runtime,
+        "_stage_inputs_and_kpt",
+        lambda host, prepared: (DecodeDeviceInputs(None, None, None, None), None),
+    )
+
+    persistent = runtime.capture_plan(prepared).prepare_inputs()
+    assert persistent.seed_buffer is seed_buffer.get_device_buffer()
+    persistent = dataclasses.replace(persistent, kpt_signature=[prepared.sampling_values[:3]])
+    runtime.refresh_trace(persistent, prepared, SimpleNamespace(full=False, page_table=False))
+    events.append("replay")
+
+    assert events == ["seed", "replay"]
+
+
+def test_runtime_seed_handling_does_not_mutate_sampling_params():
+    seed_buffer = FakeLazySeedBuffer()
+    runtime = make_runtime(seed_buffer=seed_buffer)
+    sampling_params = seeded_sampling(11, 22)
+    before = dataclasses.asdict(sampling_params)
+
+    prepared = prepare(runtime, positions=(4, 9), sampling_params=sampling_params, reset=True)
+    runtime._refresh_sampling_seeds(prepared)
+
+    assert dataclasses.asdict(sampling_params) == before
+
+
+def test_runtime_seed_none_preserves_and_restores_exact_legacy_buffer_defaults():
+    seed_buffer = FakeLazySeedBuffer()
+    defaults = seed_buffer.source.clone()
+    runtime = make_runtime(seed_buffer=seed_buffer)
+
+    unseeded = prepare(runtime, positions=(5, -1), sampling_params=stochastic_sampling(), reset=True)
+    runtime._refresh_sampling_seeds(unseeded)
+    assert seed_buffer.updates == []
+    assert torch.equal(seed_buffer.source, defaults)
+
+    runtime._refresh_sampling_seeds(
+        prepare(runtime, positions=(5, -1), sampling_params=seeded_sampling(313), reset=True)
+    )
+    assert not torch.equal(seed_buffer.updates[-1], defaults)
+    runtime._refresh_sampling_seeds(unseeded)
+
+    assert torch.equal(seed_buffer.updates[-1], defaults)
+    assert torch.equal(seed_buffer.source, defaults)
+
+    update_count = len(seed_buffer.updates)
+    runtime._refresh_sampling_seeds(dataclasses.replace(unseeded, reset_batch=False))
+    assert len(seed_buffer.updates) == update_count
+    assert torch.equal(seed_buffer.source, defaults)
+
+
+def test_runtime_mixed_seeded_peer_does_not_reset_continuing_unseeded_lane():
+    seed_buffer = FakeLazySeedBuffer()
+    defaults = seed_buffer.source.clone()
+    runtime = make_runtime(seed_buffer=seed_buffer)
+    unseeded = prepare(
+        runtime,
+        positions=(10, 10),
+        sampling_params=stochastic_sampling(seed=[None, None]),
+        reset=True,
+    )
+    runtime._refresh_sampling_seeds(unseeded)
+    assert seed_buffer.updates == []
+
+    mixed = prepare(
+        runtime,
+        positions=(11, 11),
+        sampling_params=stochastic_sampling(seed=[None, 42]),
+        reset=False,
+    )
+    runtime._refresh_sampling_seeds(mixed)
+    entered = seed_buffer.updates[-1].clone()
+    assert int(entered[0]) == int(defaults[0])
+    assert int(entered[1]) != int(defaults[1])
+
+    continued = dataclasses.replace(mixed, start_pos=torch.tensor([12, 12]))
+    runtime._refresh_sampling_seeds(continued)
+    continued_values = seed_buffer.updates[-1].clone()
+    assert int(continued_values[0]) == int(defaults[0])
+    assert int(continued_values[1]) != int(entered[1])
+
+    peer_left = prepare(
+        runtime,
+        positions=(13, 13),
+        sampling_params=stochastic_sampling(seed=[None, None]),
+        reset=False,
+    )
+    runtime._refresh_sampling_seeds(peer_left)
+    leave_values = seed_buffer.updates[-1].clone()
+    assert torch.equal(leave_values, defaults)
+
+    update_count = len(seed_buffer.updates)
+    runtime._refresh_sampling_seeds(dataclasses.replace(peer_left, start_pos=torch.tensor([14, 14])))
+    assert len(seed_buffer.updates) == update_count
+    assert torch.equal(seed_buffer.source, defaults)
+
+
+def test_runtime_mixed_seeded_peer_honors_explicit_batch_reset_for_unseeded_lane():
+    seed_buffer = FakeLazySeedBuffer()
+    defaults = seed_buffer.source.clone()
+    runtime = make_runtime(seed_buffer=seed_buffer)
+    initial = prepare(
+        runtime,
+        positions=(20, 20),
+        sampling_params=stochastic_sampling(seed=[None, None]),
+        reset=True,
+    )
+    runtime._refresh_sampling_seeds(initial)
+    assert seed_buffer.updates == []
+
+    reset_with_peer = prepare(
+        runtime,
+        positions=(21, 21),
+        sampling_params=stochastic_sampling(seed=[None, 42]),
+        reset=True,
+    )
+    runtime._refresh_sampling_seeds(reset_with_peer)
+
+    values = seed_buffer.updates[-1]
+    assert int(values[0]) == int(defaults[0])
+    assert int(values[1]) != int(defaults[1])
 
 
 @pytest.mark.parametrize(

@@ -148,7 +148,7 @@
       "source_parameter_id": "eval-32-perf-report",
       "node_id": "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[performance-eval-32-perf-report-P150x4]",
       "dp": 1,
-      "trace_mode": "decode_only",
+      "trace_mode": "all",
       "context_bucket": 1024,
       "cache_protocol": [
         "cold_write",
@@ -167,6 +167,31 @@
       "report_perf": true
     },
     {
+      "id": "p150x4.accuracy.seeded_cross_cardinality",
+      "geometry_id": "p150x4_tp4_dp1",
+      "profile": "accuracy",
+      "demo_case": "seeded-cross-cardinality",
+      "source_parameter_id": "seeded-cross-cardinality",
+      "node_id": "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b_p150x4_seeded_cross_cardinality[P150x4]",
+      "dp": 1,
+      "trace_mode": "decode_only",
+      "context_bucket": 1024,
+      "cache_protocol": [
+        "cold_write",
+        "warm_read"
+      ],
+      "capabilities": [
+        "functional",
+        "determinism"
+      ],
+      "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
+      "acceptance_condition": "The exact canonical node executes 32 true active-batch-1 controls with prepared regular-single prefill and candidates 1/2/4/32 with prepared-prefill geometry proving regular-batched Q128 rows at cardinalities 2 and 4 plus Q128 active-31/padded-32 and one Q1024 regular-single row at cardinality 32. After all required eager-prefill signatures are registered, each reused executor captures exactly one top-k decode trace alongside required non-top-k decode coverage; every generated decode iteration records a successful replay of that top-k trace key with zero coverage misses and zero post-activation compile rejections. It uses unique per-request decode seed streams, compares complete generated token-ID tuples request-by-request, and emits either INVARIANT or BATCHED_PREFILL_REJECTED. BATCHED_PREFILL_REJECTED is a completed negative verdict that retains the sequential P150x4 policy; malformed or incomplete outputs, missing execution, decoded-string comparison, conflicting batch-disable environment controls, skips, or xfails do not satisfy this requirement.",
+      "batch_size": 32,
+      "decode_tokens": 32,
+      "repeat_batches": 1,
+      "report_perf": false
+    },
+    {
       "id": "p150x4.accuracy.eval_32_perf_report",
       "geometry_id": "p150x4_tp4_dp1",
       "profile": "accuracy",
@@ -174,7 +199,7 @@
       "source_parameter_id": "eval-32-perf-report",
       "node_id": "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b[accuracy-eval-32-perf-report-P150x4]",
       "dp": 1,
-      "trace_mode": "decode_only",
+      "trace_mode": "all",
       "context_bucket": 1024,
       "cache_protocol": [
         "cold_write",
@@ -280,7 +305,8 @@
       "dp": 1,
       "trace_mode": "all",
       "trace_prefill_buckets": [
-        128
+        128,
+        1024
       ],
       "context_requirements": [
         {
@@ -317,12 +343,12 @@
     },
     {
       "id": "cross_cardinality_invariance",
-      "capability": "Fixed request IDs and per-request seeds must be invariant across batched-prefill cardinalities 1, 2, 4, and 32 and a sequential-prefill control.",
+      "capability": "Fixed request IDs and per-request seeds must be compared across 32 true batch-1 controls and batched-prefill candidate cardinalities 1, 2, 4, and 32, with an immutable INVARIANT or BATCHED_PREFILL_REJECTED disposition.",
       "applies_to": [
         "p150x4_tp4_dp1"
       ],
       "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
-      "acceptance_condition": "Immutable qualification evidence demonstrates this capability for every listed geometry without dropping a profile, workload, or row."
+      "acceptance_condition": "Immutable qualification evidence records the completed experiment as either INVARIANT or BATCHED_PREFILL_REJECTED without dropping a profile, workload, or row; either disposition satisfies experiment completion, while only INVARIANT permits changing the checked-in sequential-prefill policy."
     },
     {
       "id": "disable_batched_prefill_policy",
@@ -331,7 +357,7 @@
         "p150x4_tp4_dp1"
       ],
       "required_resolution": "PASS_OR_APPROVED_UNSUPPORTED_GEOMETRY",
-      "acceptance_condition": "Immutable qualification evidence demonstrates this capability for every listed geometry without dropping a profile, workload, or row."
+      "acceptance_condition": "The checked-in P150x4 policy remains sequential when the experiment disposition is BATCHED_PREFILL_REJECTED and may enable batched prefill only when immutable evidence records INVARIANT; missing or incomplete experiment evidence cannot change the policy."
     },
     {
       "id": "central_trace_region",
@@ -382,4 +408,3 @@
     }
   ]
 }
-

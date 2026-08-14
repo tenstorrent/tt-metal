@@ -477,19 +477,6 @@ def _seeded_cross_cardinality_sampling_params(request_indexes) -> SamplingParams
     )
 
 
-def _install_cross_cardinality_device_seeds(llm, request_indexes) -> None:
-    """Map fixed per-request seeds onto the active Sampling1D slots."""
-
-    sampling = llm.model.sampling
-    seeds_buffer = sampling.config.seeds
-    update = getattr(seeds_buffer, "update", None)
-    if not callable(update):
-        raise TypeError("seeded cross-cardinality qualification requires a mutable Sampling1D seed buffer")
-    active_seeds = [_BH_CROSS_CARDINALITY_SEEDS[index] for index in request_indexes]
-    padded_seeds = active_seeds + [0] * (sampling.config.max_batch_size - len(active_seeds))
-    update(torch.tensor(padded_seeds, dtype=torch.int32))
-
-
 def _run_seeded_cross_cardinality_batch(
     llm,
     prompts: list[str],
@@ -548,7 +535,6 @@ def _execute_seeded_cross_cardinality_shape(
     """Execute one exact eager shape after its program is compiled."""
 
     active_prompts = [prompts[index] for index in request_indexes]
-    _install_cross_cardinality_device_seeds(llm, request_indexes)
     input_tokens, prompt_lens = preprocess_llama3_8b_chat_prompts(
         active_prompts,
         llm,
@@ -566,7 +552,11 @@ def _execute_seeded_cross_cardinality_shape(
         max_batch_size=llm.model.config.max_batch_size,
         prompt_lens=prompt_lens,
         sampling_params=sampling_params,
-        prefill_sampling_params=sampling_params,
+        # The controlled stochastic stream begins in decode and is routed by
+        # DecodeRuntime from SamplingParams.seed.  Keep prefill on the logits
+        # path so this experiment does not depend on a separate prefill RNG
+        # lifecycle or a qualification-only seed-buffer mutation.
+        prefill_sampling_params=None,
         pipeline_readback=False,
     )
     assert len(result.generated_token_ids) == len(request_indexes)

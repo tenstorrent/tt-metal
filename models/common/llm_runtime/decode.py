@@ -24,7 +24,7 @@ from models.common.llm_runtime.tensor_resources import (
     raise_cleanup_failures,
     release_orphans,
 )
-from models.common.sampling import SamplingParams, format_sampling_params
+from models.common.sampling import SamplingParams, SeedManager, format_sampling_params
 
 
 @dataclass(frozen=True)
@@ -99,6 +99,7 @@ class PreparedDecode:
     page_table: torch.Tensor
     sampling_params: SamplingParams | None
     sampling_values: tuple[tuple[int, ...], tuple[float, ...], tuple[float, ...], bool] | None
+    sampling_seeds: tuple[int | None, ...] | None
     sampling_path: str
     reset_batch: bool
     device_feedback: bool
@@ -135,6 +136,7 @@ class DecodePersistentInputs:
     device_inputs: DecodeDeviceInputs
     kpt: tuple[Any, Any, Any] | None
     kpt_signature: list[Any] | None = None
+    seed_buffer: Any | None = None
 
     def owned_tensor_values(self) -> tuple[Any, ...]:
         return self.device_inputs.values(), self.kpt
@@ -271,6 +273,11 @@ class DecodeRuntime:
     The model, mesh, output reader, sampler, and KV-backed page-table values are
     borrowed. Only staged invocation tensors, raw outputs, output leases, and
     retryable decode transients are released here.
+
+    Explicit ``SamplingParams.seed`` routing is a decode-top-k contract. The
+    common prefill runtime retains its existing sampling behavior and does not
+    consume this decode RNG stream; callers that need one coherent controlled
+    stream must keep prefill on the logits path and begin sampling in decode.
     """
 
     def __init__(self, config: DecodeRuntimeConfig):
@@ -285,6 +292,17 @@ class DecodeRuntime:
         self._external_by_raw_id: dict[int, DecodeOutputLease] = {}
         self._external_by_host_id: dict[int, DecodeOutputLease] = {}
         self._transient_orphans: list[TensorResourceOrphan] = []
+        seed_buffer = getattr(getattr(config.model, "sampling", None), "config", None)
+        seed_buffer = getattr(seed_buffer, "seeds", None)
+        seed_source = getattr(seed_buffer, "source", None)
+        seed_capacity = int(seed_source.numel()) if callable(getattr(seed_source, "numel", None)) else None
+        if seed_capacity is not None and seed_capacity < config.lane_capacity:
+            raise ValueError("model sampling seed buffer is smaller than the decode lane capacity")
+        self._seed_manager = (
+            SeedManager(max_batch_size=seed_capacity or config.lane_capacity, seed_buffer=seed_buffer)
+            if config.device_sampling_enabled and callable(getattr(seed_buffer, "update", None))
+            else None
+        )
 
     # Public API
 
@@ -317,6 +335,12 @@ class DecodeRuntime:
         sampling_values = (
             None if sampling_params is None else _formatted_sampling_values(sampling_params, self.config.lane_capacity)
         )
+        sampling_seeds = (
+            None if sampling_params is None else _formatted_sampling_seeds(sampling_params, self.config.lane_capacity)
+        )
+        if sampling_seeds is not None and any(seed is not None for seed in sampling_seeds):
+            if self._seed_manager is None:
+                raise TypeError("explicit request seeds require model.sampling.config.seeds to be a mutable LazyBuffer")
         normalized = self._normalize_page_table(
             page_table,
             start_pos,
@@ -328,6 +352,7 @@ class DecodeRuntime:
             page_table=normalized,
             sampling_params=sampling_params,
             sampling_values=sampling_values,
+            sampling_seeds=sampling_seeds,
             sampling_path=self._classify_sampling_path(sampling_values),
             reset_batch=bool(reset_batch),
             device_feedback=feedback,
@@ -363,6 +388,7 @@ class DecodeRuntime:
         device_inputs, kpt = self._stage_inputs_and_kpt(host_inputs, prepared)
         owned = (device_inputs, kpt)
         try:
+            self._refresh_sampling_seeds(prepared)
             with _validate_module_inputs(self.config.model):
                 output = self._run_body(
                     device_inputs,
@@ -390,7 +416,12 @@ class DecodeRuntime:
             host_inputs = self._prepare_inputs_host(prepared)
             device_inputs, kpt = self._stage_inputs_and_kpt(host_inputs, prepared)
             signature = [prepared.sampling_values[:3]] if kpt is not None else None
-            return DecodePersistentInputs(device_inputs=device_inputs, kpt=kpt, kpt_signature=signature)
+            return DecodePersistentInputs(
+                device_inputs=device_inputs,
+                kpt=kpt,
+                kpt_signature=signature,
+                seed_buffer=self._seed_device_handle(),
+            )
 
         def capture(persistent: Any) -> Any:
             values = _persistent_values(persistent)
@@ -411,6 +442,11 @@ class DecodeRuntime:
     ) -> None:
         self._require_prepared(prepared)
         values = _persistent_values(artifact)
+        self._validate_trace_seed_handle(values)
+        # Sampling1D's trace captures the stable model-owned seed tensor handle.
+        # Refresh its contents before replay so the trace cannot observe stale
+        # request state.
+        self._refresh_sampling_seeds(prepared)
         if bool(decision.full):
             host_inputs = self._prepare_inputs_host(prepared)
             _copy_host_to_device(host_inputs.values(), values.device_inputs.values())
@@ -656,6 +692,47 @@ class DecodeRuntime:
             tt_out_tok=None,
         )
 
+    def _seed_device_handle(self):
+        if self._seed_manager is None:
+            return None
+        return self._seed_manager.get_seed_device_buffer()
+
+    def _validate_trace_seed_handle(self, persistent: DecodePersistentInputs) -> None:
+        if self._seed_manager is None:
+            if persistent.seed_buffer is not None:
+                raise RuntimeError("decode trace unexpectedly captured a seed buffer")
+            return
+        current = self._seed_device_handle()
+        if persistent.seed_buffer is not current:
+            raise RuntimeError("decode trace seed buffer handle changed after capture")
+
+    def _refresh_sampling_seeds(self, prepared: PreparedDecode) -> None:
+        manager = self._seed_manager
+        seeds = prepared.sampling_seeds
+        active_slots = [slot for slot, position in enumerate(prepared.start_pos) if int(position) >= 0]
+        if prepared.sampling_path != "topk":
+            if manager is not None:
+                manager.refresh_absolute_request_seeds(
+                    None,
+                    active_slots,
+                    prepared.start_pos,
+                    reset_batch=prepared.reset_batch,
+                )
+            return
+        has_explicit_seed = seeds is not None and any(
+            seeds[slot] is not None for slot in active_slots if slot < len(seeds)
+        )
+        if manager is None:
+            if has_explicit_seed:
+                raise TypeError("explicit request seeds require a mutable model-owned seed buffer")
+            return
+        manager.refresh_absolute_request_seeds(
+            seeds,
+            active_slots,
+            prepared.start_pos,
+            reset_batch=prepared.reset_batch,
+        )
+
     def _make_device_kpt(self, prepared):
         host = self._make_host_kpt(prepared)
         if host is None:
@@ -758,6 +835,7 @@ def _persistent_values(value: Any) -> DecodePersistentInputs:
             device_inputs=device,
             kpt=values.get("kpt"),
             kpt_signature=values.get("kpt_signature"),
+            seed_buffer=values.get("seed_buffer"),
         )
     raise TypeError("decode persistent inputs have an unsupported representation")
 
@@ -916,6 +994,24 @@ def _formatted_sampling_values(sampling_params, batch_size):
         all(value == 1 for value in k) and all(value == 0 for value in p) and all(value == 1 for value in temperature)
     )
     return k, p, temperature, greedy
+
+
+def _formatted_sampling_seeds(sampling_params, batch_size):
+    """Return slot-indexed request seeds without mutating caller parameters."""
+
+    seed = getattr(sampling_params, "seed", None)
+    if seed is None:
+        return None
+    if isinstance(seed, torch.Tensor):
+        if seed.ndim == 0:
+            seed = seed.item()
+        else:
+            seed = seed.reshape(-1).tolist()
+    if not isinstance(seed, (list, tuple)):
+        return (int(seed),) * int(batch_size)
+    values = [None if value is None else int(value) for value in seed[:batch_size]]
+    values.extend([None] * (int(batch_size) - len(values)))
+    return tuple(values)
 
 
 def _concat_host_output(value, cluster_shape):

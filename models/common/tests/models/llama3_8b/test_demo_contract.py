@@ -37,8 +37,9 @@ def test_demo_exposes_seeded_bh_cross_cardinality_qualification_node():
     assert '_BH_CROSS_CARDINALITIES = (1, 2, 4, 32)' in _DEMO_SOURCE
     assert 'device_name not in {"P150", "P150x4"}' in _DEMO_SOURCE
     assert "_BH_CROSS_CARDINALITY_SEEDS" in _DEMO_SOURCE
-    assert "def _install_cross_cardinality_device_seeds(llm, request_indexes)" in _DEMO_SOURCE
-    assert "seeds_buffer" in _DEMO_SOURCE and "update(torch.tensor" in _DEMO_SOURCE
+    assert "_install_cross_cardinality_device_seeds" not in _DEMO_SOURCE
+    assert "prefill_sampling_params=None" in _DEMO_SOURCE
+    assert "DecodeRuntime from SamplingParams.seed" in _DEMO_SOURCE
     assert "allow_batched_prefill_with_device_sampling_for_diagnostics=allow_batched_prefill" in _DEMO_SOURCE
     assert "allow_batched_prefill=True" in _DEMO_SOURCE
     assert '("DISABLE_BATCHED_PREFILL", "DISABLE_BATCHED_EXTRACT")' in _DEMO_SOURCE

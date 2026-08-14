@@ -16,6 +16,7 @@ from models.common.sampling import (
     format_sampling_params,
 )
 from models.common.sampling.tt_log_probs import MAX_TOP_LOGPROBS, LogProbsResult
+from models.common.sampling.generator import MAX_UINT32, _hash_request_seed_to_device_seed
 from models.common.utility_functions import comp_pcc
 
 
@@ -79,7 +80,34 @@ def test_seed_manager_seed_params_do_not_fallback_to_slot_zero():
     assert seed_manager._seed_from_slot_params([11], 0) == 11
     assert seed_manager._seed_from_slot_params([11], 1) is None
     assert seed_manager._seed_from_slot_params(torch.tensor([22]), 1) is None
+    assert seed_manager._seed_from_slot_params((44,), 0) == 44
     assert seed_manager._seed_from_slot_params(33, 3) == 33
+
+
+def test_seed_manager_updates_lazy_buffer_with_request_position_hash_and_preserves_default_source():
+    class Buffer:
+        def __init__(self):
+            self.source = torch.arange(4, dtype=torch.int64)
+            self.updates = []
+
+        def update(self, source):
+            self.source = source
+            self.updates.append(source.clone())
+
+    buffer = Buffer()
+    defaults = buffer.source.clone()
+    seed_manager = SeedManager(max_batch_size=4, seed_buffer=buffer)
+    seed_manager.reset_seed_from_slots((707, None, None, None), range(4))
+    seed_manager.align_seed_counters_to_positions((707, None, None, None), [0], [13], offset=1)
+
+    values = seed_manager.get_new_values([0])
+
+    assert values == (_hash_request_seed_to_device_seed(707, 14), MAX_UINT32, MAX_UINT32, MAX_UINT32)
+    assert torch.equal(buffer.updates[-1], torch.tensor(values))
+    assert torch.equal(buffer.source, defaults)
+
+    seed_manager.restore_default_device_values()
+    assert torch.equal(buffer.updates[-1], defaults)
 
 
 def test_seed_counter_position_alignment_skips_out_of_bounds_slots():

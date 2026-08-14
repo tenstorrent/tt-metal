@@ -53,13 +53,47 @@ def test_demo_case_manifest_is_preserved():
     assert ast.literal_eval(optimizations.args[1]) == ["performance", "accuracy"]
 
 
-def test_cross_cardinality_experiment_is_standalone_fixed_and_host_deterministic():
-    function = _function("test_qwen3_32b_p150x4_cross_cardinality")
+def _cross_cardinality_namespace():
+    names = {
+        "_compare_cross_cardinality_token_ids",
+        "_require_cross_cardinality_prefill_geometry",
+    }
+    nodes = [
+        node
+        for node in _DEMO_TREE.body
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)) and node.name in names
+    ]
+    namespace = {
+        "_CROSS_CARDINALITY_REQUEST_IDS": tuple(f"request-{index}" for index in range(32)),
+        "_CROSS_CARDINALITIES": (1, 2, 4, 32),
+        "_CROSS_CARDINALITY_DECODE_TOKENS": 1,
+    }
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), _DEMO_PATH, "exec"), namespace)
+    return namespace
+
+
+def test_cross_cardinality_experiment_is_one_canonical_exact_token_node():
+    function = _function("test_qwen3_32b_p150x4_seeded_cross_cardinality")
     source = ast.unparse(function)
     assert "get_device_name(mesh_device) != 'P150x4'" in source
-    assert "sampling_params=None" in source
-    assert "assert_cross_cardinality_consistency(outputs_by_cardinality)" in source
-    assert "disable_batched_prefill=prefill_mode == 'sequential'" not in source
+    assert "_require_cross_cardinality_environment()" in source
+    assert "ma.disable_batched_prefill is True" in source
+    assert "ma.batched_prefill_batched_extract is True" in source
+    assert "sampling_params=sampling_params" in source
+    assert "prefill_sampling_params=None" in source
+    assert "ondevice_decode_loop=True" in source
+    assert "trace_mode=eval_decode_trace_mode('traced')" in source
+    assert "model.sampling.config.seeds" not in source
+    assert "_snapshot_cross_cardinality_prefill" in source
+    assert "_require_cross_cardinality_prefill_geometry" in source
+    assert "_compare_cross_cardinality_token_ids(controls, prefixes)" in source
+    assert "QWEN3_32B_CROSS_CARDINALITY_VERDICT=" in source
+    assert "decode_eval_output" not in source
+    assert "assert_cross_cardinality_consistency" not in source
+    assert "ma.disable_batched_prefill = False" in source
+    assert "ma.disable_batched_prefill = True" in source
+    assert "for request_id, prompt, seed in zip" in source
+    assert "first 2/4 requests in one Q128 batch" in source
     assert ast.literal_eval(
         next(
             node.value
@@ -69,16 +103,157 @@ def test_cross_cardinality_experiment_is_standalone_fixed_and_host_deterministic
         )
     ) == (1, 2, 4, 32)
     assert "qwen3-32b-request-{index:02d}" in _DEMO_SOURCE
-    warmup_call = _calls("test_qwen3_32b_p150x4_cross_cardinality", "_warmup_demo_executor")[0]
-    compile_case = next(keyword.value for keyword in warmup_call.keywords if keyword.arg == "prefill_compile_case")
-    assert ast.unparse(compile_case) == "(input_tokens, prompt_lens)"
-    warmup_page_table = next(keyword.value for keyword in warmup_call.keywords if keyword.arg == "page_table")
-    assert ast.unparse(warmup_page_table) == "page_table[:cardinality]"
+    seed_assignment = next(
+        node
+        for node in _DEMO_TREE.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "_CROSS_CARDINALITY_SEEDS" for target in node.targets)
+    )
+    namespace = {}
+    exec(compile(ast.Module(body=[seed_assignment], type_ignores=[]), _DEMO_PATH, "exec"), namespace)
+    seeds = namespace["_CROSS_CARDINALITY_SEEDS"]
+    assert len(seeds) == len(set(seeds)) == 32
+    prompt_order = next(
+        node
+        for node in _DEMO_TREE.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "_CROSS_CARDINALITY_PROMPT_ORDER"
+            for target in node.targets
+        )
+    )
+    order_namespace = {}
+    exec(compile(ast.Module(body=[prompt_order], type_ignores=[]), _DEMO_PATH, "exec"), order_namespace)
+    assert tuple(order_namespace["_CROSS_CARDINALITY_PROMPT_ORDER"]) == (*range(2, 32), 0, 1)
+    assert len(_calls("test_qwen3_32b_p150x4_seeded_cross_cardinality", "make_executor")) == 2
+    make_calls = _calls("test_qwen3_32b_p150x4_seeded_cross_cardinality", "make_executor")
+    expected_policies = {
+        ast.literal_eval(next(keyword.value for keyword in call.keywords if keyword.arg == "expected_disable_batched_prefill"))
+        for call in make_calls
+    }
+    assert expected_policies == {True, False}
+    assert "executor.prefill_runtime.config.disable_batched_prefill" in source
+    assert "compile_prefill_case" in source
+    assert "executor.warmup_model_decode(enable_trace=False, **decode_kwargs)" in source
+    assert "executor.warmup_model_decode(enable_trace=True, **decode_kwargs)" in source
+    assert source.index("compile_prefill_case(sequential_executor") < source.index(
+        "activate_decode_trace(sequential_executor"
+    )
+    assert source.index("compile_prefill_case(candidate_executor") < source.index(
+        "activate_decode_trace(candidate_executor"
+    )
+    assert "compiler.trace_count == len(coverage) >= 1" in source
+    assert "signature.sampling_path == 'topk'" in source
+    assert "len(topk_coverage) == 1" in source
+    assert "compiler.trace_key_for_program(decode_program_key) == expected_topk_trace_key" in source
+    assert "compiler.trace_count == expected_semantic_trace_count and compiler.trace_active" in source
+    assert "compiler.trace_count == 1" not in source
+    assert "record is not None and record.artifact is not None" in source
+    assert "replay_delta != _CROSS_CARDINALITY_DECODE_TOKENS" in source
+    assert "post_activation_compile_rejections == 0" in source
+    assert "control_trace_lifecycle" in source
+    assert "candidate_trace_lifecycle" in source
+    assert "control_replay_evidence" in source
+    assert "candidate_replay_evidence" in source
+    assert "control_prefill_geometry" in source
+    assert "candidate_prefill_geometry" in source
+    assert "eager_prefill_decode_traced" in source
 
 
-def test_cross_cardinality_override_is_explicit_and_canonical_cases_do_not_use_it():
-    create_call = _calls("test_qwen3_32b_p150x4_cross_cardinality", "create_model")[0]
-    assert any(keyword.arg == "disable_batched_prefill" for keyword in create_call.keywords)
+def test_cross_cardinality_geometry_requires_real_batched_requests_and_source_rows(expect_error):
+    namespace = _cross_cardinality_namespace()
+    require = namespace["_require_cross_cardinality_prefill_geometry"]
+    batched_2 = (
+        {
+            "kind": "batched",
+            "source_rows": (0, 1),
+            "active_batch_size": 2,
+            "padded_batch_size": 2,
+            "padded_sequence_length": 128,
+            "operation_variants": ("regular-batched",),
+        },
+    )
+    require(batched_2, cardinality=2, batched_candidate=True)
+
+    sequential_2 = tuple(
+        {
+            "kind": "single",
+            "source_rows": (row,),
+            "active_batch_size": 1,
+            "padded_batch_size": 1,
+            "padded_sequence_length": 128,
+            "operation_variants": ("regular-single",),
+        }
+        for row in range(2)
+    )
+    with expect_error(AssertionError, "cardinality 2 prepared-prefill geometry disagrees"):
+        require(sequential_2, cardinality=2, batched_candidate=True)
+
+    batched_32 = (
+        {
+            "kind": "batched",
+            "source_rows": tuple(range(31)),
+            "active_batch_size": 31,
+            "padded_batch_size": 32,
+            "padded_sequence_length": 128,
+            "operation_variants": ("regular-batched",),
+        },
+        {
+            "kind": "single",
+            "source_rows": (31,),
+            "active_batch_size": 1,
+            "padded_batch_size": 1,
+            "padded_sequence_length": 1024,
+            "operation_variants": ("regular-single",),
+        },
+    )
+    require(batched_32, cardinality=32, batched_candidate=True)
+
+
+def test_cross_cardinality_verdict_compares_exact_tokens_and_accepts_negative_execution(expect_error):
+    namespace = _cross_cardinality_namespace()
+    request_ids = namespace["_CROSS_CARDINALITY_REQUEST_IDS"]
+    controls = {request_id: (index, index + 1) for index, request_id in enumerate(request_ids)}
+    prefixes = {
+        cardinality: {request_id: controls[request_id] for request_id in request_ids[:cardinality]}
+        for cardinality in (1, 2, 4, 32)
+    }
+
+    verdict, mismatches = namespace["_compare_cross_cardinality_token_ids"](controls, prefixes)
+    assert verdict == "INVARIANT"
+    assert mismatches == ()
+
+    prefixes[4][request_ids[2]] = (2, 999)
+    verdict, mismatches = namespace["_compare_cross_cardinality_token_ids"](controls, prefixes)
+    assert verdict == "BATCHED_PREFILL_REJECTED"
+    assert mismatches == (
+        {
+            "cardinality": 4,
+            "request_id": request_ids[2],
+            "first_token_difference": 1,
+            "control_token_count": 2,
+            "batched_token_count": 2,
+        },
+    )
+
+    with expect_error(AssertionError, "must contain all 32 fixed request IDs"):
+        namespace["_compare_cross_cardinality_token_ids"]({request_ids[0]: (0,)}, prefixes)
+
+    prefixes = {
+        cardinality: {request_id: controls[request_id] for request_id in request_ids[:cardinality]}
+        for cardinality in (1, 2, 4, 32)
+    }
+    prefixes[4][request_ids[2]] = (2,)
+    with expect_error(AssertionError, "candidates must each return 2 generated tokens"):
+        namespace["_compare_cross_cardinality_token_ids"](controls, prefixes)
+
+
+def test_cross_cardinality_environment_and_checked_in_policy_fail_closed():
+    source = ast.unparse(_function("_require_cross_cardinality_environment"))
+    assert "DISABLE_BATCHED_PREFILL" in source
+    assert "DISABLE_BATCHED_EXTRACT" in source
+    create_call = _calls("test_qwen3_32b_p150x4_seeded_cross_cardinality", "create_model")[0]
+    assert not any(keyword.arg == "disable_batched_prefill" for keyword in create_call.keywords)
     canonical_calls = _calls("test_qwen3_32b", "create_model")
     assert canonical_calls
     assert all(
