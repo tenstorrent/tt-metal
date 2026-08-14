@@ -338,7 +338,8 @@ models:
     wh_galaxy_perf: 55
     wh_n150: 100
     wh_n300: 60
-    bh_p150: 7
+    # +35 for the Qwen3-0.6B (15) and Qwen3-1.7B (20) P150 entries in models_e2e_tests.yaml.
+    bh_p150: 42
     bh_p300: 8
     bh_quietbox_2: 42
   unit:
