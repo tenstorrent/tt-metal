@@ -17,6 +17,7 @@ import os
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.demos.gemma4.config import MeshConfig, ModeConfig
@@ -31,6 +32,7 @@ from ...tests.test_factory import (
     compare_tensors,
     find_layer_idx,
     get_pcc_threshold,
+    load_real_weights_into,
     parametrize_mesh_with_fabric,
 )
 
@@ -75,11 +77,20 @@ def _attn_weight_dtype(mesh_device):
     return precision.get("attention", ttnn.bfloat16)
 
 
-def _setup_attention(mesh_device, layer_idx, create_kv_cache=False, max_seq_len=128):
-    """Create HF reference and TT attention module for a given mesh."""
+def _setup_attention(mesh_device, layer_idx, create_kv_cache=False, max_seq_len=128, real_weights=False):
+    """Create HF reference and TT attention module for a given mesh.
+
+    ``real_weights`` overwrites the constructor init with the checkpoint's
+    trained q/k/v/o projections and q/k norms for this layer. Both sides still
+    read their weights from ``hf_attn``, so the reference and the TT module stay
+    in lockstep either way.
+    """
     hf_text_config = TestFactory.create_hf_text_config()
     hf_layer = TestFactory.create_hf_reference_layer(hf_text_config, layer_idx)
     hf_attn = hf_layer.self_attn
+    if real_weights:
+        load_real_weights_into(hf_attn, f"layers.{layer_idx}.self_attn")
+        hf_attn.eval()
     config = Gemma4AttentionConfig(TestFactory.create_hf_config(), layer_idx)
 
     state_dict = {k: v.clone() for k, v in hf_attn.state_dict().items() if not k.startswith("v_norm")}
@@ -168,6 +179,61 @@ def test_attention_prefill(layer_type, seq_len, mesh_device, reset_seeds, reques
     passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
     assert passing, (
         f"Attention prefill (layer_type={layer_type}, layer_idx={layer_idx}, "
+        f"seq={seq_len}, tp={mesh_config.tp}) PCC too low: {pcc_msg}"
+    )
+
+
+# ── Real-weight prefill PCC ───────────────────────────────────────────────
+
+
+@parametrize_mesh_with_fabric()
+@pytest.mark.parametrize("layer_type", ["sliding_attention", "full_attention"], ids=["sliding", "global"])
+@pytest.mark.parametrize("seq_len", [1024], ids=["seq1024"])
+def test_attention_prefill_real_weights(layer_type, seq_len, mesh_device, reset_seeds, request):
+    """Prefill PCC on the checkpoint's trained q/k/v/o projections and q/k norms.
+
+    ``test_attention_prefill`` runs on HF's constructor init. The projections are
+    what this buys: real q_proj spans [-0.30, 0.36] over ~5k distinct values,
+    and the weight dtype follows ``precision_overrides.json``, so on 31B/12B this
+    gates the *shipped bfp8* attention weights at real magnitudes — a
+    shared-exponent format's error depends on the within-block spread, which
+    random init does not reproduce.
+
+    Not the q/k norms: unlike every other RMSNorm in this model those are
+    constant vectors in the checkpoint (12B layer 0: q=1.0234375, k=0.1220703125,
+    one unique value each). The only thing they add over the all-ones init is the
+    ~8x q-vs-k scale difference.
+    """
+    hf_text_config = TestFactory.create_hf_text_config()
+    try:
+        layer_idx = find_layer_idx(hf_text_config, layer_type)
+    except ValueError:
+        pytest.skip(f"No {layer_type} layer in this model")
+
+    hf_text_config, hf_attn, config, tt_attn, mesh_config = _setup_attention(mesh_device, layer_idx, real_weights=True)
+    _skip_if_l1_overflow(config, mesh_device)
+
+    q_norm = getattr(hf_attn, "q_norm", None)
+    if q_norm is not None and getattr(q_norm, "weight", None) is not None:
+        w = q_norm.weight.data.float()
+        logger.info(f"layers.{layer_idx}.self_attn q_norm: min={w.min():.4g} max={w.max():.4g} std={w.std():.4g}")
+
+    x_torch = torch.randn(1, seq_len, config.hidden_size, dtype=torch.float32)
+
+    hf_rope = TestFactory.create_hf_rope(hf_text_config, seq_len, layer_idx)
+    sliding = config.sliding_window if config.is_sliding else None
+    attn_mask = build_hf_prefill_mask(seq_len, sliding_window=sliding)
+    with torch.no_grad():
+        ref_output, _ = hf_attn(x_torch, position_embeddings=hf_rope, attention_mask=attn_mask, shared_kv_states=None)
+
+    cos_tt, sin_tt = TestFactory.create_tt_rope_cache(mesh_device, hf_text_config, max(seq_len, 128), layer_idx)
+    x_tt = _to_device(x_torch.unsqueeze(0).to(torch.bfloat16), mesh_device)
+    tt_output = tt_attn(x_tt, rope_mats=(cos_tt, sin_tt), is_decode=False)
+    tt_output_torch = _from_device(tt_output, mesh_device).squeeze(0).float()
+
+    passing, pcc_msg = compare_tensors(tt_output_torch, ref_output, pcc_threshold=get_pcc_threshold(request))
+    assert passing, (
+        f"Attention prefill real-weights (layer_type={layer_type}, layer_idx={layer_idx}, "
         f"seq={seq_len}, tp={mesh_config.tp}) PCC too low: {pcc_msg}"
     )
 

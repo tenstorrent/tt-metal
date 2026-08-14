@@ -235,6 +235,143 @@ def skip_if_config_only_checkpoint():
         pytest.skip(_CONFIG_ONLY_SKIP_REASON)
 
 
+# ── Real checkpoint weights ────────────────────────────────────────────────
+#
+# ``create_hf_reference_layer`` and friends build HF modules from the *config*
+# and leave the constructor's init in place — N(0, 0.02) for the router/expert
+# tensors, all-ones for every RMSNorm scale, HF's default for the projections.
+# That has none of the dynamic range or the outlier channels a trained
+# checkpoint carries, which is exactly what bf16/bfp8 storage and multi-step
+# accumulation get wrong. The helpers below pull the *real* tensors so a test
+# can gate the device op at the magnitudes the model actually runs at.
+#
+# Only the requested tensors are read: the safetensors headers give a
+# key -> shard map, then one ``get_tensor`` per key. Materializing a 31B
+# state dict to fetch one projection would dominate every test that used it.
+
+
+@lru_cache(maxsize=1)
+def real_checkpoint_dir():
+    """Local directory holding the checkpoint's safetensors shards.
+
+    Cached: for a hub-id ``HF_MODEL`` this goes through ``snapshot_download``,
+    which round-trips to the Hub to revalidate the revision even when every
+    shard is already local. Once per process, not once per parametrized case.
+    """
+    model_path = _get_model_path()
+    if os.path.isdir(model_path):
+        return model_path
+    from huggingface_hub import snapshot_download
+
+    return snapshot_download(model_path, allow_patterns=["*.safetensors", "*.safetensors.index.json"])
+
+
+@lru_cache(maxsize=1)
+def real_weight_index():
+    """``{tensor key: shard path}`` from the safetensors headers — no tensor data read."""
+    from pathlib import Path
+
+    from safetensors import safe_open
+
+    index = {}
+    for shard in sorted(Path(real_checkpoint_dir()).glob("*.safetensors")):
+        with safe_open(str(shard), framework="pt") as f:
+            for key in f.keys():
+                index[key] = str(shard)
+    return index
+
+
+@lru_cache(maxsize=1)
+def real_text_prefix():
+    """Checkpoint prefix for the text stack, trailing dot included.
+
+    The plain text releases name these ``model.layers.0.…`` and the unified
+    multimodal ones ``model.language_model.layers.0.…``. Derived from wherever
+    ``embed_tokens.weight`` lives rather than guessed, so a third naming
+    convention resolves too.
+    """
+    for key in sorted(real_weight_index()):
+        if key.endswith("embed_tokens.weight") and "per_layer" not in key:
+            return key[: -len("embed_tokens.weight")]
+    return "model."
+
+
+def skip_unless_real_weights():
+    """Skip unless HF_MODEL resolves to a checkpoint with readable safetensors."""
+    skip_if_config_only_checkpoint()
+    if not real_weight_index():
+        pytest.skip(f"No safetensors shards under {real_checkpoint_dir()}; this test needs real weights")
+
+
+def load_real_substate(relative_prefix):
+    """Real weights under ``<text prefix><relative_prefix>.``, keys made relative.
+
+    ``load_real_substate("layers.0.self_attn")`` returns ``{"q_proj.weight": …,
+    "k_norm.weight": …}`` — the shape an HF submodule's ``load_state_dict``
+    wants. fp32 tensors are cast to bf16 to match what
+    ``Gemma4ModelArgs.load_state_dict`` hands the real model.
+    """
+    from collections import defaultdict
+
+    from safetensors import safe_open
+
+    assert relative_prefix, "relative_prefix must be non-empty — an empty one would load the whole text stack"
+    skip_unless_real_weights()
+    index = real_weight_index()
+    prefix = f"{real_text_prefix()}{relative_prefix}."
+    by_shard = defaultdict(list)
+    for key in index:
+        if key.startswith(prefix):
+            by_shard[index[key]].append(key)
+    if not by_shard:
+        pytest.skip(f"Checkpoint {_get_model_path()} has no weights under '{prefix}'")
+
+    out = {}
+    for shard, keys in by_shard.items():
+        with safe_open(shard, framework="pt") as f:
+            for key in keys:
+                tensor = f.get_tensor(key)
+                out[key[len(prefix) :]] = tensor.to(torch.bfloat16) if tensor.dtype == torch.float32 else tensor
+    return out
+
+
+def load_real_model_substate(num_layers):
+    """Real weights for a *truncated* text stack, keyed for an HF reference model.
+
+    Returns ``embed_tokens.weight``, ``layers.{0..num_layers-1}.…`` and
+    ``norm.weight`` — deliberately not the whole checkpoint, so a 1-layer test
+    reads one layer's tensors rather than all 48.
+    """
+    state = {}
+    for name in ("embed_tokens", "norm"):
+        for key, value in load_real_substate(name).items():
+            state[f"{name}.{key}"] = value
+    for layer_idx in range(num_layers):
+        for key, value in load_real_substate(f"layers.{layer_idx}").items():
+            state[f"layers.{layer_idx}.{key}"] = value
+    return state
+
+
+def load_real_weights_into(module, relative_prefix):
+    """Load the checkpoint's weights for ``relative_prefix`` into an HF module.
+
+    Returns the loaded state dict (keys relative to ``relative_prefix``) so a
+    caller can log or reuse the tensors it just installed.
+
+    ``strict=False``: the TT port drops tensors the reference module still
+    declares (``v_norm``) and vice versa. Asserts that *something* landed, so a
+    prefix typo fails loudly instead of quietly leaving the constructor init —
+    which would make the test look like it passed on real weights.
+    """
+    state = load_real_substate(relative_prefix)
+    _, unexpected = module.load_state_dict(state, strict=False)
+    loaded = len(state) - len(unexpected)
+    assert (
+        loaded > 0
+    ), f"No weight under '{relative_prefix}' matched {type(module).__name__}; unexpected={unexpected[:5]}"
+    return state
+
+
 class TestFactory:
     """Common test setup for Gemma4 unit tests."""
 
