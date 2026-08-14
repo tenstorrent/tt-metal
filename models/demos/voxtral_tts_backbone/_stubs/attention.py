@@ -114,6 +114,38 @@ def _kv_second_core_memory_config(n_kv_heads: int, head_dim: int):
         return None
 
 
+#: Cores the decode attention may spend on ONE (batch, kv-head) pair.
+#
+# Handed no program config, `scaled_dot_product_attention_decode` sets this to
+# the WHOLE grid, which at batch 1 with 8 KV heads works out to 16 cores per
+# head and 128 active. Sixteen ways is far too fine for this cache: a 256-deep
+# history is 16 positions per core, half a tile of work, and the kernel then
+# pays a ceil(log2(16)) = 4-round tree reduction ACROSS those cores to put the
+# head back together. The reduction, not the read, is what the op costs.
+#
+# Swept on this cache depth, as the op's device time in the profiled slice:
+# default(16) 5.29 / 4 -> 3.25 / 2 -> 3.04 / 1 -> 2.99 ms. It is monotone, which
+# is the tell that the reduction is the whole cost -- but the last step is worth
+# 0.05 ms and whole-model came out marginally BETTER at 2 than at 1 (231.845 vs
+# 231.919 ms), so take 2: one reduction round, 16 active cores, and it still has
+# somewhere to go when a deeper cache makes the read matter again.
+_SDPA_CORES_PER_HEAD = 2
+
+
+def _sdpa_decode_program_config(device):
+    """Decode-attention parallelism, or None to keep the op's own default."""
+    try:
+        grid = device.compute_with_storage_grid_size()
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=grid,
+            q_chunk_size=0,
+            k_chunk_size=0,
+            max_cores_per_head_batch=_SDPA_CORES_PER_HEAD,
+        )
+    except Exception:  # noqa: BLE001 - keep the op's own core allocation
+        return None
+
+
 class TtAttention:
     def __init__(self, device, weights, dims, scaling):
         self.device = device
@@ -159,6 +191,8 @@ class TtAttention:
             )
         except Exception:  # noqa: BLE001 - accuracy tuning is best-effort
             self.compute_kernel_config = None
+
+        self.sdpa_decode_program_config = _sdpa_decode_program_config(device)
 
     # ---------------------------------------------------------------- build
     @classmethod
@@ -453,7 +487,12 @@ class TtAttention:
         key = self._apply_rope(key, cos, sin)
         self._write_kv(k_cache, key, v_cache, value, cache_pos_tensor)
         attn = ttnn.transformer.scaled_dot_product_attention_decode(
-            query, k_cache, v_cache, scale=self.scaling, cur_pos_tensor=cache_pos_tensor
+            query,
+            k_cache,
+            v_cache,
+            scale=self.scaling,
+            cur_pos_tensor=cache_pos_tensor,
+            program_config=self.sdpa_decode_program_config,
         )
         # Already [1, 1, q_heads, hd]: merging the heads is the last two dims,
         # emitted straight into o_proj's shard as the generic path also does.
@@ -569,6 +608,7 @@ class TtAttention:
             k_cache,
             v_cache,
             scale=self.scaling,
+            program_config=self.sdpa_decode_program_config,
             **pos_kwargs,
         )
         return ttnn.permute(attn, (1, 0, 2, 3))
