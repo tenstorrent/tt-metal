@@ -1899,6 +1899,75 @@ So the kernel-constraint half degrades gracefully where the architecture half do
 
 ---
 
+## ★ F18 — the architecture gate tests the model's NAME, not its structure (with a tested fix)
+
+`compat` refused the three-block model outright. The chain, in `compatibility.py`:
+
+```python
+family = detect_family(cfg)              # matches cfg["model_type"] against hardcoded name lists
+is_unknown = family.startswith("unknown")
+fpr = arch_descriptor(model_type, architectures, is_encoder_decoder)
+if not fpr.startswith("decoder-only"):
+    return report                        # early return -> EMPTY block table
+```
+
+**Every input to that decision is a name.** `model_type`, `architectures`, `is_encoder_decoder`.
+`model_type` is free text chosen by whoever wrote the config, so a model that is *structurally* a
+Llama-family decoder is refused for being called `"voxtral_tts"` — while the config carries every
+field the block checks actually read: `num_attention_heads`, `num_key_value_heads`, `head_dim`,
+`intermediate_size`, `rope_theta`, `rms_norm_eps`.
+
+**The intent is right and worth preserving.** The checklist it runs is the LLM-decoder one; run it
+against a VAE and it would report *"GQA attention: ready"* for a model with no attention. Families
+genuinely differ — MLA, SSM and MoE need different handling. Refusing to guess beats a confident
+plan for the wrong architecture.
+
+**The implementation tests the label instead of the thing.**
+
+### Tested fix
+
+Added `_looks_like_decoder(cfg)` — requires the four fields the checks read, plus one
+attention-shape hint (`num_key_value_heads` or `head_dim`) and one position hint (`rope_theta`,
+`rope_parameters`, `rope_scaling` or `max_position_embeddings`), so a bag of integers does not
+qualify. Used as a fallback in `detect_family` after the name lists.
+
+Same model, same command:
+
+```
+BEFORE   ARCHITECTURE NOT RECOGNIZED (non-LLM)      0 ready / 0 partial / 0 missing
+AFTER    Llama-family causal LM (INFERRED from config fields, model_type='voxtral_tts'
+         is not a known name; config declares 3 stacks: backbone, flow, codec)
+         Overall verdict: READY                     10 ready / 0 partial / 0 missing
+```
+
+Also added `declared_stacks(cfg)`, which reads `block_stacks` — the field F17 showed nothing was
+reading.
+
+### The fix is INCOMPLETE, and the remainder is the real recommendation
+
+`Overall verdict: READY` is **wrong**. It analysed the *backbone* and declared the whole *model*
+ready. The flow matcher and the codec are not covered by that checklist at all, and the codec is
+built on `conv1d` — which §6.13 records as the op that caused this port's hang. So the patch trades
+"refuses to analyse anything" for "analyses one stack and overclaims for three": **F16 in a new
+costume.**
+
+The correct output is per-stack, and the tool already has the names:
+
+```
+backbone : 10 ready / 0 partial / 0 missing
+flow     : NOT ANALYSED — no checklist for flow-matching
+codec    : NOT ANALYSED — no checklist for neural codecs
+```
+
+**Three states, not two: supported / missing / not-analysed.** That is the change worth making —
+it is what lets the tool be honest about scope instead of choosing between silence and
+over-confidence, and it is the same gap F16 identified from the other direction.
+
+*(Note: the `READY` verdict can only fire at all because F2 was fixed in this checkout —
+`lambda _: []` -> `lambda _: True`. Unpatched, that verdict is unreachable.)*
+
+---
+
 ## Corrections to this document
 
 - **`beat_baseline: false` on 24/24 kernel records is BY DESIGN, not a defect.** I flagged it as a

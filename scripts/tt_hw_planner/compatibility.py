@@ -103,6 +103,34 @@ VLM_MODEL_TYPES = {
 }
 
 
+#: The fields every block check below actually READS. A config carrying all of them describes a
+#: transformer decoder no matter what string its `model_type` holds -- and `model_type` is a free
+#: text field, so a custom architecture never matches the name lists even when it is structurally
+#: identical to one that does. Keyed on structure, this is decidable; keyed on the name, it is not.
+_DECODER_FIELDS = ("num_attention_heads", "num_hidden_layers", "hidden_size", "intermediate_size")
+
+
+def _looks_like_decoder(cfg: dict) -> bool:
+    if not all(cfg.get(k) for k in _DECODER_FIELDS):
+        return False
+    # at least one attention-shape and one norm/position hint, so a bag of ints does not qualify
+    shape = any(cfg.get(k) for k in ("num_key_value_heads", "head_dim"))
+    pos = any(cfg.get(k) for k in ("rope_theta", "rope_parameters", "rope_scaling",
+                                   "max_position_embeddings"))
+    return bool(shape and pos)
+
+
+def declared_stacks(cfg: dict) -> list:
+    """Stacks the config names explicitly, e.g. `block_stacks: [backbone, flow, codec]`.
+
+    A multi-stack model that SAYS so should not have to also be laid out as subfolders --
+    discovery currently looks for dit/ vae/ text_encoder/ and finds nothing when the stacks are
+    module attributes.
+    """
+    v = cfg.get("block_stacks") or cfg.get("stacks") or []
+    return [str(x) for x in v] if isinstance(v, (list, tuple)) else []
+
+
 def detect_family(cfg: dict) -> str:
     mt = (cfg.get("model_type") or "").lower()
     if mt in MLA_MODEL_TYPES:
@@ -115,6 +143,11 @@ def detect_family(cfg: dict) -> str:
         return "MoE (mixture-of-experts)"
     if mt in LLAMA_FAMILY_MODEL_TYPES:
         return "Llama-family causal LM"
+    if _looks_like_decoder(cfg):
+        stacks = declared_stacks(cfg)
+        extra = f"; config declares {len(stacks)} stacks: {', '.join(stacks)}" if stacks else ""
+        return (f"Llama-family causal LM (INFERRED from config fields, model_type={mt or 'none'!r} "
+                f"is not a known name{extra})")
     return f"unknown ({mt or 'no model_type'})"
 
 
