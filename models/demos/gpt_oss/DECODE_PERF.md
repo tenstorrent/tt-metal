@@ -26,13 +26,14 @@ wrongly that these changes did nothing.
 
 ## What it measures
 
-| tree | ms/token | tok/s/user |
-|---|---|---|
-| this branch without the four config commits | 32.61 | 30.66 |
-| this branch | 19.89 and 19.77 | 50.27 and 50.58 |
+| tree | commit | ms/token | tok/s/user |
+|---|---|---|---|
+| harness only, before the four config commits | `376b5729330` | 32.49 | 30.78 |
+| this branch | `2c3291577e9` | 19.80 | 50.49 |
 
-Two samples are given for this branch because one number cannot show spread. Both were taken by
-running the command above directly.
+That is a 64.0% gain in throughput, measured by running the command above at both commits on this
+branch. The same code measured 19.89 and 19.77 ms on two earlier samples, so read the current
+figure as 19.8 +/- 0.1 ms rather than as an exact quantity.
 
 The starting point already selects the greedy token on device: the harness does that itself. Read
 the full logits tensor back to the host each step instead and decode is host-bound, which hides
