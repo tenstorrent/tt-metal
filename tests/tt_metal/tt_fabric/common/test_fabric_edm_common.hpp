@@ -29,6 +29,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
@@ -139,7 +140,7 @@ static void build_and_enqueue(
         futures.emplace_back(tt::tt_metal::detail::async([&devices, &programs, i, enqueue_only]() {
             if constexpr (std::is_same_v<ProgramContainer, std::vector<Program*>>) {
                 if (!enqueue_only) {
-                    tt::tt_metal::detail::CompileProgram(devices[i]->get_devices()[0], *programs[i]);
+                    slow_dispatch::CompileProgram(*devices[i], *programs[i]);
                 }
                 MeshWorkload mesh_workload;
                 MeshCoordinateRange device_range = MeshCoordinateRange({0, 0}, {0, 0});  // Single device range
@@ -147,7 +148,7 @@ static void build_and_enqueue(
                 tt::tt_metal::distributed::EnqueueMeshWorkload(devices[i]->mesh_command_queue(), mesh_workload, false);
             } else {
                 if (!enqueue_only) {
-                    tt::tt_metal::detail::CompileProgram(devices[i]->get_devices()[0], programs[i]);
+                    slow_dispatch::CompileProgram(*devices[i], programs[i]);
                 }
                 MeshWorkload mesh_workload;
                 MeshCoordinateRange device_range = MeshCoordinateRange({0, 0}, {0, 0});  // Single device range
