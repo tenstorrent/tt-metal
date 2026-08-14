@@ -87,12 +87,22 @@ void GumbelSampleDeviceOperation::validate_on_program_cache_miss(
             args.positions.size());
 
         // Both dataflow kernels carry the full local list as runtime args (the origin core has to
-        // re-derive the target row of any entry it merges), so the batch has to fit alongside the
-        // fixed args in the 256-slot runtime-arg region -- five of them in the reader (it also
-        // carries Ht), four in the writer, so the worst case here is 205.
+        // re-derive the target row of any entry it merges), so the batch is bounded by the per-core
+        // runtime-arg budget. The reader binds it: it carries five fixed args to the writer's four.
+        //
+        // The bound is tt_metal::max_runtime_args, the documented PORTABLE FLOOR, not the enforced
+        // ceiling -- for a Tensix kernel that is max_runtime_args_tensix = 4096, with the real L1
+        // fit checked at program finalize. Sitting under the floor is deliberate: it holds whatever
+        // core type the op is ever placed on, and the practical limit is lower than either number
+        // anyway, since every core receives its own copy of the list and the host therefore writes
+        // B_local * cores * 2 args per dispatch. Anything approaching this bound should move the
+        // positions into a small tensor the cores read once instead.
+        constexpr uint32_t kReaderFixedArgs = 5U;
+        constexpr uint32_t kMaxEntries = tt::tt_metal::max_runtime_args - kReaderFixedArgs;
         TT_FATAL(
-            entries <= 200U,
-            "GumbelSample: position-aware sampling supports up to 200 batch rows per device, got {}",
+            entries <= kMaxEntries,
+            "GumbelSample: position-aware sampling supports up to {} batch rows per device, got {}",
+            kMaxEntries,
             entries);
 
         const uint32_t tokens = logits.logical_shape()[-2];

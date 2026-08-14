@@ -321,11 +321,11 @@ tt::tt_metal::Program build_program(
         defines[kDoPositionsDefineKey] = "1";
     }
 
-    // Slot 2 held Ht, which is now a runtime arg so that one program serves every prompt length.
-    // The slot is kept (pinned) rather than removed: reader_gumbel_sample.cpp hard-codes
-    // TensorAccessorArgs<3> and chains the mask accessor off its offset, so shifting it would
-    // misdecode the accessor words instead of failing to compile.
-    std::vector<uint32_t> reader_ct_args{layout.block_size, layout.Wt, 1U};
+    // Ht is NOT here: it is a runtime arg, so that one program serves every prompt length. Keep this
+    // count in step with TensorAccessorArgs<N> in reader_gumbel_sample.cpp -- the accessor offset is
+    // hard-coded there and the mask accessor chains off it, so a mismatch misdecodes the accessor
+    // words (page size read as the config flags) instead of failing to compile.
+    std::vector<uint32_t> reader_ct_args{layout.block_size, layout.Wt};
     tt::tt_metal::TensorAccessorArgs(logits_buffer).append_to(reader_ct_args);
     if (has_mask) {
         tt::tt_metal::TensorAccessorArgs(mask_buffer).append_to(reader_ct_args);
@@ -493,10 +493,11 @@ void GumbelSampleProgramFactory::override_runtime_arguments(
                 core_args[kReaderLogitsBufferIdx] = logits_address;
                 core_args[kReaderMaskBufferIdx] = mask_address;
                 // Ht is runtime-only (deliberately out of the program hash in position mode) so it
-                // must be re-applied on every cache hit. Unconditional, because the slot exists in
-                // both modes -- patching it only in position mode would run one past the end of the
-                // 4-word decode arg vector, and RuntimeArgsData's bounds check is a TT_ASSERT that
-                // compiles away in Release, so the write would land in the packed dispatch command.
+                // must be re-applied on every cache hit. This is unconditional only because the
+                // reader emits the slot in BOTH modes. Were it appended for position mode alone,
+                // decode's arg vector would stop at four words and this line would write one past
+                // the end -- and RuntimeArgsData's bounds check is a TT_ASSERT that compiles away in
+                // Release, so it would land silently in the packed dispatch command.
                 core_args[kReaderHtIdx] = layout.Ht;
                 for (size_t i = 0; i < local_positions.size(); ++i) {
                     core_args[kReaderPositionsArgBase + i] = local_positions[i];

@@ -450,15 +450,35 @@ class LlamaGRPOCompleter(GRPOCompleter):
             mask = self._create_causal_mask(processed, new_tokens, pad_lengths, B)
             logits = self._model(token_tensor, mask, kv_cache=kv_cache, new_tokens=new_tokens)
 
+            # Only ONE position per row is ever read -- the last, since the prompts are LEFT-padded
+            # (see the prompt_tokens_np fill) so every sequence ends at new_tokens - 1. Sampling all
+            # new_tokens positions and slicing afterwards did new_tokens times the necessary work on
+            # the prefill step, where new_tokens is the whole padded prompt.
+            #
+            # Passing the positions instead makes the op read only the tiles those rows live in and
+            # return [B, 1, 1, 1], so prefill sampling costs one decode step's worth of work whatever
+            # the prompt length. It also stops the prefill program's cache key tracking the prompt
+            # length, which was a fresh JIT build of the kernels on every distinct length.
+            #
+            # The list is sized to the LOCAL shard, matching what the slice below already assumes
+            # about how the batch is distributed; the op accepts either that or the global list.
             next_token_tensor = ttml.ops.sample.sample_op(
-                logits, ctx.temperature, np.random.randint(low=1e7), logits_mask_tensor, self._seed_axes
+                logits,
+                ctx.temperature,
+                np.random.randint(low=1e7),
+                logits_mask_tensor,
+                self._seed_axes,
+                [new_tokens - 1] * B_local,
             )
 
-            last_token_column = ttnn.slice(
-                next_token_tensor.get_value(),
-                [0, 0, new_tokens - 1, 0],
-                [B_local, 1, new_tokens, 1],
-            )
+            # The op already returns exactly one row per batch entry, so there is nothing left to
+            # select -- but the column outlives next_token_tensor, which is deallocated below, so it
+            # has to be a real copy. CLONE, not slice: ttnn.slice short-circuits a full-range slice
+            # by returning the input tensor itself (slice.cpp, "No-op check"), which would alias the
+            # buffer that is about to be freed and fault on the next step's ttnn.pad. Before
+            # positions this slice was narrowing [B_local, 1, new_tokens, 1] down to one row, so it
+            # always copied.
+            last_token_column = ttnn.clone(next_token_tensor.get_value())
 
             generated_columns.append(last_token_column)
             chunk_columns.append(last_token_column)

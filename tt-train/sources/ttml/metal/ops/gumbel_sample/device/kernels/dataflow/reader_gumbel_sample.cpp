@@ -34,9 +34,6 @@ void kernel_main() {
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
-    // Compile-time slot 2 held Ht and is now unused, but the host still emits it: the accessor
-    // offsets below are hard-coded (TensorAccessorArgs<3>, and the mask accessor chains off it), so
-    // dropping the slot would misdecode the accessor words rather than fail to compile.
 
 #ifdef DO_LOGITS_MASK
     constexpr bool do_logits_mask = true;
@@ -53,7 +50,7 @@ void kernel_main() {
     // Per-entry token positions, appended after the five fixed args (see kReaderPositionsArgBase).
     const uint32_t positions_arg_base = rt_idx;
 
-    constexpr auto logits_args = TensorAccessorArgs<3>();
+    constexpr auto logits_args = TensorAccessorArgs<2>();
     constexpr auto mask_args = TensorAccessorArgs<logits_args.next_compile_time_args_offset()>();
     const auto logits_address_generator = TensorAccessor(logits_args, logits_address);
     const auto mask_address_generator = TensorAccessor(mask_args, mask_address);
