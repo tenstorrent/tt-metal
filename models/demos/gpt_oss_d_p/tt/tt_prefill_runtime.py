@@ -15,9 +15,8 @@ the engine allocates via ``GptOssPrefillAdapter.allocate_kv_cache`` and passes t
 into every call). ``prefill_chunk`` / ``compile`` / ``gather_layer`` / ``kv_cache_pcc_check`` accept
 an optional cache arg that defaults to ``self.kv_cache``.
 
-CHUNKED prefill is supported: the SP cache-READ attention path (``cached_len > 0``, chunks 1+) uses the
-ring-joint dense SDPA over the block-cyclic packed KV cache (``attention/dense_sp.py``); chunk 0 /
-one-shot (``cached_len == 0``) uses the gather-Q stand-in. The single-chip (sp==1) cache-read is still
+CHUNKED prefill is supported: the SP cache-backed RingJointSDPA path uses the block-cyclic packed KV
+cache (``attention/dense_sp.py``) from chunk 0 onward. The single-chip (sp==1) cache-read is still
 ``NotImplementedError`` (not used on the galaxy). The galaxy KV-PCC harness runs both one-shot and
 multi-chunk.
 """

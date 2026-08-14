@@ -104,20 +104,20 @@ def main():
         flush=True,
     )
     if chunked:
-        # chunks 1+ drive the SP ring cache-read (attention/dense_sp.py); chunk 0 is the gather-Q
-        # stand-in. Full-attention layers fold the sink once across ring iterations (accuracy-clean).
+        # Every sequence-parallel chunk, including chunk 0, drives the SP ring cache-read
+        # (attention/dense_sp.py). Full-attention layers fold the sink once across ring iterations.
         print(
-            "[prefill-pcc] chunked: chunk 0 = gather-Q stand-in, chunks 1+ = ring cache-read (sinks all layers)",
+            "[prefill-pcc] chunked: every chunk = ring cache-read (sinks all layers)",
             flush=True,
         )
 
     from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
     from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
-    # Chunked (chunks 1+) uses the ring cache-read, which needs the cyclic torus route for the
+    # Chunked prefill uses the ring cache-read for every chunk, which needs the cyclic torus route for the
     # sliding-halo wraparound -> FABRIC_1D_RING + the torus mesh descriptor
-    # (TT_MESH_GRAPH_DESC_PATH=.../single_bh_galaxy_torus_xy_graph_descriptor.textproto). One-shot
-    # (gather-Q AllGather) runs on the linear fabric + the plain mesh descriptor.
+    # (TT_MESH_GRAPH_DESC_PATH=.../single_bh_galaxy_torus_xy_graph_descriptor.textproto). One-shot runs
+    # on the linear fabric + the plain mesh descriptor.
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING if chunked else ttnn.FabricConfig.FABRIC_1D)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(ROWS, COLS))
     print(f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)

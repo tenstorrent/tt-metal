@@ -2720,11 +2720,11 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
     q_dtype = GPT_OSS_RING_SINK_CONFIG.q_dtype
     kv_dtype = GPT_OSS_RING_SINK_CONFIG.kv_dtype
     chunk_size_global = chunk_size_local * sp_size
-    # Compact chunked sliding consumes the current complete ring group plus its predecessor.
-    # Exercise early cache growth and the production chunk index (5K Q after ten 5K groups).
-    # Partial/wrapped Q groups are outside the compact GPT-OSS specialization and are covered
-    # by the pre-existing non-sliding KV-pad rotation tests.
-    prefix_lengths = (chunk_size_global, 2 * chunk_size_global, 10 * chunk_size_global)
+    # A complete first group is valid even though it has no predecessor *group*: device 0
+    # clips at token zero while all other devices consume a predecessor within the group.
+    # Exercise that path, early cache growth, and the production chunk index (5K Q after
+    # ten 5K groups). Partial/wrapped Q groups remain outside this specialization.
+    prefix_lengths = (0, chunk_size_global, 2 * chunk_size_global, 10 * chunk_size_global)
     logical_lengths = tuple(prefix + chunk_size_global for prefix in prefix_lengths)
     max_logical_n = max(logical_lengths)
 
@@ -2880,12 +2880,12 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
 
                 tt_out = run_device_call(logical_n, kv_actual_isl)
 
-                if iteration == 0 and case_index == 1:
+                if iteration == 0 and case_index == 2:
                     with expect_error(RuntimeError, "complete ring-group boundary"):
                         # Same tensor specs and KV-pad specialization: this must be rejected by
                         # cache-hit scalar validation before the halo source group can underflow.
                         run_device_call(logical_n - tile_height, kv_actual_isl)
-                if iteration == 0 and case_index == 2:
+                if iteration == 0 and case_index == 3:
                     with expect_error(RuntimeError, "complete ring-group boundary"):
                         # Without KV-pad rotation logical_n is hash-pinned, so this exercises the
                         # ordinary cache-miss validation for a partial final ring group.
@@ -4999,6 +4999,51 @@ def test_ring_joint_attention_gpt_oss_chunked_sliding_native_ring_gqa_accuracy_a
             )
     finally:
         close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
+def test_ring_joint_attention_gemma_complete_group_sliding_geometry():
+    """Compile and run the generalized Gemma sliding geometry on the native SP ring.
+
+    The first test in this area covers the one-complete-group halo behavior with
+    a short GPT-OSS window. This smoke test proves that the structural gates also
+    admit Gemma's D256, 4Q:2K:2V and W1024 geometry, where the K-chunk-rounded
+    halo exactly fills one local 1024-token slab.
+    """
+    mesh_config = gpt_oss_chunked_mesh_config()
+    chunk_size = 1024 * mesh_config.sp_size
+    model = replace(
+        GPT_OSS_CHUNKED_MODEL,
+        name="gemma_complete_group_sliding",
+        nhq=4,
+        nhk=2,
+        nhv=2,
+        d_q=256,
+        d_k=256,
+        d_v=256,
+        q_chunk_sizes=[64],
+        k_chunk_sizes=[128],
+        seq_len=chunk_size,
+    )
+
+    # Chunk 0 proves Gemma geometry works at logical_n == G; chunk 1 verifies
+    # that it continues to dispatch after cache growth. This is a geometry/
+    # dispatch test; the GPT-OSS regression above independently checks PCC.
+    for chunk_id in (0, 1):
+        with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(chunk_id)}):
+            run_ring_joint_sdpa_chunked(
+                mesh_config,
+                model,
+                batch_size=1,
+                chunk_size=chunk_size,
+                total_seq=2 * chunk_size,
+                qk_configs=[(64, 128)],
+                # The first call must see a cache physically larger than its Q
+                # slab, just as GPT-OSS's max-sequence cache is sized in production.
+                persistent_buffer_mode="reuse_max",
+                reuse_kv_buffer=True,
+                sliding_window_size=1024,
+                do_check=False,
+            )
 
 
 def test_ring_joint_attention_gpt_oss_chunked_sliding_indexed_kv_cache_accuracy():
