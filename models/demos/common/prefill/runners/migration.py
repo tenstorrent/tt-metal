@@ -34,6 +34,19 @@ from loguru import logger
 
 import ttnn
 
+_DEFAULT_DEVICE_MAP_FILE = "/tmp/prefill_device_map.txt"
+
+
+def migration_file_export_enabled() -> bool:
+    """True when PREFILL_MIGRATION_EXPORT_TO_FILE=1: drop the device map and KV chunk table on
+    the filesystem for the KV manager (tt-d-gen), instead of pushing them over the co-located
+    worker's shmem queues (no MigrationLayerClient, no SET_TABLE/WORKER_READY)."""
+    return os.environ.get("PREFILL_MIGRATION_EXPORT_TO_FILE", "0") == "1"
+
+
+def migration_device_map_file_path() -> str:
+    return os.environ.get("PREFILL_MIGRATION_DEVICE_MAP_PATH", _DEFAULT_DEVICE_MAP_FILE)
+
 
 def _disaggregation():
     """KvChunkAddressTable + serializer come from ttnn.experimental.disaggregation
@@ -273,6 +286,28 @@ def serialize_prebuilt_kv_chunk_table(*, table, path: str) -> str:
         f"(configs={table.num_configs()}, entries={table.total_entries()})"
     )
     return path
+
+
+def export_device_map_to_file(mesh_device, mesh_shape, path: str) -> str:
+    """Write this rank's local device map (``fabric_mesh_id fabric_chip_id umd_chip_id`` per line)
+    to a host-local text file, atomically (temp file + rename)."""
+    device_map = _build_device_map(mesh_device, mesh_shape)
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as map_file:
+        map_file.writelines(f"{mesh_id} {chip_id} {umd_id}\n" for mesh_id, chip_id, umd_id in device_map)
+    os.replace(tmp, path)
+    logger.info(f"[migration] device map ({len(device_map)} chips) exported to {path}")
+    return path
+
+
+def export_device_map_file_and_gather_stage_layout(
+    mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers, device_map_path: str
+):
+    """ALL RANKS: file-export counterpart of :func:`deliver_device_map_and_gather_stage_layout` —
+    drop the local FNID->UMD map to a host-local text file instead of pushing it to a co-located
+    worker, then join the same collective all-gather. Returns the gathered ``stage_layout``."""
+    export_device_map_to_file(mesh_device, mesh_shape, device_map_path)
+    return allgather_kv_stage_layout(mesh_device, kv_base_addr, mesh_shape, first_layer_idx, num_my_layers)
 
 
 def deliver_device_map_and_gather_stage_layout(
