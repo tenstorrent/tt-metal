@@ -389,6 +389,23 @@ It also means `tilize`'s ledger is about 166 cases -- 96 nightly, 16 `codegen_dt
 and capping would have been the wrong instinct anyway: the correctness and prototype bands are uncapped
 on purpose, and a partial prototype pass set cannot attribute a failure to the generator.
 
+### What the first `tilize` baseline established
+
+Run [31823944470](https://github.com/tenstorrent/tt-metal/actions/runs/31823944470), measured on CIv2 by
+[31824246253](https://github.com/tenstorrent/tt-metal/actions/runs/31824246253):
+
+- **170 in-scope cases and zero out-of-scope ones.** The estimate from the grid was about 166, so the
+  arithmetic holds. The zero is `tilize.yaml` having no `port_scope` block, which `ledger.py` reads as
+  "port scope equals codegen scope". It follows that the generated routing test has nothing to assert
+  and the correctness band's routing check has nothing to check -- unlike `untilize`, where 96
+  out-of-scope cases were most of what that test covered. Do not read a green routing check on this op
+  as evidence the routing check works.
+- **The prototype passes 170 of 170.** So the parity bar is the strict one, with nothing excused, and
+  the prototype leg is now exercised end to end on an op it was not written against.
+- Stratification picked its axes with none dropped.
+- The baseline's own port-side legs fail with `ttnn.tilize has no implementation kwarg in this build`,
+  which is the correct thing to hand an agent that has not written anything yet.
+
 ## Checkout was the slowest thing in the pipeline, and it is not our fault
 
 `build-artifact.yaml` checks out with `fetch-depth: 500` and `fetch-tags: true`. On a repo with ~1300
