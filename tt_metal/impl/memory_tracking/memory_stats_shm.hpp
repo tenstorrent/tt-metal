@@ -40,6 +40,11 @@ constexpr uint32_t CHIP_STATS_UNUSED = UINT32_MAX;
 //     which only understands v3 still parses the fields it knows.
 constexpr uint32_t DEVICE_MEMORY_REGION_VERSION = 4;
 
+// A region of an older layout is taken over only when no owning process is still alive.
+// reference_count cannot decide it: an older writer leaks it permanently when killed, which
+// would make the upgrade one-way. Requires knowing where `processes` is; see
+// process_table_layout_is_known().
+
 // Values for DeviceMemoryRegion::init_state. A freshly created SHM region is
 // zero-filled, so UNINITIALIZED must be 0.
 constexpr uint32_t SHM_INIT_UNINITIALIZED = 0u;
@@ -57,10 +62,8 @@ struct DeviceMemoryRegion {
     // Number of live entries in `processes`. Derived, not independently counted.
     std::atomic<uint32_t> num_active_processes;
     std::atomic<uint64_t> last_update_timestamp;  // Last update time (nanoseconds since epoch)
-    // Number of processes currently attached. Derived from the number of live
-    // `processes` entries, so a process that is SIGKILLed (no destructor) is
-    // reclaimed by the next attacher instead of pinning this count above zero
-    // forever -- which used to prevent the region from ever resetting again.
+    // Number of processes currently attached. Derived from the live `processes` entries, so a
+    // SIGKILLed process is reclaimed by the next attacher instead of pinning this above zero.
     std::atomic<uint32_t> reference_count;
 
     // Physical chip identification (for proper device correlation)
@@ -104,13 +107,9 @@ struct DeviceMemoryRegion {
         char process_name[64];                        // Optional: process name for debugging
     } processes[MAX_PROCESSES];
 
-    // Publishes whether the fields above are valid. Deliberately placed LAST so
-    // that every v3 field keeps its offset. Written with release semantics only
-    // after initialization completes, and read with acquire semantics before any
-    // other field is trusted: shm_open(O_CREAT) hands out a zero-filled region,
-    // so without this an attaching process could observe chip_stats entries whose
-    // chip_id reads 0 -- a *valid* chip ID, defeating the CHIP_STATS_UNUSED
-    // sentinel -- and start accumulating into slots the creator is about to clear.
+    // Publishes whether the fields above are valid; last, so every v3 field keeps its offset.
+    // Without it an attacher can observe a zero-filled region, where chip_id reads 0 -- a
+    // valid chip ID, defeating the CHIP_STATS_UNUSED sentinel. Release on write, acquire on read.
     std::atomic<uint32_t> init_state;
 } __attribute__((aligned(64)));
 
@@ -244,6 +243,13 @@ private:
     // Helper: is this PID still alive? Used to reclaim slots left behind by
     // processes that died without running their destructor.
     static bool process_is_alive(pid_t pid);
+
+    // May `processes` be read in a region written by this version? Gates inspecting a
+    // foreign-layout region rather than trusting its leak-prone reference_count.
+    static bool process_table_layout_is_known(uint32_t version);
+
+    // Read-only; valid only when process_table_layout_is_known() for the region's version.
+    bool region_has_live_process() const;
 
     // Helper: wait (bounded) for another process to finish initializing the region.
     // Returns false on timeout, in which case this provider disables itself rather

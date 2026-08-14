@@ -99,32 +99,42 @@ SharedMemoryStatsProvider::SharedMemoryStatsProvider(
         region_->version.load(std::memory_order_relaxed) == DEVICE_MEMORY_REGION_VERSION) {
         // Fully initialized region of the expected layout: attach to it as-is.
     } else if (observed_state == SHM_INIT_READY) {
-        // Ready, but a layout we do not understand. Reclaim it only if nobody is
-        // attached; otherwise leave it alone and disable tracking for this provider.
-        // Deliberately do NOT walk `processes` here: under a foreign layout those
-        // offsets may not be where we think they are. reference_count has held its
-        // offset since v2, which is the most we can safely rely on.
+        // Ready, but a layout we do not understand. Reclaim it if nobody is using it.
+        // reference_count alone cannot decide that -- an older writer leaks it when killed,
+        // which would make the upgrade one-way -- so where `processes` is known to be at a
+        // known offset, ask whether an owner is still alive instead.
+        const uint32_t found_version = region_->version.load(std::memory_order_relaxed);
         const uint32_t attached = region_->reference_count.load(std::memory_order_acquire);
+        bool reclaimable = attached == 0;
+        if (!reclaimable && process_table_layout_is_known(found_version)) {
+            // Read-only: nothing is written to a foreign-layout region unless we go on to
+            // reinitialize the whole thing.
+            reclaimable = !region_has_live_process();
+        }
+
         uint32_t expected = SHM_INIT_READY;
-        if (attached == 0 &&
-            region_->init_state.compare_exchange_strong(
-                expected, SHM_INIT_IN_PROGRESS, std::memory_order_acq_rel, std::memory_order_relaxed)) {
+        if (reclaimable && region_->init_state.compare_exchange_strong(
+                               expected, SHM_INIT_IN_PROGRESS, std::memory_order_acq_rel, std::memory_order_relaxed)) {
             log_info(
                 tt::LogMetal,
-                "SHM version mismatch for asic_id=0x{:x} (found v{}, expected v{}), reinitializing stale region",
+                "SHM version mismatch for asic_id=0x{:x} (found v{}, expected v{}), reinitializing stale region "
+                "(reference_count={}, no live owner)",
                 asic_id_,
-                region_->version.load(std::memory_order_relaxed),
-                DEVICE_MEMORY_REGION_VERSION);
+                found_version,
+                DEVICE_MEMORY_REGION_VERSION,
+                attached);
             must_initialize = true;
         } else {
             log_warning(
                 tt::LogMetal,
-                "SHM version mismatch for asic_id=0x{:x} (found v{}, expected v{}) with {} attached process(es); "
-                "disabling SHM tracking for this provider",
+                "SHM version mismatch for asic_id=0x{:x} (found v{}, expected v{}) and the region is still in use "
+                "(reference_count={}); disabling SHM tracking for this provider. If no tt-metal process is running, "
+                "the region is stale and can be removed with: rm /dev/shm/tt_device_{}_memory",
                 asic_id_,
-                region_->version.load(std::memory_order_relaxed),
+                found_version,
                 DEVICE_MEMORY_REGION_VERSION,
-                attached);
+                attached,
+                asic_id_);
             munmap(region_, sizeof(DeviceMemoryRegion));
             region_ = nullptr;
             close(shm_fd_);
@@ -582,6 +592,26 @@ void SharedMemoryStatsProvider::clear_process_slot(DeviceMemoryRegion::ProcessSt
     // Release the slot last: pid == 0 is what makes it claimable, so it must not
     // become visible before the fields above have been cleared.
     slot.pid.store(0, std::memory_order_release);
+}
+
+bool SharedMemoryStatsProvider::process_table_layout_is_known(uint32_t version) {
+    // v2..v4 place `processes` at the same offset with the same ProcessStats layout. v1
+    // predates it, and a higher version belongs to a writer newer than us, so in both cases we
+    // must not assume where the table is.
+    return version >= 2 && version <= DEVICE_MEMORY_REGION_VERSION;
+}
+
+bool SharedMemoryStatsProvider::region_has_live_process() const {
+    if (!region_) {
+        return false;
+    }
+    for (const auto& slot : region_->processes) {
+        const pid_t pid = slot.pid.load(std::memory_order_acquire);
+        if (pid != 0 && pid != getpid() && process_is_alive(pid)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 bool SharedMemoryStatsProvider::process_is_alive(pid_t pid) {
