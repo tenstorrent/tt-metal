@@ -135,7 +135,27 @@ class TopKRouter:
             self.weight,
             bias=self.bias,
             memory_config=mem_config,
-            compute_kernel_config=self.compute_config,
+            compute_kernel_config=ttnn.init_device_compute_kernel_config(
+                hidden_states.device().arch(),
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            ),
+            program_config=ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(2, 1),
+                in0_block_w=45,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                out_block_h=1,
+                out_block_w=1,
+                per_core_M=max(1, hidden_states.shape[-2] // 32),
+                per_core_N=1,
+                fuse_batch=False,
+                fused_activation=None,
+                mcast_in0=True,
+            ),
+            dtype=ttnn.bfloat8_b,
         )
 
         expert_indices, expert_weights = topk_router(
