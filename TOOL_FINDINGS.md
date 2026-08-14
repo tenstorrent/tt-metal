@@ -2166,6 +2166,56 @@ reaching the same place by different reasoning is a design note the author shoul
 
 ---
 
+## F22 — the isolation worktree silently ignores uncommitted changes to the tool's own source
+
+**Status: found 2026-08-14, cost one run** · severity: developer iterating on the tool gets stale
+behaviour with no warning · reported: not yet
+
+`auto-up` runs in a private worktree — a good design, and the reason nothing it does can damage the
+caller's checkout:
+
+```
+[isolation] worktree: /tmp/tt_hw_planner__..._1786737198
+```
+
+That worktree is created from **`HEAD`**. An edit sitting in the working tree is not in `HEAD`, so
+it does not exist inside the run — **and nothing says so**.
+
+Concretely: the F21 patch was written to `models/tt_transformers/tt/model_config.py`, compile-checked,
+and the run launched. It failed with the *identical* `ValueError` the patch fixes. The worktree was
+on `81814c5383` while the patch landed in `5ee438f04b`; `grep -c auto_map` in the worktree returned
+**0** against **3** in the main checkout.
+
+**Why this matters more than an ordinary footgun.** The people most likely to edit this tool's source
+are the people extending it — adding a family, a block, an op-registry entry — and the natural loop
+is *edit, re-run, observe*. That loop silently observes the previous version. The failure looks
+exactly like "my fix didn't work", which is the most expensive possible misdiagnosis.
+
+**Suggested fixes, cheapest first:**
+
+- At worktree creation, if `git status --porcelain` is non-empty for tracked tool source, print a
+  one-line warning naming the files that will NOT be included.
+- Offer `--include-uncommitted` (a `git stash`-and-apply, or worktree-from-working-tree).
+- Print the worktree's commit sha in the banner. It is already printing the path; the sha is the
+  thing that determines behaviour.
+
+**Verification I now use before every relaunch:** grep the created worktree for the patch itself,
+rather than trusting the main checkout —
+
+```
+worktree: /tmp/tt_hw_planner__..._1786737523
+patch present in worktree: 3        # was 0 on the run that failed
+```
+
+### Process note (mine)
+
+I launched the run before committing the patch, then committed while it was in flight. Ordinary
+sequencing error, but it is worth recording next to the finding: the tool's design made a routine
+mistake produce a result indistinguishable from a failed fix, and I only caught it because the error
+message was byte-identical to the previous run's — which is a weak signal to rely on.
+
+---
+
 ## Corrections to this document
 
 - **`beat_baseline: false` on 24/24 kernel records is BY DESIGN, not a defect.** I flagged it as a
