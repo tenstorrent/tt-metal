@@ -128,14 +128,37 @@ jobs:
           # skips its unit / P150 / craq-sim jobs on its own whenever metal-run-id
           # is set. To widen the scope, add the sibling `bh-loudbox-*` / `p150-*`
           # booleans from tt-blaze's ci.yaml here (its job guards need widening too).
-          gh workflow run "$BLAZE_WORKFLOW" \
+          # Preflight the token before dispatching. tt-blaze is PRIVATE, and
+          # GitHub answers 404 (never 403) for anything a token cannot see there,
+          # so `gh workflow run` reports a missing workflow when the real fault is
+          # a PAT that cannot read the repo. These two probes separate the cases so
+          # the log names the actual problem.
+          if ! gh api "repos/${BLAZE_REPO}" --jq .full_name >/dev/null 2>&1; then
+            echo "::error::TT_BLAZE_PAT cannot read ${BLAZE_REPO}. ${BLAZE_REPO} is private, so an unauthorised token gets 404, not 403 -- this is almost always the token, not a missing repo. Check it is not expired, that it grants access to ${BLAZE_REPO} (fine-grained PATs are per-repo and may also need org approval), and that the org allows it."
+            echo "- ❌ tt-blaze — TT_BLAZE_PAT cannot read ${BLAZE_REPO}" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          if ! gh api "repos/${BLAZE_REPO}/actions/workflows/${BLAZE_WORKFLOW}" --jq .id >/dev/null 2>&1; then
+            echo "::error::TT_BLAZE_PAT can read ${BLAZE_REPO} but not ${BLAZE_WORKFLOW}. That is an Actions-permission gap, not a missing file: a fine-grained PAT needs Actions: Read and write (plus Metadata: Read); a classic PAT needs the 'repo' and 'workflow' scopes."
+            echo "- ❌ tt-blaze — TT_BLAZE_PAT lacks Actions access on ${BLAZE_REPO}" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          # Dispatching needs actions:WRITE, which neither probe above proves --
+          # both are reads. A 403 here (rather than 404) means the token can see
+          # Actions but not trigger them.
+          if ! gh workflow run "$BLAZE_WORKFLOW" \
             --repo "$BLAZE_REPO" \
             --ref "$BLAZE_REF" \
             -f metal-run-id="$METAL_RUN_ID" \
             -f metal-ref="$METAL_REF" \
             -f dispatch-id="$DISPATCH_ID" \
             -f bh-loudbox-run-all=false \
-            -f bh-loudbox-gptoss=true
+            -f bh-loudbox-gptoss=true; then
+            echo "::error::Dispatch of ${BLAZE_WORKFLOW} on ${BLAZE_REPO}@${BLAZE_REF} failed. The token can read the workflow (checked above), so the usual causes are: no actions:write on ${BLAZE_REPO}; ${BLAZE_REF} does not carry every input passed here (an input this workflow sends but ${BLAZE_REF}'s ci.yaml does not declare is rejected outright -- the tt-blaze side must land FIRST); or ${BLAZE_REF} does not exist."
+            echo "- ❌ tt-blaze — dispatch rejected" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
           echo "Dispatched ${BLAZE_REPO} ${BLAZE_WORKFLOW} on ${BLAZE_REF} (GPT-OSS bucket)"
           echo "  tt-metal commit:  ${METAL_REF}"
