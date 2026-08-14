@@ -47,17 +47,22 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
         }
 
         // TODO: with multiple TCs are there multiple descriptors?
-        // z_dim is derived from the tensor shape rather than the raw face count: the hardware only
-        // accepts z_dim of 1 or 4, so a non-square face grid (e.g. the 1x2 grid of a 1x32 tiny tile)
-        // has to be addressed one face at a time, which is also what the tiny-tile unpack MOP assumes.
-        const tdma_descriptor_t td = ckernel::trisc::construct_tdma_desc(
-            get_operand_tensor_shape(i),
+        // Build the descriptor through construct_tdma_desc so the z_dim rule is single-sourced:
+        // z_dim is 4 only for a full 2x2 face grid and 1 otherwise (a tiny tile is one tile per
+        // face, which is what the tiny-tile LLK paths index against). Writing the face count
+        // straight into z_dim programmed the HW-invalid z_dim == 2 for every 2-face tile (16x32, 32x16).
+        // This is every DFB, so a 2-face operand now reaches the LLKs that still index L1 in whole
+        // tiles as one HW tile per face; those paths assert total_num_faces() == MAX_NUM_FACES in
+        // their init (tracked in tt-metal #47597).
+        const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(i);
+        const tdma_descriptor_t td_val = ckernel::trisc::construct_tdma_desc(
+            tensor_shape,
             get_local_dfb_interface(i).tc_slots[0].base_addr,
-            static_cast<std::uint32_t>(l1_data_format),
+            static_cast<std::uint8_t>(l1_data_format),
             i,
-            static_cast<std::uint32_t>(unpack_dst_format[i]));
+            unpack_dst_format[i]);
 
-        ckernel::trisc::_configure_buf_desc_table_(i, td.buf_desc);
+        ckernel::trisc::_configure_buf_desc_table_(i, td_val.buf_desc);
     }
 
     tdma_descriptor_t td_val_A, td_val_B;

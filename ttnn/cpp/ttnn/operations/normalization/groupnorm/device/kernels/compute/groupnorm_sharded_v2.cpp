@@ -58,12 +58,12 @@ void kernel_main() {
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(23);
     constexpr uint32_t tile_width = get_compile_time_arg_val(24);
 
-    // Non-tile-aligned H*W (#50682); derivation and precision caveat in compute/groupnorm.cpp.
-    // Unlike the interleaved kernel this one consumes the mean during centering, so K*E[x]^2 is
-    // computed before centering and stashed in dfb_kmsq until the rsqrt step.
-    constexpr uint32_t logical_hw = get_compile_time_arg_val(25);
-    constexpr uint32_t padded_hw = get_compile_time_arg_val(26);
-    constexpr bool has_pad_correction = padded_hw != logical_hw;
+    // Non-tile-aligned H*W; see compute/groupnorm.cpp. logical_hw / padded_hw only keep two shapes
+    // padding to the same size out of one cached program; has_row_mask is what this branches on.
+    constexpr uint32_t logical_hw [[maybe_unused]] = get_compile_time_arg_val(25);
+    constexpr uint32_t padded_hw [[maybe_unused]] = get_compile_time_arg_val(26);
+    constexpr bool has_row_mask = get_compile_time_arg_val(27) == 1;
+    constexpr uint32_t mask_tiles_per_group = has_row_mask ? 2 * block_w : block_w;
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -93,12 +93,6 @@ void kernel_main() {
     constexpr uint32_t dfb_ex_global_id = num_cores_per_mcast_group == 1 ? dfb_ex_partial_id : tt::CBIndex::c_15;
     constexpr uint32_t dfb_ex2pe_id = tt::CBIndex::c_17;
     constexpr uint32_t dfb_ones_id = tt::CBIndex::c_26;
-
-    // #50682 pad-correction CBs. dfb_k holds K from the writer; dfb_msq is transient scratch;
-    // dfb_kmsq carries K*E[x]^2 across the centering loop.
-    constexpr uint32_t dfb_k_id = tt::CBIndex::c_18;
-    constexpr uint32_t dfb_msq_id = tt::CBIndex::c_19;
-    constexpr uint32_t dfb_kmsq_id = tt::CBIndex::c_20;
 
     // output cb
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
@@ -185,9 +179,6 @@ void kernel_main() {
     DataflowBuffer dfb_scaler(dfb_scaler_id);
     DataflowBuffer dfb_scaler_global(dfb_scaler_global_id);
     DataflowBuffer dfb_x(dfb_x_id);
-    DataflowBuffer dfb_k(dfb_k_id);
-    DataflowBuffer dfb_msq(dfb_msq_id);
-    DataflowBuffer dfb_kmsq(dfb_kmsq_id);
 
 // tilize input from RM to tile layout
 #ifdef TILIZE_IN
@@ -226,8 +217,14 @@ void kernel_main() {
             reconfig_data_format_srcb(dfb_in0_id, dfb_input_mask_id);
             mul_init(dfb_in0_id, dfb_input_mask_id);
             dfb_x.reserve_back(block_hw);
-            dfb_input_mask.wait_front(block_w);
+            dfb_input_mask.wait_front(mask_tiles_per_group);
             for (uint32_t i = 0; i < block_h; ++i) {
+                // Row-masked set on the batch's final row-tile, so the padding contributes nothing
+                // to E[x]. if constexpr keeps tile-aligned codegen unchanged.
+                uint32_t mask_set_offset = 0;
+                if constexpr (has_row_mask) {
+                    mask_set_offset = (i == block_h - 1) ? block_w : 0;
+                }
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; ++j) {
                     tile_regs_acquire();
@@ -239,7 +236,7 @@ void kernel_main() {
                         if (index >= per_core_MN) {
                             index = per_core_MN - 1;
                         }
-                        uint32_t index_mask = w + index_subblock_w_offset;
+                        uint32_t index_mask = w + index_subblock_w_offset + mask_set_offset;
 #ifdef TILIZE_IN
                         mul_tiles(dfb_in_id, dfb_input_mask_id, index, index_mask, w);
 #else
@@ -315,33 +312,6 @@ void kernel_main() {
             }
             dfb_ex_global.wait_front(1);
 
-            // Stash K*E[x]^2 while cb_ex_global still holds E[x]; centering below consumes it.
-            if constexpr (has_pad_correction) {
-                dfb_k.wait_front(1);
-                // dfb_msq = E[x]^2
-                dfb_msq.reserve_back(1);
-                tile_regs_acquire();
-                mul_init(dfb_ex_global_id, dfb_ex_global_id);
-                mul_tiles(dfb_ex_global_id, dfb_ex_global_id, 0, 0, dst0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, dfb_msq_id);
-                tile_regs_release();
-                dfb_msq.push_back(1);
-                // dfb_kmsq = K * E[x]^2 (persists until the rsqrt step)
-                dfb_msq.wait_front(1);
-                dfb_kmsq.reserve_back(1);
-                tile_regs_acquire();
-                mul_init(dfb_msq_id, dfb_k_id);
-                mul_tiles(dfb_msq_id, dfb_k_id, 0, 0, dst0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, dfb_kmsq_id);
-                tile_regs_release();
-                dfb_msq.pop_front(1);
-                dfb_kmsq.push_back(1);
-            }
-
             // x - E[x]
             sub_bcast_scalar_init(dfb_x_id, dfb_ex_global_id);
             // fp32: reset both srcs so fp32 x/mean aren't read through the partial-E[x] bf16 dfb_ones format.
@@ -376,12 +346,18 @@ void kernel_main() {
             dfb_x.wait_front(block_hw);
 
             for (uint32_t i = 0; i < block_h; i++) {
+                // Same switch as pass 1; otherwise each padding row is centered to
+                // (garbage - E[x]) and squared into the variance.
+                uint32_t mask_set_offset = 0;
+                if constexpr (has_row_mask) {
+                    mask_set_offset = (i == block_h - 1) ? block_w : 0;
+                }
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; ++j) {
                     tile_regs_acquire();
                     for (uint32_t w = 0; w < subblock_w; ++w) {
                         uint32_t index = w + index_subblock_w_offset;
-                        uint32_t index_mask = index;
+                        uint32_t index_mask = index + mask_set_offset;
                         mul_tiles(dfb_x_id, dfb_input_mask_id, index, index_mask, w);
                     }
                     tile_regs_commit();
@@ -397,7 +373,7 @@ void kernel_main() {
                     tile_regs_release();
                 }
             }
-            dfb_input_mask.pop_front(block_w);
+            dfb_input_mask.pop_front(mask_tiles_per_group);
             reconfig_data_format_srcb(dfb_input_mask_id, dfb_x_id);
 
             // (x - E[x])^2
@@ -456,32 +432,17 @@ void kernel_main() {
             dfb_ex_global.wait_front(1);
             dfb_ex2pe.reserve_back(1);
 
-            // Var := Var - K*E[x]^2, staged through dfb_msq so (Var + eps) is unchanged when aligned.
-            constexpr uint32_t dfb_var_src_id = has_pad_correction ? dfb_msq_id : dfb_ex_global_id;
-            if constexpr (has_pad_correction) {
-                dfb_kmsq.wait_front(1);
-                dfb_msq.reserve_back(1);
-                tile_regs_acquire();
-                sub_init(dfb_ex_global_id, dfb_kmsq_id);
-                sub_tiles(dfb_ex_global_id, dfb_kmsq_id, 0, 0, dst0);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, dfb_msq_id);
-                tile_regs_release();
-                dfb_kmsq.pop_front(1);
-                dfb_msq.push_back(1);
-                dfb_msq.wait_front(1);
-            }
-
+            // The row mask keeps the padding out of both sums, so this is already the variance over
+            // the real rows; no back-correction needed.
             // (Var + eps)
             tile_regs_acquire();
-            add_init(dfb_var_src_id, dfb_eps_id);
+            add_init(dfb_ex_global_id, dfb_eps_id);
             // fp32: reset both srcs so bf16 eps isn't read through the (x-Ex)^2 fp32 format (else garbage var+eps).
             if constexpr (enable_fp32_reconfig) {
-                reconfig_data_format_srca(dfb_var_src_id);
+                reconfig_data_format_srca(dfb_ex_global_id);
                 reconfig_data_format_srcb(dfb_eps_id);
             }
-            add_tiles(dfb_var_src_id, dfb_eps_id, 0, 0, dst0);
+            add_tiles(dfb_ex_global_id, dfb_eps_id, 0, 0, dst0);
             // 1/[sqrt(Var + eps)]
             rsqrt_tile_init<true>();
             rsqrt_tile<true>(dst0);
@@ -491,9 +452,6 @@ void kernel_main() {
             tile_regs_release();
             dfb_ex2pe.push_back(1);
             dfb_ex_global.pop_front(1);
-            if constexpr (has_pad_correction) {
-                dfb_msq.pop_front(1);
-            }
             //  (x - Ex) * 1/[sqrt(Var + eps)]
             index_h_offset = 0;
             mul_bcast_scalar_init(dfb_x_id, dfb_ex2pe_id);

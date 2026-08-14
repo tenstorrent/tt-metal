@@ -16,7 +16,7 @@ on:
         type: string
         default: "in-service"
       single-card-demo:
-        description: 'Demo tests. Input ''all'', ''disabled'', or a list of requested models as JSON array, for example: ["resnet", "sdxl"]'
+        description: 'Demo tests. Input ''all'', ''disabled'', or a list of requested models as JSON array, for example: ["bge_m3"]'
         default: disabled
         type: string
       single-card-perf-device-models:

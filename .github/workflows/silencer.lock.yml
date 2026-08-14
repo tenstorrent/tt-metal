@@ -942,9 +942,7 @@ jobs:
                         "description": "Select model to test",
                         "enum": [
                           "all",
-                          "mistral-small-3.1-24b",
                           "mochi",
-                          "wan2.2-t2v-a14b",
                           "z-image-turbo"
                         ],
                         "type": "string"
@@ -1175,8 +1173,6 @@ jobs:
                         "enum": [
                           "all",
                           "tt-training-models",
-                          "sd35",
-                          "flux1-dev",
                           "motif",
                           "wan2-2",
                           "mochi",
@@ -1238,8 +1234,6 @@ jobs:
                         "description": "Select model to test",
                         "enum": [
                           "all",
-                          "sd35",
-                          "flux1",
                           "motif",
                           "wan22",
                           "mochi",
@@ -1348,12 +1342,9 @@ jobs:
                         "description": "Select model to test",
                         "enum": [
                           "all",
-                          "resnet50",
                           "unit",
-                          "sd35",
                           "wan22",
                           "mochi",
-                          "flux1",
                           "motif",
                           "qwenimage"
                         ],
@@ -1614,10 +1605,7 @@ jobs:
                         "description": "Select model to test",
                         "enum": [
                           "all",
-                          "resnet50",
-                          "stable_diffusion_35_large",
                           "mochi",
-                          "flux1-dev",
                           "motif",
                           "qwenimage"
                         ],
@@ -1667,15 +1655,6 @@ jobs:
                         "description": "Enable Link Time Optimization (LTO)",
                         "type": "boolean"
                       },
-                      "model": {
-                        "default": "all",
-                        "description": "Filter tests by model name",
-                        "enum": [
-                          "all",
-                          "deepseek_prefill"
-                        ],
-                        "type": "string"
-                      },
                       "platform": {
                         "default": "Ubuntu 22.04",
                         "description": "Platform to build and test",
@@ -1724,9 +1703,6 @@ jobs:
                           "all",
                           "tteager",
                           "trace stress",
-                          "resnet",
-                          "sd35_large",
-                          "flux1",
                           "motif",
                           "qwenimage",
                           "mochi",
@@ -1956,9 +1932,6 @@ jobs:
                         "description": "Select model to test",
                         "enum": [
                           "all",
-                          "resnet50",
-                          "sd35_large",
-                          "flux1-dev",
                           "motif",
                           "qwenimage",
                           "mochi",
@@ -2019,7 +1992,6 @@ jobs:
                           "dits",
                           "deepseek",
                           "tttv2 modules",
-                          "mistral-small-3.1-24b-vision",
                           "qwen3_vl"
                         ],
                         "type": "string"
@@ -2095,7 +2067,8 @@ jobs:
                           "ltx-2.3-pro-t2v",
                           "ltx-2.3-fast-t2v",
                           "ltx-2.3-pro-i2v",
-                          "ltx-2.3-fast-i2v"
+                          "ltx-2.3-fast-i2v",
+                          "resnet50"
                         ],
                         "type": "string"
                       },
@@ -2187,7 +2160,8 @@ jobs:
                           "wan-2.2-i2v",
                           "flux.1-schnell",
                           "flux.1-dev",
-                          "ltx-2.3"
+                          "ltx-2.3",
+                          "resnet50"
                         ],
                         "type": "string"
                       },
@@ -2283,7 +2257,8 @@ jobs:
                           "gemma-4-31b",
                           "mixtral-8x7b",
                           "gpt-oss-20b",
-                          "sdxl"
+                          "sdxl",
+                          "vit"
                         ],
                         "type": "string"
                       },
@@ -2377,7 +2352,8 @@ jobs:
                           "mixtral-8x7b",
                           "shallow-unet",
                           "gpt-oss-20b",
-                          "sdxl"
+                          "sdxl",
+                          "vit"
                         ],
                         "type": "string"
                       },
@@ -2468,7 +2444,15 @@ jobs:
                           "gemma-2-9b",
                           "gemma-4-e2b",
                           "gemma-4-e4b",
-                          "panoptic-deeplab"
+                          "panoptic-deeplab",
+                          "mistral-small-3.1-24b",
+                          "sd35",
+                          "vggnet",
+                          "bert-tiny",
+                          "bert-large",
+                          "distilbert",
+                          "squeezebert",
+                          "mnist-mlp"
                         ],
                         "type": "string"
                       },
@@ -2561,7 +2545,10 @@ jobs:
                           "gemma-4-e2b",
                           "gemma-4-e4b",
                           "panoptic-deeplab",
-                          "bevformer"
+                          "bevformer",
+                          "mistral-small-3.1-24b",
+                          "sd35",
+                          "bert-large"
                         ],
                         "type": "string"
                       },
@@ -2648,7 +2635,7 @@ jobs:
                       },
                       "requested-models": {
                         "default": "all",
-                        "description": "List of requested models as JSON array, for example: [\"resnet50\", \"vit\"]. Default is 'all'",
+                        "description": "List of requested models as JSON array, for example: [\"vit\"]. Default is 'all'",
                         "type": "string"
                       }
                     },
@@ -2686,7 +2673,7 @@ jobs:
                       },
                       "models-to-run": {
                         "default": "all",
-                        "description": "List of requested models as JSON array, for example: [\"common_models\", \"functional_unet\"]. Default is 'all'",
+                        "description": "List of requested models as JSON array, for example: [\"bge_m3\"]. Default is 'all'",
                         "type": "string"
                       },
                       "platform": {
@@ -2750,7 +2737,7 @@ jobs:
                       },
                       "requested-models": {
                         "default": "all",
-                        "description": "List of requested models as JSON array, for example: [\"resnet\", \"sdxl\"]. Default is 'all'",
+                        "description": "List of requested models as JSON array, for example: [\"bge_m3\"]. Default is 'all'",
                         "type": "string"
                       },
                       "run-perf-tests": {

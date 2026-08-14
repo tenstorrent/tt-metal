@@ -2,22 +2,12 @@
 
 run_tg_tests() {
 
-  if [[ "$1" == "resnet50" ]]; then
-    echo "LOG_METAL: running resnet50 run_tg_frequent_tests"
-    pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py ; fail+=$?
-
-  elif [[ "$1" == "unit" ]]; then
+  if [[ "$1" == "unit" ]]; then
     echo "LOG_METAL: running unit/distributed run_tg_frequent_tests"
     ## ERISC IRAM is always on for WH; these tests mix fabric and non-fabric CCL and rely on consistent jit/build behavior.
     pytest tests/ttnn/distributed/test_data_parallel_example_TG.py --timeout=900 ; fail+=$?
     pytest tests/ttnn/distributed/test_multidevice_TG.py --timeout=900 ; fail+=$?
     pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
-
-  elif [[ "$1" == "sd35" ]]; then
-    echo "LOG_METAL: running stable diffusion 3.5 Large run_tg_frequent_tests"
-    pytest models/tt_dit/tests/models/sd35/test_vae_sd35.py -k "tg" --timeout=300; fail+=$?
-    pytest models/tt_dit/tests/models/sd35/test_attention_sd35.py -k "4x4sp0tp1" --timeout=300; fail+=$?
-    pytest models/tt_dit/tests/models/sd35/test_transformer_sd35.py::test_sd35_transformer_block -k "4x4sp0tp1" --timeout=300; fail+=$?
 
   elif [[ "$1" == "motif" ]]; then
     echo "LOG_METAL: running Motif run_tg_frequent_tests"

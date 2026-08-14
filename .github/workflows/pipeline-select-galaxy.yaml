@@ -51,7 +51,6 @@ on:
           - llama3_8b_dp
           - llama3_70b_dp
           - whisper
-          - sd35
           - gpt-oss
           - motif
           - wan22
@@ -69,9 +68,7 @@ on:
           - disabled
           - all
           - llama3
-          - resnet50
           - unit
-          - sd35
           - wan22
           - mochi
           - motif
@@ -88,7 +85,6 @@ on:
           #          - llama70b
           #          - llama_unit_tests
           #          - llama70b_prefill
-          - sd35
           - motif
           #          - sentence_bert
           - wan2-2

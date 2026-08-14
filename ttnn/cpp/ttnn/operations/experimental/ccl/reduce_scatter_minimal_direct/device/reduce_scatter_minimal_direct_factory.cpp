@@ -212,7 +212,7 @@ tt::tt_metal::WorkloadDescriptor ReduceScatterMinimalDirectProgramFactory::creat
         sems.push_back(
             ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0, sem_buffer_type));
     }
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, subdevices);
 
     const bool needs_init_sync =
         !(tensor_args.persistent_output_tensor.has_value() && tensor_args.persistent_staging_tensor.has_value());

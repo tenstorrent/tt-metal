@@ -182,6 +182,9 @@ def test_strided_all_gather_minimal_matmul_async(
         shard_weights=shard_weights,
         ag_core_grid_offset=ag_offset,
         read_local_slice_from_input=read_local_slice_from_input,
+        # Blackhole has the cores for the aggregators; require them so a config change cannot silently
+        # drop back to reader-signaled matmul and lose the overlap.
+        mm_signal_aggregator_mode=ttnn.MMSignalAggregatorMode.On,
     )
 
 
@@ -309,4 +312,5 @@ def test_strided_all_gather_minimal_matmul_ltx_configs(
         shard_weights=False,
         ag_core_grid_offset=ag_offset,
         read_local_slice_from_input=True,
+        mm_signal_aggregator_mode=ttnn.MMSignalAggregatorMode.On,
     )
