@@ -1,0 +1,79 @@
+2026-08-14 01:12:55.855 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-08-14 01:12:58.217 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-14 01:12:58.217 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-14 01:12:58.217 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-14 01:12:58.217 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-14 01:12:58.228 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-14 01:12:58.228 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-14 01:12:58.306 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-14 01:12:58.307 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-14 01:12:58.307 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-14 01:12:58.307 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-14 01:12:58.308 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-14 01:12:58.483 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-14 01:12:58.604 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:12:58.604 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:12:58.604 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-14 01:12:58.605 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:12:58.605 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:12:58.646 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:12:58.676 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:12:58.676 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:13:02.138 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+2026-08-14 01:13:02.140 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+2026-08-14 01:13:02.141 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+P|HF leg:
+P|  hf  in  shape=[1, 1, 8, 128] padded=[1, 1, 32, 128] DRAM TensorMemoryLayout.INTERLEAVED
+P|  hf  out shape=[1, 1, 8, 128] padded=[1, 1, 32, 128]
+P|  hf  in  shape=[1, 1, 1, 128] padded=[1, 1, 32, 128] DRAM TensorMemoryLayout.INTERLEAVED
+P|  hf  out shape=[1, 1, 1, 128] padded=[1, 1, 32, 128]
+P|Meta leg:
+P|  mt  in  shape=[1, 1, 8, 128] padded=[1, 1, 32, 128] DRAM TensorMemoryLayout.INTERLEAVED
+P|  mt  out shape=[1, 1, 8, 128] padded=[1, 1, 32, 128]
+P|  mt  in  shape=[1, 1, 1, 128] padded=[1, 1, 32, 128] DRAM TensorMemoryLayout.INTERLEAVED
+P|  mt  out shape=[1, 1, 1, 128] padded=[1, 1, 32, 128]
+P|attention out: max|diff| 1.221e-04  PCC 0.9999697
+P|k cache (Meta permuted back) vs HF: max|diff| 3.125e-01  shape [128, 1, 32, 128]
+P|v cache vs v cache: max|diff| 0.000e+00
+P|
+P|--- with a cache primed by prefill (the shipped harness order) ---
+2026-08-14 01:13:02.222 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+2026-08-14 01:13:02.222 | warning  |              Op | ttnn::tilize: Using input shard spec for output tensor because the legacy sharded optimized program factory is being used (tilize_device_operation.cpp:248)
+P|attention out, primed cache: max|diff| 8.911e-02  PCC 0.1932974
+P|done
+nanobind: leaked 1 instances!
+ - leaked instance 0x746822def0a8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 15 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - ... skipped remainder
+nanobind: leaked 236 functions!
+ - leaked function "tensor_topology"
+ - leaked function ""
+ - leaked function "reshape"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "to_torch_with_padded_shape"
+ - leaked function "memory_config"
+ - leaked function "cpu"
+ - leaked function "create_descriptor"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-14 01:13:03.252 | info     |    BuildKernels | JIT cache stats: 291/291 hits (100.0%) [291 cached, 130 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-14 01:13:03.252 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-14 01:13:03.266 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-14 01:13:03.266 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-14 01:13:03.815 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-14 01:13:03.815 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-14 01:13:03.815 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

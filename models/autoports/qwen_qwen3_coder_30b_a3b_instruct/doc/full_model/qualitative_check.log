@@ -1,0 +1,236 @@
+2026-08-14 13:04:34.145 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+6 prompts from /home/raahem/tt-metal/models/common/readiness_check/vllm_prompts.txt
+2026-08-14 13:04:36.003 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-14 13:04:36.003 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-14 13:04:36.003 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-14 13:04:36.003 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-14 13:04:36.015 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-14 13:04:36.016 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-14 13:04:36.094 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-14 13:04:36.094 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-14 13:04:36.094 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-14 13:04:36.094 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-14 13:04:36.095 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-14 13:04:36.338 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-14 13:04:36.456 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 13:04:36.456 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 13:04:36.456 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-14 13:04:36.456 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 13:04:36.456 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 13:04:36.502 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 13:04:36.530 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 13:04:36.530 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+weight load 177.5 s
+
+=== prompt 1/6: 'Write a haiku about machine learning.' (16 tokens) ===
+--- completion (greedy, 17 tokens) ---
+Data streams flow—
+Neural networks dream in patterns,
+Wisdom emerges.
+2026-08-14 13:07:35.643 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:35.643 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-14 13:07:35.649 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 13:07:35.649 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 13:07:35.649 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 13:07:35.649 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 13:07:35.652 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:35.652 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-14 13:07:35.653 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 13:07:35.653 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 13:07:35.653 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 13:07:35.653 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 13:07:35.761 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:35.761 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:35.920 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:35.922 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+--- completion (sampled, 17 tokens) ---
+Data streams flow—
+Neural networks dream in patterns,
+Wisdom emerges.
+
+=== prompt 2/6: 'Explain the difference between supervised and unsupervised learning in simple terms.' (23 tokens) ===
+--- completion (greedy, 128 tokens) ---
+Think of it like learning from different types of teachers:
+
+**Supervised Learning** = Learning from a teacher who gives you the right answers
+- You're given data with both inputs AND correct outputs (like "Here's a picture of a cat, and the label says 'cat'")
+- The algorithm learns by comparing its predictions to the correct answers
+- Goal: Make accurate predictions on new, unseen data
+- Examples: Email spam detection, medical diagnosis, image recognition
+
+**Unsupervised Learning** = Learning from a teacher who only shows you data without telling you what's what
+- You're given data with only inputs, no
+2026-08-14 13:07:41.840 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:41.840 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:41.938 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:41.938 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:42.095 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:42.095 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+--- completion (sampled, 128 tokens) ---
+Think of it like learning from different types of teachers:
+
+**Supervised Learning** = Learning from a teacher who gives you the right answers
+- You're given data with both inputs AND correct outputs (like "Here's a picture of a cat, and the label says 'cat'")
+- The algorithm learns by comparing its predictions to the correct answers
+- Goal: Make accurate predictions on new, unseen data
+- Examples: Email spam detection, medical diagnosis, image recognition
+
+**Unsupervised Learning** = Learning from a teacher who only shows you data without telling you what's what
+- You're given data with only inputs, no
+
+=== prompt 3/6: 'Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered' (31 tokens) ===
+--- completion (greedy, 128 tokens) ---
+Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered a peculiar glitch in the royal clock tower. While the other townspeople marveled at its precise ticking, she noticed that every hour, the golden hands would pause for exactly seventeen seconds before continuing their eternal dance.
+
+Intrigued, she snuck into the tower's dusty interior and found the source of the anomaly: a small, glowing crystal embedded in the clock's heart, pulsing with an otherworldly light. As she reached out to touch it, the crystal suddenly blazed brilliant white, and suddenly, she could hear the clock
+2026-08-14 13:07:48.568 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:48.568 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:48.664 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:48.664 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:48.818 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:48.818 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+--- completion (sampled, 128 tokens) ---
+Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered a peculiar glitch in the royal clock tower. While the other townspeople marveled at its precise ticking, she noticed that every hour, the golden hands would pause for exactly seventeen seconds before continuing their eternal dance.
+
+Intrigued, she snuck into the tower's dusty interior and found that the clock's mechanism was connected to a hidden chamber beneath the stones. Inside, she discovered a small, glowing crystal that pulsed with the same rhythm as the clock's hands. As she reached out to touch it, the crystal suddenly blazed with
+
+=== prompt 4/6: 'What are the three laws of thermodynamics?' (17 tokens) ===
+--- completion (greedy, 128 tokens) ---
+The three laws of thermodynamics are fundamental principles that govern energy and heat transfer in physical systems:
+
+## First Law of Thermodynamics
+**Energy cannot be created or destroyed, only transformed from one form to another.**
+- This is essentially the law of conservation of energy
+- Mathematically: ΔU = Q - W (change in internal energy equals heat added minus work done)
+
+## Second Law of Thermodynamics
+**The entropy of an isolated system always increases over time, or remains constant in ideal reversible processes.**
+- Heat flows naturally from hot to cold objects
+- No heat engine can be 100% efficient
+
+2026-08-14 13:07:57.842 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:57.842 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:57.940 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:57.940 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:58.099 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:07:58.099 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+--- completion (sampled, 128 tokens) ---
+The three laws of thermodynamics are fundamental principles that govern energy and heat transfer in physical systems:
+
+## First Law of Thermodynamics
+**Energy cannot be created or destroyed, only transformed from one form to another.**
+- This is essentially the law of conservation of energy
+- Mathematically: ΔU = Q - W (change in internal energy equals heat added minus work done)
+
+## Second Law of Thermodynamics
+**The entropy of an isolated system always increases over time, or remains constant in ideal reversible processes.**
+- Heat flows naturally from hot to cold objects
+- No heat engine can be 100% efficient
+
+
+=== prompt 5/6: 'Translate the following to French: "Hello, how are you today?"' (22 tokens) ===
+--- completion (greedy, 12 tokens) ---
+"Bonjour, comment allez-vous aujourd'hui ?"
+2026-08-14 13:08:04.171 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:08:04.171 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:08:04.268 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:08:04.268 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:08:04.425 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:08:04.425 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+--- completion (sampled, 12 tokens) ---
+"Bonjour, comment allez-vous aujourd'hui ?"
+
+=== prompt 6/6: 'Write a Python function to calculate the Fibonacci sequence.' (18 tokens) ===
+--- completion (greedy, 128 tokens) ---
+Here are several Python implementations of the Fibonacci sequence calculation:
+
+## 1. Recursive Approach (Simple but Inefficient)
+
+```python
+def fibonacci_recursive(n):
+    """
+    Calculate the nth Fibonacci number using recursion.
+    Time complexity: O(2^n) - Very slow for large n
+    """
+    if n <= 0:
+        return 0
+    elif n == 1:
+        return 1
+    else:
+        return fibonacci_recursive(n - 1) + fibonacci_recursive(n - 2)
+```
+
+## 2. Iterative Approach (Efficient)
+
+```python
+def fibonacci_iterative(n):
+    """
+
+2026-08-14 13:08:07.900 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:08:07.900 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:08:07.998 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:08:07.998 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:08:08.156 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 13:08:08.156 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+--- completion (sampled, 128 tokens) ---
+Here are several Python implementations of the Fibonacci sequence calculation:
+
+## 1. Recursive Approach (Simple but Inefficient)
+
+```python
+def fibonacci_recursive(n):
+    """
+    Calculate the nth Fibonacci number using recursion.
+    Time complexity: O(2^n) - Very slow for large n
+    """
+    if n <= 0:
+        return 0
+    elif n == 1:
+        return 1
+    else:
+        return fibonacci_recursive(n - 1) + fibonacci_recursive(n - 2)
+```
+
+## 2. Iterative Approach (Efficient)
+
+```python
+def fibonacci_iterative(n):
+    """
+
+
+wrote 6 prompts x 2 completions to /home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_qualitative/vllm_qualitative_outputs.json
+nanobind: leaked 1 instances!
+ - leaked instance 0x722c5ddcb618 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 36 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "create_output_tensors"
+ - leaked function "num_cores"
+ - leaked function ""
+ - leaked function "host_buffer"
+ - leaked function "from_json"
+ - leaked function "subtract"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-14 13:08:12.315 | info     |    BuildKernels | JIT cache stats: 563/608 hits (92.6%) [563 cached, 953 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-14 13:08:12.315 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-14 13:08:12.336 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-14 13:08:12.336 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-14 13:08:12.899 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-14 13:08:12.899 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-14 13:08:12.899 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

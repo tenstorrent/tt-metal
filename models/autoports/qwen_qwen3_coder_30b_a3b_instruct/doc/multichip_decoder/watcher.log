@@ -1,0 +1,147 @@
+# Watcher-clean evidence, stage 03.
+# command: TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 \
+#            pytest models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/ -q -rA \
+#            -m "not models_performance_bare_metal"
+# result:  109 passed, 16 deselected in 433.83s
+# grep for watcher asserts/errors/NoC violations in the full log: 0 matches.
+#
+# TT_METAL_WATCHER_DISABLE_ETH=1 is required on this host: with ethernet-core
+# instrumentation on, FABRIC_1D_RING fails to come up at all --
+#   TT_FATAL: Program size (29072) too large for kernel config buffer (25600) on ACTIVE_ETH
+# Every worker core is still watched, including the sparse_matmul in0 sender
+# where the nnz assert lives; nnz_hazard.log shows the watcher tripping it.
+#
+# The per-test list below is complete (109 lines), not the alphabetical excerpt
+# an earlier revision of this file carried.
+
+2026-08-13 18:51:49.485 | info     |       LLRuntime | Watcher log file: /home/raahem/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:296)
+2026-08-13 18:51:49.485 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-13 18:51:49.490 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-13 18:51:49.494 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-13 18:51:49.498 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-13 18:51:51.379 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:613)
+2026-08-13 18:51:51.444 | info     |       LLRuntime | Watcher log file: /home/raahem/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:296)
+2026-08-13 18:51:51.445 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-13 18:51:51.449 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-13 18:51:51.453 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-13 18:51:51.458 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-13 18:51:51.918 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:613)
+2026-08-13 18:51:51.983 | info     |       LLRuntime | Watcher log file: /home/raahem/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:296)
+2026-08-13 18:51:51.983 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-13 18:51:51.988 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-13 18:51:51.992 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-13 18:51:51.996 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-13 18:51:53.838 | info     |       LLRuntime | Watcher thread stopped watching... (watcher_server.cpp:613)
+2026-08-13 18:51:53.904 | info     |       LLRuntime | Watcher log file: /home/raahem/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:296)
+2026-08-13 18:51:53.904 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+
+--- per-test outcomes (109) ---
+test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-contiguous-p128-1x1]
+test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-contiguous-p32-1x1]
+test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-paged32-p128-1x1]
+test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-paged32-p32-1x1]
+test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-paged64-p128-1x1]
+test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-paged64-p32-1x1]
+test_attention_decode.py::test_decode_q_rows_are_all_live[blackhole-1x1]
+test_attention.py::test_attention_prefill_vs_reference[blackhole-s128-1x1]
+test_attention.py::test_attention_prefill_vs_reference[blackhole-s32-1x1]
+test_attention.py::test_attention_prefill_vs_reference[blackhole-s512-1x1]
+test_attention.py::test_causality
+test_attention.py::test_qk_norm_weights_are_non_trivial
+test_decoder_layer_decode.py::test_decode_layer_matches_prefill[blackhole-contiguous-p128-1x1]
+test_decoder_layer_decode.py::test_decode_layer_matches_prefill[blackhole-contiguous-p32-1x1]
+test_decoder_layer_decode.py::test_decode_layer_matches_prefill[blackhole-paged32-p128-1x1]
+test_decoder_layer_decode.py::test_decode_layer_matches_prefill[blackhole-paged32-p32-1x1]
+test_decoder_layer_decode.py::test_multi_step_decode[blackhole-1x1]
+test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s100-1x1]
+test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s128-1x1]
+test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s257-1x1]
+test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s32-1x1]
+test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s33-1x1]
+test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s512-1x1]
+test_decoder_layer.py::test_non_aligned_tail_tokens[blackhole-s100-1x1]
+test_decoder_layer.py::test_non_aligned_tail_tokens[blackhole-s33-1x1]
+test_decoder_layer.py::test_residual_path_is_present[blackhole-1x1]
+test_determinism.py::test_decode_is_deterministic[blackhole-1x1]
+test_determinism.py::test_prefill_is_deterministic[blackhole-1x1]
+test_determinism.py::test_repeated_decode_steps_are_stable[blackhole-1x1]
+test_moe.py::test_experts_with_reference_routing[blackhole-s128-1x1]
+test_moe.py::test_experts_with_reference_routing[blackhole-s32-1x1]
+test_moe.py::test_moe_block_end_to_end[blackhole-s128-1x1]
+test_moe.py::test_moe_block_end_to_end[blackhole-s32-1x1]
+test_moe.py::test_router_dense_weights_vs_reference[blackhole-s128-1x1]
+test_moe.py::test_router_dense_weights_vs_reference[blackhole-s32-1x1]
+test_moe.py::test_router_selection_matches[blackhole-1x1]
+test_moe.py::test_router_weights_sum_to_one[blackhole-1x1]
+test_multichip_decoder.py::test_baseline_upload_is_actually_replicated[blackhole-1x4-device_params0]
+test_multichip_decoder.py::test_expert_window_can_be_empty[blackhole-1x4-device_params0]
+test_multichip_decoder.py::test_local_kv_cache_layout[blackhole-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b1-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b2-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b32-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b8-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_decode_contiguous_batch8[blackhole-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_decode_is_traceable[blackhole-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_decode_stress_is_deterministic[blackhole-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_decode_vs_single_chip[blackhole-contiguous-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_decode_vs_single_chip[blackhole-paged32-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_multi_step_decode_vs_hf[blackhole-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_prefill_is_deterministic[blackhole-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_prefill_vs_hf[blackhole-s128-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_prefill_vs_hf[blackhole-s33-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s100-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s128-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s257-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s32-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s33-1x4-device_params0]
+test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s512-1x4-device_params0]
+test_multichip_decoder.py::test_no_runtime_fallbacks[blackhole-b1-1x4-device_params0]
+test_multichip_decoder.py::test_no_runtime_fallbacks[blackhole-b32-1x4-device_params0]
+test_multichip_decoder.py::test_repo_default_topology_is_wrong_for_this_mesh
+test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-decode-1x4-device_params0]
+test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-s128-1x4-device_params0]
+test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-s33-1x4-device_params0]
+test_multichip_decoder.py::test_stacked_layer_io_contract[blackhole-1x4-device_params0]
+test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-0-1x4-device_params0]
+test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-1-1x4-device_params0]
+test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-2-1x4-device_params0]
+test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-3-1x4-device_params0]
+test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-4-1x4-device_params0]
+test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-5-1x4-device_params0]
+test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-6-1x4-device_params0]
+test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-7-1x4-device_params0]
+test_multichip_decoder.py::test_wqkv_column_split_is_head_interleaved
+test_optimized_decoder.py::test_optimized_decode_batch[blackhole-b1-1x1]
+test_optimized_decoder.py::test_optimized_decode_batch[blackhole-b2-1x1]
+test_optimized_decoder.py::test_optimized_decode_batch[blackhole-b32-1x1]
+test_optimized_decoder.py::test_optimized_decode_batch[blackhole-b8-1x1]
+test_optimized_decoder.py::test_optimized_decode_is_traceable[blackhole-1x1-device_params0]
+test_optimized_decoder.py::test_optimized_decode_matches_prefill[blackhole-contiguous-1x1]
+test_optimized_decoder.py::test_optimized_decode_matches_prefill[blackhole-paged32-1x1]
+test_optimized_decoder.py::test_optimized_multi_step_decode[blackhole-1x1]
+test_optimized_decoder.py::test_optimized_prefill_is_deterministic[blackhole-1x1]
+test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s100-1x1]
+test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s128-1x1]
+test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s257-1x1]
+test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s32-1x1]
+test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s33-1x1]
+test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s512-1x1]
+test_optimized_decoder.py::test_optimized_router_matches_functional[blackhole-decode-1x1]
+test_optimized_decoder.py::test_optimized_router_matches_functional[blackhole-s128-1x1]
+test_optimized_decoder.py::test_optimized_router_matches_functional[blackhole-s33-1x1]
+test_optimized_decoder.py::test_optimized_router_padding_is_zero[blackhole-decode-1x1]
+test_optimized_decoder.py::test_optimized_router_padding_is_zero[blackhole-s100-1x1]
+test_optimized_decoder.py::test_optimized_router_padding_is_zero[blackhole-s128-1x1]
+test_optimized_decoder.py::test_optimized_router_padding_is_zero[blackhole-s33-1x1]
+test_optimized_decoder.py::test_optimized_vs_functional_precision_delta[blackhole-s128-1x1]
+test_optimized_decoder.py::test_optimized_vs_functional_precision_delta[blackhole-s33-1x1]
+test_reference.py::test_layer_forward_is_deterministic
+test_reference.py::test_layer_forward_is_finite_and_non_degenerate
+test_reference.py::test_moe_matches_unfused_reimplementation
+test_reference.py::test_router_selects_expected_expert_count
+test_rmsnorm.py::test_rmsnorm_vs_reference[blackhole-input_decode-1x1]
+test_rmsnorm.py::test_rmsnorm_vs_reference[blackhole-input_s128-1x1]
+test_rmsnorm.py::test_rmsnorm_vs_reference[blackhole-input_s32-1x1]
+test_rmsnorm.py::test_rmsnorm_vs_reference[blackhole-postattn_s32-1x1]
+test_trace.py::test_decode_step_is_traceable[blackhole-1x1-device_params0]
+test_trace.py::test_traced_replay_follows_new_input[blackhole-1x1-device_params0]

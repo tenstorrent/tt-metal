@@ -1,0 +1,4 @@
+# probes/allreduce_ab.py -- warmed traced decode ctx128, median of 100, whole layer.
+P|agsum  traced decode ctx128 = 0.4801 ms   (reference)
+P|rsag   traced decode ctx128 = 0.4760 ms   (max|diff| vs agsum = 4.883e-04)
+P|agpad  FAILED reshape_common.cpp:50 new_volume == old_volume

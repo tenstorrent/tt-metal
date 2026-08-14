@@ -1,0 +1,118 @@
+arch:
+  0: blackhole
+  1: blackhole
+  2: blackhole
+  3: blackhole
+chips:
+  {}
+chip_unique_ids:
+  0: 154095682331393
+  1: 154095682331392
+  2: 154095682331105
+  3: 154095682331104
+ethernet_connections:
+  -
+    - chip: 0
+      chan: 2
+    - chip: 3
+      chan: 5
+  -
+    - chip: 0
+      chan: 4
+    - chip: 3
+      chan: 4
+  -
+    - chip: 0
+      chan: 8
+    - chip: 1
+      chan: 3
+  -
+    - chip: 0
+      chan: 9
+    - chip: 1
+      chan: 2
+  -
+    - chip: 1
+      chan: 4
+    - chip: 2
+      chan: 4
+  -
+    - chip: 1
+      chan: 5
+    - chip: 2
+      chan: 2
+  -
+    - chip: 2
+      chan: 8
+    - chip: 3
+      chan: 3
+  -
+    - chip: 2
+      chan: 9
+    - chip: 3
+      chan: 2
+ethernet_connections_to_remote_devices:
+  []
+chips_with_mmio:
+  - 0: 0
+  - 1: 1
+  - 2: 2
+  - 3: 3
+io_device_type: PCIe
+harvesting:
+  0:
+    noc_translation: true
+    harvest_mask: 288
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  1:
+    noc_translation: true
+    harvest_mask: 320
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 2
+    l2cpu_harvesting_mask: 0
+  2:
+    noc_translation: true
+    harvest_mask: 130
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 1
+    l2cpu_harvesting_mask: 0
+  3:
+    noc_translation: true
+    harvest_mask: 384
+    dram_harvesting_mask: 0
+    eth_harvesting_mask: 288
+    pcie_harvesting_mask: 2
+    l2cpu_harvesting_mask: 0
+chip_to_bus_id:
+  0: "0x01"
+  1: "0x02"
+  2: "0x03"
+  3: "0x04"
+boards:
+  -
+    - board_id: 4815490072847
+    - board_type: p300
+    - chips:
+        - 2
+        - 3
+  -
+    - board_id: 4815490072856
+    - board_type: p300
+    - chips:
+        - 0
+        - 1
+asic_locations:
+  0: 1
+  1: 0
+  2: 1
+  3: 0
+chip_pci_bdfs:
+  0: 0000:01:00.0
+  1: 0000:02:00.0
+  2: 0000:03:00.0
+  3: 0000:04:00.0

@@ -1,0 +1,40 @@
+=== Sampling1D, synthetic [1,1,32,37984]/die logits, no model ===
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/full_model/probes/run_watcher_ab.sh: line 24: 2789642 Aborted                 ( timeout 900 python "$HERE/$probe" --leg "$leg" "$@" > "$log" 2>&1 ) 2> /dev/null
+sampler_watcher_ab       argmax_nobarrier                           TRIPPED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/full_model/probes/run_watcher_ab.sh: line 24: 2789877 Aborted                 ( timeout 900 python "$HERE/$probe" --leg "$leg" "$@" > "$log" 2>&1 ) 2> /dev/null
+sampler_watcher_ab       argmax_barrier                             TRIPPED
+sampler_watcher_ab       split_k32                                  clean
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/full_model/probes/run_watcher_ab.sh: line 24: 2790247 Aborted                 ( timeout 900 python "$HERE/$probe" --leg "$leg" "$@" > "$log" 2>&1 ) 2> /dev/null
+sampler_watcher_ab       argmax_stage_gather                        TRIPPED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/full_model/probes/run_watcher_ab.sh: line 24: 2790482 Aborted                 ( timeout 900 python "$HERE/$probe" --leg "$leg" "$@" > "$log" 2>&1 ) 2> /dev/null
+sampler_watcher_ab       argmax_stage_slice                         TRIPPED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/full_model/probes/run_watcher_ab.sh: line 24: 2790716 Aborted                 ( timeout 900 python "$HERE/$probe" --leg "$leg" "$@" > "$log" 2>&1 ) 2> /dev/null
+sampler_watcher_ab       argmax_stage_untilize                      TRIPPED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/full_model/probes/run_watcher_ab.sh: line 24: 2790959 Aborted                 ( timeout 900 python "$HERE/$probe" --leg "$leg" "$@" > "$log" 2>&1 ) 2> /dev/null
+sampler_watcher_ab       argmax_stage_argmax                        TRIPPED
+sampler_watcher_ab       raw_gather                                 clean
+sampler_watcher_ab       argmax_shipped                             clean
+
+=== raw ttnn.experimental.all_gather_async, no Sampling1D ===
+ccl_watcher_ab           sampler_argmax_shape                       clean
+ccl_watcher_ab           sampler_argmax_barrier                     clean
+ccl_watcher_ab           sampler_shape_default_knobs                clean
+ccl_watcher_ab           sampler_shape_default_knobs_nobarrier      clean
+ccl_watcher_ab           layer_width_sampler_knobs                  clean
+ccl_watcher_ab           layer_width_default_knobs                  clean
+ccl_watcher_ab           sampler_shape_workers1                     clean
+ccl_watcher_ab           sampler_shape_chunks10                     clean
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/full_model/probes/run_watcher_ab.sh: line 24: 2792507 Aborted                 ( timeout 900 python "$HERE/$probe" --leg "$leg" "$@" > "$log" 2>&1 ) 2> /dev/null
+ccl_watcher_ab           sampler_shipped_branch                     TRIPPED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/full_model/probes/run_watcher_ab.sh: line 24: 2792737 Aborted                 ( timeout 900 python "$HERE/$probe" --leg "$leg" "$@" > "$log" 2>&1 ) 2> /dev/null
+ccl_watcher_ab           sampler_shipped_branch_no_cluster_axis     TRIPPED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/full_model/probes/run_watcher_ab.sh: line 24: 2792959 Aborted                 ( timeout 900 python "$HERE/$probe" --leg "$leg" "$@" > "$log" 2>&1 ) 2> /dev/null
+ccl_watcher_ab           sampler_shipped_branch_nobarrier           TRIPPED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/full_model/probes/run_watcher_ab.sh: line 24: 2793169 Aborted                 ( timeout 900 python "$HERE/$probe" --leg "$leg" "$@" > "$log" 2>&1 ) 2> /dev/null
+ccl_watcher_ab           layer_width_shipped_branch                 TRIPPED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/full_model/probes/run_watcher_ab.sh: line 24: 2793391 Aborted                 ( timeout 900 python "$HERE/$probe" --leg "$leg" "$@" > "$log" 2>&1 ) 2> /dev/null
+ccl_watcher_ab           linear_workers1                            TRIPPED
+ccl_watcher_ab           linear_chunks10                            clean
+ccl_watcher_ab           linear_barrier                             clean
+ccl_watcher_ab           linear_default_knobs_nobarrier             clean
+ccl_watcher_ab           sampler_shape_linear                       clean

@@ -4,8 +4,8 @@
   "current_supported_context": 262144,
   "capability_reduction": false,
   "limiting_reason": null,
-  "stage": "optimized_multichip_decoder",
-  "scope": "single decoder layer (layer 0) on the full 4-die P300_X2 mesh (1x4), batch 1; the single-die stage-02 numbers below are retained unchanged",
+  "stage": "full_model",
+  "scope": "the complete 48-layer causal LM on the full 4-die P300_X2 mesh (1x4), batch 1: embeddings, 48 stage-04 multichip decoder layers, final norm, column-parallel lm_head and on-device traced sampling. The single-layer stage-02/03/04 numbers below are retained unchanged.",
   "device": {
     "arch": "blackhole",
     "board": "p300 x2 (ClusterType.P300_X2), 4 dies",
@@ -49,7 +49,7 @@
   },
   "pcc_validated_context_tokens": 512,
   "pcc_validation_note": "PCC against the HuggingFace reference is verified up to 512 tokens; longer lengths are capacity/liveness probes only, because a full-length torch reference for 262144 tokens does not fit in host RAM. This is a limit of the reference, not of the TTNN decoder.",
-  "forward_looking_note": "DISCHARGED by stage 03. The stage-01 note read: 'the full 48-layer model would need ~24 GiB on a 32 GiB die, so the full-model stage will have to weigh KV dtype, paging across dice, or a served-context cap.' None of those trade-offs is needed. TP=4 across the four dies puts the whole 48-layer model plus a full 262144-token paged KV cache in 11.829 GB per die with 22.350 GB free -- measured by allocating it, not by arithmetic. KV dtype is unchanged (bfloat16), paging is unchanged (block_size 32), and the served context is unchanged. The note is kept rather than deleted because it is the question this stage answers.",
+  "forward_looking_note": "DISCHARGED by stage 03. The stage-01 note read: 'the full 48-layer model would need ~24 GiB on a 32 GiB die, so the full-model stage will have to weigh KV dtype, paging across dice, or a served-context cap.' None of those trade-offs is needed. TP=4 across the four dies puts the whole 48-layer model plus a full 262144-token paged KV cache in 11.759 GB per die with 22.119 GB free -- measured in stage 05 by allocating the real 48-layer model, and the figure this note now carries (see full_model_measured and comparison_to_stage03_prediction). Stage 03 predicted 11.829 / 22.350 from a synthetic allocation of the same shapes; the prediction and the measurement agree to within 0.6%. KV dtype is unchanged (bfloat16), paging is unchanged (block_size 32), and the served context is unchanged. The note is kept rather than deleted because it is the question this stage answers.",
   "evidence": [
     "doc/functional_decoder/work_log.md (context probe section)",
     "doc/multichip_decoder/README.md and work_log.md",
@@ -57,7 +57,11 @@
     "doc/multichip_decoder/probes/footprint_probe.py",
     "doc/multichip_decoder/pcc_log.txt",
     "doc/optimized_multichip_decoder/README.md and work_log.md",
-    "doc/optimized_multichip_decoder/pcc_log.txt"
+    "doc/optimized_multichip_decoder/pcc_log.txt",
+    "doc/full_model/README.md and work_log.md",
+    "doc/full_model/probes/footprint_262144.json (the allocation this file quotes)",
+    "doc/full_model/probes/perf_full_model.csv and .json",
+    "doc/full_model/run_prefill_check.log, run_teacher_forcing.log, run_autoregressive.log"
   ],
   "expert_weight_dtype": "bfloat4_b",
   "optimized_note": "Stage 02 changed expert weight dtype to bfloat4_b, attention projection dtype to bfloat8_b, the expert matmul block widths, expert math fidelity to LoFi, and the decode attention projections to a DRAM-sharded program config. None of these touches the KV cache layout, dtype, or paging, so the measured context limits carry over unchanged. Per-layer weight DRAM: expert weights shrink ~3.6x (bf16 to bfloat4_b, which is 0.5625 B/elem once each 16-element block's exponent byte is counted). Decode additionally needs a second, DRAM-width-sharded copy of wqkv/wo; at bfloat8_b (1.0625 B/elem) each copy is 20.05 MB, so the pair is 40.11 MB against the single bf16 copy stage 01 held at 37.75 MB -- a 2.36 MB increase, not a wash, and an earlier revision of this file called it one by rounding bfloat8_b to 1 B/elem. Against 24 GB of usable DRAM it changes nothing: no capability reduction.",
@@ -96,5 +100,63 @@
     "context_at_batch32_basis": "~22.6 GB usable / (32 users * 48 layers * 512 B/token); arithmetic"
   },
   "multichip_pcc_note": "Multichip PCC is validated against the single-chip TTNN optimized decoder run replicated on the same mesh, 0.99962-0.99997 across prefill S = 32/33/100/128/257/512 and decode in both cache modes, and against HF at 0.9990 (prefill) and 0.9988-0.9993 (decode). See doc/multichip_decoder/pcc_log.txt. The 512-token PCC validation ceiling of the stage-01/02 entry above is unchanged and has the same cause: a full-length torch reference does not fit in host RAM. Stage 04 re-ran every one of those gates on the optimized path: 112 passed, 0 failed (stage 03's 111 plus the host-only test_meta_rope_weights_match_hf), with prefill 0.999620-0.999868 and decode 0.999935-0.999941 against the single-chip TTNN baseline. The one movement is decode vs single-chip, 0.99997 -> 0.99994, and it is the right sign: the reference is optimized_decoder.py, whose numerics stage 04 left unchanged (its only edit is an optional rope= seam that defaults to the shipped op) and which still accumulates its RMSNorm sum of squares in bf16, while the multichip norm now measures 1.686e-02 against a torch fp64 reference where the old one measured 6.711e-02. Against HF the four decode steps move by at most 8e-05 and in both directions (0.9992853->0.9992450, 0.9987817->0.9987388, 0.9993126->0.9993928, 0.9989592->0.9989421), i.e. three are marginally lower and one is higher; that is bf16 rounding under a changed norm, not a regression, and the earlier wording 'nothing regressed' was literally false. See doc/optimized_multichip_decoder/pcc_log.txt.",
-  "stage04_note": "Stage 04 optimized the multichip decoder in place and changed NOTHING this file measures. No capability reduction. What it changed: both residual RMSNorms now run width-sharded over 8 L1 cores instead of one core, the router projection reads that L1 shard instead of DRAM-interleaved, and the two collectives use caller-owned persistent buffers. KV cache dtype, layout, paging and bytes/token are untouched, and so is the activation sharding of the cache. Two things grew: each layer carries a second, ROW_MAJOR copy of each residual RMSNorm vector (the layout the sharded rms_norm program factory reads) at 4 KB each, i.e. 8 KB per layer and 0.384 MB per die over all 48 layers, against 4.596 GB of sharded decoder weights; and the mesh context owns two sets of persistent reduce-scatter/all-gather buffers of about 0.5 MB each, once per mesh rather than once per layer. Both are far below the 22.350 GB/die of measured headroom, so the 262144-token contract, the batch-4-at-full-context figure and the single-die comparison all stand unchanged. Evidence: doc/optimized_multichip_decoder/README.md and work_log.md section 9."
+  "stage04_note": "Stage 04 optimized the multichip decoder in place and changed NOTHING this file measures. No capability reduction. What it changed: both residual RMSNorms now run width-sharded over 8 L1 cores instead of one core, the router projection reads that L1 shard instead of DRAM-interleaved, and the two collectives use caller-owned persistent buffers. KV cache dtype, layout, paging and bytes/token are untouched, and so is the activation sharding of the cache. Two things grew: each layer carries a second, ROW_MAJOR copy of each residual RMSNorm vector (the layout the sharded rms_norm program factory reads) at 4 KB each, i.e. 8 KB per layer and 0.384 MB per die over all 48 layers, against 4.596 GB of sharded decoder weights; and the mesh context owns two sets of persistent reduce-scatter/all-gather buffers of about 0.5 MB each, once per mesh rather than once per layer. Both are far below the 22.350 GB/die of measured headroom, so the 262144-token contract, the batch-4-at-full-context figure and the single-die comparison all stand unchanged. Evidence: doc/optimized_multichip_decoder/README.md and work_log.md section 9.",
+  "full_model_measured": {
+    "method": "doc/full_model/probes/footprint_probe.py --context 262144. Unlike the stage-03 probe this builds the REAL model -- real weights, real embed_tokens, real lm_head, the real paged KV cache at the advertised context, the real RoPE tables -- captures both decode traces and runs a token through it. Output archived at doc/full_model/probes/footprint_262144.json and .log. GB = 1e9, as the allocator reports it.",
+    "weights_embed_lm_head_rope_gb_per_die": 5.311,
+    "kv_cache_at_262144_batch1_gb_per_die": 6.443,
+    "traces_and_persistent_buffers_gb_per_die": 0.006,
+    "total_gb_per_die": 11.759,
+    "headroom_gb_per_die": 22.119,
+    "dram_per_die_gb_reported": 33.879,
+    "dram_per_die_note": "33.879 rather than the 34.18 recorded for stage 03/04 because this probe opens the mesh with trace_region_size=300 MB, which the allocator carves out of DRAM before reporting. It is the same hardware; the difference is 0.30 GB and is the trace region the decode traces live in.",
+    "sum_note": "the three stage rows in doc/full_model/probes/footprint_262144.json sum to 11.759415296, BIT-IDENTICAL to total_gb_per_die -- there is no residual and nothing is omitted. The 0.001 that appears if the 3dp values in this file or in the README's table are added up is introduced by that display rounding alone. An earlier revision of this field attributed it to 'the allocator's rounding across the three separate reads', which the raw JSON contradicts; doc/full_model/probes/check_published_figures.py now asserts the raw rows equal the raw total exactly.",
+    "comparison_to_stage03_prediction": "stage 03's footprint probe ALLOCATED 11.829 GB/die for the same contents and never ran through them. Executing it measures 11.759, 0.070 GB lower: the running model carries one shared pair of RoPE tables and one shared set of persistent collective buffers where the allocation probe's per-layer tensor list double-counted nothing, and the two paged caches are allocated once per layer at exactly ceil(262144/32) blocks. The stage-03 figure remains the honest allocation-time answer and is not restated here as wrong.",
+    "weight_load_seconds": 182.66,
+    "weight_load_note": "48 layers streamed one at a time out of the sharded safetensors checkpoint; the 61 GB checkpoint is never fully materialised on the host.",
+    "rope_table_note": "the probe builds the model with the default rope_cache_len of 8192, so the RoPE tables inside weights_embed_lm_head_rope_gb_per_die are the 8192-row pair (0.004 GB/die). Growing them to the full 262144 context costs 0.134 GB/die (262144 * 128 * 2 B * 2 tables), taking the total to 11.889 GB/die and the headroom to 21.985. No capability reduction; the tables grow on demand via Qwen3CoderModel.ensure_rope_capacity, and tt/generator.py's decode_forward takes decode_horizon= so a low-level caller grows them once before any trace is captured."
+  },
+  "full_model_context_note": "NO REDUCTION. The advertised 262144 context is allocated and held by the running 48-layer model with 22.119 GB/die free. What has NOT been done at the full stack is a 262144-token prefill: prefill is single-shot (no internal chunking), and the longest prompt actually pushed through all 48 layers in this stage is 1000 tokens. The 262144-token single-layer prefill probe in measured.prefill_probe above still stands, and the KV cache, page tables and positions are sized and exercised for the full context. This is a coverage gap in the evidence, not a capability reduction, and it is named as limitation 1 of doc/full_model/README.md.",
+  "full_model_batch": {
+    "primary": 1,
+    "primary_note": "every performance figure in doc/full_model/README.md is batch 1.",
+    "largest_tested": 4,
+    "largest_tested_note": "tests/test_full_model.py::test_mixed_length_batch_prefill_and_decode runs four users at prompt lengths 7 / 33 / 64 / 129 through one prefill and one decode with disjoint physical cache pages. Batch was not pushed to 32 at the full stack in this stage.",
+    "hard_ceiling": 32,
+    "hard_ceiling_basis": "nlp_create_qkv_heads_decode_device_operation.cpp:51 asserts num_users <= 32. A TTNN op limit, unchanged by TP, and reached long before DRAM is."
+  },
+  "full_model_performance": {
+    "workload": "prompt 128 / generate 128 / batch 1, 48 layers, 1x4 P300_X2, FABRIC_1D_RING",
+    "source": "doc/full_model/probes/perf_full_model.csv and .json",
+    "ttft_ms_warmed": 126.695,
+    "ttft_ms_cold": 1115.157,
+    "decode_logits_only_ms": 20.211,
+    "decode_logits_only_tps_user": 49.479,
+    "decode_token_out_ms": 22.079,
+    "decode_token_out_tps_user": 45.292,
+    "decode_token_out_with_readback_ms": 22.748,
+    "decode_token_out_with_readback_tps_user": 43.959,
+    "layer_stack_lower_bound_ms": 20.573,
+    "layer_stack_lower_bound_basis": "48 x the stage-04 traced decode layer at ctx128, 0.4286 ms",
+    "ttft_cold_note": "first pass through a freshly opened mesh, so dominated by JIT kernel compilation and by the state of ~/.cache/ttnn. An earlier revision recorded 188.866 from a run with a warmer cache. Warmed TTFT is the served figure.",
+    "sampler_note": "greedy routes to Sampling1D's force-argmax strategy, measured at 1.125 ms against the split path's 6.155 ms on the same logits, both returning token 16. The 1.125 figure is after tt/model.py's _WatcherCleanSampling1D stopped pinning num_workers_per_link=1 on the argmax gather; it was 1.859 with the upstream spelling, which also tripped a device ASSERT under the watcher. See doc/full_model/README.md and watcher_ab.log.",
+    "watcher": "clean. TT_METAL_WATCHER=10 TT_METAL_WATCHER_DISABLE_ETH=1 pytest tests/ -m 'not models_performance_bare_metal' -q is 145 passed with zero tripped asserts (doc/full_model/pytest_watcher_clean.log.gz)."
+  },
+  "full_model_accuracy": {
+    "reference": "readiness_aime24_chat.refpt, AIME24 prompt 0, HF chat template, 158 prompt tokens, gen_len 100, top_k 100, generated fresh by stage 05",
+    "prefill": {
+      "top1": 0.98,
+      "top5": 1.0,
+      "top100": 1.0,
+      "log": "doc/full_model/run_prefill_check.log"
+    },
+    "decode_teacher_forced": {
+      "top1": 0.99,
+      "top5": 1.0,
+      "top100": 1.0,
+      "log": "doc/full_model/run_teacher_forcing.log"
+    },
+    "bar": "top5 >= 0.98 and top100 == 1.00; both met at 1.000"
+  },
+  "full_model_policy_note": "Stage 05 changed NOTHING about the decoder layer's dtype, fidelity, KV, activation or CCL policy, the paged-cache dtype split, the rejection ledger, or the inter-layer residual layout. The one edit to tt/multichip_decoder.py is an optional rope= parameter defaulting to the op it already called, and the stage-04 suite re-runs at 112 passed / 0 failed on this tree. What the full model adds is a replicated bf16 embedding (0.622 GB/die, no collective), a replicated final norm, a column-parallel bfloat8_b lm_head with zero vocabulary padding (151936 = 4 x 37984), growable replicated RoPE tables, and two captured traces plus their persistent inputs -- 0.006 GB/die of traces and buffers in total. Decode rotary moved from ttnn.experimental.rotary_embedding (Python-int position, unreplayable in a trace) to ttnn.experimental.rotary_embedding_hf over a device-gathered cos/sin pair; both are HF rotate_half and the swap is bit-identical at max|diff| 0.000e+00 and PCC 1.0 at every position tested, so the KV cache channel convention is untouched."
 }

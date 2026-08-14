@@ -1,0 +1,8 @@
+seq_len=1 row=0: piece is hidden -> False, same buffer address -> True
+  ^^ deallocating `hidden` here leaves `piece` dangling; the next read segfaults
+[qbge-devex-01:2078869] Signal: Segmentation fault (11)
+--- --fixed ---
+seq_len=1 row=0: piece is hidden -> False, same buffer address -> False
+  read back ok, finite=True
+seq_len=2 row=1: piece is hidden -> False, same buffer address -> False
+  read back ok, finite=True

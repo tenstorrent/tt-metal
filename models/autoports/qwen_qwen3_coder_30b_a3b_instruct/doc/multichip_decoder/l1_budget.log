@@ -1,0 +1,8 @@
+# probes/l1_budget_probe.py -- EAGER decode step, median of 10. See work_log.md section 9 for why the batch-1 row is not the one that decides the shipped config.
+P|batch= 1 intermediates=   7.34 MB  L1=1.7336 ms  DRAM=1.6924 ms
+P|batch= 2 intermediates=  14.68 MB  L1=1.7816 ms  DRAM=1.7930 ms
+P|batch= 4 intermediates=  29.36 MB  L1=1.8887 ms  DRAM=1.9753 ms
+P|batch= 8 intermediates=  58.72 MB  L1=2.4969 ms  DRAM=2.9082 ms
+P|batch=16 intermediates= 117.44 MB  L1=3.3040 ms  DRAM=4.0386 ms
+P|batch=32 intermediates= 234.88 MB  L1=FAILED TT_FATAL @ /home/raahem/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:462: false
+P|done

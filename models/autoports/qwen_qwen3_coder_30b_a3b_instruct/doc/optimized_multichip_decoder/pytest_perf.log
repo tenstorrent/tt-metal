@@ -1,0 +1,184 @@
+2026-08-13 22:39:12.377 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/raahem/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/raahem/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, timeout-2.4.0, split-0.11.0, github-actions-annotate-failures-0.3.0, cov-7.0.0, anyio-4.14.2, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 16 items / 8 deselected / 8 selected
+
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_prefill[blackhole-1x1-device_params0] Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-08-13 22:39:15.573 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-13 22:39:15.573 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-13 22:39:15.573 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-13 22:39:15.573 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-13 22:39:15.585 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-13 22:39:15.585 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-13 22:39:15.663 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-13 22:39:15.663 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-13 22:39:15.663 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-13 22:39:15.663 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-13 22:39:15.665 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-13 22:39:15.846 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-13 22:39:15.972 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=50331648 from device_params (already set)
+2026-08-13 22:39:15.973 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 22:39:15.973 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 22:39:15.973 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-13 22:39:15.973 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 22:39:15.973 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 22:39:16.008 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-13 22:39:16.645 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-13 22:39:20.612 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_perf:_prefill_sweep:409 - BASELINE 1x1 prefill S=  128: median     9.35 ms (  73.0 us/token)
+2026-08-13 22:39:20.844 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_perf:_prefill_sweep:409 - BASELINE 1x1 prefill S=  512: median    35.35 ms (  69.0 us/token)
+2026-08-13 22:39:21.293 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_perf:_prefill_sweep:409 - BASELINE 1x1 prefill S= 1024: median    70.50 ms (  68.8 us/token)
+2026-08-13 22:39:22.182 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_perf:_prefill_sweep:409 - BASELINE 1x1 prefill S= 2048: median   141.88 ms (  69.3 us/token)
+2026-08-13 22:39:22.182 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_perf:_write_rows:429 - wrote /home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_multichip_decoder/perf_baseline_1x1_prefill.csv
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_decode[blackhole-ctx128-1x1-device_params0] 2026-08-13 22:39:22.515 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=50331648 from device_params (already set)
+2026-08-13 22:39:22.565 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-13 22:39:22.610 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-13 22:39:26.610 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_perf:test_optimized_multichip_baseline_1x1_decode:510 - BASELINE 1x1 traced decode ctx=  128: median  0.5638 ms
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_prefill_latency[blackhole-1x4-device_params0] 2026-08-13 22:39:26.943 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=50331648 from device_params (already set)
+2026-08-13 22:39:26.943 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 22:39:26.943 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 22:39:26.943 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 22:39:26.943 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 22:39:26.943 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 22:39:26.991 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 22:39:27.010 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 22:39:27.010 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 22:39:27.664 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 22:39:30.386 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_perf:_prefill_sweep:409 - MULTICHIP 1x4 prefill S=  128: median     3.22 ms (  25.1 us/token)
+2026-08-13 22:39:30.485 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_perf:_prefill_sweep:409 - MULTICHIP 1x4 prefill S=  512: median     9.95 ms (  19.4 us/token)
+2026-08-13 22:39:30.644 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_perf:_prefill_sweep:409 - MULTICHIP 1x4 prefill S= 1024: median    18.83 ms (  18.4 us/token)
+2026-08-13 22:39:30.934 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_perf:_prefill_sweep:409 - MULTICHIP 1x4 prefill S= 2048: median    36.90 ms (  18.0 us/token)
+2026-08-13 22:39:30.935 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_perf:_write_rows:429 - wrote /home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_multichip_decoder/perf_prefill.csv
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_decode_latency_traced[blackhole-ctx128-1x4-device_params0] 2026-08-13 22:39:31.271 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=50331648 from device_params (already set)
+2026-08-13 22:39:31.271 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 22:39:31.271 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 22:39:31.271 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 22:39:31.272 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 22:39:31.272 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 22:39:31.326 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 22:39:31.338 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 22:39:31.338 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 22:39:31.404 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 22:39:34.212 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_perf:test_optimized_multichip_decode_latency_traced:599 - MULTICHIP 1x4 traced decode ctx=  128: median  0.4286 ms
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_decode[blackhole-ctx1k-1x1-device_params0] 2026-08-13 22:39:34.551 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=50331648 from device_params (already set)
+2026-08-13 22:39:34.597 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-13 22:39:34.644 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-13 22:39:38.705 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_perf:test_optimized_multichip_baseline_1x1_decode:510 - BASELINE 1x1 traced decode ctx= 1024: median  0.6611 ms
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_decode_latency_traced[blackhole-ctx1k-1x4-device_params0] 2026-08-13 22:39:39.035 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=50331648 from device_params (already set)
+2026-08-13 22:39:39.036 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 22:39:39.036 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 22:39:39.036 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 22:39:39.036 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 22:39:39.036 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 22:39:39.085 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 22:39:39.098 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 22:39:39.098 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 22:39:39.160 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 22:39:41.914 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_perf:test_optimized_multichip_decode_latency_traced:599 - MULTICHIP 1x4 traced decode ctx= 1024: median  0.5254 ms
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_decode[blackhole-ctx4k-1x1-device_params0] 2026-08-13 22:39:42.257 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=50331648 from device_params (already set)
+2026-08-13 22:39:42.303 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-13 22:39:42.350 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-13 22:39:46.341 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_perf:test_optimized_multichip_baseline_1x1_decode:510 - BASELINE 1x1 traced decode ctx= 4096: median  0.9912 ms
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_decode_latency_traced[blackhole-ctx4k-1x4-device_params0] 2026-08-13 22:39:46.668 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=50331648 from device_params (already set)
+2026-08-13 22:39:46.668 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 22:39:46.668 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 22:39:46.668 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 22:39:46.668 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 22:39:46.668 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 22:39:46.718 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 22:39:46.731 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 22:39:46.731 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 22:39:46.795 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 22:39:49.727 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_perf:test_optimized_multichip_decode_latency_traced:599 - MULTICHIP 1x4 traced decode ctx= 4096: median  0.8667 ms
+PASSED
+
+==================================== PASSES ====================================
+_ test_optimized_multichip_baseline_1x1_prefill[blackhole-1x1-device_params0] __
+------------------------------ Captured log setup ------------------------------
+WARNING  huggingface_hub.utils._http:_http.py:904 Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+- generated xml file: /home/raahem/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+5.54s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_prefill[blackhole-1x1-device_params0]
+4.06s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_decode[blackhole-ctx1k-1x1-device_params0]
+4.00s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_decode[blackhole-ctx128-1x1-device_params0]
+3.99s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_decode[blackhole-ctx4k-1x1-device_params0]
+3.27s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_prefill_latency[blackhole-1x4-device_params0]
+2.93s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_decode_latency_traced[blackhole-ctx4k-1x4-device_params0]
+2.81s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_decode_latency_traced[blackhole-ctx128-1x4-device_params0]
+2.76s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_decode_latency_traced[blackhole-ctx1k-1x4-device_params0]
+2.64s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_prefill[blackhole-1x1-device_params0]
+0.94s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_prefill_latency[blackhole-1x4-device_params0]
+0.34s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_decode_latency_traced[blackhole-ctx128-1x4-device_params0]
+0.34s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_decode_latency_traced[blackhole-ctx1k-1x4-device_params0]
+0.34s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_decode_latency_traced[blackhole-ctx4k-1x4-device_params0]
+0.31s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_decode[blackhole-ctx128-1x1-device_params0]
+0.31s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_decode[blackhole-ctx4k-1x1-device_params0]
+0.30s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_decode[blackhole-ctx1k-1x1-device_params0]
+0.13s teardown models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_decode_latency_traced[blackhole-ctx128-1x4-device_params0]
+0.13s teardown models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_decode_latency_traced[blackhole-ctx4k-1x4-device_params0]
+0.13s teardown models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_decode_latency_traced[blackhole-ctx1k-1x4-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_prefill_latency[blackhole-1x4-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_decode[blackhole-ctx4k-1x1-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_decode[blackhole-ctx1k-1x1-device_params0]
+0.12s teardown models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_decode[blackhole-ctx128-1x1-device_params0]
+0.11s teardown models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_prefill[blackhole-1x1-device_params0]
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_prefill[blackhole-1x1-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_decode[blackhole-ctx128-1x1-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_prefill_latency[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_decode_latency_traced[blackhole-ctx128-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_decode[blackhole-ctx1k-1x1-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_decode_latency_traced[blackhole-ctx1k-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_baseline_1x1_decode[blackhole-ctx4k-1x1-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_perf.py::test_optimized_multichip_decode_latency_traced[blackhole-ctx4k-1x4-device_params0]
+======================= 8 passed, 8 deselected in 36.91s =======================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7bd0d6223b88 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7bd0d6641188 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 22 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 250 functions!
+ - leaked function "update_tensor_topology"
+ - leaked function "to_json"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function "sfpu_inf"
+ - leaked function "get_system_mesh_id"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-13 22:39:51.886 | info     |    BuildKernels | JIT cache stats: 909/909 hits (100.0%) [909 cached, 2759 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-13 22:39:51.886 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-13 22:39:51.902 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-13 22:39:51.902 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-13 22:39:52.472 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-13 22:39:52.472 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-13 22:39:52.472 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

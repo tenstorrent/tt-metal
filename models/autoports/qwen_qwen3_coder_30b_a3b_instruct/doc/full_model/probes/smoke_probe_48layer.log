@@ -1,0 +1,95 @@
+2026-08-14 03:22:12.429 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-14 03:22:14.064 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-14 03:22:14.064 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-14 03:22:14.064 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-14 03:22:14.064 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-14 03:22:14.075 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-14 03:22:14.076 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-14 03:22:14.162 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-14 03:22:14.162 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-14 03:22:14.162 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-14 03:22:14.162 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-14 03:22:14.164 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-14 03:22:14.321 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-14 03:22:14.441 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 03:22:14.441 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 03:22:14.441 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-14 03:22:14.441 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 03:22:14.441 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 03:22:14.483 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 03:22:14.529 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 03:22:14.529 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 03:25:38.653 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:25:38.653 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-14 03:25:38.669 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 03:25:38.669 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 03:25:38.669 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 03:25:38.669 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 03:25:38.670 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:25:38.670 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_multicast_factory.cpp:42)
+2026-08-14 03:25:38.671 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 4096 B pages. Configure 12288 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 03:25:38.671 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 4096 B pages. Configure 12288 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 03:25:38.671 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 4096 B pages. Configure 12288 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 03:25:38.671 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 4096 B pages. Configure 12288 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 03:25:39.998 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:25:39.998 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:25:40.174 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:25:40.174 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:25:41.242 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:25:41.242 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-14 03:25:41.243 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 03:25:41.243 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 03:25:41.243 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 03:25:41.243 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 03:25:41.340 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:25:41.340 | warning  |              Op | Allocating semaphores in L1, which may fragment L1 and reduce headroom for subsequent op allocations. Configure an L1_SMALL region to mitigate this. (all_gather_unicast_factory.cpp:56)
+2026-08-14 03:25:41.341 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 03:25:41.341 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 03:25:41.342 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 03:25:41.342 | warning  |              Op | Fabric packet size 4352 B is suboptimal for transporting 2048 B pages. Configure 8192 B packet size to maximize throughput. (ccl_common.cpp:70)
+2026-08-14 03:25:41.439 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+2026-08-14 03:25:41.533 | warning  |              Op | The following ttnn.all_gather args are deprecated and will be removed in September-2026: num_links, topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores. (all_gather.cpp:148)
+[smoke] build_generator(48 layers): 203.0s
+[smoke] prompt tokens: 18
+[smoke] device-sampling generate: 2.93s for 32 tokens
+[smoke] tokens: [8420, 525, 264, 2421, 2155, 5510, 311, 3270, 264, 13027, 729, 429, 17431, 288, 264, 914, 1447, 565, 6730, 220, 16, 25, 12091, 923, 328, 89114, 320, 13319, 13027, 292, 340, 73594]
+[smoke] text: 'Here are a few different ways to write a Python function that reverses a string:\n\n## Method 1: Using String Slicing (Most Pythonic)\n```'
+[smoke] trace_stats: {'captures': 1, 'replays': 31, 'releases': 0, 'decode_warmups': 1, 'token_host_copies': 0, 'token_device_copies': 4, 'position_host_copies': 4, 'rotary_position_host_copies': 4, 'page_table_host_copies': 4, 'sampling_param_host_copies': 0, 'caller_token_readbacks': 32, 'explicit_synchronizations': 6, 'resets': 0}
+[smoke] one steady-state replay moved: {'replays': (31, 32)}
+[smoke] host-compat tokens: [8420, 525, 264, 2421]  (device first 4: [8420, 525, 264, 2421])
+[smoke] fallback audit: {'batch': 1, 'dram_sharded_qkv': (2048, 1280), 'dram_sharded_wo': (1024, 2048), 'dram_sharded_taken': True, 'gate_up_in0_block_w': 16, 'down_in0_block_w': 12, 'expert_intermediate_buffer': 'L1', 'local_heads': (8, 1), 'local_experts': 32, 'norm_shard_cores': 8, 'norm_shard_feeds_qkv_directly': True, 'decode_ccl_buffers_persistent': True, 'num_layers': 48, 'embedding': 'replicated_bf16_no_collective', 'residual_contract': 'replicated [1,1,B,2048] bf16 TILE DRAM, no inter-layer collective', 'final_norm': 'replicated, width-sharded decode kernel', 'lm_head_parallelism': 'column_parallel_over_vocab', 'lm_head_local_vocab': 37984, 'lm_head_weight_dtype': 'DataType.BFLOAT8_B', 'vocab_padding': 0, 'decode_rope': 'rotary_embedding_hf(is_decode_mode=True), device position gather', 'decode_rope_position_source': 'device tensor advanced by ttnn.plus_one inside the trace', 'sampling': 'Sampling1D split (local topk -> all-gather -> ttnn.sampling)', 'host_logit_readback_on_token_out_path': False, 'host_argmax_on_token_out_path': False, 'kv_cache_dtype': 'bfloat16', 'kv_cache_paged': True, 'page_block_size': 32, 'collective_topology': 'Topology.Ring', 'prefill_num_links': 2, 'decode_num_links': 1}
+nanobind: leaked 1 instances!
+ - leaked instance 0x7d59eca67678 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 37 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - ... skipped remainder
+nanobind: leaked 311 functions!
+ - leaked function "deallocate"
+ - leaked function "sfpu_nan"
+ - leaked function "from_json"
+ - leaked function ""
+ - leaked function "__init__"
+ - leaked function "EnableMemoryReports"
+ - leaked function ""
+ - leaked function "deallocate_buffers"
+ - leaked function ""
+ - leaked function "dram_grid_size"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-14 03:25:42.408 | info     |    BuildKernels | JIT cache stats: 501/512 hits (97.9%) [501 cached, 313 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-14 03:25:42.408 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-14 03:25:42.431 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-14 03:25:42.431 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-14 03:25:43.018 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-14 03:25:43.018 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-14 03:25:43.018 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

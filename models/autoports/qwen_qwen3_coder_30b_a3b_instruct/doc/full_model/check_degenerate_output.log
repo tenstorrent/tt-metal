@@ -1,0 +1,23 @@
+### --scope autoregressive
+measured: tt free-running completion [models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_autoregressive/autoregressive_meta.json] {'source': 'words', 'num_tokens': 107, 'adjacent_duplication': 0.0094, 'trigram_loop_fraction': 0.028}
+measured: hf/tt token agreement (informational) [models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_autoregressive/autoregressive_meta.json] {'matching_tokens': 4, 'compared_tokens': 128}
+
+No degenerate output detected.
+exit=0
+
+### --scope vllm
+measured: prompt[0] greedy_completion ('Write a haiku about machine learning.') [models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 10, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.3}
+measured: prompt[0] sampled_completion ('Write a haiku about machine learning.') [models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 10, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.3}
+measured: prompt[1] greedy_completion ('Explain the difference between supervised and unsupervised l') [models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 97, 'adjacent_duplication': 0.0208, 'trigram_loop_fraction': 0.0619}
+measured: prompt[1] sampled_completion ('Explain the difference between supervised and unsupervised l') [models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 97, 'adjacent_duplication': 0.0208, 'trigram_loop_fraction': 0.0619}
+measured: prompt[2] greedy_completion ('Complete this story: Once upon a time, in a faraway kingdom,') [models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 103, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0291}
+measured: prompt[2] sampled_completion ('Complete this story: Once upon a time, in a faraway kingdom,') [models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 107, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0561}
+measured: prompt[3] greedy_completion ('What are the three laws of thermodynamics?') [models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 93, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0645}
+measured: prompt[3] sampled_completion ('What are the three laws of thermodynamics?') [models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 93, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.0645}
+measured: prompt[4] greedy_completion ('Translate the following to French: "Hello, how are you today') [models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 6, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.5}
+measured: prompt[4] sampled_completion ('Translate the following to French: "Hello, how are you today') [models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 6, 'adjacent_duplication': 0.0, 'trigram_loop_fraction': 0.5}
+measured: prompt[5] greedy_completion ('Write a Python function to calculate the Fibonacci sequence.') [models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 63, 'adjacent_duplication': 0.0161, 'trigram_loop_fraction': 0.0476}
+measured: prompt[5] sampled_completion ('Write a Python function to calculate the Fibonacci sequence.') [models/autoports/qwen_qwen3_coder_30b_a3b_instruct/readiness_qualitative/vllm_qualitative_outputs.json] {'source': 'words', 'num_tokens': 63, 'adjacent_duplication': 0.0161, 'trigram_loop_fraction': 0.0476}
+
+No degenerate output detected.
+exit=0

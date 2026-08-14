@@ -179,3 +179,5 @@ model_tracer/traced_operations
 # published numbers rather than build output. Exempt them from the blanket
 # *.csv rule above.
 !models/autoports/**/doc/**/*.csv
+!models/autoports/**/doc/**/*.log
+!models/autoports/**/doc/**/*.yaml

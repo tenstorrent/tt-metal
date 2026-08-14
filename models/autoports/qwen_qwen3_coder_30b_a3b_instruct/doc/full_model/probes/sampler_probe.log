@@ -1,0 +1,4 @@
+split_k32_padded             {'ms': 11.005861550802365, 'matches_host_argmax': '31/32'}
+split_k32_unpadded           {'ms': 6.151157099520788, 'matches_host_argmax': '31/32'}
+split_k16_padded             {'ms': 11.104397801682353, 'matches_host_argmax': '31/32'}
+split_k16_unpadded           {'ms': 6.268356449436396, 'matches_host_argmax': '31/32'}

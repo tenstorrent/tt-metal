@@ -1,0 +1,72 @@
+2026-08-14 14:09:31.943 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-14 14:09:32.732 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-14 14:09:32.732 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-14 14:09:32.732 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-14 14:09:32.732 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-14 14:09:32.744 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-14 14:09:32.744 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-14 14:09:32.821 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-14 14:09:32.821 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-14 14:09:32.821 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-14 14:09:32.821 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-14 14:09:32.823 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-14 14:09:33.011 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-14 14:09:33.129 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 14:09:33.129 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 14:09:33.129 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-14 14:09:33.129 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 14:09:33.129 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 14:09:33.188 | info     |       LLRuntime | Watcher log file: /home/raahem/tt-metal/generated/watcher/watcher.log (watcher_server.cpp:296)
+2026-08-14 14:09:33.188 | info     |       LLRuntime | Watcher server initialized, disabled features: ETH (watcher_server.cpp:565)
+2026-08-14 14:09:33.188 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-14 14:09:33.192 | info     |           Metal | Watcher checking device 1 (watcher_device_reader.cpp:415)
+2026-08-14 14:09:33.194 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 14:09:33.199 | info     |           Metal | Watcher checking device 2 (watcher_device_reader.cpp:415)
+2026-08-14 14:09:33.204 | info     |           Metal | Watcher checking device 3 (watcher_device_reader.cpp:415)
+2026-08-14 14:09:33.227 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 14:09:33.227 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+[argmax_stage_gather] eager warm-up
+2026-08-14 14:09:43.286 | info     |           Metal | Watcher checking device 0 (watcher_device_reader.cpp:415)
+2026-08-14 14:09:43.286 | warning  |           Metal | Watcher stopped the device due to tripped assert, see watcher log for more details (watcher_device_reader.cpp:850)
+2026-08-14 14:09:43.286 | warning  |           Metal | Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 2): BRISC tripped an assert on line 119. Note that file name reporting is not yet implemented, and the reported line number for the assert may be from a different file. Current kernel: ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp. (watcher_device_reader.cpp:851)
+2026-08-14 14:09:43.286 | info     |           Metal | Last waypoint:    K,CRBW,   W,   W,   W (watcher_device_reader.cpp:1127)
+2026-08-14 14:09:43.286 | info     |           Metal | While running kernels: (watcher_device_reader.cpp:1368)
+2026-08-14 14:09:43.286 | info     |           Metal |  BRISC: ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp (watcher_device_reader.cpp:1370)
+2026-08-14 14:09:43.286 | info     |           Metal |  NCRISC: ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_reader.cpp (watcher_device_reader.cpp:1370)
+2026-08-14 14:09:43.286 | info     |           Metal |  TRISC0: blank (watcher_device_reader.cpp:1370)
+2026-08-14 14:09:43.286 | info     |           Metal |  TRISC1: blank (watcher_device_reader.cpp:1370)
+2026-08-14 14:09:43.286 | info     |           Metal |  TRISC2: blank (watcher_device_reader.cpp:1370)
+2026-08-14 14:09:43.286 | critical |          Always | TT_THROW: Watcher detected tripped assert and stopped device. (assert.hpp:104)
+terminate called after throwing an instance of 'std::runtime_error'
+  what():  TT_THROW @ /home/raahem/tt-metal/tt_metal/impl/debug/watcher_device_reader.cpp:856: tt::exception
+info:
+Watcher detected tripped assert and stopped device.
+backtrace:
+ --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstring<> >(char const*, int, char const*, char const*, fmt::v11::fstring<> const&)
+ --- tt::tt_metal::WatcherDeviceReader::Core::DumpAssertStatus() const
+ --- tt::tt_metal::WatcherDeviceReader::Core::Dump() const
+ --- tt::tt_metal::WatcherDeviceReader::Dump(_IO_FILE*)
+ --- tt::tt_metal::WatcherServer::Impl::dump(_IO_FILE*)
+ --- tt::tt_metal::WatcherServer::Impl::poll_watcher_data()
+ --- /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79) [0x79912cef5c79]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84) [0x799144c9cb84]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c) [0x799144d29d6c]
+
+[qbge-devex-01:2790248] *** Process received signal ***
+[qbge-devex-01:2790248] Signal: Aborted (6)
+[qbge-devex-01:2790248] Signal code:  (-6)
+[qbge-devex-01:2790248] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x799144c45330]
+[qbge-devex-01:2790248] [ 1] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x799144c9ec0c]
+[qbge-devex-01:2790248] [ 2] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x799144c4527e]
+[qbge-devex-01:2790248] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x799144c288ff]
+[qbge-devex-01:2790248] [ 4] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xac2b5)[0x79912ceac2b5]
+[qbge-devex-01:2790248] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xc31ea)[0x79912cec31ea]
+[qbge-devex-01:2790248] [ 6] /lib/x86_64-linux-gnu/libstdc++.so.6(_ZSt10unexpectedv+0x0)[0x79912ceabcac]
+[qbge-devex-01:2790248] [ 7] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xabcc6)[0x79912ceabcc6]
+[qbge-devex-01:2790248] [ 8] /home/raahem/tt-metal/build_Release/lib/libtt_metal.so(_ZN2tt8tt_metal13WatcherServer4Impl17poll_watcher_dataEv+0x7ee)[0x7990fd101f9e]
+[qbge-devex-01:2790248] [ 9] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xf5c79)[0x79912cef5c79]
+[qbge-devex-01:2790248] [10] /lib/x86_64-linux-gnu/libc.so.6(+0x9cb84)[0x799144c9cb84]
+[qbge-devex-01:2790248] [11] /lib/x86_64-linux-gnu/libc.so.6(+0x129d6c)[0x799144d29d6c]
+[qbge-devex-01:2790248] *** End of error message ***
+timeout: the monitored command dumped core

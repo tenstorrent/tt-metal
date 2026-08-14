@@ -1,0 +1,5 @@
+# probes/nnz_cost_probe.py -- one die, shipped decode shapes, trace-slope per op.
+P|E=32 live=8 nnz=None (shipped)   gate_up   90.39 us  down   67.62 us  pair  158.01 us
+P|E=32 live=8 nnz=8 exact          gate_up   68.98 us  down   38.75 us  pair  107.73 us
+P|E=32 live=2 nnz=2 exact          gate_up   24.42 us  down   18.72 us  pair   43.15 us
+P|done

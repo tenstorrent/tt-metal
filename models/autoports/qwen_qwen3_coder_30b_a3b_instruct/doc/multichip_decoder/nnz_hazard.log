@@ -1,0 +1,14 @@
+# nnz_hazard_probe.py under TT_METAL_WATCHER=10, one die, no fabric.
+# command: TT_METAL_WATCHER=10 python probes/nnz_hazard_probe.py
+# exit:    134 (SIGABRT) -- the watcher stopped the device on the deliberate mismatch.
+
+P|exact nnz=8 with 8 live: ok, out (1, 1, 1, 32, 1, 2048) finite=True
+P|nnz=None with 8 live: ok, finite=True
+P|nnz=None with 0 live: ok, max|out| = 0.0
+P|about to run nnz=8 against 2 live entries -- expect a watcher assert or a hang
+
+--- the deliberate nnz=8-against-2-live mismatch, as the watcher reports it ---
+warning  |           Metal | Watcher stopped the device due to tripped assert, see watcher log for more details (watcher_device_reader.cpp:850)
+warning  |           Metal | Device 3 worker core(x= 0,y= 0) virtual(x= 1,y= 2): BRISC tripped an assert on line 431. Note that file name reporting is not yet implemented, and the reported line number for the assert may be from a different file. Current kernel: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp. (watcher_device_reader.cpp:851)
+info     |           Metal | Last waypoint: NWBD,   W,UPMD,MWDD,   K (watcher_device_reader.cpp:1127)
+info     |           Metal |  BRISC: ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp (watcher_device_reader.cpp:1370)

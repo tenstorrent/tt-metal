@@ -1,0 +1,15 @@
+P|DRAM per die: 34.18 GB total, 0.000 GB already in use
+P|per-die tensors per layer: (1, 32, 2048, 1536), (1, 32, 768, 2048), (1, 1, 2048, 1280), (1, 1, 2048, 1280), (1, 1, 1024, 2048), (1, 1, 1024, 2048), (1, 1, 2048, 128), (1, 1, 1, 2048), (1, 1, 1, 2048)
+P|after 12 layers of sharded weights:   1.149 GB/die
+P|after 24 layers of sharded weights:   2.298 GB/die
+P|after 36 layers of sharded weights:   3.447 GB/die
+P|after 48 layers of sharded weights:   4.596 GB/die
+P|48 layers = 4.596 GB/die; + embed (replicated) and lm_head (column-parallel, per-die N = 37984) = 5.374 GB/die
+P|+ paged KV for 12 layers at ctx 262144:   6.988 GB/die total
+P|+ paged KV for 24 layers at ctx 262144:   8.602 GB/die total
+P|+ paged KV for 36 layers at ctx 262144:  10.215 GB/die total
+P|+ paged KV for 48 layers at ctx 262144:  11.829 GB/die total
+P|ALL 48 layers' weights + KV at ctx 262144, batch 1: 11.829 GB/die of 34.18 GB, 22.350 GB free
+P|per-die KV arithmetic: 512 B/token/layer, 48 layers x 262144 tokens = 6.442 GB/die
+P|per-die total at full context, batch 1 = 11.816 GB of 34.18 GB
+P|done

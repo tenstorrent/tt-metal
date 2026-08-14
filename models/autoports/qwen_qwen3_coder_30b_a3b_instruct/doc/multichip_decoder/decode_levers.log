@@ -1,0 +1,7 @@
+# probes/decode_levers.py -- warmed traced decode ctx128, median of 100, whole layer.
+P|shipped                          0.4766 ms   (reference)
+P|expert intermediates in DRAM     0.5128 ms   (max|diff| 0.000e+00)
+P|num_links=1                      0.4738 ms   (max|diff| 0.000e+00)
+P|bfloat8_b collective payload     0.4854 ms   (max|diff| 1.953e-03)
+P|Topology.Linear (repo default)   0.4836 ms   (max|diff| 9.766e-04)
+P|done

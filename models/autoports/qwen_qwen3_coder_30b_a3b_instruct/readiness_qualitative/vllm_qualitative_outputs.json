@@ -1,0 +1,32 @@
+[
+  {
+    "prompt": "Write a haiku about machine learning.",
+    "greedy_completion": "Data streams flow\u2014\nNeural networks dream in patterns,\nWisdom emerges.",
+    "sampled_completion": "Data streams flow\u2014\nNeural networks dream in patterns,\nWisdom emerges."
+  },
+  {
+    "prompt": "Explain the difference between supervised and unsupervised learning in simple terms.",
+    "greedy_completion": "Think of it like learning from different types of teachers:\n\n**Supervised Learning** = Learning from a teacher who gives you the right answers\n- You're given data with both inputs AND correct outputs (like \"Here's a picture of a cat, and the label says 'cat'\")\n- The algorithm learns by comparing its predictions to the correct answers\n- Goal: Make accurate predictions on new, unseen data\n- Examples: Email spam detection, medical diagnosis, image recognition\n\n**Unsupervised Learning** = Learning from a teacher who only shows you data without telling you what's what\n- You're given data with only inputs, no",
+    "sampled_completion": "Think of it like learning from different types of teachers:\n\n**Supervised Learning** = Learning from a teacher who gives you the right answers\n- You're given data with both inputs AND correct outputs (like \"Here's a picture of a cat, and the label says 'cat'\")\n- The algorithm learns by comparing its predictions to the correct answers\n- Goal: Make accurate predictions on new, unseen data\n- Examples: Email spam detection, medical diagnosis, image recognition\n\n**Unsupervised Learning** = Learning from a teacher who only shows you data without telling you what's what\n- You're given data with only inputs, no"
+  },
+  {
+    "prompt": "Complete this story: Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered",
+    "greedy_completion": "Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered a peculiar glitch in the royal clock tower. While the other townspeople marveled at its precise ticking, she noticed that every hour, the golden hands would pause for exactly seventeen seconds before continuing their eternal dance.\n\nIntrigued, she snuck into the tower's dusty interior and found the source of the anomaly: a small, glowing crystal embedded in the clock's heart, pulsing with an otherworldly light. As she reached out to touch it, the crystal suddenly blazed brilliant white, and suddenly, she could hear the clock",
+    "sampled_completion": "Once upon a time, in a faraway kingdom, there lived a curious young inventor who discovered a peculiar glitch in the royal clock tower. While the other townspeople marveled at its precise ticking, she noticed that every hour, the golden hands would pause for exactly seventeen seconds before continuing their eternal dance.\n\nIntrigued, she snuck into the tower's dusty interior and found that the clock's mechanism was connected to a hidden chamber beneath the stones. Inside, she discovered a small, glowing crystal that pulsed with the same rhythm as the clock's hands. As she reached out to touch it, the crystal suddenly blazed with"
+  },
+  {
+    "prompt": "What are the three laws of thermodynamics?",
+    "greedy_completion": "The three laws of thermodynamics are fundamental principles that govern energy and heat transfer in physical systems:\n\n## First Law of Thermodynamics\n**Energy cannot be created or destroyed, only transformed from one form to another.**\n- This is essentially the law of conservation of energy\n- Mathematically: \u0394U = Q - W (change in internal energy equals heat added minus work done)\n\n## Second Law of Thermodynamics\n**The entropy of an isolated system always increases over time, or remains constant in ideal reversible processes.**\n- Heat flows naturally from hot to cold objects\n- No heat engine can be 100% efficient\n",
+    "sampled_completion": "The three laws of thermodynamics are fundamental principles that govern energy and heat transfer in physical systems:\n\n## First Law of Thermodynamics\n**Energy cannot be created or destroyed, only transformed from one form to another.**\n- This is essentially the law of conservation of energy\n- Mathematically: \u0394U = Q - W (change in internal energy equals heat added minus work done)\n\n## Second Law of Thermodynamics\n**The entropy of an isolated system always increases over time, or remains constant in ideal reversible processes.**\n- Heat flows naturally from hot to cold objects\n- No heat engine can be 100% efficient\n"
+  },
+  {
+    "prompt": "Translate the following to French: \"Hello, how are you today?\"",
+    "greedy_completion": "\"Bonjour, comment allez-vous aujourd'hui ?\"",
+    "sampled_completion": "\"Bonjour, comment allez-vous aujourd'hui ?\""
+  },
+  {
+    "prompt": "Write a Python function to calculate the Fibonacci sequence.",
+    "greedy_completion": "Here are several Python implementations of the Fibonacci sequence calculation:\n\n## 1. Recursive Approach (Simple but Inefficient)\n\n```python\ndef fibonacci_recursive(n):\n    \"\"\"\n    Calculate the nth Fibonacci number using recursion.\n    Time complexity: O(2^n) - Very slow for large n\n    \"\"\"\n    if n <= 0:\n        return 0\n    elif n == 1:\n        return 1\n    else:\n        return fibonacci_recursive(n - 1) + fibonacci_recursive(n - 2)\n```\n\n## 2. Iterative Approach (Efficient)\n\n```python\ndef fibonacci_iterative(n):\n    \"\"\"\n",
+    "sampled_completion": "Here are several Python implementations of the Fibonacci sequence calculation:\n\n## 1. Recursive Approach (Simple but Inefficient)\n\n```python\ndef fibonacci_recursive(n):\n    \"\"\"\n    Calculate the nth Fibonacci number using recursion.\n    Time complexity: O(2^n) - Very slow for large n\n    \"\"\"\n    if n <= 0:\n        return 0\n    elif n == 1:\n        return 1\n    else:\n        return fibonacci_recursive(n - 1) + fibonacci_recursive(n - 2)\n```\n\n## 2. Iterative Approach (Efficient)\n\n```python\ndef fibonacci_iterative(n):\n    \"\"\"\n"
+  }
+]

@@ -1,0 +1,106 @@
+2026-08-13 22:40:12.341 | INFO     | __main__:main:203 - Setting profiler artifacts folder to /tmp/prof_omc_pf
+2026-08-13 22:40:12.342 | INFO     | __main__:main:412 - Using port 8086
+2026-08-13 22:40:12.343 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-08-13 22:40:12.344 | INFO     | tracy:run_report_setup:112 - Capture command: ('/home/raahem/tt-metal/build/tools/profiler/bin/tracy-capture -o /tmp/prof_omc_pf/.logs/tracy_profile_log_host.tracy -f -p 8086',)
+Connecting to 127.0.0.1:8086...2026-08-13 22:40:12.349 | INFO     | __main__:main:430 - Test process started
+2026-08-13 22:40:13.049 | INFO     | __main__:main:203 - Setting profiler artifacts folder to /tmp/prof_omc_pf
+2026-08-13 22:40:13.284 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-08-13 22:40:16.058 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-13 22:40:16.058 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-13 22:40:16.058 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-13 22:40:16.058 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-13 22:40:16.069 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-13 22:40:16.070 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-13 22:40:16.150 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-13 22:40:16.150 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-13 22:40:16.150 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-13 22:40:16.150 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-13 22:40:16.152 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-13 22:40:16.355 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-13 22:40:16.478 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 22:40:16.478 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 22:40:16.478 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-13 22:40:16.478 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 22:40:16.478 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 22:40:16.532 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-08-13 22:40:16.538 | info     |           Metal | Profiler started on device 1 (profiler_initializer.cpp:49)
+2026-08-13 22:40:16.544 | info     |           Metal | Profiler started on device 2 (profiler_initializer.cpp:49)
+2026-08-13 22:40:16.550 | info     |           Metal | Profiler started on device 3 (profiler_initializer.cpp:49)
+2026-08-13 22:40:19.057 | info     |           Metal | SYNC PROGRAM FINISH IS DONE ON 0 (tt_metal_profiler.cpp:199)
+2026-08-13 22:40:19.057 | info     |           Metal | Host sync data for device: 0, cpu_start:2029828917716702, delay:627415506917.043, freq:1.3499835812810776 Hz (tt_metal_profiler.cpp:304)
+2026-08-13 22:40:19.068 | info     |           Metal | Device sync data for device: 2, delay: -1542115094 ns, freq scale: 1.0000140557605053 (tt_metal_profiler.cpp:320)
+2026-08-13 22:40:19.068 | info     |           Metal | Device sync data for device: 3, delay: -2317160531 ns, freq scale: 1.000003454733625 (tt_metal_profiler.cpp:320)
+2026-08-13 22:40:19.068 | info     |           Metal | Device sync data for device: 1, delay: -693457113 ns, freq scale: 1.0000065703760415 (tt_metal_profiler.cpp:320)
+2026-08-13 22:40:19.068 | info     |           Metal | Device sync data for device: 0, delay: 0 ns, freq scale: 1 (tt_metal_profiler.cpp:320)
+2026-08-13 22:40:19.068 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 22:40:19.100 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 22:40:19.100 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 22:40:25.562 | info     |           Metal | SYNC PROGRAM FINISH IS DONE ON 0 (tt_metal_profiler.cpp:199)
+2026-08-13 22:40:25.562 | info     |           Metal | Host sync data for device: 0, cpu_start:2029828917716702, delay:627415523363.9507, freq:1.3499685848205216 Hz (tt_metal_profiler.cpp:304)
+2026-08-13 22:40:26.052 | info     |           Metal | Device sync data for device: 2, delay: -1527813225 ns, freq scale: 0.9999966694703298 (tt_metal_profiler.cpp:320)
+2026-08-13 22:40:26.052 | info     |           Metal | Device sync data for device: 3, delay: -2316523165 ns, freq scale: 1.0000026806528575 (tt_metal_profiler.cpp:320)
+2026-08-13 22:40:26.052 | info     |           Metal | Device sync data for device: 1, delay: -691970199 ns, freq scale: 1.0000047609387892 (tt_metal_profiler.cpp:320)
+2026-08-13 22:40:26.052 | info     |           Metal | Device sync data for device: 0, delay: 0 ns, freq scale: 1 (tt_metal_profiler.cpp:320)
+P|profiled prefill done
+nanobind: leaked 1 instances!
+ - leaked instance 0x73e2b031be28 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 15 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - ... skipped remainder
+nanobind: leaked 236 functions!
+ - leaked function ""
+ - leaked function "enable_program_cache"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "device_coords"
+ - leaked function "is_sharded"
+ - leaked function "pad"
+ - leaked function ""
+ - leaked function "remove_sub_device_manager"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-13 22:40:29.850 | info     |    BuildKernels | JIT cache stats: 276/276 hits (100.0%) [276 cached, 183 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-13 22:40:29.850 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-13 22:40:29.885 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-13 22:40:29.885 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-13 22:40:30.479 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-13 22:40:30.479 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-13 22:40:30.479 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)
+
+Timer resolution: 0 ns
+
+Frames: 2
+Time span: 2:33.8
+Zones: 2,689,361
+Elapsed time: 17.31 s
+Saving trace... done!
+Trace size 25.63 MB (19.53% ratio)
+2026-08-13 22:40:30.867 | INFO     | __main__:main:469 - Copying /home/raahem/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/raahem/tt-metal/build/profiler/build_wasm/traces/profile_layer_2026_08_13_22_40_30.tracy
+2026-08-13 22:40:30.867 | WARNING  | __main__:main:474 - Could not copy /home/raahem/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy to /home/raahem/tt-metal/build/profiler/build_wasm/traces/profile_layer_2026_08_13_22_40_30.tracy: [Errno 2] No such file or directory: '/home/raahem/tt-metal/generated/profiler/.logs/tracy_profile_log_host.tracy'
+2026-08-13 22:40:30.868 | INFO     | __main__:main:481 - embed.tracy -> traces/profile_layer_2026_08_13_22_40_30.tracy
+2026-08-13 22:40:30.868 | INFO     | tracy.serve_wasm:launch_server_subprocess:284 - Launching tracy web app GUI server subprocess...
+2026-08-13 22:40:30.868 | INFO     | tracy.serve_wasm:launch_server_subprocess:287 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-08-13 22:40:30.868 | INFO     | tracy.serve_wasm:launch_server_subprocess:294 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-08-13 22:40:31.771 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /tmp/prof_omc_pf/.logs/tracy_ops_times.csv
+2026-08-13 22:40:31.813 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /tmp/prof_omc_pf/.logs/tracy_ops_data.csv
+2026-08-13 22:40:31.813 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:422 - Importing ops logs
+/home/raahem/tt-metal/tools/tracy/process_ops_logs.py:527: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-08-13 22:40:34.381 | INFO     | tracy.perf_counter_analysis:get_device_op_data:2140 - Getting device ops
+2026-08-13 22:40:34.381 | INFO     | tracy.process_ops_logs:append_device_data:1086 - Appending device data
+2026-08-13 22:40:37.188 | INFO     | tracy.process_ops_logs:generate_reports:1419 - OPs' perf analysis is finished! Generating reports ...
+2026-08-13 22:40:37.188 | INFO     | tracy.process_ops_logs:generate_reports:1439 - Copying runtime artifacts
+2026-08-13 22:40:37.259 | INFO     | tracy.process_ops_logs:generate_reports:1448 - Generating OPs CSV
+2026-08-13 22:40:37.854 | INFO     | tracy.process_ops_logs:generate_reports:1904 - OPs csv generated at: /tmp/prof_omc_pf/reports/2026_08_13_22_40_37/ops_perf_results_2026_08_13_22_40_37.csv

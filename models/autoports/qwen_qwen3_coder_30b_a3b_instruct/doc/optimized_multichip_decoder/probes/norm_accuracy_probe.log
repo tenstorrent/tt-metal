@@ -1,0 +1,109 @@
+2026-08-13 21:19:46.615 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2026-08-13 21:19:46.649 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-13 21:19:46.649 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-13 21:19:46.649 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-13 21:19:46.649 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-13 21:19:46.660 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-13 21:19:46.660 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-13 21:19:46.738 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-13 21:19:46.738 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-13 21:19:46.738 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-13 21:19:46.738 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-13 21:19:46.740 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-13 21:19:46.877 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:318)
+2026-08-13 21:19:46.877 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-13 21:19:46.999 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:19:46.999 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:19:46.999 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-13 21:19:46.999 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:19:46.999 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+P|interleaved, no compute config (shipped)       19.82 us   max|err vs fp64| 6.711e-02  rel 1.21e-02
+P|sharded  4 cores, default                       7.36 us   max|err vs fp64| 6.711e-02  rel 1.21e-02
+P|sharded  4 cores, HiFi4 fp32acc                 7.53 us   max|err vs fp64| 1.439e-02  rel 2.60e-03
+P|  (4 cores) i2s 0.26 us  s2i 0.25 us
+P|sharded  8 cores, default                       4.26 us   max|err vs fp64| 3.586e-02  rel 6.48e-03
+P|sharded  8 cores, HiFi4 fp32acc                 4.92 us   max|err vs fp64| 1.686e-02  rel 3.05e-03
+P|  (8 cores) i2s 0.51 us  s2i 0.53 us
+2026-08-13 21:19:49.893 | critical |          Always | TT_FATAL: Illegal kernel placement for writer_unary_sharded, Kernels cannot be placed on dispatch cores! (assert.hpp:104)
+Traceback (most recent call last):
+  File "/home/raahem/tt-metal/models/autoports/qwen_qwen3_coder_30b_a3b_instruct/doc/optimized_multichip_decoder/probes/norm_accuracy_probe.py", line 122, in <module>
+    xs = ttnn.to_memory_config(x, mc)
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/raahem/tt-metal/ttnn/ttnn/decorators.py", line 650, in __call__
+    result = self.function(*function_args, **function_kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: TT_FATAL @ /home/raahem/tt-metal/tt_metal/impl/program/program.cpp:149: not on_dispatch_core
+info:
+Illegal kernel placement for writer_unary_sharded, Kernels cannot be placed on dispatch cores!
+backtrace:
+ --- void tt::assert::detail::tt_throw_impl<fmt::v11::fstring<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&>, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > >(char const*, int, char const*, char const*, fmt::v11::fstring<std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&> const&, std::__cxx11::basic_string<char, std::char_traits<char>, std::allocator<char> > const&)
+ --- /home/raahem/tt-metal/build_Release/lib/libtt_metal.so(+0x954648) [0x73116a354648]
+ --- tt::tt_metal::detail::ProgramImpl::compile(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::detail::ProgramImpl::compile_and_allocate(tt::tt_metal::IDevice*, bool)
+ --- tt::tt_metal::distributed::MeshWorkloadImpl::compile(tt::tt_metal::distributed::MeshDevice*)
+ --- tt::tt_metal::distributed::EnqueueMeshWorkload(tt::tt_metal::distributed::MeshCommandQueue&, tt::tt_metal::distributed::MeshWorkload&, bool)
+ --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail21enqueue_mesh_workloadITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim35InterleavedToShardedDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSI_12MeshWorkloadEb+0x2a9) [0x73116bd54b49]
+ --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(+0xd57fe4) [0x73116bd57fe4]
+ --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_4prim35InterleavedToShardedDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceERNSH_13program_cache6detail12ProgramCacheERKNSM_15ProgramCacheKeyE+0x8f) [0x73116bd5451f]
+ --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_4prim35InterleavedToShardedDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS7_13tensor_args_tERNS7_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0x16d) [0x73116bd5363d]
+ --- /home/raahem/tt-metal/build_Release/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_4prim35InterleavedToShardedDeviceOperationEEENT_21tensor_return_value_tERKNS5_22operation_attributes_tERKNS5_13tensor_args_tE+0x305) [0x73116bd52df5]
+ --- ttnn::prim::interleaved_to_sharded(ttnn::Tensor const&, tt::tt_metal::MemoryConfig const&, tt::tt_metal::DataType const&, bool, std::optional<ttnn::Tensor> const&)
+ --- ttnn::interleaved_to_sharded(ttnn::Tensor const&, tt::tt_metal::MemoryConfig const&, std::optional<tt::tt_metal::DataType> const&, std::optional<bool> const&, std::optional<ttnn::Tensor> const&)
+ --- ttnn::to_memory_config(ttnn::Tensor const&, tt::tt_metal::MemoryConfig const&, std::optional<tt::tt_metal::DataType>, std::optional<ttnn::Tensor> const&)
+ --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x4469bc) [0x73116dc469bc]
+ --- /home/raahem/tt-metal/ttnn/ttnn/_ttnn.so(+0x3604d5) [0x73116db604d5]
+ --- python(_PyObject_Call_Prepend+0xa0) [0x189b9f0]
+ --- python() [0x189b92e]
+ --- python(_PyEval_EvalFrameDefault+0x55ae) [0x181836e]
+ --- python(_PyObject_Call_Prepend+0xa0) [0x189b9f0]
+ --- python() [0x189b92e]
+ --- python(_PyEval_EvalFrameDefault+0x30e6) [0x1815ea6]
+ --- python(PyEval_EvalCode+0xde) [0x1896b20]
+ --- python() [0x18b1949]
+ --- python() [0x19fc785]
+ --- python(_PyRun_SimpleFileObject+0x106) [0x19fc546]
+ --- python(_PyRun_AnyFileObject+0x4a) [0x19fc2dc]
+ --- python() [0x19fc278]
+ --- python() [0x19fc171]
+ --- python() [0x1ae94a3]
+ --- python() [0x1979298]
+ --- python() [0x19790ac]
+ --- /lib/x86_64-linux-gnu/libc.so.6(+0x2a1ca) [0x7311b202a1ca]
+ --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x8b) [0x7311b202a28b]
+ --- python(_start+0x29) [0x19c1ea9]
+
+nanobind: leaked 1 instances!
+ - leaked instance 0x73111a065998 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 42 types!
+ - leaked type "DispatchCoreAxis"
+ - leaked type "ttnn._ttnn.device.SubDeviceManagerId"
+ - leaked type "MathFidelity"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.types.Shape"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - ... skipped remainder
+nanobind: leaked 347 functions!
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "from_json"
+ - leaked function "__init__"
+ - leaked function "__init__"
+ - leaked function ""
+ - leaked function "device"
+ - leaked function ""
+ - leaked function "__ne__"
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-13 21:19:50.366 | info     |    BuildKernels | JIT cache stats: 48/78 hits (61.5%) [48 cached, 24 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-13 21:19:50.367 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-13 21:19:50.378 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-13 21:19:50.378 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-13 21:19:50.862 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-13 21:19:50.862 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-13 21:19:50.862 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

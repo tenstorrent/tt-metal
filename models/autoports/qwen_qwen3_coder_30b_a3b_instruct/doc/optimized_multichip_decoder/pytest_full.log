@@ -1,0 +1,1137 @@
+2026-08-14 01:26:53.365 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/raahem/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/raahem/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, timeout-2.4.0, split-0.11.0, github-actions-annotate-failures-0.3.0, cov-7.0.0, anyio-4.14.2, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 128 items / 16 deselected / 112 selected
+
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention.py::test_qk_norm_weights_are_non_trivial Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention.py::test_causality [transformers] You tried to access the `AttentionInterface` with a `config._attn_implementation` set to `None`. This is expected if you use an Attention Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._attn_implementation`
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention.py::test_attention_prefill_vs_reference[blackhole-s32-1x1] 2026-08-14 01:26:56.567 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-14 01:26:56.567 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-14 01:26:56.567 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-14 01:26:56.567 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-14 01:26:56.579 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-14 01:26:56.579 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-14 01:26:56.657 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-14 01:26:56.657 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-14 01:26:56.657 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-14 01:26:56.657 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-14 01:26:56.658 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-14 01:26:56.665 | warning  |             UMD | AICLK settled at 1343 MHz, within 5% of the requested 1350 MHz but not an exact match. Proceeding. (tt_device.cpp:318)
+2026-08-14 01:26:56.810 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-14 01:26:56.929 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:26:56.929 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:26:56.929 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:26:56.929 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-14 01:26:56.929 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:26:56.929 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:26:56.966 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:26:57.602 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:26:57.668 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention:test_attention_prefill_vs_reference:115 - (False, 'Max ATOL Delta: 0.005973741412162781, Max RTOL Delta: 3325.8427734375')
+2026-08-14 01:26:57.668 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention:test_attention_prefill_vs_reference:116 - attention prefill seq=32: 0.9997258703133174
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-contiguous-p32-1x1] 2026-08-14 01:26:58.947 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:26:58.992 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:26:59.035 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:26:59.102 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention_decode:test_decode_matches_prefill_at_same_position:114 - (False, 'Max ATOL Delta: 0.00241059809923172, Max RTOL Delta: 5.947422027587891')
+2026-08-14 01:26:59.102 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention_decode:test_decode_matches_prefill_at_same_position:116 - decode at pos 32 [contiguous]: 0.9995325465293994
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention_decode.py::test_decode_q_rows_are_all_live[blackhole-1x1] 2026-08-14 01:26:59.427 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:26:59.472 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:26:59.516 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:26:59.568 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention_decode:test_decode_q_rows_are_all_live:135 - decode output zero fraction = 0.0000
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s32-1x1] 2026-08-14 01:27:01.426 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:27:01.470 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:27:01.514 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+[transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+2026-08-14 01:27:03.619 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer:test_decoder_layer_vs_reference:112 - (False, 'Max ATOL Delta: 0.029276803135871887, Max RTOL Delta: inf')
+2026-08-14 01:27:03.619 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer:test_decoder_layer_vs_reference:113 - decoder layer seq=32: 0.9991382696236931
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_non_aligned_tail_tokens[blackhole-s33-1x1] 2026-08-14 01:27:03.948 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:27:03.993 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:27:04.037 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:27:06.189 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer:test_non_aligned_tail_tokens:143 - seq=33: tail=[0.9999, 0.99985, 0.99465] body_worst=0.99471 median=0.99981
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_residual_path_is_present[blackhole-1x1] 2026-08-14 01:27:06.523 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:27:06.567 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:27:06.611 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:27:08.641 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer:test_residual_path_is_present:175 - corr(output, input) = 0.8615
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer_decode.py::test_decode_layer_matches_prefill[blackhole-contiguous-p32-1x1] 2026-08-14 01:27:10.656 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:27:10.701 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:27:10.746 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:27:12.894 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer_decode:test_decode_layer_matches_prefill:118 - (False, 'Max ATOL Delta: 0.018045008182525635, Max RTOL Delta: 77.39993286132812')
+2026-08-14 01:27:12.894 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer_decode:test_decode_layer_matches_prefill:120 - decode layer at pos 32 [contiguous]: 0.9946808621713572
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer_decode.py::test_multi_step_decode[blackhole-1x1] 2026-08-14 01:27:13.236 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:27:13.280 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:27:13.324 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:27:15.430 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer_decode:test_multi_step_decode:154 - decode step 0 (pos 32): 0.9946833573349575
+2026-08-14 01:27:15.433 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer_decode:test_multi_step_decode:154 - decode step 1 (pos 33): 0.999580666250684
+2026-08-14 01:27:15.436 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer_decode:test_multi_step_decode:154 - decode step 2 (pos 34): 0.9998757356175997
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_determinism.py::test_prefill_is_deterministic[blackhole-1x1] 2026-08-14 01:27:17.414 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:27:17.458 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:27:17.503 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:27:19.800 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_determinism:test_prefill_is_deterministic:88 - prefill: 3 runs bit-identical
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_determinism.py::test_decode_is_deterministic[blackhole-1x1] 2026-08-14 01:27:20.137 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:27:20.182 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:27:20.226 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:27:22.369 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_determinism:test_decode_is_deterministic:127 - decode: 2 independent prefill+decode sequences bit-identical
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_determinism.py::test_repeated_decode_steps_are_stable[blackhole-1x1] 2026-08-14 01:27:22.704 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:27:22.750 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:27:22.794 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:27:25.017 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_determinism:test_repeated_decode_steps_are_stable:165 - 64-step rollout: activation std min=0.02031 max=0.02885 ratio=1.420
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_moe.py::test_router_dense_weights_vs_reference[blackhole-s32-1x1] 2026-08-14 01:27:26.976 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:27:27.023 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:27:27.067 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:27:27.075 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_moe:test_router_dense_weights_vs_reference:92 - (False, 'Max ATOL Delta: 0.0005505681037902832, Max RTOL Delta: nan')
+2026-08-14 01:27:27.075 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_moe:test_router_dense_weights_vs_reference:93 - router dense seq=32: 0.9999986545442966
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_moe.py::test_router_selection_matches[blackhole-1x1] 2026-08-14 01:27:27.400 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:27:27.445 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:27:27.490 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:27:27.498 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_moe:test_router_selection_matches:132 - router selection: 5/128 tokens differ from the fp32 reference; largest missed routing weight 0.1239
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_moe.py::test_experts_with_reference_routing[blackhole-s32-1x1] 2026-08-14 01:27:27.828 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:27:27.872 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:27:27.918 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:27:29.994 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_moe:test_experts_with_reference_routing:185 - (False, 'Max ATOL Delta: 0.0001262105070054531, Max RTOL Delta: inf')
+2026-08-14 01:27:29.994 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_moe:test_experts_with_reference_routing:186 - experts (reference routing) seq=32: 0.9998085261571744
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_moe.py::test_moe_block_end_to_end[blackhole-s32-1x1] 2026-08-14 01:27:30.324 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:27:30.370 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:27:30.414 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:27:32.500 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_moe:test_moe_block_end_to_end:217 - (False, 'Max ATOL Delta: 0.00013325829058885574, Max RTOL Delta: inf')
+2026-08-14 01:27:32.500 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_moe:test_moe_block_end_to_end:218 - MoE block end-to-end seq=32: 0.9998091753412652
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_moe.py::test_router_weights_sum_to_one[blackhole-1x1] 2026-08-14 01:27:32.835 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:27:32.880 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:27:32.924 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_baseline_upload_is_actually_replicated[blackhole-1x4-device_params0] 2026-08-14 01:27:34.910 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:27:34.910 | info     |           Metal | Fabric config changed from FabricConfig::DISABLED to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:27:34.910 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:27:34.910 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:27:34.911 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:27:34.911 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:27:34.958 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:27:34.991 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:27:34.991 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:27:35.645 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:27:40.337 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_baseline_upload_is_actually_replicated:259 - replicated single-chip baseline: max spread across 4 dies = 0.000e+00
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-0-1x4-device_params0] 2026-08-14 01:27:40.670 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:27:40.670 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:27:40.670 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:27:40.670 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:27:40.671 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:27:40.671 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:27:40.718 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:27:40.731 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:27:40.731 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:27:40.790 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:27:45.357 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=0: 4 dies bit-identical over 1024 selections
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-decode-1x4-device_params0] 2026-08-14 01:27:45.712 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:27:45.712 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:27:45.712 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:27:45.712 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:27:45.713 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:27:45.713 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:27:45.761 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:27:45.773 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:27:45.773 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:27:45.832 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:27:50.509 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_router_windows_partition_global_routing:319 - router windows seq=1: max |stitched - global| = 0.000e+00
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s32-1x4-device_params0] 2026-08-14 01:27:50.845 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:27:50.846 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:27:50.846 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:27:50.846 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:27:50.846 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:27:50.846 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:27:50.894 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:27:50.906 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:27:50.906 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:27:50.967 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:27:55.670 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=32 vs single-chip TTNN: 0.999726173883768
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_hf[blackhole-s128-1x4-device_params0] 2026-08-14 01:27:56.010 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:27:56.010 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:27:56.010 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:27:56.010 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:27:56.011 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:27:56.011 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:27:56.059 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:27:56.071 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:27:56.071 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:27:56.132 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:28:00.874 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_hf:365 - multichip prefill S=128 vs HF: 0.9990883578961901
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_is_deterministic[blackhole-1x4-device_params0] 2026-08-14 01:28:01.223 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:28:01.223 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:28:01.223 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:28:01.223 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:28:01.223 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:28:01.223 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:28:01.271 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:28:01.284 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:28:01.284 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:28:01.930 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:28:06.636 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_is_deterministic:377 - multichip prefill: 3 runs bit-identical on all 4 dies
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_local_kv_cache_layout[blackhole-1x4-device_params0] 2026-08-14 01:28:06.976 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:28:06.976 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:28:06.976 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:28:06.976 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:28:06.977 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:28:06.977 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:28:07.026 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:28:07.038 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:28:07.038 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:28:07.098 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:28:11.784 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_local_kv_cache_layout:417 - local KV head layout: 4x[.,1,.,.] stitched vs single-chip [.,4,.,.]: 1.0
+2026-08-14 01:28:11.784 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_local_kv_cache_layout:421 - per-die KV: 512 B/token/layer (single chip: 2048)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_vs_single_chip[blackhole-contiguous-1x4-device_params0] 2026-08-14 01:28:12.135 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:28:12.135 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:28:12.135 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:28:12.135 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:28:12.135 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:28:12.135 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:28:12.184 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:28:12.197 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:28:12.197 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:28:12.258 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:28:16.881 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_vs_single_chip:474 - multichip decode [contiguous] vs single-chip TTNN: 0.9999345318510067
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_contiguous_batch8[blackhole-1x4-device_params0] 2026-08-14 01:28:17.225 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:28:17.226 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:28:17.226 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:28:17.226 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:28:17.226 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:28:17.226 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:28:17.275 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:28:17.288 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:28:17.288 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:28:17.347 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:28:22.195 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 0 vs single-chip TTNN: 0.9999345318510067
+2026-08-14 01:28:22.196 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 1 vs single-chip TTNN: 0.9999371911164702
+2026-08-14 01:28:22.196 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 2 vs single-chip TTNN: 0.9998928679638549
+2026-08-14 01:28:22.196 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 3 vs single-chip TTNN: 0.9999261582329086
+2026-08-14 01:28:22.196 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 4 vs single-chip TTNN: 0.999960995305192
+2026-08-14 01:28:22.196 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 5 vs single-chip TTNN: 0.9999652958487225
+2026-08-14 01:28:22.196 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 6 vs single-chip TTNN: 0.9999615950465374
+2026-08-14 01:28:22.196 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 7 vs single-chip TTNN: 0.9999511139965788
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_multi_step_decode_vs_hf[blackhole-1x4-device_params0] 2026-08-14 01:28:22.542 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:28:22.542 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:28:22.542 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:28:22.542 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:28:22.542 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:28:22.542 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:28:22.593 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:28:22.606 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:28:22.606 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:28:22.667 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:28:27.362 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_multi_step_decode_vs_hf:585 - multichip decode step 0 (pos 32) vs HF: 0.999245003101615
+2026-08-14 01:28:27.365 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_multi_step_decode_vs_hf:585 - multichip decode step 1 (pos 33) vs HF: 0.998738790344711
+2026-08-14 01:28:27.368 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_multi_step_decode_vs_hf:585 - multichip decode step 2 (pos 34) vs HF: 0.9993927543473524
+2026-08-14 01:28:27.371 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_multi_step_decode_vs_hf:585 - multichip decode step 3 (pos 35) vs HF: 0.9989421079333342
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b1-1x4-device_params0] 2026-08-14 01:28:27.708 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:28:27.708 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:28:27.708 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:28:27.708 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:28:27.708 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:28:27.708 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:28:27.758 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:28:27.771 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:28:27.771 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:28:27.833 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:28:32.555 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=1 user 0 vs HF: 0.9992450035600746
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_decode_output_layout_matches_input[blackhole-b1-1x4-device_params0] 2026-08-14 01:28:32.908 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:28:32.908 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:28:32.908 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:28:32.908 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:28:32.908 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:28:32.908 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:28:32.959 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:28:32.973 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:28:32.973 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:28:33.036 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_expert_window_can_be_empty[blackhole-1x4-device_params0] 2026-08-14 01:28:37.985 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:28:37.985 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:28:37.985 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:28:37.985 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:28:37.985 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:28:37.985 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:28:38.035 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:28:38.048 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:28:38.048 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:28:38.697 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:28:43.364 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_expert_window_can_be_empty:747 - forced routing: live experts per die = [6, 2, 0, 0] (sum 8)
+2026-08-14 01:28:43.374 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_expert_window_can_be_empty:758 - empty-window partials: max |value| on dies [2, 3] = 0.0
+2026-08-14 01:28:43.416 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_expert_window_can_be_empty:799 - layer under maximally unbalanced routing vs single-chip: 0.9999411824084109
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_stacked_layer_io_contract[blackhole-1x4-device_params0] 2026-08-14 01:28:43.762 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:28:43.762 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:28:43.762 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:28:43.762 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:28:43.763 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:28:43.763 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:28:43.813 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:28:43.826 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:28:43.826 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:28:43.888 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:28:48.606 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_stacked_layer_io_contract:850 - two stacked multichip layers vs two stacked single-chip layers: 0.9994464888290773
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_is_traceable[blackhole-1x4-device_params0] 2026-08-14 01:28:48.959 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:28:48.959 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:28:48.959 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:28:48.959 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:28:48.959 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:28:48.959 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:28:49.010 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:28:49.024 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:28:49.024 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:28:49.088 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:28:53.765 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_is_traceable:894 - multichip traced decode vs eager: 1.0
+2026-08-14 01:28:53.766 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_is_traceable:910 - multichip traced replay delta after input swap = 0.147461
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_stress_is_deterministic[blackhole-1x4-device_params0] 2026-08-14 01:28:54.125 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:28:54.125 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:28:54.125 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:28:54.125 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:28:54.126 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:28:54.126 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:28:54.176 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:28:54.190 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:28:54.190 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:28:54.253 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:28:59.003 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_stress_is_deterministic:951 - multichip decode: 20 consecutive steps bit-identical across all 4 dies
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_no_runtime_fallbacks[blackhole-b1-1x4-device_params0] 2026-08-14 01:28:59.355 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:28:59.355 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:28:59.355 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:28:59.355 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:28:59.355 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:28:59.355 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:28:59.407 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:28:59.421 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:28:59.421 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:28:59.483 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:29:04.212 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_no_runtime_fallbacks:971 - multichip fallback audit at batch 1: {'batch': 1, 'dram_sharded_qkv': (2048, 1280), 'dram_sharded_wo': (1024, 2048), 'dram_sharded_taken': True, 'gate_up_in0_block_w': 16, 'down_in0_block_w': 12, 'expert_intermediate_buffer': 'L1', 'local_heads': (8, 1), 'local_experts': 32, 'norm_shard_cores': 8, 'norm_shard_feeds_qkv_directly': True, 'decode_ccl_buffers_persistent': True}
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s32-1x1] 2026-08-14 01:29:06.282 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:06.329 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:06.964 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:08.816 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_prefill_vs_reference:133 - optimized prefill seq=32: 0.9986983078877577
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_vs_functional_precision_delta[blackhole-s128-1x1] 2026-08-14 01:29:09.159 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:09.204 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:09.253 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:13.240 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_vs_functional_precision_delta:170 - (False, 'Max ATOL Delta: 0.0302734375, Max RTOL Delta: inf')
+2026-08-14 01:29:13.240 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_vs_functional_precision_delta:171 - seq=128 optimized vs functional (bf16 vs DataType.BFLOAT4_B): 0.9989845162943563
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_router_matches_functional[blackhole-decode-1x1] 2026-08-14 01:29:13.577 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:13.622 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:13.671 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:13.685 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_router_matches_functional:204 - router seq=1: max |functional - optimized| = 9.766e-04, weight sums in [1.00488, 1.00488]
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_router_padding_is_zero[blackhole-decode-1x1] 2026-08-14 01:29:14.024 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:14.070 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:14.119 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:14.130 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_router_padding_is_zero:245 - router seq=1: padded (1, 1, 32, 128), 3968 padding entries, max |pad| = 0.0
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_matches_prefill[blackhole-contiguous-1x1] 2026-08-14 01:29:14.462 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:14.508 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:14.557 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:16.433 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_matches_prefill:292 - optimized decode [contiguous]: 0.9993006214235667
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_multi_step_decode[blackhole-1x1] 2026-08-14 01:29:16.771 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:16.816 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:16.865 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:18.775 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_multi_step_decode:332 - optimized decode step 0 (pos 32): 0.9993015592731632
+2026-08-14 01:29:18.777 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_multi_step_decode:332 - optimized decode step 1 (pos 33): 0.9987682857695582
+2026-08-14 01:29:18.779 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_multi_step_decode:332 - optimized decode step 2 (pos 34): 0.9994152956546027
+2026-08-14 01:29:18.780 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_multi_step_decode:332 - optimized decode step 3 (pos 35): 0.9990167171662175
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_is_deterministic[blackhole-1x1] 2026-08-14 01:29:19.124 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:19.170 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:19.219 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:21.012 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_prefill_is_deterministic:353 - optimized prefill: 3 runs bit-identical
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_is_traceable[blackhole-1x1-device_params0] 2026-08-14 01:29:21.356 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=50331648 from device_params (already set)
+2026-08-14 01:29:21.402 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:21.452 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:23.254 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_is_traceable:393 - optimized traced vs eager: 1.0
+2026-08-14 01:29:23.256 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_is_traceable:402 - optimized traced replay delta after input swap = 0.387695
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_batch[blackhole-b1-1x1] 2026-08-14 01:29:23.600 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:23.646 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:23.695 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:25.541 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=1 user 0 vs HF: 0.9993015593450881
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_rmsnorm.py::test_rmsnorm_vs_reference[blackhole-input_s32-1x1] 2026-08-14 01:29:26.866 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:26.911 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:26.961 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:26.962 | INFO     | models.common.modules.lazy_weight:get_device_weight:120 - [32m[cache hit][0m Loading tensor from cache: model_cache/qwen3_coder_30b_a3b/rmsnorm/input_layernorm_L0_srcshape_1_1_64_32_dtype_BFLOAT16_layout_ROW_MAJOR_replicated_device_42.tensorbin
+2026-08-14 01:29:26.972 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_rmsnorm:test_rmsnorm_vs_reference:97 - (False, 'Max ATOL Delta: 0.0009765625, Max RTOL Delta: 0.0208740234375')
+2026-08-14 01:29:26.973 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_rmsnorm:test_rmsnorm_vs_reference:98 - RMSNorm[input_layernorm] prefill seq=32: 0.9999902539982501
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_trace.py::test_decode_step_is_traceable[blackhole-1x1-device_params0] 2026-08-14 01:29:28.848 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=50331648 from device_params (already set)
+2026-08-14 01:29:28.894 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:28.943 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:31.133 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_trace:test_decode_step_is_traceable:129 - (True, 'Max ATOL Delta: 0.0, Max RTOL Delta: 0.0')
+2026-08-14 01:29:31.133 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_trace:test_decode_step_is_traceable:130 - traced vs eager: 1.0
+2026-08-14 01:29:31.133 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_trace:test_decode_step_is_traceable:134 - traced vs reference: 0.9946808621713572
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_trace.py::test_traced_replay_follows_new_input[blackhole-1x1-device_params0] 2026-08-14 01:29:31.486 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=50331648 from device_params (already set)
+2026-08-14 01:29:31.533 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:31.583 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:33.706 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_trace:test_traced_replay_follows_new_input:194 - max|out_a - out_b| after swapping the input token = 0.396484
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention.py::test_attention_prefill_vs_reference[blackhole-s128-1x1] 2026-08-14 01:29:35.239 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:35.286 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:35.336 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:35.407 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention:test_attention_prefill_vs_reference:115 - (False, 'Max ATOL Delta: 0.005973741412162781, Max RTOL Delta: 4089.9765625')
+2026-08-14 01:29:35.407 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention:test_attention_prefill_vs_reference:116 - attention prefill seq=128: 0.999593289421142
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-contiguous-p128-1x1] 2026-08-14 01:29:36.752 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:36.796 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:36.845 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:36.919 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention_decode:test_decode_matches_prefill_at_same_position:114 - (False, 'Max ATOL Delta: 0.0008259210735559464, Max RTOL Delta: 28.023754119873047')
+2026-08-14 01:29:36.919 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention_decode:test_decode_matches_prefill_at_same_position:116 - decode at pos 128 [contiguous]: 0.9994144220512609
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s128-1x1] 2026-08-14 01:29:38.802 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:38.847 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:38.896 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:41.207 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer:test_decoder_layer_vs_reference:112 - (False, 'Max ATOL Delta: 0.029276808723807335, Max RTOL Delta: inf')
+2026-08-14 01:29:41.207 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer:test_decoder_layer_vs_reference:113 - decoder layer seq=128: 0.9995151190922138
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_non_aligned_tail_tokens[blackhole-s100-1x1] 2026-08-14 01:29:41.560 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:41.605 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:41.653 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:43.865 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer:test_non_aligned_tail_tokens:143 - seq=100: tail=[0.99979, 0.99982, 0.99986] body_worst=0.99465 median=0.99982
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer_decode.py::test_decode_layer_matches_prefill[blackhole-contiguous-p128-1x1] 2026-08-14 01:29:45.912 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:45.958 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:46.007 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:48.319 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer_decode:test_decode_layer_matches_prefill:118 - (False, 'Max ATOL Delta: 0.0021971017122268677, Max RTOL Delta: 5.539421081542969')
+2026-08-14 01:29:48.319 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer_decode:test_decode_layer_matches_prefill:120 - decode layer at pos 128 [contiguous]: 0.9998858616104674
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_moe.py::test_router_dense_weights_vs_reference[blackhole-s128-1x1] 2026-08-14 01:29:50.247 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:50.293 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:50.342 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:50.358 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_moe:test_router_dense_weights_vs_reference:92 - (False, 'Max ATOL Delta: 0.1240234375, Max RTOL Delta: nan')
+2026-08-14 01:29:50.358 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_moe:test_router_dense_weights_vs_reference:93 - router dense seq=128: 0.9949131274392454
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_moe.py::test_experts_with_reference_routing[blackhole-s128-1x1] 2026-08-14 01:29:50.706 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:50.751 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:50.800 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:53.060 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_moe:test_experts_with_reference_routing:185 - (False, 'Max ATOL Delta: 0.00013723550364375114, Max RTOL Delta: inf')
+2026-08-14 01:29:53.060 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_moe:test_experts_with_reference_routing:186 - experts (reference routing) seq=128: 0.9998037048111582
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_moe.py::test_moe_block_end_to_end[blackhole-s128-1x1] 2026-08-14 01:29:53.406 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:29:53.452 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:29:53.502 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:29:55.731 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_moe:test_moe_block_end_to_end:217 - (False, 'Max ATOL Delta: 0.00022039783652871847, Max RTOL Delta: inf')
+2026-08-14 01:29:55.731 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_moe:test_moe_block_end_to_end:218 - MoE block end-to-end seq=128: 0.9981134841478666
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-1-1x4-device_params0] 2026-08-14 01:29:57.767 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:29:57.768 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:29:57.768 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:29:57.768 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:29:57.768 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:29:57.768 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:29:57.818 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:29:57.832 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:29:57.832 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:29:58.488 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:30:03.107 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=1: 4 dies bit-identical over 1024 selections
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-s33-1x4-device_params0] 2026-08-14 01:30:03.468 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:30:03.468 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:30:03.468 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:30:03.468 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:30:03.469 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:30:03.469 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:30:03.520 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:30:03.534 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:30:03.534 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:30:03.597 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:30:08.309 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_router_windows_partition_global_routing:319 - router windows seq=33: max |stitched - global| = 0.000e+00
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s128-1x4-device_params0] 2026-08-14 01:30:08.680 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:30:08.680 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:30:08.680 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:30:08.680 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:30:08.680 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:30:08.680 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:30:08.730 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:30:08.745 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:30:08.745 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:30:09.394 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:30:14.020 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=128 vs single-chip TTNN: 0.9998520985932086
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_hf[blackhole-s33-1x4-device_params0] 2026-08-14 01:30:14.382 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:30:14.382 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:30:14.382 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:30:14.382 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:30:14.383 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:30:14.383 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:30:14.432 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:30:14.447 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:30:14.447 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:30:14.511 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:30:19.348 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_hf:365 - multichip prefill S=33 vs HF: 0.9989603338857946
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_vs_single_chip[blackhole-paged32-1x4-device_params0] 2026-08-14 01:30:19.705 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:30:19.705 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:30:19.705 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:30:19.705 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:30:19.706 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:30:19.706 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:30:19.756 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:30:19.770 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:30:19.770 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:30:19.833 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:30:24.581 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_vs_single_chip:474 - multichip decode [paged(32)] vs single-chip TTNN: 0.999941351428888
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b2-1x4-device_params0] 2026-08-14 01:30:24.932 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:30:24.933 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:30:24.933 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:30:24.933 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:30:24.933 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:30:24.933 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:30:24.984 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:30:24.998 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:30:24.998 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:30:25.063 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:30:29.868 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=2 user 0 vs HF: 0.9992450035600746
+2026-08-14 01:30:29.947 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=2 user 1 vs HF: 0.9994441043393264
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_decode_output_layout_matches_input[blackhole-b8-1x4-device_params0] 2026-08-14 01:30:30.301 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:30:30.302 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:30:30.302 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:30:30.302 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:30:30.302 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:30:30.302 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:30:30.354 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:30:30.368 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:30:30.368 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:30:30.432 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_no_runtime_fallbacks[blackhole-b32-1x4-device_params0] 2026-08-14 01:30:35.479 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:30:35.479 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:30:35.479 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:30:35.479 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:30:35.480 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:30:35.480 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:30:35.533 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:30:35.547 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:30:35.547 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:30:35.614 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:30:40.198 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_no_runtime_fallbacks:971 - multichip fallback audit at batch 32: {'batch': 32, 'dram_sharded_qkv': (2048, 1280), 'dram_sharded_wo': (1024, 2048), 'dram_sharded_taken': True, 'gate_up_in0_block_w': 16, 'down_in0_block_w': 12, 'expert_intermediate_buffer': 'DRAM', 'local_heads': (8, 1), 'local_experts': 32, 'norm_shard_cores': 8, 'norm_shard_feeds_qkv_directly': True, 'decode_ccl_buffers_persistent': True}
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s128-1x1] 2026-08-14 01:30:42.185 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:30:42.232 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:30:42.282 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:30:44.254 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_prefill_vs_reference:133 - optimized prefill seq=128: 0.9990056768864599
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_vs_functional_precision_delta[blackhole-s33-1x1] 2026-08-14 01:30:44.606 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:30:44.652 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:30:44.703 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:30:48.682 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_vs_functional_precision_delta:170 - (False, 'Max ATOL Delta: 0.029296875, Max RTOL Delta: inf')
+2026-08-14 01:30:48.683 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_vs_functional_precision_delta:171 - seq=33 optimized vs functional (bf16 vs DataType.BFLOAT4_B): 0.9986686780881959
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_router_matches_functional[blackhole-s128-1x1] 2026-08-14 01:30:49.028 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:30:49.075 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:30:49.125 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:30:49.145 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_router_matches_functional:204 - router seq=128: max |functional - optimized| = 9.766e-04, weight sums in [0.99561, 1.00635]
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_router_padding_is_zero[blackhole-s33-1x1] 2026-08-14 01:30:49.482 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:30:49.528 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:30:49.578 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:30:49.594 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_router_padding_is_zero:245 - router seq=33: padded (1, 1, 64, 128), 3968 padding entries, max |pad| = 0.0
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_matches_prefill[blackhole-paged32-1x1] 2026-08-14 01:30:49.945 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:30:49.990 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:30:50.041 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:30:51.957 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_matches_prefill:292 - optimized decode [paged(32)]: 0.9993015593450881
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_batch[blackhole-b2-1x1] 2026-08-14 01:30:52.306 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:30:52.353 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:30:52.404 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:30:54.384 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=2 user 0 vs HF: 0.9993015593450881
+2026-08-14 01:30:54.471 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=2 user 1 vs HF: 0.9994934633239579
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_rmsnorm.py::test_rmsnorm_vs_reference[blackhole-input_s128-1x1] 2026-08-14 01:30:55.848 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:30:55.894 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:30:55.945 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:30:55.946 | INFO     | models.common.modules.lazy_weight:get_device_weight:120 - [32m[cache hit][0m Loading tensor from cache: model_cache/qwen3_coder_30b_a3b/rmsnorm/input_layernorm_L0_srcshape_1_1_64_32_dtype_BFLOAT16_layout_ROW_MAJOR_replicated_device_67.tensorbin
+2026-08-14 01:30:55.958 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_rmsnorm:test_rmsnorm_vs_reference:97 - (False, 'Max ATOL Delta: 0.001953125, Max RTOL Delta: 0.021728515625')
+2026-08-14 01:30:55.958 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_rmsnorm:test_rmsnorm_vs_reference:98 - RMSNorm[input_layernorm] prefill seq=128: 0.9999889362763026
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention.py::test_attention_prefill_vs_reference[blackhole-s512-1x1] 2026-08-14 01:30:57.272 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:30:57.317 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:30:57.368 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:30:57.486 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention:test_attention_prefill_vs_reference:115 - (False, 'Max ATOL Delta: 0.00987999141216278, Max RTOL Delta: 17080.85546875')
+2026-08-14 01:30:57.487 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention:test_attention_prefill_vs_reference:116 - attention prefill seq=512: 0.9994361942420286
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-paged32-p32-1x1] 2026-08-14 01:30:58.836 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:30:58.883 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:30:58.935 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:30:58.992 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention_decode:test_decode_matches_prefill_at_same_position:114 - (False, 'Max ATOL Delta: 0.00241059809923172, Max RTOL Delta: 65.85342407226562')
+2026-08-14 01:30:58.992 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention_decode:test_decode_matches_prefill_at_same_position:116 - decode at pos 32 [paged(block=32)]: 0.9995292872960986
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s512-1x1] 2026-08-14 01:31:00.846 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:31:00.891 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:31:00.943 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:31:03.498 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer:test_decoder_layer_vs_reference:112 - (False, 'Max ATOL Delta: 0.08000603318214417, Max RTOL Delta: inf')
+2026-08-14 01:31:03.498 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer:test_decoder_layer_vs_reference:113 - decoder layer seq=512: 0.9993923430583141
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer_decode.py::test_decode_layer_matches_prefill[blackhole-paged32-p32-1x1] 2026-08-14 01:31:05.505 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:31:05.551 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:31:05.602 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:31:07.777 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer_decode:test_decode_layer_matches_prefill:118 - (False, 'Max ATOL Delta: 0.018045008182525635, Max RTOL Delta: inf')
+2026-08-14 01:31:07.777 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer_decode:test_decode_layer_matches_prefill:120 - decode layer at pos 32 [paged(block=32)]: 0.9946833573349575
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-2-1x4-device_params0] 2026-08-14 01:31:09.769 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:31:09.770 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:31:09.770 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:31:09.770 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:31:09.770 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:31:09.770 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:31:09.820 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:31:09.835 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:31:09.835 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:31:10.490 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:31:15.154 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=2: 4 dies bit-identical over 1024 selections
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-s128-1x4-device_params0] 2026-08-14 01:31:15.520 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:31:15.521 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:31:15.521 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:31:15.521 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:31:15.521 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:31:15.521 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:31:15.573 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:31:15.588 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:31:15.588 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:31:15.657 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:31:20.382 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_router_windows_partition_global_routing:319 - router windows seq=128: max |stitched - global| = 0.000e+00
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s512-1x4-device_params0] 2026-08-14 01:31:20.744 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:31:20.745 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:31:20.745 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:31:20.745 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:31:20.745 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:31:20.745 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:31:20.799 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:31:20.814 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:31:20.814 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:31:20.884 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:31:25.880 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=512 vs single-chip TTNN: 0.999620460949962
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b8-1x4-device_params0] 2026-08-14 01:31:26.234 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:31:26.234 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:31:26.234 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:31:26.234 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:31:26.234 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:31:26.234 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:31:26.285 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:31:26.301 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:31:26.301 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:31:26.365 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:31:31.113 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 0 vs HF: 0.9992450035600746
+2026-08-14 01:31:31.198 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 1 vs HF: 0.9994441043393264
+2026-08-14 01:31:31.276 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 2 vs HF: 0.9994544253098209
+2026-08-14 01:31:31.363 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 3 vs HF: 0.9993312504026023
+2026-08-14 01:31:31.453 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 4 vs HF: 0.9994259776629145
+2026-08-14 01:31:31.532 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 5 vs HF: 0.999515318099617
+2026-08-14 01:31:31.603 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 6 vs HF: 0.9992655076211026
+2026-08-14 01:31:31.683 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 7 vs HF: 0.999273488138553
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s512-1x1] 2026-08-14 01:31:33.703 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:31:33.750 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:31:33.801 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:31:35.892 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_prefill_vs_reference:133 - optimized prefill seq=512: 0.9989889286895374
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_router_matches_functional[blackhole-s33-1x1] 2026-08-14 01:31:36.233 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:31:36.280 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:31:36.331 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:31:36.350 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_router_matches_functional:204 - router seq=33: max |functional - optimized| = 9.766e-04, weight sums in [0.99707, 1.00488]
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_router_padding_is_zero[blackhole-s100-1x1] 2026-08-14 01:31:36.693 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:31:36.739 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:31:36.790 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:31:36.808 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_router_padding_is_zero:245 - router seq=100: padded (1, 1, 128, 128), 3584 padding entries, max |pad| = 0.0
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_batch[blackhole-b8-1x1] 2026-08-14 01:31:37.152 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:31:37.197 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:31:37.249 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:31:39.314 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=8 user 0 vs HF: 0.9993015593450881
+2026-08-14 01:31:39.397 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=8 user 1 vs HF: 0.9994934633239579
+2026-08-14 01:31:39.474 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=8 user 2 vs HF: 0.9994953954109504
+2026-08-14 01:31:39.553 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=8 user 3 vs HF: 0.9993687384652433
+2026-08-14 01:31:39.639 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=8 user 4 vs HF: 0.9994614571916378
+2026-08-14 01:31:39.718 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=8 user 5 vs HF: 0.9995037156374033
+2026-08-14 01:31:39.792 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=8 user 6 vs HF: 0.999314089603218
+2026-08-14 01:31:39.873 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=8 user 7 vs HF: 0.9993082972687571
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_rmsnorm.py::test_rmsnorm_vs_reference[blackhole-postattn_s32-1x1] 2026-08-14 01:31:41.200 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:31:41.247 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:31:41.298 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:31:41.299 | INFO     | models.common.modules.lazy_weight:get_device_weight:120 - [32m[cache hit][0m Loading tensor from cache: model_cache/qwen3_coder_30b_a3b/rmsnorm/post_attention_layernorm_L0_srcshape_1_1_64_32_dtype_BFLOAT16_layout_ROW_MAJOR_replicated_device_80.tensorbin
+2026-08-14 01:31:41.311 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_rmsnorm:test_rmsnorm_vs_reference:97 - (False, 'Max ATOL Delta: 0.015625, Max RTOL Delta: 0.0198974609375')
+2026-08-14 01:31:41.312 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_rmsnorm:test_rmsnorm_vs_reference:98 - RMSNorm[post_attention_layernorm] prefill seq=32: 0.9999899690470638
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-paged32-p128-1x1] 2026-08-14 01:31:42.650 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:31:42.696 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:31:42.747 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:31:42.819 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention_decode:test_decode_matches_prefill_at_same_position:114 - (False, 'Max ATOL Delta: 0.0011836346238851547, Max RTOL Delta: 96.84754180908203')
+2026-08-14 01:31:42.819 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention_decode:test_decode_matches_prefill_at_same_position:116 - decode at pos 128 [paged(block=32)]: 0.999446276315806
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s33-1x1] 2026-08-14 01:31:44.634 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:31:44.679 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:31:44.732 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:31:46.980 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer:test_decoder_layer_vs_reference:112 - (False, 'Max ATOL Delta: 0.029276803135871887, Max RTOL Delta: inf')
+2026-08-14 01:31:46.980 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer:test_decoder_layer_vs_reference:113 - decoder layer seq=33: 0.9990094173358364
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer_decode.py::test_decode_layer_matches_prefill[blackhole-paged32-p128-1x1] 2026-08-14 01:31:48.867 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:31:48.913 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:31:48.965 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:31:51.260 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer_decode:test_decode_layer_matches_prefill:118 - (False, 'Max ATOL Delta: 0.0013753585517406464, Max RTOL Delta: 9.693435668945312')
+2026-08-14 01:31:51.260 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer_decode:test_decode_layer_matches_prefill:120 - decode layer at pos 128 [paged(block=32)]: 0.9998892205382237
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-3-1x4-device_params0] 2026-08-14 01:31:53.176 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:31:53.177 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:31:53.177 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:31:53.177 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:31:53.177 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:31:53.177 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:31:53.226 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:31:53.242 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:31:53.242 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:31:53.310 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:31:58.066 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=3: 4 dies bit-identical over 1024 selections
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s33-1x4-device_params0] 2026-08-14 01:31:58.440 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:31:58.440 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:31:58.441 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:31:58.441 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:31:58.441 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:31:58.441 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:31:58.491 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:31:58.506 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:31:58.506 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:31:58.576 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:32:03.401 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=33 vs single-chip TTNN: 0.9997335206043321
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b32-1x4-device_params0] 2026-08-14 01:32:03.770 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:32:03.771 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:32:03.771 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:32:03.771 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:32:03.771 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:32:03.771 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:32:03.824 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:32:03.839 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:32:03.839 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:32:03.909 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:32:09.069 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 0 vs HF: 0.9992450035600746
+2026-08-14 01:32:09.153 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 1 vs HF: 0.9994441043393264
+2026-08-14 01:32:09.234 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 2 vs HF: 0.9994544253098209
+2026-08-14 01:32:09.319 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 3 vs HF: 0.9993312504026023
+2026-08-14 01:32:09.409 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 4 vs HF: 0.9994259776629145
+2026-08-14 01:32:09.488 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 5 vs HF: 0.999515318099617
+2026-08-14 01:32:09.560 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 6 vs HF: 0.9992655076211026
+2026-08-14 01:32:09.641 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 7 vs HF: 0.999273488138553
+2026-08-14 01:32:09.719 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 8 vs HF: 0.9992380168243756
+2026-08-14 01:32:09.803 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 9 vs HF: 0.999231862413366
+2026-08-14 01:32:09.888 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 10 vs HF: 0.9950797483850857
+2026-08-14 01:32:09.965 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 11 vs HF: 0.9995664786300886
+2026-08-14 01:32:10.047 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 12 vs HF: 0.9989115557076926
+2026-08-14 01:32:10.127 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 13 vs HF: 0.9939255621655199
+2026-08-14 01:32:10.203 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 14 vs HF: 0.9991591858436268
+2026-08-14 01:32:10.283 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 15 vs HF: 0.9994818980240605
+2026-08-14 01:32:10.368 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 16 vs HF: 0.9990920850604048
+2026-08-14 01:32:10.450 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 17 vs HF: 0.9992070456865015
+2026-08-14 01:32:10.533 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 18 vs HF: 0.9993522599191121
+2026-08-14 01:32:10.614 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 19 vs HF: 0.996290594339868
+2026-08-14 01:32:10.693 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 20 vs HF: 0.9993654479983222
+2026-08-14 01:32:10.774 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 21 vs HF: 0.9991977456504364
+2026-08-14 01:32:10.858 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 22 vs HF: 0.9993430125011343
+2026-08-14 01:32:10.942 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 23 vs HF: 0.9994094977078336
+2026-08-14 01:32:11.021 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 24 vs HF: 0.9994054595181203
+2026-08-14 01:32:11.102 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 25 vs HF: 0.9955135574569638
+2026-08-14 01:32:11.179 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 26 vs HF: 0.9995151746699567
+2026-08-14 01:32:11.260 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 27 vs HF: 0.9994807091508782
+2026-08-14 01:32:11.344 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 28 vs HF: 0.9992759716993211
+2026-08-14 01:32:11.432 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 29 vs HF: 0.9932161039443776
+2026-08-14 01:32:11.513 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 30 vs HF: 0.9993192265737711
+2026-08-14 01:32:11.598 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 31 vs HF: 0.9994875056071248
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s33-1x1] 2026-08-14 01:32:13.617 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:32:13.664 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:32:14.301 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:32:16.206 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_prefill_vs_reference:133 - optimized prefill seq=33: 0.9987153783497918
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_router_padding_is_zero[blackhole-s128-1x1] 2026-08-14 01:32:16.550 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:32:16.595 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:32:16.647 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:32:16.668 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_router_padding_is_zero:245 - router seq=128: padded (1, 1, 128, 128), 0 padding entries, max |pad| = 0.0
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_batch[blackhole-b32-1x1] 2026-08-14 01:32:17.015 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:32:17.061 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:32:17.112 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:32:19.428 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 0 vs HF: 0.9993015593450881
+2026-08-14 01:32:19.510 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 1 vs HF: 0.9994934633239579
+2026-08-14 01:32:19.588 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 2 vs HF: 0.9994953954109504
+2026-08-14 01:32:19.666 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 3 vs HF: 0.9993687384652433
+2026-08-14 01:32:19.750 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 4 vs HF: 0.9994614571916378
+2026-08-14 01:32:19.834 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 5 vs HF: 0.9995037156374033
+2026-08-14 01:32:19.908 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 6 vs HF: 0.999314089603218
+2026-08-14 01:32:19.989 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 7 vs HF: 0.9993082972687571
+2026-08-14 01:32:20.068 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 8 vs HF: 0.9992729407309596
+2026-08-14 01:32:20.151 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 9 vs HF: 0.9992345264502666
+2026-08-14 01:32:20.236 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 10 vs HF: 0.9952653229990375
+2026-08-14 01:32:20.312 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 11 vs HF: 0.9995927071502643
+2026-08-14 01:32:20.395 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 12 vs HF: 0.9990876299953922
+2026-08-14 01:32:20.476 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 13 vs HF: 0.9940779262117728
+2026-08-14 01:32:20.552 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 14 vs HF: 0.9992491474909109
+2026-08-14 01:32:20.634 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 15 vs HF: 0.9994929016185573
+2026-08-14 01:32:20.718 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 16 vs HF: 0.999102293789881
+2026-08-14 01:32:20.804 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 17 vs HF: 0.999155995556426
+2026-08-14 01:32:20.890 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 18 vs HF: 0.9993809208861516
+2026-08-14 01:32:20.975 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 19 vs HF: 0.9996304755385592
+2026-08-14 01:32:21.054 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 20 vs HF: 0.9992465283501994
+2026-08-14 01:32:21.135 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 21 vs HF: 0.9991092847067605
+2026-08-14 01:32:21.216 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 22 vs HF: 0.9993739411447842
+2026-08-14 01:32:21.299 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 23 vs HF: 0.9994572789294301
+2026-08-14 01:32:21.379 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 24 vs HF: 0.9994350485302137
+2026-08-14 01:32:21.462 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 25 vs HF: 0.99902098239808
+2026-08-14 01:32:21.540 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 26 vs HF: 0.9995139472537292
+2026-08-14 01:32:21.622 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 27 vs HF: 0.9995086324006477
+2026-08-14 01:32:21.705 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 28 vs HF: 0.9993417577555798
+2026-08-14 01:32:21.790 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 29 vs HF: 0.9933105642442985
+2026-08-14 01:32:21.871 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 30 vs HF: 0.999319029979169
+2026-08-14 01:32:21.957 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_decode_batch:498 - optimized decode batch=32 user 31 vs HF: 0.9994749254723151
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_rmsnorm.py::test_rmsnorm_vs_reference[blackhole-input_decode-1x1] 2026-08-14 01:32:23.257 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:32:23.304 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:32:23.357 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:32:23.358 | INFO     | models.common.modules.lazy_weight:get_device_weight:120 - [32m[cache hit][0m Loading tensor from cache: model_cache/qwen3_coder_30b_a3b/rmsnorm/input_layernorm_L0_srcshape_1_1_64_32_dtype_BFLOAT16_layout_ROW_MAJOR_replicated_device_90.tensorbin
+2026-08-14 01:32:23.373 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_rmsnorm:test_rmsnorm_vs_reference:97 - (False, 'Max ATOL Delta: 0.000244140625, Max RTOL Delta: 0.01446533203125')
+2026-08-14 01:32:23.373 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_rmsnorm:test_rmsnorm_vs_reference:98 - RMSNorm[input_layernorm] decode seq=1: 0.9999944057434491
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-paged64-p32-1x1] 2026-08-14 01:32:24.673 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:32:24.718 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:32:24.769 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:32:24.847 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention_decode:test_decode_matches_prefill_at_same_position:114 - (False, 'Max ATOL Delta: 0.00241059809923172, Max RTOL Delta: 65.85342407226562')
+2026-08-14 01:32:24.848 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention_decode:test_decode_matches_prefill_at_same_position:116 - decode at pos 32 [paged(block=64)]: 0.9995292872960986
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s100-1x1] 2026-08-14 01:32:26.644 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:32:26.689 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:32:26.742 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:32:29.089 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer:test_decoder_layer_vs_reference:112 - (False, 'Max ATOL Delta: 0.029276806861162186, Max RTOL Delta: inf')
+2026-08-14 01:32:29.089 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer:test_decoder_layer_vs_reference:113 - decoder layer seq=100: 0.9995053438011939
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-4-1x4-device_params0] 2026-08-14 01:32:30.995 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:32:30.995 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:32:30.995 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:32:30.995 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:32:30.996 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:32:30.996 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:32:31.046 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:32:31.061 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:32:31.061 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:32:31.720 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:32:36.339 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=4: 4 dies bit-identical over 1024 selections
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s100-1x4-device_params0] 2026-08-14 01:32:36.713 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:32:36.713 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:32:36.713 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:32:36.713 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:32:36.713 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:32:36.713 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:32:36.765 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:32:36.780 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:32:36.780 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:32:36.851 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:32:41.497 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=100 vs single-chip TTNN: 0.9998680715538794
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s100-1x1] 2026-08-14 01:32:43.607 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:32:43.654 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:32:43.706 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:32:45.654 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_prefill_vs_reference:133 - optimized prefill seq=100: 0.999098605916036
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-paged64-p128-1x1] 2026-08-14 01:32:47.066 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:32:47.112 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:32:47.165 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:32:47.241 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention_decode:test_decode_matches_prefill_at_same_position:114 - (False, 'Max ATOL Delta: 0.0011836346238851547, Max RTOL Delta: 96.84754180908203')
+2026-08-14 01:32:47.241 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_attention_decode:test_decode_matches_prefill_at_same_position:116 - decode at pos 128 [paged(block=64)]: 0.999446276315806
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s257-1x1] 2026-08-14 01:32:49.011 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:32:49.058 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:32:49.111 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:32:51.595 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer:test_decoder_layer_vs_reference:112 - (False, 'Max ATOL Delta: 0.08000607788562775, Max RTOL Delta: inf')
+2026-08-14 01:32:51.595 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_decoder_layer:test_decoder_layer_vs_reference:113 - decoder layer seq=257: 0.9994165932237048
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-5-1x4-device_params0] 2026-08-14 01:32:53.463 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:32:53.463 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:32:53.463 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:32:53.463 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:32:53.463 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:32:53.463 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:32:53.514 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:32:53.529 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:32:53.529 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:32:53.598 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:32:58.387 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=5: 4 dies bit-identical over 1024 selections
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s257-1x4-device_params0] 2026-08-14 01:32:58.739 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:32:58.740 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:32:58.740 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:32:58.740 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:32:58.740 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:32:58.740 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:32:58.791 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:32:58.807 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:32:58.807 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:32:58.874 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:33:03.967 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=257 vs single-chip TTNN: 0.9997130463493856
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s257-1x1] 2026-08-14 01:33:05.938 | INFO     | conftest:mesh_device:612 - No trace region size for (1, 1)
+2026-08-14 01:33:05.986 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using CreateDevices API. (device_manager.cpp:264)
+2026-08-14 01:33:06.037 | DEBUG    | conftest:mesh_device:630 - multidevice with 1 devices is created
+2026-08-14 01:33:08.077 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_optimized_decoder:test_optimized_prefill_vs_reference:133 - optimized prefill seq=257: 0.9989918463825027
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_wqkv_column_split_is_head_interleaved 2026-08-14 01:33:10.217 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_wqkv_column_split_is_head_interleaved:229 - wqkv head-interleaved split verified for 4 dies, per-die N = 1280
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_repo_default_topology_is_wrong_for_this_mesh 2026-08-14 01:33:10.448 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_repo_default_topology_is_wrong_for_this_mesh:242 - multichip_decoder overrides default_topology (callable: default_topology)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-6-1x4-device_params0] 2026-08-14 01:33:10.669 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:33:10.670 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:33:10.670 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:33:10.670 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:33:10.670 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:33:10.670 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:33:10.719 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:33:10.734 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:33:10.734 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:33:10.806 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:33:15.358 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=6: 4 dies bit-identical over 1024 selections
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-7-1x4-device_params0] 2026-08-14 01:33:15.722 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-14 01:33:15.722 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-14 01:33:15.722 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-14 01:33:15.722 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-14 01:33:15.722 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-14 01:33:15.722 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-14 01:33:15.773 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-14 01:33:15.788 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-14 01:33:15.788 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-14 01:33:16.444 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-14 01:33:21.167 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=7: 4 dies bit-identical over 1024 selections
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_meta_rope_weights_match_hf PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_reference.py::test_layer_forward_is_finite_and_non_degenerate PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_reference.py::test_layer_forward_is_deterministic PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_reference.py::test_moe_matches_unfused_reimplementation PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_reference.py::test_router_selects_expected_expert_count PASSED
+
+==================================== PASSES ====================================
+_____________________ test_qk_norm_weights_are_non_trivial _____________________
+------------------------------ Captured log setup ------------------------------
+WARNING  huggingface_hub.utils._http:_http.py:904 Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+- generated xml file: /home/raahem/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 20 durations =============================
+7.01s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_baseline_upload_is_actually_replicated[blackhole-1x4-device_params0]
+6.98s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-2-1x4-device_params0]
+6.95s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-1-1x4-device_params0]
+6.83s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-4-1x4-device_params0]
+6.42s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-5-1x4-device_params0]
+6.39s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-3-1x4-device_params0]
+5.64s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-7-1x4-device_params0]
+5.60s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_is_deterministic[blackhole-1x4-device_params0]
+5.58s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_expert_window_can_be_empty[blackhole-1x4-device_params0]
+5.52s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s128-1x4-device_params0]
+5.25s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s257-1x4-device_params0]
+5.19s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s512-1x4-device_params0]
+5.16s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b32-1x4-device_params0]
+5.12s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s33-1x4-device_params0]
+5.08s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_no_runtime_fallbacks[blackhole-b1-1x4-device_params0]
+5.06s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_hf[blackhole-s33-1x4-device_params0]
+5.05s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-s128-1x4-device_params0]
+5.04s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-s33-1x4-device_params0]
+5.01s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-decode-1x4-device_params0]
+5.00s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_stress_is_deterministic[blackhole-1x4-device_params0]
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention.py::test_qk_norm_weights_are_non_trivial
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention.py::test_causality
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention.py::test_attention_prefill_vs_reference[blackhole-s32-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-contiguous-p32-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention_decode.py::test_decode_q_rows_are_all_live[blackhole-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s32-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_non_aligned_tail_tokens[blackhole-s33-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_residual_path_is_present[blackhole-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer_decode.py::test_decode_layer_matches_prefill[blackhole-contiguous-p32-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer_decode.py::test_multi_step_decode[blackhole-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_determinism.py::test_prefill_is_deterministic[blackhole-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_determinism.py::test_decode_is_deterministic[blackhole-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_determinism.py::test_repeated_decode_steps_are_stable[blackhole-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_moe.py::test_router_dense_weights_vs_reference[blackhole-s32-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_moe.py::test_router_selection_matches[blackhole-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_moe.py::test_experts_with_reference_routing[blackhole-s32-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_moe.py::test_moe_block_end_to_end[blackhole-s32-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_moe.py::test_router_weights_sum_to_one[blackhole-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_baseline_upload_is_actually_replicated[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-0-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-decode-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s32-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_hf[blackhole-s128-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_is_deterministic[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_local_kv_cache_layout[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_vs_single_chip[blackhole-contiguous-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_contiguous_batch8[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_multi_step_decode_vs_hf[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b1-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_decode_output_layout_matches_input[blackhole-b1-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_expert_window_can_be_empty[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_stacked_layer_io_contract[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_is_traceable[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_stress_is_deterministic[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_no_runtime_fallbacks[blackhole-b1-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s32-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_vs_functional_precision_delta[blackhole-s128-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_router_matches_functional[blackhole-decode-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_router_padding_is_zero[blackhole-decode-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_matches_prefill[blackhole-contiguous-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_multi_step_decode[blackhole-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_is_deterministic[blackhole-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_is_traceable[blackhole-1x1-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_batch[blackhole-b1-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_rmsnorm.py::test_rmsnorm_vs_reference[blackhole-input_s32-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_trace.py::test_decode_step_is_traceable[blackhole-1x1-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_trace.py::test_traced_replay_follows_new_input[blackhole-1x1-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention.py::test_attention_prefill_vs_reference[blackhole-s128-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-contiguous-p128-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s128-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_non_aligned_tail_tokens[blackhole-s100-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer_decode.py::test_decode_layer_matches_prefill[blackhole-contiguous-p128-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_moe.py::test_router_dense_weights_vs_reference[blackhole-s128-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_moe.py::test_experts_with_reference_routing[blackhole-s128-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_moe.py::test_moe_block_end_to_end[blackhole-s128-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-1-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-s33-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s128-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_hf[blackhole-s33-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_vs_single_chip[blackhole-paged32-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b2-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_decode_output_layout_matches_input[blackhole-b8-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_no_runtime_fallbacks[blackhole-b32-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s128-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_vs_functional_precision_delta[blackhole-s33-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_router_matches_functional[blackhole-s128-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_router_padding_is_zero[blackhole-s33-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_matches_prefill[blackhole-paged32-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_batch[blackhole-b2-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_rmsnorm.py::test_rmsnorm_vs_reference[blackhole-input_s128-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention.py::test_attention_prefill_vs_reference[blackhole-s512-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-paged32-p32-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s512-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer_decode.py::test_decode_layer_matches_prefill[blackhole-paged32-p32-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-2-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-s128-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s512-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b8-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s512-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_router_matches_functional[blackhole-s33-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_router_padding_is_zero[blackhole-s100-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_batch[blackhole-b8-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_rmsnorm.py::test_rmsnorm_vs_reference[blackhole-postattn_s32-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-paged32-p128-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s33-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer_decode.py::test_decode_layer_matches_prefill[blackhole-paged32-p128-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-3-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s33-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b32-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s33-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_router_padding_is_zero[blackhole-s128-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_decode_batch[blackhole-b32-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_rmsnorm.py::test_rmsnorm_vs_reference[blackhole-input_decode-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-paged64-p32-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s100-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-4-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s100-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s100-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_attention_decode.py::test_decode_matches_prefill_at_same_position[blackhole-paged64-p128-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_decoder_layer.py::test_decoder_layer_vs_reference[blackhole-s257-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-5-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s257-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_optimized_decoder.py::test_optimized_prefill_vs_reference[blackhole-s257-1x1]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_wqkv_column_split_is_head_interleaved
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_repo_default_topology_is_wrong_for_this_mesh
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-6-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-7-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_meta_rope_weights_match_hf
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_reference.py::test_layer_forward_is_finite_and_non_degenerate
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_reference.py::test_layer_forward_is_deterministic
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_reference.py::test_moe_matches_unfused_reimplementation
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_reference.py::test_router_selects_expected_expert_count
+================ 112 passed, 16 deselected in 390.48s (0:06:30) ================
+nanobind: leaked 4 instances!
+ - leaked instance 0x7b310efecea8 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7b310efed088 of type "ttnn._ttnn.multi_device.MeshCoordinate"
+ - leaked instance 0x7b30bb9f3b48 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7b30bbdfd098 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 26 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.multi_device.MeshMapperConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.multi_device.CppTensorToMesh"
+ - ... skipped remainder
+nanobind: leaked 261 functions!
+ - leaked function ""
+ - leaked function "unpad_from_tile"
+ - leaked function ""
+ - leaked function "enable_program_cache"
+ - leaked function ""
+ - leaked function ""
+ - leaked function "deallocate"
+ - leaked function "to_json"
+ - leaked function "__repr__"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-14 01:33:26.833 | info     |    BuildKernels | JIT cache stats: 1522/1522 hits (100.0%) [1522 cached, 20155 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-14 01:33:26.833 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-14 01:33:26.850 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-14 01:33:26.850 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-14 01:33:27.410 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-14 01:33:27.410 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-14 01:33:27.410 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

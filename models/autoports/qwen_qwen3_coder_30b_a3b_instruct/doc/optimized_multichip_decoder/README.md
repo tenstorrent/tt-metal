@@ -375,10 +375,20 @@ it changed answer.
    between the head split and RoPE — is offline, weight-side and exact;
    `test_meta_rope_weights_match_hf` asserts the whole convention on the host,
    and `weight_mapping.permute_wqkv_to_meta` leaves V and `wo` untouched. The
-   position gather is hoisted out of the forward path onto the first eager call,
-   which is legitimate because `token_index` is a Python int for the shipped op
-   too — neither spelling can advance the rotary position inside a replayed
-   trace.
+   position gather is hoisted out of the forward path onto the first eager call.
+
+   *Corrected at stage 05.* This paragraph used to justify that hoist with
+   "neither spelling can advance the rotary position inside a replayed trace",
+   and that is **false** for `rotary_embedding_llama`. Its nanobind signature
+   (`rotary_embedding_llama_nanobind.cpp:38-44`) takes only tensors —
+   `input_tensor`, `cos_cache`, `sin_cache`, `trans_mat` — and no position
+   argument at all, and `models/tt_transformers/tt/rope.py:571,739` builds
+   exactly that form; it is trace-replayable. What was unreplayable was *this
+   wiring*, which hoisted the cos/sin gather onto the first eager call and so
+   baked the position into the cached pair — a property of the implementation,
+   not of the op. The rejection below is unaffected: it rests on the channel
+   convention, not on traceability. Stage 05 needed a position-tensor rotary and
+   found one in `rotary_embedding_hf` (`../full_model/README.md`).
 
    **It then failed `test_multichip_decode_vs_single_chip` at PCC 0.876, and
    `probes/rope_layer_probe.py` says why:**

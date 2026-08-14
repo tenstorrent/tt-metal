@@ -1,0 +1,72 @@
+2026-08-13 21:29:16.690 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-08-13 21:29:18.965 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-13 21:29:18.965 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-13 21:29:18.965 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-13 21:29:18.965 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-13 21:29:18.976 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-13 21:29:18.976 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-13 21:29:19.055 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-13 21:29:19.055 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-13 21:29:19.055 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-13 21:29:19.055 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-13 21:29:19.056 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-13 21:29:19.257 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-13 21:29:19.381 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:29:19.381 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:29:19.381 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-13 21:29:19.381 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:29:19.381 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:29:19.423 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:29:19.452 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:29:19.452 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+P|pass1 04 default (scatter tail)      0.4348 ms   (reference)
+P|pass1 04 + threshold router tail     0.4382 ms   (max|diff| 0.000e+00)
+P|pass1 04 + persistent CCL buffers    0.4335 ms   (max|diff| 0.000e+00)
+2026-08-13 21:29:23.201 | critical |          Always | TT_FATAL: Mesh device is required for matmul_reduce_scatter_async operation (assert.hpp:104)
+P|pass1 04 + fused matmul-RS on wo     FAILED TT_FATAL @ /home/raahem/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:36: mesh_device != nullptr
+info:
+Mesh device is required for matm
+P|pass2 04 default (scatter tail)      0.4346 ms   (max|diff| 0.000e+00)
+P|pass2 04 + threshold router tail     0.4382 ms   (max|diff| 0.000e+00)
+P|pass2 04 + persistent CCL buffers    0.4333 ms   (max|diff| 0.000e+00)
+2026-08-13 21:29:23.364 | critical |          Always | TT_FATAL: Mesh device is required for matmul_reduce_scatter_async operation (assert.hpp:104)
+P|pass2 04 + fused matmul-RS on wo     FAILED TT_FATAL @ /home/raahem/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async.cpp:36: mesh_device != nullptr
+info:
+Mesh device is required for matm
+P|done
+nanobind: leaked 1 instances!
+ - leaked instance 0x73ecac4c2418 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 15 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "UnaryOpType"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulDeviceOperation"
+ - leaked type "ttnn._ttnn.multi_device.MeshDevice"
+ - ... skipped remainder
+nanobind: leaked 236 functions!
+ - leaked function "buffer_num_pages"
+ - leaked function "get_fabric_node_id"
+ - leaked function "ranges"
+ - leaked function ""
+ - leaked function "remove_sub_device_manager"
+ - leaked function "compute_program_hash"
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-13 21:29:24.352 | info     |    BuildKernels | JIT cache stats: 292/294 hits (99.3%) [292 cached, 272 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-13 21:29:24.352 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-13 21:29:24.366 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-13 21:29:24.366 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-13 21:29:24.843 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-13 21:29:24.843 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-13 21:29:24.843 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

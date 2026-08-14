@@ -400,8 +400,16 @@ Q and K row blocks of `wqkv` plus Qwen3's per-head `q_norm`/`k_norm`
 (`weight_mapping.permute_wqkv_to_meta`, `permute_head_vector_to_meta`), a
 host-side assertion of the whole convention (`test_meta_rope_weights_match_hf`),
 a decode-only Meta weight twin, and the position gather hoisted onto the first
-eager call — legitimate because `token_index` is a Python int for the shipped op
-too, so neither spelling can move the rotary position inside a replayed trace.
+eager call.
+
+*Corrected at stage 05.* The hoist used to be justified with "neither spelling
+can move the rotary position inside a replayed trace". That is **false** for
+`rotary_embedding_llama`: its nanobind signature
+(`rotary_embedding_llama_nanobind.cpp:38-44`) takes tensors only and no position
+argument, and `models/tt_transformers/tt/rope.py:571,739` builds exactly that
+form. The op is trace-replayable; the hoist in *this* wiring is what baked the
+position in. Nothing below changes — the rejection was always about channel
+convention.
 
 **Then `test_multichip_decode_vs_single_chip` read PCC 0.876.** The dies agreed
 exactly (spread 0.0), so it was systematic, not a race.

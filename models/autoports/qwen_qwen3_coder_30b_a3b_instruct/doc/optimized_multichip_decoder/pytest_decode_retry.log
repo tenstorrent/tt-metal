@@ -1,0 +1,625 @@
+2026-08-13 21:53:16.104 | DEBUG    | ttnn:<module>:78 - Initial ttnn.CONFIG:
+Config{cache_path=/home/raahem/.cache/ttnn,model_cache_path=/home/raahem/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/raahem/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/raahem/tt-metal
+configfile: pytest.ini
+plugins: dash-2.15.0, timeout-2.4.0, split-0.11.0, github-actions-annotate-failures-0.3.0, cov-7.0.0, anyio-4.14.2, benchmark-5.2.3
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 38 items
+
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_wqkv_column_split_is_head_interleaved Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+2026-08-13 21:53:19.667 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_wqkv_column_split_is_head_interleaved:229 - wqkv head-interleaved split verified for 4 dies, per-die N = 1280
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_repo_default_topology_is_wrong_for_this_mesh 2026-08-13 21:53:19.890 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_repo_default_topology_is_wrong_for_this_mesh:242 - multichip_decoder overrides default_topology (callable: default_topology)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_baseline_upload_is_actually_replicated[blackhole-1x4-device_params0] 2026-08-13 21:53:20.107 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:228)
+2026-08-13 21:53:20.107 | info     |             UMD | Cluster constructor started. (cluster.cpp:389)
+2026-08-13 21:53:20.107 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:96)
+2026-08-13 21:53:20.107 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:115)
+2026-08-13 21:53:20.118 | info     |             UMD | Established firmware bundle version: 19.8.99 (topology_discovery.cpp:575)
+2026-08-13 21:53:20.119 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:119)
+2026-08-13 21:53:20.199 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3}/[0, 1, 2, 3] and remote chip ids {} (cluster.cpp:173)
+2026-08-13 21:53:20.199 | info     |             UMD | IOMMU: enabled (cluster.cpp:147)
+2026-08-13 21:53:20.199 | info     |             UMD | KMD version: 2.10.0 (cluster.cpp:150)
+2026-08-13 21:53:20.199 | info     |             UMD | Cluster constructor completed. (cluster.cpp:648)
+2026-08-13 21:53:20.200 | info     |             UMD | Starting devices in cluster (cluster.cpp:1184)
+2026-08-13 21:53:20.461 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1192)
+2026-08-13 21:53:20.576 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:53:20.576 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:53:20.576 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:53:20.576 | warning  |          Always | Unknown motherboard 'B850M-C' for chip_id=0 (bus_id=0x1) — falling back to bus_id as tray_id. Add this motherboard and its bus IDs to mobo_to_bus_ids in physical_system_discovery.cpp. (physical_system_discovery.cpp:119)
+2026-08-13 21:53:20.576 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:53:20.576 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:53:20.618 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:53:20.642 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:53:20.642 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:53:21.297 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:53:25.767 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_baseline_upload_is_actually_replicated:259 - replicated single-chip baseline: max spread across 4 dies = 0.000e+00
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-0-1x4-device_params0] 2026-08-13 21:53:26.106 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:53:26.106 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:53:26.106 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:53:26.106 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:53:26.106 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:53:26.106 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:53:26.154 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:53:26.166 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:53:26.166 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:53:26.225 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:53:30.686 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=0: 4 dies bit-identical over 1024 selections
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-decode-1x4-device_params0] 2026-08-13 21:53:31.042 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:53:31.042 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:53:31.042 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:53:31.042 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:53:31.042 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:53:31.042 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:53:31.090 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:53:31.102 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:53:31.102 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:53:31.163 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:53:35.469 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_router_windows_partition_global_routing:319 - router windows seq=1: max |stitched - global| = 0.000e+00
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s32-1x4-device_params0] 2026-08-13 21:53:35.808 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:53:35.808 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:53:35.808 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:53:35.808 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:53:35.808 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:53:35.808 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:53:35.855 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:53:35.868 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:53:35.868 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:53:35.926 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:53:40.328 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=32 vs single-chip TTNN: 0.999726173883768
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_hf[blackhole-s128-1x4-device_params0] 2026-08-13 21:53:40.673 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:53:40.674 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:53:40.674 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:53:40.674 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:53:40.674 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:53:40.674 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:53:40.722 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:53:40.734 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:53:40.734 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:53:40.793 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+[transformers] You tried to access the `AttentionInterface` with a `config._attn_implementation` set to `None`. This is expected if you use an Attention Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._attn_implementation`
+[transformers] You tried to access the `ExpertsInterface` with a `config._experts_implementation` set to `None`. This is expected if you use an Expert Module as a standalone Module. If this is not the case, something went wrong with the dispatch of `config._experts_implementation`
+2026-08-13 21:53:47.342 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_hf:365 - multichip prefill S=128 vs HF: 0.9990883578961901
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_is_deterministic[blackhole-1x4-device_params0] 2026-08-13 21:53:47.800 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:53:47.801 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:53:47.801 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:53:47.801 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:53:47.801 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:53:47.801 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:53:47.865 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:53:47.882 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:53:47.882 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:53:48.008 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:53:56.135 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_is_deterministic:377 - multichip prefill: 3 runs bit-identical on all 4 dies
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_local_kv_cache_layout[blackhole-1x4-device_params0] 2026-08-13 21:53:56.576 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:53:56.577 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:53:56.577 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:53:56.577 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:53:56.577 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:53:56.577 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:53:56.651 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:53:56.668 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:53:56.668 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:53:56.797 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:54:05.367 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_local_kv_cache_layout:417 - local KV head layout: 4x[.,1,.,.] stitched vs single-chip [.,4,.,.]: 1.0
+2026-08-13 21:54:05.368 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_local_kv_cache_layout:421 - per-die KV: 512 B/token/layer (single chip: 2048)
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_vs_single_chip[blackhole-contiguous-1x4-device_params0] 2026-08-13 21:54:05.828 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:54:05.829 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:54:05.829 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:54:05.829 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:54:05.829 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:54:05.829 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:54:05.904 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:54:05.922 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:54:05.922 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:54:06.032 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:54:14.694 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_vs_single_chip:474 - multichip decode [contiguous] vs single-chip TTNN: 0.9999345318510067
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_contiguous_batch8[blackhole-1x4-device_params0] 2026-08-13 21:54:15.152 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:54:15.152 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:54:15.152 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:54:15.152 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:54:15.152 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:54:15.152 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:54:15.223 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:54:15.239 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:54:15.239 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:54:15.402 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:54:24.638 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 0 vs single-chip TTNN: 0.9999345318510067
+2026-08-13 21:54:24.638 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 1 vs single-chip TTNN: 0.9999371911164702
+2026-08-13 21:54:24.639 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 2 vs single-chip TTNN: 0.9998928679638549
+2026-08-13 21:54:24.639 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 3 vs single-chip TTNN: 0.9999261582329086
+2026-08-13 21:54:24.639 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 4 vs single-chip TTNN: 0.999960995305192
+2026-08-13 21:54:24.639 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 5 vs single-chip TTNN: 0.9999652958487225
+2026-08-13 21:54:24.640 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 6 vs single-chip TTNN: 0.9999615950465374
+2026-08-13 21:54:24.640 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_contiguous_batch8:547 - multichip decode [contiguous, batch 8] user 7 vs single-chip TTNN: 0.9999511139965788
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_multi_step_decode_vs_hf[blackhole-1x4-device_params0] 2026-08-13 21:54:25.105 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:54:25.105 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:54:25.105 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:54:25.105 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:54:25.106 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:54:25.106 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:54:25.183 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:54:25.204 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:54:25.204 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:54:25.911 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:54:36.822 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_multi_step_decode_vs_hf:585 - multichip decode step 0 (pos 32) vs HF: 0.999245003101615
+2026-08-13 21:54:36.832 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_multi_step_decode_vs_hf:585 - multichip decode step 1 (pos 33) vs HF: 0.998738790344711
+2026-08-13 21:54:36.841 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_multi_step_decode_vs_hf:585 - multichip decode step 2 (pos 34) vs HF: 0.9993927543473524
+2026-08-13 21:54:36.848 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_multi_step_decode_vs_hf:585 - multichip decode step 3 (pos 35) vs HF: 0.9989421079333342
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b1-1x4-device_params0] 2026-08-13 21:54:37.351 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:54:37.352 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:54:37.352 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:54:37.352 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:54:37.352 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:54:37.352 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:54:37.437 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:54:37.454 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:54:37.455 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:54:37.587 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:54:51.676 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=1 user 0 vs HF: 0.9992450035600746
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_expert_window_can_be_empty[blackhole-1x4-device_params0] 2026-08-13 21:54:52.193 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:54:52.193 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:54:52.193 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:54:52.193 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:54:52.194 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:54:52.194 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:54:52.273 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:54:52.291 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:54:52.291 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:54:52.424 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:55:01.732 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_expert_window_can_be_empty:693 - forced routing: live experts per die = [6, 2, 0, 0] (sum 8)
+2026-08-13 21:55:01.758 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_expert_window_can_be_empty:704 - empty-window partials: max |value| on dies [2, 3] = 0.0
+2026-08-13 21:55:01.892 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_expert_window_can_be_empty:745 - layer under maximally unbalanced routing vs single-chip: 0.9999411824084109
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_stacked_layer_io_contract[blackhole-1x4-device_params0] 2026-08-13 21:55:02.372 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:55:02.372 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:55:02.372 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:55:02.372 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:55:02.373 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:55:02.373 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:55:02.441 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:55:02.460 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:55:02.460 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:55:02.569 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:55:12.063 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_stacked_layer_io_contract:796 - two stacked multichip layers vs two stacked single-chip layers: 0.9994464888290773
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_is_traceable[blackhole-1x4-device_params0] 2026-08-13 21:55:12.542 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:55:12.543 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:55:12.543 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:55:12.543 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:55:12.543 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:55:12.543 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:55:12.614 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:55:12.636 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:55:12.636 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:55:12.797 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:55:21.902 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_is_traceable:840 - multichip traced decode vs eager: 1.0
+2026-08-13 21:55:21.906 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_is_traceable:856 - multichip traced replay delta after input swap = 0.147461
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_stress_is_deterministic[blackhole-1x4-device_params0] 2026-08-13 21:55:22.407 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:55:22.407 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:55:22.407 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:55:22.407 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:55:22.407 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:55:22.407 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:55:22.490 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:55:22.511 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:55:22.511 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:55:22.617 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:55:32.182 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_stress_is_deterministic:897 - multichip decode: 20 consecutive steps bit-identical across all 4 dies
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_no_runtime_fallbacks[blackhole-b1-1x4-device_params0] 2026-08-13 21:55:32.681 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:55:32.682 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:55:32.682 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:55:32.682 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:55:32.682 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:55:32.682 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:55:32.759 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:55:32.780 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:55:32.780 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:55:33.531 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:55:42.524 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_no_runtime_fallbacks:917 - multichip fallback audit at batch 1: {'batch': 1, 'dram_sharded_qkv': (2048, 1280), 'dram_sharded_wo': (1024, 2048), 'dram_sharded_taken': True, 'gate_up_in0_block_w': 16, 'down_in0_block_w': 12, 'expert_intermediate_buffer': 'L1', 'local_heads': (8, 1), 'local_experts': 32}
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-1-1x4-device_params0] 2026-08-13 21:55:43.019 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:55:43.020 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:55:43.020 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:55:43.020 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:55:43.020 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:55:43.020 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:55:43.093 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:55:43.115 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:55:43.115 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:55:43.275 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:55:51.906 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=1: 4 dies bit-identical over 1024 selections
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-s33-1x4-device_params0] 2026-08-13 21:55:52.423 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:55:52.424 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:55:52.424 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:55:52.424 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:55:52.425 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:55:52.425 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:55:52.527 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:55:52.550 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:55:52.550 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:55:52.662 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:56:01.926 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_router_windows_partition_global_routing:319 - router windows seq=33: max |stitched - global| = 0.000e+00
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s128-1x4-device_params0] 2026-08-13 21:56:02.442 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:56:02.443 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:56:02.443 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:56:02.443 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:56:02.443 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:56:02.443 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:56:02.523 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:56:02.543 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:56:02.543 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:56:02.643 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:56:13.238 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=128 vs single-chip TTNN: 0.9998520985932086
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_hf[blackhole-s33-1x4-device_params0] 2026-08-13 21:56:13.724 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:56:13.724 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:56:13.724 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:56:13.724 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:56:13.725 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:56:13.725 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:56:13.808 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:56:13.828 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:56:13.828 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:56:13.974 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:56:32.499 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_hf:365 - multichip prefill S=33 vs HF: 0.9989603338857946
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_vs_single_chip[blackhole-paged32-1x4-device_params0] 2026-08-13 21:56:33.029 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:56:33.029 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:56:33.029 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:56:33.029 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:56:33.030 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:56:33.030 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:56:33.107 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:56:33.128 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:56:33.128 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:56:33.291 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:56:43.883 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_vs_single_chip:474 - multichip decode [paged(32)] vs single-chip TTNN: 0.999941351428888
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b2-1x4-device_params0] 2026-08-13 21:56:44.390 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:56:44.390 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:56:44.390 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:56:44.390 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:56:44.391 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:56:44.391 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:56:44.467 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:56:44.487 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:56:44.488 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:56:45.215 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:57:02.053 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=2 user 0 vs HF: 0.9992450035600746
+2026-08-13 21:57:08.154 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=2 user 1 vs HF: 0.9994441043393264
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_no_runtime_fallbacks[blackhole-b32-1x4-device_params0] 2026-08-13 21:57:08.649 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:57:08.650 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:57:08.650 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:57:08.650 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:57:08.650 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:57:08.650 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:57:08.726 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:57:08.762 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:57:08.762 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:57:08.933 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:57:18.650 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_no_runtime_fallbacks:917 - multichip fallback audit at batch 32: {'batch': 32, 'dram_sharded_qkv': (2048, 1280), 'dram_sharded_wo': (1024, 2048), 'dram_sharded_taken': True, 'gate_up_in0_block_w': 16, 'down_in0_block_w': 12, 'expert_intermediate_buffer': 'DRAM', 'local_heads': (8, 1), 'local_experts': 32}
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-2-1x4-device_params0] 2026-08-13 21:57:19.142 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:57:19.143 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:57:19.143 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:57:19.143 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:57:19.143 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:57:19.143 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:57:19.228 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:57:19.248 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:57:19.248 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:57:19.382 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:57:28.716 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=2: 4 dies bit-identical over 1024 selections
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-s128-1x4-device_params0] 2026-08-13 21:57:29.214 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:57:29.215 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:57:29.215 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:57:29.215 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:57:29.215 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:57:29.215 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:57:29.291 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:57:29.311 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:57:29.311 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:57:29.450 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:57:40.113 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_router_windows_partition_global_routing:319 - router windows seq=128: max |stitched - global| = 0.000e+00
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s512-1x4-device_params0] 2026-08-13 21:57:40.624 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:57:40.624 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:57:40.624 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:57:40.624 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:57:40.624 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:57:40.624 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:57:40.716 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:57:40.740 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:57:40.740 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:57:40.913 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:57:52.426 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=512 vs single-chip TTNN: 0.999620460949962
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b8-1x4-device_params0] 2026-08-13 21:57:52.944 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:57:52.944 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:57:52.944 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:57:52.944 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:57:52.945 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:57:52.945 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:57:53.024 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:57:53.045 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:57:53.045 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:57:53.797 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:58:09.512 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 0 vs HF: 0.9992450035600746
+2026-08-13 21:58:12.395 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 1 vs HF: 0.9994441043393264
+2026-08-13 21:58:12.521 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 2 vs HF: 0.9994544253098209
+2026-08-13 21:58:18.238 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 3 vs HF: 0.9993312504026023
+2026-08-13 21:58:24.330 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 4 vs HF: 0.9994259776629145
+2026-08-13 21:58:29.094 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 5 vs HF: 0.999515318099617
+2026-08-13 21:58:29.303 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 6 vs HF: 0.9992655076211026
+2026-08-13 21:58:30.731 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=8 user 7 vs HF: 0.999273488138553
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-3-1x4-device_params0] 2026-08-13 21:58:31.238 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:58:31.238 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:58:31.238 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:58:31.238 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:58:31.238 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:58:31.238 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:58:31.320 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:58:31.343 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:58:31.343 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:58:31.537 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:58:41.116 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=3: 4 dies bit-identical over 1024 selections
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s33-1x4-device_params0] 2026-08-13 21:58:41.636 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:58:41.637 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:58:41.637 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:58:41.637 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:58:41.638 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:58:41.638 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:58:41.722 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:58:41.742 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:58:41.742 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:58:41.863 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:58:52.722 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=33 vs single-chip TTNN: 0.9997335206043321
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b32-1x4-device_params0] 2026-08-13 21:58:53.243 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 21:58:53.244 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 21:58:53.244 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 21:58:53.244 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 21:58:53.244 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 21:58:53.244 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 21:58:53.359 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 21:58:53.379 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 21:58:53.379 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 21:58:53.517 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 21:59:13.296 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 0 vs HF: 0.9992450035600746
+2026-08-13 21:59:15.383 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 1 vs HF: 0.9994441043393264
+2026-08-13 21:59:19.688 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 2 vs HF: 0.9994544253098209
+2026-08-13 21:59:25.611 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 3 vs HF: 0.9993312504026023
+2026-08-13 21:59:32.640 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 4 vs HF: 0.9994259776629145
+2026-08-13 21:59:39.530 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 5 vs HF: 0.999515318099617
+2026-08-13 21:59:44.204 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 6 vs HF: 0.9992655076211026
+2026-08-13 21:59:50.854 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 7 vs HF: 0.999273488138553
+2026-08-13 21:59:57.283 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 8 vs HF: 0.9992380168243756
+2026-08-13 22:00:06.016 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 9 vs HF: 0.999231862413366
+2026-08-13 22:00:11.636 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 10 vs HF: 0.9950797483850857
+2026-08-13 22:00:13.983 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 11 vs HF: 0.9995664786300886
+2026-08-13 22:00:16.914 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 12 vs HF: 0.9989115557076926
+2026-08-13 22:00:17.352 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 13 vs HF: 0.9939255621655199
+2026-08-13 22:00:19.378 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 14 vs HF: 0.9991591858436268
+2026-08-13 22:00:20.860 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 15 vs HF: 0.9994818980240605
+2026-08-13 22:00:21.818 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 16 vs HF: 0.9990920850604048
+2026-08-13 22:00:24.116 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 17 vs HF: 0.9992070456865015
+2026-08-13 22:00:27.189 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 18 vs HF: 0.9993522599191121
+2026-08-13 22:00:32.462 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 19 vs HF: 0.996290594339868
+2026-08-13 22:00:34.160 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 20 vs HF: 0.9993654479983222
+2026-08-13 22:00:40.566 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 21 vs HF: 0.9991977456504364
+2026-08-13 22:00:44.608 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 22 vs HF: 0.9993430125011343
+2026-08-13 22:00:45.785 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 23 vs HF: 0.9994094977078336
+2026-08-13 22:00:46.319 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 24 vs HF: 0.9994054595181203
+2026-08-13 22:00:50.288 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 25 vs HF: 0.9955135574569638
+2026-08-13 22:00:50.415 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 26 vs HF: 0.9995151746699567
+2026-08-13 22:00:50.555 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 27 vs HF: 0.9994807091508782
+2026-08-13 22:00:53.910 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 28 vs HF: 0.9992759716993211
+2026-08-13 22:00:56.418 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 29 vs HF: 0.9932161039443776
+2026-08-13 22:01:00.079 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 30 vs HF: 0.9993192265737711
+2026-08-13 22:01:00.954 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_decode_batch:627 - multichip decode batch=32 user 31 vs HF: 0.9994875056071248
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-4-1x4-device_params0] 2026-08-13 22:01:01.421 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 22:01:01.421 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 22:01:01.421 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 22:01:01.421 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 22:01:01.421 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 22:01:01.421 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 22:01:01.489 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 22:01:01.506 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 22:01:01.506 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 22:01:02.178 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 22:01:07.500 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=4: 4 dies bit-identical over 1024 selections
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s100-1x4-device_params0] 2026-08-13 22:01:07.879 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 22:01:07.879 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 22:01:07.879 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 22:01:07.879 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 22:01:07.880 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 22:01:07.880 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 22:01:07.932 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 22:01:07.947 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 22:01:07.947 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 22:01:08.019 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 22:01:15.525 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=100 vs single-chip TTNN: 0.9998680715538794
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-5-1x4-device_params0] 2026-08-13 22:01:15.928 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 22:01:15.928 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 22:01:15.928 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 22:01:15.928 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 22:01:15.929 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 22:01:15.929 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 22:01:15.989 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 22:01:16.004 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 22:01:16.004 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 22:01:16.078 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 22:01:21.108 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=5: 4 dies bit-identical over 1024 selections
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s257-1x4-device_params0] 2026-08-13 22:01:21.483 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 22:01:21.483 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 22:01:21.483 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 22:01:21.483 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 22:01:21.483 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 22:01:21.483 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 22:01:21.536 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 22:01:21.551 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 22:01:21.551 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 22:01:21.621 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 22:01:26.837 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_multichip_prefill_vs_single_chip:351 - multichip prefill S=257 vs single-chip TTNN: 0.9997130463493856
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-6-1x4-device_params0] 2026-08-13 22:01:27.216 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 22:01:27.216 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 22:01:27.216 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 22:01:27.216 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 22:01:27.216 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 22:01:27.216 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 22:01:27.270 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 22:01:27.284 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 22:01:27.284 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 22:01:27.356 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 22:01:32.199 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=6: 4 dies bit-identical over 1024 selections
+PASSED
+models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-7-1x4-device_params0] 2026-08-13 22:01:32.573 | INFO     | conftest:mesh_device:600 - Keeping trace_region_size=90000000 from device_params (already set)
+2026-08-13 22:01:32.573 | info     |           Metal | Fabric config changed from FabricConfig::FABRIC_1D_RING to FabricConfig::FABRIC_1D_RING, reinitializing control plane (metal_env.cpp:337)
+2026-08-13 22:01:32.573 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:437)
+2026-08-13 22:01:32.573 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:499)
+2026-08-13 22:01:32.573 | info     |          Fabric | Logical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3329)
+2026-08-13 22:01:32.573 | info     |          Fabric | Physical multi-mesh adjacency: intermesh degree histogram {0:1}; intra-mesh degree histograms mesh0 {2:4} (topology_mapper_utils.cpp:3337)
+2026-08-13 22:01:32.625 | info     |           Metal | Initializing Fabric (fabric_firmware_initializer.cpp:296)
+2026-08-13 22:01:32.640 | info     |           Metal | Fabric initialized on 4 devices (fabric_firmware_initializer.cpp:444)
+2026-08-13 22:01:32.640 | info     |           Metal | Fabric Initialized with config FabricConfig::FABRIC_1D_RING (fabric_firmware_initializer.cpp:313)
+2026-08-13 22:01:32.714 | DEBUG    | conftest:mesh_device:630 - multidevice with 4 devices is created
+2026-08-13 22:01:37.693 | INFO     | autoports.qwen_qwen3_coder_30b_a3b_instruct.tests.test_multichip_decoder:test_topk_is_identical_across_dies:292 - topk seed=7: 4 dies bit-identical over 1024 selections
+PASSED
+
+==================================== PASSES ====================================
+__________________ test_wqkv_column_split_is_head_interleaved __________________
+------------------------------ Captured log setup ------------------------------
+WARNING  huggingface_hub.utils._http:_http.py:904 Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+- generated xml file: /home/raahem/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+117.12s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b32-1x4-device_params0]
+27.44s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b8-1x4-device_params0]
+12.99s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b2-1x4-device_params0]
+11.16s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-s128-1x4-device_params0]
+11.13s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b2-1x4-device_params0]
+11.09s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s512-1x4-device_params0]
+10.95s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b32-1x4-device_params0]
+10.76s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_vs_single_chip[blackhole-paged32-1x4-device_params0]
+10.76s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s33-1x4-device_params0]
+10.70s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b8-1x4-device_params0]
+10.34s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_no_runtime_fallbacks[blackhole-b32-1x4-device_params0]
+10.29s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s128-1x4-device_params0]
+10.19s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_no_runtime_fallbacks[blackhole-b1-1x4-device_params0]
+10.16s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-3-1x4-device_params0]
+9.86s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-2-1x4-device_params0]
+9.84s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_expert_window_can_be_empty[blackhole-1x4-device_params0]
+9.76s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-s33-1x4-device_params0]
+9.75s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_hf[blackhole-s33-1x4-device_params0]
+9.59s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_stress_is_deterministic[blackhole-1x4-device_params0]
+9.47s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_stacked_layer_io_contract[blackhole-1x4-device_params0]
+9.46s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_multi_step_decode_vs_hf[blackhole-1x4-device_params0]
+9.42s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_is_traceable[blackhole-1x4-device_params0]
+9.36s call     models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_hf[blackhole-s33-1x4-device_params0]
+9.17s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-1-1x4-device_params0]
+9.15s setup    models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_contiguous_batch8[blackhole-1x4-device_params0]
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_wqkv_column_split_is_head_interleaved
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_repo_default_topology_is_wrong_for_this_mesh
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_baseline_upload_is_actually_replicated[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-0-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-decode-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s32-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_hf[blackhole-s128-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_is_deterministic[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_local_kv_cache_layout[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_vs_single_chip[blackhole-contiguous-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_contiguous_batch8[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_multi_step_decode_vs_hf[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b1-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_expert_window_can_be_empty[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_stacked_layer_io_contract[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_is_traceable[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_stress_is_deterministic[blackhole-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_no_runtime_fallbacks[blackhole-b1-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-1-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-s33-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s128-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_hf[blackhole-s33-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_vs_single_chip[blackhole-paged32-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b2-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_no_runtime_fallbacks[blackhole-b32-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-2-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_router_windows_partition_global_routing[blackhole-s128-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s512-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b8-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-3-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s33-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_decode_batch[blackhole-b32-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-4-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s100-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-5-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_multichip_prefill_vs_single_chip[blackhole-s257-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-6-1x4-device_params0]
+PASSED models/autoports/qwen_qwen3_coder_30b_a3b_instruct/tests/test_multichip_decoder.py::test_topk_is_identical_across_dies[blackhole-7-1x4-device_params0]
+======================== 38 passed in 501.08s (0:08:21) ========================
+nanobind: leaked 2 instances!
+ - leaked instance 0x7211825292d8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+ - leaked instance 0x72118210fb68 of type "ttnn._ttnn.tensor.MemoryConfig"
+nanobind: leaked 21 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "FabricConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - ... skipped remainder
+nanobind: leaked 250 functions!
+ - leaked function ""
+ - leaked function "storage_type"
+ - leaked function "compute_program_hash"
+ - leaked function "get_num_devices"
+ - leaked function "__ne__"
+ - leaked function ""
+ - leaked function "to_torch_with_padded_shape"
+ - leaked function "enable_program_cache"
+ - leaked function ""
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html2026-08-13 22:01:40.632 | info     |    BuildKernels | JIT cache stats: 998/998 hits (100.0%) [998 cached, 10950 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:207)
+2026-08-13 22:01:40.632 | info     |    BuildKernels | JIT telemetry: 3 registered TelemetryTokens (build_cache_telemetry.cpp:230)
+2026-08-13 22:01:40.647 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:513)
+2026-08-13 22:01:40.647 | info     |             UMD | Closing devices in cluster (cluster.cpp:1197)
+2026-08-13 22:01:41.135 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1206)
+2026-08-13 22:01:41.135 | info     |             UMD | Cluster destructor started. (cluster.cpp:912)
+2026-08-13 22:01:41.135 | info     |             UMD | Cluster destructor completed. (cluster.cpp:915)

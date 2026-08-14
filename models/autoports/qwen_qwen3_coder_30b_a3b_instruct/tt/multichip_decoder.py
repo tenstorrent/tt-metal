@@ -258,11 +258,15 @@ def _meta_rope(ctx: MeshContext, cos_cache: ttnn.Tensor, sin_cache: ttnn.Tensor,
     call and cached on ``ctx``:
 
     * the **Meta cos/sin** for this ``token_index``, read off the HF device
-      cache once, permuted on the host and uploaded already sharded. That is
-      legitimate precisely because ``token_index`` is a Python int -- the
-      shipped HF op bakes the position into the traced program too, so neither
-      spelling can advance the rotary position inside a replayed trace, and
-      hoisting the gather changes nothing about what a trace can express.
+      cache once, permuted on the host and uploaded already sharded. This hoist
+      is what makes *this* wiring unreplayable, and it is a property of the
+      wiring rather than of the op: ``rotary_embedding_llama`` takes cos/sin as
+      tensors and no position argument at all
+      (``rotary_embedding_llama_nanobind.cpp:38-44``), so it can be driven from
+      a position tensor inside a trace. The shipped
+      ``rotary_embedding(..., token_index)`` genuinely cannot, which is why
+      stage 05 moved decode to ``rotary_embedding_hf``. An earlier revision of
+      this docstring claimed neither spelling could; that was wrong.
     * the **transformation matrix**, which is position-independent.
 
     The Meta *channel order* is not established here at all: it is a property of
@@ -1414,6 +1418,7 @@ def decoder_layer_decode_multichip(
     kv_cache: KVCache,
     current_pos: ttnn.Tensor,
     token_index: int,
+    rope=None,
 ) -> ttnn.Tensor:
     """Decode one token per user on the mesh. ``x`` / return ``[1, 1, B, 2048]``.
 
@@ -1432,6 +1437,19 @@ def decoder_layer_decode_multichip(
     eps = config.global_config.rms_norm_eps
 
     normed = decode_residual_norm(x, weights.input_layernorm_rm, eps)
+    # ``rope`` is the stage-05 seam. It defaults to ``None`` and therefore to
+    # ``_apply_rope`` -- ``ttnn.experimental.rotary_embedding`` with a **Python
+    # int** ``token_index``, which is what every stage-03/04 number was measured
+    # at and what the single-layer tests still exercise. That spelling cannot be
+    # replayed: the position is a compile-time argument, so a captured trace
+    # rotates every later token at the position it was captured at. The full
+    # model therefore passes ``model._rope_decode``, which is
+    # ``ttnn.experimental.rotary_embedding_hf(is_decode_mode=True)`` reading a
+    # **per-user cos/sin pair gathered on device** from a position tensor the
+    # trace itself advances. Same HF ``rotate_half`` channel convention, so the
+    # KV cache convention, prefill, and every weight are untouched -- which is
+    # exactly what stage 04's rejected ``rotary_embedding_llama`` lever could not
+    # offer (README limitation 4).
     # The rotary stays the **HF** op. ``rotary_embedding_llama`` is 3.05x faster
     # standalone and bit-identical there, but it cannot be adopted for decode
     # alone: it needs Meta channel order, and the KV cache prefill already wrote
@@ -1452,6 +1470,7 @@ def decoder_layer_decode_multichip(
         # default, which is the configuration every published decode number here
         # was measured at. See _sdpa_program_config.
         sdpa_program_config=None if kv_cache.is_paged else _sdpa_program_config(x.device()),
+        rope=rope,
     )
     ttnn.deallocate(normed)
     attn_out = all_reduce_decode(attn_partial, ctx)
