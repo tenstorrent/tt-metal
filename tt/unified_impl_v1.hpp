@@ -167,17 +167,15 @@ template <int thread>
 Semaphore<thread>& Semaphore<thread>::inc_mcast(PhysicalMcast mcast, uint32_t value) {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
-        // num_dests_excluding_sender() assumes the issuing core is the start
-        // corner. Issuing from anywhere else undercounts, and the multicast then
-        // retires before the cores it missed ever hear about it -- a stranded
-        // handshake rather than anything resembling a miscount.
-        ASSERT(PhysicalCoord::this_core() == mcast.start);
-#endif
+        // Sender-aware count, with no assertion that the issuer is the start
+        // corner: multicast noc_core_write raises its arrival flag from OUTSIDE
+        // the rectangle, where every core in range is a destination. set_mcast
+        // below keeps the corner rule, because only the handshake paths use it.
+        //
         // Corners in NOC order, sizes from the ascending rectangle. See
         // PhysicalMcast::get_noc_addr -- this path takes raw coordinates, so it
         // needs the same swap.
-        const uint32_t dests = mcast.num_dests_excluding_sender();
+        const uint32_t dests = mcast.num_dests_excluding(PhysicalCoord::this_core());
         if (noc_index == 1) {
             sem.inc_multicast(Noc{}, mcast.end.x, mcast.end.y, mcast.start.x, mcast.start.y, value, dests);
         } else {
@@ -419,21 +417,17 @@ void NocAsyncWriteTx<thread>::wait() const {
 #endif
 }
 
-// --- NocAsyncCopyTx ---
+// --- NocAsyncReadCoreTx ---
 
-template <int thread, bool SrcIsLocal>
-NocAsyncCopyTx<thread, SrcIsLocal>::NocAsyncCopyTx(const Storage& dst, const Block& src) :
+template <int thread>
+NocAsyncReadCoreTx<thread>::NocAsyncReadCoreTx(const Storage& dst, const Block& src) :
     dst_cb(dst.cb_id), dst_tiles(dst.num_tiles), src_cb(src.cb_id), src_tiles(src.num_tiles) {}
 
-template <int thread, bool SrcIsLocal>
-NocAsyncCopyTx<thread, SrcIsLocal>::~NocAsyncCopyTx() {
+template <int thread>
+NocAsyncReadCoreTx<thread>::~NocAsyncReadCoreTx() {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        if constexpr (SrcIsLocal) {
-            // Writes have DEPARTED local L1 -- the release condition for a
-            // source buffer. Not the same as having landed.
-            noc_async_writes_flushed();
-        }
+        // The source is the peer's L1; the local Block is only a handle.
         cb_pop_front(src_cb, src_tiles);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
@@ -442,15 +436,77 @@ NocAsyncCopyTx<thread, SrcIsLocal>::~NocAsyncCopyTx() {
 #endif
 }
 
-template <int thread, bool SrcIsLocal>
-Block NocAsyncCopyTx<thread, SrcIsLocal>::wait() const {
+template <int thread>
+Block NocAsyncReadCoreTx<thread>::wait() const {
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        if constexpr (SrcIsLocal) {
-            noc_async_write_barrier();  // LANDED at the destination
+        noc_async_read_barrier();  // landed HERE, which is all a pull needs
+        cb_push_back(dst_cb, dst_tiles);
+    }
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    waited = true;
+#endif
+#endif
+    return Block(dst_cb, dst_tiles);
+}
+
+// --- NocAsyncWriteCoreTx ---
+
+template <int thread>
+NocAsyncWriteCoreTx<thread>::NocAsyncWriteCoreTx(const Storage& dst, const Block& src) :
+    dst_cb(dst.cb_id),
+    dst_tiles(dst.num_tiles),
+    src_cb(src.cb_id),
+    src_tiles(src.num_tiles),
+    arrived(kCopyArrivedSem<thread>) {}
+
+template <int thread>
+NocAsyncWriteCoreTx<thread>::NocAsyncWriteCoreTx(
+    const Storage& dst, const Block& src, PhysicalMcast rect, bool receiving) :
+    dst_cb(dst.cb_id),
+    dst_tiles(dst.num_tiles),
+    src_cb(src.cb_id),
+    src_tiles(src.num_tiles),
+    rect(rect),
+    broadcast(true),
+    receiving(receiving),
+    arrived(kCopyArrivedSem<thread>) {}
+
+template <int thread>
+NocAsyncWriteCoreTx<thread>::~NocAsyncWriteCoreTx() {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+    if constexpr (thread == TT_DM_THREAD_ID) {
+        // Writes have DEPARTED local L1 -- the release condition for a source
+        // buffer. Not the same as having landed. A receiving core issued none,
+        // so this is a no-op for it.
+        noc_async_writes_flushed();
+        cb_pop_front(src_cb, src_tiles);
+    }
+#if defined(ASSERT_ENABLED) && ASSERT_ENABLED
+    ASSERT(waited);
+#endif
+#endif
+}
+
+template <int thread>
+Block NocAsyncWriteCoreTx<thread>::wait() const {
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+    if constexpr (thread == TT_DM_THREAD_ID) {
+        if (broadcast && receiving) {
+            // A receiving core has nothing of its own in flight. Its data landed
+            // when the sender says so, not when its own NOC goes idle.
+            arrived.wait(1);
+            arrived.set(0);  // rearm for the next push
         } else {
-            noc_async_read_barrier();
+            noc_async_write_barrier();  // LANDED at the destination
+            if (broadcast) {
+                // Only now is that true for the receivers too.
+                arrived.inc_mcast(rect);
+            }
         }
+        // Every core pushes, including a sender outside the rectangle: the
+        // destination address is this core's own write pointer, so the copies have
+        // to advance in step or the next push lands somewhere else.
         cb_push_back(dst_cb, dst_tiles);
     }
 #if defined(ASSERT_ENABLED) && ASSERT_ENABLED
@@ -704,41 +760,99 @@ void synchronize_cores() {
 // --- Core-to-core movement ---
 
 template <int thread>
-NocAsyncCopyTx<thread, /*SrcIsLocal=*/false> noc_read(
-    const Storage& storage, Block block, LogicalCoord coord, uint32_t offset) {
-    block.consume();
+NocAsyncReadCoreTx<thread> noc_core_read(const Storage& dst, Block src, PhysicalCoord coord, uint32_t byte_offset) {
+    src.consume();
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_wait_front(block.cb_id, block.num_tiles);
-        cb_reserve_back(storage.cb_id, storage.num_tiles);
-        const uint32_t bytes = cb_page_bytes(storage.cb_id);
-        const uint64_t src = coord.get_noc_addr(get_read_ptr(block.cb_id) + offset);
-        noc_async_read(src, get_write_ptr(storage.cb_id), bytes * storage.num_tiles);
+        cb_wait_front(src.cb_id, src.num_tiles);
+        cb_reserve_back(dst.cb_id, dst.num_tiles);
+        const uint32_t bytes = cb_page_bytes(dst.cb_id);
+        const uint64_t from = coord.get_noc_addr(get_read_ptr(src.cb_id) + byte_offset);
+        noc_async_read(from, get_write_ptr(dst.cb_id), bytes * dst.num_tiles);
     }
 #else
     (void)coord;
-    (void)offset;
+    (void)byte_offset;
 #endif
-    return NocAsyncCopyTx<thread, false>(storage, block);
+    return NocAsyncReadCoreTx<thread>(dst, src);
 }
 
 template <int thread>
-NocAsyncCopyTx<thread, /*SrcIsLocal=*/true> noc_write(
-    const Storage& storage, Block block, LogicalCoord coord, uint32_t offset) {
-    block.consume();
+NocAsyncWriteCoreTx<thread> noc_core_write(const Storage& dst, Block src, PhysicalCoord coord, uint32_t byte_offset) {
+    src.consume();
 #if defined(IS_DM_THREAD) && IS_DM_THREAD
     if constexpr (thread == TT_DM_THREAD_ID) {
-        cb_wait_front(block.cb_id, block.num_tiles);
-        cb_reserve_back(storage.cb_id, storage.num_tiles);
-        const uint32_t bytes = cb_page_bytes(storage.cb_id);
-        const uint64_t dst = coord.get_noc_addr(get_write_ptr(storage.cb_id) + offset);
-        noc_async_write(get_read_ptr(block.cb_id), dst, bytes * block.num_tiles);
+        cb_wait_front(src.cb_id, src.num_tiles);
+        cb_reserve_back(dst.cb_id, dst.num_tiles);
+        const uint32_t bytes = cb_page_bytes(dst.cb_id);
+        const uint64_t to = coord.get_noc_addr(get_write_ptr(dst.cb_id) + byte_offset);
+        noc_async_write(get_read_ptr(src.cb_id), to, bytes * src.num_tiles);
     }
 #else
     (void)coord;
-    (void)offset;
+    (void)byte_offset;
 #endif
-    return NocAsyncCopyTx<thread, true>(storage, block);
+    return NocAsyncWriteCoreTx<thread>(dst, src);
+}
+
+template <int thread>
+NocAsyncWriteCoreTx<thread> noc_core_write(const Storage& dst, Block src, PhysicalMcast mcast, uint32_t byte_offset) {
+    static_assert(
+        kMcastSemsReserved,
+        "a multicast noc_core_write needs its arrival semaphore reserved by the host: build the program "
+        "through unified_program(), which reserves it and defines TT_UNIFIED_MCAST_SEM_BASE");
+    src.consume();
+    bool receiving = false;
+#if defined(IS_DM_THREAD) && IS_DM_THREAD
+    if constexpr (thread == TT_DM_THREAD_ID) {
+        // Which side of the exchange this core is on, decided from its own
+        // coordinate -- the same shape as the multicast noc_load handshake.
+        receiving = mcast.contains(PhysicalCoord::this_core());
+
+        // Both sides reserve: the receivers to take delivery, the sender because
+        // its own write pointer is what addresses theirs.
+        cb_wait_front(src.cb_id, src.num_tiles);
+        cb_reserve_back(dst.cb_id, dst.num_tiles);
+
+        const uint32_t bytes = cb_page_bytes(dst.cb_id);
+        const uint64_t to = mcast.get_noc_addr(get_write_ptr(dst.cb_id) + byte_offset);
+
+        // Sender-aware count, not num_dests_excluding_sender(): this core is
+        // outside the rectangle, so every core in range is a destination.
+        const uint32_t num_dests = mcast.num_dests_excluding(PhysicalCoord::this_core());
+
+        // No destination count on the handle: noc_async_write_multicast adds
+        // num_dests to noc_nonposted_writes_acked at issue time, so the
+        // destructor's flush and wait()'s barrier cover every destination.
+        if (receiving) {
+            noc_async_write_multicast_loopback_src(get_read_ptr(src.cb_id), to, bytes * src.num_tiles, num_dests);
+        } else {
+            noc_async_write_multicast(get_read_ptr(src.cb_id), to, bytes * src.num_tiles, num_dests);
+        }
+    }
+#else
+    (void)mcast;
+    (void)byte_offset;
+#endif
+    return NocAsyncWriteCoreTx<thread>(dst, src, mcast, receiving);
+}
+
+// The Logical forms translate and forward. `src` moves through, so consume() runs
+// exactly once -- in the Physical overload, on its own copy.
+
+template <int thread>
+NocAsyncReadCoreTx<thread> noc_core_read(const Storage& dst, Block src, LogicalCoord coord, uint32_t byte_offset) {
+    return noc_core_read<thread>(dst, std::move(src), coord.to_physical(), byte_offset);
+}
+
+template <int thread>
+NocAsyncWriteCoreTx<thread> noc_core_write(const Storage& dst, Block src, LogicalCoord coord, uint32_t byte_offset) {
+    return noc_core_write<thread>(dst, std::move(src), coord.to_physical(), byte_offset);
+}
+
+template <int thread>
+NocAsyncWriteCoreTx<thread> noc_core_write(const Storage& dst, Block src, LogicalMcast mcast, uint32_t byte_offset) {
+    return noc_core_write<thread>(dst, std::move(src), mcast.to_physical(), byte_offset);
 }
 
 }  // namespace unified
