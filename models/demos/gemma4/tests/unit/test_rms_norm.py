@@ -15,9 +15,6 @@ are exercised at the magnitudes the model actually runs at.
     HF_MODEL=google/gemma-4-31B-it pytest .../test_rms_norm.py -k real_weights
 """
 
-import os
-from functools import lru_cache
-
 import pytest
 import torch
 from loguru import logger
@@ -32,7 +29,8 @@ from ...tests.test_factory import (
     get_pcc_threshold,
     parametrize_batch_seq,
     parametrize_mesh_with_fabric,
-    skip_if_config_only_checkpoint,
+    real_weight_index,
+    skip_unless_real_weights,
 )
 
 
@@ -158,53 +156,14 @@ def _is_text_tower(key):
     return not any(tower in key for tower in _NON_TEXT_TOWERS)
 
 
-@lru_cache(maxsize=1)
-def _resolve_checkpoint_dir(model_path):
-    """Local directory holding the checkpoint's safetensors shards.
-
-    Cached: for a hub-id ``HF_MODEL`` this goes through ``snapshot_download``,
-    which round-trips to the Hub to revalidate the revision even when every
-    shard is already local. Once per process, not once per parametrized case.
-    """
-    if os.path.isdir(model_path):
-        return model_path
-    from huggingface_hub import snapshot_download
-
-    return snapshot_download(model_path, allow_patterns=["*.safetensors", "*.safetensors.index.json"])
-
-
-@lru_cache(maxsize=1)
-def _safetensors_weight_index(ckpt_dir):
-    """``{tensor key: shard path}`` from the safetensors headers — no tensor data read."""
-    from pathlib import Path
-
-    from safetensors import safe_open
-
-    index = {}
-    for shard in sorted(Path(ckpt_dir).glob("*.safetensors")):
-        with safe_open(str(shard), framework="pt") as f:
-            for key in f.keys():
-                index[key] = str(shard)
-    return index
-
-
 def _load_real_norm_weight(site):
-    """Trained RMSNorm scale for ``site``, straight from the checkpoint.
-
-    Pulls exactly one tensor out of the shards rather than materializing the
-    whole state dict — a 31B ``from_pretrained`` to fetch one ``[hidden]``
-    vector would dominate the test. Cast to bf16 to match what
-    ``Gemma4ModelArgs.load_state_dict`` hands the real model.
-    """
-    model_path = _get_model_path()
-    ckpt_dir = _resolve_checkpoint_dir(model_path)
-    index = _safetensors_weight_index(ckpt_dir)
-    if not index:
-        pytest.skip(f"No safetensors shards under {ckpt_dir}; real-weight norm PCC needs them")
+    """Trained RMSNorm scale for ``site``, straight from the checkpoint."""
+    skip_unless_real_weights()
+    index = real_weight_index()
 
     matches = sorted(k for k in index if _is_text_tower(k) and _REAL_NORM_SITES[site](k))
     if not matches:
-        pytest.skip(f"Checkpoint {model_path} has no '{site}' RMSNorm weight")
+        pytest.skip(f"Checkpoint {_get_model_path()} has no '{site}' RMSNorm weight")
     key = matches[0]
 
     from safetensors import safe_open
@@ -226,7 +185,7 @@ def test_rms_norm_real_weights(batch_size, seq_len, site, mesh_device, reset_see
     are neither unit nor centred (12B final ``norm`` reaches 604), so this is
     the gate that would catch a regression there.
     """
-    skip_if_config_only_checkpoint()
+    skip_unless_real_weights()
 
     from transformers.models.gemma4.modeling_gemma4 import Gemma4RMSNorm
 
