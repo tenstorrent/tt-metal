@@ -62,8 +62,22 @@ noise:
     batch4d                  9009     9005     8968      9005
     floor_1tile              3622     3532     3506      3547
 
-So the knob stays at its measured-catalog default of 4; it is live and this
-harness re-measures it in one command when the surrounding costs change.
+!! BOTH A/B TABLES ABOVE ARE VOID (Refinement 3). !!
+
+The fixture patched `HIDDEN_TILES_PER_CORE_FLOOR` / `_rect_candidates` on the
+module obtained by `import ttnn.operations.rms_norm.rms_norm_program_descriptor`
+— which is a SECOND import of that file, not the module dict the op actually
+executes in.  So every "sweep" above re-measured the shipped configuration, and
+"flat within +-1%" was flatness of a constant, not of the knob.  The patch target
+is fixed below (`PLAN_GLOBALS`); re-measured honestly at the perf target's config
+the floor knob moves the decode wall by up to 25%, and the combine fan-in it
+half-controls turned out to be the decode regime's dominant cost.
+
+The numbers in the first table (per-shape ns) were never affected — they are
+straight measurements of the shipped path at the Phase 0 config, and they remain
+the pre-Refinement-3 record for THIS config (HiFi4 / fp32_dest_acc_en=True /
+ROW_MAJOR gamma).  The perf target's own config is measured in
+`test_rms_norm_perf_decode.py`.
 """
 
 import pathlib
@@ -72,8 +86,15 @@ import pytest
 import torch
 import ttnn
 
-import ttnn.operations.rms_norm.rms_norm_program_descriptor as pd
 from ttnn.operations.rms_norm import rms_norm
+from ttnn.operations.rms_norm.rms_norm import create_program_descriptor as _create_program_descriptor
+
+# The module dict the descriptor ACTUALLY executes in.  `import
+# ttnn.operations.rms_norm.rms_norm_program_descriptor as pd` yields a module
+# object whose `__file__` is the right file but whose `__dict__` is a SECOND
+# import of it, so `monkeypatch.setattr(pd, ...)` patches a copy nobody runs.
+# That is what silently voided both A/Bs recorded in the docstring above.
+PLAN_GLOBALS = _create_program_descriptor.__globals__
 
 # Shapes op_design.md calls decisive, plus the two regime-pinned families and
 # the fixed-cost floor.
@@ -113,9 +134,9 @@ HIDDEN_FLOOR = int(_FLOOR_SELECTOR.read_text().strip()) if _FLOOR_SELECTOR.exist
 @pytest.fixture(autouse=True)
 def rect_search(monkeypatch):
     if RECT_SEARCH == "column_pinned":
-        monkeypatch.setattr(pd, "_rect_candidates", _column_pinned)
+        monkeypatch.setitem(PLAN_GLOBALS, "_rect_candidates", _column_pinned)
     if HIDDEN_FLOOR is not None:
-        monkeypatch.setattr(pd, "HIDDEN_TILES_PER_CORE_FLOOR", HIDDEN_FLOOR)
+        monkeypatch.setitem(PLAN_GLOBALS, "HIDDEN_TILES_PER_CORE_FLOOR", HIDDEN_FLOOR)
     return RECT_SEARCH
 
 

@@ -95,6 +95,28 @@ void kernel_main() {
 
     constexpr uint32_t BLOCK_TILES = BLOCK_ROWS * SLICE_HIDDEN_TILES;
 
+    // Which datapath the root's cross-core combine reduce uses — a DISPATCH on
+    // the reduce width, not a replacement (examples/master.md, `reduce_accumulate`
+    // / `reduce_block`).  Pairwise `add_tiles(acc_to_dest)` + one within-tile
+    // finalize beats the matmul-with-ones `reduce_tile` datapath once there are
+    // enough tiles to amortize it (REDUCE_ROW crosses over at ~4); BELOW the
+    // crossover the single matmul-reduce is faster, so dispatching this way is
+    // never slower than the library.
+    //
+    // Both sides are measured here.  Above the crossover the win is a NULL on
+    // this op — s = 32 costs 9770 ns vs 9732 ns for ReduceTile, inside noise —
+    // which is master.md's own caveat ("the win is compute-only; a
+    // data-movement-bound reduce won't show it") and is itself the useful
+    // finding: the root's combine cost is the gather INCAST (s stat tiles
+    // converging on one core), not the reduce math.  BELOW the crossover the
+    // penalty is real and was measured as a regression (the prefill geometry
+    // lands at s = 2 and paid ~2.5% for the accumulate datapath), which is
+    // exactly why the crossover is honored instead of hardcoding one algorithm.
+    constexpr uint32_t COMBINE_ACCUMULATE_MIN_TILES = 4;
+    constexpr auto COMBINE_ALGORITHM = NUM_HIDDEN_SLICES >= COMBINE_ACCUMULATE_MIN_TILES
+                                           ? ckl::ReduceAlgorithm::AccumulateViaAdd
+                                           : ckl::ReduceAlgorithm::Auto;
+
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
     const uint32_t is_root = get_arg_val<uint32_t>(1);
     const uint32_t mask_local_col = get_arg_val<uint32_t>(2);
@@ -251,7 +273,7 @@ void kernel_main() {
                     ckl::ReduceInputPolicy::BulkWaitBulkPop,
                     ckl::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
                     ReduceFp32Mode::Fast,
-                    ckl::ReduceAlgorithm::Auto,
+                    COMBINE_ALGORITHM,
                     ckl::NoAccumulation,
                     decltype(finalize)>(
                     ckl::ReduceInputBlockShape::of(BLOCK_ROWS, NUM_HIDDEN_SLICES),

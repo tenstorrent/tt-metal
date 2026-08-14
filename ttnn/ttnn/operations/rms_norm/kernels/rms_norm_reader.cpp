@@ -110,7 +110,12 @@ void kernel_main() {
     // except TILE+sharded, where the CB *is* the whole resident shard.
     constexpr uint32_t IN_WAIT_TILES = get_compile_time_arg_val(CT + 17);
     constexpr uint32_t SHARD_PAGE_BYTES = get_compile_time_arg_val(CT + 18);
-    constexpr auto in_args = TensorAccessorArgs<CT + 19>();
+    // TILE-layout gamma: read ONLY the two row-0 face segments of each gamma
+    // tile instead of the whole 2 KB page (see the GAMMA_IS_TILE branch below).
+    // Host-gated off for block-float gamma, whose tile carries a shared-exponent
+    // header that a partial read would leave behind.
+    constexpr uint32_t GAMMA_ROW0_ONLY = get_compile_time_arg_val(CT + 19);
+    constexpr auto in_args = TensorAccessorArgs<CT + 20>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t BLOCK_TILES = BLOCK_ROWS * SLICE_HIDDEN_TILES;
@@ -192,7 +197,33 @@ void kernel_main() {
         noc.async_write_zeros(cb_gamma_obj, SLICE_HIDDEN_TILES * GAMMA_TILE_BYTES);
         noc.write_zeros_l1_barrier();
 
-        if constexpr (GAMMA_IS_TILE) {
+        if constexpr (GAMMA_IS_TILE && GAMMA_ROW0_ONLY) {
+            // gamma is a [W] vector, so a TILE-layout gamma is a (1, ..., 1, W)
+            // tensor padded up to a whole tile-row: each of its Wt tiles carries
+            // real data in ROW 0 ONLY, and the 31 rows below it are tile padding.
+            // `BroadcastDim::Row` reads row 0 and nothing else (the same fact the
+            // ROW_MAJOR branch below already relies on), so pulling the whole
+            // 2 KB page moves 32x the bytes the consumer can see.  In the decode
+            // regime (Rt == 1) that made gamma a full THIRD of the op's DRAM
+            // traffic, for 1/32 of the useful payload.
+            //
+            // Row 0 straddles two faces: face0 row0 at tile byte 0 and face1 row0
+            // at tile byte 16*16*elem.  Both offsets are multiples of 64, so both
+            // reads start on a legal DRAM boundary; both landing addresses are
+            // 16 B-aligned in L1.  The rest of the tile is already NoC-zeroed
+            // above, which is the valid encoding for the padding rows.
+            constexpr uint32_t FACE_ROW_BYTES = FACE_DIM * GAMMA_ELEM_BYTES;
+            constexpr uint32_t FACE1_OFFSET = FACE_DIM * FACE_DIM * GAMMA_ELEM_BYTES;
+            static_assert(FACE1_OFFSET % DRAM_ALIGN_BYTES == 0, "gamma face-1 row 0 must start on a DRAM boundary");
+            for (uint32_t t = 0; t < valid_tiles; ++t) {
+                const uint32_t dst = gamma_l1 + t * GAMMA_TILE_BYTES;
+                noc_async_read(gamma_accessor.get_noc_addr(slice_base + t, 0), dst, FACE_ROW_BYTES);
+                noc_async_read(
+                    gamma_accessor.get_noc_addr(slice_base + t, FACE1_OFFSET), dst + FACE1_OFFSET, FACE_ROW_BYTES);
+            }
+        } else if constexpr (GAMMA_IS_TILE) {
+            // Block-float gamma: the tile is not addressable row-wise (its faces
+            // share an exponent header), so the whole page comes across.
             for (uint32_t t = 0; t < valid_tiles; ++t) {
                 noc_async_read(
                     gamma_accessor.get_noc_addr(slice_base + t), gamma_l1 + t * GAMMA_TILE_BYTES, GAMMA_TILE_BYTES);

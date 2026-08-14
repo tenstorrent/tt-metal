@@ -11,7 +11,8 @@ parameter here, defined exactly ONCE and derived from downstream:
     SLICE_HIDDEN_TILES    (S)  — the hidden block extent = the whole slice
     BLOCK_ROWS            (B)  — the row block extent (coarsest that fits L1)
     OUT_CB_DEPTH / RM_IN_DEPTH / RM_OUT_DEPTH — buffer-depth knobs
-    HIDDEN_TILES_PER_CORE_FLOOR — hidden-granularity tuning knob
+    HIDDEN_TILES_PER_CORE_FLOOR — hidden-granularity floor (bounds S from below)
+    FANIN_BALANCE_K       — combine fan-in balance (bounds s from above)
     DM_CHUNK_TILES        — NoC tiles per barrier (reader AND writer)
 
 CB page counts, loop trip counts and grid sizing are computed FROM those knobs;
@@ -33,6 +34,35 @@ TILE_DIM = 32
 # Knobs (single source of truth; see op_design.md §Parameters)
 # ---------------------------------------------------------------------------
 HIDDEN_TILES_PER_CORE_FLOOR = 4  # measured-fastest width-shard geometries land at 4-8
+# Combine fan-in balance — the OTHER side of the hidden-split tradeoff.
+#
+# Splitting the hidden axis `s` ways cuts the per-core DRAM transfer (S = Wt/s
+# tiles, so ~c2/s) but grows the cross-core combine, which costs ~c1*s: s partial
+# tiles incast into ONE root, s gather atomics, a root reduce over s tiles, and a
+# barrier across s cores.  `HIDDEN_TILES_PER_CORE_FLOOR` bounds only S; nothing
+# bounded `s`, so the search maximized occupancy and ran the combine off the end.
+#
+# Minimizing c1*s + c2*Wt/s puts the optimum at s* = sqrt(c2*Wt/c1), i.e.
+# proportional to sqrt(Wt) — NOT at a constant.  A constant cap was measured
+# first and is wrong in exactly the way the model predicts: tuned to the wide
+# single-row decode shapes it costs the tall-and-wide ones occupancy they need
+# (a constant 32 regressed (1,1,64,12288) by 5.5%).
+#
+# Measured (Blackhole p150b, one fresh run per point, perf-target config), the
+# wall is U-shaped in `s` and the minimum tracks sqrt(Wt) with k ~= 2.13:
+#     Wt=224 (W=7168):  s=56 -> 11049 ns | s=32 ->  9732 | s=28 -> 9881 | s=14 -> 10901 | s=7 -> 14910
+#     Wt=160 (W=5120):  s=40 ->  9316    | s=32 ->  8445 | s=27 -> 8377 | s=20 ->  8549 | s=10 -> 9846
+#     Wt=72  (W=2304):  s=18 ->  6547    | s=9  ->  6707
+#     Wt=32  (W=1024):  s=8  ->  5525    | s=4  ->  6173   (the floor already caps s at 8 here)
+#   predicted s* = 2.13*sqrt(Wt):  Wt=224 -> 32, 160 -> 27, 72 -> 18, 32 -> 12 (censored to 8).
+FANIN_BALANCE_K = 2.13
+
+
+def _fanin_slice_cap(hidden_tiles: int) -> int:
+    """The `s` above which the combine costs more than the transfer it saves."""
+    return max(1, round(FANIN_BALANCE_K * (hidden_tiles**0.5)))
+
+
 OUT_CB_DEPTH = 2  # cb_output_tiles double buffer (2.78x overlap, double_buffer/report.md)
 RM_IN_DEPTH = 2  # cb_rm_stage_in  tile-row window
 RM_OUT_DEPTH = 2  # cb_rm_stage_out tile-row window
@@ -380,7 +410,14 @@ def _plan(device, input_tensor, *, has_gamma, bytes_):
 
     # Hidden-granularity floor: never slice so thin that the combine dominates a
     # 1-tile payload (feature_spec.py:343-346 measured geometries land at 4-8).
-    slice_cap = min(hidden_tiles, max(1, _div_up(hidden_tiles, HIDDEN_TILES_PER_CORE_FLOOR)), gx * gy)
+    # `_fanin_slice_cap` bounds the same tradeoff from the other end — see
+    # FANIN_BALANCE_K for the measured U-curve in `s`.
+    slice_cap = min(
+        hidden_tiles,
+        max(1, _div_up(hidden_tiles, HIDDEN_TILES_PER_CORE_FLOOR)),
+        _fanin_slice_cap(hidden_tiles),
+        gx * gy,
+    )
 
     best = None
     for s, rect_w, rect_h in _rect_candidates(gx, gy):
@@ -496,6 +533,17 @@ def create_program_descriptor(
     mask_valid_w = W % TILE_DIM
     mask_enabled = (mask_valid_w != 0) and not is_row_major
 
+    # A TILE-layout gamma is a [W] vector padded to a whole tile-row: only ROW 0
+    # of each of its Wt tiles carries data, and `BroadcastDim::Row` is the only
+    # consumer, so the reader fetches the two row-0 face segments (2 x 32 elems)
+    # instead of the whole tile.  That is 32x fewer gamma bytes off DRAM — in the
+    # decode regime (Rt == 1) gamma is otherwise a full third of the op's traffic.
+    #
+    # Refused for block-float gamma: a bfp8 tile's faces share an exponent header,
+    # so a row-slice of the page is not a decodable tile.
+    _BLOCK_FLOAT_DTYPES = (ttnn.bfloat8_b,)
+    gamma_row0_only = has_gamma and gamma.layout == ttnn.TILE_LAYOUT and gamma.dtype not in _BLOCK_FLOAT_DTYPES
+
     # ---- core assignment ----
     # Interleaved: G rectangles of (rect_w x rect_h) cores, chosen by _plan.
     # Sharded:     G groups of S_COUNT consecutive cores of the SHARD grid, in
@@ -574,11 +622,30 @@ def create_program_descriptor(
         cb_cores_crs = kernel_cores_crs
 
     # ---- mcast wire: one Mcast2D per row-group rect (identical CT for all) ----
+    #
+    # `handshake` (the receiver->sender readiness ack) is a PERF KNOB, not a
+    # constant: it costs the root s-1 inbound remote atomics and a wait, per
+    # block, and it buys exactly one thing — the guarantee that broadcast n+1
+    # does not overwrite a landing buffer still holding broadcast n.
+    #
+    # With ONE broadcast per kernel (num_blocks == 1: the whole decode regime,
+    # where the row-group is a single tile-row) there IS no broadcast n+1, and
+    # cb_rms_recip is untouched at boot, so the ack is pure cost.  Dropping it is
+    # safe because the remaining ordering edge still holds: every receiver
+    # constructs its ReceiverPipe (which inits its own data_ready flag to
+    # INVALID) at kernel boot, and the root cannot send until it has gathered all
+    # s partials -- which needs every contributor's compute+writer to have run,
+    # i.e. strictly after that core's reader passed the ctor.  So the flag can
+    # never be clobbered by a signal that arrives before the ctor.
+    #
+    # As soon as a row-group has more than one block the ack is load-bearing and
+    # comes back on.
+    single_shot_bcast = all(g["num_blocks"] <= 1 for g in active_groups)
     mcast_by_group = {}
     if S_COUNT > 1:
         cfg = ttnn.McastConfig(
             noc=ttnn.NOC.NOC_0,
-            handshake=True,
+            handshake=not single_shot_bcast,
             sem_ids=[SEM_MCAST_READY, SEM_MCAST_CONSUMED],
         )
         for idx, g in enumerate(active_groups):
@@ -682,6 +749,7 @@ def create_program_descriptor(
         1 if sharded else 0,
         in_wait_tiles,
         in_shard_page,
+        1 if gamma_row0_only else 0,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
