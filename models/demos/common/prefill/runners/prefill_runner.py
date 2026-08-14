@@ -634,6 +634,21 @@ def run_request_loop(
             first_layer_idx=cfg.first_layer_idx,
         )
 
+        # With DFlash on, the drafter's context K/V is a SECOND populated cache that kv_cache_pcc_check
+        # (kvpe only) never looks at — and on a multi-rank pipeline it is the only cache whose contents
+        # depend on the D2D-transported FC partial, so it is the check that proves the inter-galaxy hand-off
+        # carried the drafter half intact. Only the last rank owns the caches; the hook no-ops elsewhere.
+        # Its reference is the separate drafter golden ($PREFILL_DFLASH_GOLDEN_KV_DIR), not the trace dir,
+        # and it skips itself when that artifact is absent.
+        if DFLASH_ENABLED:
+            dflash_check = getattr(runtime, "dflash_kv_cache_pcc_check", None)
+            if dflash_check is None:
+                raise RuntimeError(
+                    f"PREFILL_DFLASH=1 and PREFILL_REQUEST_LOOP_PCC=1 but {type(runtime).__name__} implements "
+                    "no dflash_kv_cache_pcc_check (optional bring-up hook)."
+                )
+            dflash_check(kv_caches, slot_id=slot_id, out_len=c * cfg.chunk_size)
+
     return chunks_per_slot, real_end_per_slot, c
 
 

@@ -55,6 +55,9 @@ class MyModelAdapter(PrefillModelAdapter):
     prefill_trace_default: str # golden trace dir (token_ids + KV); PREFILL_TRACE_DIR overrides
     default_gate_mode: str = "DEVICE_FP32"  # MoE gate mode name; PREFILL_GATE_FALLBACK_MODE overrides
     l1_small_size: int = 0     # L1_SMALL carve-out at mesh-open (only if an op routes semaphores there)
+    supports_dflash: bool = False  # may PREFILL_DFLASH=1 attach the DFlash drafter to this model? The
+                               # drafter is a separate checkpoint targeting ONE architecture (today only
+                               # Kimi-K2.6/K2.7), so leave it False unless a matching drafter exists.
 
     def load_hf_config(self):
         """Load and normalize the HF config from PREFILL_HF_MODEL (falling back to
