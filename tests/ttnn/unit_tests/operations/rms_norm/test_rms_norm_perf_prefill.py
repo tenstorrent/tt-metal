@@ -40,8 +40,29 @@ object obtained by importing the descriptor file: the package is reachable under
 two names, so `monkeypatch.setattr(pd, KNOB, v)` patches a second import that
 nobody runs (this silently voided two A/B tables in `test_rms_norm_perf.py`).
 
-Measured, Blackhole p150b (11x10 grid), TARGET CONFIG, one fresh run per point.
-See the changelog for the full table.
+Measured, Blackhole p150b (11x10 grid), TARGET CONFIG, MEDIAN of 3 fresh runs
+per point (device kernel ns):
+
+    shape              R3 base   +dm32   +ladder   achievable   ttnn.neg
+    (1,1,8192,1024)      92899   90320     88316        96744      85899
+    (1,1,8192,2304)     207404  198987    187575       211345     198515
+    (1,1,8192,5120)     414599  411580    405003       738307     436850
+    (1,1,8192,7168)     570644  561649    558273      1032281     607069
+
+The last column is the CEILING probe and it is the phase's real finding:
+`ttnn.neg` on the identical shapes is the simplest possible read-one/write-one
+streaming op on this part (no reduction, no gamma, no cross-core combine), and
+rms_norm now costs 1.03x / 0.95x / 0.93x / 0.92x of it.  This profile is
+DRAM-bandwidth-saturated -- it is at or under the wall of an op that does
+strictly less work -- so the remaining headroom is in the memory controller, not
+in this op's schedule.  A fidelity probe agrees: LoFi is indistinguishable from
+HiFi2 and HiFi4 costs only +4-6%, so the FPU math barely shows on the wall.
+
+Two named levers were measured and REJECTED on the data, which is the other half
+of the result: widening `l1_working_budget` to the part's real 1.46 MB coarsens
+block_rows and costs +5.7% / +3.7% on the two wide shapes (a coarser block is a
+LONGER fully-serial read before compute starts), and OUT_CB_DEPTH 3/4 does not
+beat 2.
 """
 
 import pathlib
