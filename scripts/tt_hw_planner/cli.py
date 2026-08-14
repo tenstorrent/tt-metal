@@ -8701,8 +8701,26 @@ def _cmd_up_core_impl(args) -> int:
             ]
         except Exception:
             _partial = []
-        if _early_compat.overall == "READY" and not _missing and not _partial and _generic_backend_picked:
+        # An INFERRED family (matched on config STRUCTURE because `model_type` is not a known
+        # name) is sound enough to run the block checklist, but not to conclude the model needs
+        # no port at all -- that conclusion skips scaffolding and runs a sibling demo on a
+        # DIFFERENT checkpoint. Likewise a config that declares more than one stack: the
+        # checklist covers the decoder stack only, so "READY" describes that stack, not the model.
+        _inferred_family = bool(getattr(_early_compat, "family_inferred", False))
+        _multi_stack = len(getattr(_early_compat, "declared_stacks", []) or []) > 1
+        if (_early_compat.overall == "READY" and not _missing and not _partial
+                and _generic_backend_picked and not _inferred_family and not _multi_stack):
             _route_via_generic_llm = True
+        elif _generic_backend_picked and (_inferred_family or _multi_stack):
+            why = []
+            if _inferred_family:
+                why.append("family was INFERRED from config structure, not a known model_type")
+            if _multi_stack:
+                why.append(f"config declares {len(_early_compat.declared_stacks)} stacks "
+                           f"({', '.join(_early_compat.declared_stacks)}) and the block "
+                           f"checklist covers the decoder stack only")
+            print(f"  NOT routing to the generic LLM demo: {'; '.join(why)}. "
+                  f"Scaffolding this model's own stubs instead.")
         elif _generic_backend_picked and _partial:
             print(
                 f"  (note: generic LLM backend matched, but "

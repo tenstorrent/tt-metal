@@ -760,6 +760,10 @@ def _aggregate_overall(report: CompatReport) -> None:
 
 def check_compatibility(model_id: str, cfg: dict) -> CompatReport:
     family = detect_family(cfg)
+    #: True when the family came from STRUCTURE, not from a known `model_type`. Good enough to
+    #: run the block checklist; NOT good enough to conclude "already supported, no port needed".
+    _inferred = "INFERRED from config fields" in family
+    _stacks = declared_stacks(cfg)
     is_unknown = family.startswith("unknown")
     minted = _minted_category(cfg) if is_unknown else None
     if is_unknown:
@@ -786,6 +790,8 @@ def check_compatibility(model_id: str, cfg: dict) -> CompatReport:
                 similar_supported_model=None,
                 discovery=discovery,
             )
+            report.family_inferred = False
+            report.declared_stacks = declared_stacks(cfg)
             report.overall = "ARCHITECTURE NOT RECOGNIZED (non-LLM) — no confident block plan"
             report.effort_summary = (
                 "No LM head / KV-cache / sampling detected; this is not a text decoder, so the generic "
@@ -796,6 +802,7 @@ def check_compatibility(model_id: str, cfg: dict) -> CompatReport:
     closest = closest_supported_model(model_id, cfg)
 
     results: List[CheckResult] = []
+    _carry = {"family_inferred": _inferred, "declared_stacks": _stacks}
     for blk in BUILDING_BLOCKS:
         needed = bool(blk.needed_when(cfg))
         if not needed:
@@ -842,4 +849,6 @@ def check_compatibility(model_id: str, cfg: dict) -> CompatReport:
         discovery=discovery,
     )
     _aggregate_overall(report)
+    report.family_inferred = _carry["family_inferred"]
+    report.declared_stacks = _carry["declared_stacks"]
     return report
