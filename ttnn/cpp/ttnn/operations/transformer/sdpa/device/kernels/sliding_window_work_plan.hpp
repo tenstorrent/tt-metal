@@ -160,6 +160,13 @@ constexpr SlidingQWorkPlan build_sliding_q_work_plan(
         if (source_ring_id != q_device_index) {
             const uint32_t halo_source_start = chunked_sliding_halo_source_start_tile(
                 source_ring_id, q_local_tile_rows, ring_size, logical_k_tile_rows, halo_tile_rows);
+            // A remote range must begin inside the fixed-size halo. This is
+            // guaranteed by the one-hop halo bound and first-group clipping;
+            // make it explicit so unsigned subtraction cannot produce an
+            // out-of-range compact-buffer index if that contract changes.
+            if (halo_source_start > first_k_chunk * k_chunk_tile_rows) {
+                return SlidingQWorkPlan{};
+            }
             first_compact_k_chunk = (first_k_chunk * k_chunk_tile_rows - halo_source_start) / k_chunk_tile_rows;
         }
         if (plan.source_range_count == SlidingQWorkPlan::max_source_ranges) {

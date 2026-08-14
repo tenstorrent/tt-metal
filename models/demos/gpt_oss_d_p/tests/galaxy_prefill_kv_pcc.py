@@ -13,7 +13,7 @@ when not on a galaxy or when no golden trace is provided.
 
 Env:
   PREFILL_TRACE_DIR   golden trace dir (metadata.json + kv_cache/layer_N.safetensors)     [required]
-  PREFILL_CHUNKED     "1" -> chunked (SP ring cache-read for chunks 1+); "0" -> one-shot            [default 0]
+  PREFILL_CHUNKED     "1" -> chunked (SP ring cache-read for every chunk); "0" -> one-shot           [default 0]
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode only)                             [default 5120]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement                   [default 1]
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs) [default: all]
@@ -114,11 +114,10 @@ def main():
     from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
     from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
-    # Chunked prefill uses the ring cache-read for every chunk, which needs the cyclic torus route for the
-    # sliding-halo wraparound -> FABRIC_1D_RING + the torus mesh descriptor
-    # (TT_MESH_GRAPH_DESC_PATH=.../single_bh_galaxy_torus_xy_graph_descriptor.textproto). One-shot runs
-    # on the linear fabric + the plain mesh descriptor.
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING if chunked else ttnn.FabricConfig.FABRIC_1D)
+    # Every SP prefill invocation, including one-shot, uses the cache-backed ring path. It therefore
+    # needs the cyclic torus route -> FABRIC_1D_RING + the torus mesh descriptor
+    # (TT_MESH_GRAPH_DESC_PATH=.../single_bh_galaxy_torus_xy_graph_descriptor.textproto).
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(ROWS, COLS))
     print(f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)
     try:

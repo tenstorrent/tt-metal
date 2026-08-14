@@ -53,7 +53,7 @@
 require logical_n &gt;= G
 require logical_n % G == 0
 require ceil((window - 1) / k_chunk_size) * k_chunk_size &lt;= Qlocal</pre>
-  <p>For <code>logical_n == G</code>, retain a fixed-size halo exchange. For the device R−1 → device 0 wrap in group 0, clamp the source group to zero, keeping the fixed payload length; device 0’s clipped work plan never consumes this payload. The source-tail helper must return zero only for that wrap case, not for every source in the first group. This preserves the compact buffer layout, device kernels, and trace/program-cache behavior.</p>
+  <p>For <code>logical_n == G</code>, retain a fixed-size halo exchange. For the device R−1 → device 0 wrap in group 0, clamp the source group to zero, keeping the fixed payload length; device 0’s clipped work plan never consumes this payload. The source-tail helper must return zero only for that wrap case, not for every source in the first group. This preserves the compact buffer layout, device kernels, and program-cache behavior; trace replay across changing chunks needs the operator's metadata-tensor path.</p>
 
   <h2>Implementation record</h2>
   <ol>
@@ -66,7 +66,7 @@ require ceil((window - 1) / k_chunk_size) * k_chunk_size &lt;= Qlocal</pre>
   </ol>
 
   <h2>Why GPT-OSS now uses the same path</h2>
-  <p>GPT-OSS formerly avoided the <code>logical_n ≥ 2G</code> constraint by routing chunk 0 through an explicit all-gather Q/K/V path, and only started RingJointSDPA at chunk 1 where <code>logical_n == 2G</code>. That staging path duplicated the execution graph and prevented a single first-group trace from serving full prefill.</p>
+  <p>GPT-OSS formerly avoided the <code>logical_n ≥ 2G</code> constraint by routing chunk 0 through an explicit all-gather Q/K/V path, and only started RingJointSDPA at chunk 1 where <code>logical_n == 2G</code>. That staging path duplicated the execution graph and prevented a single program from serving full prefill.</p>
   <p>GPT-OSS now writes chunk-0 K/V into cache and calls RingJointSDPA at <code>logical_n == G</code>, like every later chunk. This avoids the replicated full-Q/K/V bootstrap. It should lower communication and memory for GPT-OSS W=128, whose K/V halo is small. For Gemma W=1024 the halo is a full predecessor slab, so the benefit is smaller; the remaining A/B measurement will quantify the trade-off.</p>
 
   <h2>Do not conflate this with partial-group support</h2>
