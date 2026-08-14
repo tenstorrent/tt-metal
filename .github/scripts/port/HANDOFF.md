@@ -312,6 +312,24 @@ Worth knowing, because it means these paths are no longer speculative:
 - A cold build on CIv2 takes about 12 minutes, so a failed run costs roughly 25 minutes to reach the
   same point again. It is worth reading ahead for the next failure rather than fixing one at a time.
 
+### A merged port can break the next port, if one name is a suffix of the other
+
+`untilize` merging did break the pipeline, in a way worth remembering because the class is broader than
+the instance. `scaffold.py` asked whether a CMake list already carried an entry with `entry in text`.
+`tilize/codegen/kernels/*.cpp` is a substring of `untilize/codegen/kernels/*.cpp`, which main gained
+hours earlier, so scaffolding `tilize` added no globs, reported `kernel_globs_added: []` with no error,
+and then failed its own verification -- which looks at the start of a line and was right.
+
+Entries are now compared as whole lines. The lesson for anything else that grows a check like this: op
+names nest, and `tilize`/`untilize` is not the only pair -- anything ending in `pad` collides with `pad`.
+The old fixture could not have caught it, because it carried no codegen globs for anything to be a
+prefix of; the replacement mirrors `main` as it actually stands.
+
+Worth noting what worked while that failed. The publish post-step committed the partial scaffold to the
+branch anyway, chained attempt 2, and attempt 2 would have been the last -- `should_chain` allows one
+ungraded attempt and no more. So the bounded chain behaved exactly as designed on its first real
+outing, including on a failure it had never been shown.
+
 ## Two things the ledger and the generator were quietly getting wrong
 
 Both were found on 2026-08-14 while sizing `tilize` before spending device time on it, and both had
