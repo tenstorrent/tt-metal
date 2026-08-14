@@ -73,8 +73,7 @@ def eltwise_binary_implied_math_formats(formats, *, is_perf=False):
 
 def eltwise_binary_math_fidelities(mathop, formats, *, is_perf=False):
     if (
-        is_perf
-        or mathop in [MathOperation.Elwadd, MathOperation.Elwsub]
+        mathop in [MathOperation.Elwadd, MathOperation.Elwsub]
         or formats.input_format == DataFormat.Int8
     ):
         return [MathFidelity.LoFi]

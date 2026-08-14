@@ -98,7 +98,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     if constexpr (!unpack_to_dest)
                     {
-                        _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(tiles_in_block);
+                        // FP32 datacopy uses ELWADD, so SrcA and SrcB must become
+                        // valid together before the separate transpose SrcB batch.
+                        _perf_unpack_loop_set_valid<true /*set_a*/, is_fp32_dest_acc_en /*set_b*/>(tiles_in_block);
                     }
                     _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(tiles_in_block);
                 }
@@ -242,7 +244,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     if constexpr (!unpack_to_dest)
                     {
-                        _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(tiles_in_block);
+                        // Match real 32-bit unpack: datacopy consumes and clears
+                        // paired SrcA/SrcB before transpose consumes dummy SrcB.
+                        _perf_math_loop_clear_valid<true /*clear_a*/, is_fp32_dest_acc_en /*clear_b*/>(tiles_in_block);
                     }
                     _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(tiles_in_block);
                 }

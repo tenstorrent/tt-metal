@@ -83,8 +83,6 @@ def binary_broadcast_implied_math_formats(format, *, is_perf=False):
 def binary_broadcast_math_fidelities(format, mathop, *, is_perf=False):
     if format.input_format == DataFormat.Int8:
         return [MathFidelity.LoFi]
-    if is_perf:
-        return [MathFidelity.LoFi]
     return get_valid_math_fidelities(format, mathop)
 
 

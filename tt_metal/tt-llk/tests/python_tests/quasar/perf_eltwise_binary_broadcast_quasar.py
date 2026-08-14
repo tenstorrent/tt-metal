@@ -2,11 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from helpers.constraints import get_valid_dest_accumulation_modes
+from helpers.constraints import (
+    get_quasar_perf_math_operations,
+    get_valid_dest_accumulation_modes,
+)
 from helpers.llk_params import (
     PERF_LOOP_FACTOR_QUASAR,
     PERF_RUN_TYPES_QUASAR,
-    MathOperation,
 )
 from helpers.param_config import generate_perf_input_dimensions, parametrize
 from quasar.test_eltwise_binary_broadcast_quasar import (
@@ -26,7 +28,7 @@ from quasar.test_eltwise_binary_broadcast_quasar import (
 @parametrize(
     formats=BINARY_BROADCAST_FORMATS,
     dest_acc=get_valid_dest_accumulation_modes,
-    mathop=[MathOperation.Elwadd],
+    mathop=get_quasar_perf_math_operations,
     broadcast_type=BROADCAST_TYPES,
     math_fidelity=lambda formats, mathop: binary_broadcast_math_fidelities(
         formats, mathop, is_perf=True

@@ -5,6 +5,7 @@
 # Test for eltwise binary operations with reuse_dest on Quasar.
 import pytest
 import torch
+from helpers.constraints import get_quasar_perf_math_operations
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     EltwiseBinaryGolden,
@@ -78,18 +79,28 @@ def reuse_dest_dest_sync_modes(*, is_perf=False):
 
 
 def reuse_dest_mathops(formats, *, is_perf=False):
-    if is_perf:
-        return [MathOperation.Elwadd]
     if (
         formats.input_format == DataFormat.MxFp8R
         or formats.input_format == DataFormat.MxFp8P
     ):
-        return [MathOperation.Elwadd, MathOperation.Elwsub]
-    return [MathOperation.Elwadd, MathOperation.Elwsub, MathOperation.Elwmul]
+        supported_mathops = [MathOperation.Elwadd, MathOperation.Elwsub]
+    else:
+        supported_mathops = [
+            MathOperation.Elwadd,
+            MathOperation.Elwsub,
+            MathOperation.Elwmul,
+        ]
+    if is_perf:
+        return [
+            mathop
+            for mathop in get_quasar_perf_math_operations()
+            if mathop in supported_mathops
+        ]
+    return supported_mathops
 
 
 def reuse_dest_math_fidelities(mathop, *, is_perf=False):
-    if is_perf or mathop in [MathOperation.Elwadd, MathOperation.Elwsub]:
+    if mathop in [MathOperation.Elwadd, MathOperation.Elwsub]:
         return [MathFidelity.LoFi]
     return [
         MathFidelity.LoFi,
