@@ -253,6 +253,15 @@ class SharedMLP:
         m = matmul_rows(hidden_states)
         k = int(hidden_states.shape[-1])
         n = int(self.gate_up_proj.shape[-1])
+        # 12B long-4k (M=4096, K=N=3840): cutoff-reshape+LoFi beats auto+LoFi
+        # ~1.11x (test_prefill_matmul_4096_12b_isolate, PCC≥0.9998 vs HiFi2).
+        # At M=2048 (31B T3K chunks) auto+LoFi still wins — keep that path.
+        if should_prefill_long_2d(m) and m >= 4096:
+            act, owned = self._prepare_prefill_act(hidden_states, None)
+            gate_up = prefill_linear_above_cutoff(act, self.gate_up_proj)
+            if owned:
+                act.deallocate(True)
+            return gate_up
         program_config, out_memcfg, compute_kernel_config = interleaved_gate_up_prefill_config(m, k, n)
         # Above the tuned 1D band, auto DRAM-in0 keeps HiFi2 by default; LoFi is
         # the isolate winner at M=2048 (1.21x, PCC≥0.9998 vs HiFi2).
