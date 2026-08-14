@@ -240,7 +240,11 @@ TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineEmitsExpectedSubtree
 
 }  // namespace
 
-TEST_F(MeshDeviceFixture, RuntimePrecompiledHitLoadsWithoutJit) {
+// AnyDispatchMeshDeviceFixture (not MeshDeviceFixture) so these tests run under
+// fast dispatch, including TT_METAL_GTEST_ETH_DISPATCH=1. MeshDeviceFixture
+// requires slow dispatch, which always resolves to WORKER and cannot catch an
+// offline/runtime ETH build-key mismatch (#53160).
+TEST_F(AnyDispatchMeshDeviceFixture, RuntimePrecompiledHitLoadsWithoutJit) {
     if (offline_compile_unsupported_under_simulator()) {
         GTEST_SKIP() << "CompileKernelOffline has no precompiled firmware for the simulator build_key "
                         "(multi-erisc disabled); skipping under TT_METAL_SIMULATOR.";
@@ -259,7 +263,7 @@ TEST_F(MeshDeviceFixture, RuntimePrecompiledHitLoadsWithoutJit) {
     EXPECT_EQ(jit_srcs.delta(), 0u);
 }
 
-TEST_F(MeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWithoutJit) {
+TEST_F(AnyDispatchMeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWithoutJit) {
     if (offline_compile_unsupported_under_simulator()) {
         GTEST_SKIP() << "CompileKernelOffline has no precompiled firmware for the simulator build_key "
                         "(multi-erisc disabled); skipping under TT_METAL_SIMULATOR.";
@@ -307,7 +311,7 @@ TEST_F(MeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWithoutJit) {
     EXPECT_EQ(jit_srcs.delta(), 0u);
 }
 
-TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledFallsBackToJit) {
+TEST_F(AnyDispatchMeshDeviceFixture, RuntimeMissingPrecompiledFallsBackToJit) {
     const auto precompiled_config = make_precompiled_config(kMissingPrecompiledRoot, BinaryPolicy::JitCompile);
     Program program = create_precompiled_program(precompiled_config);
     auto* device = this->devices_.at(0)->get_devices().at(0);
@@ -318,7 +322,7 @@ TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledFallsBackToJit) {
     EXPECT_GT(jit_srcs.delta(), 0u);
 }
 
-TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
+TEST_F(AnyDispatchMeshDeviceFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
     const auto precompiled_config = make_precompiled_config(kMissingPrecompiledRoot, BinaryPolicy::Error);
     Program program = create_precompiled_program(precompiled_config);
     auto* device = this->devices_.at(0)->get_devices().at(0);
