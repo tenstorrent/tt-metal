@@ -5,6 +5,8 @@
 #include "tilize.hpp"
 
 #include "device/tilize_device_operation.hpp"
+#include "codegen/tilize_codegen_device_operation.hpp"
+#include "codegen/tilize_codegen_supported.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -49,7 +51,12 @@ ttnn::Tensor tilize(
     bool use_multicore,
     bool use_low_perf,
     tt::tt_metal::Tile tile,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::string& implementation) {
+    namespace tilize_codegen = ttnn::operations::data_movement::tilize_codegen;
+    // Validate before any early return so an invalid value fails consistently.
+    const auto sel = tilize_codegen::parse_implementation(implementation);
+
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tile.get_tile_size(input_cb_data_format);
     uint32_t output_single_tile_size =
@@ -75,6 +82,36 @@ ttnn::Tensor tilize(
         fixed_staging_bytes);
 
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
+        DataType resolved_output_dtype = output_dtype.value_or(input_tensor.dtype());
+        MemoryConfig resolved_output_mem_config = memory_config.value_or(input_tensor.memory_config());
+
+        // Every codegen builder places work over the full compute_with_storage_grid_size() and
+        // implements neither a single-core mode nor a sub-core-grid restriction, so a caller that
+        // set any of these controls to something codegen cannot honour must go to native.
+        const bool controls_supported =
+            tilize_codegen::supported_execution_controls(use_multicore, use_low_perf, sub_core_grids);
+
+        if (sel != tilize_codegen::ImplementationSelector::Native) {
+            const bool supported =
+                controls_supported &&
+                tilize_codegen::supported_by_codegen(input_tensor, resolved_output_mem_config, resolved_output_dtype);
+            if (sel == tilize_codegen::ImplementationSelector::Codegen) {
+                TT_FATAL(
+                    supported,
+                    "tilize: implementation=\"codegen\" requires a supported input/output configuration (row-major, "
+                    "tile-aligned width, interleaved, in-scope dtype) and default execution controls "
+                    "(use_multicore=true, use_low_perf=false, no sub_core_grids)");
+                return ttnn::prim::tilize_codegen(
+                    input_tensor, resolved_output_mem_config, resolved_output_dtype, tile);
+            }
+            // Auto: codegen iff supported and not perf-demoted; else fall through to native below.
+            if (supported &&
+                !tilize_codegen::is_demoted(input_tensor, resolved_output_mem_config, resolved_output_dtype)) {
+                return ttnn::prim::tilize_codegen(
+                    input_tensor, resolved_output_mem_config, resolved_output_dtype, tile);
+            }
+        }
+
         // Workaround for https://github.com/tenstorrent/tt-metal/issues/45331:
         // ttnn::prim::tilize routes wide width-sharded input to
         // TilizeMultiCoreDefaultProgramFactory, whose CBs are sized to a full

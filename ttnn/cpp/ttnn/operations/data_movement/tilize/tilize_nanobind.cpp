@@ -32,6 +32,7 @@ void bind_tilize(nb::module_& mod) {
             use_low_perf (bool, optional): Use a low performance version that uses less memory. USE ONLY IF ABSOLUTELY NEEDED IN MODELS. Defaults to `False`.
             tile (ttnn.Tile, optional): Tile shape for the output tensor. Defaults to the standard 32x32 tile.
             sub_core_grids (CoreRangeSet, optional): Used to restrict tilize to a set of cores, Defaults to using the entire device
+            implementation (str, optional): "auto" (default), "native", or "codegen".
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -48,6 +49,7 @@ void bind_tilize(nb::module_& mod) {
         nb::arg("use_multicore") = true,
         nb::arg("use_low_perf") = false,
         nb::arg("tile") = tt::tt_metal::Tile(),  // default to 32x32 tile
-        nb::arg("sub_core_grids") = nb::none());
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("implementation") = "auto");
 }
 }  // namespace ttnn::operations::data_movement::detail
