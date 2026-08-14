@@ -1628,6 +1628,54 @@ tree (48 partials, not 32). Not bit-identical, `decode_min_pcc` 0.999316 → 0.9
 long-form words flipped. **A variant pinning `per_core_N=3` on the two residual matmuls — which puts
 their output on 96/3 = 32 cores, matching the norm's existing grid — is under test.**
 
+### ★ O9 — what the 0.95 gate actually cost, measured in the metrics it cannot see
+
+The tool's optimizer accepted `down_proj → bfloat8_b` (commit `074ec705a8`) on the only two
+criteria it has: faster, and PCC still above 0.95. The hand-port evaluated the same change at
+§6.16 and **handed the speed back**. This prices that disagreement by making the identical change
+to the hand-port and running its audio-tier gate — everything else held fixed, both tags in one
+session.
+
+```
+                    baseline      w2 -> bf8_b
+wer_longform             0    ->      3        *** WORSE ***   (tolerance is 0)
+codes_real_n            45    ->     59        *** WORSE ***   +31% code flips
+codes_real_pct         5.2    ->    6.8        *** WORSE ***
+decode_mean_pp        0.97    ->   1.09        *** WORSE ***
+mos_min             2.6597    -> 2.4145                        -0.245 on the WORST utterance
+mos_longform        4.6101    -> 4.5895                        within tolerance
+ms_per_frame        27.751    -> 30.271        *** WORSE ***   SLOWER by 2.52 ms
+rtf                 0.3653    -> 0.4113        *** WORSE ***
+pytest                 132    ->    131        *** WORSE ***   the §6.16 guard fired
+                                               8 metrics worse, 15 within tolerance
+```
+
+**Three of those four quality columns are invisible to the tool's gate.** It has no word-error
+metric, no perceptual metric, and no exact-match check on discrete codes — and `mos_min` is the
+worst-case utterance, which a mean-based gate would hide even if it had one. Its own PCC reading
+for this change stayed comfortably above 0.95 throughout.
+
+**And on this build the change is SLOWER.** §6.16 measured BFP8 `w2` as ~2.5 ms *faster* on the
+N150; on p150 it costs 2.52 ms. So the trade is now loss-loss.
+
+#### O9b — the tool re-opens its NOs but never its YESes
+
+The sharpest part. In run 2 the tool's own diagnostic for this exact op reported:
+
+> *this op takes the SAME 0.159 ms/call at bf16 and at bf8_b, so it is not bandwidth-bound and the
+> limit is the shape of its k-reduction*
+
+**It measured that `w2`'s dtype does not affect its speed — after having already spent accuracy
+lowering that dtype in run 1 — and never went back.** Section O4p credits this tool for re-opening
+four *rejections* in a single run, which is the best thing it does. But nothing re-opens an
+**acceptance**. Precision is the only irreversible cost the ladder pays, and it is the one class of
+decision never revisited when later evidence undermines it.
+
+**Suggested fix, and it is symmetric with what the tool already does well:** when a measurement
+shows a lever is inert on an op (same time at two dtypes, same time at two grids), re-open every
+*applied* change that rung made to that op and try reverting it. A revert that costs nothing in
+time and buys back accuracy is a strict win, and the ladder currently cannot express it.
+
 ### F14 — "producer emits the consumer's shard" needs to check the consumer's PROGRAM CONFIG grid
 
 The most useful mechanism the tool found is also the one most likely to misfire, and the reason is
