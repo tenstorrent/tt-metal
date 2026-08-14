@@ -211,43 +211,23 @@ std::vector<uint32_t> recv_index_bases_per_sender(const std::vector<std::pair<Co
     return bases;
 }
 
-// The device whose logical DRAM coordinates a DRAM-sender GCB's public
-// sender_receiver_core_mapping() is expressed in: the mesh's reference device. Logical DRAM
-// sender coords are per-device (harvest masks differ), so this is the one place that fixes
-// which device the mapping names; every device-bound use goes through device_sender_for_role.
-IDevice* canonical_sender_device(distributed::MeshDevice* mesh_device) { return mesh_device->get_devices().at(0); }
-
-// A DRAM-sender GCB exposes the canonical device's logical sender coordinates for API
-// compatibility. `canonical_sender_role` recovers a canonical coordinate's stable role
-// (its index within the bank's ordered sender list). It depends only on the canonical
-// device, so callers resolve it once per sender rather than once per (sender, device).
-size_t canonical_sender_role(distributed::MeshDevice* mesh_device, const CoreCoord& canonical_sender) {
-    const uint32_t bank_id = static_cast<uint32_t>(canonical_sender.x);
-    const std::vector<CoreCoord> canonical_senders =
-        mesh_device->impl().dram_sender_logical_cores(canonical_sender_device(mesh_device), bank_id);
-    const auto canonical_it = std::find(canonical_senders.begin(), canonical_senders.end(), canonical_sender);
-    TT_FATAL(
-        canonical_it != canonical_senders.end(),
-        "Canonical DRAM sender ({}, {}) is not a provisioned sender for bank {}",
-        canonical_sender.x,
-        canonical_sender.y,
-        bank_id);
-    return static_cast<size_t>(std::distance(canonical_senders.begin(), canonical_it));
-}
-
-// Selects the logical DRAM core that plays `sender_role` for `bank_id` on `device`'s
-// harvested topology.
-CoreCoord device_sender_for_role(
-    distributed::MeshDevice* mesh_device, const IDevice* device, uint32_t bank_id, size_t sender_role) {
+// A logical DRAM coordinate names an endpoint role rather than a raw subchannel (see
+// metal_SocDescriptor::dram_bank_endpoint_coords), so one sender mapping holds for every device in
+// the mesh even when their DRAM harvest masks differ: each device translates the same logical coord
+// to its own physical subchannel. Check that per device rather than trusting it — a descriptor whose
+// endpoint layout didn't reproduce the role would otherwise silently drive the wrong DRISC core, and
+// a sender that isn't provisioned for its bank would take credits nobody returns.
+void validate_dram_sender_on_device(
+    distributed::MeshDevice* mesh_device, const IDevice* device, const CoreCoord& sender_logical) {
+    const uint32_t bank_id = static_cast<uint32_t>(sender_logical.x);
     const std::vector<CoreCoord> device_senders = mesh_device->impl().dram_sender_logical_cores(device, bank_id);
     TT_FATAL(
-        sender_role < device_senders.size(),
-        "Device {} has {} DRAM senders for bank {}, but canonical sender role {} is required",
-        device->id(),
-        device_senders.size(),
+        std::find(device_senders.begin(), device_senders.end(), sender_logical) != device_senders.end(),
+        "DRAM sender ({}, {}) is not a provisioned sender for bank {} on device {}",
+        sender_logical.x,
+        sender_logical.y,
         bank_id,
-        sender_role);
-    return device_senders[sender_role];
+        device->id());
 }
 }  // namespace
 
@@ -303,7 +283,7 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
     // when two senders share a bank, the second reads slabs that start where the first's end.
     const std::vector<uint32_t> recv_index_bases = recv_index_bases_per_sender(sender_receiver_core_mapping_);
     for (size_t s = 0; s < sender_receiver_core_mapping_.size(); ++s) {
-        const auto& [canonical_sender, receivers] = sender_receiver_core_mapping_[s];
+        const auto& [sender_logical, receivers] = sender_receiver_core_mapping_[s];
         const auto receivers_vec = corerange_to_cores(receivers, /*max_cores=*/std::nullopt, /*row_wise=*/true);
         const uint32_t this_num_receivers = static_cast<uint32_t>(receivers_vec.size());
 
@@ -313,11 +293,8 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
         hdr->num_receivers_and_remote_pages_sent_ptr =
             remote_cb_pack(this_num_receivers, static_cast<uint32_t>(pages_sent_worker_l1_base_));
 
-        // The canonical sender role is device-independent; resolve it once per sender.
-        const uint32_t bank_id = static_cast<uint32_t>(canonical_sender.x);
-        const size_t sender_role = canonical_sender_role(mesh_device, canonical_sender);
-
         for (IDevice* dev : devices) {
+            validate_dram_sender_on_device(mesh_device, dev, sender_logical);
             for (uint32_t i = 0; i < max_num_receivers_per_sender; ++i) {
                 if (i < this_num_receivers) {
                     const CoreCoord receiver_phys = dev->worker_core_from_logical_core(receivers_vec[i]);
@@ -328,7 +305,6 @@ void GlobalCircularBuffer::initialize_dram_sender_state_block(
                     noc_xy_words[2 * i + 1] = 0;
                 }
             }
-            const CoreCoord sender_logical = device_sender_for_role(mesh_device, dev, bank_id, sender_role);
             const CoreCoord virtual_core = dev->virtual_core_from_logical_core(sender_logical, CoreType::DRAM);
             cluster.write_core(
                 dev->id(),
@@ -400,30 +376,21 @@ void GlobalCircularBuffer::setup_cb_buffers(
         pages_sent_worker_l1_base_ = pages_sent_address;
     }
 
-    // The canonical (reference-device) sender role for each mapping entry is device-independent;
-    // resolve it once here so the per-device config build only performs the target-device index lookup.
-    std::vector<std::pair<uint32_t, size_t>> canonical_roles;  // {bank_id, role}
     if (sender_core_type == experimental::SenderCoreType::Dram) {
         TT_FATAL(dram_sender_mesh_device != nullptr, "DRAM-sender GCB config requires its MeshDevice");
-        canonical_roles.reserve(sender_receiver_core_mapping_.size());
-        for (const auto& [canonical_sender, _receivers] : sender_receiver_core_mapping_) {
-            canonical_roles.emplace_back(
-                static_cast<uint32_t>(canonical_sender.x),
-                canonical_sender_role(dram_sender_mesh_device, canonical_sender));
-        }
     }
 
     const auto make_config_host_buffer = [&](IDevice* config_device) {
         std::vector<uint32_t> cb_config_host_buffer(cb_config_size / sizeof(uint32_t), 0);
         for (size_t s = 0; s < sender_receiver_core_mapping_.size(); ++s) {
-            const auto& [canonical_sender, receiver_cores] = sender_receiver_core_mapping_[s];
+            const auto& [sender_logical, receiver_cores] = sender_receiver_core_mapping_[s];
             const auto& receiver_cores_vec = corerange_to_cores(receiver_cores);
             uint32_t num_receivers = receiver_cores.num_cores();
 
             // Worker senders have their own config page in the sharded buffer; DRAM senders don't
             // (the DRISC kernel hand-rolls the sender iface state from compile-time args).
             if (sender_core_type == experimental::SenderCoreType::Worker) {
-                uint32_t sender_idx = core_to_core_id.at(canonical_sender) * cb_config_page_size / sizeof(uint32_t);
+                uint32_t sender_idx = core_to_core_id.at(sender_logical) * cb_config_page_size / sizeof(uint32_t);
                 cb_config_host_buffer[sender_idx++] = 1;
                 cb_config_host_buffer[sender_idx++] = num_receivers;
                 cb_config_host_buffer[sender_idx++] = buffer_address;
@@ -442,13 +409,12 @@ void GlobalCircularBuffer::setup_cb_buffers(
             }
 
             // Sender's physical NOC coord -- where the receiver's pages_acked NOC-inc lands. For
-            // worker senders this is the worker phys; for DRAM senders it is the target device's
-            // DRAM virtual coord for the canonical sender's stable bank/role.
-            const CoreCoord sender_logical =
-                (sender_core_type == experimental::SenderCoreType::Dram)
-                    ? device_sender_for_role(
-                          dram_sender_mesh_device, config_device, canonical_roles[s].first, canonical_roles[s].second)
-                    : canonical_sender;
+            // worker senders this is the worker phys; for DRAM senders it is the target device's own
+            // DRAM virtual coord for this sender's bank/role, which differs across devices with
+            // different DRAM harvest masks even though the logical coord does not.
+            if (sender_core_type == experimental::SenderCoreType::Dram) {
+                validate_dram_sender_on_device(dram_sender_mesh_device, config_device, sender_logical);
+            }
             CoreCoord sender_physical_coord =
                 (sender_core_type == experimental::SenderCoreType::Worker)
                     ? config_device->worker_core_from_logical_core(sender_logical)
@@ -613,9 +579,10 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
     distributed::MeshDevice* mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool dual_senders_per_bank) {
-    // The mapping is keyed by canonical-device logical coords; per-device sender placement is
-    // resolved from each entry's (bank, role) when the GCB is written to a device.
-    const IDevice* canonical_device = canonical_sender_device(mesh_device);
+    // Logical DRAM sender coords name an endpoint role, so resolving them against any one device
+    // gives the mapping for the whole mesh; each device translates them to its own physical
+    // subchannel, and validate_dram_sender_on_device rechecks that when the GCB is written out.
+    const IDevice* reference_device = mesh_device->get_devices().at(0);
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
     mapping.reserve((dual_senders_per_bank ? 2 : 1) * bank_to_receivers.size());
     std::unordered_set<uint32_t> seen_banks;
@@ -631,7 +598,7 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
         if (!dual_senders_per_bank) {
             // Single sender per bank (the free non-endpoint subchannel).
             mapping.emplace_back(
-                mesh_device->impl().pick_unused_dram_logical_core(canonical_device, bank_id), receivers);
+                mesh_device->impl().pick_unused_dram_logical_core(reference_device, bank_id), receivers);
             continue;
         }
 
@@ -641,7 +608,7 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
         // secondary parked — same as the single-sender path. Dual- and single-sender banks may
         // therefore coexist in one dual-mode GCB.
         const std::vector<CoreCoord> sender_cores =
-            mesh_device->impl().dram_sender_logical_cores(canonical_device, bank_id);
+            mesh_device->impl().dram_sender_logical_cores(reference_device, bank_id);
         if (n == 1) {
             mapping.emplace_back(sender_cores.at(0), receivers);
             continue;

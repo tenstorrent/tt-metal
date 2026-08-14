@@ -101,8 +101,12 @@ TEST_F(DramSenderGCBMultiDeviceFixture, ConfigAndSenderStateUsePerDeviceDramTopo
     constexpr uint32_t kBankId = 0;
     constexpr uint32_t kNumReceivers = 2;
     CoreRangeSet receiver_cores(CoreRange({0, 0}, {kNumReceivers - 1, 0}));
-    auto gcb = experimental::CreateGlobalCircularBufferWithDramSenders(
-        *mesh_device_, {{kBankId, receiver_cores}}, kGcbSize, BufferType::L1, /*dual_senders_per_bank=*/true);
+    auto gcb = experimental::CreateGlobalCircularBufferForTensorPrefetcher(
+        *mesh_device_,
+        {{kBankId, receiver_cores}},
+        kGcbSize,
+        BufferType::L1,
+        /*support_multi_receiver_shards=*/false);
     ASSERT_EQ(gcb.sender_receiver_core_mapping().size(), kNumReceivers);
 
     const auto& hal = MetalContext::instance(mesh_device_->impl().get_context_id()).hal();
@@ -115,6 +119,14 @@ TEST_F(DramSenderGCBMultiDeviceFixture, ConfigAndSenderStateUsePerDeviceDramTopo
     for (IDevice* device : mesh_device_->get_devices()) {
         const std::vector<CoreCoord> device_senders = mesh_device_->impl().dram_sender_logical_cores(device, kBankId);
         ASSERT_EQ(device_senders.size(), kNumReceivers);
+
+        // Logical sender coords name an endpoint role, so they are the same on every device; only
+        // the physical subchannel they resolve to tracks that device's DRAM harvest mask. The GCB's
+        // one mapping is only valid for the whole mesh because of this.
+        for (uint32_t sender_role = 0; sender_role < kNumReceivers; ++sender_role) {
+            EXPECT_EQ(device_senders[sender_role], gcb.sender_receiver_core_mapping()[sender_role].first)
+                << "device " << device->id() << ", sender role " << sender_role;
+        }
 
         for (uint32_t sender_role = 0; sender_role < kNumReceivers; ++sender_role) {
             const CoreCoord expected_sender_virtual =
