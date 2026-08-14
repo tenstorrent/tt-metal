@@ -327,8 +327,16 @@ def _plan_sharded(device, input_tensor, *, has_gamma, bytes_):
     # Turn the coarse knobs first, the overlap knobs only if that is not enough.
     # A shard pins slice_hidden_tiles, so on the ROW_MAJOR path (three S-sized
     # staging buffers) the buffer-DEPTH knobs are the only remaining slack.
-    block_rows, rm_in_depth, rm_out_depth = 1, RM_IN_DEPTH, RM_OUT_DEPTH
-    for in_depth, out_depth in ((RM_IN_DEPTH, RM_OUT_DEPTH), (1, RM_OUT_DEPTH), (1, 1)):
+    #
+    # If nothing fits the (conservative) budget, fall through to the SMALLEST
+    # configuration rather than the default one: a shard pins slice_hidden_tiles,
+    # so that is the only remaining move, and the real L1 is larger than the
+    # fallback budget assumes.
+    ladder = (
+        ((RM_IN_DEPTH, RM_OUT_DEPTH), (1, RM_OUT_DEPTH), (1, 1)) if is_row_major else ((RM_IN_DEPTH, RM_OUT_DEPTH),)
+    )
+    block_rows, rm_in_depth, rm_out_depth = 1, ladder[-1][0], ladder[-1][1]
+    for in_depth, out_depth in ladder:
         # A divisor keeps every block the same size, which is what lets the
         # resident-shard CB stay exactly full at every block boundary (the
         # in-place rewrite of x needs get_write_ptr() == get_read_ptr()).
@@ -336,8 +344,6 @@ def _plan_sharded(device, input_tensor, *, has_gamma, bytes_):
         if chosen:
             block_rows, rm_in_depth, rm_out_depth = chosen, in_depth, out_depth
             break
-        if not is_row_major:
-            break  # the depth knobs are ROW_MAJOR-only; nothing more to turn
 
     grid = device.compute_with_storage_grid_size()
     return {
