@@ -7,7 +7,7 @@ TTNN implementation of Distributed RMSNorm module for DeepSeek V3.
 
 This module performs distributed RMSNorm across chips using:
 1. rms_norm_pre_all_gather - compute local sum(x^2) statistics
-2. all_gather - gather statistics across chips
+2. high_bw_all_gather - gather statistics across chips
 3. rms_norm_post_all_gather - normalize using global statistics
 
 Supports both DRAM interleaved and L1 sharded memory configurations.
@@ -176,6 +176,7 @@ class TtDistributedRmsNorm(LightweightModule):
         self.stats_memcfg = stats_memcfg
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
+        self._gathered_stats = None
 
         logger.debug(f"Initializing TtDistributedRmsNorm with emb_dim={emb_dim}, epsilon={epsilon}")
         logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
@@ -260,18 +261,25 @@ class TtDistributedRmsNorm(LightweightModule):
         )
         logger.debug(f"Pre-all-gather stats shape: {tt_stats.shape}")
 
-        # Step 2: All-gather stats across cluster_axis
-        all_gather_kwargs = {
-            "input_tensor": tt_stats,
-            "dim": 3,
-            "cluster_axis": self.cluster_axis,
-            "num_links": self.num_links,
-            "topology": self.topology,
-        }
-        if self.stats_memcfg is not None:
-            all_gather_kwargs["memory_config"] = self.stats_memcfg
-
-        tt_gathered_stats = ttnn.all_gather(**all_gather_kwargs)
+        # Step 2: Gather stats across cluster_axis. high_bw_all_gather writes into a caller-provided
+        # DRAM tensor, so allocate its fixed-shape output once and reuse it across forwards.
+        if self._gathered_stats is None:
+            gathered_shape = list(tt_stats.shape)
+            gathered_shape[3] *= self.mesh_device.shape[self.cluster_axis]
+            self._gathered_stats = ttnn.empty(
+                gathered_shape,
+                dtype=tt_stats.dtype,
+                layout=tt_stats.layout,
+                device=self.mesh_device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        tt_gathered_stats = ttnn.experimental.high_bw_all_gather(
+            tt_stats,
+            dim=3,
+            output_tensor=self._gathered_stats,
+            cluster_axis=self.cluster_axis,
+            num_links=self.num_links,
+        )
         ttnn.deallocate(tt_stats)
         logger.debug(f"Gathered stats shape: {tt_gathered_stats.shape}")
 
@@ -284,7 +292,6 @@ class TtDistributedRmsNorm(LightweightModule):
             dtype=ttnn.bfloat16,
             program_config=self.sharded_progcfg,
         )
-        ttnn.deallocate(tt_gathered_stats)
         logger.debug(f"Output shape: {tt_output.shape}")
 
         return tt_output
