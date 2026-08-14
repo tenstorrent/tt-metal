@@ -374,24 +374,20 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.fold">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">fold</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stride_h</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stride_w</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">collapse_output</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.fold" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">fold</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stride_h</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stride_w</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.fold" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>NHWC space-to-depth. Packs every stride_h * stride_w neighbourhood at position
-(h * stride_h, w * stride_w) into the channel dim at position (h, w). Shapes below
-use the padded H/W/C (any HW / channel padding is applied before folding).</p>
-<p>Output shape: (N, Hp/stride_h, Wp/stride_w, Cp * stride_h * stride_w)
-where Hp, Wp, Cp are the padded input dims.</p>
+<p>Fold TT Tensor.
+Input tensor must be on TT accelerator device, in ROW_MAJOR.
+Output tensor will be on TT accelerator device, in ROW_MAJOR.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
 <ul class="simple">
-<li><p><strong>input</strong> (<em>ttnn.Tensor</em>) – Input tensor [N, H, W, C].</p></li>
-<li><p><strong>stride_h</strong> (<em>int</em>) – Stride along H.</p></li>
-<li><p><strong>stride_w</strong> (<em>int</em>) – Stride along W.</p></li>
-<li><p><strong>collapse_output</strong> (<em>bool</em><em>, </em><em>optional</em>) – Default False. When True, returns
-(1, 1, N * Hp/stride_h * Wp/stride_w, Cp * stride_h * stride_w) instead.</p></li>
+<li><p><strong>input</strong> (<em>ttnn.Tensor</em>) – Input tensor to be folded. Tensor of shape [N, H, W, C].</p></li>
+<li><p><strong>stride_h</strong> (<em>int</em>) – Stride along the H-dimension.</p></li>
+<li><p><strong>stride_w</strong> (<em>int</em>) – Stride along the W-dimension.</p></li>
 </ul>
 </dd>
 </dl>
