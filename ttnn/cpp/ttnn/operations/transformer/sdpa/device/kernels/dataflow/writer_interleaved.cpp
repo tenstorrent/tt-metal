@@ -93,7 +93,12 @@ void kernel_main() {
     // otherwise just this head's width (contiguous).
     const uint32_t out_row_stride = fuse_concat_heads ? (NQH * vDHt) : vDHt;
 
-    constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
+    // Size the NoC write budget by the cores that actually have work, not the whole grid --
+    // the same issue fixed in reader_interleaved.cpp. The Q-chunk space is pair-distributed when
+    // causal, so at B=1/NQH=6/q_num_chunks=16 only 48 of ~130 cores participate; dividing by 130
+    // floors the threshold to 1 and drains the NoC after every tile written.
+    constexpr uint32_t num_active_writers = get_num_active_readers<B, NQH, q_num_chunks, is_causal != 0, num_cores>();
+    constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_active_writers>();
 
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_identity_scale_in,
