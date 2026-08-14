@@ -81,10 +81,40 @@ class RMSNorm(nn.Module):
             ttnn.deallocate(tt_gathered_stats)
             return tt_output
         else:
-            tt_output = ttnn.rms_norm(
-                x,
-                weight=self.tt_weight,
-                epsilon=self.eps,
-                # program_config=program_config,
-            )
-            return tt_output
+            if x.shape[2] == 1 and x.shape[3] == 2880:
+                # Optimized decode path: l1_width_sharded with 5 cores
+                shard_spec = ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(4, 0))}),
+                    [32, 576],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                )
+                sharded_config = ttnn.MemoryConfig(
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
+                )
+                x_sharded = ttnn.to_memory_config(x, sharded_config)
+
+                program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=ttnn.CoreCoord(5, 1),
+                    subblock_w=3,
+                    block_h=1,
+                    block_w=18,
+                    inplace=False,
+                )
+
+                tt_output_sharded = ttnn.rms_norm(
+                    x_sharded,
+                    weight=self.tt_weight,
+                    epsilon=self.eps,
+                    program_config=program_config,
+                    memory_config=sharded_config,
+                )
+
+                tt_output = ttnn.sharded_to_interleaved(tt_output_sharded, ttnn.L1_MEMORY_CONFIG)
+                return tt_output
+            else:
+                tt_output = ttnn.rms_norm(
+                    x,
+                    weight=self.tt_weight,
+                    epsilon=self.eps,
+                )
+                return tt_output
