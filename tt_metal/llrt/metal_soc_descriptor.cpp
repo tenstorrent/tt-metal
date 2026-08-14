@@ -324,18 +324,32 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         this->dram_view_eth_cores.push_back(std::move(eth_dram_cores));
         this->dram_view_worker_cores.push_back(std::move(worker_dram_cores));
 
-        size_t num_subchannels = get_grid_size(tt::CoreType::DRAM).y;
-        size_t preferred_subchannel = worker_endpoints[0];
+        // Order a bank's endpoints by role, not by raw subchannel id: the worker endpoints in NOC
+        // order (NOC0 first, so logical y == 0 stays the endpoint CMFW also uses for DRAM telemetry,
+        // SYS-1419), then whatever subchannels are left, ascending. A role-ordered y means a logical
+        // DRAM CoreCoord denotes the same thing on every device: which raw subchannel serves which
+        // role is fixed per descriptor entry, but DRAM harvesting shifts which entry a bank maps to,
+        // so ordering by subchannel id would make (bank, y) name a different role from one device to
+        // the next. Endpoints that repeat a subchannel (Wormhole declares the same one for both NOCs)
+        // are placed once, which leaves those descriptors ordered exactly as before.
+        const size_t num_subchannels = get_grid_size(tt::CoreType::DRAM).y;
+        std::vector<bool> subchannel_placed(num_subchannels, false);
         std::vector<tt::tt_metal::CoreCoord> bank_endpoints;
         bank_endpoints.reserve(num_subchannels);
-        auto preferred_coord =
-            get_dram_core_for_channel(logical_channel, preferred_subchannel, tt::CoordSystem::TRANSLATED);
-        bank_endpoints.push_back({preferred_coord.x, preferred_coord.y});
-        for (size_t sub = 0; sub < num_subchannels; sub++) {
-            if (sub != preferred_subchannel) {
-                auto coord = get_dram_core_for_channel(logical_channel, sub, tt::CoordSystem::TRANSLATED);
-                bank_endpoints.push_back({coord.x, coord.y});
+        const auto place_subchannel = [&](size_t sub) {
+            if (sub >= num_subchannels || subchannel_placed[sub]) {
+                return;
             }
+            subchannel_placed[sub] = true;
+            const tt::umd::CoreCoord coord =
+                get_dram_core_for_channel(logical_channel, sub, tt::CoordSystem::TRANSLATED);
+            bank_endpoints.push_back({coord.x, coord.y});
+        };
+        for (const size_t worker_endpoint : worker_endpoints) {
+            place_subchannel(worker_endpoint);
+        }
+        for (size_t sub = 0; sub < num_subchannels; sub++) {
+            place_subchannel(sub);
         }
         this->dram_bank_endpoint_coords.push_back(std::move(bank_endpoints));
     }
