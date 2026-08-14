@@ -131,12 +131,22 @@ exec 9>"$DEVICE_LOCK"
 flock 9
 echo ">> [3/3] sweeping"
 started=$SECONDS
-# A found race turns the case red, so a non-zero exit is a result, not a crash:
-# report the timing either way and pass the code on. The supervisor rides out a
-# wedged card by resetting and resuming, and reports that separately by exiting
-# 75, so a caller can tell "found races" from "the card stopped answering".
+# A found race turns the case red, so exit 1 is a result, not a crash: report the
+# timing either way and pass the code on. The supervisor rides out a wedged card by
+# resetting and resuming, and reports that separately by exiting 75, so a caller can
+# tell "found races" from "the card stopped answering" from "the sweep never ran" (70).
 status=0
 supervise_nodeids "$NODEIDS" --compile-consumer \
     "${QUIET_ARGS[@]}" "${XDIST_ARGS[@]}" || status=$?
+
+# The supervisor writes junit.xml as its last act, so a missing one means it never
+# reached the end. Worth checking separately because pytest exits 1 for "some tests
+# failed" and python exits 1 for "the script raised", and the caller cannot tell
+# those apart: a sweep that died on an import in 0.06s returned exactly what a sweep
+# that ran for six hours and found races returns, and CI passed it as a clean shard.
+if [[ ! -f "$REPORT_DIR/junit.xml" ]]; then
+    echo ">> ttnop: sweep did not complete — no junit.xml in $REPORT_DIR" >&2
+    status=70
+fi
 echo ">> timing: compile=${compile_s}s sweep=$((SECONDS - started))s total=${SECONDS}s"
 exit "$status"
