@@ -17,6 +17,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "impl/program/program_cache_impl.hpp"
 
 namespace ttnn {
 namespace {
@@ -330,23 +331,23 @@ TEST_F(LaunchOperation2x4Test, LaunchOpFilterTensorShards) {
 }
 
 TEST_F(LaunchOperation2x4Test, CachingHeterogeneousDispatch) {
-    EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 0);
+    EXPECT_EQ(mesh_device_->get_program_cache().impl().num_entries(), 0);
 
     auto full_tensor = make_tensor_with_num_shards(8, mesh_device_.get());
     auto sum = ttnn::add(full_tensor, full_tensor);
 
-    EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 1);
+    EXPECT_EQ(mesh_device_->get_program_cache().impl().num_entries(), 1);
 
     auto sum2 = ttnn::add(full_tensor, full_tensor);
-    EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 1);
+    EXPECT_EQ(mesh_device_->get_program_cache().impl().num_entries(), 1);
 
     auto uneven_tensor = make_tensor_with_num_shards(2, mesh_device_.get());
     auto sum_uneven = ttnn::add(uneven_tensor, uneven_tensor);
 
-    EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 2);
+    EXPECT_EQ(mesh_device_->get_program_cache().impl().num_entries(), 2);
 
     auto sum3 = ttnn::add(uneven_tensor, uneven_tensor);
-    EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 2);
+    EXPECT_EQ(mesh_device_->get_program_cache().impl().num_entries(), 2);
 }
 
 TEST_F(LaunchOperation2x4Test, OutputTensorTopology) {

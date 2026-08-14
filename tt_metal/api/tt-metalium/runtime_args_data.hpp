@@ -4,33 +4,27 @@
 
 #pragma once
 
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
 #include <string>
-#include <utility>
 
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal {
+
+namespace detail {
+struct RuntimeArgsDataAccess;
+}
+
 // RuntimeArgsData provides an indirection to the runtime args
 // Prior to generating the cq cmds for the device, this points into a vector within the kernel
 // After generation, this points into the cq cmds so that runtime args API calls
 // update the data directly in the command
 struct RuntimeArgsData {
-    std::uint32_t* rt_args_data;
-    std::size_t rt_args_count;
-
-    bool in_bounds(std::size_t index) const noexcept {
-        if (index >= rt_args_count) {
-            std::cerr << "TT_FATAL: Index " << index << " is larger than runtime args size " << rt_args_count << " at "
-                      << __FILE__ << ":" << __LINE__ << std::endl;
-            return false;
-        }
-        return true;
-    }
+    RuntimeArgsData() = default;
+    RuntimeArgsData(std::uint32_t* data, std::size_t count) : rt_args_data(data), rt_args_count(count) {}
 
     // NOLINTNEXTLINE(readability-make-member-function-const)
     std::uint32_t& operator[](std::size_t index) noexcept {
@@ -68,6 +62,21 @@ struct RuntimeArgsData {
     const std::uint32_t* data() const noexcept { return rt_args_data; }
 
     std::size_t size() const noexcept { return rt_args_count; }
+
+private:
+    friend struct detail::RuntimeArgsDataAccess;
+
+    bool in_bounds(std::size_t index) const noexcept {
+        if (index >= rt_args_count) {
+            std::cerr << "TT_FATAL: Index " << index << " is larger than runtime args size " << rt_args_count << " at "
+                      << __FILE__ << ":" << __LINE__ << std::endl;
+            return false;
+        }
+        return true;
+    }
+
+    std::uint32_t* rt_args_data = nullptr;
+    std::size_t rt_args_count = 0;
 };
 
 }  // namespace tt::tt_metal

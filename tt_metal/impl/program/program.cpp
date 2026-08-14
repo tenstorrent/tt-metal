@@ -1627,7 +1627,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
                 //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
                 if (!kernel->common_runtime_args().empty()) {
                     RuntimeArgsData& crta = kernel->common_runtime_args_data();
-                    crta.data()[handle.addr_crta_word] = handle.allocated_address;
+                    crta[handle.addr_crta_word] = handle.allocated_address;
                 }
             }
         }
@@ -2678,7 +2678,7 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
 
 void detail::ProgramImpl::set_runtime_id(ProgramId id) { this->runtime_id = id; }
 
-void Program::set_runtime_id(ProgramId id) { internal_->set_runtime_id(id); }
+void Program::set_runtime_id(std::uint64_t id) { internal_->set_runtime_id(id); }
 
 uint32_t detail::ProgramImpl::get_sem_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type = tt::tt_metal::hal_programmable_core_type_from_core_type(core_type);
@@ -2746,7 +2746,7 @@ ProgramId detail::ProgramImpl::get_id() const { return this->id; }
 
 ProgramId detail::ProgramImpl::get_runtime_id() const { return this->runtime_id; }
 
-ProgramId Program::get_runtime_id() const { return internal_->get_runtime_id(); }
+std::uint64_t Program::get_runtime_id() const { return internal_->get_runtime_id(); }
 
 size_t detail::ProgramImpl::num_kernels() const {
     size_t count = 0;

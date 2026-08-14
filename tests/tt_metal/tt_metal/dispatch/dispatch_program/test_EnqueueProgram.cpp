@@ -36,6 +36,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/runtime_args_data.hpp>
+#include "impl/program/runtime_args_data.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -623,7 +624,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
         } else {
             for (KernelHandle k : kernels) {
                 memcpy(
-                    GetCommonRuntimeArgs(program_, k).rt_args_data,
+                    tt::tt_metal::detail::RuntimeArgsDataAccess::ptr(GetCommonRuntimeArgs(program_, k)),
                     common_args.data(),
                     common_args.size() * sizeof(uint32_t));
             }

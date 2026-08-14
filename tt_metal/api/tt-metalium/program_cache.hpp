@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include <compare>
+#include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
 
@@ -128,40 +131,31 @@ struct ProgramCacheKey {
     }
 };
 
-// Custom hasher for ProgramCacheKey that uses the precomputed hash value.
-// Other member(s) ignored since std::unordered_map will use operator== to resolve collisions within buckets.
-struct ProgramCacheKeyHasher {
-    std::size_t operator()(const ProgramCacheKey& key) const { return static_cast<std::size_t>(key.hash); }
-};
+struct ProgramCacheImpl;
 
 // Generic Program Cache: This data structure is tied to a device handle and can store generic program types from
 // TT-Metal and TT-Eager using ttsl::concepts::unique_any.
 struct ProgramCache {
-    bool contains(const ProgramCacheKey& program_key) const { return this->cache_.contains(program_key); }
+    ProgramCache();
+    explicit ProgramCache(ProgramCacheImpl);
+    ProgramCache(const ProgramCache&) = delete;
+    ProgramCache& operator=(const ProgramCache&) = delete;
+    ProgramCache(ProgramCache&& other) noexcept;
+    ProgramCache& operator=(ProgramCache&& other) noexcept;
+    ~ProgramCache();
 
-    CachedProgramFactory& get(const ProgramCacheKey& program_key) { return this->cache_.at(program_key); }
+    bool contains(const ProgramCacheKey& program_key) const;
+    CachedProgramFactory& get(const ProgramCacheKey& program_key);
+    void insert(const ProgramCacheKey& program_key, CachedProgramFactory&& program);
 
-    void insert(const ProgramCacheKey& program_key, CachedProgramFactory&& program) {
-        this->cache_.insert({program_key, std::move(program)});
-    }
+    bool is_enabled() const;
+    bool cache_misses_allowed() const;
 
-    void enable() { is_enabled_ = true; }
-
-    void disable() { is_enabled_ = false; }
-
-    bool is_enabled() const { return is_enabled_; }
-
-    void set_cache_misses_allowed(bool allowed) { allow_cache_misses_ = allowed; }
-    bool cache_misses_allowed() const { return allow_cache_misses_; }
-
-    void clear() { this->cache_.clear(); }
-
-    std::size_t num_entries() const { return this->cache_.size(); }
+    ProgramCacheImpl& impl();
+    const ProgramCacheImpl& impl() const;
 
 private:
-    bool is_enabled_ = true;
-    bool allow_cache_misses_ = true;
-    std::unordered_map<ProgramCacheKey, CachedProgramFactory, ProgramCacheKeyHasher> cache_;
+    std::unique_ptr<ProgramCacheImpl> impl_;
 };
 
 }  // namespace tt::tt_metal::program_cache::detail

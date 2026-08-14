@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include "impl/kernels/kernel_types.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "mesh_device.hpp"
