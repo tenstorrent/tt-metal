@@ -532,3 +532,7 @@ A fresh independent `$stage-review` then inspected the implementation, final
 outputs, accuracy, context, trace lifecycle, performance, profiler, fallback,
 Watcher limitation, and failed-probe classification. Its persisted verdict in
 `STAGE_REREVIEW.md` is `clean-pass` with no required work.
+
+Runner-remediation checkpoint: repo `tt-metal`, branch
+`mvasiljevic/fmf/qwen-qwen3-6-27b`, commit `3f3bf40cd87` (local only; not
+pushed). This documentation-only follow-up records the checkpoint SHA.
