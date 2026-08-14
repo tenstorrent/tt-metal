@@ -314,57 +314,6 @@ RealtimeProfilerDevice::RealtimeProfilerDevice() = default;
 RealtimeProfilerDevice::~RealtimeProfilerDevice() = default;
 RealtimeProfilerDevice::RealtimeProfilerDevice(RealtimeProfilerDevice&&) noexcept = default;
 
-void RealtimeProfilerDevice::configure_program_start_peek(
-    ContextId context_id, CoreCoord dispatch_s_virtual, uint32_t start_a_addr, uint32_t start_b_addr) {
-    try {
-        const tt_xy_pair tlb_core(dispatch_s_virtual.x, dispatch_s_virtual.y);
-        auto* tlb_manager =
-            MetalContext::instance(context_id).get_cluster().get_driver()->get_chip(chip_id)->get_tlb_manager();
-        const uint32_t span = start_b_addr + 2 * sizeof(uint32_t) - start_a_addr;
-        if (tlb_manager == nullptr || !tlb_manager->is_tlb_mapped(tlb_core, start_a_addr, span)) {
-            return;
-        }
-        auto* window = tlb_manager->get_tlb_window(tlb_core);
-        if (window == nullptr) {
-            return;
-        }
-        const uint64_t window_offset = window->get_base_address() - window->handle_ref().get_config().local_offset;
-        auto* base = window->handle_ref().get_base();
-        peek_start_a = reinterpret_cast<volatile uint32_t*>(base + window_offset + start_a_addr);
-        peek_start_b = reinterpret_cast<volatile uint32_t*>(base + window_offset + start_b_addr);
-    } catch (const std::exception& e) {
-        log_debug(
-            tt::LogMetal,
-            "[Real-time profiler] Device {}: program-start peek disarmed ({}); long-program starts fall back to the "
-            "ring-wide rate",
-            chip_id,
-            e.what());
-    }
-}
-
-void RealtimeProfilerDevice::peek_running_program_start() {
-    if (peek_start_a == nullptr || clock_sync == nullptr) {
-        return;
-    }
-    const auto newest_bank_start = [this] {
-        const uint64_t a = (static_cast<uint64_t>(peek_start_a[0]) << 32) | peek_start_a[1];
-        const uint64_t b = (static_cast<uint64_t>(peek_start_b[0]) << 32) | peek_start_b[1];
-        return std::max(a, b);
-    };
-    const uint64_t candidate = newest_bank_start();
-    if (candidate == last_peek_device_timestamp) {
-        return;
-    }
-    // Reject a torn two-word read: dispatch_s writes once and holds; a second identical peek cannot be torn.
-    if (newest_bank_start() != candidate) {
-        return;
-    }
-    // pin_start declines until the chord around the start is finalized; keep offering until it takes.
-    if (clock_sync->pin_start(candidate)) {
-        last_peek_device_timestamp = candidate;
-    }
-}
-
 std::vector<RealtimeProfilerDevice> initialize_realtime_profiler_devices(
     const std::shared_ptr<distributed::MeshDevice>& mesh_device, ContextId context_id) {
     std::vector<RealtimeProfilerDevice> devices;
@@ -423,14 +372,9 @@ std::vector<RealtimeProfilerDevice> initialize_realtime_profiler_devices(
         dev_state.core_l1 = rt_profiler_core_l1_addrs;
 
         dev_state.clock_sync = std::make_unique<DeviceClockSync>(context_id, device, dev_state.realtime_profiler_core);
-        if (dispatch_core_manager.is_dispatcher_s_core_allocated(device_id, 0, 0)) {
-            const tt_cxy_pair& dispatch_s_cxy = dispatch_core_manager.dispatcher_s_core(device_id, 0, 0);
-            dev_state.configure_program_start_peek(
-                context_id,
-                device->virtual_core_from_logical_core(CoreCoord(dispatch_s_cxy.x, dispatch_s_cxy.y), CoreType::WORKER),
-                msg_field_addr(realtime_profiler_base_addr, ProfilerMsg::Field::kernel_start_a),
-                msg_field_addr(realtime_profiler_base_addr, ProfilerMsg::Field::kernel_start_b));
-        }
+        constexpr size_t kProbeRingCapacity = 8192;  // ~3 s of active-cadence probes of receiver absence
+        dev_state.probe_ring = std::make_unique<BroadcastRing<DeviceClockSync::Anchor>>(kProbeRingCapacity);
+        dev_state.probe_reader.emplace(dev_state.probe_ring->make_reader());
         if (!dev_state.clock_sync->has_direct_clock_read()) {
             log_warning(
                 tt::LogMetal,

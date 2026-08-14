@@ -25,16 +25,17 @@ namespace tt::tt_metal {
 
 class IDevice;
 
-// Probe spacing floor. Certification needs two adjacent probe gaps plus read noise to fit inside
-// kDvfsMinTransitionSpacing, so the floor sits well under half of it to leave jitter margin.
-inline constexpr auto kDeviceClockSyncInterval = std::chrono::microseconds(250);
+// Probe spacing for actively-drained devices. Certification needs two adjacent probe gaps plus
+// read noise to fit inside kDvfsMinTransitionSpacing; the sync thread self-paces with tens of
+// microseconds of wakeup jitter, so pairs land around 800 us with ~100 us of margin.
+inline constexpr auto kDeviceClockSyncInterval = std::chrono::microseconds(375);
 
 // Minimum spacing between starts of device clock-rate transitions. AICLK is stepped by the ARC
 // firmware's 1 ms DVFS timer, one monotone PLL glide per tick; a board-power message can pull a
 // tick up to ~10 us early, and the 50 us margin absorbs several such pulls stacking on one tick.
-// Verified against Blackhole firmware (tt-system-firmware dvfs.c/pll driver); assumed for
-// Wormhole. Host-forced clock operations (forced AICLK/VDD, AICLK sweep, clock-scheme switch)
-// bypass the timer and void this constant.
+// Verified against Blackhole firmware (tt-system-firmware dvfs.c/pll driver) and confirmed by
+// SysEng for Wormhole (same 1 ms ARC control-loop period on both). Host-forced clock operations
+// (forced AICLK/VDD, AICLK sweep, clock-scheme switch) bypass the timer and void this constant.
 inline constexpr auto kDvfsMinTransitionSpacing = std::chrono::microseconds(950);
 
 // Maps device cycle-counter timestamps onto the host steady_clock timeline by interpolating
@@ -44,8 +45,7 @@ inline constexpr auto kDvfsMinTransitionSpacing = std::chrono::microseconds(950)
 // The error is a sound upper bound provided that: each probe's true read time lies within
 // ±Anchor::error of its host_timestamp (bracketed read); the device counter is monotone and its
 // rate piecewise-constant up to monotone transitions (DVFS glides) whose starts are at least
-// kDvfsMinTransitionSpacing apart; no host-forced clock operation is active; and, if a
-// FrequencyPrior is supplied, the rate never leaves it.
+// kDvfsMinTransitionSpacing apart; and no host-forced clock operation is active.
 //
 // A chord (the interval between adjacent probes) is *certified* once the two-chord windows on
 // both sides of it measure shorter than kDvfsMinTransitionSpacing: at most one transition can
@@ -53,9 +53,9 @@ inline constexpr auto kDvfsMinTransitionSpacing = std::chrono::microseconds(950)
 // inside the chord, and the worst-case interpolation error follows from that bracket — a hard
 // bound under the assumptions above alone. Chords that cannot be certified (receiver stalls,
 // history edges) and records whose start predates the retained history are bounded against the
-// lifetime-observed rate envelope instead (the FrequencyPrior until anything has been observed;
-// the chord's own span without either). That tier adds one assumption: an unobserved window
-// holds no rate the clock has never visited. It understates only when a first-ever rate
+// practical rate band instead — the spread of mature smoothed frequencies, noise-padded (the
+// chord's own span until a window has matured). That tier adds one assumption: an unobserved
+// window holds no rate the clock has never shown. It understates only when a first-ever rate
 // excursion lands inside an unprobed gap; the alternative — the platform's full idle-to-limit
 // range — never understates but overstates such records' error by ~50x.
 //
@@ -79,25 +79,11 @@ public:
         double frequency = 0.0;
     };
 
-    // Rate range (device cycles per host ns) the clock cannot leave, e.g. the platform's
-    // idle/limit AICLK values. Trusted as a hard bound; see the class contract.
-    struct FrequencyPrior {
-        double min_frequency = 0.0;
-        double max_frequency = 0.0;
-    };
-
     static constexpr size_t kProbeHistoryCapacity =
         std::bit_ceil(static_cast<size_t>(std::chrono::seconds(2) / kDeviceClockSyncInterval));
 
-    explicit ClockSyncMapping(std::optional<FrequencyPrior> frequency_prior = std::nullopt);
-
     // Requires probe host/device times strictly after the previous retained probe.
     void add_probe(const Anchor& probe);
-
-    // Snapshot a start timestamp onto the host timeline while probes still cover it (e.g.
-    // long-running programs). Returns false until the chord around it is finalized, so callers
-    // must keep offering the timestamp until it takes.
-    bool pin_start(uint64_t device_timestamp);
 
     // Nullopt only when no retained probe precedes either timestamp.
     [[nodiscard]] std::optional<RecordMapping> map_record(
@@ -117,9 +103,9 @@ public:
         return num_certified_chords_.load(std::memory_order_relaxed);
     }
 
-    // Records whose bound came from an uncertified chord or the history envelope. They are still
-    // published, with envelope-tier bounds — this only counts them, so callers can assert the
-    // fallback tier stays a tiny fraction of traffic.
+    // Records whose bound came from an uncertified chord or the pre-history ride. They are still
+    // published, with fallback-tier bounds — this only counts them, so callers can assert the
+    // tier stays a tiny fraction of traffic.
     [[nodiscard]] uint64_t num_records_on_uncertified_chords() const {
         return num_records_on_uncertified_chords_.load(std::memory_order_relaxed);
     }
@@ -140,18 +126,51 @@ private:
         double rate_lo = 0.0;
         double rate_hi = 0.0;
         double frequency = 0.0;           // secant of the adjacent probes; interpolation slope
-        double smoothed_frequency = 0.0;  // frequency-window secant as of finalize; what records publish
+        double smoothed_frequency = 0.0;  // frequency-window regression as of finalize; what records publish
         // |1/smoothed_frequency - 1/frequency|, ns per cycle: consumer host_end reconstruction skew.
         double smoothing_skew_per_cycle = 0.0;
+        // Largest skew read noise alone can put on this chord's secant; skew beyond it is
+        // evidence of a transition inside the chord.
+        double noise_skew_per_cycle = 0.0;
         uint64_t open_device_timestamp = 0;
         double open_host_ns = 0.0;
         uint64_t close_device_timestamp = 0;
     };
 
-    // Sliding baseline for the published frequency: at >=1 s the secant noise (read error / span)
-    // sits at ~1 ppm; the max keeps the anchor safely inside the 2 s probe retention.
-    static constexpr auto kFrequencyWindowSlide = std::chrono::seconds(1);
+    // Baseline for the published frequency: at this span read noise costs the regression well
+    // under a ppm, and the anchor stays safely inside the 2 s probe retention. The window slides
+    // continuously, so there is no re-anchor burst.
     static constexpr auto kFrequencyWindowMax = std::chrono::milliseconds(1600);
+
+    // Sliding-window extremum (monotonic deque): each entry enters and leaves once — O(1)
+    // amortized push/evict, no rescan when the anchor passes entries holding the extremum.
+    struct SlidingExtremum {
+        std::array<uint64_t, kProbeHistoryCapacity> chord_index{};
+        std::array<double, kProbeHistoryCapacity> value{};
+        uint64_t head = 0;
+        uint64_t tail = 0;
+
+        [[nodiscard]] bool empty() const { return head == tail; }
+        [[nodiscard]] double front() const { return value[head & (kProbeHistoryCapacity - 1)]; }
+        void clear() { head = tail = 0; }
+        // dominates(new_value, existing) == true drops the existing entry: <= for max-tracking,
+        // >= for min-tracking.
+        template <typename Dominates>
+        void push(uint64_t index, double v, Dominates dominates) {
+            while (head != tail && dominates(v, value[(tail - 1) & (kProbeHistoryCapacity - 1)])) {
+                --tail;
+            }
+            chord_index[tail & (kProbeHistoryCapacity - 1)] = index;
+            value[tail & (kProbeHistoryCapacity - 1)] = v;
+            ++tail;
+        }
+        // Drops entries whose chord lies at or before the window anchor.
+        void evict_through(uint64_t index) {
+            while (head != tail && chord_index[head & (kProbeHistoryCapacity - 1)] <= index) {
+                ++head;
+            }
+        }
+    };
 
     [[nodiscard]] std::optional<uint64_t> chord_index_around(uint64_t device_timestamp) const;
 
@@ -171,10 +190,6 @@ private:
     // certificate and computes the neighbor-bracket bound. Called when probe close_index+1 lands.
     void finalize_chord(uint64_t close_index);
 
-    // Re-anchors the frequency window once it exceeds kFrequencyWindowMax, rebuilding the running
-    // intersection over the chords it keeps (rare; the intersection of a subset cannot be empty).
-    void slide_frequency_window(uint64_t close_index);
-
     [[nodiscard]] uint64_t first_probe_at_or_past(uint64_t device_timestamp) const;
 
     [[nodiscard]] uint64_t oldest_probe() const {
@@ -192,20 +207,67 @@ private:
     uint64_t probes_end_ = 0;
     mutable uint64_t last_probe_index_ = 0;
 
-    std::optional<FrequencyPrior> frequency_prior_;
+    // Least squares over the window's probes via running sums: O(1) add/remove, O(1) origin
+    // rebase (shift identities keep magnitudes at window scale). ~sqrt(N/12) tighter than the
+    // endpoint secant: ~0.02 ppm at a mature window.
+    struct WindowRegression {
+        double n = 0;
+        double sum_t = 0;
+        double sum_d = 0;
+        double sum_tt = 0;
+        double sum_td = 0;
+        double origin_host_ns = 0;
+        double origin_device = 0;
 
-    // Widest noise-widened secant range ever measured; input to the history-exceeded envelope.
-    double observed_min_frequency_ = 0.0;
-    double observed_max_frequency_ = 0.0;
+        void clear(double host_ns, double device) {
+            *this = WindowRegression{};
+            origin_host_ns = host_ns;
+            origin_device = device;
+        }
+        void add(double host_ns, double device) {
+            const double t = host_ns - origin_host_ns;
+            const double d = device - origin_device;
+            n += 1;
+            sum_t += t;
+            sum_d += d;
+            sum_tt += t * t;
+            sum_td += t * d;
+        }
+        void remove(double host_ns, double device) {
+            const double t = host_ns - origin_host_ns;
+            const double d = device - origin_device;
+            n -= 1;
+            sum_t -= t;
+            sum_d -= d;
+            sum_tt -= t * t;
+            sum_td -= t * d;
+        }
+        void rebase(double host_ns, double device) {
+            const double dt = host_ns - origin_host_ns;
+            const double dd = device - origin_device;
+            sum_tt += -2.0 * dt * sum_t + n * dt * dt;
+            sum_td += -dd * sum_t - dt * sum_d + n * dt * dd;
+            sum_t -= n * dt;
+            sum_d -= n * dd;
+            origin_host_ns = host_ns;
+            origin_device = device;
+        }
+        // Ticks per host ns; NaN-free fallback is the caller's endpoint secant.
+        [[nodiscard]] double slope() const {
+            const double det = n * sum_tt - sum_t * sum_t;
+            return det > 0.0 ? (n * sum_td - sum_t * sum_d) / det : 0.0;
+        }
+    };
 
     // Frequency window: the run of consecutive certified chords whose rate brackets all intersect.
     // Maintaining the *running intersection* (not pairwise checks) makes hidden-step creep
-    // impossible: every rate in the window provably lies inside it, so the window may grow
-    // without bound and only a detected transition (empty intersection) resets it.
+    // impossible: every rate in the window provably lies inside it; only a detected transition
+    // (empty intersection) resets it.
     bool frequency_window_active_ = false;
-    uint64_t frequency_window_anchor_ = 0;  // probe index the window secant is measured from
-    double frequency_window_rate_lo_ = 0.0;
-    double frequency_window_rate_hi_ = 0.0;
+    uint64_t frequency_window_anchor_ = 0;  // probe index the window is measured from
+    SlidingExtremum window_rate_lo_;        // max of in-window rate_lo
+    SlidingExtremum window_rate_hi_;        // min of in-window rate_hi
+    WindowRegression window_regression_;    // over probes [anchor, close]
 
     // Relaxed atomics so diagnostics accessors are readable from any thread; everything else on
     // this class is receiver-thread-only.
@@ -213,12 +275,47 @@ private:
     std::atomic<uint64_t> num_certified_chords_{0};
     std::atomic<uint64_t> num_records_on_uncertified_chords_{0};
 
-    // chord_index_around(start) cache.
+    // chord_index_around(start) cache, plus constants folded out of the per-record path (records
+    // arrive chord-consecutive; holdback maps only finalized — immutable — chords, so the cache
+    // cannot go stale). offset = llround(offset_b * start + offset_a) equals the smoothed
+    // mapping up to fp reordering (~1 ulp).
+    struct ActiveChordConstants {
+        uint64_t open_device_timestamp = 0;
+        uint64_t close_device_timestamp = 0;
+        double offset_a = 0.0;
+        double offset_b = 0.0;
+        int64_t base_error_ns = 0;  // probe_error + nonlinearity: the mid-chord bound
+        uint64_t refine_threshold_cycles = 0;
+        double refine_slope = 0.0;
+        int64_t probe_error_ns = 0;
+        double smoothing_skew_per_cycle = 0.0;
+        double smoothed_frequency = 0.0;
+        double frequency = 0.0;      // chord secant
+        double secant_offset = 0.0;  // open_device - frequency * open_host_ns
+        bool transition_evident = false;
+        bool certified = false;
+    };
     std::optional<uint64_t> active_chord_index_;
+    ActiveChordConstants active_;
 
-    // From pin_start; cleared once map_record uses it.
-    std::optional<Anchor> pinned_start_;
-    uint64_t last_pin_device_timestamp_ = 0;
+    void refresh_active_chord_constants();
+
+    // error_ns_on specialized to in-bounds timestamps on the active chord.
+    [[nodiscard]] int64_t active_error_ns(uint64_t device_timestamp) const {
+        const uint64_t distance_cycles = std::min(
+            device_timestamp - active_.open_device_timestamp, active_.close_device_timestamp - device_timestamp);
+        if (distance_cycles >= active_.refine_threshold_cycles) {
+            return active_.base_error_ns;
+        }
+        return active_.probe_error_ns +
+               static_cast<int64_t>(active_.refine_slope * static_cast<double>(distance_cycles)) + 1;
+    }
+
+    // Spread of mature smoothed frequencies: prices the pre-history ride and, noise-padded, the
+    // uncertified-chord fallback. Grows only from certified chords' ppm-accurate window values,
+    // so contended-era brackets cannot poison it.
+    double smoothed_frequency_min_ = 0.0;
+    double smoothed_frequency_max_ = 0.0;
 };
 
 // Reads a tensix free-running cycle counter over PCIe (bracketed between steady_clock reads) and
@@ -237,19 +334,16 @@ public:
 
     [[nodiscard]] bool has_direct_clock_read() const { return mapped_clock_lo_ != nullptr; }
 
-    void resync();
+    // Thread split: read_probe() and the read-path state behind it belong to the sync thread;
+    // ingest_probe(), map_record(), and the mapping belong to the receiver thread. The atomic
+    // peak-gap counter is the only state both sides touch.
 
-    [[nodiscard]] bool due_for_probe(std::chrono::steady_clock::time_point now) const {
-        return now - last_probe_at_ >= kDeviceClockSyncInterval;
-    }
+    // Takes one bracketed clock probe (best of up to kResyncProbes reads). Sync thread only.
+    [[nodiscard]] Anchor read_probe();
 
-    [[nodiscard]] std::chrono::steady_clock::time_point next_probe_due() const {
-        return last_probe_at_ + kDeviceClockSyncInterval;
-    }
-
-    // Snapshot a start timestamp onto the host timeline while probes still cover it (e.g. long-running programs).
-    // Returns false while the surrounding chord is not yet finalized; callers re-offer the timestamp.
-    bool pin_start(uint64_t device_timestamp) { return mapping_.pin_start(device_timestamp); }
+    // Feeds a probe from read_probe() into the mapping. Receiver thread only; probes must arrive
+    // in the order they were taken.
+    void ingest_probe(const Anchor& probe) { mapping_.add_probe(probe); }
 
     // Nullopt only when no retained probe precedes either timestamp.
     [[nodiscard]] std::optional<RecordMapping> map_record(

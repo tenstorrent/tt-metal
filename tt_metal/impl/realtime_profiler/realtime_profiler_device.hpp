@@ -7,11 +7,13 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 
 #include "context/context_types.hpp"
+#include "tt_metal/common/broadcast_ring.hpp"
 #include "tt_metal/impl/dispatch/kernels/realtime_profiler_ring_buffer.hpp"
 #include "tt_metal/impl/realtime_profiler/device_clock_sync.hpp"
 
@@ -35,7 +37,7 @@ struct RealtimeProfilerCoreL1Addrs {
 // Real-time profiler runtime constants. On-device L1 layout sizes are reused from
 // realtime_profiler_ring_buffer.hpp so host and device share a single source of truth.
 struct RealtimeProfilerRuntimeSizes {
-    static constexpr uint32_t fifo_pages = 32768 * 2;              // host D2H FIFO depth, in pages
+    static constexpr uint32_t fifo_pages = 32768;                  // host D2H FIFO depth, in pages
     static constexpr uint32_t page_size = RT_PROFILER_ENTRY_SIZE;  // host page size == ring entry size
     static constexpr uint32_t page_words = page_size / sizeof(uint32_t);
     static constexpr uint32_t fifo_size = fifo_pages * page_size;  // pinned-host FIFO, in bytes (2 MiB)
@@ -67,15 +69,13 @@ struct RealtimeProfilerDevice {
     uint32_t unacked_pages = 0;
     bool fifo_capacity_warned = false;
 
-    volatile uint32_t* peek_start_a = nullptr;
-    volatile uint32_t* peek_start_b = nullptr;
-    uint64_t last_peek_device_timestamp = 0;
-    std::chrono::steady_clock::time_point next_peek_at{};
-
-    void configure_program_start_peek(
-        ContextId context_id, CoreCoord dispatch_s_virtual, uint32_t start_a_addr, uint32_t start_b_addr);
-    // Pins the start of whatever program dispatch_s is currently waiting on.
-    void peek_running_program_start();
+    // Probe pipe: the sync thread writes each probe it takes, the receiver drains them into
+    // clock_sync's mapping at publish time. Sized so the writer laps the reader only after the
+    // receiver has been absent for multiple seconds; a lap costs the gap's chords their
+    // certificates, exactly as the stall itself would. Declared before the reader so the reader
+    // is destroyed first.
+    std::unique_ptr<BroadcastRing<DeviceClockSync::Anchor>> probe_ring;
+    std::optional<BroadcastRing<DeviceClockSync::Anchor>::Reader> probe_reader;
 
     RealtimeProfilerDevice();
     ~RealtimeProfilerDevice();

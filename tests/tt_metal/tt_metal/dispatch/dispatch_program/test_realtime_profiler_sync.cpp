@@ -562,7 +562,10 @@ void kernel_main() {
     EXPECT_GE(it->host_end(), window_start);
     EXPECT_LE(it->host_end(), window_end + std::chrono::milliseconds(2));
     EXPECT_GT(it->clock_sync.error, std::chrono::nanoseconds::zero());
-    EXPECT_LT(it->clock_sync.error, std::chrono::nanoseconds(1500)) << "sync error is too high";
+    // A start predating the probe history rides back at the practical smoothed-frequency spread
+    // (a few ppm on a stable clock), so the claim scales with the overhang rather than staying at
+    // read noise.
+    EXPECT_LT(it->clock_sync.error, std::chrono::microseconds(200)) << "sync error is too high";
     log_info(
         tt::LogTest,
         "[RT profiler sync] long program: duration={:.3f}s sync error={}us",
@@ -579,8 +582,6 @@ void kernel_main() {
 
 constexpr double kSpacingNs = std::chrono::duration<double, std::nano>(kDeviceClockSyncInterval).count();
 constexpr double kProbeErrorNs = 500.0;
-// Typical WH platform range, cycles/ns; any range containing the simulated rates is valid.
-constexpr ClockSyncMapping::FrequencyPrior kTestPrior{.min_frequency = 0.5, .max_frequency = 1.35};
 
 // Piecewise-constant-rate clock; the tests space transitions per the DVFS cadence except where
 // they deliberately exercise the uncertified fallback.
@@ -662,7 +663,7 @@ ClockSyncMapping::RecordMapping map_and_expect_covered(
 
 TEST(RealtimeProfilerSync, MappingQuietClockIsTightAndCovered) {
     SyntheticDeviceClock clock(1.0);
-    ClockSyncMapping mapping(kTestPrior);
+    ClockSyncMapping mapping;
     SyntheticProbeFeed feed{mapping, clock};
     feed.feed(0.0, 20.0 * kSpacingNs);
 
@@ -674,6 +675,66 @@ TEST(RealtimeProfilerSync, MappingQuietClockIsTightAndCovered) {
     }
 }
 
+// Head-to-head with the retired init sync (syncDeviceHost's 249-sample OLS), granted the same
+// per-sample noise as our probes — strictly more charitable than its real one-way write jitter.
+// Both estimate a known exact rate on a quiet clock; the window regression must not lose.
+TEST(RealtimeProfilerSync, SmoothedFrequencyMatchesInitSyncRegression) {
+    constexpr double kTrueRate = 0.9855;
+    constexpr int kSeeds = 20;
+    constexpr double kRunSpanNs = 2.5e9;
+    constexpr int kInitSamples = 249;
+    constexpr double kInitPeriodNs = 10e6;
+
+    double ours_sq = 0.0;
+    double init_sq = 0.0;
+    for (int seed = 0; seed < kSeeds; ++seed) {
+        SyntheticDeviceClock clock(kTrueRate);
+        ClockSyncMapping mapping;
+        SyntheticProbeFeed feed{mapping, clock};
+        feed.lcg_state += static_cast<uint64_t>(seed) * 0x9E3779B97F4A7C15ull;
+        feed.feed(0.0, kRunSpanNs);
+        // A record inside a single, finalized chord near the end: whole-record-in-chord is the
+        // path that publishes the window regression (spanning records publish their own secant).
+        const double chord_open = (std::floor(kRunSpanNs / kSpacingNs) - 4.0) * kSpacingNs;
+        const auto start = static_cast<uint64_t>(std::llround(clock.device_at(chord_open + 60e3)));
+        const auto end = static_cast<uint64_t>(std::llround(clock.device_at(chord_open + 240e3)));
+        const auto record = mapping.map_record(start, end);
+        ASSERT_TRUE(record.has_value());
+        ours_sq += (record->frequency - kTrueRate) * (record->frequency - kTrueRate);
+
+        uint64_t lcg = 0x0123456789ABCDEFull + static_cast<uint64_t>(seed) * 0xD1B54A32D192ED03ull;
+        double sum_t = 0.0;
+        double sum_d = 0.0;
+        double sum_tt = 0.0;
+        double sum_td = 0.0;
+        for (int i = 0; i < kInitSamples; ++i) {
+            const double t = (i + 1) * kInitPeriodNs;
+            lcg = lcg * 6364136223846793005ull + 1442695040888963407ull;
+            const double unit = static_cast<double>(lcg >> 11) / static_cast<double>(1ull << 53);
+            const double noise = (unit - 0.5) * kProbeErrorNs;
+            const double d = clock.device_at(t + noise);
+            sum_t += t;
+            sum_d += d;
+            sum_tt += t * t;
+            sum_td += t * d;
+        }
+        const double init_freq = (kInitSamples * sum_td - sum_t * sum_d) / (kInitSamples * sum_tt - sum_t * sum_t);
+        init_sq += (init_freq - kTrueRate) * (init_freq - kTrueRate);
+    }
+
+    const double ours_rms_ppm = std::sqrt(ours_sq / kSeeds) / kTrueRate * 1e6;
+    const double init_rms_ppm = std::sqrt(init_sq / kSeeds) / kTrueRate * 1e6;
+    log_info(
+        tt::LogTest,
+        "[RT profiler sync] quiet-clock frequency RMS over {} seeds: window regression={:.4f} ppm, "
+        "init-sync-style OLS={:.4f} ppm",
+        kSeeds,
+        ours_rms_ppm,
+        init_rms_ppm);
+    EXPECT_LE(ours_rms_ppm, init_rms_ppm)
+        << "the rolling window regression must not be less accurate than the retired init sync";
+}
+
 TEST(RealtimeProfilerSync, MappingCoversAStepLateInAChord) {
     // The failure mode of witness-style estimates: a step at 90% of a chord, where a mid-probe
     // departure test under-reports the worst-case in-chord misplacement by ~2x.
@@ -681,7 +742,7 @@ TEST(RealtimeProfilerSync, MappingCoversAStepLateInAChord) {
     const double step_at = 5.0 * kSpacingNs + 0.9 * kSpacingNs;
     clock.set_rate_at(step_at, 1.35);
 
-    ClockSyncMapping mapping(kTestPrior);
+    ClockSyncMapping mapping;
     SyntheticProbeFeed feed{mapping, clock};
     feed.feed(0.0, 12.0 * kSpacingNs);
 
@@ -702,7 +763,7 @@ TEST(RealtimeProfilerSync, MappingSurvivesTheTwoStepCancellation) {
     clock.set_rate_at(2'100e3, 0.5);
     clock.set_rate_at(3'250e3, 0.67);
 
-    ClockSyncMapping mapping(kTestPrior);
+    ClockSyncMapping mapping;
     SyntheticProbeFeed feed{mapping, clock};
     feed.feed(0.0, 5'000e3, /*spacing_ns=*/500e3);
 
@@ -713,26 +774,22 @@ TEST(RealtimeProfilerSync, MappingSurvivesTheTwoStepCancellation) {
 
 TEST(RealtimeProfilerSync, MappingCoversAReceiverStall) {
     // A probe gap far beyond the DVFS cadence, with two transitions inside it. The certificate
-    // fails and the bound degrades to the observed-envelope fallback — large and honest, provided
-    // the in-gap rates were visited while probes still flowed (the tier's stated assumption; the
-    // pre-gap excursions below satisfy it).
+    // fails and the bound degrades to the fallback tier — here the chord-span containment, since
+    // this feed is too short to mature a frequency window — large and honest.
     SyntheticDeviceClock clock(0.5);
     clock.set_rate_at(1'000e3, 1.35);
     clock.set_rate_at(2'000e3, 0.8);
     clock.set_rate_at(3'400e3, 1.35);
     clock.set_rate_at(4'600e3, 0.5);
 
-    for (const bool with_prior : {true, false}) {
-        ClockSyncMapping mapping(with_prior ? std::optional(kTestPrior) : std::nullopt);
-        SyntheticProbeFeed feed{mapping, clock};
-        feed.feed(0.0, 3'000e3);
-        feed.feed(5'400e3, 6'600e3);
+    ClockSyncMapping mapping;
+    SyntheticProbeFeed feed{mapping, clock};
+    feed.feed(0.0, 3'000e3);
+    feed.feed(5'400e3, 6'600e3);
 
-        const std::string label = with_prior ? "stall with prior" : "stall without prior";
-        map_and_expect_covered(mapping, clock, 3'350e3, 3'450e3, label + ", first step");
-        map_and_expect_covered(mapping, clock, 4'550e3, 4'650e3, label + ", second step");
-        map_and_expect_covered(mapping, clock, 3'100e3, 5'100e3, label + ", spanning both");
-    }
+    map_and_expect_covered(mapping, clock, 3'350e3, 3'450e3, "stall, first step");
+    map_and_expect_covered(mapping, clock, 4'550e3, 4'650e3, "stall, second step");
+    map_and_expect_covered(mapping, clock, 3'100e3, 5'100e3, "stall, spanning both");
 }
 
 TEST(RealtimeProfilerSync, MappingFrequencyTracksATransition) {
@@ -740,7 +797,7 @@ TEST(RealtimeProfilerSync, MappingFrequencyTracksATransition) {
     const double step_at = 100.0 * kSpacingNs + 150e3;
     clock.set_rate_at(step_at, 1.2);
 
-    ClockSyncMapping mapping(kTestPrior);
+    ClockSyncMapping mapping;
     SyntheticProbeFeed feed{mapping, clock};
     feed.feed(0.0, 200.0 * kSpacingNs);
 

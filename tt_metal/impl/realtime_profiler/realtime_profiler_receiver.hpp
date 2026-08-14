@@ -78,12 +78,11 @@ public:
     // Records published with a fallback-tier bound (uncertified chord or history envelope). Never
     // dropped; tests bound this to a tiny fraction of published records.
     uint64_t num_records_on_uncertified_chords() const;
-    // Worst per-drain phase times since the previous call; reading clears them. Read/resync/publish.
-    std::array<uint64_t, 3> take_peak_phase_ns() {
+    // Worst full receiver-loop iteration and iteration count since the previous call; reading
+    // clears them. The loop period is what FIFO occupancy scales with.
+    std::array<uint64_t, 2> take_loop_stats() {
         return {
-            peak_read_ns_.exchange(0, std::memory_order_relaxed),
-            peak_resync_ns_.exchange(0, std::memory_order_relaxed),
-            peak_publish_ns_.exchange(0, std::memory_order_relaxed)};
+            peak_loop_ns_.exchange(0, std::memory_order_relaxed), loop_count_.exchange(0, std::memory_order_relaxed)};
     }
 
 private:
@@ -100,14 +99,19 @@ private:
     void run();
     uint64_t run_loop(std::vector<uint32_t>& page_buf);
     uint64_t drain_on_shutdown(std::vector<uint32_t>& page_buf);
-    uint32_t drain_all_devices(std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf);
-    // Reads, services overdue probes, then publishes.
+    uint32_t drain_all_devices(std::vector<uint32_t>& page_buf);
+    // Reads, ingests queued probes, then publishes.
     // Returns number of pages read.
     uint32_t drain_device_pages(RealtimeProfilerDevice& dev_state, std::vector<uint32_t>& page_buf);
-    // Probes any device whose probe is overdue. Interleaved between drain phases so probe cadence
-    // tracks the floor regardless of publish latency: certification depends on adjacent probe-gap
-    // pairs staying under kDvfsMinTransitionSpacing.
-    void probe_overdue_devices();
+    // Drains the device's probe ring into its mapping. Receiver thread only.
+    void ingest_probes(RealtimeProfilerDevice& dev_state);
+    // Probes every device whose next probe is due and returns the earliest upcoming deadline.
+    // Sync thread only (after the constructor's warm-up).
+    std::chrono::steady_clock::time_point probe_due_devices();
+    // Sync thread body: sole owner of the probe schedule and the probe rings' writer side. The
+    // receiver never touches a clock register, so a blocked clock read can delay probes but never
+    // draining — and receiver health never delays probes.
+    void run_sync();
 
     const DataCollector* data_collector_ = nullptr;
     RealtimeProfilerService* realtime_profiler_service_ = nullptr;
@@ -115,7 +119,13 @@ private:
     std::vector<RealtimeProfilerDevice> devices_;
     RealtimeProfilerRecordRing ring_;
     std::thread receiver_thread_;
+    std::thread sync_thread_;
     std::atomic<bool> stop_{false};
+    // Separate from stop_: the sync thread outlives the receiver thread through shutdown so the
+    // final drain can still finalize held-back records.
+    std::atomic<bool> sync_stop_{false};
+    // Sync thread only (initialized before the threads start).
+    std::vector<std::chrono::steady_clock::time_point> probe_next_due_;
 
     // Diagnostics
     std::atomic<uint32_t> peak_fifo_pages_{0};               // all-time peak D2H FIFO occupancy
@@ -125,11 +135,9 @@ private:
     std::optional<std::chrono::nanoseconds> sync_error_window_max_;
     std::atomic<uint64_t> num_published_records_{0};  // records published to the ring
     std::atomic<uint64_t> num_published_batches_{0};  // batches published to the ring
-    std::atomic<uint64_t> peak_read_ns_{0};
-    std::atomic<uint64_t> peak_resync_ns_{0};
-    std::atomic<uint64_t> peak_publish_ns_{0};
+    std::atomic<uint64_t> peak_loop_ns_{0};
+    std::atomic<uint64_t> loop_count_{0};
 
-    static void note_phase_peak(std::atomic<uint64_t>& peak, std::chrono::steady_clock::duration d);
     std::atomic<uint64_t> num_inverted_timestamp_records_{0};
     std::atomic<uint64_t> num_unmappable_records_{0};
 

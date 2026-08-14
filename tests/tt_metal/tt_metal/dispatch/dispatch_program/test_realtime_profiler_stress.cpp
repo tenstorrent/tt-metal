@@ -624,13 +624,13 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
         if (now - last_report >= kStressReportInterval) {
             const uint64_t report_batches = rt->num_published_batches();
             const uint64_t sync_errors = sync_error_count.load(std::memory_order_relaxed);
-            const auto phase_peaks_ns = rt->take_peak_phase_ns();
+            const auto loop_stats = rt->take_loop_stats();
             log_info(
                 tt::LogTest,
                 "[RT profiler stress] t={}s replays={} published={} mean_publish_batch={:.1f} peak_fifo={} this "
                 "window, {} all-time of {} pages, sync error mean={:.0f}ns max={}ns this window ({}ns all-time), "
                 "frequency min/mean/max={:.4f}/{:.4f}/{:.4f} GHz, probe gap max={:.0f}us this window, chords "
-                "certified={:.1f}%, phase max read/resync/publish={}us/{}us/{}us, fallback-tier records={}",
+                "certified={:.1f}%, loop max={}us mean={}us, fallback-tier records={}",
                 std::chrono::duration_cast<std::chrono::seconds>(now - run_start).count(),
                 num_replays,
                 rt->num_published_records(),
@@ -649,9 +649,10 @@ TEST(RealtimeProfilerStress, ConsumerDropAccountingUnderLoad) {
                 rt->num_chords_finalized() ? 100.0 * static_cast<double>(rt->num_chords_certified()) /
                                                  static_cast<double>(rt->num_chords_finalized())
                                            : 0.0,
-                phase_peaks_ns[0] / 1000,
-                phase_peaks_ns[1] / 1000,
-                phase_peaks_ns[2] / 1000,
+                loop_stats[0] / 1000,
+                loop_stats[1] ? std::chrono::duration_cast<std::chrono::microseconds>(kStressReportInterval).count() /
+                                    loop_stats[1]
+                              : 0,
                 rt->num_records_on_uncertified_chords());
             last_report = now;
         }

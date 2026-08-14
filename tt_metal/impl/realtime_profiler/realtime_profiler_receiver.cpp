@@ -7,6 +7,7 @@
 #include "tt_metal/impl/realtime_profiler/realtime_profiler_device.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -49,12 +50,11 @@ static_assert(
 
 constexpr uint32_t kMaxSocketPagesPerRead = 1024;
 
-// Acks are batched because notifying the sender is a PCIe write that, on Wormhole, goes through
-// the dynamic-TLB UMD path — an interprocess chip mutex plus a TLB reconfigure per call, the only
-// operation on the receiver hot path that can block on other processes. Deferring acks costs the
-// device at most this much apparent FIFO headroom (1/8th of the shallowest FIFO), in exchange for
-// ~4x fewer mutex crossings at saturation and ~20x fewer at typical load.
-constexpr uint32_t kAckBatchPages = 4096;
+// The ack is a posted-class store through the per-worker-core static TLB window — the
+// receiver's only chip MMIO, ~0.3 us each. Batching trades apparent FIFO headroom (the device
+// sees up to this many consumed-but-unacked pages) against ack traffic; 512 keeps the headroom
+// loss at 1.6% for well under 1% of receiver time at the stress ceiling.
+constexpr uint32_t kAckBatchPages = 512;
 
 // Probes accrue on the kDeviceClockSyncInterval cadence, so the retained history spans
 // capacity * interval (~2.5 s) of wall time. A finished record sits behind at most
@@ -98,6 +98,7 @@ size_t RealtimeProfilerReceiver::publish_pages(
     batch.clear();
 
     const uint64_t finalized = dev_state.clock_sync->finalized_device_timestamp();
+    int64_t batch_max_error_ns = -1;
     const auto map_into_batch = [&](uint32_t runtime_id, uint64_t start_timestamp, uint64_t end_timestamp) {
         const auto mapping = dev_state.clock_sync->map_record(start_timestamp, end_timestamp);
         if (!mapping.has_value()) {
@@ -113,12 +114,10 @@ size_t RealtimeProfilerReceiver::publish_pages(
             .clock_sync = {.device_cycle_offset = mapping->device_cycle_offset, .error = mapping->error},
             .kernel_sources = data_collector_->GetKernelSourcesForRuntimeId(static_cast<uint16_t>(runtime_id)),
         });
-        sync_error_window_max_ =
-            sync_error_window_max_.has_value() ? std::max(*sync_error_window_max_, mapping->error) : mapping->error;
+        batch_max_error_ns = std::max(batch_max_error_ns, mapping->error.count());
     };
 
-    // Held-back records first: they predate anything decoded below. The probe taken just before
-    // this call covers every one of them, so the finalized prefix is normally the whole vector.
+    // Held-back records first: they predate anything decoded below.
     auto pending_split = dev_state.pending_records.begin();
     for (; pending_split != dev_state.pending_records.end() && pending_split->end_timestamp <= finalized;
          ++pending_split) {
@@ -170,6 +169,11 @@ size_t RealtimeProfilerReceiver::publish_pages(
                 total);
         }
     }
+    if (batch_max_error_ns >= 0) {
+        const std::chrono::nanoseconds batch_max{batch_max_error_ns};
+        sync_error_window_max_ =
+            sync_error_window_max_.has_value() ? std::max(*sync_error_window_max_, batch_max) : batch_max;
+    }
     if (batch.empty()) {
         return 0;
     }
@@ -202,11 +206,38 @@ RealtimeProfilerReceiver::RealtimeProfilerReceiver(ContextId context_id, std::ve
     for (RealtimeProfilerDevice& dev_state : devices_) {
         dev_state.pending_records.reserve(kMaxSocketPagesPerRead);
     }
+    // Warm-up here, not at device construction: any earlier leaves a multi-hundred-ms probe gap
+    // while the remaining devices initialize, and startup records pick up fallback-tier bounds.
+    constexpr int kWarmUpRounds = 4;
+    for (int round = 0; round < kWarmUpRounds; ++round) {
+        if (round != 0) {
+            std::this_thread::sleep_for(kDeviceClockSyncInterval);
+        }
+        for (RealtimeProfilerDevice& dev_state : devices_) {
+            if (dev_state.clock_sync->has_direct_clock_read()) {
+                dev_state.clock_sync->ingest_probe(dev_state.clock_sync->read_probe());
+            }
+        }
+    }
+    // Grouped phases: probing every device at the same instant advances every holdback
+    // watermark together, and one drain pass then publishes the whole mesh's held records — a
+    // synchronized burst that sets the FIFO high-water mark. Per-device cadence is unaffected.
+    constexpr size_t kProbePhaseGroups = 4;
+    probe_next_due_.resize(devices_.size());
+    const auto schedule_start = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < devices_.size(); ++i) {
+        probe_next_due_[i] = schedule_start + (i % kProbePhaseGroups) * (kDeviceClockSyncInterval / kProbePhaseGroups);
+    }
     realtime_profiler_service_->attach_producer(*this);
 
     try {
+        sync_thread_ = std::thread(&RealtimeProfilerReceiver::run_sync, this);
         receiver_thread_ = std::thread(&RealtimeProfilerReceiver::run, this);
     } catch (...) {
+        sync_stop_.store(true, std::memory_order_release);
+        if (sync_thread_.joinable()) {
+            sync_thread_.join();
+        }
         realtime_profiler_service_->detach_producer(*this);
         throw;
     }
@@ -263,12 +294,43 @@ uint64_t RealtimeProfilerReceiver::num_records_on_uncertified_chords() const {
     return total;
 }
 
-void RealtimeProfilerReceiver::probe_overdue_devices() {
-    const auto now = std::chrono::steady_clock::now();
-    for (auto& dev_state : devices_) {
-        if (dev_state.clock_sync->due_for_probe(now)) {
-            dev_state.clock_sync->resync();
+void RealtimeProfilerReceiver::ingest_probes(RealtimeProfilerDevice& dev_state) {
+    std::array<DeviceClockSync::Anchor, 64> buf;
+    for (;;) {
+        const auto got = dev_state.probe_reader->read_batch(std::span<DeviceClockSync::Anchor>(buf));
+        for (const DeviceClockSync::Anchor& probe : got) {
+            dev_state.clock_sync->ingest_probe(probe);
         }
+        if (got.size() < buf.size()) {
+            return;
+        }
+    }
+}
+
+std::chrono::steady_clock::time_point RealtimeProfilerReceiver::probe_due_devices() {
+    const auto now = std::chrono::steady_clock::now();
+    auto earliest = now + kDeviceClockSyncInterval;
+    for (size_t i = 0; i < devices_.size(); ++i) {
+        if (now >= probe_next_due_[i]) {
+            devices_[i].probe_ring->writer().publish(devices_[i].clock_sync->read_probe());
+            // Absolute schedule: a late probe is followed by a correspondingly early one, so an
+            // adjacent chord pair absorbs the lateness instead of compounding it — the
+            // certificate budget cares about pair sums, not single gaps.
+            probe_next_due_[i] = std::max(probe_next_due_[i] + kDeviceClockSyncInterval, now);
+        }
+        earliest = std::min(earliest, probe_next_due_[i]);
+    }
+    return earliest;
+}
+
+void RealtimeProfilerReceiver::run_sync() {
+    tracy::SetThreadName("RtProfilerSync");
+#if defined(__linux__)
+    ::prctl(PR_SET_TIMERSLACK, 1UL, 0, 0, 0);
+#endif
+    while (!sync_stop_.load(std::memory_order_acquire)) {
+        const auto earliest = probe_due_devices();
+        std::this_thread::sleep_until(std::min(earliest, std::chrono::steady_clock::now() + kDeviceClockSyncInterval));
     }
 }
 
@@ -288,7 +350,6 @@ uint32_t RealtimeProfilerReceiver::drain_device_pages(
         return 0;
     }
     const uint32_t num_pages_to_read = std::min(available, kMaxSocketPagesPerRead);
-    const auto read_start = std::chrono::steady_clock::now();
     {
         TTZoneScopedDN(RT_PROFILER, "SocketRead");
         TTZoneValueD(RT_PROFILER, num_pages_to_read);
@@ -299,31 +360,14 @@ uint32_t RealtimeProfilerReceiver::drain_device_pages(
         dev_state.socket->notify_sender();
         dev_state.unacked_pages = 0;
     }
-    const auto after_read = std::chrono::steady_clock::now();
 
-    // Probes run strictly on the kDeviceClockSyncInterval cadence, never per drain: back-to-back
-    // drains would mint microseconds-wide chords whose noisy secants poison the rate brackets of
-    // neighboring chords.
-    probe_overdue_devices();
-    const auto after_resync = std::chrono::steady_clock::now();
+    ingest_probes(dev_state);
 
     publish_pages(
         dev_state,
         std::span(page_buf).first(num_pages_to_read * RealtimeProfilerRuntimeSizes::page_words),
         publish_batch_);
-    const auto after_publish = std::chrono::steady_clock::now();
-
-    note_phase_peak(peak_read_ns_, after_read - read_start);
-    note_phase_peak(peak_resync_ns_, after_resync - after_read);
-    note_phase_peak(peak_publish_ns_, after_publish - after_resync);
     return num_pages_to_read;
-}
-
-void RealtimeProfilerReceiver::note_phase_peak(std::atomic<uint64_t>& peak, std::chrono::steady_clock::duration d) {
-    const auto ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(d).count());
-    if (ns > peak.load(std::memory_order_relaxed)) {
-        peak.store(ns, std::memory_order_relaxed);
-    }
 }
 
 uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
@@ -333,9 +377,17 @@ uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
 
     constexpr auto kPlotInterval = std::chrono::milliseconds(1);
     auto last_plot = std::chrono::steady_clock::now();
+    auto last_iteration = last_plot;
     while (!stop_.load(std::memory_order_acquire)) {
         const auto now = std::chrono::steady_clock::now();
-        const uint32_t num_pages = drain_all_devices(now, page_buf);
+        const auto iteration_ns =
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(now - last_iteration).count());
+        last_iteration = now;
+        if (iteration_ns > peak_loop_ns_.load(std::memory_order_relaxed)) {
+            peak_loop_ns_.store(iteration_ns, std::memory_order_relaxed);
+        }
+        loop_count_.fetch_add(1, std::memory_order_relaxed);
+        const uint32_t num_pages = drain_all_devices(page_buf);
         num_pages_received += num_pages;
 
         if (now - last_plot >= kPlotInterval) {
@@ -357,54 +409,28 @@ uint64_t RealtimeProfilerReceiver::run_loop(std::vector<uint32_t>& page_buf) {
             backoff = std::chrono::microseconds{1};
             continue;
         }
-        // Cap the sleep at the earliest probe deadline: certification needs adjacent probe gaps to
-        // stay comfortably under kDvfsMinTransitionSpacing, so floor probes must not inherit
-        // backoff jitter.
-        auto sleep_duration = std::chrono::duration_cast<std::chrono::steady_clock::duration>(backoff);
-        const auto after_drain = std::chrono::steady_clock::now();
-        for (const auto& dev_state : devices_) {
-            sleep_duration = std::min(sleep_duration, dev_state.clock_sync->next_probe_due() - after_drain);
-        }
-        if (sleep_duration > std::chrono::steady_clock::duration::zero()) {
-            std::this_thread::sleep_for(sleep_duration);
-        }
+        std::this_thread::sleep_for(backoff);
         backoff += std::max(backoff / 4, std::chrono::microseconds{1});
         backoff = std::min(backoff, kReceiverMaxBackoff);
     }
     return num_pages_received;
 }
 
-uint32_t RealtimeProfilerReceiver::drain_all_devices(
-    std::chrono::steady_clock::time_point now, std::vector<uint32_t>& page_buf) {
+uint32_t RealtimeProfilerReceiver::drain_all_devices(std::vector<uint32_t>& page_buf) {
     uint32_t num_pages = 0;
     bool published_on_idle = false;
     for (auto& dev_state : devices_) {
         try {
             const uint32_t drained = drain_device_pages(dev_state, page_buf);
             num_pages += drained;
-            if (drained != 0) {
-                probe_overdue_devices();
-                now = std::chrono::steady_clock::now();
-            } else {
-                if (dev_state.clock_sync->due_for_probe(now)) {
-                    TTZoneScopedDN(RT_PROFILER, "IdleSyncProbe");
-                    TTZoneValueD(RT_PROFILER, dev_state.chip_id);
-                    dev_state.clock_sync->resync();
-                }
-                // Flush and peek on their own cadences: probes may be serviced by the overdue
-                // interleave during other devices' drains, so neither can key off due_for_probe.
+            if (drained == 0) {
+                ingest_probes(dev_state);
                 if (!dev_state.pending_records.empty()) {
                     published_on_idle |= publish_pages(dev_state, {}, publish_batch_) != 0;
                 }
                 if (dev_state.unacked_pages != 0) {
                     dev_state.socket->notify_sender();
                     dev_state.unacked_pages = 0;
-                }
-                if (now >= dev_state.next_peek_at) {
-                    dev_state.next_peek_at = now + kDeviceClockSyncInterval;
-                    // an idle device may be idle because a program is running on it; this is what
-                    // keeps a start that will outlive the ring mappable.
-                    dev_state.peek_running_program_start();
                 }
             }
         } catch (const std::exception& e) {
@@ -430,7 +456,7 @@ uint64_t RealtimeProfilerReceiver::drain_on_shutdown(std::vector<uint32_t>& page
     uint64_t num_pages_drained = 0;
     uint32_t quiet_rounds = 0;
     while (quiet_rounds < kShutdownDrainQuietRounds && std::chrono::steady_clock::now() < give_up_at) {
-        const uint32_t num_pages = drain_all_devices(std::chrono::steady_clock::now(), page_buf);
+        const uint32_t num_pages = drain_all_devices(page_buf);
         num_pages_drained += num_pages;
         bool outstanding = false;
         for (const RealtimeProfilerDevice& dev_state : devices_) {
@@ -504,6 +530,10 @@ void RealtimeProfilerReceiver::shutdown() {
     if (receiver_thread_.joinable()) {
         stop_.store(true, std::memory_order_release);
         receiver_thread_.join();
+    }
+    if (sync_thread_.joinable()) {
+        sync_stop_.store(true, std::memory_order_release);
+        sync_thread_.join();
     }
 
     realtime_profiler_service_->detach_producer(*this);
