@@ -215,3 +215,25 @@ motivating delta has evaporated**, and it should not be built.
 > operation over a per-core hidden slice with its own CB, and the combine is a single named operation
 > whose contributor page layout (`row·s + contributor`) is stated — neither change touches the loop
 > nest, the block extents, or any other CB.
+
+## Perf 1 — the gather landing shrinks with the reduce-scatter combine
+
+`cb_gathered_partials` is no longer `num_hidden_slices * block_rows` pages. The combine is
+reduce-scattered across `num_owners = min(s, block_rows)` cores (clamped to a divisor of
+`block_rows`), so each owner lands only the rows it reduces:
+
+    cb_gathered_partials : s * own_rows        pages of stat_tile   (own_rows = block_rows / num_owners)
+    cb_slice_stat  (NEW) : own_rows            pages of stat_tile   (only when num_owners > 1)
+    cb_rms_bcast         : block_rows          pages of stat_tile   (unchanged; now the funnel's landing)
+
+At `num_owners == 1` (the decode regime, `block_rows == 1`) this is byte-for-byte the old ledger.
+On the perf-flagged BLOCK-shard prefill geometry it is **32 KB instead of 1 MB**, and that is what
+finally makes the coarser `block_rows` affordable: the sharded ladder now picks **16** where
+Refinement 5 measured 16 as −2.8 % but had to decline it for L1. `_footprint_bytes` and
+`_footprint_bytes_sharded` both charge the new sizes, so the ladder sees the freed budget.
+
+**Measured and REJECTED on L1 grounds** (Perf 1, idea I5): a `block_rows * S`-page intermediate CB
+between `scale_block` and `apply_gamma_block` (replacing the `sync_pack_to_unpack` edge) is a 2.4 %
+win on that stage in isolation but consumes exactly the budget above — it pushed `block_rows` back
+16 → 8 on the focus geometry, and the whole-op result was flat (34554 → 34301; interleaved prefill
+`w1024` median 87231 → 87004). A 2.4 % stage win is not worth a −2.8 % block choice.

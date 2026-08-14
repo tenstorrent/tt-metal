@@ -128,9 +128,22 @@ def _combine_owners(num_slices: int, block_rows: int) -> int:
 # multiply, and that copy sits on the MATH thread between two dependent ops, while
 # the unfused pair runs as two independent DEST windows that pipeline against the
 # packer.  On this op the math thread binds and the L1 crossings do not, so the
-# trade goes the wrong way.  The lever is CORRECT (the whole sharded suite passes
-# with it on) and stays as a live knob: set it to 2 to fuse wherever a core owns
-# more than one tile-row.  At 0 the program is byte-identical to Refinement 4.
+# trade goes the wrong way.
+#
+# PERF 1 SAFETY WARNING, before anyone turns this on: `ckl::DestReuseBinary`
+# returns silently WRONG data when the chain's block_size equals DEST_AUTO_LIMIT
+# (measured PCC 0.9866, values overshooting ~1.7x; correct at a window of 4).
+# `chain_max_block_v` advertises 8 as legal, so the caller gets no signal.  The
+# fused path below therefore computes the wrong answer -- not merely slower -- on
+# any geometry whose S makes DEST_BLOCK 8, which includes the perf-flagged
+# (1,1,32,7168) at S=8.  Cap DEST_BLOCK_TILES at DEST_AUTO_LIMIT-1 first.
+#
+# The lever is otherwise correct at smaller windows and stays as a live knob: set
+# it to 2 to fuse wherever a core owns more than one tile-row.  At 0 the program is
+# byte-identical to Refinement 4, and Perf 1 measured every OTHER fusion mechanism
+# as a regression too (DEST_TO_SRCB 1.52x, an SFPU DEST binary 8.5x), because this
+# stage is MATH-thread-bound and its L1 crossings are free -- so the fusion
+# question is closed, not open.
 GAMMA_FUSE_MIN_ROW_TILES = 0
 
 # Tiles per DEST window on the streaming eltwise passes (compute's DEST_BLOCK_TILES).
