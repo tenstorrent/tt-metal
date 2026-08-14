@@ -24,7 +24,11 @@ from helpers.llk_params import (
     ReducePool,
     format_dict,
 )
-from helpers.param_config import input_output_formats, parametrize
+from helpers.param_config import (
+    input_output_formats,
+    parametrize,
+    select_perf_tile_sizes,
+)
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -86,6 +90,21 @@ def reduce_dest_acc_modes(*, is_perf=False):
     )
 
 
+def reduce_tile_dimensions(formats, *, is_perf=False):
+    functional_tile_sizes = [
+        td
+        for td in SUPPORTED_TILE_SIZES
+        if not is_mx_unsupported_tile_dims(
+            formats.input_format, formats.output_format, td
+        )
+    ]
+    return (
+        select_perf_tile_sizes(functional_tile_sizes)
+        if is_perf
+        else functional_tile_sizes
+    )
+
+
 def reduce_implied_math_formats(formats, *, is_perf=False):
     if is_perf:
         return [ImpliedMathFormat.Yes]
@@ -127,13 +146,7 @@ def reduce_pool_type_and_math_fidelity_combinations(*, is_perf=False):
 @pytest.mark.quasar
 @parametrize(
     formats=REDUCE_FORMATS,
-    tile_dimensions=lambda formats: [
-        td
-        for td in SUPPORTED_TILE_SIZES
-        if not is_mx_unsupported_tile_dims(
-            formats.input_format, formats.output_format, td
-        )
-    ],
+    tile_dimensions=lambda formats: reduce_tile_dimensions(formats, is_perf=False),
     dest_acc=lambda: reduce_dest_acc_modes(is_perf=False),
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=lambda: reduce_pool_type_and_math_fidelity_combinations(

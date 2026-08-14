@@ -19,7 +19,7 @@ from quasar.test_eltwise_unary_sfpu_quasar import (
         is_perf=True
     ),
     run_types=PERF_RUN_TYPES_QUASAR,
-    loop_factor=[PERF_LOOP_FACTOR_QUASAR],
+    loop_factor=[PERF_LOOP_FACTOR_QUASAR / 2],
     is_perf=[True],
 )
 def test_perf_eltwise_unary_sfpu_quasar(

@@ -50,20 +50,22 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
 kt_dims = [1, 2, 4]
+PERF_KT_DIMS = [1, 4]
 
 
-def matmul_math_fidelities(format):
-    # Integer matmul is LoFi-only on Quasar.
-    return (
-        [MathFidelity.LoFi]
-        if format.input_format == DataFormat.Int8
-        else [
-            MathFidelity.LoFi,
-            MathFidelity.HiFi2,
-            MathFidelity.HiFi3,
-            MathFidelity.HiFi4,
-        ]
-    )
+def matmul_math_fidelities(format, *, is_perf=False):
+    # Integer matmul is LoFi-only on Quasar. MX is already full precision at LoFi,
+    # so perf skips the extra HiFi phases.
+    if format.input_format == DataFormat.Int8 or (
+        is_perf and format.input_format.is_mx_format()
+    ):
+        return [MathFidelity.LoFi]
+    return [
+        MathFidelity.LoFi,
+        MathFidelity.HiFi2,
+        MathFidelity.HiFi3,
+        MathFidelity.HiFi4,
+    ]
 
 
 def matmul_dest_sync_modes(*, is_perf=False):
@@ -78,20 +80,24 @@ def matmul_dest_acc_modes(format):
     )
 
 
-def matmul_dimensions(dest_acc, dest_sync, *, exact_dest_fill=False):
+def matmul_dimensions(dest_acc, dest_sync, *, exact_dest_fill=False, is_perf=False):
     max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // (
         2 if dest_acc == DestAccumulation.Yes else 1
     )
+    # Perf keeps dest-full tall (max_tiles, 1) and wide (1, max_tiles) so both
+    # ct>=rt and ct<rt MOP addr_mod branches are covered, and kt=1 vs kt=4.
+    mt_dims = (1, max_tiles) if is_perf else range(1, max_tiles + 1)
+    selected_kt_dims = PERF_KT_DIMS if is_perf else kt_dims
     return [
         ([mt_dim * TILE_DIM, kt_dim * TILE_DIM], [kt_dim * TILE_DIM, nt_dim * TILE_DIM])
-        for mt_dim in range(1, max_tiles + 1)
+        for mt_dim in mt_dims
         if not exact_dest_fill or max_tiles % mt_dim == 0
         for nt_dim in (
             [max_tiles // mt_dim]
             if exact_dest_fill
             else range(1, max_tiles // mt_dim + 1)
         )
-        for kt_dim in kt_dims
+        for kt_dim in selected_kt_dims
     ]
 
 

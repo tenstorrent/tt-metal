@@ -28,6 +28,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
     runtime,
+    select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -75,7 +76,6 @@ def generate_unpack_unary_operand_combinations(
     Returns: List of (format, dest_acc, transpose_en, unpacker_sel, input_dimensions) tuples
     """
     combinations = []
-    perf_tile_dims = (32, 32)
     dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
 
     for fmt in formats_list:
@@ -100,29 +100,9 @@ def generate_unpack_unary_operand_combinations(
             # pack to Fp32 when dest is in 16-bit mode.
             if in_fmt != DataFormat.Float32 and fmt.output_format == DataFormat.Float32:
                 continue
-            perf_dest_acc_modes = (
+            dest_acc_modes = (
                 dest_acc_modes if in_fmt.is_32_bit() else (DestAccumulation.No,)
             )
-            for dest_acc in perf_dest_acc_modes:
-                for dest_sync in dest_sync_modes:
-                    perf_dimensions = generate_perf_input_dimensions(
-                        dest_acc, dest_sync, use_largest_fallback=True
-                    )
-                    for transpose_en in transpose_modes:
-                        for unpacker_sel in unpacker_engines:
-                            for dimensions in perf_dimensions:
-                                combinations.append(
-                                    (
-                                        fmt,
-                                        dest_acc,
-                                        dest_sync,
-                                        transpose_en,
-                                        unpacker_sel,
-                                        dimensions,
-                                        runtime(perf_tile_dims),
-                                    )
-                                )
-            continue
 
         for dest_acc in dest_acc_modes:
             if (
@@ -135,13 +115,18 @@ def generate_unpack_unary_operand_combinations(
                 continue
             for dest_sync in dest_sync_modes:
                 for transpose_en in transpose_modes:
+                    # transpose is not supported for tiny-tiles
+                    functional_tile_sizes = (
+                        ((32, 32),)
+                        if transpose_en == Transpose.Yes
+                        else SUPPORTED_TILE_SIZES
+                    )
+                    tile_sizes = (
+                        select_perf_tile_sizes(functional_tile_sizes)
+                        if is_perf
+                        else functional_tile_sizes
+                    )
                     for unpacker_sel in unpacker_engines:
-                        # transpose is not supported for tiny-tiles
-                        tile_sizes = (
-                            ((32, 32),)
-                            if transpose_en == Transpose.Yes
-                            else SUPPORTED_TILE_SIZES
-                        )
                         for tile_dims in tile_sizes:
                             if is_mx_unsupported_tile_dims(
                                 in_fmt, fmt.output_format, tile_dims
@@ -153,9 +138,16 @@ def generate_unpack_unary_operand_combinations(
                             ):
                                 continue
                             tile_shape = construct_tile_shape(tile_dims)
-                            for dimensions in generate_unary_input_dimensions(
-                                dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
-                            ):
+                            dimensions_list = (
+                                generate_perf_input_dimensions(
+                                    dest_acc, dest_sync, tile_shape
+                                )
+                                if is_perf
+                                else generate_unary_input_dimensions(
+                                    dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+                                )
+                            )
+                            for dimensions in dimensions_list:
                                 combinations.append(
                                     (
                                         fmt,

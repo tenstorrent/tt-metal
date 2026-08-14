@@ -30,10 +30,11 @@ from helpers.llk_params import (
 )
 from helpers.param_config import (
     DEST_SYNC_TILE_LIMITS,
+    generate_perf_input_dimensions,
     input_output_formats,
     parametrize,
     runtime,
-    select_perf_input_dimensions,
+    select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -118,7 +119,11 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
         """
         return in_fmt in (DataFormat.Int8, DataFormat.UInt8) and in_fmt == out_fmt
 
-    tile_sizes = [(32, 32)] if is_perf else UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES
+    tile_sizes = (
+        select_perf_tile_sizes(UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES)
+        if is_perf
+        else UNPACK_REDUCE_COL_TILIZEA_STRIDED_TILE_SIZES
+    )
 
     combinations = []
 
@@ -141,15 +146,12 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
                     if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dimensions):
                         continue
                     tile_shape = construct_tile_shape(tile_dimensions)
-                    functional_dimensions = generate_corner_case_input_dimensions(
-                        dest_sync, acc, tile_shape
-                    )
                     dimensions_list = (
-                        select_perf_input_dimensions(
-                            functional_dimensions, use_largest_fallback=True
-                        )
+                        generate_perf_input_dimensions(acc, dest_sync, tile_shape)
                         if is_perf
-                        else functional_dimensions
+                        else generate_corner_case_input_dimensions(
+                            dest_sync, acc, tile_shape
+                        )
                     )
                     for dimensions in dimensions_list:
                         for pool_type in (

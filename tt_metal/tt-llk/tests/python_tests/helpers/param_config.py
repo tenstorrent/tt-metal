@@ -629,6 +629,27 @@ PERF_INPUT_DIMENSIONS = (
     [32, 512],
 )
 
+# One representative per HW tile MOP class. Intersect with each test's functional
+# tile-size set via ``select_perf_tile_sizes`` instead of pinning a single shape.
+PERF_TILE_SIZES = (
+    (32, 32),  # 4-face standard
+    (16, 16),  # 1-face
+    (32, 16),  # 2-face narrow
+    (1, 32),  # tiny-tile MOP (shared with 2/4/8 x 32)
+)
+
+
+def select_perf_tile_sizes(functional_tile_sizes):
+    """Select MOP-class tile sizes that a functional sweep actually supports.
+
+    Keeps ``PERF_TILE_SIZES`` order. MX / unpack-to-dest filters still apply at
+    the call site; this only intersects with the functional tile-size list.
+    """
+    supported_tile_sizes = {tuple(tile_dims) for tile_dims in functional_tile_sizes}
+    return [
+        tile_dims for tile_dims in PERF_TILE_SIZES if tile_dims in supported_tile_sizes
+    ]
+
 
 def select_perf_input_dimensions(functional_dimensions, *, use_largest_fallback=True):
     """Select perf matrices from the dimensions supported by a functional test.
@@ -668,15 +689,38 @@ def generate_perf_input_dimensions(
     *,
     use_largest_fallback=True,
 ):
-    """Select perf matrices from unary functional coverage."""
+    """Dest-full tall and wide matrices, scaled by ``tile_shape``.
+
+    Tile counts are ``(max_tiles, 1)`` and ``(1, max_tiles)`` for the dest
+    capacity of ``dest_sync`` / ``dest_acc``. ``use_largest_fallback`` is kept
+    for call-site compatibility; dest-fill matrices always fit dest.
+    """
     if tile_shape is None:
         tile_shape = construct_tile_shape()
 
-    functional_dimensions = generate_unary_input_dimensions(
-        dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
-    )
+    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
+    max_tiles_in_dest = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    tile_rows = tile_shape.total_row_dim()
+    tile_cols = tile_shape.total_col_dim()
+
+    dest_fill_tile_counts = ((max_tiles_in_dest, 1), (1, max_tiles_in_dest))
+    dimensions = []
+    seen = set()
+    for rt_dim, ct_dim in dest_fill_tile_counts:
+        matrix = [rt_dim * tile_rows, ct_dim * tile_cols]
+        key = tuple(matrix)
+        if key not in seen:
+            seen.add(key)
+            dimensions.append(matrix)
+
+    if dimensions or not use_largest_fallback:
+        return dimensions
+
     return select_perf_input_dimensions(
-        functional_dimensions, use_largest_fallback=use_largest_fallback
+        generate_unary_input_dimensions(
+            dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+        ),
+        use_largest_fallback=True,
     )
 
 

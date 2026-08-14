@@ -26,6 +26,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
     runtime,
+    select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -97,31 +98,11 @@ def generate_unpack_tilize_combinations(
             if in_fmt.is_32_bit()
             else (UnpackerEngine.UnpA, UnpackerEngine.UnpB)
         )
-
-        if is_perf:
-            for dest_acc in dest_acc_modes:
-                for dest_sync in dest_sync_modes:
-                    perf_dimensions = generate_perf_input_dimensions(
-                        dest_acc, dest_sync, use_largest_fallback=True
-                    )
-                    for unpacker_sel in unpacker_engines:
-                        if (
-                            dest_acc == DestAccumulation.Yes
-                            and unpacker_sel == UnpackerEngine.UnpB
-                        ):
-                            continue
-                        for dimensions in perf_dimensions:
-                            combinations.append(
-                                (
-                                    fmt,
-                                    dest_acc,
-                                    dest_sync,
-                                    unpacker_sel,
-                                    dimensions,
-                                    runtime((32, 32)),
-                                )
-                            )
-            continue
+        tile_sizes = (
+            select_perf_tile_sizes(UNPACK_TILIZE_TILE_SIZES)
+            if is_perf
+            else UNPACK_TILIZE_TILE_SIZES
+        )
 
         for dest_acc in dest_acc_modes:
             for dest_sync in dest_sync_modes:
@@ -134,7 +115,7 @@ def generate_unpack_tilize_combinations(
                         and unpacker_sel == UnpackerEngine.UnpB
                     ):
                         continue
-                    for tile_dims in UNPACK_TILIZE_TILE_SIZES:
+                    for tile_dims in tile_sizes:
                         if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
                             continue
                         if (
@@ -144,9 +125,16 @@ def generate_unpack_tilize_combinations(
                         ):
                             continue
                         tile_shape = construct_tile_shape(tile_dims)
-                        for dimensions in generate_unary_input_dimensions(
-                            dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
-                        ):
+                        dimensions_list = (
+                            generate_perf_input_dimensions(
+                                dest_acc, dest_sync, tile_shape
+                            )
+                            if is_perf
+                            else generate_unary_input_dimensions(
+                                dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+                            )
+                        )
+                        for dimensions in dimensions_list:
                             combinations.append(
                                 (
                                     fmt,

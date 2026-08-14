@@ -21,13 +21,14 @@ from quasar.test_matmul_quasar import test_matmul as run_matmul
 @pytest.mark.quasar
 @parametrize(
     format=MATMUL_FORMAT,
-    math_fidelity=matmul_math_fidelities,
+    math_fidelity=lambda format: matmul_math_fidelities(format, is_perf=True),
     dest_sync_mode=lambda: matmul_dest_sync_modes(is_perf=True),
     dest_acc=matmul_dest_acc_modes,
     dimensions=lambda dest_acc, dest_sync_mode: matmul_dimensions(
         dest_acc,
         dest_sync_mode,
         exact_dest_fill=True,
+        is_perf=True,
     ),
     implied_math_format=lambda format: matmul_implied_math_formats(
         format, is_perf=True

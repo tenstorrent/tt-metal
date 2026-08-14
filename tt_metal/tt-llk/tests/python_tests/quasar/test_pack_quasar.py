@@ -27,6 +27,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
     runtime,
+    select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -64,8 +65,8 @@ def generate_qsr_pack_combinations(
 
     Args:
         formats_list: List of input/output format pairs
-        is_perf: Restrict combinations to SyncHalf, a 16x16 tile, and perf
-            input dimensions for performance measurements.
+        is_perf: Restrict combinations to SyncHalf, MOP-class tile sizes, and
+            dest-full perf input dimensions for performance measurements.
 
     Returns:
         List of (format, dest_acc, dest_sync, input_dimensions, relu_type,
@@ -134,30 +135,13 @@ def generate_qsr_pack_combinations(
         )
         for dest_acc in get_dest_acc_modes(in_fmt):
             if is_supported_dest_mode_dependent_conversion(in_fmt, out_fmt, dest_acc):
-                if is_perf:
-                    tile_dims = MX_SUPPORTED_TILE_SIZES[0]
-                    if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
-                        continue
-                    tile_shape = construct_tile_shape(tile_dims)
-                    for dest_sync in dest_sync_modes:
-                        perf_dimensions = generate_perf_input_dimensions(
-                            dest_acc, dest_sync, tile_shape
-                        )
-                        for relu_type in relu_types:
-                            for input_dimensions in perf_dimensions:
-                                combinations.append(
-                                    (
-                                        fmt,
-                                        dest_acc,
-                                        dest_sync,
-                                        runtime(input_dimensions),
-                                        runtime(relu_type),
-                                        runtime(tile_dims),
-                                    )
-                                )
-                    continue
+                tile_sizes = (
+                    select_perf_tile_sizes(SUPPORTED_TILE_SIZES)
+                    if is_perf
+                    else SUPPORTED_TILE_SIZES
+                )
                 for dest_sync in dest_sync_modes:
-                    for tile_dims in SUPPORTED_TILE_SIZES:
+                    for tile_dims in tile_sizes:
                         if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
                             continue
                         # Unpack-to-dest (required for 32-bit formats) does not support tiny tiles.
@@ -168,16 +152,23 @@ def generate_qsr_pack_combinations(
                         ):
                             continue
                         tile_shape = construct_tile_shape(tile_dims)
-                        for dimensions in generate_unary_input_dimensions(
-                            dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
-                        ):
+                        dimensions_list = (
+                            generate_perf_input_dimensions(
+                                dest_acc, dest_sync, tile_shape
+                            )
+                            if is_perf
+                            else generate_unary_input_dimensions(
+                                dest_acc, dest_sync=dest_sync, tile_shape=tile_shape
+                            )
+                        )
+                        for dimensions in dimensions_list:
                             for relu_type in relu_types:
                                 combinations.append(
                                     (
                                         fmt,
                                         dest_acc,
                                         dest_sync,
-                                        dimensions,
+                                        runtime(dimensions) if is_perf else dimensions,
                                         runtime(relu_type),
                                         runtime(tile_dims),
                                     )

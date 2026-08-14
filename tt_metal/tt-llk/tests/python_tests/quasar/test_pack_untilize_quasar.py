@@ -20,6 +20,7 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
     runtime,
+    select_perf_tile_sizes,
 )
 from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
@@ -108,7 +109,11 @@ def generate_pack_untilize_combinations(
 
         for dest_acc in get_dest_acc_modes(in_fmt):
             for dest_sync in dest_sync_modes:
-                tile_sizes = [(32, 32)] if is_perf else PACK_UNTILIZE_TILE_SIZES
+                tile_sizes = (
+                    select_perf_tile_sizes(PACK_UNTILIZE_TILE_SIZES)
+                    if is_perf
+                    else PACK_UNTILIZE_TILE_SIZES
+                )
                 for tile_dims in tile_sizes:
                     if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
                         continue

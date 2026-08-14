@@ -149,10 +149,19 @@ def generate_qsr_transpose_dest_combinations(
                 for dest_sync in dest_sync_modes:
                     for math_transpose_faces in transpose_faces_modes:
                         if is_perf:
+                            mode_dimensions = dimensions_by_mode[(dest_acc, dest_sync)]
                             perf_dimensions = select_perf_input_dimensions(
-                                dimensions_by_mode[(dest_acc, dest_sync)],
+                                mode_dimensions,
                                 use_largest_fallback=False,
                             )
+                            # Dest-full vs 2-block is selected via PERF_INPUT_DIMENSIONS.
+                            # Keep the 3-block / 2-switch case when the mode defines it.
+                            three_block = [64, 384]
+                            if (
+                                three_block in mode_dimensions
+                                and three_block not in perf_dimensions
+                            ):
+                                perf_dimensions.append(three_block)
                             for dimensions in perf_dimensions:
                                 combinations.append(
                                     (
