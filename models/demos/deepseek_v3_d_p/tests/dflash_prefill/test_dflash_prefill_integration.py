@@ -287,9 +287,9 @@ def test_dflash_prefill_integration(
     real = hf_context_kv(ctx)
 
     # Device drafter: finalize the accumulated sliced FC (reduce_scatter → hidden_norm → per-layer k/v/norm/rope).
-    # Caller owns the K/V caches (like the MLA prefill runner) and passes them into finalize_context_kv.
+    # Caller owns the K/V caches (like the MLA prefill runner) and passes them into forward().
     k_cache, v_cache = allocate_dflash_kv_cache(mesh_device, dcfg, isl_total, sp_axis=sp_axis, tp_axis=tp_axis)
-    drafter.finalize_context_kv(k_cache, v_cache)
+    drafter.forward(k_cache, v_cache)
     ttnn.synchronize_device(mesh_device)
 
     # cache SP-sharded on seq → concat SP along seq(dim2), TP along kv-head(dim1); the host[:num_layers]
