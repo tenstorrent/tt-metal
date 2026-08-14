@@ -384,6 +384,21 @@ class CUSTOM_MM_UNINIT(TemplateParameter):
 
 
 @dataclass
+class SORT_DST_WRITE_OFFSET(TemplateParameter):
+    """Dst-row offset passed to the shared ``set_dst_write_addr_offset`` helper.
+
+    Emits ``constexpr std::uint32_t SORT_DST_WRITE_OFFSET = <n>;`` for
+    ``sort_headers_coexist_test.cpp``. Units are Dst rows: 2 is the column-group flip
+    topk_xl uses, 64 a whole-tile rebase as in deepseek_top32_rm.
+    """
+
+    offset: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t SORT_DST_WRITE_OFFSET = {self.offset}u;"
+
+
+@dataclass
 class PACK_NUM_TILES(TemplateParameter):
     """Tile count for the block/per-tile pack drivers.
 
