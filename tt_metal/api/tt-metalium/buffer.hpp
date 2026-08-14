@@ -32,16 +32,8 @@ namespace tt::tt_metal {
 
 class Allocator;
 class BufferImpl;
+class BufferShardingArgsImpl;
 class IDevice;
-
-// Forward declarations for friended free functions in the experimental namespace.
-// These are used to access experimental config params, which are not part of the official public API.
-class Buffer;
-class BufferShardingArgs;
-namespace experimental::per_core_allocation {
-BufferShardingArgs& set_per_core_allocation(BufferShardingArgs& args, bool enable);
-bool is_per_core_allocation(const BufferShardingArgs& args);
-}  // namespace experimental::per_core_allocation
 
 struct ShardSpec {
     /* The individual cores the shard grid is mapped to */
@@ -122,49 +114,34 @@ struct ShardedBufferConfig {
 
 class BufferShardingArgs {
 public:
-    BufferShardingArgs() = default;
-    BufferShardingArgs(std::nullopt_t) {}
+    explicit BufferShardingArgs(BufferShardingArgsImpl impl);
+    BufferShardingArgs();
+    BufferShardingArgs(std::nullopt_t);
 
-    BufferShardingArgs(BufferDistributionSpec buffer_distribution_spec) :
-        buffer_distribution_spec_(std::move(buffer_distribution_spec)),
-        buffer_layout_(TensorMemoryLayout::BLOCK_SHARDED) {}
-    BufferShardingArgs(std::optional<BufferDistributionSpec> buffer_distribution_spec) :
-        buffer_distribution_spec_(std::move(buffer_distribution_spec)),
-        buffer_layout_(
-            buffer_distribution_spec_.has_value() ? TensorMemoryLayout::BLOCK_SHARDED
-                                                  : TensorMemoryLayout::INTERLEAVED) {}
-
-    BufferShardingArgs(ShardSpecBuffer shard_spec, TensorMemoryLayout buffer_layout) :
-        shard_spec_(std::move(shard_spec)), buffer_layout_(buffer_layout) {}
-    BufferShardingArgs(std::optional<ShardSpecBuffer> shard_spec, TensorMemoryLayout buffer_layout) :
-        shard_spec_(std::move(shard_spec)), buffer_layout_(buffer_layout) {}
-
+    BufferShardingArgs(BufferDistributionSpec buffer_distribution_spec);
+    BufferShardingArgs(std::optional<BufferDistributionSpec> buffer_distribution_spec);
+    BufferShardingArgs(ShardSpecBuffer shard_spec, TensorMemoryLayout buffer_layout);
+    BufferShardingArgs(std::optional<ShardSpecBuffer> shard_spec, TensorMemoryLayout buffer_layout);
     BufferShardingArgs(
         std::optional<BufferDistributionSpec> buffer_distribution_spec,
         std::optional<ShardSpecBuffer> shard_spec,
-        TensorMemoryLayout buffer_layout) :
-        buffer_distribution_spec_(std::move(buffer_distribution_spec)),
-        shard_spec_(std::move(shard_spec)),
-        buffer_layout_(buffer_layout) {}
+        TensorMemoryLayout buffer_layout);
 
-    const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const { return buffer_distribution_spec_; }
+    BufferShardingArgs(const BufferShardingArgs&);
+    BufferShardingArgs& operator=(const BufferShardingArgs&);
+    BufferShardingArgs(BufferShardingArgs&&) noexcept;
+    BufferShardingArgs& operator=(BufferShardingArgs&&) noexcept;
+    ~BufferShardingArgs();
 
-    const std::optional<ShardSpecBuffer>& shard_spec() const { return shard_spec_; }
+    const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const;
+    const std::optional<ShardSpecBuffer>& shard_spec() const;
+    TensorMemoryLayout buffer_layout() const;
 
-    TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
-
-    // per_core_allocation is experimental functionality
-    // access is through experimental::per_core_allocation free functions
-    friend BufferShardingArgs& experimental::per_core_allocation::set_per_core_allocation(BufferShardingArgs&, bool);
-    friend bool experimental::per_core_allocation::is_per_core_allocation(const BufferShardingArgs&);
+    BufferShardingArgsImpl& impl();
+    const BufferShardingArgsImpl& impl() const;
 
 private:
-    std::optional<BufferDistributionSpec> buffer_distribution_spec_;
-    std::optional<ShardSpecBuffer> shard_spec_;
-    TensorMemoryLayout buffer_layout_ = TensorMemoryLayout::INTERLEAVED;
-    // per_core_allocation is experimental functionality
-    // access is through experimental::per_core_allocation free functions
-    bool per_core_allocation_ = false;
+    std::unique_ptr<BufferShardingArgsImpl> impl_;
 };
 
 bool is_sharded(const TensorMemoryLayout& layout);
@@ -227,8 +204,6 @@ public:
     const BufferImpl& impl() const;
 
 private:
-    DeviceAddr translate_page_address(DeviceAddr offset, uint32_t bank_id) const;
-
     std::unique_ptr<BufferImpl> impl_;
 };
 

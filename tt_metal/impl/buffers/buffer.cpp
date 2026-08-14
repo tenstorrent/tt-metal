@@ -34,9 +34,76 @@
 
 #include "impl/emulation/emule_live_ranges.hpp"
 #include "impl/buffers/buffer_impl.hpp"
+#include "impl/buffers/buffer_sharding_args_impl.hpp"
 #include "impl/buffers/generate_buffer_page_mapping.hpp"
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 
 namespace tt::tt_metal {
+
+BufferShardingArgs::BufferShardingArgs(BufferShardingArgsImpl impl) :
+    impl_(std::make_unique<BufferShardingArgsImpl>(std::move(impl))) {}
+
+BufferShardingArgs::BufferShardingArgs() : BufferShardingArgs(BufferShardingArgsImpl{}) {}
+
+BufferShardingArgs::BufferShardingArgs(std::nullopt_t) : BufferShardingArgs(BufferShardingArgsImpl{}) {}
+
+BufferShardingArgs::BufferShardingArgs(BufferDistributionSpec buffer_distribution_spec) :
+    BufferShardingArgs(
+        BufferShardingArgsImpl{std::move(buffer_distribution_spec), std::nullopt, TensorMemoryLayout::BLOCK_SHARDED}) {}
+
+BufferShardingArgs::BufferShardingArgs(std::optional<BufferDistributionSpec> buffer_distribution_spec) {
+    const bool has_spec = buffer_distribution_spec.has_value();
+    *this = BufferShardingArgs(BufferShardingArgsImpl{
+        std::move(buffer_distribution_spec),
+        std::nullopt,
+        has_spec ? TensorMemoryLayout::BLOCK_SHARDED : TensorMemoryLayout::INTERLEAVED});
+}
+
+BufferShardingArgs::BufferShardingArgs(ShardSpecBuffer shard_spec, TensorMemoryLayout buffer_layout) :
+    BufferShardingArgs(BufferShardingArgsImpl{std::nullopt, std::move(shard_spec), buffer_layout}) {}
+
+BufferShardingArgs::BufferShardingArgs(std::optional<ShardSpecBuffer> shard_spec, TensorMemoryLayout buffer_layout) :
+    BufferShardingArgs(BufferShardingArgsImpl{std::nullopt, std::move(shard_spec), buffer_layout}) {}
+
+BufferShardingArgs::BufferShardingArgs(
+    std::optional<BufferDistributionSpec> buffer_distribution_spec,
+    std::optional<ShardSpecBuffer> shard_spec,
+    TensorMemoryLayout buffer_layout) :
+    BufferShardingArgs(
+        BufferShardingArgsImpl{std::move(buffer_distribution_spec), std::move(shard_spec), buffer_layout}) {}
+
+BufferShardingArgs::BufferShardingArgs(const BufferShardingArgs& other) :
+    impl_(other.impl_ ? std::make_unique<BufferShardingArgsImpl>(*other.impl_) : nullptr) {}
+
+BufferShardingArgs& BufferShardingArgs::operator=(const BufferShardingArgs& other) {
+    if (this != &other) {
+        impl_ = other.impl_ ? std::make_unique<BufferShardingArgsImpl>(*other.impl_) : nullptr;
+    }
+    return *this;
+}
+
+BufferShardingArgs::BufferShardingArgs(BufferShardingArgs&&) noexcept = default;
+BufferShardingArgs& BufferShardingArgs::operator=(BufferShardingArgs&&) noexcept = default;
+BufferShardingArgs::~BufferShardingArgs() = default;
+
+const std::optional<BufferDistributionSpec>& BufferShardingArgs::buffer_distribution_spec() const {
+    return impl().buffer_distribution_spec_;
+}
+
+const std::optional<ShardSpecBuffer>& BufferShardingArgs::shard_spec() const { return impl().shard_spec_; }
+
+TensorMemoryLayout BufferShardingArgs::buffer_layout() const { return impl().buffer_layout_; }
+
+BufferShardingArgsImpl& BufferShardingArgs::impl() {
+    TT_FATAL(impl_ != nullptr, "BufferShardingArgs is in a moved-from state.");
+    return *impl_;
+}
+
+const BufferShardingArgsImpl& BufferShardingArgs::impl() const {
+    TT_FATAL(impl_ != nullptr, "BufferShardingArgs is in a moved-from state.");
+    return *impl_;
+}
+
 namespace {
 
 #if defined(TRACY_ENABLE)
@@ -653,7 +720,7 @@ DeviceAddr Buffer::page_address(DeviceAddr bank_id, DeviceAddr page_index) const
     TT_FATAL(bank_id < num_banks, "Invalid Bank ID: {} exceeds total numbers of banks ({})!", bank_id, num_banks);
     DeviceAddr pages_offset_within_bank = page_index / num_banks;
     auto offset = (round_up(this->page_size(), static_cast<DeviceAddr>(this->alignment())) * pages_offset_within_bank);
-    return translate_page_address(offset, bank_id);
+    return impl_->translate_page_address(*this, offset, bank_id);
 }
 
 uint32_t Buffer::alignment() const { return impl_->allocator_->get_alignment(this->buffer_type()); }
@@ -684,8 +751,8 @@ std::optional<uint32_t> Buffer::num_cores() const {
     return impl_->shard_spec_->tensor_shard_spec.grid.num_cores();
 }
 
-DeviceAddr Buffer::translate_page_address(DeviceAddr offset, uint32_t bank_id) const {
-    DeviceAddr base_page_address = this->address() + impl_->allocator_->get_bank_offset(impl_->buffer_type_, bank_id);
+DeviceAddr BufferImpl::translate_page_address(const Buffer& self, DeviceAddr offset, uint32_t bank_id) const {
+    DeviceAddr base_page_address = self.address() + allocator_->get_bank_offset(buffer_type_, bank_id);
     return base_page_address + offset;
 }
 

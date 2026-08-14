@@ -4,6 +4,7 @@
 
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include "impl/buffers/buffer_impl.hpp"
+#include "impl/buffers/buffer_sharding_args_impl.hpp"
 #include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal::experimental::per_core_allocation {
@@ -38,10 +39,10 @@ void copy_per_core_addresses(Buffer& dst, const Buffer& src) {
 }
 
 BufferShardingArgs& set_per_core_allocation(BufferShardingArgs& args, bool enable) {
-    args.per_core_allocation_ = enable;
+    args.impl().per_core_allocation_ = enable;
     return args;
 }
 
-bool is_per_core_allocation(const BufferShardingArgs& args) { return args.per_core_allocation_; }
+bool is_per_core_allocation(const BufferShardingArgs& args) { return args.impl().per_core_allocation_; }
 
 }  // namespace tt::tt_metal::experimental::per_core_allocation

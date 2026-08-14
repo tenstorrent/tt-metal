@@ -70,6 +70,7 @@ public:
     void allocate_impl(Buffer& self);
     void deallocate(Buffer& self);
     void deallocate_impl(Buffer& self);
+    DeviceAddr translate_page_address(const Buffer& self, DeviceAddr offset, uint32_t bank_id) const;
 
     void set_per_core_addresses(std::unordered_map<CoreCoord, DeviceAddr> addrs) {
         per_core_addresses_ = std::move(addrs);
