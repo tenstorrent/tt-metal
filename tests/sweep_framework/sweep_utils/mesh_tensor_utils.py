@@ -827,6 +827,37 @@ def device_canary(device) -> Tuple[bool, str]:
     return True, f"canary: 2+2 == 4 across {num_devices} device(s)"
 
 
+_TRIAGE_SENTINEL_ENV = "TRIAGE_SENTINEL"
+_TRIAGE_SENTINEL_DEFAULT = "generated/.tt_triage_already_ran"
+
+
+def dispatch_timeout_detail():
+    """Detail string if a dispatch timeout has already fired in this job, else None.
+
+    The runtime's TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE hook touches this sentinel when it
+    detects a device timeout and runs tt-triage, so its presence is direct evidence that the device
+    was declared unrecoverable at some point in this job.
+
+    This is the blind spot device_canary cannot cover. The canary probes the device NOW, and a
+    2+2 on tiny tensors can still succeed on a device whose fast-dispatch path has already timed out
+    on real work -- which is exactly what lead-models run 31771328869 showed: the runtime logged
+    "TIMEOUT: device timeout ... the device is unrecoverable", the op returned zeros anyway, the
+    canary reported healthy, and two add vectors that pass on every other box were booked as PCC 0.0
+    failures. The timeout is a property of the JOB, not of the moment, so it needs a durable marker
+    rather than a probe.
+    """
+    path = os.environ.get(_TRIAGE_SENTINEL_ENV, "").strip() or _TRIAGE_SENTINEL_DEFAULT
+    try:
+        if not os.path.exists(path):
+            return None
+    except (OSError, ValueError):  # unusable path (embedded null, too long) -- treat as "no marker"
+        return None
+    return (
+        f"dispatch timeout: the runtime declared a device timeout earlier in this job "
+        f"(triage sentinel {path!r} present), so results after it are not attributable to the vector"
+    )
+
+
 def clear_job_device_program_cache() -> None:
     """Clear the cached job device's program cache — call at each module boundary
     so a new module doesn't collide with an earlier module's cached programs /

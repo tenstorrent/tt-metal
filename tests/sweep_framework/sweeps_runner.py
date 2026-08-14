@@ -344,6 +344,7 @@ def run(input_queue, output_queue, config: SweepsConfig):
         clear_job_device_program_cache,
         close_job_device,
         device_canary,
+        dispatch_timeout_detail,
         resolved_open_params_for_source,
         set_traced_source_for_open,
     )
@@ -444,7 +445,12 @@ def run(input_queue, output_queue, config: SweepsConfig):
                 if not status and cur_device is not None:
                     healthy, canary_detail = device_canary(cur_device)
                     if healthy:
-                        canary_detail = None  # nothing to report; the failure stands on its own
+                        # The probe passes on a device that has ALREADY timed out on real work --
+                        # 2+2 on two tiles is not enough work to hit the wedged path. Check the
+                        # durable marker too before letting the failure stand.
+                        canary_detail = dispatch_timeout_detail()
+                        if canary_detail:
+                            logger.error(f"Device unusable after a failing vector: {canary_detail}")
                     else:
                         logger.error(f"Device canary FAILED after a failing vector: {canary_detail}")
                 output_queue.put(
@@ -466,6 +472,10 @@ def run(input_queue, output_queue, config: SweepsConfig):
                     if not healthy:
                         canary_detail = detail
                         logger.error(f"Device canary FAILED after a raised vector: {detail}")
+                    else:
+                        canary_detail = dispatch_timeout_detail()
+                        if canary_detail:
+                            logger.error(f"Device unusable after a raised vector: {canary_detail}")
                 output_queue.put([False, str(e), None, None, None, canary_detail])
     finally:
         _exhaust_fixture()
@@ -608,8 +618,9 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
         response[3],
         response[4],
     )
-    # 6th element (optional, so older/other producers of this tuple still unpack): set only
-    # when the vector FAILED and the post-failure device canary also failed.
+    # 6th element (optional, so older/other producers of this tuple still unpack): set only when the
+    # vector FAILED and the device was then found unusable -- either the canary could not compute
+    # 2+2, or a dispatch timeout had already fired in this job.
     canary_detail = response[5] if len(response) > 5 else None
     result["message"] = message
 
@@ -656,25 +667,30 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
     else:
         result["exception"] = message
         if canary_detail:
-            # The vector failed AND the device then failed to compute 2+2 across its own mesh.
-            # A device that cannot do that is not evidence about this op, so the failure is
-            # unattributable: mark NOT_RUN and stop rather than book it -- and rather than keep
-            # feeding vectors to a device that will manufacture more.
+            # The vector failed AND the device is not in a state where that failure means anything,
+            # by either of two independent signals (device_canary / dispatch_timeout_detail):
+            # it could not compute 2+2 across its own mesh, or the runtime already declared a
+            # dispatch timeout earlier in this job. Neither is evidence about this op, so the
+            # failure is unattributable: mark NOT_RUN and stop rather than book it -- and rather
+            # than keep feeding vectors to a device that will manufacture more.
             #
             # This is what run 31295900210 needed. On UF-MN-B4-GWH03 a device timeout was
             # followed by add/linear/nlp_create_qkv_heads_decode each returning PCC exactly 0.0;
             # all three were booked as test failures and all three pass in other runs on other
-            # boxes. The exception text alone could not tell them apart from real regressions --
-            # a health probe can.
+            # boxes. The exception text alone could not tell them apart from real regressions.
+            # Run 31771328869 repeated it on the SAME box with the canary already in place: the
+            # probe passed (2+2 on two tiles is not enough work to hit the wedged path) while the
+            # runtime had already logged "the device is unrecoverable", which is why the durable
+            # timeout marker is checked as well as the live probe.
             #
             # Deliberately ahead of the profiler-readback rule below: both mean "the device is
-            # bad", and the canary is the more direct measurement of the two.
+            # bad", and these are the more direct measurements of the two.
             logger.error(
-                f"Device canary failed after input_hash='{input_hash}' failed: {canary_detail}. "
+                f"Device unusable when input_hash='{input_hash}' failed: {canary_detail}. "
                 "The failure is unattributable to this vector -- marking NOT_RUN and ending the run."
             )
             result["status"] = TestStatus.NOT_RUN
-            result["exception"] = f"DEVICE CANARY FAILED (result not attributable to this vector): {canary_detail}"
+            result["exception"] = f"DEVICE UNUSABLE (result not attributable to this vector): {canary_detail}"
             result["device_perf"] = None
             result["_abort_suite"] = True
             result["_infra_abort"] = True
