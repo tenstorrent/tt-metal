@@ -39,6 +39,7 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -46,6 +47,7 @@ import ttnn
 
 from ....layers.module import Module
 from ....utils.tensor import fast_device_to_host, local_device_to_torch
+from ....utils.yuv_d2h import fast_device_to_host_yuv
 from .encoder_minimax_h3 import MiniMaxH3Encoder3d
 
 DEFAULT_TILE_SIZE = 256
@@ -149,6 +151,45 @@ def blend(a: torch.Tensor, b: torch.Tensor, blend_extent: int, dim: int) -> torc
     slice_rest = [slice(None)] * b.ndim
     slice_rest[dim] = slice(blend_extent, None)
     return torch.cat([blended, b[tuple(slice_rest)]], dim=dim)
+
+
+OUTPUT_TYPES = ("float", "yuv420")
+"""A decoded clip is either a torch ``(1, 3, T, H, W)`` tensor or, on the YUV path, a planar
+``(T, H*3//2, W)`` uint8 array. Only the temporal assembly in :meth:`MiniMaxH3Vae._decode` touches
+both, and only along the frame axis -- these three keep that one difference in one place."""
+
+
+def clip_num_frames(clip) -> int:
+    return clip.shape[0] if isinstance(clip, np.ndarray) else clip.shape[2]
+
+
+def clip_frames(clip, start: int, stop: int):
+    return clip[start:stop] if isinstance(clip, np.ndarray) else clip[:, :, start:stop]
+
+
+def concat_clip_frames(parts: list):
+    if parts and isinstance(parts[0], np.ndarray):
+        return np.concatenate(parts, axis=0)
+    return torch.cat(parts, dim=2)
+
+
+def blend_clip_frames(a, b, extent: int):
+    """Cross-fade ``a``'s trailing frames into ``b``'s leading ones -- :func:`blend` along frames.
+
+    The planar branch blends already-quantized uint8. BT.601 is affine and 4:2:0 decimation is
+    linear, so a convex combination commutes with the conversion and the only cost is re-rounding:
+    bounded at 1 LSB, and measured never to exceed it.
+    """
+    if not isinstance(a, np.ndarray):
+        return blend(a, b, extent, dim=-3)
+
+    extent = min(a.shape[0], b.shape[0], extent)
+    positions = np.arange(extent, dtype=np.float32).reshape(-1, *([1] * (a.ndim - 1)))
+    head = a[-extent:].astype(np.float32) * (1.0 - positions / extent) + b[:extent].astype(np.float32) * (
+        positions / extent
+    )
+    head = np.clip(np.rint(head), 0, 255).astype(np.uint8)
+    return head if extent == b.shape[0] else np.concatenate([head, b[extent:]], axis=0)
 
 
 def stitch_tiles(
@@ -684,7 +725,7 @@ class MiniMaxH3Vae(Module):
         if pending is not None:
             yield from read_wave(*pending)
 
-    def _decode_clip_device_stitched(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
+    def _decode_clip_device_stitched(self, z_BCTHW: torch.Tensor, output_type: str = "float"):
         """One clip, decoded and stitched entirely on device, read back as the assembled canvas.
 
         The win is transfer volume, not compute. The host path reads back **overlapping** tiles --
@@ -716,6 +757,15 @@ class MiniMaxH3Vae(Module):
         assert (
             len(units) <= wave_size
         ), f"a device-stitched clip must fit one wave; {len(units)} tiles against {wave_size} devices"
+        # The co-location below all-gathers the *whole* of each cluster axis, so every device ends up
+        # holding `wave_size` tiles regardless of how many the grid has. That is affordable when the
+        # grid fills the mesh and ruinous when it does not: a 4x7 grid on a 4x32 quad would put 128
+        # tiles on every chip to use 28 of them. Refuse rather than allocate it. Lifting this needs
+        # the neighbour-exchange form, where a tile only ever pulls its two overlap strips.
+        assert grid_rows == mesh_rows and grid_cols <= mesh_cols, (
+            f"the gather-based device stitch needs a {mesh_rows}x<={mesh_cols} tile grid to match the "
+            f"mesh, got {grid_rows}x{grid_cols} on {mesh_rows}x{mesh_cols}"
+        )
         _, _, num_frames, height, width = units[0].shape
         decoder = self._decoder_for(num_frames, height, width)
         profile = self._profile
@@ -739,6 +789,11 @@ class MiniMaxH3Vae(Module):
 
         mark = time.perf_counter()
         decoded = decoder(tokens)
+        # Row-major from here to the DMA. `unpatchify_device`'s rank-8 intermediate has trailing dims
+        # of 16, which a tiled reshape pads to 32x32 -- a 4x blowup for a view -- and the stitch's
+        # slices and concats land off tile boundaries on this grid's overlaps. One conversion here
+        # keeps every step after it on a fast path, `mesh_partition` included.
+        decoded = ttnn.to_layout(decoded, ttnn.ROW_MAJOR_LAYOUT)
         pixels = unpatchify_device(
             decoded,
             num_frames=num_frames,
@@ -771,20 +826,56 @@ class MiniMaxH3Vae(Module):
         profile["device_each"].append(elapsed)
 
         mark = time.perf_counter()
-        # One replica: the gathers above made every device identical (the stitch-device test
-        # asserts this), so this is the replicated case `local_device_to_torch` is for -- a
-        # single-shard read with no collective.
-        # One replica: the gathers above made every device identical.
-        out = local_device_to_torch(canvas).float()
+        canvas_shape = tuple(canvas.shape)
+        canvas_dtype = str(canvas.dtype)
+        if output_type == "yuv420":
+            out = self._read_canvas_yuv(canvas)
+            read_bytes = out.size
+        else:
+            # One replica: the gathers above made every device identical (the stitch-device test
+            # asserts this), so this is the replicated case `local_device_to_torch` is for -- a
+            # single-shard read with no collective.
+            out = local_device_to_torch(canvas).float()
+            read_bytes = out.numel() * out.element_size()
         elapsed = time.perf_counter() - mark
         profile["readback"] += elapsed
         profile["readback_each"].append(elapsed)
-        profile["shape"] = tuple(canvas.shape)
-        profile["dtype"] = str(canvas.dtype)
-        profile["readback_mb"] += out.numel() * out.element_size() / 1e6
+        profile["shape"] = canvas_shape
+        profile["dtype"] = canvas_dtype
+        profile["readback_mb"] += read_bytes / 1e6
         profile["waves"] += 1
         profile["units"] += len(units)
         return out
+
+    def _read_canvas_yuv(self, canvas: ttnn.Tensor) -> np.ndarray:
+        """Convert the replicated canvas to YUV 4:2:0 on device and read it back as planar uint8.
+
+        Two things earn their keep here. The `clamp` is the reference's post-stitch `clamp(0, 1)`,
+        moved to `[-1, 1]` by the `proj_out` fold and kept *after* the blend because clamping is the
+        one step in the chain that is not affine. The `mesh_partition` pair splits a canvas every
+        device already holds an identical copy of, so the DMA that follows runs across every PCIe
+        link instead of one -- the same repeat/partition trick `fast_device_to_host` uses to spread
+        a multi-host read.
+        """
+        canvas = ttnn.clamp(canvas, min=-1.0, max=1.0)
+        canvas = ttnn.typecast(canvas, ttnn.bfloat16)
+        canvas = ttnn.to_layout(canvas, ttnn.ROW_MAJOR_LAYOUT)
+
+        mesh_rows, mesh_cols = tuple(self.mesh_device.shape)
+        height, width = int(canvas.shape[-2]), int(canvas.shape[-1])
+        # `fast_device_to_host_yuv` reconstructs H and W as `per_shard * mesh_extent`, so an uneven
+        # split would silently assemble a canvas of the wrong size rather than fail.
+        assert height % mesh_rows == 0, f"canvas height {height} does not split over {mesh_rows} mesh rows"
+        assert width % mesh_cols == 0, f"canvas width {width} does not split over {mesh_cols} mesh columns"
+        assert (height // mesh_rows) % 2 == 0 and (
+            width // mesh_cols
+        ) % 2 == 0, "4:2:0 needs an even per-shard height and width"
+
+        canvas = ttnn.mesh_partition(canvas, dim=-2, cluster_axis=0)
+        canvas = ttnn.mesh_partition(canvas, dim=-1, cluster_axis=1)
+
+        planar = fast_device_to_host_yuv(canvas, self.mesh_device, ccl_manager=self.ccl_manager)
+        return planar.reshape(planar.shape[0], height * 3 // 2, width)
 
     def decode_clip(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
         """Decode one temporal clip, spatially tiled -- the reference ``_decode_clip``.
@@ -843,8 +934,14 @@ class MiniMaxH3Vae(Module):
         rows = [decoded[i * columns : (i + 1) * columns] for i in range(len(y_lengths))]
         return stitch_tiles(rows, y_overlaps, x_overlaps)
 
-    def decode(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
+    def decode(self, z_BCTHW: torch.Tensor, *, output_type: str = "float"):
         """Decode a latent video, mirroring the chunking ``encode`` applied.
+
+        ``output_type`` picks what crosses PCIe. ``"float"`` reads the decoder's own pixels back and
+        returns ``(1, 3, T, H, W)``. ``"yuv420"`` converts on device and returns a planar
+        ``(T, H*3//2, W)`` uint8 array ready for ``export_video_audio_yuv`` -- 1.5 bytes per pixel
+        against 6, and no host blend, unpatchify or upcast. It needs the assembled canvas, so it
+        requires ``device_stitch``, and it needs ``[-1, 1]`` pixels, so it requires ``pixel_denorm``.
 
         ``token_drop`` removes the tail of every encoded chunk, so consecutive decoded
         chunks overlap by ``frame_overlap`` pixel frames and are cross-faded. Ported from
@@ -856,16 +953,24 @@ class MiniMaxH3Vae(Module):
         and a server worker pins torch to one thread for the denoise loop's benefit. The previous
         limit is restored on the way out.
         """
+        if output_type not in OUTPUT_TYPES:
+            raise ValueError(f"output_type must be one of {OUTPUT_TYPES}, got {output_type!r}")
+        if output_type == "yuv420":
+            if not self.device_stitch:
+                raise ValueError("output_type='yuv420' needs device_stitch=True; it reads back the stitched canvas")
+            if self.pixel_denorm is None:
+                raise ValueError("output_type='yuv420' needs pixel_denorm; the YUV kernel takes [-1, 1] pixels")
+
         threads = _DECODE_TORCH_THREADS
         previous_threads = torch.get_num_threads()
         if threads > 0 and threads != previous_threads:
             torch.set_num_threads(threads)
         try:
-            return self._decode(z_BCTHW)
+            return self._decode(z_BCTHW, output_type)
         finally:
             torch.set_num_threads(previous_threads)
 
-    def _decode(self, z_BCTHW: torch.Tensor) -> torch.Tensor:
+    def _decode(self, z_BCTHW: torch.Tensor, output_type: str = "float"):
         self._profile = self._empty_profile()
         decode_started = time.perf_counter()
         config = self.config
@@ -890,7 +995,7 @@ class MiniMaxH3Vae(Module):
             # Device path: each chunk's tile grid is decoded, unpatchified, all-gathered and blended on
             # device, and only the assembled canvas is read back. One chunk at a time, which is what
             # the host path's grouping already reduces to at 768P (32 devices // 28 tiles == 1).
-            clips = [self._decode_clip_device_stitched(latents) for latents in chunk_latents]
+            clips = [self._decode_clip_device_stitched(latents, output_type) for latents in chunk_latents]
         elif self.use_tiling and chunk_latents:
             latent_height, latent_width = chunk_latents[0].shape[-2], chunk_latents[0].shape[-1]
             mark = time.perf_counter()
@@ -924,17 +1029,18 @@ class MiniMaxH3Vae(Module):
             clip = clips[i]
             for j in range(int(config.token_drop > 0) + 1):
                 frame_start = j * chunk_num_frames
-                chunk = clip[:, :, frame_start : frame_start + chunk_num_frames][:, :, config.frame_pre_padding :]
+                chunk = clip_frames(clip, frame_start, frame_start + chunk_num_frames)
+                chunk = clip_frames(chunk, config.frame_pre_padding, clip_num_frames(chunk))
                 if j == 0:
                     if overlap is not None:
-                        chunk = blend(overlap, chunk, config.frame_overlap, dim=-3)
+                        chunk = blend_clip_frames(overlap, chunk, config.frame_overlap)
                     decoded.append(chunk)
                 else:
                     overlap = chunk
         if overlap is not None:
             decoded.append(overlap)
 
-        result = torch.cat(decoded, dim=2)
+        result = concat_clip_frames(decoded)
         if pad_tokens > 0:
             intra_tail = config.clip_length % temporal_ratio
             tokens_before_pad = z_BCTHW.shape[2] - pad_tokens
@@ -942,7 +1048,7 @@ class MiniMaxH3Vae(Module):
                 intra_tail if intra_tail and (tokens_before_pad + k) % chunk_size == 0 else temporal_ratio
                 for k in range(pad_tokens)
             )
-            result = result[:, :, :-pad_frames]
+            result = clip_frames(result, 0, clip_num_frames(result) - pad_frames)
         self._report_profile(time.perf_counter() - decode_started)
         return result
 

@@ -34,8 +34,17 @@ class DeviceTileStitcher:
     every chunk, so they are built once and reused for the whole video.
     """
 
-    def __init__(self, mesh_device: ttnn.MeshDevice) -> None:
+    def __init__(self, mesh_device: ttnn.MeshDevice, layout: ttnn.Layout = ttnn.ROW_MAJOR_LAYOUT) -> None:
         self.mesh_device = mesh_device
+        # ROW_MAJOR, because this grid's geometry is hostile to tiles. The derived overlaps are
+        # [96, 80, 80] by height and [80, 80, 80, 80, 64, 64] by width, so the blend slices begin at
+        # 176 and 80 -- neither a multiple of 32 -- and `ttnn.slice` drops to untilize -> row-major
+        # -> retilize for exactly that case. The trims then hand `ttnn.concat` extents of 80 and 176,
+        # which is tile padding on the concat dim and triggers the same fallback again, with a
+        # logged warning. Staying row-major skips both. `binary_ng` takes ROW_MAJOR operands and
+        # keeps the layout on output, so the arithmetic is unaffected, and the dtype is untouched:
+        # the blend stays float32 so the existing PCC and seam gates carry over unchanged.
+        self.layout = layout
         self._ramps: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
 
     def _ramp_pair(self, shape: tuple[int, ...], extent: int, dim: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -54,7 +63,7 @@ class DeviceTileStitcher:
             weight_a = (1 - positions / extent).view(view).expand(slab).contiguous()
             weight_b = (positions / extent).view(view).expand(slab).contiguous()
             self._ramps[key] = tuple(
-                ttnn.from_torch(w, dtype=ttnn.float32, device=self.mesh_device, layout=ttnn.TILE_LAYOUT)
+                ttnn.from_torch(w, dtype=ttnn.float32, device=self.mesh_device, layout=self.layout)
                 for w in (weight_a, weight_b)
             )
         return self._ramps[key]

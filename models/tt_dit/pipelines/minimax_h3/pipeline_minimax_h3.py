@@ -313,6 +313,11 @@ class MiniMaxH3Pipeline:
         self._vae = None
         self._encoder_state_loaded = False
         self._image_processor = None
+        # `"yuv420"` builds the VAE for the device-stitched path: the canvas is blended, clamped and
+        # colour-converted on device, and `_decode_video` returns planar `(T, H*3//2, W)` uint8 for
+        # `export_video_audio_yuv` instead of a `(1, 3, T, H, W)` float tensor. Off by default because
+        # it changes this method's return type, and every quality gate reads the float one.
+        self.vae_output_type = "float"
         self._video_processor = None
         self._vision_tower = None
         self._vision_config = None
@@ -1051,11 +1056,16 @@ class MiniMaxH3Pipeline:
             logger.info("building the video VAE")
             # Used only for the wave readback, which keeps the decode off the MPI path; the VAE's
             # forward runs no collectives.
+            yuv = self.vae_output_type == "yuv420"
             self._vae = MiniMaxH3Vae(
                 self.vae_config,
                 mesh_device=self.mesh_device,
                 weight_loader=self._cache_submodel,
                 ccl_manager=self.ccl_manager,
+                device_stitch=yuv,
+                # Folded into `proj_out`, which is why `_decode_video` does no de-normalization on
+                # the YUV path: the decoder already emits the `[-1, 1]` the colour kernel takes.
+                pixel_denorm=(MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD) if yuv else None,
             )
             state = self._read_safetensors("vae")
             self._vae.load_decoder_state(state)
@@ -1902,7 +1912,10 @@ class MiniMaxH3Pipeline:
             self.patch_size,
         )
         latents = self._denormalize(latents, self.vae_config.latents_mean, self.vae_config.latents_std)
-        video = vae.decode(latents)
+        video = vae.decode(latents, output_type=self.vae_output_type)
+        if self.vae_output_type == "yuv420":
+            # De-normalized, clamped and colour-converted on device; nothing left to do on host.
+            return video
         # The VAE emits ImageNet-normalized RGB.
         video = self._denormalize(video.float(), MINIMAX_H3_PIXEL_MEAN, MINIMAX_H3_PIXEL_STD).clamp(0, 1)
         return video
