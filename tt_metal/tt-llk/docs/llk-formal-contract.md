@@ -554,3 +554,44 @@ init/execute) and "neither" (hard — trace body + helpers); QSR's 25 are all th
 the shape of the per-op, per-arch sage swarms used in §11–§12. So the mapping is **~1–2 swarm
 passes**, not a hand audit; the 37% where `init` takes the operand params is free from the
 signature.
+
+---
+
+## 14. Fuzzer audit (independent, all FSM-valid sequences)
+
+A generator (`tools/analysis/fuzz_sequences.py`) enumerates every FSM-valid call sequence over
+`{CFG, RCFG, INIT, EXE, UNI}` × operand `{A, B}`, length ≤ 6 — 60 skeletons → 584 distinct
+scenarios (incl. the `cb1/cb2` example). An independent AI auditor, given only §1–§9 plus a
+blind-spot rubric (§10–§13 withheld), labelled each `covered` / `blind` / `invalid`.
+
+```
+584 →  342 covered | 37 invalid | 205 blind   (no_history 107, ground_truth 98, cross_exu 0)
+```
+
+Do not read 205 as "35% of usage is blind" — the space weights all orderings equally, including
+sequences no sane kernel writes. The value is that the blind set collapses to **two structural
+gaps**:
+
+- **Operand identity (`no_history`, 107).** The operation record is keyed by op *type*, not
+  operand/CB identity, so `UNI_B` on an `INIT_A` record — a wrong-operand teardown — is accepted.
+  This is G1 generalized to the `cb1/cb2` case; the tool keeps no operand-ownership baseline.
+- **Operand-vs-tracked-`y` consistency (`ground_truth`, 98; 71 use operand B with no `CFG_B`).**
+  `init` snapshots the operand requirement and `execute` checks against that snapshot
+  (self-consistent), but nothing compares the requirement against tracked `y_i` with its
+  known-bits — so using an operand that was never configured, or misconfigured, passes silently.
+
+Consequences:
+
+1. Both gaps close with mechanisms already identified: (a) add operand identity to the operation
+   record; (b) add the `init`/`execute` operand-args-vs-tracked-`y_i` check that §4 currently
+   omits and legacy `unpack_operand_check` had (see §11 C2 / the missing-reconfig analysis). With
+   both, the 205 collapse toward covered.
+2. This **conditions §10's "certainty ≥ 98.5%":** that figure assumed the operand-consistency
+   check works and ignored operand identity. The fuzzer, reasoning from §4 *as written*, shows
+   those two are load-bearing — absent them the abstract blind fraction is 35%, and real usage is
+   more exposed than 98.5% implied.
+
+`cross_exu` = 0 only because the single-EXU alphabet cannot express cross-thread order; probing
+G4b needs a multi-EXU fuzzer. Caveat: the auditor is Sonnet; verdicts are contract-reasoning
+estimates, corroborated by the two classes matching independently-derived findings, not
+individually source-verified.
