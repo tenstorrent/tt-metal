@@ -110,6 +110,14 @@ there is something to report. Each failing site lists the exact counts that brok
 it, its addr2line inline chain (resolved during the sweep, while the ELF still
 exists) and a copy-paste `focus.sh` line that re-runs just those counts as a rate.
 
+A supervised run also writes `junit.xml`, covering every case it reached. The
+supervisor builds it rather than pytest, because pytest writes its junit file at
+session end and a wedged core gets that session killed — every result from that
+attempt would be missing from exactly the runs worth reading. It comes instead
+from a per-case log the workers append as they go, which survives the kill and
+spans the attempts a resume is split across, and it carries the hung cases as
+failures: the worker that would have reported one is stuck in a device read.
+
 `--device-jobs N` fans the device phase out over N Tensix cores (the harness maps
 xdist `gwN` to core `N/8, N%8`). Default is 8. Variants call the test body
 directly (`item.obj`), not `item.runtest`, so the sweep hook cannot nest.

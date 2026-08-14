@@ -190,6 +190,7 @@ def run_shell_command(
     cwd: str | None = None,
     stdin_data: str | bytes = None,
     text=True,
+    timeout: float | None = None,
 ):
     """Run a command. A string uses ``shell=True`` (legacy). A sequence is
     executed with ``shell=False`` so path arguments are not re-split.
@@ -203,6 +204,7 @@ def run_shell_command(
         input=stdin_data,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        timeout=timeout,
     )
 
     if result.returncode != 0:

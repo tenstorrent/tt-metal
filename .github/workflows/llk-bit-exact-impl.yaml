@@ -31,6 +31,33 @@ env:
   TTNOP_THREADS: unpack,math
   TTNOP_SITE_MODE: sync
   TTNOP_DELAYS: 1-100
+  # Watchdog (ttnop/supervise.py). Spelled out rather than left to the defaults
+  # so the knobs are visible next to the sweep's own.
+  # One worker silent mid-case for this long means the device stopped answering
+  # it. Sized by the reporting path, not by how long a test takes — see the note
+  # on WEDGE_TIMEOUT in ttnop/supervise.py before lowering it.
+  TTNOP_WEDGE_TIMEOUT: 120
+  # Only fires before the first beat or after the last, so it has to clear
+  # collection of a full suite.
+  TTNOP_QUIET_TIMEOUT: 900
+  TTNOP_MAX_RESETS: 5
+  # A wedged worker is killed on its own first; xdist brings up a replacement on
+  # one of the card's many spare Tensix, so the run keeps full width and no reset
+  # is needed. The real budget is the spare cores the enumeration reports; this
+  # only applies when the card cannot be asked.
+  TTNOP_MAX_EVICTIONS: 8
+  # Floor on working cores. Only a worker that cannot be killed costs width — an
+  # evicted one is replaced — so this is how many such losses are absorbed before
+  # the card is reset to get those cores back.
+  TTNOP_MIN_WORKERS: 5
+  # Only consulted when a worker cannot be killed, to decide whether resetting now
+  # beats finishing short-handed. Roughly what a reset plus restart and
+  # re-collection costs, in seconds.
+  TTNOP_RESET_COST: 240
+  # ci.sh turns the per-test reporters off, so this heartbeat is the only thing
+  # in the log between the phase banners and the final timing line. Lower it if a
+  # shard needs watching live; it costs one directory scan per interval.
+  TTNOP_PROGRESS_SECONDS: 300
 
 jobs:
   build-images:
@@ -113,17 +140,53 @@ jobs:
       - name: Set CHIP_ARCH for logs and artifacts
         shell: bash
         run: echo "CHIP_ARCH=wormhole" >> "$GITHUB_ENV"
-      # TEMP ttnop: continue-on-error so a red case does not abort the shard.
-      # UNKNOWN: drop continue-on-error if the workflow should go red on races.
+
+      # The sweep's hang recovery resets the card, so if that cannot work here
+      # the shard would only find out hours in, at the first wedge — which is
+      # the failure this whole path exists to avoid. Doing it up front proves
+      # the reset works and hands the sweep a known-good card.
+      - name: Reset the card (and prove the recovery path works)
+        shell: bash
+        working-directory: ${{ env.LLK_PATH }}/tests/python_tests
+        run: |
+          python3 - <<'PY'
+          from helpers.hardware_controller import HardwareController
+
+          HardwareController().reset_card()
+          print("card reset OK")
+          PY
+      # A found race is a result, not a broken shard: the report artifact is the
+      # deliverable and the job stays green for it. A perturbation that wedged a
+      # core is a different thing — a case was skipped and the sweep ran on
+      # degraded hardware — and supervise.py exits 75 to say so, escalated in the
+      # step below rather than swallowed here.
       - name: Run ttnop sweep
         id: ttnop
         shell: bash
         working-directory: ${{ env.LLK_PATH }}
-        continue-on-error: true
         env:
           PYTEST_MARKERS: ${{ inputs.pytest-markers }}
         run: |
+          status=0
+          (
           ${{ matrix.test-group.cmd }}
+          ) || status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "ttnop sweep exited $status"
+          exit 0
+
+      # Not only the reset case any more: the usual recovery now kills the wedged
+      # worker and carries on with a spare core, so this fires without the card
+      # having been reset at all. Either way a case was skipped and the variant
+      # that did it is the finding worth reading.
+      - name: Fail the shard if a perturbation wedged a core
+        if: steps.ttnop.outputs.status == '75'
+        shell: bash
+        run: |
+          echo "::error::A perturbation hung a Tensix core. The sweep recovered" \
+               "(spare core, or a card reset) and skipped that case. The variant" \
+               "that wedged it is in the ttnop report artifact."
+          exit 1
 
       - name: Upload ttnop failure report
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -135,9 +198,25 @@ jobs:
             ${{ env.LLK_PATH }}/tests/python_tests/ttnop/reports/**/failures.jsonl
           if-no-files-found: warn
 
+      # Written by supervise.py, not by pytest: pytest only writes its junit file
+      # at session end, and a wedged core gets that session killed, so the results
+      # from the attempt that hit the wedge would be missing from exactly the runs
+      # worth looking at. The supervisor builds it from the per-case log workers
+      # append as they go, which also lets the hung cases appear as failures — no
+      # pytest worker survives to report those itself.
+      - name: Upload ttnop junit results
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        if: always()
+        with:
+          name: ttnop-junit-wormhole-${{ matrix.test-group.split_group }}
+          path: ${{ env.LLK_PATH }}/tests/python_tests/ttnop/reports/**/junit.xml
+          if-no-files-found: warn
+
+      # The sweep step now always exits 0 and reports through its status output,
+      # so its `outcome` is no longer the thing to key off.
       - name: Upload test logs on failure
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
-        if: failure() || steps.ttnop.outcome == 'failure'
+        if: failure() || steps.ttnop.outputs.status != '0'
         with:
           name: ttnop-logs-wormhole-${{ matrix.test-group.split_group }}
           path: |

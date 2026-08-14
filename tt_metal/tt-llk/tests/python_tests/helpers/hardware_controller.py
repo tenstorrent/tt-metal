@@ -6,6 +6,10 @@ from .logger import logger
 from .target_config import TestTargetConfig
 from .utils import run_shell_command
 
+# Callers reset precisely when the card has stopped behaving, so the reset is
+# not entitled to assume it will return on its own.
+RESET_TIMEOUT_SECONDS = 180
+
 
 class HardwareController:
     """
@@ -23,9 +27,9 @@ class HardwareController:
 
         if self.chip_architecture == ChipArchitecture.BLACKHOLE:
             logger.info("Resetting BH card")
-            run_shell_command("tt-smi -r")
+            run_shell_command("tt-smi -r", timeout=RESET_TIMEOUT_SECONDS)
         elif self.chip_architecture == ChipArchitecture.WORMHOLE:
             logger.info("Resetting WH card")
-            run_shell_command("tt-smi -r")
+            run_shell_command("tt-smi -r", timeout=RESET_TIMEOUT_SECONDS)
         else:
             raise ValueError("Unknown chip architecture")
