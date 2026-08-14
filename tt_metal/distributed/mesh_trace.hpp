@@ -39,15 +39,14 @@ public:
     // Trace data per logical Device in a Mesh.
     std::vector<MeshTraceData> ordered_trace_data;
     uint32_t total_trace_size = 0;
-    // Circular buffer bytes this trace leaves resident per logical core, accumulated during
-    // capture and re-applied on each replay. Replay has no per-program host-side pass to
-    // hook, so traced execution would otherwise report whatever ran before it.
+    // Per-core MAXIMUM CB bytes over this trace's programs, accumulated at capture and
+    // re-applied on each replay (replay has no per-program pass to hook). The programs reuse
+    // the same CB space, so the maximum is what each core must accommodate; the last program's
+    // footprint would only say which op the trace ended on. Consequently this exceeds the CB
+    // config table in L1 after a multi-program replay -- that table holds only the last program.
     //
-    // Kept PER MeshCoordinateRange, not merged mesh-wide: a MeshWorkload can run different
-    // programs on different device ranges, and merging would attribute one range's circular
-    // buffers to devices that never ran them. Entries are stored in capture order and
-    // replayed in that order, so later programs overwrite earlier ones on shared cores --
-    // matching what the replayed command stream does to L1.
+    // Per MeshCoordinateRange, not merged mesh-wide: merging would attribute one range's
+    // circular buffers to devices that never ran them.
     std::vector<std::pair<MeshCoordinateRange, std::map<CoreCoord, uint64_t>>> cb_bytes_per_core_by_range;
 };
 

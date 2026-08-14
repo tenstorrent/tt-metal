@@ -55,20 +55,28 @@ namespace {
 
 constexpr uint32_t kCbsPerProgram = 4;
 
+// Tracking is unusable either because Device built no provider (TT_METAL_SHM_TRACKING_DISABLED)
+// or because the provider could not attach. Both must skip: the second is a property of the
+// machine's /dev/shm, not of the code under test.
+const char* kTrackingUnavailable =
+    "SHM tracking is not available on this device: either disabled via "
+    "TT_METAL_SHM_TRACKING_DISABLED, or the provider could not attach to the region (a stale "
+    "/dev/shm/tt_device_*_memory from an older build can cause this; see the Metal log)";
+
+bool tracking_available(const Device* device) {
+    const auto* provider = device->get_shm_stats_provider();
+    return provider != nullptr && provider->is_initialized();
+}
+
 // Median of a timing sample, to keep the assertion robust against scheduler noise.
 double median_ms(std::vector<double> samples) {
     std::sort(samples.begin(), samples.end());
     return samples[samples.size() / 2];
 }
 
-// Cost of one tracking query. This isolates the cost from the 100 ms rate limiter in
-// update_allocator_stats.cpp, which bounds how often the query runs but not how expensive
-// each run is.
-//
-// Each sample times a batch of queries and divides, rather than timing a single call: once
-// the total is incrementally maintained a query is an atomic load in the tens of
-// nanoseconds, and a single-call measurement can round to zero -- which would make the
-// ratio below a division by zero rather than the ~1x it should report.
+// Cost of one tracking query. Each sample times a batch and divides: once the total is
+// incrementally maintained a query is an atomic load, and a single-call measurement rounds to
+// zero -- making the ratio below a division by zero rather than the ~1x it should report.
 constexpr int kQueriesPerSample = 500;
 
 double time_tracking_query_ms(const Device* device, int samples_wanted = 5) {
@@ -88,20 +96,17 @@ double time_tracking_query_ms(const Device* device, int samples_wanted = 5) {
 
 }  // namespace
 
-// This one runs by default: it is the regression guard for the bottleneck, and a guard
-// that never executes guards nothing. It is sized for CI -- 256 live programs, well under
-// a second of registration -- which is already far past the point where the old
-// recompute-per-call behaviour shows up (115x at 256 programs, measured). The heavier
-// characterisations below stay opt-in.
+// Runs by default: the regression guard for the bottleneck, sized for CI at 256 live programs
+// -- already far past where recompute-per-call shows up (145x on a p150a, 115x on an n300).
+// The heavier characterisations below stay opt-in.
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, TensixCircularBufferTrackingCostScaling) {
     auto mesh_device = devices_.at(0);
     auto* idevice = mesh_device->get_devices().at(0);
     auto* device = dynamic_cast<Device*>(idevice);
     ASSERT_NE(device, nullptr) << "expected a concrete Device to query CB tracking on";
 
-    if (device->get_shm_stats_provider() == nullptr) {
-        GTEST_SKIP() << "SHM tracking is disabled (TT_METAL_SHM_TRACKING_DISABLED=1); "
-                        "unset it to reproduce the bottleneck";
+    if (!tracking_available(device)) {
+        GTEST_SKIP() << kTrackingUnavailable << ". Tracking must be on to reproduce the bottleneck";
     }
 
     // CBs over the whole compute grid, which is what a real op does.
@@ -162,8 +167,8 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, TensixCircularBufferTrackingCostS
 
     // The tracked total is incrementally maintained, so a query is an atomic load and its
     // cost does not depend on how many programs are alive. Recomputing it per call instead
-    // makes this ratio track the program count: 115x at 256 live programs, measured on an
-    // n300 before the rework.
+    // makes this ratio track the program count: 145x at 256 live programs, measured on a
+    // p150a against the code this replaced (115x on an n300).
     const double growth = final_ms / baseline_ms;
     log_info(tt::LogTest, "tracking query cost grew {:.1f}x between 1 and {} live programs", growth, max_programs);
     EXPECT_LT(growth, 10.0) << "Device::get_total_cb_allocated() cost scales with the number of live "
@@ -176,11 +181,10 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, TensixCircularBufferTrackingCostS
 // Measures the *user-visible* cost: total wall-clock to register N programs'
 // circular buffers, which is what a warmup sweep actually pays.
 //
-// This is distinct from the query-cost test above, because
-// update_allocator_stats.cpp rate-limits the query to one per 100 ms per device.
-// The limiter bounds tracking to ~10 x cost(N) per second, so the damage depends
-// on the wall-clock duration of the warmup, not on N alone: a fast loop dilutes
-// it, while a long compile-bound warmup pays it repeatedly at a large N.
+// Distinct from the query-cost test above because it is paid per registration rather than
+// per query. Against the code this replaced it also understates the damage: that version
+// admitted at most one query per 100 ms per device, so a tight loop like this one diluted the
+// cost that a compile-paced warmup pays in full. The paced test below is the honest one.
 //
 // Run twice to compare:
 //   unit_tests_api --gtest_filter='*CircularBufferRegistrationWallClock*' \
@@ -252,15 +256,10 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, DISABLED_TensixCircularBufferRegi
         total_ms);
 }
 
-// The decisive measurement. The two tests above show that a tight registration
-// loop is too fast for the 100 ms rate limiter to admit more than ~one query, so
-// the tracking cost hides. A real warmup is compile-bound: programs appear tens
-// to hundreds of ms apart, so nearly every registration is *admitted* by the
-// limiter and pays the full O(live_programs) recompute.
-//
-// This test builds up a realistic number of live programs, then registers a few
-// more at a compile-like cadence and reports the cost of those registrations --
-// which is what the reporter's workload actually experiences per program.
+// Cost per registration with 4096 programs already live and registrations arriving at a
+// compile-like cadence -- the regime #52010 reports, and the one a tight loop hides. Measured
+// on one p150a: 67.9 ms per registration before this rework, 0.007 ms after, which is what
+// tracking-disabled also costs.
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, DISABLED_TensixCircularBufferPacedRegistrationCost) {
     auto mesh_device = devices_.at(0);
     auto* idevice = mesh_device->get_devices().at(0);
@@ -275,7 +274,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, DISABLED_TensixCircularBufferPace
 
     constexpr size_t kWarmup = 4096;                           // live programs already in the cache
     constexpr size_t kPaced = 25;                              // additional registrations, paced
-    constexpr auto kCadence = std::chrono::milliseconds(110);  // > the 100 ms limiter window
+    constexpr auto kCadence = std::chrono::milliseconds(110);  // stands in for kernel compilation
 
     std::vector<Program> cached_programs;
     cached_programs.reserve(kWarmup + kPaced);
@@ -420,8 +419,8 @@ namespace {
 void check_cb_tracking_matches_device_l1(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     auto* device = dynamic_cast<Device*>(mesh_device->get_devices().at(0));
     ASSERT_NE(device, nullptr);
-    if (device->get_shm_stats_provider() == nullptr) {
-        GTEST_SKIP() << "SHM tracking disabled; nothing to validate against";
+    if (!tracking_available(device)) {
+        GTEST_SKIP() << kTrackingUnavailable << "; nothing to validate against";
     }
 
     const CoreCoord grid = device->compute_with_storage_grid_size();
@@ -476,8 +475,9 @@ void check_cb_tracking_matches_device_l1(const std::shared_ptr<distributed::Mesh
         << ") for a single live program";
 
     // ...and that the value actually reaches shared memory, which is the entire point of
-    // the feature: an in-process number nobody can read is not memory tracking. The SHM
-    // publish is rate-limited (one per 100 ms per device), so allow it a moment to land.
+    // the feature: an in-process number nobody can read is not memory tracking. Publishing
+    // happens on the dispatching thread as the figure changes, so this should be immediate;
+    // the retry loop only keeps the test from being a race if that ever stops being true.
     auto* provider = device->get_shm_stats_provider();
     ASSERT_NE(provider, nullptr);
     uint64_t from_shm = 0;
@@ -496,8 +496,8 @@ void check_cb_tracking_is_current_not_peak(const std::shared_ptr<distributed::Me
     auto* idevice = mesh_device->get_devices().at(0);
     auto* device = dynamic_cast<Device*>(idevice);
     ASSERT_NE(device, nullptr);
-    if (device->get_shm_stats_provider() == nullptr) {
-        GTEST_SKIP() << "SHM tracking disabled";
+    if (!tracking_available(device)) {
+        GTEST_SKIP() << kTrackingUnavailable;
     }
 
     const CoreCoord grid = device->compute_with_storage_grid_size();
@@ -611,8 +611,8 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixCircularBufferTrackingAcrossTrace
     for (auto& mesh_device : this->devices_) {
         auto* device = dynamic_cast<Device*>(mesh_device->get_devices().at(0));
         ASSERT_NE(device, nullptr);
-        if (device->get_shm_stats_provider() == nullptr) {
-            GTEST_SKIP() << "SHM tracking disabled";
+        if (!tracking_available(device)) {
+            GTEST_SKIP() << kTrackingUnavailable;
         }
 
         const CoreCoord grid = device->compute_with_storage_grid_size();
@@ -700,22 +700,97 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixCircularBufferTrackingAcrossTrace
     }
 }
 
-// The per-core CB footprint is computed once per program and cached (ProgramImpl::
-// cb_bytes_per_core), and a re-dispatch of the program that is already resident is skipped by
-// comparing footprint identity -- without that, the enqueue path paid per-core work on every
-// dispatch (~80 ns/core, which doubled host dispatch cost on a full grid).
-//
-// Both halves of that can go stale, and neither is visible to the tests above, which dispatch
-// each program once:
-//   - alternating programs: the identity check must not report the previously resident program
-//   - resizing a CB: the cache must be dropped when the layout it was computed from is
-//     invalidated, or the figure is pinned to the old size forever
+// A replay must report the most CB space any of the trace's programs needs per core, not
+// whichever was captured last -- invisible in the test above, whose trace holds one program.
+// The device's CB config table is deliberately not the oracle: it holds the last program,
+// which is exactly the value this asserts we do not report.
+TEST_F(UnitMeshCQSingleCardTraceFixture, TensixCircularBufferTrackingReportsTracePeak) {
+    for (auto& mesh_device : this->devices_) {
+        auto* device = dynamic_cast<Device*>(mesh_device->get_devices().at(0));
+        ASSERT_NE(device, nullptr);
+        if (!tracking_available(device)) {
+            GTEST_SKIP() << kTrackingUnavailable;
+        }
+
+        const CoreCoord grid = device->compute_with_storage_grid_size();
+        const CoreRange cr(CoreCoord(0, 0), CoreCoord(grid.x - 1, grid.y - 1));
+        const CoreRangeSet cr_set({cr});
+        const CBConfig cb_config;
+        const uint32_t num_cores = grid.x * grid.y;
+        auto zero = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero, zero);
+        auto& cq = mesh_device->mesh_command_queue();
+
+        auto make_workload = [&](uint32_t mult, uint64_t& bytes_per_core) {
+            auto workload = std::make_shared<distributed::MeshWorkload>();
+            Program p;
+            workload->add_program(device_range, std::move(p));
+            auto& prog = workload->get_programs().at(device_range);
+            bytes_per_core = 0;
+            for (uint32_t cb_id = 0; cb_id < 2; cb_id++) {
+                const uint32_t total_size = cb_config.page_size * mult;
+                CircularBufferConfig config = CircularBufferConfig(total_size, {{cb_id, cb_config.data_format}})
+                                                  .set_page_size(cb_id, cb_config.page_size);
+                CreateCircularBuffer(prog, cr_set, config);
+                bytes_per_core += total_size;
+            }
+            initialize_program(prog, cr_set);
+            return workload;
+        };
+
+        // The large program is captured FIRST, so "last captured" and "largest" differ.
+        uint64_t big_bytes_per_core = 0;
+        uint64_t small_bytes_per_core = 0;
+        auto workload_big = make_workload(8, big_bytes_per_core);
+        auto workload_small = make_workload(1, small_bytes_per_core);
+        ASSERT_GT(big_bytes_per_core, small_bytes_per_core);
+
+        // Trace capture cannot load new binaries, so both must have run once already.
+        distributed::EnqueueMeshWorkload(cq, *workload_big, false);
+        distributed::EnqueueMeshWorkload(cq, *workload_small, false);
+        distributed::Finish(cq);
+
+        const auto tid = distributed::BeginTraceCapture(mesh_device.get(), cq.id());
+        distributed::EnqueueMeshWorkload(cq, *workload_big, false);
+        distributed::EnqueueMeshWorkload(cq, *workload_small, false);
+        mesh_device->end_mesh_trace(cq.id(), tid);
+
+        mesh_device->replay_mesh_trace(cq.id(), tid, true);
+        distributed::Finish(cq);
+
+        const uint64_t tracked = device->get_total_cb_allocated();
+        const uint64_t expected_peak = big_bytes_per_core * num_cores;
+        const uint64_t last_captured = small_bytes_per_core * num_cores;
+
+        log_info(
+            tt::LogTest,
+            "device {}: after replay tracked={} peak={} last-captured={} ({} cores)",
+            device->id(),
+            tracked,
+            expected_peak,
+            last_captured,
+            num_cores);
+
+        EXPECT_EQ(tracked, expected_peak)
+            << "a trace replay reports " << tracked << " where its largest program needs " << expected_peak
+            << "; the per-core peak across the trace is what each core must accommodate";
+        EXPECT_NE(tracked, last_captured) << "the reported total is the trace's last captured program ("
+                                          << last_captured << "), which says nothing about what the trace needs";
+
+        mesh_device->release_mesh_trace(tid);
+    }
+}
+
+// The footprint is cached per program and a re-dispatch of the resident one is skipped by
+// pointer identity. Two ways that goes stale, neither visible above where each program is
+// dispatched once: alternating programs must not report the previously resident one, and
+// resizing a CB must drop the cache or the figure is pinned to the old size.
 TEST_F(UnitMeshCQSingleCardProgramFixture, TensixCircularBufferTrackingFollowsProgramChanges) {
     for (auto& mesh_device : this->devices_) {
         auto* device = dynamic_cast<Device*>(mesh_device->get_devices().at(0));
         ASSERT_NE(device, nullptr);
-        if (device->get_shm_stats_provider() == nullptr) {
-            GTEST_SKIP() << "SHM tracking disabled";
+        if (!tracking_available(device)) {
+            GTEST_SKIP() << kTrackingUnavailable;
         }
 
         const CoreCoord grid = device->compute_with_storage_grid_size();
@@ -819,8 +894,8 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixBufferTrackingMatchesAllocator)
         auto* device = dynamic_cast<Device*>(mesh_device->get_devices().at(0));
         ASSERT_NE(device, nullptr);
         auto* provider = device->get_shm_stats_provider();
-        if (provider == nullptr) {
-            GTEST_SKIP() << "SHM tracking disabled";
+        if (!tracking_available(device)) {
+            GTEST_SKIP() << kTrackingUnavailable;
         }
 
         const auto pid = getpid();
@@ -885,8 +960,8 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixBufferTrackingSeesOtherThreads)
         auto* device = dynamic_cast<Device*>(mesh_device->get_devices().at(0));
         ASSERT_NE(device, nullptr);
         auto* provider = device->get_shm_stats_provider();
-        if (provider == nullptr) {
-            GTEST_SKIP() << "SHM tracking disabled";
+        if (!tracking_available(device)) {
+            GTEST_SKIP() << kTrackingUnavailable;
         }
 
         const auto pid = getpid();

@@ -1111,8 +1111,7 @@ void Device::record_dispatched_program_cbs(const detail::ProgramImpl& program) {
         return;
     }
 
-    // The footprint is a property of the program, computed once and cached there, so this is a
-    // shared_ptr copy rather than a walk of the program's circular buffers.
+    // Cached on the program, so this is a shared_ptr copy rather than a walk of its CBs.
     std::shared_ptr<const std::map<CoreCoord, uint64_t>> footprint = program.cb_bytes_per_core();
     if (footprint == nullptr) {
         // No locally-allocated CBs: dispatching this program overwrites no CB config, so what
@@ -1123,12 +1122,10 @@ void Device::record_dispatched_program_cbs(const detail::ProgramImpl& program) {
     bool changed = false;
     {
         std::lock_guard<std::mutex> lock(cb_residency_mutex_);
-        // Fast path: this exact footprint is already the one resident on this device, and
-        // nothing has been applied since (anything else that touches the residency clears
-        // last_cb_footprint_). So the per-core state and the total cannot have moved, and there
-        // is nothing to publish. Steady-state execution re-dispatches the same program over and
-        // over, which makes this the common case -- and it is what keeps the enqueue path from
-        // paying per-core work on every dispatch.
+        // Already the resident footprint, and nothing has been applied since -- anything else
+        // that touches the residency clears last_cb_footprint_ -- so nothing can have moved.
+        // Re-dispatching the same program is the steady state, so this is the common case, and
+        // skipping it is what keeps per-core work off the enqueue path.
         if (last_cb_footprint_ == footprint) {
             return;
         }
@@ -1173,26 +1170,25 @@ bool Device::apply_cb_residency_locked(const std::map<CoreCoord, uint64_t>& per_
 }
 
 void Device::publish_cb_residency() {
-    // Publish to shared memory only when the figure actually changed. Steady-state
-    // execution re-dispatches the same programs over and over, so the CB footprint is
-    // usually identical to the last dispatch and there is nothing to publish. Publishing
-    // unconditionally cost a measurable few percent of model warmup.
-    //
-    // This is deliberately NOT a rate limit: a rate limiter drops the final update and
-    // never retries it, leaving a stale figure in shared memory forever once a workload
-    // goes idle. Publishing on change is both cheaper and always eventually correct.
-    // Called outside cb_residency_mutex_ -- the provider never takes it.
+    // Callers publish only when the figure changed: steady state re-dispatches the same
+    // program, and publishing unconditionally cost a few percent of model warmup. Not a rate
+    // limit -- that drops the final update and leaves a stale figure once a workload goes idle.
+    // Called outside cb_residency_mutex_; the provider never takes it.
     shm_stats_provider_->update_from_allocator(this, getpid());
 }
 
-void Device::compute_program_cb_bytes_per_core(
+void Device::accumulate_trace_cb_peak_per_core(
     const detail::ProgramImpl& program, std::map<CoreCoord, uint64_t>& per_core) {
     const std::shared_ptr<const std::map<CoreCoord, uint64_t>> footprint = program.cb_bytes_per_core();
     if (footprint == nullptr) {
         return;
     }
     for (const auto& [core, bytes] : *footprint) {
-        per_core[core] = bytes;
+        // Max, not assignment: the trace's programs reuse the same CB space, so per core the
+        // largest is what that core must hold. Assigning leaves whichever program was captured
+        // last, which under-reported a two-program trace by 3.5x.
+        uint64_t& peak = per_core[core];
+        peak = std::max(peak, bytes);
     }
 }
 

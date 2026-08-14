@@ -180,15 +180,10 @@ public:
     // Get SHM stats provider for real-time memory monitoring (used by GraphTracker)
     SharedMemoryStatsProvider* get_shm_stats_provider() const { return shm_stats_provider_.get(); }
 
-    // CB memory reporting.
     // Bytes of L1 occupied by circular buffers, as currently configured on the device.
-    //
-    // This used to be recomputed by walking every program in active_programs_, which
-    // was both O(live programs) -- the warmup bottleneck -- and the wrong quantity: a
-    // cached program occupies no CB space until it is dispatched, so the result was a
-    // high-water mark across the program cache rather than what is in use. It is now
-    // maintained per core at dispatch time, mirroring the CB config the dispatcher
-    // writes into L1, so it matches what can be read back from the device.
+    // Maintained per core at dispatch time, mirroring the CB config the dispatcher writes into
+    // L1, so it matches a readback. Do not recompute it from live programs: that is O(live
+    // programs) per call and counts cached programs, which occupy no CB space until dispatched.
     uint64_t get_total_cb_allocated() const;
 
     // Called for each program as it is dispatched: records that program's CB footprint
@@ -196,10 +191,10 @@ public:
     // is correct -- their L1 CB config was not overwritten.
     void record_dispatched_program_cbs(const detail::ProgramImpl& program);
 
-    // Accumulate a program's CB footprint into `per_core`. Used by trace capture to build up
-    // the footprint a whole trace will produce; later programs overwrite earlier ones on
-    // shared cores, matching what the replayed command stream does to L1.
-    static void compute_program_cb_bytes_per_core(
+    // Accumulate a program's CB footprint into a trace's running per-core peak, once per
+    // captured program. Takes the maximum per core, not the last value; see
+    // MeshTraceDescriptor::cb_bytes_per_core_by_range for why that is the useful quantity.
+    static void accumulate_trace_cb_peak_per_core(
         const detail::ProgramImpl& program, std::map<CoreCoord, uint64_t>& per_core);
 
     // Install a per-core CB footprint wholesale. Used by trace replay: the host does not
