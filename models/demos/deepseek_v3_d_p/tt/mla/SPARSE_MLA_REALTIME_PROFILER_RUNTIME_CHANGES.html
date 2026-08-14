@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Why sparse MLA overlap required realtime-profiler runtime changes</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --ink: #17202a;
+      --muted: #5f6b76;
+      --line: #d8dee6;
+      --accent: #155eef;
+      --accent-soft: #e9f0ff;
+      --warning: #8a4b08;
+      --warning-soft: #fff4df;
+      --success: #176b3a;
+      --success-soft: #e9f7ef;
+      --code: #eef1f5;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #11151a;
+        --panel: #191f26;
+        --ink: #e8edf2;
+        --muted: #aab4bf;
+        --line: #39434e;
+        --accent: #83aaff;
+        --accent-soft: #1d315e;
+        --warning: #ffc46b;
+        --warning-soft: #4a3216;
+        --success: #7bd9a1;
+        --success-soft: #173c28;
+        --code: #252d36;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font: 16px/1.58 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    main { max-width: 1120px; margin: 0 auto; padding: 48px 24px 80px; }
+    header, section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      margin-bottom: 20px;
+      padding: 28px 32px;
+    }
+    h1 { font-size: clamp(2rem, 4vw, 3.1rem); line-height: 1.08; margin: 0 0 18px; }
+    h2 { font-size: 1.55rem; margin: 0 0 16px; }
+    h3 { font-size: 1.1rem; margin: 24px 0 8px; }
+    p, ul, ol { margin: 0 0 14px; }
+    li + li { margin-top: 7px; }
+    a { color: var(--accent); }
+    code {
+      background: var(--code);
+      border-radius: 4px;
+      padding: 0.12em 0.35em;
+      font: 0.9em ui-monospace, SFMono-Regular, Consolas, monospace;
+      overflow-wrap: anywhere;
+    }
+    .eyebrow { color: var(--accent); font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+    .lede { font-size: 1.18rem; max-width: 900px; }
+    .meta { color: var(--muted); font-size: 0.94rem; }
+    .callout {
+      border-left: 5px solid var(--accent);
+      background: var(--accent-soft);
+      border-radius: 6px;
+      margin: 20px 0;
+      padding: 16px 18px;
+    }
+    .callout.warning { border-color: var(--warning); background: var(--warning-soft); }
+    .callout.success { border-color: var(--success); background: var(--success-soft); }
+    .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+    .card { border: 1px solid var(--line); border-radius: 9px; padding: 18px; }
+    .card h3 { margin-top: 0; }
+    .flow {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(5, 1fr);
+      align-items: stretch;
+      margin: 20px 0 8px;
+    }
+    .flow div {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+      text-align: center;
+      position: relative;
+    }
+    .flow div:not(:last-child)::after {
+      content: "→";
+      color: var(--accent);
+      font-weight: 800;
+      position: absolute;
+      right: -14px;
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 1;
+    }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0 4px; }
+    th, td { border: 1px solid var(--line); padding: 12px; text-align: left; vertical-align: top; }
+    th { background: var(--code); }
+    .file { font-weight: 700; }
+    .small { color: var(--muted); font-size: 0.92rem; }
+    @media (max-width: 820px) {
+      main { padding: 24px 12px 48px; }
+      header, section { padding: 22px 18px; }
+      .flow { grid-template-columns: 1fr; }
+      .flow div:not(:last-child)::after { content: "↓"; right: 50%; top: auto; bottom: -20px; transform: translateX(50%); }
+      table, thead, tbody, th, td, tr { display: block; }
+      thead { position: absolute; clip: rect(0 0 0 0); }
+      tr { border: 1px solid var(--line); margin-bottom: 12px; }
+      td { border: 0; border-bottom: 1px solid var(--line); }
+      td:last-child { border-bottom: 0; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">Sparse MLA · GLM-5.2 · device-time qualification</p>
+    <h1>Why overlap required realtime-profiler runtime changes</h1>
+    <p class="lede">
+      Commit <code>20e839e1ff9032573690c031751ad58b5e967fed</code> changes the realtime profiler so
+      <code>topk_large_indices</code> and <code>high_bw_all_gather</code> can be identified and timed independently
+      while they run concurrently on separate subdevices. The old profiler was designed around one globally active
+      program interval. It could time serial work, but it could not produce trustworthy per-program intervals for
+      independent subdevice streams.
+    </p>
+    <p class="meta">Scope: every changed file in the commit, including the host-side measurement helper. No tensor D2H or host-clock timing fallback is used.</p>
+  </header>
+
+  <section>
+    <h2>The precise claim</h2>
+    <div class="callout warning">
+      <strong>The execution feature and its proof are different.</strong> Sparse MLA can launch top-k and gather
+      concurrently without these profiler changes. What was impossible with the old profiler was the required
+      production evidence: on every chip, identify both programs from the same forward, retain their raw device
+      start/end ticks, prove that their intervals intersect, and compare their union with the serialized branch.
+    </div>
+    <p>
+      The exact code in this commit is not the only conceivable implementation. However, a valid solution needs
+      equivalent runtime properties: identity attached to the actual go command, timing state per subdevice stream,
+      completion attribution per stream, lossless record handoff, and raw intervals exposed to the qualification
+      layer. A Python-only change cannot reconstruct information that the device runtime merged, mislabeled, or
+      overwrote before delivery.
+    </p>
+  </section>
+
+  <section>
+    <h2>Why the old design failed under overlap</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>One implicit active interval</h3>
+        <p>Start time and program ID were sampled around the dispatch-s command loop, not stored independently for each worker-completion stream.</p>
+      </div>
+      <div class="card">
+        <h3>One global end sample</h3>
+        <p>The monitor noticed that some stream changed and wrote a shared end timestamp. Two active subdevices had no durable stream-to-end mapping.</p>
+      </div>
+      <div class="card">
+        <h3>Overwrite-prone notification</h3>
+        <p>Ping-pong A/B slots had no acknowledgement back to dispatch-s. Closely spaced completions could reuse a slot before its record was safely consumed.</p>
+      </div>
+      <div class="card">
+        <h3>Duration, not interval</h3>
+        <p>The Python helper returned only duration. Equal or improved duration cannot prove concurrency; overlap requires the intersection of two raw intervals.</p>
+      </div>
+    </div>
+    <p>
+      Profiling top-k and gather in separate runs would measure serial microbenchmarks, not contention and concurrency
+      in the real sparse-MLA forward. Bracketing each operation with host synchronization would perturb or serialize
+      the schedule. Bracketing the whole branch with a host timer would provide only a makespan and could not establish
+      that the two device programs overlapped.
+    </p>
+  </section>
+
+  <section>
+    <h2>The new end-to-end record path</h2>
+    <div class="flow" aria-label="Profiler record flow">
+      <div><strong>Program runtime</strong><br>patch runtime ID into go command</div>
+      <div><strong>dispatch-s</strong><br>start interval in the selected stream slot</div>
+      <div><strong>stream monitor</strong><br>capture that stream's completion tick</div>
+      <div><strong>SPSC queue</strong><br>retain complete interval until acknowledged</div>
+      <div><strong>host callback</strong><br>expose raw ticks and fail on loss</div>
+    </div>
+    <p class="small">
+      All interval boundaries originate from device wall clocks. Records are eventually transported to the host by the
+      profiler, as profiler records always are; no tensor is copied to host to infer completion, and host elapsed time
+      is never substituted for device time.
+    </p>
+  </section>
+
+  <section>
+    <h2>Why every runtime change was necessary</h2>
+    <table>
+      <thead>
+        <tr><th>Changed file</th><th>What changed</th><th>Why the goal could not be met without it</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="file"><a href="../../../../../tt_metal/impl/program/dispatch.cpp">tt_metal/impl/program/dispatch.cpp</a></td>
+          <td>The normal and traced enqueue paths patch the current <code>runtime_id</code> directly into the cached multicast go command.</td>
+          <td>A program ID in a separate asynchronous FIFO is not a reliable identity boundary once commands for independent subdevices interleave. Identity must travel with the exact command that starts the work. Updating both normal and trace paths prevents traced execution from silently reverting to ambiguous attribution.</td>
+        </tr>
+        <tr>
+          <td class="file"><a href="../../../../../tt_metal/impl/dispatch/device_command.hpp">device_command.hpp</a><br><a href="../../../../../tt_metal/impl/dispatch/device_command.cpp">device_command.cpp</a></td>
+          <td><code>add_dispatch_go_signal_mcast</code> accepts a 16-bit profiler program ID and serializes it into the device command. The default zero remains the unprofiled sentinel for callers whose runtime ID is patched later or that do not participate.</td>
+          <td>This is the host-to-device transport for command-bound identity. Without it, dispatch-s would still have to guess which FIFO ID belongs to which interleaved go command.</td>
+        </tr>
+        <tr>
+          <td class="file"><a href="../../../../../tt_metal/impl/dispatch/kernels/cq_commands.hpp">cq_commands.hpp</a></td>
+          <td><code>CQDispatchGoSignalMcastCmd</code> gains <code>profiler_program_id</code>. <code>wait_stream</code> is narrowed from 32 to 16 bits so the packed command does not grow.</td>
+          <td>The firmware command ABI must contain the identity field for dispatch-s to consume it. The stream index is bounded far below 16 bits, so repacking preserves the fixed command footprint instead of expanding command-queue traffic or breaking layout assumptions.</td>
+        </tr>
+        <tr>
+          <td class="file"><a href="../../../../../tt_metal/hw/inc/hostdev/realtime_profiler_msgs.h">realtime_profiler_msgs.h</a></td>
+          <td>Adds a 128-entry, eight-word-per-record SPSC queue; monotonic read/write indices; and per-stream end-time and completion-count arrays for the eight dispatch message streams.</td>
+          <td>This is the durable shared state the old global A/B slots lacked. Per-stream fields preserve which completion belongs to which active subdevice. The queue absorbs bursts of closely spaced completions and prevents a later interval from overwriting an earlier unread one.</td>
+        </tr>
+        <tr>
+          <td class="file"><a href="../../../../../tt_metal/impl/dispatch/kernel_config/dispatch_s.cpp">kernel_config/dispatch_s.cpp</a></td>
+          <td>Initializes the queue indices and every per-stream timestamp/completion field to zero when dispatch-s is configured.</td>
+          <td>These fields live in reused L1 memory, not automatically zeroed language-runtime storage. Uninitialized indices could make an empty queue look full or non-empty; stale completion counts could close the first measured program with a previous run's timestamp.</td>
+        </tr>
+        <tr>
+          <td class="file"><a href="../../../../../tt_metal/impl/dispatch/kernels/realtime_profiler.hpp">kernels/realtime_profiler.hpp</a></td>
+          <td>Extracts <code>read_realtime_wall_clock</code> and reuses it from the legacy timestamp helper and the new per-stream paths. It preserves the required low-then-high register read order.</td>
+          <td>Start and end producers now live in more than one firmware path. A shared primitive keeps both readings in the same device clock domain and avoids subtly different latch ordering. Host clocks cannot replace this because they include dispatch and synchronization latency.</td>
+        </tr>
+        <tr>
+          <td class="file"><a href="../../../../../tt_metal/impl/dispatch/kernels/cq_realtime_profiler_dispatch_subordinate.hpp">cq_realtime_profiler_dispatch_subordinate.hpp</a></td>
+          <td>The monitor masks stream counters to their hardware width, initializes published completion counts, and writes end ticks plus completion count into the slot for the stream that changed.</td>
+          <td>A global end timestamp says only that something completed. Sparse MLA needs the top-k end and gather end independently. Publishing the counter after the timestamp also lets dispatch-s wait for the exact target completion before consuming the corresponding end tick.</td>
+        </tr>
+        <tr>
+          <td class="file"><a href="../../../../../tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp">cq_dispatch_subordinate.cpp</a></td>
+          <td>
+            Maintains active ID/start time per stream; closes the previous interval at that stream's target completion;
+            starts the next interval immediately before its go signal; enqueues complete records; drains them through an
+            acknowledged transport; and finishes/drains the last active interval on profiler flush or termination.
+          </td>
+          <td>
+            This is the core state-machine change. One global active record cannot represent top-k and gather at the
+            same time. Per-stream slots allow both to be live simultaneously. Closing before starting the next command
+            on the same stream makes boundaries non-overlapping within a stream while preserving overlap across
+            streams. Flush handling is essential because the last program has no following go command to close it.
+            Queue-full draining provides backpressure instead of record loss. The established FIFO pop remains only to
+            consume the legacy producer and keep that FIFO from filling; it no longer supplies attribution.
+          </td>
+        </tr>
+        <tr>
+          <td class="file"><a href="../../../../../tt_metal/distributed/realtime_profiler_manager.cpp">distributed/realtime_profiler_manager.cpp</a></td>
+          <td>Passes the dispatch-s address of <code>realtime_profiler_state</code> to the profiler BRISC as <code>DISPATCH_PROFILER_STATE_ADDR</code>.</td>
+          <td>The consumer needs an explicit NOC destination for its acknowledgement. Merely setting its local copy to idle does not tell dispatch-s that the mailbox record has been read, so the producer could not safely reuse the transport slot.</td>
+        </tr>
+        <tr>
+          <td class="file"><a href="../../../../../tt_metal/impl/dispatch/kernels/cq_realtime_profiler.cpp">cq_realtime_profiler.cpp</a></td>
+          <td>After copying a record into the profiler ring, the profiler core writes <code>IDLE</code> back to dispatch-s and waits for the NOC write to complete.</td>
+          <td>This closes the producer/consumer handshake. Without a remote acknowledgement, dispatch-s cannot distinguish “notification observed” from “record safely copied,” leaving the same overwrite race that the queue was introduced to remove.</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="callout success">
+      <strong>Quasar remains device-timed.</strong> Where the separate stream monitor path is not used, dispatch-s reads
+      the device wall clock when closing an interval. That architecture guard is not a host-timing or D2H fallback.
+    </div>
+  </section>
+
+  <section>
+    <h2>The measurement-helper change was also required</h2>
+    <p>
+      <a href="../../../../../tests/ttnn/profiling/realtime_profiler_utils.py"><code>tests/ttnn/profiling/realtime_profiler_utils.py</code></a>
+      is not device runtime, but it is the final part of the evidence path:
+    </p>
+    <ul>
+      <li><strong>Raw fields:</strong> returns <code>start_timestamp</code>, <code>end_timestamp</code>, and <code>frequency</code>, enabling per-chip intersection and union math. Duration alone cannot prove overlap.</li>
+      <li><strong>Callback locking:</strong> protects records and counters shared with the asynchronous receiver thread. Without it, the polling thread could observe partial or inconsistent batches.</li>
+      <li><strong>Pre-run drain:</strong> synchronizes, waits for callback traffic to settle, and discards stale records before the measured forward. Otherwise a prior warm-up program could be mistaken for the measured top-k or gather.</li>
+      <li><strong>Fail-closed loss handling:</strong> reports invalid raw records and rejects any batch with dropped records. Qualification must not turn missing intervals into an apparent speedup.</li>
+      <li><strong>Settle-window collection:</strong> retains all chips and both concurrent programs instead of returning after the first callback from the first chip.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Why simpler alternatives were insufficient</h2>
+    <table>
+      <thead><tr><th>Alternative</th><th>Why it does not satisfy the goal</th></tr></thead>
+      <tbody>
+        <tr><td>Use host wall-clock brackets</td><td>Includes submission, synchronization, callback, and manager overhead; cannot identify the device interval intersection; violates the device-time-only requirement.</td></tr>
+        <tr><td>Copy a completion value or tensor to host</td><td>Adds a D2H synchronization point, perturbs concurrency, and still does not provide both device start/end intervals. Explicitly outside the requested design.</td></tr>
+        <tr><td>Profile top-k and gather separately</td><td>Measures serial isolated behavior and removes the contention/scheduling interaction whose production benefit is being qualified.</td></tr>
+        <tr><td>Keep the A/B slots and poll faster</td><td>Polling speed is not correctness. With no producer-visible acknowledgement, a legal timing still exists in which two completions overwrite an unread slot.</td></tr>
+        <tr><td>Infer identity from kernel arrival order</td><td>Independent subdevices and multiple chips do not provide one global arrival order. Identity must be attached before execution, not reconstructed after asynchronous delivery.</td></tr>
+        <tr><td>Sum the two device durations</td><td>For concurrent intervals, the critical branch is their union, not their sum. The sum overstates elapsed time by exactly the intersection that must be measured.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>What the qualification can now establish</h2>
+    <ol>
+      <li>On each chip, select top-k and gather by runtime ID and kernel sources from the same sparse-MLA forward.</li>
+      <li>Compute each duration from that chip's raw device ticks and frequency.</li>
+      <li>Compute <code>intersection = max(0, min(end) - max(start))</code> and require a positive intersection.</li>
+      <li>Compute <code>union = topk_duration + gather_duration - intersection</code> and compare it with the serialized branch baseline.</li>
+      <li>Collapse across chips only after doing interval arithmetic locally, because device wall clocks are not assumed synchronized across chips.</li>
+      <li>Reject stale, malformed, incomplete, or dropped evidence instead of silently falling back to host time.</li>
+    </ol>
+    <p>
+      The consumer is <a href="../../../../../models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py"><code>test_sparse_mla_perf.py</code></a>;
+      the broader rollout and 80/30 versus 80/40 resource plan is documented in
+      <a href="SPARSE_MLA_TOPK_KV_GATHER_OVERLAP_PLAN.md"><code>SPARSE_MLA_TOPK_KV_GATHER_OVERLAP_PLAN.md</code></a>.
+    </p>
+  </section>
+
+  <section>
+    <h2>Scope discipline</h2>
+    <p>
+      The commit deliberately does not add profiler-visible Tensix core-count metadata, public record fields,
+      nanobind surface, CSV schema, or tensor readback. Those are useful observability ideas, but they are not needed
+      to prove overlap. The retained runtime changes are the minimum coherent path that prevents identity loss,
+      timestamp ambiguity, and record overwrite while preserving device-only timing.
+    </p>
+    <p class="meta">
+      Terminology note: the commit body mentions “worker footprints,” but the tightened final diff carries the
+      per-program runtime ID, not a worker-core-count field. Core ownership is validated separately from configured
+      subdevice grids and scheduler budgets.
+    </p>
+  </section>
+</main>
+</body>
+</html>
