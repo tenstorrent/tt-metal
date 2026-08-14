@@ -137,7 +137,8 @@ def _default_mlp_compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
-        fp32_dest_acc_en=False,
+        # #46445: see attention.py -- fp32 dest accumulation for the wi/wo matmuls.
+        fp32_dest_acc_en=True,
         packer_l1_acc=True,
     )
 
