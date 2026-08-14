@@ -9,6 +9,7 @@
 #include <sstream>
 #include <string>
 
+#include <impl/context/context_types.hpp>
 #include <tt_stl/unreachable.hpp>
 
 namespace tt::tt_metal {
@@ -21,7 +22,11 @@ struct KernelSource {
     // if source_type_ is FILE_PATH, file pointed by path_ exists at time of construction
     std::filesystem::path path_;
 
-    KernelSource(const std::string& source, const SourceType& source_type);
+    // Resolve path using rtoptions from context_id and construct a FILE_PATH KernelSource.
+    static KernelSource from_path(ContextId context_id, const std::filesystem::path& path);
+
+    // Construct a SOURCE_CODE KernelSource from inline source.
+    static KernelSource from_source(const std::string& source_code);
 
     std::string name() const {
         if (this->source_type_ == SourceType::FILE_PATH) {
@@ -49,6 +54,9 @@ struct KernelSource {
         }
         ttsl::unreachable();
     }
+
+private:
+    KernelSource(std::string source, SourceType source_type, std::filesystem::path path);
 };
 
 }  // namespace tt::tt_metal

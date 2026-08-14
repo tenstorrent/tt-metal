@@ -1215,6 +1215,25 @@ targets:
               decode_t_s_u_tolerance: 0.2
               prefill_time_to_first_token: 105
             accuracy: {}
+      bh_quietbox_2:
+        entries:
+          - batch_size: 1
+            seq_len: 512
+            status: active
+            perf: {}
+            accuracy:
+              top1: 96
+              top5: 99
+          - batch_size: 32
+            seq_len: 1024
+            status: active
+            perf:
+              decode_t/s: 665.9
+              decode_t/s/u: 20.81
+              decode_t_s_u_tolerance: 0.2
+              prefill_time_to_first_token: 83.3
+              prefill_time_to_first_token_tolerance: 0.2
+            accuracy: {}
   qwen2.5-vl-32b:
     aliases: ["Qwen2.5-VL-32B", "Qwen/Qwen2.5-VL-32B-Instruct"]
     skus:

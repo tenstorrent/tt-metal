@@ -80,6 +80,9 @@ class Linear(Module):
         activation_fn=None,
         dtype=ttnn.bfloat16,
         mesh_device=None,
+        # Branch addition kept over main: the H3 / Qwen3-VL layers pass an explicit config for
+        # the sites that need more precision than the shared default.
+        compute_kernel_config=None,
     ):
         super().__init__()
 
@@ -102,7 +105,7 @@ class Linear(Module):
         NOTE: This is the special config which attains good correctness
         HiFi2 + packer_l1_acc + bf16 acc in a fused linear (matmul + bias) with unfused non-approx activation
         """
-        self.compute_config = ttnn.init_device_compute_kernel_config(
+        self.compute_config = compute_kernel_config or ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=MATH_FIDELITY.get(dtype, ttnn.MathFidelity.HiFi2),
             math_approx_mode=False,
@@ -176,6 +179,9 @@ class ColParallelLinear(Module):
         chunks=None,
         chunk_sizes=None,
         activation_dtype=None,
+        # Branch addition kept over main: the H3 / Qwen3-VL layers pass an explicit config for
+        # the sites that need more precision than the shared default.
+        compute_kernel_config=None,
         pin_output_bf16=False,
     ):
         super().__init__()
@@ -217,7 +223,7 @@ class ColParallelLinear(Module):
         # the linears on its path; off elsewhere so no other model's default output dtype changes.
         self.pin_output_bf16 = pin_output_bf16
 
-        self.compute_config = ttnn.init_device_compute_kernel_config(
+        self.compute_config = compute_kernel_config or ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=MATH_FIDELITY.get(dtype, ttnn.MathFidelity.HiFi2),
             math_approx_mode=False,
@@ -311,13 +317,37 @@ class ColParallelLinear(Module):
         return _apply_activation_fn(outputs[1], self.activation_fn)
 
     def forward(
-        self, x: ttnn.Tensor, compute_kernel_config=None, default_block_size=None, parallel_config=None, dtype=None
+        self,
+        x: ttnn.Tensor,
+        compute_kernel_config=None,
+        default_block_size=None,
+        parallel_config=None,
+        dtype=None,
+        addcmul_a=None,
+        addcmul_b=None,
+        addcmul_scalar: float = 1.0,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """
         Expects x to be replicated.
         Return output fractured on columns.
         If chunks is set, returns a list of tensors split along the output dimension.
+
+        `addcmul_a` / `addcmul_b` fuse a gated residual into the matmul epilogue, returning
+        `addcmul_a + addcmul_scalar * matmul_result * addcmul_b`. Both must already be at the
+        per-TP-device output slice. Only the all-gather-matmul path supports it, so it requires
+        `parallel_config`; callers on the unfused path should apply the addcmul themselves.
         """
+        if addcmul_a is not None or addcmul_b is not None:
+            if (addcmul_a is None) != (addcmul_b is None):
+                msg = "addcmul_a and addcmul_b must be given together"
+                raise ValueError(msg)
+            if parallel_config is None or parallel_config.tensor_parallel.factor <= 1:
+                msg = "fused addcmul needs the all-gather-matmul path; pass parallel_config"
+                raise ValueError(msg)
+            if self.chunks is not None and self.chunks > 1:
+                msg = "fused addcmul is not supported alongside chunked output"
+                raise ValueError(msg)
+
         x = maybe_cast_activation(x, self.activation_dtype)
         if self.pin_output_bf16:
             dtype = resolve_output_dtype(dtype, x)
@@ -373,6 +403,9 @@ class ColParallelLinear(Module):
                 ),
                 dtype=dtype,
                 fuse_swiglu=self.fuse_swiglu,
+                scalar=addcmul_scalar if addcmul_a is not None else None,
+                addcmul_input_tensor1=addcmul_a,
+                addcmul_input_tensor2=addcmul_b,
             )
 
             if self.chunks is not None and (self.chunks > 1):
@@ -429,6 +462,9 @@ class RowParallelLinear(Module):
         mesh_axis=0,
         fsdp_mesh_axis=None,
         ccl_manager=None,
+        # Branch addition kept over main: the H3 / Qwen3-VL layers pass an explicit config for
+        # the sites that need more precision than the shared default.
+        compute_kernel_config=None,
     ):
         super().__init__()
 
@@ -442,7 +478,7 @@ class RowParallelLinear(Module):
         if self.fsdp_mesh_axis is not None:
             assert self.mesh_axis != self.fsdp_mesh_axis
 
-        self.compute_config = ttnn.init_device_compute_kernel_config(
+        self.compute_config = compute_kernel_config or ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
             math_fidelity=MATH_FIDELITY.get(dtype, ttnn.MathFidelity.HiFi2),
             math_approx_mode=False,
@@ -482,7 +518,7 @@ class RowParallelLinear(Module):
 
     def forward(
         self,
-        x: ttnn.Tensor,
+        x: ttnn.Tensor | list[ttnn.Tensor],
         *,
         compute_kernel_config=None,
         use_persistent_buffer: bool = True,
@@ -491,6 +527,7 @@ class RowParallelLinear(Module):
     ) -> ttnn.Tensor:
         """
         Expects x to be column fractured.
+        x may be a 2-element list [prefix, suffix] for fused concat over K (concat-free).
         Return output fractured on columns.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
@@ -503,11 +540,19 @@ class RowParallelLinear(Module):
         else:
             weight = self.weight.data
 
-        M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+        if isinstance(x, (list, tuple)):
+            assert len(x) == 2, f"RowParallelLinear.forward: list x must be [prefix, suffix], got {len(x)}"
+            x, x_second = x
+            K = weight.padded_shape[-2]
+        else:
+            x_second = None
+            K = x.padded_shape[-1]
+
+        M, N = x.padded_shape[-2], weight.padded_shape[-1]
         core_grid = get_matmul_core_grid(self.mesh_device)
         matmul_config = get_matmul_config(M, K, N, core_grid, default_block_size)
         output = ttnn.experimental.minimal_matmul(
-            input_tensor=x,
+            input_tensor=[x, x_second] if x_second is not None else x,
             weight_tensor=weight,
             bias_tensor=self.bias.data if self.bias is not None else None,
             config=matmul_config,
@@ -531,7 +576,7 @@ class RowParallelLinear(Module):
 
     def forward_fused_addcmul(
         self,
-        x: ttnn.Tensor,
+        x: ttnn.Tensor | list[ttnn.Tensor],
         addcmul_a: ttnn.Tensor,
         addcmul_b: ttnn.Tensor,
         scalar: float = 1.0,
@@ -542,6 +587,9 @@ class RowParallelLinear(Module):
         """Fused RowParallel matmul + reduce-scatter + addcmul at the RS final write step.
 
         Computes: output = addcmul_a + scalar * rs_result * addcmul_b
+
+        ``x`` may be a single tensor or a 2-element list ``[prefix, suffix]`` for fused concat over K.
+        The weight must be per-segment tile-padded (see ``prepare_weight_for_concatenated_input``).
 
         Both addcmul_a and addcmul_b must already be at their per-TP-device slice size
         [D/tp]. The RS kernel fuses the addcmul at the final ring write, eliminating
@@ -556,14 +604,29 @@ class RowParallelLinear(Module):
         else:
             weight = self.weight.data
 
-        M, K, N = x.padded_shape[-2], x.padded_shape[-1], weight.padded_shape[-1]
+        # x: single tensor, or [prefix, suffix] virtually concatenated over K (concat-free).
+        if isinstance(x, (list, tuple)):
+            assert len(x) == 2, f"forward_fused_addcmul: list x must be exactly [prefix, suffix], got {len(x)}"
+            x, x_second = x
+        else:
+            x_second = None
+
+        # For fused concat the matmul K spans both halves = the weight's K; x is only the prefix half.
+        K = weight.padded_shape[-2] if x_second is not None else x.padded_shape[-1]
+        M, N = x.padded_shape[-2], weight.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
 
         needs_reshape = len(x.shape) <= 3
         if needs_reshape:
             x = ttnn.unsqueeze(x, 0)
+            if x_second is not None:
+                x_second = ttnn.unsqueeze(x_second, 0)
+        pre_rs_shape = tuple(list(x.shape)[:-1] + [N])
+        _, rs_output_buffer = self.ccl_manager.get_rs_ping_pong_buffer(
+            pre_rs_shape, 3, self.mesh_axis, return_intermediate=False
+        )
         _, output = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
-            input_tensor=x,
+            input_tensor=[x, x_second] if x_second is not None else x,
             weight_tensor=weight,
             dim=3,
             multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),

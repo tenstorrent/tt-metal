@@ -75,7 +75,7 @@ it is classified differently on different systems.
 | Llama3.2-90B-Vision | WH LLMBox |
 | Qwen3-32B | WH LLMBox, BH QuietBox 2 |
 | Qwen2.5-32B | WH LLMBox, BH QuietBox 2 |
-| Qwen2.5-Coder-32B | WH LLMBox |
+| Qwen2.5-Coder-32B | WH LLMBox, BH QuietBox 2 |
 | Qwen2.5-VL-72B | WH LLMBox, BH QuietBox 2 |
 | Qwen3-VL-32B | WH LLMBox |
 | Shallow-UNet | WH N150, WH LLMBox, BH P150 |
