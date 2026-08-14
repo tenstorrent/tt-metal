@@ -35,7 +35,17 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 # Real (pre-pad) prompt lengths. prepare_input pads each up to compress_rate*sp, so the ragged ones
 # exercise the pad + trim + mask path.
-_SHAPES = [128, 130, 256, 260, 300, 512, 513, 1024, 2048, 4095, 4096, 5120]
+_SEED = 42
+# One shape per behaviour, not one per number: everything under 1024 pads to the same slab. 128 is the
+# shortest legal prompt, 130 and 4095 are the padding cases, 1024 needs none, 5120 is the runner's width.
+_SHAPES = [128, 130, 1024, 4095, 5120]
+_COMPRESSOR_SHAPES = [900, 2048, 5120]
+# Single-shot floors. Higher than the chunked ones: one pass accumulates nothing.
+_FORWARD_PCC = 0.998
+_COMPRESSOR_PCC = 0.999
+# The stored entries, checked at the end of a chunked run. They are written once and never recomputed, so
+# this holds ~0.9997 no matter how deep the run goes.
+_CACHE_PCC = 0.998
 
 
 def _config(model_config, num_hidden_layers=4):
@@ -45,7 +55,7 @@ def _config(model_config, num_hidden_layers=4):
     be Flash's values -- a Pro config that left them out would build Pro widths with Flash's latent and
     grouping, and the reference would agree with it, so PCC would pass on the wrong model."""
     m = model_config
-    return DeepseekV4Config(
+    cfg = DeepseekV4Config(
         hidden_size=m.EMB_SIZE,
         head_dim=m.HEAD_DIM,
         num_attention_heads=m.NUM_ATTENTION_HEADS,
@@ -56,31 +66,20 @@ def _config(model_config, num_hidden_layers=4):
         compress_rope_theta=m.COMPRESS_ROPE_THETA,
         rms_norm_eps=m.RMS_NORM_EPS,
     )
+    cfg._attn_implementation = "eager"  # V4 is eager-only: the sdpa interface silently drops the sinks
+    return cfg
 
 
-# Flash and Pro differ in hidden size, head count, q latent and o groups; compress_rate (128), head_dim
-# and sliding_window are the same, so the whole chunking contract is shared and only the widths move.
+# (id, dimension constants, per-chunk PCC floor, long-run floor). PCC decays with depth on both variants:
+# every chunk inherits the previous one's error through the cache and the carry, and the softmax widens as
+# the cache fills. Pro decays ~2.6x faster, since 128 heads and a 7168-wide hidden make every bf16
+# reduction longer. Over 56K tokens flash goes 0.9989 -> 0.9925 and pro 0.9984 -> 0.9816, the per-chunk
+# drop halving on both while the cache entries hold 0.9997. The two long scenarios split the same 56K
+# differently and land within 1.2e-4, so the floors track depth, not chunk boundaries.
 #
-# TODO: these belong on a V4 prefill adapter (tt/runners/adapters/) once V4 has a block and a runtime, so
-# build_runtime/allocate_kv_cache become writable. The adapter would then own what is hardcoded here --
-# model_config, hf_repo_id, env_var, the PCC thresholds, the golden-trace dir -- and the same object would
-# serve both the `variant` fixture and the runner (tests/conftest.py:33).
-#
-# (id, dimension constants, per-chunk PCC floor, long-run PCC floor). PCC decays with kv_actual on both
-# variants: every chunk inherits the previous one's error through the cache and the carry, and the softmax
-# reduction gets wider as the compressed cache fills. Pro decays ~2.6x faster -- 128 heads and a 7168-wide
-# hidden make every bf16 reduction longer -- so both its floors are lower.
-#
-# Measured on 11x5120 (56,320 tokens), first and last chunk:
-#
-#     kv_actual          0        51200
-#     flash          0.998885   0.992513
-#     pro            0.998414   0.981595
-#
-# The per-chunk drop halves over the run on both (flash 874e-6 -> 361e-6, pro 1945e-6 -> 947e-6) while the
-# stored cache entries hold 0.9997, so this is the attention reduction widening, not the cache drifting.
-# The two long scenarios split the same 56,320 tokens differently -- one uniform, one down to 256-token
-# chunks -- and land within 1.2e-4 of each other, so the floors track depth, not chunk boundaries.
+# TODO: move to a V4 prefill adapter once V4 has a block and a runtime, so build_runtime and
+# allocate_kv_cache become writable. The adapter would own the config, these floors and the golden-trace
+# dir, and serve both the `variant` fixture and the runner (tests/conftest.py:33).
 _VARIANTS = [
     ("flash", DeepSeekV4FlashConfig, 0.997, 0.99),
     ("pro", DeepSeekV4ProConfig, 0.994, 0.98),
@@ -120,7 +119,65 @@ _MESH_CONFIGS = [
 ]
 
 
-@pytest.mark.parametrize("seq_len", [900, 2048, 5120], ids=["seq900-unaligned", "seq2k", "seq5120"])
+def _report_chunk_pccs(pccs, floor):
+    """Log every chunk's PCC, then let the worst one decide. Asserting inside the loop stops at the first
+    chunk under the floor, and PCC can dip and recover -- reporting first means one run tells the whole
+    story instead of one chunk per run."""
+    for it, kv_actual, valid, pcc in pccs:
+        log = logger.warning if pcc < floor else logger.info
+        log(f"  iter {it} (kv_actual={kv_actual} valid={valid}): PCC {pcc:.6f}")
+    worst_it, _, _, worst = min(pccs, key=lambda row: row[3])
+    assert worst >= floor, f"worst chunk PCC {worst:.6f} (iter {worst_it}) is below the floor {floor}"
+
+
+# The compressed-cache write must compile nothing per chunk: fill_cache keeps update_idx out of its
+# program hash (update_cache_device_operation.cpp:160) and the shift carries its offset as matrix data.
+_WRITE_COMPILES_PER_CHUNK = 0
+# (chunk_size, real lengths). chunk_size only has to carry whole compression windows on every SP shard,
+# so 5120 is as legal as 4096 -- it is the runner's default and the one the append offset does not land
+# tile-aligned on, which is why it belongs here.
+_CHUNKED_SCENARIOS = [
+    ("2chunk-ragged", 4096, [4096, 3000]),  # the other chunk width, where the append offset is tile-aligned
+    ("chunk5120-full", 5120, [5120, 5120]),  # what the perf gate measures
+    ("chunk5120-ragged", 5120, [5120, 5120, 3000]),  # three appends, last one ragged
+    # Non-final chunks below chunk_size. Pins the two places real_len and the padded slab width must not
+    # be confused: the carry, and the tail the compressed-cache write carries across chunks.
+    ("chunk5120-varying", 5120, [1024, 256, 5120]),
+]
+
+
+class _RefHCACache:
+    """Minimal ``past_key_values`` for driving the reference chunk by chunk: the attention calls
+    ``.update(k, v, layer_idx)`` on the container, the compressor reaches into ``.layers[layer_idx]``."""
+
+    def __init__(self, layer):
+        self.layers = [layer]
+
+    def update(self, key_states, value_states, layer_idx, *args, **kwargs):
+        return self.layers[layer_idx].update(key_states, value_states)
+
+
+def _sliding_mask(q_pos, k_pos, sliding_window):
+    i, j = q_pos.view(-1, 1), k_pos.view(1, -1)
+    allowed = (j <= i) & (i - j < sliding_window)
+    return torch.zeros(i.shape[0], j.shape[1]).masked_fill(~allowed, float("-inf"))
+
+
+# Demo-sized prompts. The two 56,320-token scenarios are the same length by construction
+# (11 * 5120 = 55 * 1024), so the mixed one differs from the uniform one only in how the tokens are
+# split -- every non-final chunk a multiple of compress_rate, none wider than chunk_size.
+_LONG_SCENARIOS = [
+    pytest.param("11x5120", 5120, [5120] * 11, id="11x5120"),
+    pytest.param(
+        "mixed5120",
+        5120,
+        [1024, 256, 5120, 2048, 5120, 5120, 3072, 5120, 640, 5120, 5120, 4096, 5120, 5120, 4224],
+        id="mixed5120",
+    ),
+]
+
+
+@pytest.mark.parametrize("seq_len", _COMPRESSOR_SHAPES, ids=[f"seq{s}" for s in _COMPRESSOR_SHAPES])
 @pytest.mark.parametrize(
     "mesh_device, device_params, topology",
     _MESH_CONFIGS,
@@ -130,7 +187,7 @@ _MESH_CONFIGS = [
 def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len, model_config):
     """TtHCACompressor against the unpadded reference. seq_len is the REAL pre-pad length, so the
     unaligned value exercises the pad + trim path."""
-    torch.manual_seed(42)
+    torch.manual_seed(_SEED)
 
     batch = 1
     config = _config(model_config)
@@ -182,7 +239,7 @@ def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len, mode
     ), f"shape mismatch: tt {tuple(compressed_kv_out.shape)} vs ref {tuple(compressed_kv_ref.shape)}"
 
     pcc_passed, pcc_message = assert_with_pcc(
-        compressed_kv_ref.to(torch.float32), compressed_kv_out.to(torch.float32), pcc=0.999
+        compressed_kv_ref.to(torch.float32), compressed_kv_out.to(torch.float32), pcc=_COMPRESSOR_PCC
     )
     logger.debug(f"mesh compressor PCC: {pcc_message}")
     assert pcc_passed, f"HCA mesh compressor PCC test failed: {pcc_message}"
@@ -209,10 +266,9 @@ def test_hca_forward(device, seq_len, model_config):
     Single device, so this is the only test that runs _o_proj with all 64 heads on one chip -- the
     shape whose nlp_concat_heads L1 footprint is largest. Keep it: the mesh tests shard the heads
     down to 16 and would not catch a head-count-dependent circular-buffer blowup."""
-    torch.manual_seed(42)
+    torch.manual_seed(_SEED)
     batch = 1
     config = _config(model_config)
-    config._attn_implementation = "eager"  # V4 is eager-only (sinks); force it for the reference
     nh, hd, sw = config.num_attention_heads, config.head_dim, config.sliding_window
     logger.debug(f"batch={batch}, seq_len={seq_len}, heads={nh}, head_dim={hd}, sw={sw}")
 
@@ -256,7 +312,7 @@ def test_hca_forward(device, seq_len, model_config):
 
     assert out.shape == out_ref.shape, f"shape mismatch: tt {tuple(out.shape)} vs ref {tuple(out_ref.shape)}"
 
-    pcc_passed, pcc_message = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), pcc=0.998)
+    pcc_passed, pcc_message = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), pcc=_FORWARD_PCC)
     logger.debug(f"HCA block PCC: {pcc_message}")
     assert pcc_passed, f"HCA block PCC test failed: {pcc_message}"
 
@@ -273,11 +329,10 @@ def test_hca_forward(device, seq_len, model_config):
 def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len, model_config):
     """Single-shot TtHCA.forward, SP+TP sharded, for an ARBITRARY prompt length. This is where padding
     awareness is proven: pad-derived compressed entries get trimmed and pad rows masked out."""
-    torch.manual_seed(42)
+    torch.manual_seed(_SEED)
 
     batch = 1
     config = _config(model_config)
-    config._attn_implementation = "eager"  # V4 is eager-only (sinks); force it for the reference
     sw = config.sliding_window
     sp_factor = mesh_device.shape[0]
     compress_rate = config.compress_rates["heavily_compressed_attention"]
@@ -329,42 +384,11 @@ def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len, model_c
 
     assert out.shape == out_ref.shape, f"shape mismatch: tt {tuple(out.shape)} vs ref {tuple(out_ref.shape)}"
 
-    pcc_passed, pcc_message = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), pcc=0.998)
+    pcc_passed, pcc_message = assert_with_pcc(out_ref.to(torch.float32), out.to(torch.float32), pcc=_FORWARD_PCC)
     logger.debug(f"mesh HCA block PCC: {pcc_message}")
     assert pcc_passed, f"HCA mesh block PCC test failed: {pcc_message}"
 
     logger.debug("PCC test passed!")
-
-
-def _report_chunk_pccs(pccs, floor):
-    """Log every chunk's PCC, then let the worst one decide.
-
-    Asserting inside the loop stops at the first chunk under the floor, which hides the shape of the curve
-    -- and PCC can dip on one chunk and recover on the next. Reporting the whole run first means one
-    execution says how far off it is and where, instead of one chunk per run."""
-    for it, kv_actual, valid, pcc in pccs:
-        log = logger.warning if pcc < floor else logger.info
-        log(f"  iter {it} (kv_actual={kv_actual} valid={valid}): PCC {pcc:.6f}")
-    worst_it, _, _, worst = min(pccs, key=lambda row: row[3])
-    assert worst >= floor, f"worst chunk PCC {worst:.6f} (iter {worst_it}) is below the floor {floor}"
-
-
-# The compressed-cache write must compile nothing per chunk: fill_cache keeps update_idx out of its
-# program hash (update_cache_device_operation.cpp:160) and the shift carries its offset as matrix data.
-_WRITE_COMPILES_PER_CHUNK = 0
-# (chunk_size, real lengths). chunk_size only has to carry whole compression windows on every SP shard,
-# so 5120 is as legal as 4096 -- it is the runner's default and the one the append offset does not land
-# tile-aligned on, which is why it belongs here.
-_CHUNKED_SCENARIOS = [
-    ("2chunk-full", 4096, [4096, 4096]),
-    ("2chunk-ragged", 4096, [4096, 3000]),
-    ("3chunk-ragged", 4096, [4096, 4096, 3000]),
-    ("chunk5120-full", 5120, [5120, 5120]),
-    ("chunk5120-ragged", 5120, [5120, 5120, 3000]),
-    # Non-final chunks below chunk_size. Pins the two places real_len and the padded slab width must not
-    # be confused: the carry, and the tail the compressed-cache write carries across chunks.
-    ("chunk5120-varying", 5120, [1024, 256, 5120]),
-]
 
 
 @pytest.mark.parametrize("name, chunk_size, iters_valid", _CHUNKED_SCENARIOS, ids=[n for n, _, _ in _CHUNKED_SCENARIOS])
@@ -382,11 +406,10 @@ def test_hca_chunked_prefill_mesh(
     The reference is deliberately NOT chunked: it runs once over the whole prompt and each chunk is
     compared against the matching slice, so the chunked path has to reproduce plain attention rather
     than agree with a reference that shares its assumptions."""
-    torch.manual_seed(42)
+    torch.manual_seed(_SEED)
 
     batch = 1
     config = _config(model_config)
-    config._attn_implementation = "eager"  # V4 is eager-only (sinks); force it for the reference
     sw = config.sliding_window
     compress_rate = config.compress_rates["heavily_compressed_attention"]
     total = sum(iters_valid)
@@ -469,42 +492,11 @@ def test_hca_chunked_prefill_mesh(
         mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig([0, 1], ttnn.MeshShape(1, 1))),
     )[:, :, : state.entry_count]
     assert cache.shape == ref_entries.shape, f"cache {tuple(cache.shape)} vs ref {tuple(ref_entries.shape)}"
-    cache_passed, cache_msg = assert_with_pcc(ref_entries.to(torch.float32), cache.to(torch.float32), pcc=0.998)
+    cache_passed, cache_msg = assert_with_pcc(ref_entries.to(torch.float32), cache.to(torch.float32), pcc=_CACHE_PCC)
     logger.debug(f"  compressed cache PCC: {cache_msg}")
     assert cache_passed, f"compressed cache mismatch: {cache_msg}"
 
     logger.debug(f"PCC test passed! entries={state.entry_count}")
-
-
-class _RefHCACache:
-    """Minimal ``past_key_values`` for driving the reference chunk by chunk: the attention calls
-    ``.update(k, v, layer_idx)`` on the container, the compressor reaches into ``.layers[layer_idx]``."""
-
-    def __init__(self, layer):
-        self.layers = [layer]
-
-    def update(self, key_states, value_states, layer_idx, *args, **kwargs):
-        return self.layers[layer_idx].update(key_states, value_states)
-
-
-def _sliding_mask(q_pos, k_pos, sliding_window):
-    i, j = q_pos.view(-1, 1), k_pos.view(1, -1)
-    allowed = (j <= i) & (i - j < sliding_window)
-    return torch.zeros(i.shape[0], j.shape[1]).masked_fill(~allowed, float("-inf"))
-
-
-# Demo-sized prompts. The two 56,320-token scenarios are the same length by construction
-# (11 * 5120 = 55 * 1024), so the mixed one differs from the uniform one only in how the tokens are
-# split -- every non-final chunk a multiple of compress_rate, none wider than chunk_size.
-_LONG_SCENARIOS = [
-    pytest.param("11x5120", 5120, [5120] * 11, id="11x5120"),
-    pytest.param(
-        "mixed5120",
-        5120,
-        [1024, 256, 5120, 2048, 5120, 5120, 3072, 5120, 640, 5120, 5120, 4096, 5120, 5120, 4224],
-        id="mixed5120",
-    ),
-]
 
 
 @pytest.mark.timeout(0)
@@ -524,11 +516,10 @@ def test_hca_long_chunked_prefill_mesh(
     this length: eager attention (forced, since sinks make V4 eager-only) materializes
     [1, num_heads, S, S] scores = 726 GB at 57K. The short scenarios are what pin chunked == plain
     attention; this test only shows it stays true that many chunks deep."""
-    torch.manual_seed(42)
+    torch.manual_seed(_SEED)
 
     batch = 1
     config = _config(model_config)
-    config._attn_implementation = "eager"  # sinks: the sdpa interface silently drops s_aux
     sw = config.sliding_window
     compress_rate = config.compress_rates["heavily_compressed_attention"]
     total = sum(iters_valid)
@@ -610,7 +601,7 @@ def test_hca_long_chunked_prefill_mesh(
         mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig([0, 1], ttnn.MeshShape(1, 1))),
     )[:, :, : state.entry_count]
     assert cache.shape == ref_entries.shape, f"cache {tuple(cache.shape)} vs ref {tuple(ref_entries.shape)}"
-    cache_passed, cache_msg = assert_with_pcc(ref_entries.to(torch.float32), cache.to(torch.float32), pcc=0.998)
+    cache_passed, cache_msg = assert_with_pcc(ref_entries.to(torch.float32), cache.to(torch.float32), pcc=_CACHE_PCC)
     logger.debug(f"  compressed cache PCC: {cache_msg}")
     assert cache_passed, f"compressed cache mismatch: {cache_msg}"
 
