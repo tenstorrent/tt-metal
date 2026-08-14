@@ -102,6 +102,11 @@ class TtRMSNorm:
         )
         return cls(canonical, _decode_shard_plan(device, dim))
 
+    @property
+    def decode_input_memory_config(self):
+        """The shard this norm reads at decode, for a producer to target."""
+        return None if self._decode_plan is None else self._decode_plan[0]
+
     def _is_decode_row(self, x) -> bool:
         """One tile row of activation -- the decode step's `[1, 1, dim]`."""
         shape = list(x.padded_shape)
@@ -127,8 +132,13 @@ class TtRMSNorm:
         # core, so it goes through the width-sharded path instead.
         if self._decode_plan is not None and self._is_decode_row(x):
             input_memcfg, program_config = self._decode_plan
+            # A producer that already emitted this exact shard is used as-is:
+            # `to_memory_config` dispatches a copy rather than no-opping on a
+            # match, and the residual add ahead of this norm targets the shard
+            # precisely so there is nothing left to convert.
+            staged = x if x.memory_config() == input_memcfg else ttnn.to_memory_config(x, input_memcfg)
             return self._impl(
-                ttnn.to_memory_config(x, input_memcfg),
+                staged,
                 mode="decode",
                 in_sharded=True,
                 out_sharded=bool(out_sharded),
