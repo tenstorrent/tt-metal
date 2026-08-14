@@ -33,9 +33,6 @@ from typing import Callable
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mla import MLAPrefillAdapter
 
-# Staged upstream checkpoint: 1.5 TB of MXFP4 shards. Only the MoE gate is read from it.
-KIMI_K3_CHECKPOINT = Path("/mnt/models/blaze/moonshotai/Kimi-K3")
-
 
 class KimiK3Adapter(MLAPrefillAdapter):
     # --- identity ---

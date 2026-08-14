@@ -43,7 +43,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     validate_composed,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
-from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3 import KIMI_K3_CHECKPOINT
 from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_testing, get_input_mem_config
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBOOK_TRACE, load_trace_gate_input
 
@@ -130,7 +129,7 @@ _REAL_GATE_SOURCES = {
     # K3's router is the one MoE tensor group the checkpoint leaves unquantized.
     "kimi_k3": _RealGateSource(
         env_var="KIMI_K3_HF_MODEL",
-        fallbacks=(str(KIMI_K3_CHECKPOINT),),
+        fallbacks=("/mnt/models/blaze/moonshotai/Kimi-K3",),
         hf_repo="moonshotai/Kimi-K3",
         key_prefix_template=GATE_KEY_PREFIX_KIMI_K3,
     ),
