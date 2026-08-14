@@ -130,6 +130,14 @@ RECT_SEARCH = _SELECTOR.read_text().strip() if _SELECTOR.exists() else "grid_wid
 _FLOOR_SELECTOR = pathlib.Path("/tmp/rms_norm_hidden_floor")
 HIDDEN_FLOOR = int(_FLOOR_SELECTOR.read_text().strip()) if _FLOOR_SELECTOR.exists() else None
 
+# Refinement 4 knobs, same file-selector idiom:
+#     echo 8 > /tmp/rms_norm_dm_chunk   # DM_CHUNK_TILES (tiles per NoC barrier)
+#     echo 1 > /tmp/rms_norm_in_depth   # IN_CB_DEPTH    (input double buffer)
+_DM_SELECTOR = pathlib.Path("/tmp/rms_norm_dm_chunk")
+DM_CHUNK = int(_DM_SELECTOR.read_text().strip()) if _DM_SELECTOR.exists() else None
+_IND_SELECTOR = pathlib.Path("/tmp/rms_norm_in_depth")
+IN_DEPTH = int(_IND_SELECTOR.read_text().strip()) if _IND_SELECTOR.exists() else None
+
 
 @pytest.fixture(autouse=True)
 def rect_search(monkeypatch):
@@ -137,6 +145,10 @@ def rect_search(monkeypatch):
         monkeypatch.setitem(PLAN_GLOBALS, "_rect_candidates", _column_pinned)
     if HIDDEN_FLOOR is not None:
         monkeypatch.setitem(PLAN_GLOBALS, "HIDDEN_TILES_PER_CORE_FLOOR", HIDDEN_FLOOR)
+    if DM_CHUNK is not None:
+        monkeypatch.setitem(PLAN_GLOBALS, "DM_CHUNK_TILES", DM_CHUNK)
+    if IN_DEPTH is not None:
+        monkeypatch.setitem(PLAN_GLOBALS, "IN_CB_DEPTH", IN_DEPTH)
     return RECT_SEARCH
 
 

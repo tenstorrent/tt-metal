@@ -211,7 +211,7 @@ was designed to remove from 11 % to 0.4 %, so it should be struck, not built (se
 
 ---
 
-### [ ] Refinement 4 — Speed up the perf-flagged prefill profile
+### [x] Refinement 4 — Speed up the perf-flagged prefill profile
 
 **Type**: perf
 
@@ -239,6 +239,34 @@ broadcast) and must be validated by building it and measuring device-ns, not by 
 **Done when**: measured device-ns improves on at least the two most-impacted prefill shapes toward their
 clock-scaled `achievable_ns`, the decode results from Refinement 3 do not regress, the golden suite is
 green, and the config-spanning guard set shows no regression.
+
+**Outcome**: **all four prefill shapes improved** (median of 3 fresh runs each, Blackhole p150b, the
+group's exact config): `(1,1,8192,1024)` 92899 → **88316** (−4.9 %), `(1,1,8192,2304)` 207404 →
+**187575** (−9.6 %), `(1,1,8192,5120)` 414599 → **405003** (−2.3 %), `(1,1,8192,7168)` 570644 →
+**558273** (−2.2 %). Every row is comfortably **inside** its `achievable_ns` (0.91× / 0.89× / 0.55× /
+0.54×). Two levers landed, both knob-turns on parameters the design already exposed:
+`DM_CHUNK_TILES` 8 → 32 (bytes in flight, reader *and* writer — measured sweep 8/16/32/64/128), and
+the `IN_CB_DEPTH` × `block_rows` **L1 ladder** that turns the design's overlap lamp in its stated
+form. Decode is byte-identical (the ladder declines the rung at one tile-row per core) and every row
+of the Phase-0 harness is at or below its Refinement-3 value.
+
+*What the bottleneck actually is.* **The queue's premise was wrong**: "≈184 GB/s, roughly 1.9× off"
+came from extrapolating the harness row `prefill_2048x1024` (a different shape at HiFi4 /
+fp32-acc-on / ROW_MAJOR gamma). Measured at the group's real config the baseline was already
+365–405 GB/s. The decisive number is a reference run of **`ttnn.neg`** — the simplest possible
+read-one/write-one streaming op — on the identical four shapes: 85899 / 198515 / 436850 / 607069 ns.
+rms_norm is now at **1.03× / 0.95× / 0.93× / 0.92×** of that, i.e. at or *under* the wall of an op
+that does strictly less work. The profile is **DRAM-bandwidth-saturated**; a fidelity probe agrees
+(LoFi ≡ HiFi2 within noise, HiFi4 only +4–6 %), so compute is not the binder.
+
+*What I would try next, and why I did not.* Nothing on this profile — the remaining headroom is in
+the DRAM controller, not the schedule, and the honest next target is elsewhere (Refinement 5's
+sharded geometries, where the input never leaves L1 and the fixed dispatch/boot cost binds). Two
+named levers here were **measured and rejected on the data**, which is the other half of the result:
+widening `l1_working_budget` to the part's real 1.46 MB *regresses* the two wide shapes (+5.7 % /
++3.7 %) because a coarser block lengthens the fully-serial read before compute starts; and
+`OUT_CB_DEPTH` 3/4 does not beat 2. The **GammaBroadcast** lamp stays retired (Refinement 3 already
+shrank its term to 0.04 % of DRAM bytes).
 
 ---
 

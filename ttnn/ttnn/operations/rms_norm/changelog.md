@@ -265,3 +265,106 @@
   and for both hidden-split knobs, and the measured before/after table in its docstring.
   `test_rms_norm_perf.py` keeps its per-shape numbers but its two A/B tables are annotated VOID with
   the reason, and its patch target is fixed.
+
+## Refinement 4 — Speed up the perf-flagged prefill profile
+
+- **Date**: 2026-08-14
+- **What was done**: two levers on the interleaved prefill profile, plus one measurement that
+  reframed the whole phase. **Reused, not rebuilt**: both levers are knob turns on parameters the
+  descriptor already exposes (`DM_CHUNK_TILES`, `IN_CB_DEPTH`, `block_rows`), and the mechanism that
+  makes the second one legal is the `pack_base` machinery Refinement 2 already built for resident
+  shards — generalized by one word (modulo the CB's *capacity* instead of its *wait count*). No new
+  CB, no new kernel file, no second program-descriptor branch. Diff: ~40 lines of descriptor, one new
+  CT arg threaded to two kernels, one line changed in each kernel.
+
+  0. **The premise had to be re-measured first — and it was wrong.** The queue put prefill "roughly
+     1.9× off" at ≈184 GB/s, extrapolated from `test_rms_norm_perf.py`'s `prefill_2048x1024` row.
+     That row is a *different shape at a different config* (HiFi4 / `fp32_dest_acc_en=True` /
+     ROW_MAJOR gamma). Measured at the perf group's real config, the Refinement-3 baseline for
+     `(1,1,8192,W)` was already **365–405 GB/s** of in+out DRAM traffic, and all four shapes were
+     already under their `achievable_ns`.
+  1. **`DM_CHUNK_TILES` 8 → 32** — the "keep bytes in flight" lever, and it moves BOTH halves of the
+     dataflow because the reader and the writer read the same knob (the ROW_MAJOR kernels convert it
+     to sticks through the same expression). At 8 the reader drained the NoC to empty every 16 KB and
+     paid the DRAM round-trip serially. Swept 8/16/32/64/128; 32 is the first value at the plateau
+     and the only one that wins on every row. The decode regime is untouched — a decode block is 4–7
+     tiles, below even the old value.
+  2. **The `IN_CB_DEPTH` × `block_rows` L1 ladder** — the design's **Overlap** perf lamp, turned in
+     exactly the form the lamp and the queue both specify ("smaller `block_rows` + a second input
+     buffer", never "same block, deeper CB"). `IN_CB_DEPTH` had been asserted at 1 since Phase 0
+     because the in-place rewrites of x pack at `get_write_ptr(cb) + i*page` and a compute thread that
+     never pushes that CB keeps its write pointer at the base forever. The real invariant is weaker:
+     the pack index only has to *track the read window*, which `(block*BLOCK_TILES) % IN_CAPACITY_TILES`
+     does for any whole-block-multiple capacity. `IN_WAIT_TILES` and `IN_CAPACITY_TILES` are now
+     separate CT args (they already differed on the sharded path; conflating them is what pinned the
+     knob). The two knobs are then **co-solved by one ladder** against one budget, because they trade
+     against each other inside it — and the deeper rung is declined on three predicates:
+     - a core owning fewer than `in_depth` blocks (nothing to prefetch — this is the **whole decode
+       regime**, which therefore stays byte-identical to Refinement 3),
+     - the L1 predicate not affording the second buffer (`(1,1,8192,7168)` lands here and keeps its
+       Refinement-3 program exactly),
+     - the resulting block being shorter than one in-flight NoC burst (`DM_CHUNK_TILES`). This third
+       guard was added *because of a measured regression*: ungated, the rung fired on
+       `(1,1,2048,1024)` with a 16-tile block and cost +1.4 % — one hidden read of a few tiles does
+       not pay for an extra set of per-block fixed costs (init + reconfig + a whole gather/mcast
+       round trip at `s > 1`). The threshold reuses `DM_CHUNK_TILES` rather than adding a second
+       literal beside it.
+- **Accuracy achieved**: unchanged — neither lever touches arithmetic (one moves barrier granularity,
+  the other moves which L1 pages a block lands in). PCC **0.9998–0.99998** on all four prefill shapes
+  at the group's exact config against its 0.9995 soft gate; `test_rms_norm_double_buffer.py` bounds
+  rel-RMS at < 0.25× the dropped-scale signature `1/sqrt(2W)` on every double-buffered shape.
+- **Performance** (Blackhole p150b, 11×10 grid, **median of 3 fresh-cache runs per point**, device
+  kernel ns, the perf group's exact config — bf16 / HiFi2 / `fp32_dest_acc_en=False` / TILE / bf16
+  TILE gamma / INTERLEAVED):
+
+  | shape | Refinement 3 | Refinement 4 | | `achievable_ns` | `ttnn.neg` (DRAM roof) |
+  |---|---|---|---|---|---|
+  | `(1,1,8192,1024)` |  92899 |  **88316** | **−4.9 %** |  96744 |  85899 |
+  | `(1,1,8192,2304)` | 207404 | **187575** | **−9.6 %** | 211345 | 198515 |
+  | `(1,1,8192,5120)` | 414599 | **405003** | **−2.3 %** | 738307 | 436850 |
+  | `(1,1,8192,7168)` | 570644 | **558273** | **−2.2 %** | 1032281 | 607069 |
+
+  Decode, at its own exact config (`test_rms_norm_perf_decode.py`): 5594 / 6536 / 8509 / 9487 ns for
+  W = 1024 / 2304 / 5120 / 7168 against Refinement 3's 5587 / 6535 / 8441 / 9657 — inside noise, as
+  it must be, since the ladder produces a byte-identical program there. Phase-0 harness
+  (`test_rms_norm_perf.py`, HiFi4 / fp32-acc / ROW_MAJOR gamma), R3-exact vs shipped, 2 runs each:
+  every row at or below — `decode_2rows_w12288` −2.9 %, `batch4d` −2.4 %, `prefill_2048x1024` −0.5 %,
+  the rest flat.
+- **What actually binds, and how I know**: the profile is **DRAM-bandwidth-saturated**. Two
+  independent probes say so.
+  - A **reference-op ceiling**: `ttnn.neg` on the identical four shapes — a production, tuned eltwise
+    unary that does exactly one read and one write of the same bytes with no reduction, no gamma and
+    no cross-core combine — costs 85899 / 198515 / 436850 / 607069 ns. rms_norm is now
+    **1.03× / 0.95× / 0.93× / 0.92×** of that, i.e. at or *under* the wall of an op doing strictly
+    less work. There is no schedule-side headroom left on this profile.
+  - A **fidelity probe** (a zero-code compute-cost classifier): LoFi is indistinguishable from HiFi2
+    and HiFi4 costs only +4–6 %, so the FPU math exposed on the wall is a few percent at most.
+- **Issues encountered**: two, both caught as regressions and both fixed rather than accepted, and
+  both are the same shape of mistake — *a coarser or deeper structure is not free when the wall is a
+  serial read*.
+  1. **Widening `l1_working_budget` is a measured LOSS.** The queue named it as lever (1) ("a larger,
+     measured budget directly coarsens `block_rows`"). Raising the fallback to the part's real
+     1.46 MB does coarsen it — `(1,1,8192,5120)` goes B=2 → 5 and `(1,1,8192,7168)` B=1 → 2 — and
+     costs **+5.7 %** and **+3.7 %**. A coarser block means a *longer fully-serial DRAM read* before
+     compute can start, which is the opposite of what this profile wants. Kept at 928 KB, now for a
+     measured reason instead of only a conservative one (`l1_ledger.md` updated).
+  2. **The overlap rung, ungated, regressed `(1,1,2048,1024)` by +1.4 %** — see lever 2's third
+     predicate. Also measured and rejected: the **writer twin** `OUT_CB_DEPTH` at 3 and 4 (3 is
+     inside noise on the two narrow shapes and +1.4 % / +2.7 % on the two wide ones; 4 is worse), so
+     the writer's depth was already at its winning value and the writer's *batching* moved with the
+     reader's through the shared `DM_CHUNK_TILES`.
+- **Left on the table (a finding, not a task)**: nothing on this profile. The interleaved prefill
+  regime is within 3–8 % of a bare unary's DRAM wall, so the next real win is not a kernel change
+  here — it is Refinement 5's sharded geometries, whose references (25640 ns for the block-sharded
+  prefill) sit *below* the measured ~3.5 µs dispatch + boot floor plus any transfer, i.e. a
+  fixed-cost problem rather than a bandwidth one.
+- **Tests added**: `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_perf_prefill.py` — the
+  prefill harness at the group's exact config (the pre-existing harness measures a cheaper cell), with
+  file-based selectors for `DM_CHUNK_TILES` / `IN_CB_DEPTH` / `OUT_CB_DEPTH` / the L1 budget and a
+  fidelity probe, patching `create_program_descriptor.__globals__` (the dict the op really executes
+  in). `test_rms_norm_double_buffer.py` — the new path's pin: the immutable acceptance suite's tallest
+  shape is 8 tile-rows, so on a 110-core grid **no existing test reaches the depth-2 rung at all**, and
+  a wrong pack base is silent (right values, one block missing its `1/rms`). Each case asserts the
+  *plan* (`in_depth > 1`, and a block to prefetch) before the values, plus the two negative pins —
+  short blocks and the whole decode regime must decline the rung. `test_rms_norm_perf.py` gained the
+  same two knob selectors so the R3-vs-R4 A/B is reproducible at the Phase 0 config.

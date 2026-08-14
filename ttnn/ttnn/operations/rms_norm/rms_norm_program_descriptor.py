@@ -548,6 +548,16 @@ def _plan(device, input_tensor, *, has_gamma, bytes_):
             continue
         cap = max(1, _div_up(max_rows_full, depth)) if depth > 1 else max_rows_full
         chosen = next((b for b in range(cap, 0, -1) if _fits_depth(b, depth)), 0)
+        # ...and the block that survives the cap must still be worth prefetching.
+        # Splitting a block in two buys one hidden read and COSTS one extra set of
+        # per-block fixed costs (LLK init + format reconfig, a pipeline fill/drain,
+        # and — when s > 1 — a whole gather + mcast + semaphore round trip).  A
+        # block shorter than one in-flight NoC burst has no read worth hiding, so
+        # the trade goes the wrong way: measured +1.4% on (1,1,2048,1024), whose
+        # depth-2 block is 16 tiles.  DM_CHUNK_TILES *is* that burst, so the
+        # threshold is that knob rather than a second literal beside it.
+        if depth > 1 and chosen * slice_tiles < DM_CHUNK_TILES:
+            chosen = 0
         if chosen:
             block_rows, in_depth = chosen, depth
             break
