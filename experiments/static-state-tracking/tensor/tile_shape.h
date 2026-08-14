@@ -32,7 +32,7 @@ enum class Layout : uint8_t {
 // On-L1 footprint of one tile.
 // ----------------------------------------------------------------------------
 constexpr uint32_t tile_size_bytes_of(DataFormat F, uint32_t tile_hw) {
-    return (F == DataFormat::Float16_b) ? tile_hw * 2u : 0u;
+    return (F == DataFormat::Float16_b || F == DataFormat::UInt16) ? tile_hw * 2u : 0u;
 }
 
 // ----------------------------------------------------------------------------
@@ -65,9 +65,13 @@ struct TileShape {
 };
 
 // ----------------------------------------------------------------------------
-// The one tile the prototype uses: 32×32 Float16_b (2×2 faces of 16×16).
+// The tiles the prototype uses: 32×32 (2×2 faces of 16×16), Float16_b and
+// UInt16 (the value/index pair of formats sort- and SDPA-style kernels
+// alternate between).
 // ----------------------------------------------------------------------------
 using Face16x16_Float16_b = FaceShape<16, 16, DataFormat::Float16_b>;
 using Tile32x32_Float16_b = TileShape<Face16x16_Float16_b, 2, 2>;
+using Face16x16_UInt16 = FaceShape<16, 16, DataFormat::UInt16>;
+using Tile32x32_UInt16 = TileShape<Face16x16_UInt16, 2, 2>;
 
 }  // namespace sst::tensor

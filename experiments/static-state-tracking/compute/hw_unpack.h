@@ -24,6 +24,7 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_defs.h"
+#include "llk_unpack_common.h"  // _llk_unpack_reconfig_data_format_srca_impl_
 
 #include "experiments/static-state-tracking/inc/state.h"  // sst::TileConfig
 
@@ -56,6 +57,34 @@ inline void unpack_hw_cfg(const sst::TileConfig& src_a, const sst::TileConfig& s
 
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size_bytes_b), 0, LO_16(p_gpr_unpack::TILE_SIZE_B));
     TT_SETDMAREG(0, LOWER_HALFWORD(tile_size_bytes_a), 0, LO_16(p_gpr_unpack::TILE_SIZE_A));
+}
+
+// Granular SrcA operand-descriptor reconfigure — the tracked-field form of the
+// audited _llk_unpack_reconfig_data_format_srca_ footprint (THCON_SEC0 tile
+// descriptor format nibble, LF8 exponent mode, out data format, tile-size GPR;
+// plus stride/x-dim/z-dim baselines when the face geometry also changed).
+// ReprogramGeometry is decided at COMPILE TIME from the tracked descriptor
+// diff — LLK 1.0 makes the caller pick it via is_tile_dim_reconfig_en, which
+// is exactly the manual bookkeeping SST replaces.
+//
+// Scope note: crossing an Int8/UInt8/Int32 boundary additionally needs the
+// SrcAUnsigned + INT8-math ALU bits (audit: to_from_int8 path, fp32-dest
+// only). None of the SST formats (Float16_b, UInt16) are in that set, so that
+// path is not ported yet.
+template <typename Traits, bool ReprogramGeometry>
+inline void unpack_srca_desc_cfg(const sst::TileConfig& tile_config) {
+    // Tile-size GPR value: 16B words, matching the LLK API convention
+    // (fifo_page_size). Inert for the SST op set — unpack_a programs the tile
+    // base address explicitly per call — but kept faithful.
+    const std::uint32_t tile_size_16B = sst::tensor::tile_size_bytes_from_tile_config(tile_config) / 16;
+    _llk_unpack_reconfig_data_format_srca_impl_<
+        Traits::fp32_dest_acc,
+        ReprogramGeometry ? p_dim_stride_target::FACE_ROW_MAJOR : p_dim_stride_target::IGNORE>(
+        tile_config.data_format,
+        tile_config.data_format,  // passthrough datacopy: dest format == L1 format
+        tile_size_16B,
+        tile_config.face_r_dim,
+        tile_config.num_faces);
 }
 
 // --- SrcA-copy configure, split into two field-keyed sub-steps so the tracker

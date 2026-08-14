@@ -19,6 +19,7 @@ namespace sst::tensor {
 
 enum class DataFormat : uint8_t {
     Float16_b = 5,
+    UInt16 = 9,
     // Add more tt::DataFormat mirrors here as formats are supported, e.g.
     //   Float32 = 0, Bfp8_b = 6, …  (values must match tt::DataFormat).
 };

@@ -29,6 +29,8 @@
 #include "ckernel_template.h"
 #include "cpack_common.h"
 #include "llk_defs.h"
+#include "llk_pack.h"         // _llk_pack_configure_addrmod_ / _llk_pack_mop_config_
+#include "llk_pack_common.h"  // set_dst_write_addr
 
 #include "experiments/static-state-tracking/inc/state.h"  // sst::TileConfig
 
@@ -54,6 +56,50 @@ inline void pack_hw_cfg(const sst::TileConfig& tile_config) {
         tile_config.num_faces,
         /*partial_face=*/false,
         /*relu_config=*/0);
+}
+
+// Granular pack operand-descriptor reconfigure — the tracked-field form of the
+// audited _llk_pack_reconfig_data_format_ footprint (pack formats, exp section,
+// 32b-read, and the Default output strides). Because it re-establishes the
+// Default strides, the caller's tracked stride_prog becomes Default after this.
+template <typename Traits>
+inline void pack_desc_cfg(const sst::TileConfig& tile_config) {
+    constexpr bool fp32 = Traits::fp32_dest_acc;
+    const std::uint32_t df = tile_config.data_format;
+    const std::uint32_t tile_size_bytes = sst::tensor::tile_size_bytes_from_tile_config(tile_config);
+    reconfig_packer_data_format<fp32>(
+        df, df, tile_size_bytes, TILE_C_DIM, tile_config.num_faces, /*partial_face=*/false);
+}
+
+// Re-establish only the Default output strides (audit: PCK0_ADDR_CTRL_*_REG_0
+// group). Needed when a prior untilize op aliased the stride registers
+// (tracked as stride_prog == Untilize) but the descriptor formats are intact.
+// Drain the pack pipe before rewriting its stride config (mirrors the stall
+// reconfig_packer_data_format uses on the same register group).
+inline void pack_default_strides_cfg(const sst::TileConfig& tile_config) {
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK | p_stall::THCON);
+    set_packer_strides<ckernel::PackMode::Default>(tile_config.data_format, TILE_C_DIM);
+}
+
+// Default-mode PACR MOP (addr-mods + template + packer X counter), one tile per
+// run. Strides are DESCRIPTOR state (see pack_desc_cfg / stride_prog) and are
+// deliberately not programmed here — the split LLK 1.0 approximates with its
+// caller-maintained skip_addrmod_config / skip_packer_strides flags.
+inline void pack_default_mop_cfg(const sst::TileConfig& tile_config) {
+    _llk_pack_configure_addrmod_<ckernel::PackMode::Default>();
+    _llk_pack_mop_config_<ckernel::PackMode::Default, /*zero_output=*/false>(
+        tile_config.face_r_dim, TILE_C_DIM, tile_config.num_faces, /*num_tiles=*/1);
+
+    // Init owns the packer X (datum) counter (single row on Blackhole).
+    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+}
+
+// Pack one DST tile to L1 in the natural tiled layout (Default mode).
+inline void pack_tile_run(const std::uint32_t dst_tile_index, const std::uint32_t out_l1_addr_16B) {
+    set_dst_write_addr(dst_tile_index);
+    program_packer_destination(out_l1_addr_16B - 1);
+    ckernel::ckernel_template::run();
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);  // reset z counters
 }
 
 template <typename Traits>

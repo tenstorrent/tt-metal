@@ -35,9 +35,13 @@ namespace hw {
 
 using namespace ckernel;
 
-// One-shot math configure.
+// One-shot math configure. The zero-flag state is a pure function of the two
+// source formats (integer formats must keep zero-substitution disabled so int
+// datums with zero exponent bits pass the FPU bit-exact), so it is established
+// here from the startup operand formats and re-derived on every tracked
+// format transition (see math_srca_fmt_cfg).
 template <typename Traits>
-inline void math_hw_cfg() {
+inline void math_hw_cfg(const sst::TileConfig& src_a, const sst::TileConfig& src_b) {
     constexpr bool fp32 = Traits::fp32_dest_acc;
 
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_zeroacc_absolute_tile_mode_RMW>(0);
@@ -46,6 +50,18 @@ inline void math_hw_cfg() {
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(0);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(fp32);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(fp32);
+
+    math::_configure_default_zero_flag_state_(src_a.data_format, src_b.data_format);
+}
+
+// MATH half of the SrcA format transition — the tracked-field form of the
+// audited _llk_math_reconfig_data_format_srca_ footprint. On Blackhole the ALU
+// source format is inferred, so for non-Int8/Int32 formats this reduces to
+// re-deriving the zero-flag state. LLK 1.0 pairs the new SrcA format with the
+// src_zero_flag_srcb_fmt SOFTWARE SHADOW here; SST passes the SrcB format from
+// the tracked state instead — the shadow's job done at compile time.
+inline void math_srca_fmt_cfg(const std::uint32_t srca_format, const std::uint32_t srcb_format) {
+    math::_configure_default_zero_flag_state_(srca_format, srcb_format);
 }
 
 // Claim the whole DST for MATH at startup (blocks until previous packs drain).

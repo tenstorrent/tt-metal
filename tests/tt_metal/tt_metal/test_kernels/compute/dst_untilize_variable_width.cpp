@@ -85,7 +85,12 @@ void kernel_main() {
         dfb_out0.reserve_back(full_ct_dim);
 
         // Main blocks (width w_main). Re-init needed on every row after the
-        // first: the previous row ended at the tail width.
+        // first: the previous row ended at the tail width. The production
+        // flavor pairs every re-init with pack_untilize_uninit, per the API
+        // contract ("call after the last pack_untilize_dest, before
+        // initializing another operation") — exactly what the in-tree kernels
+        // (bmm fused-bias, transpose_wh_rm) do. Skipping the uninit with the
+        // remap-reconfiguring init corrupts output intermittently.
 #ifdef VW_SKIP_REMAP
         if (r == 0) {
             pack_untilize_dest_init<w_main, full_ct_dim>(dfb::out);
@@ -94,6 +99,9 @@ void kernel_main() {
                 dfb::out);
         }
 #else
+        if (r != 0) {
+            pack_untilize_uninit(dfb::out);
+        }
         pack_untilize_dest_init<w_main, full_ct_dim>(dfb::out);
 #endif
         for (uint32_t b = 0; b < num_main; ++b) {
@@ -113,6 +121,7 @@ void kernel_main() {
 #ifdef VW_SKIP_REMAP
         pack_untilize_dest_init<w_tail, full_ct_dim, false, TILE_C_DIM, false, false /*configure_remap*/>(dfb::out);
 #else
+        pack_untilize_uninit(dfb::out);
         pack_untilize_dest_init<w_tail, full_ct_dim>(dfb::out);
 #endif
         for (uint32_t t = 0; t < num_tail; ++t) {

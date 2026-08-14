@@ -59,12 +59,29 @@ using TraitsFrom = KernelTraits<S.global.dest.value.fp32_acc, S.global.dest.valu
 // ---------------------------------------------------------------------------
 
 // copy_tile writes: unpack program (mode+geometry), math FPU program
-// (mode+geometry). Descriptors and global cfg are requires-only (unchanged).
+// (mode+geometry), and — when the tile type differs from the tracked SrcA
+// descriptor — the SrcA descriptor plus the global ALU srcA-format/zero-flag
+// pair (audit: unpack reconfig_srca writes THCON_SEC0, math reconfig_srca
+// writes the zero-flag group).
 constexpr State with_copy(State s, const TileConfig& tile_config) {
     s.unpack.mode = Tracked<UnpackMode>{UnpackMode::DataCopy};
     s.unpack.tile_config = Tracked<TileConfig>{tile_config};
     s.math.mode = Tracked<MathMode>{MathMode::DataCopy};
     s.math.tile_config = Tracked<TileConfig>{tile_config};
+    s.unpack.src_a_desc = Tracked<TileConfig>{tile_config};
+    AluFmtCfg alu = s.global.alu_fmt.value;  // requires alu_fmt known (asserted in copy_tile)
+    alu.srca_format = tile_config.data_format;
+    s.global.alu_fmt = Tracked<AluFmtCfg>{alu};
+    return s;
+}
+
+// pack_tile writes: pack program (Default mode + geometry), pack descriptor
+// (formats + Default strides when reconfigured), stride_prog = Default.
+constexpr State with_pack(State s, const TileConfig& tile_config) {
+    s.pack.mode = Tracked<PackMode>{PackMode::Default};
+    s.pack.tile_config = Tracked<TileConfig>{tile_config};
+    s.pack.desc = Tracked<TileConfig>{tile_config};
+    s.pack.stride_prog = Tracked<PackStrideProgram>{PackStrideProgram::Default};
     return s;
 }
 
@@ -87,6 +104,10 @@ constexpr State with_untilize(
 template <const State& S, typename TileT>
 struct CopyNext {
     static constexpr State value = with_copy(S, Resolver<TileT>::tile_config());
+};
+template <const State& S, typename TileT>
+struct PackTileNext {
+    static constexpr State value = with_pack(S, Resolver<TileT>::tile_config());
 };
 template <const State& S, uint16_t TilesPerBlock, uint16_t TilesPerRow, typename TileT>
 struct UntilizeNext {
@@ -162,7 +183,7 @@ ALWI auto hw_startup() {
     // exactly once (straight-line: the only time; in a loop: hoisted by `loop`).
     UNPACK((hw::unpack_hw_cfg<ActiveKernelTraits>(tile_config_in_a, tile_config_in_b)));
     MATH((hw::math_pack_sync_cfg<ActiveKernelTraits>()));
-    MATH((hw::math_hw_cfg<ActiveKernelTraits>()));
+    MATH((hw::math_hw_cfg<ActiveKernelTraits>(tile_config_in_a, tile_config_in_b)));
     PACK((hw::pack_hw_cfg<ActiveKernelTraits>(tile_config_out)));
     PACK((hw::pack_dest_cfg<ActiveKernelTraits>()));
 
@@ -188,12 +209,19 @@ ALWI void tile_regs_release() { PACK((hw::pack_dest_section_done<ActiveKernelTra
 // copy_tile: datacopy one tile A -> DST[dst_idx].
 //
 // requires: global.dest known (fp32 selects the MOV vs ELWADD datacopy MOP)
-//           global.alu_fmt.srca_format == TileT's format (ALU consumes SrcA)
-//           unpack.src_a_desc == TileT's config (descriptor must match the
-//             tile being unpacked; granular descriptor reconfig is not yet
-//             ported, so a mismatch is a compile error, not a reconfigure)
-//           unpack/math programs == datacopy@geometry (reconfigured on mismatch)
-// writes:   unpack.{mode,tile_config}, math.{mode,tile_config}
+//           global.alu_fmt known (the zero-flag state pairs SrcA with the
+//             tracked SrcB format)
+//           unpack.src_a_desc == TileT's config — RECONFIGURED on mismatch:
+//             the format sub-step re-emits only the THCON_SEC0 descriptor
+//             group + the MATH zero-flag pair; the geometry sub-step adds the
+//             stride/x-dim/z-dim baselines only when the face geometry also
+//             changed (LLK 1.0 makes the caller pick via
+//             is_tile_dim_reconfig_en — a manual flag SST derives)
+//           unpack/math programs == datacopy@geometry (reconfigured on
+//             mismatch; the MOPs depend on geometry, NOT on the data format,
+//             so a pure format swap re-emits no MOP)
+// writes:   unpack.{mode,tile_config,src_a_desc}, math.{mode,tile_config},
+//           global.alu_fmt.srca_format (+ its derived zero-flag)
 // clobbers: — (its counters/dvalid traffic is class-A protocol, balanced per call)
 // ---------------------------------------------------------------------------
 template <const State& S, typename TileT, Backend B>
@@ -202,27 +230,42 @@ ALWI auto copy_tile(Tag<S>, const Tensor<TileT, B>& in, uint32_t in_idx, uint32_
 
     static_assert(S.global.dest.known, "copy_tile requires an established DEST config — call hw_startup first");
     static_assert(
-        S.unpack.src_a_desc.matches(tile_config),
-        "copy_tile requires the SrcA descriptor configured for this tile type (established by hw_startup; "
-        "granular descriptor reconfiguration is not yet ported to SST)");
-    static_assert(
-        S.global.alu_fmt.known && S.global.alu_fmt.value.srca_format == tile_config.data_format,
-        "copy_tile requires the ALU SrcA format to match this tile type");
+        S.global.alu_fmt.known,
+        "copy_tile requires an established ALU format config — call hw_startup first");
 
-    // MATH: single datacopy-MOP sub-step (depends on mode + geometry + fp32).
-    constexpr bool m_all =
-        !S.math.mode.matches(MathMode::DataCopy) || !S.math.tile_config.matches(tile_config);
+    // SrcA operand descriptor: reconfigure only what the tracked diff proves
+    // changed. Format-only swaps (the sort/SDPA value<->index pattern) emit
+    // ~4 config writes; geometry changes add the stride/dim group.
+    constexpr bool desc_fmt_change =
+        !S.unpack.src_a_desc.known || S.unpack.src_a_desc.value.data_format != tile_config.data_format;
+    constexpr bool desc_geom_change =
+        !S.unpack.src_a_desc.known || S.unpack.src_a_desc.value.face_r_dim != tile_config.face_r_dim ||
+        S.unpack.src_a_desc.value.num_faces != tile_config.num_faces;
+    if constexpr (desc_fmt_change || desc_geom_change) {
+        UNPACK((hw::unpack_srca_desc_cfg<TraitsFrom<S>, desc_geom_change>(tile_config)));
+        MATH((hw::math_srca_fmt_cfg(tile_config.data_format, S.global.alu_fmt.value.srcb_format)));
+    }
 
-    // UNPACK: format sub-step keys on geometry (tile_config); MOP sub-step keys on op
-    // mode AND geometry — its outer loop count is tile_config.num_faces, so a same-mode
-    // geometry change must still re-emit the MOP.
-    if constexpr (!S.unpack.tile_config.matches(tile_config)) {
+    // UNPACK program: face sub-step keys on mode + face_r_dim (haloize + x_end);
+    // MOP sub-step keys on mode + num_faces (the MOP outer loop count). Neither
+    // depends on the data format.
+    constexpr bool u_geom_known = S.unpack.tile_config.known;
+    if constexpr (
+        !S.unpack.mode.matches(UnpackMode::DataCopy) || !u_geom_known ||
+        S.unpack.tile_config.value.face_r_dim != tile_config.face_r_dim) {
         UNPACK((hw::unpack_datacopy_face_cfg(tile_config)));
     }
-    if constexpr (!S.unpack.mode.matches(UnpackMode::DataCopy) || !S.unpack.tile_config.matches(tile_config)) {
+    if constexpr (
+        !S.unpack.mode.matches(UnpackMode::DataCopy) || !u_geom_known ||
+        S.unpack.tile_config.value.num_faces != tile_config.num_faces) {
         UNPACK((hw::unpack_datacopy_mop_cfg(tile_config)));
     }
-    if constexpr (m_all) {
+
+    // MATH program: the datacopy MOP keys on mode + num_faces (+ fp32 from the
+    // tracked dest config); format-agnostic (MOVA2D moves 16-bit rows).
+    if constexpr (
+        !S.math.mode.matches(MathMode::DataCopy) || !S.math.tile_config.known ||
+        S.math.tile_config.value.num_faces != tile_config.num_faces) {
         MATH((hw::math_a2d_cfg<TraitsFrom<S>>(tile_config)));
     }
 
@@ -232,6 +275,50 @@ ALWI auto copy_tile(Tag<S>, const Tensor<TileT, B>& in, uint32_t in_idx, uint32_
     (void)in_idx;
     (void)dst_idx;
     return Tag<CopyNext<S, TileT>::value>{};
+}
+
+// ---------------------------------------------------------------------------
+// pack_tile: pack one DST tile -> L1 in the natural tiled layout (Default
+// mode).
+//
+// requires: global.dest known, with remap DISABLED (Default pack reads the
+//             natural tiled DST layout — hw_startup<..., Remap=false>)
+//           pack.desc == TileT's config — RECONFIGURED on mismatch (formats +
+//             Default strides); if only the strides were aliased by a prior
+//             untilize (stride_prog != Default), just the stride group is
+//             re-emitted
+//           pack program == Default@geometry (MOP re-emitted on mode or
+//             geometry switch; format-agnostic)
+// writes:   pack.{mode,tile_config,desc}, pack.stride_prog = Default
+// clobbers: — (the per-call L1 address / DST W-counter traffic is class-A)
+// ---------------------------------------------------------------------------
+template <const State& S, typename TileT, Backend B>
+ALWI auto pack_tile(Tag<S>, const Tensor<TileT, B>& out, uint32_t dst_idx, uint32_t out_tile_idx) {
+    constexpr TileConfig tile_config = Resolver<TileT>::tile_config();
+
+    static_assert(S.global.dest.known, "pack_tile requires an established DEST config — call hw_startup first");
+    static_assert(
+        !S.global.dest.value.remap,
+        "pack_tile (Default mode) packs the natural tiled DST layout — hw_startup<..., Remap=false> required");
+
+    if constexpr (!S.pack.desc.matches(tile_config)) {
+        PACK((hw::pack_desc_cfg<TraitsFrom<S>>(tile_config)));  // formats + Default strides
+    } else if constexpr (!S.pack.stride_prog.matches(PackStrideProgram::Default)) {
+        PACK((hw::pack_default_strides_cfg(tile_config)));
+    }
+
+    if constexpr (
+        !S.pack.mode.matches(PackMode::Default) || !S.pack.tile_config.known ||
+        S.pack.tile_config.value.face_r_dim != tile_config.face_r_dim ||
+        S.pack.tile_config.value.num_faces != tile_config.num_faces) {
+        PACK((hw::pack_default_mop_cfg(tile_config)));
+    }
+
+    PACK((hw::pack_tile_run(dst_idx, out.tile_addr_16B(out_tile_idx))));
+    (void)out;
+    (void)dst_idx;
+    (void)out_tile_idx;
+    return Tag<PackTileNext<S, TileT>::value>{};
 }
 
 // ---------------------------------------------------------------------------
