@@ -647,6 +647,28 @@ def before_loop(
         )
         if not perf_node:
             raise RuntimeError("could not auto-generate a perf test from --pcc-test (see messages above)")
+        # SAY WHAT THE TEST DECIDED FOR ITSELF. The tool owns ISL/OSL/batch/depth and sends them; a
+        # generated test that defines its OWN capped count is a measurement condition nobody asked
+        # for, and nothing read it back. Voxtral's test defined TT_PERF_AUDIO_STREAMS=2 while the
+        # pipeline was built for its declared batch of 8, so prefill measured a quarter of the real
+        # workload and was printed against a full-batch roofline. Reported rather than refused: the
+        # same test also defines TT_PERF_FLUSH_EVERY=32, which changes no workload, and no static rule
+        # tells the two apart.
+        try:
+            from .perf_test_gen import invented_workload_vars as _invented
+
+            _pp_abs = model_root / str(perf_node).partition("::")[0]
+            _inv = _invented(_pp_abs.read_text(errors="ignore"), stages=_survey and [] or [])
+            if _inv:
+                print(
+                    "      note - the generated perf test defines its own workload knob(s): %s "
+                    "(the tool does not set these; a capped default measures less than the model's "
+                    "declared batch)" % ", ".join("%s=%d" % (v, d) for v, d in _inv),
+                    file=sys.stderr,
+                    flush=True,
+                )
+        except Exception:  # noqa: BLE001 -- never block generation on a report line
+            pass
         _pp, _, _pf = perf_node.partition("::")
         pathmap["perf_test"] = {"path": _pp, "case": _pf, "note": "auto-gen from --pcc-test"}
         pathmap["perf_tests"] = [pathmap["perf_test"]]

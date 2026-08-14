@@ -694,6 +694,51 @@ def _correction_feedback(reason: str, failure: str, prev_draft: str | None) -> s
     return "\n".join(parts)
 
 
+# The workload knobs the TOOL owns. Anything else that shrinks the work is the generator inventing a
+# measurement condition nobody asked for.
+_KNOWN_WORKLOAD_VARS = ("TT_PERF_ISL_TOKENS", "TT_PERF_OSL_TOKENS", "TT_PERF_BATCH", "TT_PERF_LAYERS", "TT_PERF_TRACE",
+                        "TT_PERF_HEADS", "TT_PERF_SEQ_LEN", "TT_PERF_TRACE_REGION", "TT_PERF_PREFILL_TRACE")  # fmt: skip
+_ENV_INT_DEFAULT_RE = re.compile(r'os\.environ\.get\(\s*"(TT_PERF_[A-Z0-9_]+)"\s*,\s*"(\d+)"\s*\)')
+
+
+def invented_workload_vars(src: str, stages=()) -> list:
+    """Env-driven counts the generated test invented, with a literal default that SHRINKS the work.
+
+    BATCH BELONGS TO THE MODEL and the skeleton says so: the tool sends TT_PERF_BATCH=0 meaning "ask
+    the pipeline", and build_pipeline answers with its own DECODE_BATCH. That channel works. What
+    defeats it is a SECOND axis the tool knows nothing about.
+
+    Measured on Voxtral-Mini-3B: the generated test defined
+
+        PERF_AUDIO_STREAMS = int(os.environ.get("TT_PERF_AUDIO_STREAMS", "2"))
+
+    which appears nowhere in this repo -- the agent writing the test decided the model's heaviest
+    trimmable input was the clip count and picked 2. The pipeline was still BUILT for its declared
+    batch of 8, and then handed 2 clips, so prefill measured a quarter of the real workload and was
+    printed beside a full-batch roofline: 148.76 ms against a 7.48 ms theoretical. Nothing read the
+    variable back, so nothing could notice.
+
+    Trimming input for a tracy run is legitimate -- it is how a deep model stays under the profiler's
+    marker limit. Inventing the axis, defaulting it below the model's own batch, and never reporting
+    it is not. A per-stage depth variable is not flagged: those names come from PIPELINE_STAGES and
+    the tool sets them.
+
+    REPORTED, NOT REFUSED. Not every invented knob caps input -- the same test also defines
+    TT_PERF_FLUSH_EVERY=32, a profiler flush cadence that changes no workload -- and no static rule
+    separates the two reliably. Refusing on a heuristic would reject working tests; the defect worth
+    fixing is that nothing ever surfaced these, so a 2-clip measurement sat beside an 8-clip ceiling
+    for a week. Naming them where the run can see them is the fix.
+    """
+    allowed = set(_KNOWN_WORKLOAD_VARS) | {"TT_PERF_%s_LAYERS" % str(st).upper() for st in (stages or ())}
+    out = []
+    for var, default in _ENV_INT_DEFAULT_RE.findall(src or ""):
+        if var in allowed:
+            continue
+        if int(default) > 0:  # a positive literal is a CAP; 0 means "ask the pipeline"
+            out.append((var, int(default)))
+    return sorted(set(out))
+
+
 def validate_generated_perf_test(out_path: Path, task: str, component: bool = False) -> tuple[str, str]:
     """Execute the freshly-generated perf test and JUDGE it, model- and hardware-agnostically:
       skip      device/ttnn unavailable at generation time -> soft-accept (never a false rejection)
@@ -1208,6 +1253,14 @@ def generate_perf_test(
         "magnitude slower and the host blocks in ttnn.synchronize_device for many minutes, stalling the run. "
         "Make the small size env-overridable with a SMALL default. A perf profile only needs a "
         "representative dispatch-dense pass, not the full-length run.\n"
+        "- The WORKLOAD SIZE comes from the model, never from a literal you choose. The skeleton sends "
+        "TT_PERF_BATCH=0, which means ASK THE PIPELINE -- build_pipeline answers with its own declared "
+        "batch. Do NOT introduce another environment variable that caps how much input is fed (clip "
+        "count, stream count, image count, chunk count). If the shape of the input genuinely needs a "
+        "count, DERIVE it from the batch the pipeline was built with, and let the environment override "
+        "it DOWNWARD only. A test that builds for the model's batch and then feeds a fraction of it "
+        "measures a workload nobody asked for, and its number is later compared against a full-batch "
+        "ceiling.\n"
         "- KEEP the skeleton's `_pl` / `PERF_LAYERS` depth lines VERBATIM near the top. A POSITIVE "
         "TT_PERF_LAYERS caps profiled depth for deep models so the device profiler's marker buffer does "
         "not overflow (worse on a multi-chip mesh, where markers scale x chips); the tool sends that "
