@@ -658,6 +658,54 @@ def patch_gemma4_trace_model_args(model_args, *, prefill_trace_enabled: bool = T
         model_args.can_enable_trace = lambda prefill_seq_len, num_cached_tokens=0, batch_size=1: False
 
 
+def ensure_trace_prefill_seq_len(seq_len: int) -> bool:
+    """Opt ``seq_len`` into prefill Metal Trace capture/replay allow-list.
+
+    Returns True when the bucket was newly added. Default lenses omit 4096 for
+    vLLM chunked-prefill APC (#51186); standalone single-chunk demos should use
+    :func:`enable_single_chunk_demo_prefill_trace_bucket` instead of changing the
+    global default.
+    """
+    n = int(seq_len)
+    if n <= 0 or n > GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN:
+        return False
+    if n in GEMMA4_TRACE_PREFILL_SEQ_LENS:
+        return False
+    GEMMA4_TRACE_PREFILL_SEQ_LENS.append(n)
+    GEMMA4_TRACE_PREFILL_SEQ_LENS.sort()
+    logger.info(
+        "Enabled prefill Metal Trace bucket seq_len={} "
+        "(omitted from default lenses for vLLM APC safety; ok for single-chunk demos)",
+        n,
+    )
+    return True
+
+
+def enable_single_chunk_demo_prefill_trace_bucket(
+    *,
+    max_seq_len: int,
+    max_prefill_chunk_size: int,
+    model_args_list,
+) -> bool:
+    """Trace the demo's single-chunk 4k bucket when the run actually uses it.
+
+    12B long-4k keeps ``prefill_chunk=4096`` (= ``max_seq_len``), but default
+    ``GEMMA4_TRACE_PREFILL_SEQ_LENS`` stops at 2048 so measured prefill stayed
+    eager. Opting 4096 in and capturing it cut warm TTFT ~1023→976 ms on WH 1x8
+    / 12B. No-ops for short demos (``max_seq_len < 4096``) and for multi-chunk
+    runs (``chunk < max_seq_len``), which already use the 2048 traced path.
+    """
+    chunk = int(max_prefill_chunk_size)
+    msl = int(max_seq_len)
+    if chunk <= 0 or msl < 4096 or chunk < msl:
+        return False
+    bucket = min(chunk, GEMMA4_MAX_TRACE_PREFILL_SEQ_LEN)
+    ensure_trace_prefill_seq_len(bucket)
+    for args in model_args_list:
+        patch_gemma4_trace_model_args(args, prefill_trace_enabled=True)
+    return True
+
+
 def maybe_disable_pli_prefill_trace(enable_trace: bool, model, batch_size: int = 1) -> bool:
     """Return False when PLI prefill must not use trace capture.
 
