@@ -96,3 +96,11 @@
 {"source":"run_safe_pytest","pid":3163357,"started_at_ms":1786670085494,"wait_ms":2,"run_ms":64349,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":0,"precompile_mode":"cold","precompile_reason":"nothing_to_compile","precompile_s":10}
 {"source":"tt-probe","pid":3168889,"started_at_ms":1786670172356,"wait_ms":194,"run_ms":68115,"test_path":"rms_norm","exit_code":0}
 {"source":"tt-probe","pid":3171928,"started_at_ms":1786670277674,"wait_ms":177,"run_ms":52529,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":3173634,"started_at_ms":1786670371258,"wait_ms":2,"run_ms":28043,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op_loose","exit_code":0,"precompile_mode":"cold","precompile_reason":"nothing_to_compile","precompile_s":10}
+{"source":"run_safe_pytest","pid":3174799,"started_at_ms":1786670411490,"wait_ms":2,"run_ms":119990,"test_path":"eval/golden_tests/rms_norm/test_golden.py::test_op_loose","exit_code":143,"precompile_mode":"cold","precompile_reason":"nothing_to_compile","precompile_s":14}
+{"source":"tt-probe","pid":3187276,"started_at_ms":1786671325361,"wait_ms":188,"run_ms":89840,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":3188070,"started_at_ms":1786671479885,"wait_ms":186,"run_ms":49170,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":3188754,"started_at_ms":1786671571906,"wait_ms":260,"run_ms":47583,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":3190255,"started_at_ms":1786671834238,"wait_ms":179,"run_ms":60696,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":3191770,"started_at_ms":1786671939495,"wait_ms":2,"run_ms":24341,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_sharded.py","exit_code":1,"precompile_mode":"cold","precompile_reason":"nothing_to_compile","precompile_s":9}
+{"source":"run_safe_pytest","pid":3192900,"started_at_ms":1786671978609,"wait_ms":2,"run_ms":12924,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_sharded.py","exit_code":0,"precompile_mode":"cold","precompile_reason":"nothing_to_compile","precompile_s":8}

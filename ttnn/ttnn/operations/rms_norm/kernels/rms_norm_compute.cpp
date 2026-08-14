@@ -163,6 +163,20 @@ void kernel_main() {
     };
 
     for (uint32_t block = 0; block < num_blocks; ++block) {
+        // Where an IN-PLACE pack lands, measured from cb_input_tiles' BASE.
+        //
+        // A pack address is `get_write_ptr(cb) + tile_index * page`, and only
+        // cb_reserve_back / cb_push_back move a *consumer's* write pointer —
+        // compute never pushes to cb_input_tiles, so its write pointer sits at the
+        // CB base for the kernel's life while `cb_pop_front` walks the read
+        // pointer forward.  When the CB's capacity is exactly one block
+        // (interleaved, and TILE+sharded at the default block_rows == shard_rows)
+        // the read pointer wraps back to base every block and this is 0.  When the
+        // CB is bound to a whole resident shard AND the L1 solve had to cut
+        // block_rows below shard_rows, it is the block's page offset into that
+        // shard — without it every block after the first would rewrite block 0's
+        // pages and silently drop its own scale factor.
+        const uint32_t pack_base = (block * BLOCK_TILES) % IN_WAIT_TILES;
         // ---- tilize_block (ROW_MAJOR only) ----
         if constexpr (IS_ROW_MAJOR) {
             ckl::tilize<SLICE_HIDDEN_TILES, cb_rm_stage_in, cb_input_tiles>(BLOCK_ROWS);
@@ -176,7 +190,10 @@ void kernel_main() {
         //      hidden tile, and only when W % 32 != 0 under TILE layout.
         if constexpr (MASK_ENABLED) {
             if (do_mask) {
+                // Read window is relative to the READ pointer (which pops walk
+                // forward); the pack window is relative to the CB base.
                 const ckl::StridedTileRange window{mask_local_col, SLICE_HIDDEN_TILES};
+                const ckl::StridedTileRange pack_window{pack_base + mask_local_col, SLICE_HIDDEN_TILES};
                 ckl::eltwise_chain(
                     ckl::IterationShape::grid(BLOCK_ROWS, 1),
                     ckl::BinaryFpu<
@@ -191,7 +208,7 @@ void kernel_main() {
                         window},
                     ckl::PackTile<ckl::output(
                         cb_input_tiles, ckl::ReservePolicy::None, ckl::PushPolicy::None, ckl::TileOffset::Strided)>{
-                        window});
+                        pack_window});
                 sync_pack_to_unpack();  // mask packed x in place; Sum(x^2) unpacks it next
             }
         }
@@ -265,7 +282,13 @@ void kernel_main() {
         // ---- scale_block: x *= rsqrt(mean + eps). A REDUCE_ROW result is
         //      column-shaped, so it broadcasts back across columns (Col).
         if constexpr (HAS_GAMMA || IS_ROW_MAJOR) {
-            ckl::mul<x_held, rms_col, in_place>(block_shape);
+            // Spelled as an explicit chain rather than `ckl::mul<...>` only because
+            // the convenience wrappers default-construct their elements and so
+            // cannot carry the runtime `pack_base`.  Same helper, same chain.
+            ckl::eltwise_chain(
+                block_shape,
+                ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_held, rms_col>{},
+                ckl::PackTile<in_place>{pack_base});
             sync_pack_to_unpack();  // x*r packed in place; the next stage unpacks it
         } else {
             ckl::mul<x_held, rms_col, to_output>(block_shape);
@@ -274,7 +297,10 @@ void kernel_main() {
         // ---- apply_gamma_block: gamma is a 1D [W] operand -> Row broadcast ----
         if constexpr (HAS_GAMMA) {
             if constexpr (IS_ROW_MAJOR) {
-                ckl::mul<x_held, gamma_row, in_place>(block_shape);
+                ckl::eltwise_chain(
+                    block_shape,
+                    ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_held, gamma_row>{},
+                    ckl::PackTile<in_place>{pack_base});
                 sync_pack_to_unpack();  // x*r*gamma packed in place; untilize unpacks it
             } else {
                 ckl::mul<x_held, gamma_row, to_output>(block_shape);
