@@ -40,15 +40,19 @@ open in `main` behind an `xfail`.
 | # | Ask | Kind | Worth |
 |---|-----|------|-------|
 | 1 | Commute integer compares to a CC polarity `SFPIADD` can fuse, instead of copy + subtract + `SFPSETCC` + `SFPCOMPC` | missed opt | 3 instr per compare-against-a-constant |
-| 2 | Lower "select between two constants under a CC, then store" to two predicated stores | missed opt | 2 instr per predicated result |
+| 2 | Lower "select between two constants under a CC, then store" to two predicated stores | missed opt | 1 instr per predicated result |
 | 3 | Fold a trailing `dst_reg++` into the preceding store's `addr_mode` | missed opt | 1 instr per DEST row |
-| 4 | Make `A && B && C` lower like nested `v_if` even when a term needs a helper instruction | missed opt | up to 8 instr per predicate |
-| 5 | Expose a total-order (sign-magnitude) compare that `v_if` can consume | **missing feature** | 2 instr, plus 4 more in dropped workarounds |
+| 4 | Make `A && B && C` lower like nested `v_if` even when a term needs a helper instruction | missed opt | 6 instr per predicate |
+| 5 | Expose a total-order (sign-magnitude) compare that `v_if` can consume | **missing feature** | 1–2 instr on the compare, plus 4 more in dropped workarounds |
 | 6 | Make `vInt`/`vUInt` relational compares correct over the full range | **correctness** | unblocks `calculate_binary_comp_uint`; removes a 6-instr hand-rolled fold |
 | 7 | `vSMag` / `DataLayout::SM32` relational compares lower to a two's-complement subtract, which cannot order sign-magnitude values | **likely bug** | — |
 
 Asks 1–4 are the bulk of the regression and none of them require new ISA surface or new
 API — they are all "sfpi already knows how to emit this, just not from this source form."
+
+Each ask is also written up as a standalone, individually fileable issue under
+[`issues/`](issues/README.md), if you would rather track them separately than as one
+umbrella.
 
 ---
 
@@ -109,7 +113,17 @@ the workarounds in §5.1–§5.4 stacked. "With ask 5" adds a total-order compar
 | int32 `lt`/`gt`/`le`/`ge` | 9 | 10 (+11%) | **9 (par)** | 9 |
 | fp32 `lt`/`gt` | 11 | 19 (+73%) | 12 (+9%) | **11 (par)** |
 | fp32 `eq`/`ne` | 14 | 20 (+43%) | 16 (+14%) | **14 (par)** |
-| fp32 `le`/`ge` | 13 | 23 (+77%) | 19 (+46%) | **13–14 (par)** |
+| fp32 `le`/`ge` | 13 | 23 (+77%) | 19 (+46%) | **13 (par)** |
+
+A note on how the last column is obtained. We can only *approximate* ask 5 today, by
+calling `__builtin_rvtt_sfpgt` for its 0/−1 lane mask and then testing the mask — which
+costs an `SFPSETCC` to get back into a CC, so it breaks even against the arithmetic
+compare it replaces. Measured that way, `le`/`ge` is 14 (`ideal_fp32_le`) and `lt`/`gt` is
+12 (`ideal_fp32_lt`). A total-order compare that sets the CC *directly*, which is what
+§5.5 actually asks for, drops the round-trip `SFPSETCC` and takes both to the column
+above. So the `le`/`ge` and `lt`/`gt` figures are one measured instruction plus one
+instruction of arithmetic we can account for exactly; `eq`/`ne` is today's 16 minus the
+two-instruction inf-tie clause a total order makes unnecessary.
 
 Read the last two columns together: **there is no case where raw TTI is fundamentally
 cheaper than sfpi.** The whole regression is (a) the optimizer not recognising four
@@ -184,10 +198,11 @@ v_if(cond) { dst_reg[0] = 1.0f; }
 v_endif;
 ```
 
-emits `SFPSTORE L9; SFPSETCC; SFPSTORE L10; SFPENCC` — **two instructions cheaper**, and
+emits `SFPSTORE L9; SFPSETCC; SFPSTORE L10; SFPENCC` — **one instruction cheaper**, and
 it stores straight out of the constant registers `L9`/`L10` with no LReg traffic at all.
-So sfpi already knows how to reach the good form; it just will not get there from the
-first spelling. On `eqz` this is 8 → 7. (`vConst0`/`vConst1` do not help and are
+The instruction that disappears is the liveness merge, the `SFPMOV` carrying the `# LV:`
+annotation. So sfpi already knows how to reach the good form; it just will not get there
+from the first spelling. On `eqz` this is 8 → 7. (`vConst0`/`vConst1` do not help and are
 deprecated — we tried.)
 
 **Ask:** recognise "assign one of two constants under a CC, then store the result" and
@@ -238,13 +253,13 @@ SFPPOPC  0
 SFPSETCC L1, 0, 6
 ```
 
-sfpi abandons CC chaining entirely and materialises the boolean into an LReg — about
-eight wasted instructions. Hoisting the constant out of the loop does not help; the
-helper instruction becomes an `SFPMOV` instead of an `SFPLOADI` and the cliff is the
-same (21 either way).
-
-Spelling the identical predicate as nested `v_if`/`v_endif` gets it back to **15**. So
-the cheap lowering exists and is reachable — `&&` just does not reach it.
+sfpi abandons CC chaining entirely and materialises the boolean into an LReg. Spelling
+the identical predicate as nested `v_if`/`v_endif` gets it back to **15**, and the six
+instructions that disappear are exactly the materialisation machinery —
+`SFPLOADI`, `SFPPUSHC`, `SFPMOV`, `SFPLOADI`, `SFPPOPC`, `SFPSETCC`. So the cheap
+lowering exists and is reachable; `&&` just does not reach it. Hoisting the constant out
+of the loop does not help either: the helper instruction becomes an `SFPMOV` instead of
+an `SFPLOADI` and the cliff is the same (21 either way).
 
 **Ask:** lower `A && B && C` the way nested `v_if` does: hoist each term's helper
 instructions ahead of the chain and chain the `SFPSETCC`s. The current behaviour means
@@ -284,9 +299,10 @@ order, and every consequence had to be worked around in source:
   (`test_binary_comp_fp32_denormal_window_ties`) and is a behaviour regression against
   raw `SFPGT`/`SFPLE`, which were exact there. We cannot close it in source at all.
 
-Measured: with a total-order compare available to `v_if`, `le`/`ge` goes 19 → 13–14
-(2 from the compare, 4 from dropping the inf-tie clause) and `eq`/`ne` goes 16 → 14 —
-both to raw-TTI parity.
+Measured through the mask escape hatch, `le`/`ge` goes 19 → 14, almost all of it from
+dropping the inf-tie clause. A compare that sets the CC directly saves the round-trip
+`SFPSETCC` on top of that, giving 13 — exact raw-TTI parity. `eq`/`ne` goes 16 → 14, also
+parity, by dropping the two-instruction inf-tie clause.
 
 **Ask:** lower `vBool(Cond, vFloat, vFloat)` to `SFPGT`/`SFPLE` with `SET_CC`, or add an
 explicit spelling (`total_order_lt(a, b)`, or `vBool(Cond, vSMag, vSMag)` once §5.7 is

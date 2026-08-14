@@ -1,8 +1,8 @@
 # sfpi codegen investigation: why the Blackhole comparison kernels regressed
 
-Supporting evidence for [ISSUE.md](ISSUE.md), which is the text of the sfpi issue.
-This branch is not intended to be merged — it exists so the issue can link to a
-runnable harness.
+Supporting evidence for [ISSUE.md](ISSUE.md), the umbrella writeup, and for the seven
+individually fileable drafts in [issues/](issues/README.md). This branch is not intended
+to be merged — it exists so those issues can link to a runnable harness.
 
 ## Background
 
@@ -22,6 +22,7 @@ compare that `v_if` can consume).
 ```sh
 ./run.sh                       # finds sfpi in $SFPI, ./runtime/sfpi, or /opt/tenstorrent/sfpi
 SFPI=/path/to/sfpi ./run.sh    # or point it explicitly
+./verify_quotes.py             # check the code quoted in issues/ still matches the probes
 ```
 
 Requires the sfpi version pinned in `tt_metal/sfpi-version` (7.69.0 at the time of
@@ -38,6 +39,8 @@ closely — e.g. int32 counts +11.1% against a measured +11.5%.
 
 | file | what it establishes |
 |---|---|
+| `ISSUE.md` | The umbrella writeup — the whole argument in one place |
+| `issues/` | The same seven asks as individually fileable issue drafts |
 | `repro.cc` | The four claims that carry the argument. **Start here.** |
 | `01_idiomatic_baseline.cc` | Cost of the kernels as PR #52932 shipped them, plus the naive int32 compare (cheap but wrong) |
 | `02_single_workarounds.cc` | Each workaround in isolation: `addr_mode` fold, hoisted constant, predicated store, raw `SFPGT`, constant registers |
@@ -48,6 +51,8 @@ closely — e.g. int32 counts +11.1% against a measured +11.5%.
 | `07_all_workarounds.cc` | Every family with all workarounds stacked |
 | `08_best_and_ideal.cc` | Best achievable today, and what a total-order compare would buy |
 | `shim.h` | Declares `ckernel::instrn_buffer` so `sfpi.h` compiles standalone |
+| `count_instructions.py` | Replay-buffer model behind every number quoted here |
+| `verify_quotes.py` | Guards the `issues/` drafts against drifting from the probes |
 
 Naming inside the probes is deliberately mechanical (`a_`…`z_`, `best_`, `ideal_`)
 because `ISSUE.md` refers to individual functions by name.
@@ -64,10 +69,16 @@ Tensix instructions per DEST row.
 | int32 `lt`/`gt`/`le`/`ge` | 9 | 10 (+11%) | **9 (par)** | 9 |
 | fp32 `lt`/`gt` | 11 | 19 (+73%) | 12 (+9%) | **11 (par)** |
 | fp32 `eq`/`ne` | 14 | 20 (+43%) | 16 (+14%) | **14 (par)** |
-| fp32 `le`/`ge` | 13 | 23 (+77%) | 19 (+46%) | **13–14 (par)** |
+| fp32 `le`/`ge` | 13 | 23 (+77%) | 19 (+46%) | **13 (par)** |
 
 The raw-TTI column is a source count: each `TTI_*`/`TT_*` macro is exactly one
 Tensix instruction. Cross-check on the counting method — the int32 fold compiles to
 `SFPLOAD, SFPLOAD, SFPSETSGN, SFPIADD, SFPXOR, SFPOR, SFPXOR, SFPSHFT, SFPSTORE`,
 the identical nine-instruction sequence in the identical order as the raw TTI it
 replaced.
+
+The last column is not directly measurable, because the primitive does not exist. The
+probes approximate it with the `__builtin_rvtt_sfpgt` mask plus an `SFPSETCC` to get back
+into a condition code, which measures one higher on the two fp32 ordering rows
+(`ideal_fp32_le` at 14, `ideal_fp32_lt` at 12). A compare that sets the CC directly drops
+that round-trip instruction. `ISSUE.md` §4 spells this out.
