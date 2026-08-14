@@ -998,6 +998,86 @@ def test_prefill_trace_is_opt_in_and_matches_the_eager_path(mesh):
         clear_generator_cache()
 
 
+def test_decode_follows_the_cache_it_is_rebound_to_after_the_trace_is_captured(mesh):
+    """A rebind to *different* buffers after decode-trace capture must not be silent.
+
+    ``ttnn_decode_forward`` calls ``paged_update_cache(layer.k_cache, layer.v_cache, ...)``,
+    so the captured decode graph bakes those buffer addresses exactly as a prefill trace
+    does.  Round 4 of the stage review found that the invalidation covered only the opt-in
+    prefill trace, while this trace runs on every token of the shipped default: a caller
+    that rebound to different buffers got a decode that read and wrote the buffers it no
+    longer owned -- wrong tokens, no error, and a log line about the *prefill* traces that
+    read as if the rebind had been handled.
+
+    The discriminating check is the last assertion: the traced decode off the rebound cache
+    must agree with the **eager** decode off the same cache, and the two prompts are chosen
+    so that a decode against the stale buffers disagrees.  Without the fix the traced step
+    answers from the first prompt's cache and the assertion fails.
+    """
+    clear_generator_cache()
+    generator = build_generator(MODEL_DIR, mesh, max_seq_len=REDUCED_MAX_SEQ, layer_indices=REDUCED_LAYERS, reuse=False)
+    prompt_a = _prompt(64, seed=11)
+    prompt_b = _prompt(64, seed=97)
+    assert prompt_a != prompt_b
+    own = generator.model.kv_cache
+    moved = None
+    try:
+        # Prompt A into the model's own cache, then a traced decode: this captures the
+        # decode trace over `own`'s buffer addresses.
+        generator.prefill_forward(torch.tensor([prompt_a]), kv_cache=own, prompt_lens=[len(prompt_a)])
+        generator.decode_forward(
+            tokens=torch.tensor([[prompt_a[-1]]], dtype=torch.long),
+            start_pos=torch.tensor([len(prompt_a)], dtype=torch.int32),
+            kv_cache=own,
+        )
+        assert generator._trace_id is not None, "the decode trace must be captured by now"
+        captured_id = generator._trace_id
+        assert generator._decode_trace_cache_sig, "and must record the cache it was captured over"
+
+        # A second, genuinely different cache, carrying prompt B.
+        moved = [
+            [ttnn.clone(k, memory_config=k.memory_config()), ttnn.clone(v, memory_config=v.memory_config())]
+            for k, v in own
+        ]
+        generator.reset()
+        generator.model.set_kv_cache(moved)
+        generator.model.reset_kv_cache()
+        generator.model.set_kv_cache(own)
+        generator.prefill_forward(torch.tensor([prompt_b]), kv_cache=moved, prompt_lens=[len(prompt_b)])
+        assert generator._trace_id is None, "a moved cache must release the decode trace"
+        assert generator._decode_trace_releases == 1
+        assert generator._decode_trace_cache_sig == ()
+
+        eager = generator.decode_forward(
+            tokens=torch.tensor([[prompt_b[-1]]], dtype=torch.long),
+            start_pos=torch.tensor([len(prompt_b)], dtype=torch.int32),
+            kv_cache=moved,
+            enable_trace=False,
+        )
+        traced = generator.decode_forward(
+            tokens=torch.tensor([[prompt_b[-1]]], dtype=torch.long),
+            start_pos=torch.tensor([len(prompt_b)], dtype=torch.int32),
+            kv_cache=moved,
+        )
+        assert generator._trace_id is not None, "and the next traced decode recaptures"
+        assert generator._trace_id != captured_id
+        assert generator._decode_trace_cache_sig not in ((),)
+        assert torch.equal(
+            traced.argmax(dim=-1), eager.argmax(dim=-1)
+        ), "the traced decode must answer from the cache it is bound to now, not the captured one"
+    finally:
+        # The recaptured trace holds `moved`'s addresses, so it goes before those buffers do.
+        generator._release_decode_trace()
+        generator.model.set_kv_cache(own)
+        if moved is not None:
+            for pair in moved:
+                for tensor in pair:
+                    ttnn.deallocate(tensor)
+        generator.teardown()
+        generator.model.deallocate()
+        clear_generator_cache()
+
+
 def test_prefill_trace_survives_rebinding_the_same_external_cache(mesh):
     """The serving path: the same external KV cache every request must not recapture.
 

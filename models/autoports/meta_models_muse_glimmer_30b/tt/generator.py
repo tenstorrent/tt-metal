@@ -322,9 +322,19 @@ class MuseGlimmerGenerator(Generator):
         #: KV-cache buffer addresses the prefill traces were captured over; see
         #: :meth:`_kv_cache_signature`.
         self._prefill_trace_cache_sig: tuple = ()
+        #: The same, for the **decode** trace.  ``ttnn_decode_forward`` calls
+        #: ``paged_update_cache(layer.k_cache, layer.v_cache, ...)``, so the captured
+        #: decode graph bakes those buffer addresses exactly as a prefill trace does, and
+        #: replaying it after a rebind to *different* buffers would read and write the old
+        #: ones -- silently wrong tokens rather than an error.  Round 4 of the stage review
+        #: found that: the invalidation covered only the opt-in prefill trace, while the
+        #: decode trace runs on every token of the shipped default.
+        #: See :meth:`_invalidate_traces_if_cache_moved`.
+        self._decode_trace_cache_sig: tuple = ()
         #: How many times a cache move has forced a release, for the log line and for the
-        #: stage's evidence; see :meth:`_invalidate_prefill_traces_if_cache_moved`.
+        #: stage's evidence; see :meth:`_invalidate_traces_if_cache_moved`.
         self._prefill_trace_releases = 0
+        self._decode_trace_releases = 0
         self._device_inputs: dict[str, ttnn.Tensor] = {}
         self._prev_page_table: torch.Tensor | None = None
         self._needs_reseed = True
@@ -614,8 +624,22 @@ class MuseGlimmerGenerator(Generator):
                     sig.append(id(cache))
         return tuple(sig)
 
-    def _invalidate_prefill_traces_if_cache_moved(self) -> None:
-        """Release the prefill traces only when the bound cache buffers actually changed.
+    def _invalidate_traces_if_cache_moved(self) -> None:
+        """Release **every** trace whose graph baked the old cache's buffer addresses.
+
+        Both the opt-in prefill trace and the always-on decode trace write the KV cache
+        through ``paged_fill_cache`` / ``paged_update_cache``, so both bake
+        ``layer.k_cache`` / ``layer.v_cache`` addresses at capture time.  Rebinding to
+        *different* buffers and replaying either one reads and writes the buffers the
+        caller no longer owns: wrong tokens, no error, and -- before round 4 of the stage
+        review caught it -- a log line about releasing the *prefill* traces that read as if
+        the rebind had been handled.  The decode trace is the one that matters most here,
+        because it runs on every token of the shipped default while the prefill trace is
+        opt-in and off.
+
+        Each trace is compared against its own recorded signature, so a caller that binds
+        one cache, decodes, and then binds a second is served correctly by recapture
+        against whichever buffers are bound at the time.
 
         The comparison is the whole fix.  ``kv_cache is not None`` -- what this used to
         test -- releases on *every* call, so a serving caller threading the same external
@@ -636,18 +660,63 @@ class MuseGlimmerGenerator(Generator):
         eligible prefill recapture.  That costs one 98 ms capture at the rebind and
         nothing after it.
         """
-        if not self._prefill_traces:
+        signature = self._kv_cache_signature()
+        stale_prefill = bool(self._prefill_traces) and signature != self._prefill_trace_cache_sig
+        stale_decode = self._trace_id is not None and signature != self._decode_trace_cache_sig
+        if not (stale_prefill or stale_decode):
             return
-        if self._kv_cache_signature() == self._prefill_trace_cache_sig:
-            return
-        self._prefill_trace_releases += 1
+        released = []
+        if stale_prefill:
+            self._prefill_trace_releases += 1
+            released.append(f"prefill x{len(self._prefill_traces)}")
+        if stale_decode:
+            self._decode_trace_releases += 1
+            released.append("decode" + (" + sampling" if self._sampling_captured else ""))
         logger.warning(
             "MuseGlimmerGenerator: the KV cache was rebound to different buffers; releasing the "
-            f"prefill traces (release {self._prefill_trace_releases}). The next eligible prefill "
-            "recaptures against the new buffers; bind the cache before the first prefill to avoid "
-            "paying for that."
+            f"{' and '.join(released)} trace(s). The next call recaptures against the new buffers; "
+            "bind the cache before the first prefill to avoid paying for that."
         )
-        self._release_prefill_traces()
+        if stale_prefill:
+            self._release_prefill_traces()
+        if stale_decode:
+            self._release_decode_trace()
+
+    def _release_decode_trace(self) -> None:
+        """Drop the decode trace, and with it the sampling trace captured over its logits.
+
+        The sampling trace has to go too: ``SamplingGenerator`` validates by tensor
+        identity against the logits it was captured over, so leaving it alive across a
+        decode recapture raises *"The provided logits tensor does not match the tensor used
+        during trace capture"* on the next sampled step.  ``decode_forward`` re-captures
+        both lazily, against whichever cache is bound then.
+
+        The drains are the same async-CCL hygiene as in :meth:`_release_prefill_traces`,
+        and equally outside any steady-state loop -- this runs at a cache rebind, not per
+        token.
+        """
+        ttnn.synchronize_device(self.mesh_device)
+        self.counters["synchronizations"] += 1
+        if self._sampling_captured:
+            try:
+                self.sampling.reset_trace()
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"failed to release the sampling trace: {exc}")
+            self._sampling_captured = False
+        if self._trace_id is not None:
+            try:
+                ttnn.release_trace(self.mesh_device, self._trace_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"failed to release the decode trace: {exc}")
+            self._trace_id = None
+        ttnn.synchronize_device(self.mesh_device)
+        if self._trace_logits is not None:
+            try:
+                ttnn.deallocate(self._trace_logits)
+            except Exception:  # noqa: BLE001
+                pass
+            self._trace_logits = None
+        self._decode_trace_cache_sig = ()
 
     def _release_prefill_traces(self) -> None:
         """Drop every prefill trace.  Their KV-cache addresses are baked in, so this is
@@ -714,7 +783,7 @@ class MuseGlimmerGenerator(Generator):
         # Bind first, then invalidate only if the buffers actually moved: a serving
         # caller threading the *same* external cache every request must keep its traces.
         if kv_cache is not None:
-            self._invalidate_prefill_traces_if_cache_moved()
+            self._invalidate_traces_if_cache_moved()
         tokens = tokens if isinstance(tokens, torch.Tensor) else torch.tensor(tokens)
         if tokens.dim() == 1:
             tokens = tokens.reshape(1, -1)
@@ -831,6 +900,7 @@ class MuseGlimmerGenerator(Generator):
         self.counters["synchronizations"] += 1
         self._trace_id = trace_id
         self._trace_logits = logits
+        self._decode_trace_cache_sig = self._kv_cache_signature()
         logger.info("MuseGlimmerGenerator: captured decode trace (positions advance on device)")
 
     def _capture_sampling_trace(self, logits: ttnn.Tensor) -> None:
@@ -914,7 +984,7 @@ class MuseGlimmerGenerator(Generator):
         """
         self.model.set_kv_cache(kv_cache)
         if kv_cache is not None:
-            self._invalidate_prefill_traces_if_cache_moved()
+            self._invalidate_traces_if_cache_moved()
         self._allocate_device_inputs()
         if self._sampling_params is None:
             self._apply_sampling_params(sampling_params)

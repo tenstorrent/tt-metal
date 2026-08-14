@@ -307,8 +307,8 @@ Each is one device job, one at a time, per `$tt-device-usage`.
 | accuracy + sampling + fallback | `evidence_accuracy.json` | top-5 1.000, top-100 1.000 |
 | fp32 control + misses | `evidence_fp32_gate.json`, `evidence_misses.json` | all four gates pass |
 | greedy sampler benchmark | `sampler_ab.json` | split still wins, 15x |
-| 53-case suite, forward | `test_results.xml` | 53 passed |
-| 53-case suite, reverse | `logs/full_test_run_reverse.log` | 53 passed |
+| 54-case suite, forward | `test_results.xml` | 54 passed |
+| 54-case suite, reverse | `logs/full_test_run_reverse.log` | 54 passed |
 | qualitative, TT + compare | `qualitative/` | byte-identical to stage 6 |
 | degeneracy gate | `logs/check_degenerate_output.log` | no degenerate output |
 | watcher, shipped-default 10 cases | `watcher/`, `logs/run_watcher.log` | `WATCHER_CLEAN`, 0 tripped asserts |
@@ -533,35 +533,65 @@ than the coverage, so the gate now also asserts that it opens the specific artif
 unchecked section would need — `prefill_128_perf_report.csv`, `work_log.md`,
 `perf_summary.json` and the two new watcher logs among them.
 
-### Round 3's own finding: the hazard is real, the claim about it was not
+### Round 3's own finding, and how round 4 overturned it
 
-The review asked for a positive control. Running one produced a result that contradicts
-both the old claim and the retraction that first replaced it, so all four configurations
-are recorded:
+Round 3 asked for a positive control. Running one produced a result that contradicted the
+original claim *and* the retraction that first replaced it, so round 3 concluded: the
+assert is real, "release then build another model" is not the trigger, and the trigger is
+the opt-in cases **plus** the larger workload.
 
-| configuration | tests | verdict |
+Round 4 rejected that too, and correctly: every configuration that tripped had twelve
+cases and every clean one had ten, so the attribution to the prefill-trace cases was
+confounded with process length. The missing control — twelve cases *without* those two —
+was then run three times, along with three more ten-case runs. Fifteen watcher processes
+in total:
+
+| configuration | runs | tripped |
 | --- | --- | --- |
-| `--arm rebuild`: capture, teardown (releases), build a second generator, prefill + traced decode | `PR_OK` | `WATCHER_CLEAN`, complete log |
-| both opt-in cases, one process | 2 passed | `WATCHER_CLEAN`, complete log |
-| the ten default cases | 10 passed | `WATCHER_CLEAN`, complete log |
-| **the ten default cases + both opt-in cases, one process** | **12 passed** | **tripped assert at teardown** |
+| the two opt-in cases alone in one process | 1 | 0 |
+| `--arm rebuild` (release, then build and run a second generator) | 1 | 0 |
+| the ten gated cases | 5 | 0 |
+| twelve: the ten + two other sampling cases | 3 | **1** |
+| twelve: the ten + both opt-in cases | 3 | **3** |
 
-Three conclusions, none of which the original bisect could have reached:
+The length control trips. So the round-3 statement is retired in turn, and what the data
+supports is narrower than either previous claim: **the trip rate rises with the number of
+device cases in one process** (0 of 5 at ten, 4 of 6 at twelve, Fisher p = 0.061), and the
+opt-in pair may or may not make it worse (3 of 3 against 1 of 3, p = 0.400 — not separable
+at this n). Both p-values are computed by the figure gate from the committed logs, not
+typed into the document.
 
-* **"release a prefill trace, then build another model on the same mesh" is not the
-  trigger.** Two independent runs do exactly that and are clean. The trigger needs the
-  larger preceding workload too.
-* **The retirement flag never mitigated anything.** The trip is at process teardown, and
-  `teardown()` releases the prefill traces regardless of whether tracing was retired. It
-  cost a serving caller its flag after one cache rebind and bought no exposure back. It is
-  removed; a cache move now recaptures.
-* **The gated set stays at ten, for an artifact reason rather than a hiding reason.** The
-  abort lands inside the watcher's own dump, so the log is truncated with no detach lines
-  and `check_watcher.py` correctly rejects it as `WATCHER_LOG_NOT_A_REAL_RUN`. The opt-in
-  pair is watched in its own process instead, so the trace-lifecycle code is still under
-  watcher. That truncation also made `check_watcher.py` report `fatal watcher messages: 0`
-  for a run that tripped an assert, so `run_watcher.sh` now greps the console for the
-  assert directly and writes `check_watcher_console*.log`.
+Three consequences:
+
+* the gated set is ten **because ten is the largest size measured with zero trips**, which
+  is an empirical scope decision rather than an attribution to the prefill-trace path;
+* the operational advice changed. "Reset the devices between builds if you use
+  `prefill_trace`" followed from the retracted attribution; what the evidence actually
+  supports is "a longer watcher run of this module is expected to abort at teardown
+  sometimes — reset and re-run, and never read a truncated watcher log as a clean one";
+* it is very likely the same fault as inherited limitation 7 (the teardown timeout on
+  ethernet core 29-25): same teardown, same acteth cores, watcher-only, and this stage
+  root-causes neither.
+
+Three statements of one limitation, two of them wrong, is the actual lesson: each was
+built on the largest control set available at the time, and each fell to the first
+control that had been left out. The bisect arms were negative controls; the round-3
+argument had no length control; only the fourth version has both.
+
+### Round 4 — `more-work-needed`
+
+| finding | what was done |
+| --- | --- |
+| **P1** the **decode** trace bakes the same KV-cache buffer addresses as a prefill trace and was never invalidated on a rebind | real, and the worse of the two: the prefill trace is opt-in and off by default while the decode trace runs on every token. `ttnn_decode_forward` calls `paged_update_cache(layer.k_cache, layer.v_cache, ...)`, so a caller that rebound to different buffers after capture got a decode reading and writing the buffers it no longer owned — wrong tokens, no error, and a log line about releasing the *prefill* traces that read as if the rebind had been handled. `_invalidate_prefill_traces_if_cache_moved` is now `_invalidate_traces_if_cache_moved`, each trace carries its own cache signature, and `_release_decode_trace()` drops the decode trace and the sampling trace captured over its logits. New test `test_decode_follows_the_cache_it_is_rebound_to_after_the_trace_is_captured` prefills prompt A, decodes (capturing), rebinds to a different cache holding prompt B, and asserts the **traced** decode agrees with the **eager** decode off B — which is the assertion that fails without the fix |
+| **P2** the fabric-ERISC attribution was confounded with process length | the control was run three times; see above. Limitation 6, the watcher section, `run_watcher.sh`'s header and the serving advice are all rewritten around it |
+| **P2** `doc/context_contract.json` carried this stage's numbers under `doc/full_model/...` provenance | the parent builder hardcodes both strings, so this stage's wrapper now re-points them from `EVIDENCE` after the parent runs, and the contract is regenerated. Same defect class as rounds 2 and 3 found in `perf_summary.json` and `evidence_perf_before.json` |
+| **P2** the `$optimize` checklist row said the two traces account for the step to **38 µs** | no artifact yields 38; it is **27** (26.8 µs). Corrected, and the gate now binds the residual rather than only asserting a band |
+| the gate's "asserts the set of artifacts it opens" was `is_file()` | the three readers now record every path they open and the coverage assertion tests *that* set. Two entries were caught immediately: `work_log.md` was being read past the recorder, and `watcher_probe_rebuild/watcher.log.gz` was listed but never opened — it is now read and checked for detach lines |
+| `ADVERTISED_CHECKS` counted bindings as checks | the split is stated: **526 checks (492 assertions, 34 README bindings)**, and both numbers are asserted |
+| the audit table called id 3119 a residual add | it is the attention-gate multiply; 3124 and 3191 are the residual adds. No value moves |
+| the README read as if the profile pinned the SwiGLU grid | `Cores` reads 110 for every elementwise row, including the 52-core softcap pair. Footnoted, with what does pin it |
+| `device_position_advances: 0` read as a contradiction | explained where it is incremented and why replays cannot bump it |
+| the reproduce block's `WATCHER_TAG=_12case` matched no committed log | tags aligned to the committed names, and the ten-case repeats and the length-control arm added to the block |
 
 ## 11. Commits
 
@@ -572,8 +602,10 @@ stage's `93adb25b7a8`. Never pushed.
 | --- | --- |
 | `ee3c378a830` | `tt/model.py`, `tt/generator.py`, `tt/optimized_decoder.py`, `tests/test_full_model.py` — the three decode-path layout changes, the opt-in traced prefill, and the seven new acceptance cases |
 | `3d03b5ca595` | `doc/optimized_full_model/` in full, the regenerated `doc/context_contract.json`, and the regenerated `readiness_autoregressive_{chat,raw}/` outputs |
+| `5e6022db622` | round-3 review fixes: the audit-table partition, the corrected prefill-128 and host-dispatch figures, the retracted retirement flag, the `--arm rebuild` probe and the gate's coverage extension |
+| *(this commit)* | round-4 review fixes: the decode-trace cache invalidation and its test, the fabric-ERISC length control, the context-contract provenance, and the gate's opened-artifact coverage |
 
-Nothing unrelated is in either commit: `git status` is clean at `3d03b5ca595` and the
+Nothing unrelated is in any of them: `git status` is clean at each, and the
 only files touched outside `doc/optimized_full_model/` are the four implementation/test
 files, the contract, and the two readiness output directories the autoregressive stage
 rewrites.

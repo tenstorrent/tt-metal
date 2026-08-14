@@ -79,7 +79,7 @@
     }
   },
   "byte_budget_at_full_context": {
-    "measured_from": "doc/full_model/evidence_accuracy.json (capability_report over the built model)",
+    "measured_from": "doc/optimized_full_model/evidence_accuracy.json (capability_report over the built model)",
     "per_device_layer_weight_bytes": 4327784448,
     "per_device_terminal_weight_bytes": 863073536,
     "per_device_terminal_weight_formula": "embed_tokens (202049 x 1664 x 2 B BF16 ROW_MAJOR) = 672,419,072 + lm_head (6656 x 50688 x 0.5625 B BFLOAT4_B) = 189,760,512 + two terminal norms",
@@ -118,7 +118,7 @@
     "traced_decode_logits_only_tok_s_u": 44.13701767209065,
     "sampling_trace_ms_per_token": 0.631904718829901,
     "layer_stack_lower_bound_ms_per_token": 22.857899999999997,
-    "source": "doc/full_model/evidence_perf.json"
+    "source": "doc/optimized_full_model/evidence_perf.json"
   },
   "tested": {
     "commands": [

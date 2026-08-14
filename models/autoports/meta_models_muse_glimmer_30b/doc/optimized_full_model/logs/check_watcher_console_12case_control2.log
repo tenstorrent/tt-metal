@@ -1,0 +1,4 @@
+WATCHER_CONSOLE_TRIPPED_ASSERT
+2026-08-14 08:05:12.561 | warning  |           Metal | Watcher stopped the device due to tripped assert, see watcher log for more details (watcher_device_reader.cpp:850)
+2026-08-14 08:05:12.561 | warning  |           Metal | Device 0 acteth core(x= 0,y= 9) virtual(x=29,y=25): subordinate_erisc detected invalid NOC command buffer state before starting the next kernel (write-capable NOC packet tags must be zero so implicit transaction ID users start with transaction ID 0). Current kernel: tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp. (watcher_device_reader.cpp:851)
+2026-08-14 08:05:12.561 | critical |          Always | TT_THROW: Watcher detected tripped assert and stopped device. (assert.hpp:104)

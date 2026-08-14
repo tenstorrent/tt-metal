@@ -1,0 +1,8 @@
+/home/ttuser/dev/muse-glimmer/tt-metal/models/autoports/meta_models_muse_glimmer_30b/doc/optimized_full_model/watcher_12case_control/watcher.log.gz: 6991 lines
+  dump boundaries: 12 (min 2)
+  kernel id lines: 3169 (min 100)
+  stack usage rows: 100 (min 10)
+  device attach: 4 (min 1)
+  device detach: 4 (min 1)
+  fatal watcher messages: 0
+WATCHER_CLEAN

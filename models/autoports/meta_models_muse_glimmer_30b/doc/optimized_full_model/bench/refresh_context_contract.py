@@ -40,6 +40,19 @@ def main() -> int:
 
     def build(previous: dict) -> dict:
         contract = original_build(previous)
+        # The parent builder hardcodes ``doc/full_model/...`` in these two provenance
+        # strings, so overriding ``EVIDENCE`` moved the *numbers* to this stage's runs but
+        # left them labelled with the previous stage's paths.  Round 4 of the stage review
+        # found that; it is the same false-provenance defect rounds 2 and 3 found in
+        # ``perf_summary.json`` and ``evidence_perf_before.json``.  Re-point them at the
+        # directory the values were actually read from, derived rather than retyped.
+        stage_dir = evidence.relative_to(ROOT.parents[2]).as_posix()
+        stage_dir = stage_dir[stage_dir.index("doc/") :]
+        if "performance" in contract:
+            contract["performance"]["source"] = f"{stage_dir}/evidence_perf.json"
+        budget = contract.get("byte_budget_at_full_context")
+        if isinstance(budget, dict) and "measured_from" in budget:
+            budget["measured_from"] = f"{stage_dir}/evidence_accuracy.json (capability_report over the built model)"
         # The two persistent/peak allocations this stage adds, from their own measured
         # artifacts rather than from prose.  ``$optimize`` requires the contract to move
         # when trace buffers or activation memory move, and both of these do.
