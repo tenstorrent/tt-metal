@@ -366,17 +366,8 @@ The criterion:
     sweep shows achieved BW actually plateauing.
 - **sharded input** → `active_cores == the shard's own cores` (lever A2), not a re-spread 2D grid.
 
-A **fixed split axis** — row-only, column-only, **or square-block** — is a latent bug: it fills the
-grid for one aspect ratio and strands the other. Do **not** switch schemes wholesale to fix one
-regime; keep the conventional split as default and divert to the specialized one **only behind a
-utilization predicate** — the `distribution_gate` pattern (proven no-regression: gated is
-byte-identical to the default on shapes the default already saturated).
-
-Discriminating regimes every distribution scheme must be checked against (these are where fixed/square
-splits break): **tall-narrow** (`Wt ≪ nt_h`), **wide-short** (`Wt ≫ nt_h`), **square**, **tiny**
-(`total_tiles < grid`), and **sharded-in**. Assert the active-core count above for each.
-**→ examples: `distribution_gate`** (gate, don't switch), **`width_split`** (the wide-short calc:
-per-core tile-column range capped by `WT_CHUNK`).
+Assert the active-core count above **per shape regime the op accepts**, not once for the shape you
+happened to develop on.
 
 - **A1. Spread worker cores across the DRAM-facing axis, not down one axis** — banks sit in a few
   columns; a line stacked on one axis piles traffic onto shared NoC links. `row_wise` in
