@@ -127,18 +127,33 @@ void validate_rm_preconditions(
 
 // Build the reader compile-time args vector for the RM path (slots match
 // reader_unary_reduce_rm.cpp). Returns scalar slots followed by TensorAccessorArgs(src).
+// `num_h_slices` / `slice_Ht` are H-axis-split geometry (H path only; 1 / full Ht_rm = normal
+// reduce).
 std::vector<uint32_t> build_rm_reader_ct_args(
-    const RmPlan& plan, uint32_t scaler_bits, const tt::tt_metal::MeshTensor& src, tt::tt_metal::ReduceOpDim dim);
+    const RmPlan& plan,
+    uint32_t scaler_bits,
+    const tt::tt_metal::MeshTensor& src,
+    tt::tt_metal::ReduceOpDim dim,
+    uint32_t num_h_slices = 1,
+    uint32_t slice_Ht = 0);
 
 // Build the writer compile-time args vector for the RM path (slots match
-// writer_reduce_rm_scalar.cpp). Returns scalar slots followed by TensorAccessorArgs(dst).
+// writer_reduce_rm_scalar.cpp): scalar slots followed by TensorAccessorArgs(dst). `tile_output`
+// selects TILE instead of ROW_MAJOR pages on the H path; it and `num_h_slices` are ignored on the
+// W path, which only emits ROW_MAJOR.
 std::vector<uint32_t> build_rm_writer_ct_args(
-    const RmPlan& plan, const tt::tt_metal::MeshTensor& dst, tt::tt_metal::ReduceOpDim dim);
+    const RmPlan& plan,
+    const tt::tt_metal::MeshTensor& dst,
+    tt::tt_metal::ReduceOpDim dim,
+    bool tile_output = false,
+    uint32_t num_h_slices = 1);
 
 // Build the compute compile-time args vector for the RM path (slots match reduce_rm.cpp).
 // `Ht_arg` is the per-core ht count (W path) or the global Ht_rm (H path); the helper
-// keeps NC pinned at 1.
-std::vector<uint32_t> build_rm_compute_ct_args(const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits);
+// keeps NC pinned at 1. `fp32_sfpu_reduce` (slot 6) routes Float32 SUM through the SFPU for
+// full-fp32 accumulation (accurate ttnn.mean) instead of the tf32 FPU path.
+std::vector<uint32_t> build_rm_compute_ct_args(
+    const RmPlan& plan, uint32_t Ht_arg, uint32_t post_mul_scaler_bits, bool fp32_sfpu_reduce);
 
 tt::tt_metal::ReduceOpParallelizationStrategy get_parallelization_strategy(
     const ttnn::Tensor& input_tensors, tt::tt_metal::ReduceOpDim reduce_dim);

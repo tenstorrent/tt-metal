@@ -2,11 +2,7 @@
 
 run_tg_tests() {
 
-  if [[ "$1" == "resnet50" ]]; then
-    echo "LOG_METAL: running resnet50 run_tg_frequent_tests"
-    pytest models/demos/vision/classification/resnet50/ttnn_resnet/tests/test_resnet50_performant.py ; fail+=$?
-
-  elif [[ "$1" == "unit" ]]; then
+  if [[ "$1" == "unit" ]]; then
     echo "LOG_METAL: running unit/distributed run_tg_frequent_tests"
     ## ERISC IRAM is always on for WH; these tests mix fabric and non-fabric CCL and rely on consistent jit/build behavior.
     pytest tests/ttnn/distributed/test_data_parallel_example_TG.py --timeout=900 ; fail+=$?

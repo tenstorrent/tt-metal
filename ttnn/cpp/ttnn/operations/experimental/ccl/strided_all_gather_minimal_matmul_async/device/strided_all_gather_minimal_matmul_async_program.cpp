@@ -96,6 +96,7 @@ strided_all_gather_minimal_matmul_async_program(
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
+    const MMSignalAggregatorMode mm_signal_aggregator_mode,
 
     /* Matmul Params */
     const std::optional<const Tensor>& bias,
@@ -169,7 +170,8 @@ strided_all_gather_minimal_matmul_async_program(
             matmul_fused_op_signaler->num_fused_op_cores_to_signal,
             config.M_block_size,
             config.K_block_size,
-            core_grid_offset);
+            core_grid_offset,
+            mm_signal_aggregator_mode);
 
     return {std::move(program), {ag_shared_variables, mm_shared_variables}};
 }
@@ -225,6 +227,7 @@ StridedAllGatherMinimalMatmulAsyncProgramFactory::create_at(
         attributes.strided_all_gather_async_struct.num_workers_per_link,
         attributes.strided_all_gather_async_struct.num_buffers_per_channel,
         attributes.all_gather_core_grid_offset,
+        attributes.mm_signal_aggregator_mode,
 
         /* Matmul Params */
         tensor_args.bias,  // Bias
