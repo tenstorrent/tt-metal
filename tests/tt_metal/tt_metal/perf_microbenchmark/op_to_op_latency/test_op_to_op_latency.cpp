@@ -102,8 +102,6 @@
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
 #include "test_common.hpp"
-#include "tt_metal/distributed/mesh_buffer_impl.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 
@@ -1188,8 +1186,7 @@ int main(int argc, char** argv) {
         if (!cfg.read_only && !cfg.skip_output_validation) {
             std::vector<uint32_t> output_data;
             (output_data)
-                .resize(
-                    (output_buffer)->impl().size() / sizeof(typename std::decay_t<decltype(output_data)>::value_type));
+                .resize((output_buffer)->size() / sizeof(typename std::decay_t<decltype(output_data)>::value_type));
             cq.enqueue_read_mesh_buffer((output_data).data(), output_buffer, /*blocking=*/true);
 
             if (output_data.size() != input_data.size()) {

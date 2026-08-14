@@ -12,8 +12,6 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt_stl/assert.hpp>
 
-#include "distributed/mesh_buffer_impl.hpp"
-
 /**
  * Internal implementation header for MeshTensor.
  *
@@ -31,7 +29,7 @@ public:
         TT_FATAL(mesh_buffer_ != nullptr, "MeshBuffer cannot be nullptr.");
         TT_FATAL(mesh_buffer_->is_allocated(), "MeshBuffer must be allocated.");
         TT_FATAL(
-            mesh_buffer_->impl().size() >= spec_.compute_packed_buffer_size_bytes(),
+            mesh_buffer_->size() >= spec_.compute_packed_buffer_size_bytes(),
             "MeshBuffer must be large enough to hold the tensor.");
     }
 
@@ -42,7 +40,7 @@ public:
     void update_topology(TensorTopology topology) { topology_ = std::move(topology); }
     void update_spec(TensorSpec spec) {
         TT_FATAL(
-            mesh_buffer_->impl().size() >= spec.compute_packed_buffer_size_bytes(),
+            mesh_buffer_->size() >= spec.compute_packed_buffer_size_bytes(),
             "MeshBuffer must be large enough to hold the tensor.");
         spec_ = std::move(spec);
     }

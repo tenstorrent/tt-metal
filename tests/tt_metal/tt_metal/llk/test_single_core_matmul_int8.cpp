@@ -33,8 +33,6 @@
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "tt_metal/distributed/mesh_buffer_impl.hpp"
-
 namespace tt::tt_metal {
 
 using namespace tt;
@@ -215,9 +213,7 @@ bool single_tile_matmul_int8(const std::shared_ptr<distributed::MeshDevice>& mes
     ////////////////////////////////////////////////////////////////////////////
     std::vector<int8_t> dest_buffer_data;
     (dest_buffer_data)
-        .resize(
-            (output_dram_buffer)->impl().size() /
-            sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
+        .resize((output_dram_buffer)->size() / sizeof(typename std::decay_t<decltype(dest_buffer_data)>::value_type));
     cq.enqueue_read_mesh_buffer((dest_buffer_data).data(), output_dram_buffer, true);
     pass = dest_buffer_data == golden_output;
 

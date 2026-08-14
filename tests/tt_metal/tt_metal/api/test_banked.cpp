@@ -32,8 +32,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "tt_metal/distributed/mesh_buffer_impl.hpp"
-
 using std::vector;
 using namespace tt::tt_metal;
 
@@ -116,13 +114,9 @@ bool reader_cb_writer(
 
     auto output_buffer = distributed::MeshBuffer::create(out_buffer_config, out_config, mesh_device.get());
 
+    log_debug(tt::LogTest, "Input buffer: [address: {} B, size: {} B]", input_buffer->address(), input_buffer->size());
     log_debug(
-        tt::LogTest, "Input buffer: [address: {} B, size: {} B]", input_buffer->address(), input_buffer->impl().size());
-    log_debug(
-        tt::LogTest,
-        "Output buffer: [address: {} B, size: {} B]",
-        output_buffer->address(),
-        output_buffer->impl().size());
+        tt::LogTest, "Output buffer: [address: {} B, size: {} B]", output_buffer->address(), output_buffer->size());
 
     TT_FATAL(
         cfg.num_tiles * cfg.page_size_bytes == cfg.size_bytes,

@@ -231,7 +231,7 @@ TEST_F(MeshBufferTest2x4, ShardedBufferInitialization) {
     EXPECT_EQ(buffer_config.compute_datum_size_bytes(), 2);
     auto sharded_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
 
-    EXPECT_EQ(sharded_buffer->impl().size(), 16 << 10);
+    EXPECT_EQ(sharded_buffer->size(), 16 << 10);
     EXPECT_EQ(sharded_buffer->global_layout(), MeshBufferLayout::SHARDED);
     EXPECT_EQ(sharded_buffer->device_local_size(), 2 << 10);
 }
@@ -243,7 +243,7 @@ TEST_F(MeshBufferTest2x4, ReplicatedBufferInitialization) {
     const ReplicatedBufferConfig buffer_config{.size = 16 << 10};
     auto replicated_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
 
-    EXPECT_EQ(replicated_buffer->impl().size(), 16 << 10);
+    EXPECT_EQ(replicated_buffer->size(), 16 << 10);
     EXPECT_EQ(replicated_buffer->global_layout(), MeshBufferLayout::REPLICATED);
     EXPECT_EQ(replicated_buffer->device_local_size(), 16 << 10);
 }
@@ -349,7 +349,7 @@ TEST_F(MeshBufferTestSuite, MoveConstructor) {
     auto original_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
 
     const auto original_address = original_buffer->address();
-    const auto original_size = original_buffer->impl().size();
+    const auto original_size = original_buffer->size();
     const auto original_device_local_size = original_buffer->device_local_size();
 
     EXPECT_TRUE(original_buffer->is_allocated());
@@ -358,7 +358,7 @@ TEST_F(MeshBufferTestSuite, MoveConstructor) {
 
     EXPECT_TRUE(moved_buffer.is_allocated());
     EXPECT_EQ(moved_buffer.address(), original_address);
-    EXPECT_EQ(moved_buffer.impl().size(), original_size);
+    EXPECT_EQ(moved_buffer.size(), original_size);
     EXPECT_EQ(moved_buffer.device_local_size(), original_device_local_size);
 
     // The moved-from MeshBuffer no longer owns an implementation.
@@ -373,7 +373,7 @@ TEST_F(MeshBufferTestSuite, MoveAssignment) {
     auto source_buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device_.get());
 
     const auto source_address = source_buffer->address();
-    const auto source_size = source_buffer->impl().size();
+    const auto source_size = source_buffer->size();
     const auto source_device_local_size = source_buffer->device_local_size();
 
     EXPECT_TRUE(source_buffer->is_allocated());
@@ -389,7 +389,7 @@ TEST_F(MeshBufferTestSuite, MoveAssignment) {
 
     EXPECT_TRUE(target_buffer->is_allocated());
     EXPECT_EQ(target_buffer->address(), source_address);
-    EXPECT_EQ(target_buffer->impl().size(), source_size);
+    EXPECT_EQ(target_buffer->size(), source_size);
     EXPECT_EQ(target_buffer->device_local_size(), source_device_local_size);
 
     // The moved-from MeshBuffer no longer owns an implementation.
@@ -496,8 +496,7 @@ TEST_F(MeshBufferTest2x4, SweepShardAndConcat) {
             std::iota(src_vec.begin(), src_vec.end(), 0);
             mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(mesh_buffer, src_vec.data(), false);
             std::vector<uint32_t> dst_vec = {};
-            (dst_vec).resize(
-                (mesh_buffer)->impl().size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+            (dst_vec).resize((mesh_buffer)->size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
             mesh_device_->mesh_command_queue().enqueue_read_mesh_buffer((dst_vec).data(), mesh_buffer, true);
 
             EXPECT_EQ(dst_vec, src_vec);
@@ -621,7 +620,7 @@ TEST_F(MeshBufferTestSuite, RowMajorShardingAndReplication) {
         std::vector<uint32_t> dst_vec =
             std::vector<uint32_t>(global_buffer_read_shape.height() * global_buffer_read_shape.width(), 0);
         (dst_vec).resize(
-            (mesh_buffer_read_view)->impl().size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+            (mesh_buffer_read_view)->size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
         mesh_device_->mesh_command_queue().enqueue_read_mesh_buffer((dst_vec).data(), mesh_buffer_read_view, true);
 
         for (int i = 0; i < dst_vec.size(); i++) {
@@ -673,7 +672,7 @@ TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplication) {
         std::vector<uint32_t> dst_vec =
             std::vector<uint32_t>(global_buffer_read_shape.height() * global_buffer_read_shape.width(), 0);
         (dst_vec).resize(
-            (mesh_buffer_read_view)->impl().size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+            (mesh_buffer_read_view)->size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
         mesh_device_->mesh_command_queue().enqueue_read_mesh_buffer((dst_vec).data(), mesh_buffer_read_view, true);
         for (int i = 0; i < dst_vec.size(); i++) {
             EXPECT_EQ(
@@ -1848,7 +1847,7 @@ TEST_F(SDMeshBufferFixture, ShardedBufferWriteReadRoundtrip) {
     mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(mesh_buffer, src.data(), false);
 
     std::vector<uint32_t> dst;
-    (dst).resize((mesh_buffer)->impl().size() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
+    (dst).resize((mesh_buffer)->size() / sizeof(typename std::decay_t<decltype(dst)>::value_type));
     mesh_device_->mesh_command_queue().enqueue_read_mesh_buffer((dst).data(), mesh_buffer, true);
 
     EXPECT_EQ(dst, src);

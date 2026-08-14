@@ -571,8 +571,8 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
         MeshCoordinate{num_rows_in_mesh_workload, 0}, MeshCoordinate{num_rows - 1, mesh_device_->num_cols() - 1});
     mesh_workload.add_program(devices_0, std::move(*programs[0]));
     mesh_workload.add_program(devices_1, std::move(*programs[1]));
-    std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->impl().size(), 2);
-    std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(src1_bufs[0]->impl().size(), 3);
+    std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->size(), 2);
+    std::vector<uint32_t> src1_vec = create_constant_vector_of_bfloat16(src1_bufs[0]->size(), 3);
 
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
         for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {

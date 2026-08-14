@@ -198,7 +198,7 @@ TEST_F(BigMeshDualRankTest2x4, SimpleShardedBufferTest) {
     // Write and read back
     mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(mesh_buffer, src_vec.data(), false);
     std::vector<uint32_t> dst_vec;
-    dst_vec.resize(mesh_buffer->impl().size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
+    dst_vec.resize(mesh_buffer->size() / sizeof(typename std::decay_t<decltype(dst_vec)>::value_type));
     mesh_device_->mesh_command_queue().enqueue_read_mesh_buffer((dst_vec).data(), mesh_buffer, true);
 
     // The expectation is that enqueue_write/read_mesh_buffer

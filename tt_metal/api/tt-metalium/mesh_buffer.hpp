@@ -112,6 +112,7 @@ public:
 
     // Throws an exception if the corresponding MeshDevice is already deallocated
     MeshDevice* device() const;
+    DeviceAddr size() const;
     DeviceAddr device_local_size() const;
     DeviceAddr address() const;
 

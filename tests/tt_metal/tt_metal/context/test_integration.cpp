@@ -92,7 +92,7 @@ void PerformDeviceWork(
     mesh_cq.enqueue_write_mesh_buffer(mesh_buffer, write_data.data(), false);
 
     std::vector<uint32_t> read_data;
-    read_data.resize(mesh_buffer->impl().size() / sizeof(typename std::decay_t<decltype(read_data)>::value_type));
+    read_data.resize(mesh_buffer->size() / sizeof(typename std::decay_t<decltype(read_data)>::value_type));
     mesh_cq.enqueue_read_mesh_buffer((read_data).data(), mesh_buffer, true);
 
     if (read_data != write_data) {
@@ -464,7 +464,7 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         cq.enqueue_write_mesh_buffer(buffer, write_data.data(), true);
 
         std::vector<uint32_t> read_data;
-        read_data.resize(buffer->impl().size() / sizeof(typename std::decay_t<decltype(read_data)>::value_type));
+        read_data.resize(buffer->size() / sizeof(typename std::decay_t<decltype(read_data)>::value_type));
         cq.enqueue_read_mesh_buffer((read_data).data(), buffer, true);
 
         auto program = CreateProgram();

@@ -9,8 +9,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "tt_metal/distributed/mesh_buffer_impl.hpp"
-
 using namespace tt;
 using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -165,8 +163,7 @@ int main() {
     // specific shard of a MeshBuffer. The shard is specified by the MeshCoordinate. The last argument indicates if the
     // operation is blocking or not.
     std::vector<bfloat16> result_vec;
-    (result_vec)
-        .resize((dst_dram_buffer)->impl().size() / sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
+    (result_vec).resize((dst_dram_buffer)->size() / sizeof(typename std::decay_t<decltype(result_vec)>::value_type));
     cq.enqueue_read_mesh_buffer((result_vec).data(), dst_dram_buffer, true);
 
     // compare the results with the expected values.

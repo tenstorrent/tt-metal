@@ -399,6 +399,8 @@ void MeshBuffer::deallocate() { impl().deallocate(); }
 
 MeshDevice* MeshBuffer::device() const { return impl().device(); }
 
+DeviceAddr MeshBuffer::size() const { return impl().size(); }
+
 DeviceAddr MeshBuffer::device_local_size() const { return impl().device_local_size(); }
 
 DeviceAddr MeshBuffer::address() const { return impl().address(); }

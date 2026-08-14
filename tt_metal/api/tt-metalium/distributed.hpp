@@ -7,7 +7,6 @@
 #include <stdint.h>
 #include <memory>
 #include <optional>
-#include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -42,13 +41,10 @@ void EnqueueWriteMeshBuffer(
     std::shared_ptr<MeshBuffer>& mesh_buffer,
     const std::vector<DType>& src,
     bool blocking = false) {
-    const DeviceAddr buf_size = mesh_buffer->global_layout() == MeshBufferLayout::SHARDED
-                                    ? std::get<ShardedBufferConfig>(mesh_buffer->global_config()).global_size
-                                    : std::get<ReplicatedBufferConfig>(mesh_buffer->global_config()).size;
     TT_FATAL(
-        src.size() * sizeof(DType) >= buf_size,
+        src.size() * sizeof(DType) >= mesh_buffer->size(),
         "Source vector is too small for mesh buffer: mesh buffer size={} bytes, source size={} * {} bytes",
-        buf_size,
+        mesh_buffer->size(),
         src.size(),
         sizeof(DType));
 
@@ -63,11 +59,7 @@ void EnqueueReadMeshBuffer(
     bool blocking = true) {
     // This API supports reading MeshBuffers sharded across devices
     // and a Unit-MeshBuffer with a replicated layout.
-    if (mesh_buffer->global_layout() == MeshBufferLayout::SHARDED) {
-        dst.resize(std::get<ShardedBufferConfig>(mesh_buffer->global_config()).global_size / sizeof(DType));
-    } else {
-        dst.resize(std::get<ReplicatedBufferConfig>(mesh_buffer->global_config()).size / sizeof(DType));
-    }
+    dst.resize(mesh_buffer->size() / sizeof(DType));
     mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
 }
 
