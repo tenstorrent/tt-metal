@@ -8,12 +8,12 @@
 import argparse
 import time
 
+MAX_SEQ_LEN = 2048  # Phi-1's max_position_embeddings; keep in sync with the model construction below.
+
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 try:
-    from tt.phi1_model import TTPhi1DecoderLayer, TTPhi1ForCausalLM
-
     import ttnn
 
     TTNN_AVAILABLE = True
@@ -21,21 +21,23 @@ except ImportError:
     TTNN_AVAILABLE = False
     print("[WARNING] ttnn not detected locally. Running in offline/emulation preparation mode.")
 
+if TTNN_AVAILABLE:
+    from models.demos.phi1.tt.phi1_model import TTPhi1DecoderLayer, TTPhi1ForCausalLM
+
 
 def compute_pcc(a: torch.Tensor, b: torch.Tensor, mask: torch.Tensor = None) -> float:
     """Computes Pearson Correlation Coefficient between two tensors.
 
-    Handles shape mismatches by trimming to the minimum common shape.
+    Requires exact shape match: a shape mismatch means the TT output is structurally
+    wrong (e.g. dropped sequence positions or vocab columns), which must fail loudly
+    rather than be silently trimmed and reported as a passing PCC score.
     Guards against zero-variance edge cases that could produce NaN.
     """
-    # Align shapes: trim to minimum dimensions
     if a.shape != b.shape:
-        min_shape = tuple(min(s1, s2) for s1, s2 in zip(a.shape, b.shape))
-        a = a[tuple(slice(0, s) for s in min_shape)]
-        b = b[tuple(slice(0, s) for s in min_shape)]
-        if mask is not None:
-            mask_shape = tuple(min(s, ms) for s, ms in zip(min_shape, mask.shape))
-            mask = mask[tuple(slice(0, s) for s in mask_shape)]
+        raise ValueError(
+            f"PCC shape mismatch: reference {tuple(a.shape)} vs TT output {tuple(b.shape)}. "
+            "This indicates a structural bug in the TT model, not a valid comparison."
+        )
 
     if mask is not None:
         # Expand mask to match tensor dimensions and filter
@@ -81,6 +83,9 @@ def main():
     parser.add_argument("--prompt", type=str, default="def fibonacci(n):", help="Input prompt for text generation")
     parser.add_argument("--max-new-tokens", type=int, default=16, help="Number of tokens to generate in generate mode")
     args = parser.parse_args()
+
+    if not 1 <= args.num_layers <= 24:
+        parser.error(f"--num-layers must be between 1 and 24, got {args.num_layers}")
 
     print("=" * 70)
     print("  TENSTORRENT BOUNTY #18287 (`microsoft/phi-1`) WORMHOLE N300 RUNNER")
@@ -150,7 +155,7 @@ def main():
                 n_heads=n_heads,
                 hidden_size=hidden_size,
                 rotary_dim=32,
-                max_position_embeddings=2048,
+                max_position_embeddings=MAX_SEQ_LEN,
                 dtype=ttnn.bfloat16,
             )
         else:
@@ -190,6 +195,15 @@ def _run_benchmark(tt_model, device, args, n_heads, hidden_size):
     else:
         dummy_input = torch.randn(batch_size, seq_len, hidden_size, dtype=torch.bfloat16)
         dummy_input = ttnn.from_torch(dummy_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Warmup pass: excludes program compilation / cache population from the timed measurement below.
+    warmup_out = tt_model(dummy_input)
+    if hasattr(ttnn, "synchronize_device"):
+        ttnn.synchronize_device(device)
+    elif hasattr(device, "synchronize"):
+        device.synchronize()
+    if isinstance(warmup_out, ttnn.Tensor):
+        ttnn.deallocate(warmup_out)
 
     t0 = time.time()
     tt_out = tt_model(dummy_input)
@@ -272,6 +286,9 @@ def _run_generation(tt_model, tokenizer, device, args):
 
     # Decode: one new token per step, O(1) work per step via the KV-cache.
     for step in range(1, args.max_new_tokens):
+        if current_pos >= MAX_SEQ_LEN:
+            print(f"      -> Reached MAX_SEQ_LEN={MAX_SEQ_LEN}, stopping generation early at step {step}.")
+            break
         new_token_input = generated_ids[:, -1:]
         logits_tt = tt_model(new_token_input, start_pos=current_pos, use_cache=True)
         if hasattr(ttnn, "synchronize_device"):
