@@ -83,6 +83,8 @@ inline void llk_unpack_A_init(
             static_assert(
                 !(DST_ACCUM_MODE && !unpack_to_dest),
                 "32BIT_DEST is not supported for broadcast when unpack_to_dest is false");
+            // Unlike the unary path above, the broadcast LLK takes no TensorShape, so it does not scale
+            // its L1 tile index by the face count. Full-tile only until it is converted (tt-metal #47597).
             LLK_ASSERT(
                 tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM &&
                     tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
@@ -142,8 +144,8 @@ inline void llk_unpack_A(const std::uint32_t operand, const std::uint32_t tile_i
  * @tparam BType: Broadcast type; BroadcastType::NONE selects the plain unary path
  * @tparam acc_to_dest: Unused on Quasar; kept for API parity with Blackhole / other arches
  * @tparam binary_reuse_dest: Dest reuse mode (unary path only)
- * @tparam unpack_to_dest: when true, the (non-broadcast) primitive routes the operand through UNP_DEST regardless of
- * format
+ * @tparam unpack_to_dest: when true, the (non-broadcast) primitive routes the operand
+ * through UNP_DEST regardless of format
  * @param operand: The logical dataflow buffer id
  * @param start_tile_index: The starting tile index within the input buffer
  * @param ntiles: The number of consecutive tiles to unpack
