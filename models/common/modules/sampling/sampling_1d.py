@@ -167,15 +167,11 @@ class Sampling1D(LightweightModule):
         # CCL introspection (port from TTSampling.__init__ lines 77-91)
         self._line_all_gather = getattr(self.config.tt_ccl, "line_all_gather", None) if self.config.tt_ccl else None
         self._line_all_gather_supports_buffer_key = False
-        self._line_all_gather_supports_dtype = False
         if callable(self._line_all_gather):
             try:
                 sig = inspect.signature(self._line_all_gather)
                 params = sig.parameters
                 self._line_all_gather_supports_buffer_key = "buffer_key" in params or any(
-                    p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
-                )
-                self._line_all_gather_supports_dtype = "dtype" in params or any(
                     p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
                 )
             except (TypeError, ValueError):
@@ -586,7 +582,6 @@ class Sampling1D(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             num_links=cfg.num_gather_links,
             buffer_key="SAMPLING_INDICES",
-            dtype=ttnn.uint16,
         )
         ttnn.deallocate(topk_indices)
 
@@ -594,7 +589,7 @@ class Sampling1D(LightweightModule):
 
     # -- CCL helper -----------------------------------------------------------
 
-    def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
+    def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None):
         """Flexible all-gather: prefer line_all_gather if available, else ttnn.all_gather.
 
         Port of TTSampling._perform_all_gather.
@@ -608,8 +603,6 @@ class Sampling1D(LightweightModule):
             }
             if self._line_all_gather_supports_buffer_key and buffer_key is not None:
                 kwargs["buffer_key"] = buffer_key
-            if self._line_all_gather_supports_dtype and dtype is not None:
-                kwargs["dtype"] = dtype
             return self._line_all_gather(tensor, **kwargs)
 
         return ttnn.all_gather(

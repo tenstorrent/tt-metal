@@ -100,7 +100,6 @@ class TTSampling(LightweightModule):
         self.tt_ccl = tt_ccl
         self._line_all_gather = getattr(self.tt_ccl, "line_all_gather", None)
         self._line_all_gather_supports_buffer_key = False
-        self._line_all_gather_supports_dtype = False
         self.pad_to_power_of_2 = getattr(args, "pad_logits_to_power_of_2", False)
         if callable(self._line_all_gather):
             try:
@@ -109,11 +108,8 @@ class TTSampling(LightweightModule):
                 self._line_all_gather_supports_buffer_key = "buffer_key" in line_all_gather_params or any(
                     param.kind == inspect.Parameter.VAR_KEYWORD for param in line_all_gather_params.values()
                 )
-                self._line_all_gather_supports_dtype = "dtype" in line_all_gather_params or any(
-                    param.kind == inspect.Parameter.VAR_KEYWORD for param in line_all_gather_params.values()
-                )
             except (TypeError, ValueError):
-                logger.warning("Unable to inspect line_all_gather signature; assuming no buffer_key or dtype support.")
+                logger.warning("Unable to inspect line_all_gather signature; assuming no buffer_key support.")
 
         padded_vocab_size = getattr(args, "padded_vocab_size", None)
         self.padded_vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
@@ -414,7 +410,7 @@ class TTSampling(LightweightModule):
             sub_core_grids=self.sub_core_grids,
         )
 
-    def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
+    def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None):
         """
         Flexible all-gather that works across different CCL implementations.
 
@@ -431,8 +427,6 @@ class TTSampling(LightweightModule):
             }
             if self._line_all_gather_supports_buffer_key and buffer_key is not None:
                 line_all_gather_kwargs["buffer_key"] = buffer_key
-            if self._line_all_gather_supports_dtype and dtype is not None:
-                line_all_gather_kwargs["dtype"] = dtype
             return self._line_all_gather(tensor, **line_all_gather_kwargs)
 
         return ttnn.all_gather(
