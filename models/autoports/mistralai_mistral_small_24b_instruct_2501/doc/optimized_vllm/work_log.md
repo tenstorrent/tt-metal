@@ -98,6 +98,6 @@ Fresh independent stage rereview: `clean-pass` in `stage_review.md`.
 
 - Nested vLLM TT-plugin observability: `6bd775d` (`Add opt-in device sampling route audit`).
 - Root stage evidence/checkpoint: `7e14ba84874` (`Record optimized Mistral vLLM serving evidence`).
-- SHA-record update: this follow-up documentation commit.
+- SHA-record update: `cf1410271de` (`Log optimized vLLM checkpoint SHAs`).
 
 No push was performed.
