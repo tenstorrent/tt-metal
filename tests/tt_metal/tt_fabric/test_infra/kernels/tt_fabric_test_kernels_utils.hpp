@@ -892,6 +892,21 @@ constexpr uint32_t SYNC_DBG_TAG_RHB = 0xC6;
 constexpr uint32_t SYNC_DBG_TAG_RDOOR = 0xC7;
 constexpr uint32_t ERISC_DBG_DOORBELL_SCRATCH_OFF = 192;
 
+// [DEST-CORE PROBE] The NOC (x,y) the worker's doorbell/payload target -- packed (x<<8)|y. Pushed in
+// global_sync_start (which survives ring-buffer eviction, unlike probe_router in global_sync_finish).
+// Compared against the eth core the router runs on: same core + same stream reg (CREDITREG=stream 22)
+// => worker and router address the SAME physical register (cross-core coherency); different => wrong target.
+constexpr uint32_t SYNC_DBG_TAG_DESTCORE = 0xC8;
+
+// [ALT-NOC DOORBELL] Read the SAME stream-22 available reg (idx 297) over the OTHER noc than the one the
+// decrement + primary doorbell read used. If the same-noc read (0xC1) shows the decrement (31) but this
+// shows num_buffers (32), the "31" is a same-NOC ordering/coalescing artifact -- the worker seeing its own
+// outstanding write -- and the decrement never actually applied to the register. Same value on both nocs =
+// the register genuinely holds 31 for the worker's core (true cross-core disagreement).
+constexpr uint32_t SYNC_DBG_TAG_DOORBELL_ALTNOC = 0xC9;
+// [DECR NOC] Which noc + sync cmd buf the decrement write used: packed (noc<<8)|sync_noc_cmd_buf.
+constexpr uint32_t SYNC_DBG_TAG_DECR_NOC = 0xCA;
+
 // MUST track MEM_AERISC_RESUME_PHASE_BASE in dev_mem_map.h. The region grows DOWNWARD from
 // MEM_ERISC_FABRIC_ROUTER_RESERVED_BASE, so enlarging MEM_AERISC_RESUME_PHASE_SIZE MOVES this base.
 // The host-side SLOT dump hardcodes the same value with the same warning (test_tt_fabric.cpp).
@@ -1037,6 +1052,13 @@ struct LineSyncConfig {
         sync_dbg_push_addr(
             SYNC_DBG_TAG_CREDITREG,
             static_cast<uint32_t>(static_cast<EdmSenderT*>(connection_ptr_)->edm_buffer_remote_free_slots_update_addr));
+        // [DEST-CORE PROBE] Which NOC core does this connection's doorbell/payload target? Packed (x<<8)|y.
+        // Same-instant with CREDITREG so we know BOTH the core and the register offset the worker addresses.
+        sync_dbg_push(
+            SYNC_DBG_TAG_DESTCORE,
+            sync_iter,
+            (static_cast<uint32_t>(static_cast<EdmSenderT*>(connection_ptr_)->edm_noc_x) << 8) |
+                static_cast<uint32_t>(static_cast<EdmSenderT*>(connection_ptr_)->edm_noc_y));
         connection_manager_->template send_header_non_blocking<false>(
             connection_ptr_, connection_idx_, (uint32_t)packet_header);
         // [NOC-DELIVERY PROBE] The send above is fire-and-forget (NON_BLOCKING: no flush, no barrier).
@@ -1084,6 +1106,22 @@ struct LineSyncConfig {
             const uint32_t free_slots =
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(debug_scratch_addr) & STREAM_FREE_SLOTS_MASK;
             sync_dbg_push(SYNC_DBG_TAG_DOORBELL, sync_iter, free_slots);
+
+            // [DECR NOC] which noc + cmd buf the decrement write used (same 'noc' as the read above).
+            sync_dbg_push(SYNC_DBG_TAG_DECR_NOC, sync_iter, (static_cast<uint32_t>(noc) << 8) | conn->sync_noc_cmd_buf);
+
+            // [ALT-NOC DOORBELL] read the SAME reg 297 over the OTHER noc. If this reads num_buffers while the
+            // primary (same-noc) read above read the decremented value, the decrement never truly applied and
+            // the same-noc read was seeing the worker's own outstanding write.
+            const uint8_t alt_noc = 1 - noc;
+            const uint64_t doorbell_altnoc_addr =
+                get_noc_addr(conn->edm_noc_x, conn->edm_noc_y, available_addr, alt_noc);
+            noc_async_read(doorbell_altnoc_addr, debug_scratch_addr + 4, sizeof(uint32_t), alt_noc);
+            noc_async_read_barrier(alt_noc);
+            invalidate_l1_cache();
+            const uint32_t free_slots_altnoc =
+                *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(debug_scratch_addr + 4) & STREAM_FREE_SLOTS_MASK;
+            sync_dbg_push(SYNC_DBG_TAG_DOORBELL_ALTNOC, sync_iter, free_slots_altnoc);
         }
     }
 
@@ -2633,12 +2671,12 @@ struct SyncKernelConfig {
 
         // Send sync start packets
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-            line_sync_configs()[i].global_sync_start(sync_iter, memory_map.get_debug_scratch_address());
+            line_sync_configs()[i].global_sync_start(sync_iter, get_result_buffer_address());
             sync_dbg_push(SYNC_DBG_TAG_GLOBAL_SENT, sync_iter, i);
         }
 
         // Wait for acks (only need one config to check)
-        line_sync_configs()[0].global_sync_finish(sync_iter, memory_map.get_debug_scratch_address());
+        line_sync_configs()[0].global_sync_finish(sync_iter, get_result_buffer_address());
 
         // Close all sync connections
         sync_connections.close_all();
