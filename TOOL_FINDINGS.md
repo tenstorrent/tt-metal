@@ -783,11 +783,12 @@ section is the credit half of the ledger and is the material for the comparison 
 | run 2 — untilize vocab blocks before joining (O4j) | — | 13.139 | 0.9904 |
 | run 2 — fused K/V cache write (O4k) | 234.1 | 12.890 | 0.9904 |
 | run 2 — decode SDPA 16 cores/head -> 2 (O4l) | 231.8 | 12.633 | 0.9904 |
-| run 2 — fused-QKV grid re-swept 32 -> 48 (O4m) | 229.6 | **12.427** | 0.9903 |
+| run 2 — fused-QKV grid re-swept 32 -> 48 (O4m) | 229.6 | 12.427 | 0.9903 |
+| run 2 — SiLU folded into the SwiGLU multiply (O4n) | 229.0 | **12.352** | 0.9903 |
 | tool's own roofline target | 338.541 | — | gate 0.95 |
 | **hand-port, for reference** | — | **15.907** | — |
 
-**12.427 against 15.907 — the tool is 21.9% AHEAD of 74 human experiments**, autonomously, with
+**12.352 against 15.907 — the tool is 22.3% AHEAD of 74 human experiments**, autonomously, with
 PCC bit-identical across its last four wins (0.990347151783074, unchanged to every decimal). Every
 one of those four was a layout or dispatch result. None spent accuracy.
 
@@ -1322,6 +1323,52 @@ hand-port's `_MM_GRID = (12, 6)` was fixed at §6.52 and has since been through 
 §6.67 (sharded norm) and §6.72 (head split). It has not been re-swept since. That is the same
 staleness this commit found, and it sharpens O4b: **re-sweep against the current structure, not from
 the historical setting.**
+
+### O4n — the hand-port's answer is better, and the tool's own note says why it couldn't reach it
+
+The SiLU was a standalone unary fetching 9216 values out of DRAM and writing them back *"to do
+almost nothing — 26 launches per token."* The tool's fix: the product is its only consumer and a
+binary op can apply a unary to an input **as it reads it**, so `silu(gate) * up` becomes one launch.
+`12.427 → 12.352`.
+
+**The hand-port does not have that unary at all.** `_PRG_W1 = _mm1d(2, 4, UnaryWithParam(SILU))`
+puts `fused_activation` inside the matmul program config, so the activation happens **in the
+projection**, with no separate launch to fold anywhere. That is strictly better than folding it into
+the consumer.
+
+**And the tool explains its own gap**, in the attempt it reverted:
+
+> *Deliberately not `ttnn.linear(activation="silu")`: with no program config to put it in, ttnn
+> appends a `unary_chain` op — the same launch under another name — and **naming a core grid** to
+> reach the genuinely fused path costs far more than the unary did (measured: gate/up 43.35 → 57.50
+> ms on the same 96 cores, because the router's auto-derived config for a named grid is not the one
+> it picks for itself).*
+
+That is the whole story: the tool reaches for fusion by **naming a grid and letting the router
+derive a config**, and the derived config is worse than the router's own default. The hand-port
+writes the **full** `MatmulMultiCoreReuseMultiCast1DProgramConfig` by hand — `in0_block_w`,
+`per_core_N`, `out_subblock_w`, and `fused_activation` together — so it gets the fusion without
+inheriting a bad config. `NOTES.md [gpt-26]` records exactly this: *"`activation="silu"` never
+fused; `fused_activation` does."*
+
+**→ Tool defect, and a concrete one for the PR (see F12).** Not a wrong answer — a missing lever.
+
+### F12 — the fusion rung reaches for a grid when it should reach for a program config
+
+**Status: found 2026-08-14** · severity: leaves activation fusion unreachable, and misprices it as a
+loss · reported: not yet
+
+When the ladder wants to fuse an activation into a matmul, it does so by naming a core grid and
+letting ttnn's router derive the rest of the program config. Measured cost on this model: **gate/up
+43.35 → 57.50 ms on the same 96 cores** — a 33% regression that has nothing to do with the fusion
+and everything to do with the derived config. The attempt is then correctly reverted, and the
+catalogue records activation fusion as a **loss**, when the lever simply was not pulled.
+
+**Fix:** when fusing an activation, emit a complete program config (`in0_block_w`, `per_core_M/N`,
+`out_subblock_h/w`, `fused_activation`) rather than a grid. The tool already builds exactly such
+configs on the `grid` rung — O4b/O4m sweep `in0_block_w` and `per_core_N` directly — so the
+machinery exists; the fusion rung just does not use it. The hand-port reached +0 launches this way
+and the tool reached +1; the difference is one code path.
 
 ### O5 — the ladder's escalation is real, and it gives up in the right place
 
