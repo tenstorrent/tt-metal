@@ -148,9 +148,6 @@ private:
         const tt::tt_metal::distributed::MeshCoordinate&);
 };
 
-// Owning handle over either a single-device `Buffer` or a `MeshBuffer`.
-// Still declared here because public `GlobalCircularBuffer` embeds it by value;
-// move out once that type is pimpl'd. No direct ttnn/tt-train call sites.
 class AnyBuffer {
 public:
     AnyBuffer() = default;
