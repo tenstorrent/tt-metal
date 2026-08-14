@@ -562,3 +562,127 @@ test exists to catch. Reset only for a genuine runtime hang, and record what hun
    Is there a packaging/compile gate that catches a header added to `experimental/` but missing from
    `sources.cmake`? Neither #52713 nor #52745 touches `sources.cmake`; #52713 adds no compute-API header, so
    it looks correct, but a gate would make that verifiable rather than reviewed.
+
+---
+
+## 12. Appendix — everything learned, for whoever picks this up
+
+Practical knowledge accumulated while landing four tests and failing at two. Recorded here
+because none of it is discoverable from the code without spending the same time.
+
+### 12.1 Branch and repo mechanics
+
+- Work branch: **`ldjurovic/llk-tests-blaze-promotions`** (tt-metal). It merges
+  `pmilenkovic/promote-rmsnorm-family` + `promote-top32-rm` + `promote-custom-mm` onto
+  `origin/main`, because the promoted headers do not exist on main and there is nothing to
+  compile against otherwise.
+- Those three branches have **different merge-bases** — only `promote-rmsnorm-family` is
+  based on current main. Merging all three produced exactly one conflict,
+  `tt_metal/hw/sources.cmake`, where both sides append to the same sorted
+  `HW_JIT_API_HEADERS` list. Keep both sides, alphabetically.
+- **The branch is not reviewable as-is.** It carries the three PR merge commits. The test
+  commits touch only `tt_metal/tt-llk/tests/`, so rebase them onto main once the PRs land.
+- `tt-llk` is **vendored** into tt-metal at `tt_metal/tt-llk`, not a submodule. Test changes
+  are ordinary tt-metal commits.
+- `tests/setup_testing_env.sh` installs a pre-commit hook into tt-metal's `.git/hooks`. It
+  rejects commits for unrelated pre-existing repo state, so every commit here used
+  `git -c core.hooksPath=/dev/null commit`. Worth knowing rather than fighting.
+
+### 12.2 Test environment
+
+- **Both** setup scripts are needed, in this order:
+  `CHIP_ARCH=blackhole ./setup_testing_env.sh` (fetches SFPI 7.69.0) then
+  `source ./setup_external_testing_env.sh` (creates `tests/.venv` and installs
+  requirements). The first alone does **not** create the venv — it assumes the Docker
+  image's Python environment — and `run_test.sh` fails with "venv not found" until the
+  second has run.
+- Run tests through `tt-llk/.claude/scripts/run_test.sh` (`count` / `compile` / `run`), never
+  raw pytest. Invocation used throughout:
+  `./.claude/scripts/run_test.sh run --worktree <abs path to tt-llk> --arch blackhole --test <file>`
+- **`--k` with brackets, commas or spaces silently mangles the pytest args** and surfaces as
+  an opaque xdist `assert not crashitem` worker crash that looks like an environment
+  failure. Cost an hour of misdiagnosis. Use `--test-id`, or a bracket-free `--k` such as
+  `--k prgm0_hazard`.
+- Shell state does not persist between tool invocations: `source .venv/bin/activate` must be
+  in the *same* command as the pytest call. A separate call silently falls back to
+  `/opt/venv`, which has an incompatible `ttexalens` and fails at conftest import.
+- Reset the device with `tt-smi -r` **only** for a genuine runtime hang. Never for compile
+  errors or reconfig escapes — resetting masks the reconfig bug a test may exist to catch.
+
+### 12.3 Harness facts that cost time
+
+- **`passed_test`'s default tolerance is `atol=rtol=0.05` for every float format.** Far too
+  loose for most numeric assertions. Both landed numeric tests pass measured, per-config
+  tolerances via `custom_rtol` / `custom_atol` instead. Measure the error envelope first,
+  then set the tolerance ~2.5x above it; do not guess, and check the guess is not *tighter*
+  than the default (an early `add_rsqrt` draft tightened bf16 25x below default and failed
+  its own correct results).
+- Template parameters reach the kernel through a generated header pulled in by `params.h`.
+  If a driver needs them at **file scope** (e.g. `constexpr` arithmetic before any
+  `#ifdef LLK_TRISC_*`), `params.h` must be included at the top of the file, not only inside
+  each TRISC block. `sfpu_sampling_test.cpp` is the precedent.
+- A `TemplateParameter` emitting `constexpr ...` cannot be tested with `#ifdef`. Emit
+  `#define NAME_VAL <n>` and derive the constexpr in the source if a default is needed for
+  variants that do not pass the parameter.
+- Enum spellings differ between layers: python `VectorMode.None_` is C++ `VectorMode::None`.
+- `DataCopyGolden` needs `input_dimensions=[rows, cols]` for anything other than a single
+  tile; without it a multi-tile call raises `shape '[1, 1024]' is invalid`.
+- `-I../../hw/ckernels/blackhole/metal/llk_api` and `-I../../hw/inc` are already on the
+  compile line, so promoted `experimental/...` headers need no fixture.
+- Metal-tree SFPU headers under `experimental/llk_sfpu/` read bare `APPROX` and
+  `DST_ACCUM_MODE`; define both before the include. Both landed SFPU drivers show it.
+
+### 12.4 LLK facts established by measurement
+
+- **`_llk_pack_` executes whatever packer MOP is currently installed** (via
+  `ckernel_template::run()`), so a leftover MOP from a previous op directly changes it. This
+  is what makes the `custom_mm` uninit test possible.
+- **The pack MOP bakes in tile geometry.** A restore is unobservable when the follow-on
+  geometry already matches: the `custom_mm` MOP restore is inert at 4 faces and only visible
+  at 2. Corollary for any future pack-state test: vary the geometry, or you are measuring
+  nothing.
+- **`_llk_pack_`'s tile index is honoured under `_llk_pack_reduce_mask_config_`** — packing
+  `DEST[n]` vs `DEST[0]` gives different data.
+- **`fill_tile` is `_calculate_fill_` at `VectorMode::RC`, 8 iterations** (whole tile). The
+  `RC_custom` / 2-iteration form used to stage a reduce scaler covers only a small region.
+  Not interchangeable.
+- **The dense_packing W-stride constants are not format-aware** — item D1. `set_packer_strides`
+  uses `datum_size_in_bytes(pack_src_format)`; `custom_mm.h` hardcodes `* 2`.
+- **The two sort families cannot both be initialized in one kernel.** `_top32_rm_init_()` and
+  `_topk_xl_init_<K, fused>()` together hang the math thread — overlapping ADDR_MOD slots,
+  MOP and REPLAY buffer. They coexist in a translation unit, which is all #52713 claims.
+- **A polluted `vConstFloatPrgm0` degrades rather than corrupts.** It makes
+  `t = x*y - Prgm0` positive, so `sfpu_reciprocal_iter`'s `v_if(t < 0)` refinement never
+  fires and raw `approx_recip` survives — about 1e-3 relative, inside the suite's 2%
+  tolerance. Any "is this init load-bearing" test needs its own threshold.
+- **`_llk_math_eltwise_binary_` derives `num_faces` / `face_r_dim` from the `TensorShape` it
+  is handed.** Forcing `DEFAULT_TENSOR_SHAPE` on a 2-face tile makes math issue four faces
+  of ops against a two-face packer and deadlocks MATH_PACK. Relevant to item 5 (§9).
+
+### 12.5 Method notes
+
+Three hypotheses were disproved on silicon (§3 twice, §9 once). What would have caught them
+sooner:
+
+1. **Read the shape of the error before theorising.** The chunked reduce was off by a
+   *non-integer, size-dependent* factor. That is a race or a wrong source, never an
+   off-by-one — an off-by-one gives a clean ratio. Two rounds were spent on clean-ratio
+   theories.
+2. **Verify a change reaches the binary before concluding it had no effect.** Checking the
+   source file contains the edit is not that check. Three identical results in a row were
+   the signal; a one-line probe (pack `DEST[0]`) settled it immediately and should have been
+   first.
+3. **Prefer the experiment that halves the search space** over the one matching the current
+   theory. Packing `DEST[0]` was listed as "cheapest decisive check" in two successive
+   revisions of this document and skipped both times in favour of a specific fix.
+4. **Do not encode an unestablished defect as `xfail`.** Both reverts could have been landed
+   as xfail and looked like progress; neither had established that the *promoted code* was
+   wrong rather than the driver. `xfail` asserts a product defect and should be used only
+   with evidence — as it is for D1, where the arithmetic is provably wrong.
+
+### 12.6 Commit trail on the work branch
+
+`4164de1` add_rsqrt · `3898f05` custom_mm uninit · `906e73a` sort-header coexistence ·
+`5c6a605` + `744bbe2` docs · `169a504` sampling Prgm0 hazard · `931eab1` + `fc2aec7` +
+`3e42be9` doc upkeep · `566a1e5` + `d6e00d0` + `3b8903f` the chunked-reduce attempts.
+
