@@ -411,7 +411,25 @@ class Model:
 
         # Final norm and lm_head
         hidden_states = self.norm(hidden_states)
-        logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
+        if hidden_states.shape[2] <= 32:
+            program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
+                in0_block_w=1,
+                out_subblock_h=1,
+                out_subblock_w=1,
+                out_block_h=1,
+                out_block_w=75,
+                per_core_M=1,
+                per_core_N=75,
+                fuse_batch=False,
+                fused_activation=None,
+                mcast_in0=True,
+            )
+            logits = ttnn.matmul(
+                hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b, program_config=program_config
+            )
+        else:
+            logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         hidden_states.deallocate(True)
         self._prefill_sampling_active = False
         # TP all-gather is deferred to process_output_prefill / process_output_decode
