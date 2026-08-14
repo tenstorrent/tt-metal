@@ -324,8 +324,10 @@ extra two-phase handoff is not amortized.
 
 # Part 2 — Propositions (levers, mostly not yet built as examples)
 
-A cross-codebase checklist of what separates an **optimal** data-movement op from a **non-optimal**
-one in tt-metal. The recurring theme:
+A cross-codebase checklist of what separates an **optimal** op from a **non-optimal** one in tt-metal.
+**A–E are data movement** (placement, transaction shape, residency, compile-time specialization, host
+dispatch); **F is the compute-side precision cost** — the knobs whose expensive setting is the default,
+so an op pays for them by inheritance rather than by decision. The recurring theme:
 
 > **Optimal** = keep data in L1, move large coalesced transactions, overlap read/write streams, and
 > specialize at compile time.
@@ -463,6 +465,60 @@ gate it on a work-per-core threshold rather than applying it globally.
   perf-lab's single-op scope)* — remove per-op host dispatch; overlap input I/O (CQ1) with execution
   (CQ0). `AdvancedPerformanceOptimizationsForModels.md:33,157,161`.
 
+## F. Precision cost (compute-side) — pay only for the precision the gate needs
+
+**F23. A precision knob is a perf lever, not free correctness insurance.** Every knob below taxes
+throughput when on, and each one's *default* or its most obvious setting is the expensive one — so
+"leave it on to be safe" is a measurable, invisible cost. The rule: **enable the cheapest config that
+clears the accuracy gate, measured** — set the knob, measure the PCC margin, and downgrade any knob
+that turns out not to be load-bearing. Blanket-enabling a precision knob is the compute-side analogue
+of over-parallelizing: correct but slower, and the cost stays invisible until you measure against a
+baseline that didn't pay it.
+
+**The boundary, and it is hard: this lever is about knobs the OP derives, never knobs the CALLER
+set.** A `ttnn.ComputeKernelConfig` a user passed in is a contract — downgrading `math_fidelity` or
+`fp32_dest_acc_en` underneath it is a silent precision regression and a fake win, not a lever (the
+perf tournament forbids it outright). What F24–F27 govern is the op's *own* choice: the value it
+computes from dtypes, or the default it ships when the caller said nothing. Deep reference:
+`/numeric-formats-metal` §1.7 (the knob-cost table) and `numerical_stability_analysis_reference.md`
+§2.1–2.2 (the srcA/srcB TF32 drop, the DEST capacity table).
+
+- **F24. Fast packer unless the gate needs precise** — `bfp8_pack_precise` picks how the packer writes
+  a `bfloat8_b` tile: fast truncates the block-float mantissas, precise rounds and costs an **extra
+  pack pass — measured ~1.4× slower on a `bf16 → bfp8_b` tilize at identical cores**. Anchor:
+  `bf16 → bfp8_b` clears **PCC 0.999 on the fast packer** (measured 0.99996), so precise earns its
+  keep essentially only for **wide (fp32) inputs → bfp8_b**. Gate it on the *input* dtype, not blanket
+  on the output dtype: `out == bfloat8_b and in == float32`, not `out == bfloat8_b` (the latter is what
+  over-conservative ops ship, and it pays the pass for every bf16 input that never needed it).
+  `tt_metal/api/tt-metalium/kernel_types.hpp:110`,
+  `tt_metal/api/tt-metalium/program_descriptors.hpp:105`; the packer branch itself:
+  `tt_metal/jit_build/data_format.cpp:264`.
+- **F25. `fp32_dest_acc_en` off unless the datums are 32-bit** *(proposition)* — a 32-bit DEST costs
+  throughput **and halves capacity**: `get_dest_limit()` returns 8→**4** tiles half-sync and 16→**8**
+  full-sync. That capacity is the ceiling on tiles per compute iteration, so enabling it silently
+  shrinks the **block factor** that B5/B7/C16 and every blocking decision are tuned against — the cost
+  shows up as more per-block overhead in a stage that looks unrelated. Enable it for genuinely 32-bit
+  datums or a cross-CB fp32 accumulation that needs the range; not as a default.
+  `ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp:89` (`get_dest_limit`, and
+  `get_dst_full_sync_enabled()` at `:71` — the other input to the same capacity);
+  `numerical_stability_analysis_reference.md` §2.2.
+- **F26. A lossless unpack path buys nothing downstream of any FPU phase** *(proposition — often a
+  structural closure)* — `Fp32Mode::Lossless` / `UnpackToDestFp32` keeps fp32 bit-exact on the way
+  into DEST, but in any pipeline containing at least one FPU helper (`reduce`, `matmul`, an FPU binary,
+  the default fast `tilize`) the data passes through srcA/srcB and takes the **fp32 → TF32 drop
+  anyway**. Paying for lossless in that chain buys *nothing* and costs the slower unpack path. So this
+  lever is usually closable by structure rather than by sweep: if the chain hits an FPU phase, the
+  lossless variant is provably pointless — assert it and move on. Reach for it only for a chain that
+  stays out of srcA/srcB end to end. `ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp:63` (`Fp32Mode`);
+  `numerical_stability_analysis_reference.md` §2.1.
+- **F27. Lowest `math_fidelity` (and `math_approx_mode=true`) that clears the gate** *(proposition)* —
+  HiFi* buys mantissa coverage with **more FPU passes**, and the shipped default is the most expensive
+  one: `MathFidelity math_fidelity = MathFidelity::HiFi4`
+  (`tt_metal/api/tt-metalium/kernel_types.hpp:106`). An op that never measured a lower fidelity is
+  paying HiFi4 by inheritance, not by decision. Measure the fidelity ladder against the accuracy gate
+  for the op's *own* default and pick the cheapest rung that clears it — while leaving a
+  caller-supplied fidelity exactly as given (F23).
+
 ## Compact optimal-vs-non-optimal
 | Dimension | Non-optimal | Optimal |
 |---|---|---|
@@ -472,6 +528,7 @@ gate it on a work-per-core threshold rather than applying it globally.
 | Streams | shared NoC | reader NoC0 / writer NoC1, per-reader VCs |
 | Residency | stream through DRAM interleaved | L1 sharded, CB aliased to shard (zero-copy) |
 | Args | runtime address-gen | compile-time `TensorAccessorArgs`, cached program |
+| Precision knobs | precise packer / fp32 DEST / HiFi4 on by default "to be safe" | cheapest config that clears the measured accuracy gate; caller's contract untouched |
 
 ## Notes
 - Sections A–B are grounded in `Saturating_DRAM_bandwidth.md` (>92% DRAM BW on Wormhole). Use
