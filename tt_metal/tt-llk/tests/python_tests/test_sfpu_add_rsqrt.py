@@ -1,0 +1,290 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+add_rsqrt SFPU functor test (Blackhole only).
+
+Covers the single entry point of
+hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_add_rsqrt.h,
+promoted out of the deepseek_v3_b1 demo tree by tt-metal #52709:
+
+    calculate_add_rsqrt<APPROX, ITERATIONS, fp32_dest_acc_en, FAST_APPROX>(addend)
+        ->  dst = rsqrt(dst + addend)
+
+The fused form exists for RMSNorm's rsqrt(variance + epsilon): the add happens inside
+the SFPU slot, so the variance never round-trips through DEST at the dest width.
+
+Three template axes, all reachable from the compute API (add_rsqrt_tile):
+
+  APPROX        LUT-only SQRT_10-bits body vs the SQRT_23-bits Newton refinement.
+                Swept in the main test, with a looser tolerance for the approx body.
+  fp32_dest_acc When false the functor does its own convert<vFloat16b>(Nearest) before
+                the store, so the golden must round to the dest width to match. Driven
+                by the dest_acc axis.
+  FAST_APPROX   Drops the trailing `v_if(x < 0) -> NaN` guard in _calculate_sqrt_body_.
+                That guard is the ONLY thing the flag changes, so it is unobservable on
+                a non-negative domain -- test_sfpu_add_rsqrt_fast_approx_negative_guard
+                is the case that actually separates the two settings.
+
+Domain. rsqrt is only defined for x + addend > 0, so the main sweep stays strictly
+positive; the negative and zero arguments are their own tests with their own exact
+expectations (NaN and +inf respectively) rather than tolerance comparisons, since
+neither is a value passed_test can meaningfully bound.
+"""
+
+import struct
+
+import pytest
+import torch
+from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.format_config import DataFormat
+from helpers.golden_generators import round_to_dest_width
+from helpers.llk_params import ApproximationMode, DestAccumulation, format_dict
+from helpers.param_config import input_output_formats, parametrize
+from helpers.stimuli_config import StimuliConfig
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
+from helpers.test_config import TestConfig
+from helpers.test_variant_parameters import (
+    APPROX_MODE,
+    SFPU_FAST_APPROX,
+    SFPU_UNARY_SCALAR,
+    VECTOR_MODE,
+)
+from helpers.llk_params import VectorMode
+from helpers.utils import passed_test
+
+pytestmark = [skip_for_wormhole, skip_for_quasar]
+
+ELEMENTS_PER_TILE = 1024
+
+# Same-in-same-out: the functor never touches srcA, so a mixed pair would only re-test
+# unpack/pack. Float32 with dest_acc=No is skipped as elsewhere in the SFPU suites.
+FORMATS = input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True)
+
+# 0.0        -> reduces to plain rsqrt, cross-checking against MathOperation.Rsqrt
+#               in test_sfpu_unary.py
+# 1e-6, 1e-5 -> the production RMSNorm epsilon range
+# 1.0        -> an addend large enough to dominate the input, so a dropped or
+#               mis-decoded addend cannot pass by being numerically small
+ADDENDS = (0.0, 1e-6, 1e-5, 1.0)
+
+# Tolerances. The shared default for every float format is atol=rtol=0.05, which is far
+# too loose to notice a wrong rsqrt -- the whole positive sweep lands in [0.44, 3.2], so
+# 5% would accept a result off by an entire bf16 ULP many times over. These are measured
+# envelopes instead: the max relative error observed on BH p100a over the sweep below
+# (uniform(0.1, 4.0), all four addends, both dest_acc settings), with rtol set ~2.5x
+# above it so seed changes and the odd outlier lane stay inside.
+#
+#   body            output    measured max_rel   rtol used   vs 0.05 default
+#   SQRT_23-bits    Float32         1.3e-7         1e-6        50000x tighter
+#   SQRT_23-bits    Float16_b       3.9e-3         1.0e-2          5x tighter
+#   SQRT_10-bits    Float32         8.8e-4         3e-3           17x tighter
+#   SQRT_10-bits    Float16_b       7.6e-3         2.0e-2        2.5x tighter
+#
+# The two Float16_b rows are dominated by one bf16 ULP (2^-8 = 3.9e-3), not by the SFPU:
+# with dest_acc=No the functor's own convert<vFloat16b>(Nearest) matches the golden's
+# rounding exactly (measured 0.0 error), while with dest_acc=Yes the packer's fp32->bf16
+# conversion and torch's differ by up to one step. Both are folded into one bf16 number
+# rather than split by dest_acc, since a 1-ULP packer disagreement is not a defect.
+#
+# atol is kept at a small floor: the binding constraint is relative (golden >= 0.44
+# everywhere in this domain), and a large atol would silently swallow the small results.
+_ATOL = 1e-3
+_RTOL = {
+    # (approx, output is 32-bit)
+    (ApproximationMode.No, True): 1e-6,
+    (ApproximationMode.No, False): 1.0e-2,
+    (ApproximationMode.Yes, True): 3e-3,
+    (ApproximationMode.Yes, False): 2.0e-2,
+}
+
+
+def _bits(value: float) -> int:
+    return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
+def _skip_unsupported(formats, dest_acc):
+    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
+        pytest.skip("Float32 inputs with dest_acc=No are not supported")
+
+
+def _run_add_rsqrt(
+    formats,
+    dest_acc,
+    addend,
+    approx=ApproximationMode.No,
+    fast_approx=False,
+    spec_A=None,
+):
+    """Compile+run one variant, returning (device_tensor, input_tensor) as fp32.
+
+    Deliberately returns raw tensors instead of asserting: the negative/zero-argument
+    tests need exact NaN/inf predicates rather than a tolerance comparison.
+    """
+    torch.manual_seed(0)
+    spec_a = StimuliSpec.uniform(low=0.1, high=4.0) if spec_A is None else spec_A
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=[32, 32],
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=[32, 32],
+        spec_A=spec_a,
+    )
+
+    configuration = TestConfig(
+        "sources/sfpu_add_rsqrt_test.cpp",
+        formats,
+        templates=[
+            APPROX_MODE(approx),
+            SFPU_FAST_APPROX(fast_approx),
+            SFPU_UNARY_SCALAR(_bits(addend)),
+            VECTOR_MODE(VectorMode.RC),
+        ],
+        runtimes=[],
+        variant_stimuli=StimuliConfig(
+            src_A.flatten(),
+            formats.input_format,
+            src_B.flatten(),
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=tile_cnt_A,
+            tile_count_B=tile_cnt_B,
+            tile_count_res=1,
+        ),
+        unpack_to_dest=formats.input_format.is_32_bit(),
+        dest_acc=dest_acc,
+        compile_time_formats=True,
+    )
+
+    res_from_L1 = configuration.run().result[:ELEMENTS_PER_TILE]
+    torch_format = format_dict[formats.output_format]
+    device = torch.tensor(res_from_L1, dtype=torch_format).flatten().to(torch.float32)
+    # The input as the device saw it: quantised to the input format, then to the dest
+    # width the datacopy landed it at.
+    seen = round_to_dest_width(
+        src_A.flatten()[:ELEMENTS_PER_TILE].to(torch.float32), dest_acc
+    )
+    return device, seen
+
+
+@parametrize(
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    addend=list(ADDENDS),
+    approx=[ApproximationMode.No, ApproximationMode.Yes],
+)
+def test_sfpu_add_rsqrt(formats, dest_acc, addend, approx):
+    """rsqrt(x + addend) over a strictly positive domain."""
+    _skip_unsupported(formats, dest_acc)
+
+    device, seen = _run_add_rsqrt(formats, dest_acc, addend, approx=approx)
+
+    # Golden mirrors the functor: add in fp32, rsqrt, then the functor's own
+    # convert<vFloat16b>(Nearest) when the dest is 16-bit.
+    golden = round_to_dest_width(torch.rsqrt(seen + addend), dest_acc)
+
+    rtol = _RTOL[(approx, formats.output_format.is_32_bit())]
+
+    assert passed_test(
+        golden,
+        device,
+        formats.output_format,
+        custom_rtol=rtol,
+        custom_atol=_ATOL,
+    ), (
+        f"add_rsqrt mismatch (addend={addend}, approx={approx.name}, "
+        f"dest_acc={dest_acc.name}, rtol={rtol})"
+    )
+
+
+@parametrize(
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    approx=[ApproximationMode.No, ApproximationMode.Yes],
+    fast_approx=[False, True],
+)
+def test_sfpu_add_rsqrt_fast_approx_negative_guard(
+    formats, dest_acc, approx, fast_approx
+):
+    """The one case that tells FAST_APPROX=true from FAST_APPROX=false.
+
+    _calculate_sqrt_body_ ends with
+    ``if constexpr (!FAST_APPROX) { v_if(x < 0.0f) { y = quiet_NaN(); } }``.
+    A negative argument is the only way to observe the flag: on a non-negative
+    domain the two settings are bit-identical, which is why the main sweep pins
+    FAST_APPROX=false and does not sweep it.
+
+    What is asserted, and what is deliberately not
+    ---------------------------------------------
+    x < 0 is outside rsqrt's domain, and the header states no result for it beyond
+    the guard itself, so this pins only the guard's *observable effect* -- it must
+    not be read as blessing any particular invalid value.
+
+    Measured on Blackhole p100a across all six live (format, dest_acc) x approx
+    combinations, the guard's effect is a sign guarantee:
+
+      FAST_APPROX=false -> no lane is negative (fp32 dest gives NaN on every lane;
+                           bf16-input paths give +inf on every lane)
+      FAST_APPROX=true  -> the un-guarded body leaves negative results (-inf on
+                           most lanes, plus a handful of NaN / finite lanes)
+
+    The NaN-vs-+inf split is format-dependent, so `isnan` specifically is NOT
+    asserted: with Float16_b input the guard's NaN arrives as +inf, and an
+    isnan-based assertion would fail there while the guard is working correctly.
+    The sign predicate holds in every configuration and still fails loudly if the
+    guard is dropped.
+    """
+    _skip_unsupported(formats, dest_acc)
+
+    # Strictly negative even after the addend is applied.
+    device, _ = _run_add_rsqrt(
+        formats,
+        dest_acc,
+        addend=0.0,
+        approx=approx,
+        fast_approx=fast_approx,
+        spec_A=StimuliSpec.uniform(low=-4.0, high=-0.1),
+    )
+
+    negative_lanes = int((device < 0).sum())
+    if fast_approx:
+        assert negative_lanes > 0, (
+            "FAST_APPROX=true must skip the negative-input guard, leaving the "
+            "un-guarded body's negative results, but no lane is negative"
+        )
+    else:
+        assert negative_lanes == 0, (
+            "FAST_APPROX=false must replace every negative-input result with the "
+            f"guard's invalid value, but {negative_lanes}/{device.numel()} lanes "
+            "are negative -- the v_if(x < 0) guard looks dropped"
+        )
+
+
+@parametrize(
+    formats=FORMATS,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    approx=[ApproximationMode.No, ApproximationMode.Yes],
+)
+def test_sfpu_add_rsqrt_zero_argument(formats, dest_acc, approx):
+    """x + addend == 0 -> +inf.
+
+    Both sqrt bodies special-case this off the input bits (`x_bits != 0` in the
+    RECIPROCAL branch, otherwise y = infinity_bits), so it is a defined result rather
+    than an undefined-domain hole -- worth pinning, since the default positive sweep
+    never reaches it and RMSNorm with eps=0 on an all-zero row does.
+    """
+    _skip_unsupported(formats, dest_acc)
+
+    device, _ = _run_add_rsqrt(
+        formats,
+        dest_acc,
+        addend=0.0,
+        approx=approx,
+        spec_A=StimuliSpec.constant(value=0.0),
+    )
+
+    assert torch.isinf(device).all() and (device > 0).all(), (
+        "rsqrt(0) must be +inf on every lane, got "
+        f"{device.unique(sorted=True)[:8].tolist()}"
+    )

@@ -325,6 +325,25 @@ class APPROX_MODE(TemplateParameter):
 
 
 @dataclass
+class SFPU_FAST_APPROX(TemplateParameter):
+    """The sqrt/rsqrt family's ``FAST_APPROX`` template argument.
+
+    Emits ``constexpr bool SFPU_FAST_APPROX = <bool>;``. Distinct from
+    :class:`APPROX_MODE`: ``APPROX_MODE`` selects which approximation *body* runs
+    (SQRT_10-bits vs SQRT_23-bits), while this flag only drops the trailing
+    ``v_if(x < 0) -> NaN`` guard in ``_calculate_sqrt_body_``. It is therefore
+    unobservable unless the stimuli reach a negative argument.
+
+    Surfaced as ``fast_and_approx`` on the compute API's ``add_rsqrt_tile``.
+    """
+
+    fast_approx: bool = False
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr bool SFPU_FAST_APPROX = {str(self.fast_approx).lower()};"
+
+
+@dataclass
 class REDUCE_BLOCK_CT_DIM(TemplateParameter):
     """Compile-time block width (in tiles) for the block-based reduce_block_max_row LLKs.
 
