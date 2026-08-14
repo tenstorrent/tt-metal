@@ -52,23 +52,55 @@ DEVICE_PARAM_KEYS = (
 
 _SENTINEL = object()
 
-# Upper bound on the AST nodes in one value expression before literal_eval is skipped. A device
-# parameter is a byte size, a queue count or an enum -- a handful of nodes. Anything larger is not a
-# device parameter, so refusing to evaluate it costs nothing and keeps literal_eval away from an
-# arbitrarily large nested literal (CWE-400). The input here is repo source, not user input, but the
-# bound is one line and makes that independent of who can write to the tree being parsed.
-_MAX_VALUE_NODES = 64
+# Depth cap for the literal reader below. A device parameter is a byte size, a queue count, a bool
+# or an enum -- depth 1 in practice -- so anything deeper is not one, and refusing it costs nothing.
+_MAX_LITERAL_DEPTH = 4
+
+
+def _literal(node, depth=0):
+    """The Python value of a literal AST node, or _SENTINEL if it is not one.
+
+    Deliberately NOT ast.literal_eval: that accepts arbitrarily large and deeply nested structures
+    (CWE-400) and is flagged wherever its input is not provably constant. This reads only the node
+    types a device parameter can be, recursing at most _MAX_LITERAL_DEPTH, so the work is bounded by
+    the shape of what we accept rather than by the size of what we are handed.
+    """
+    if depth > _MAX_LITERAL_DEPTH:
+        return _SENTINEL
+    if isinstance(node, ast.Constant):  # str, int, float, bool, None
+        return node.value
+    # -1 / +1 parse as a UnaryOp around the constant, not as a negative constant.
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        operand = _literal(node.operand, depth + 1)
+        if isinstance(operand, (int, float)) and not isinstance(operand, bool):
+            return -operand if isinstance(node.op, ast.USub) else operand
+        return _SENTINEL
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        items = [_literal(e, depth + 1) for e in node.elts]
+        if any(i is _SENTINEL for i in items):
+            return _SENTINEL
+        return tuple(items) if isinstance(node, ast.Tuple) else (set(items) if isinstance(node, ast.Set) else items)
+    if isinstance(node, ast.Dict):
+        out = {}
+        for key_node, value_node in zip(node.keys, node.values):
+            if key_node is None:  # {**spread} -- not a literal we can read
+                return _SENTINEL
+            key = _literal(key_node, depth + 1)
+            value = _literal(value_node, depth + 1)
+            if key is _SENTINEL or value is _SENTINEL:
+                return _SENTINEL
+            out[key] = value
+        return out
+    return _SENTINEL
 
 
 def _render(node):
     """A literal as its Python value, anything else as its source text."""
+    value = _literal(node)
+    if value is not _SENTINEL:
+        return value
     try:
-        if sum(1 for _ in ast.walk(node)) <= _MAX_VALUE_NODES:
-            return ast.literal_eval(node)
-    except (ValueError, TypeError, SyntaxError, MemoryError, RecursionError):
-        pass
-    try:
-        return ast.unparse(node)
+        return ast.unparse(node)  # enums and other names keep their source form
     except Exception:
         return _SENTINEL
 
