@@ -1,11 +1,14 @@
 {
   "op": "tilize",
   "topology": {
-    "phase": 0,
-    "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+    "phase": 1,
+    "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = shard_ht * n_chunks): e_shard_same_small=4, e_shard_same_wide=8",
     "plan_paths": [
-      "R_ALIGNED/P_ACCESSOR",
-      "R_PAD/P_ACCESSOR"
+      "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+      "R_PAD/P_ACCESSOR/W_BLOCKS",
+      "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+      "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+      "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION"
     ],
     "dtypes": [
       "bfloat16",
@@ -75,11 +78,43 @@
       "phase": 0
     },
     "A2": {
-      "status": "deferred",
-      "followup": "Launch only on the cores that own a shard once L1-sharded I/O lands (SUPPORTED[shard_api] is ['none'] at Phase 0, so there is no shard to be adjacent to). Refinement A3.",
+      "status": "applied",
+      "knob": "zero_copy",
       "predicted_delta_pct": 0.0,
-      "reason": "No sharded cell is supported yet; on interleaved every core is equally far from every bank.",
-      "phase": 0
+      "reason": "Refinement 1: the sharded path launches on exactly the cores that hold shards, in shard order (ttnn.get_optimal_worker_cores_for_sharded_tensor), instead of the whole compute grid \u2014 a core with no shard would have nothing local to tilize. Pinned structurally by test_local_shard_launches_only_on_cores_that_hold_data (4 shards -> 4 cores). The zero_copy=0 arm is its only counterfactual and CONFLATES A2 with C14 (turning the placement off also restores the generic full-grid block split), so the number below is the pair's, not A2's alone; A2's own contribution on these shapes is the dispatch cost of the idle cores.",
+      "measured": {
+        "shape": [
+          1,
+          1,
+          512,
+          64
+        ],
+        "on_ns": 1402.0,
+        "off_ns": 5257.0,
+        "note": "Conflated with C14 (same knob). Interleaved cells are unaffected: A0 keeps the full grid there.",
+        "topology": {
+          "phase": 1,
+          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = shard_ht * n_chunks): e_shard_same_small=4, e_shard_same_wide=8",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        }
+      },
+      "phase": 1
     },
     "A3": {
       "status": "deferred",
@@ -295,18 +330,82 @@
       "phase": 0
     },
     "C14": {
-      "status": "deferred",
-      "followup": "Back cb_input_sticks / cb_output_tiles on the resident L1 shard via ttnn.cb_descriptor_from_sharded_tensor (zero NoC on the sharded side). Refinement A3.",
+      "status": "applied",
+      "knob": "zero_copy",
       "predicted_delta_pct": 50.0,
-      "reason": "SUPPORTED[shard_api] is ['none'] at Phase 0, so there is no shard to alias yet.",
-      "phase": 0
+      "reason": "Refinement 1: both CBs are placed ON the resident L1 shard via ttnn.cb_descriptor_from_sharded_tensor when the shard spec matches the blocking, so the reader publishes pages it never fetched and the writer drains pages it never sent \u2014 zero NoC traffic on a local-shard side. The OFF arm (zero_copy=0) takes the TensorAccessor path over the very shard already resident in L1, which is the 'tolerated, not implemented' sharding this lever replaces. Measured 3.7x on the smallest sharded regime and 9.5x on the 8-blocks/core one, so it pays in BOTH regimes (no work-per-core gate needed).",
+      "measured": {
+        "shape": [
+          1,
+          1,
+          512,
+          64
+        ],
+        "on_ns": 1402.0,
+        "off_ns": 5257.0,
+        "note": "smallest sharded regime, HEIGHT-sharded 4 cores, bf16 -> 3.75x. Larger regime [1,1,2048,256] HEIGHT-sharded 8 cores: 4901 ns on / 46548 ns off -> 9.50x. Ablation on the ON arm: full 4901 -> no_compute 862 -> sync_only 856, i.e. the zero-copy path has NO measurable data movement left and is bound by the tilize LLK.",
+        "topology": {
+          "phase": 1,
+          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = shard_ht * n_chunks): e_shard_same_small=4, e_shard_same_wide=8",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        }
+      },
+      "phase": 1
     },
     "C15": {
-      "status": "deferred",
-      "followup": "Accept L1-sharded input/output so the DRAM leg disappears on one or both sides (Refinement A3/A3b).",
+      "status": "applied",
+      "knob": "zero_copy",
       "predicted_delta_pct": 50.0,
-      "reason": "Same gate as C14: interleaved-only at Phase 0.",
-      "phase": 0
+      "reason": "Refinement 1 accepts L1-sharded input and/or output, so the DRAM leg disappears on the sharded side(s): a same-spec sharded call touches DRAM zero times (both CBs alias their shard) and a crossover keeps only the interleaved side's leg. Same knob as C14 \u2014 the zero_copy=0 arm is the only counterfactual that removes the placement, and it also restores the NoC traffic this row is about.",
+      "measured": {
+        "shape": [
+          1,
+          1,
+          512,
+          64
+        ],
+        "on_ns": 1402.0,
+        "off_ns": 5257.0,
+        "note": "Same-spec sharded [1,1,2048,256] bf16 measures 4901 ns (427.9 GB/s of effective read+write) against 46548 ns when the same shard is re-fetched over the NoC; the DRAM->shard crossover of the same shape measures 14768 ns (142 GB/s), i.e. exactly one DRAM leg left. The DRAM floor does NOT describe the zero-copy rows \u2014 they are L1/compute bound (see C14's ablation), which is the re-target Refinement 3 must apply.",
+        "topology": {
+          "phase": 1,
+          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = shard_ht * n_chunks): e_shard_same_small=4, e_shard_same_wide=8",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        }
+      },
+      "phase": 1
     },
     "C16": {
       "status": "measured-no-payoff",
@@ -531,5 +630,9 @@
         }
       }
     }
+  },
+  "notes": {
+    "L4_split_reader": "Design lamp L4 (master.md example T2 `split_reader`, ~1.7x) becomes APPLICABLE for the first time with Refinement 1: on a sharded-OUTPUT plan the writer issues no NoC work at all, so BRISC is free to take half the reader's DRAM reads on the interleaved->shard crossover. Not built here (Refinement 1 is placement only); it is Refinement 3's business. It has no Part-2 catalog ID, hence this note rather than a levers row.",
+    "phase1_stale_closure_reread": "The 10 'possibly unlocked' staleness signals are the topology block moving from interleaved-only to interleaved + three sharded plan paths. Re-read at Refinement 1 and all still hold: A1 (row_wise) is INAPPLICABLE on the sharded path (cores come from shard order, split_work_to_cores is not called); A4 (cliff cores) \u2014 derive_shard_blocking makes WT_CHUNK divide shard_wt exactly and uneven shards fall back to the accessor path; B11 \u2014 a shard row is shard_w*elem with shard_w % 32 == 0, still a 32 B multiple; B12 \u2014 destination tile regions are disjoint, so even the cross-core gather reads no byte twice; C16 \u2014 an aliased CB has no depth and the zero-copy path is compute-bound (ablation: 4901 -> 862 with compute stubbed), so there is still nothing to overlap; C17 \u2014 RM-in / TILE-out still cannot alias (the two aliased CBs sit on different tensors); D20/F23/F26/F27 are untouched by placement."
   }
 }

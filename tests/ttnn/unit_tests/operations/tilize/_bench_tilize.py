@@ -70,7 +70,19 @@ def _read_kernel_ns(device):
     return total if found else None
 
 
-def _measure(device, shape, dtype, *, use_multicore=True, use_double_buffer=True, levers=None, ablate=None, label=""):
+def _measure(
+    device,
+    shape,
+    dtype,
+    *,
+    use_multicore=True,
+    use_double_buffer=True,
+    levers=None,
+    ablate=None,
+    label="",
+    in_mem_config=None,
+    out_mem_config=None,
+):
     """One warm launch (compile + program cache), then ONE measured launch.
 
     Device kernel duration has no warm-up transient, so a trial loop would just
@@ -89,14 +101,15 @@ def _measure(device, shape, dtype, *, use_multicore=True, use_double_buffer=True
             dtype=dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=in_mem_config if in_mem_config is not None else ttnn.DRAM_MEMORY_CONFIG,
         )
+        call = dict(memory_config=out_mem_config, use_multicore=use_multicore, use_double_buffer=use_double_buffer)
 
-        tilize(tt_input, use_multicore=use_multicore, use_double_buffer=use_double_buffer)
+        tilize(tt_input, **call)
         ttnn.synchronize_device(device)
         _read_kernel_ns(device)  # flush the warm-up window
 
-        out = tilize(tt_input, use_multicore=use_multicore, use_double_buffer=use_double_buffer)
+        out = tilize(tt_input, **call)
         ttnn.synchronize_device(device)
         ns = _read_kernel_ns(device)
     finally:
@@ -191,6 +204,100 @@ def test_bench_lever_regime_select_off(device, regime):
 def test_bench_lever_fp32_dest_off(device, regime):
     """master.md F25: fp32 DEST + lossless unpack (the exactness gate) turned off."""
     _measure(device, SHAPES[regime], ttnn.float32, levers=dict(fp32_dest=0), label=f"fp32_dest=0/{regime}")
+
+
+# --- sharded placement (Refinement 1; op_design.md §9.4 case (e)) ----------
+# NOTE the RE-TARGET: a local-shard side is L1 loopback, not DRAM, so the
+# DRAM-floor target does not describe these rows. The `zero_copy=0` arm is the
+# measured OFF arm of master.md C14 (+ A2): it takes the TensorAccessor path over
+# the very shard that is already resident, which is the "tolerated, not
+# implemented" sharding an aliased CB replaces.
+def _height_shard(shape, num_cores):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores - 1, 0))})
+    shard_shape = (shape[-2] // num_cores, shape[-1])
+    return ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+
+SHARDED_SHAPES = {
+    # (e) small same-spec zero-copy case from the design's bench table
+    "e_shard_same_small": ([1, 1, 512, 64], 4),
+    # a bigger same-spec case: 8 cores, 8 blocks/core — where a per-block lever
+    # could show on the sharded path at all
+    "e_shard_same_wide": ([1, 1, 2048, 256], 8),
+}
+
+
+@pytest.mark.parametrize("regime", list(SHARDED_SHAPES))
+@pytest.mark.parametrize("dtype_name", list(_DTYPES))
+def test_bench_sharded_same_spec(device, regime, dtype_name):
+    """Zero-copy both sides: no NoC traffic on either side, L1 loopback only."""
+    shape, num_cores = SHARDED_SHAPES[regime]
+    cfg = _height_shard(shape, num_cores)
+    _measure(
+        device,
+        shape,
+        _DTYPES[dtype_name],
+        in_mem_config=cfg,
+        out_mem_config=cfg,
+        label=f"baseline/{regime}/{dtype_name}",
+    )
+
+
+@pytest.mark.parametrize("regime", list(SHARDED_SHAPES))
+def test_bench_lever_zero_copy_off(device, regime):
+    """master.md C14 (+A2) OFF: re-read/re-write the resident shard over the NoC."""
+    shape, num_cores = SHARDED_SHAPES[regime]
+    cfg = _height_shard(shape, num_cores)
+    _measure(
+        device,
+        shape,
+        ttnn.bfloat16,
+        in_mem_config=cfg,
+        out_mem_config=cfg,
+        levers=dict(zero_copy=0),
+        label=f"zero_copy=0/{regime}",
+    )
+
+
+@pytest.mark.parametrize("regime", list(SHARDED_SHAPES))
+def test_bench_sharded_crossover(device, regime):
+    """DRAM interleaved in -> local shard out (the read half is still DRAM)."""
+    shape, num_cores = SHARDED_SHAPES[regime]
+    _measure(
+        device,
+        shape,
+        ttnn.bfloat16,
+        in_mem_config=ttnn.DRAM_MEMORY_CONFIG,
+        out_mem_config=_height_shard(shape, num_cores),
+        label=f"crossover/{regime}",
+    )
+
+
+@pytest.mark.parametrize("regime", list(SHARDED_SHAPES))
+@pytest.mark.parametrize(
+    "ablate, name",
+    [({"compute": 1}, "no_compute"), ({"compute": 1, "dm": 1}, "sync_only")],
+    ids=["no_compute", "sync_only"],
+)
+def test_bench_sharded_ablation(device, regime, ablate, name):
+    """Classification for the zero-copy path: with NO NoC traffic on either side,
+    the only payload left is the tilize LLK, so this is what re-targets the
+    sharded rows away from the DRAM floor."""
+    shape, num_cores = SHARDED_SHAPES[regime]
+    cfg = _height_shard(shape, num_cores)
+    _measure(
+        device,
+        shape,
+        ttnn.bfloat16,
+        in_mem_config=cfg,
+        out_mem_config=cfg,
+        ablate=ablate,
+        label=f"ablate:{name}/{regime}",
+    )
 
 
 # --- classification ablation (op_design.md §9.1) ---------------------------

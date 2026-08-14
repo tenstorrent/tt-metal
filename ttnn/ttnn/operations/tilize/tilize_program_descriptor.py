@@ -12,6 +12,14 @@ computed *from* those knobs, never from a whole-op dimension.
 Blocks are indexed W-chunk-major (``wc = b // NT_H``, ``row = b % NT_H``) so a
 core's consecutive blocks share one W chunk and march linearly through the
 source page ids.
+
+Placement (op_design.md §5.2, design lamp L1) is decided **per side** and is
+orthogonal to the blocking: a resident L1 shard backs its CB directly
+(``P_LOCAL_SHARD``, zero NoC on that side) while interleaved memory — and a
+non-local shard — goes through a ``TensorAccessor`` (``P_ACCESSOR``). A shard
+does not change the loop nest; it pins the cores, the per-core tile region and
+the W extent, which is why the sharded work assignment (``W_REGION``) is a
+different index map over the same block.
 """
 
 from __future__ import annotations
@@ -91,6 +99,11 @@ W_REGION = 1
 #                     when this is 1).
 #   double_buffer 0 -> force CB_DEPTH 1 regardless of use_double_buffer
 #                     (master.md C16 off arm).
+#   zero_copy     0 -> never alias a CB on a resident L1 shard: take the
+#                     TensorAccessor path on both sides and the generic block
+#                     split over the whole grid, i.e. re-read/re-write the local
+#                     shard over the NoC (master.md C14 + A2 off arm; this is
+#                     precisely the "tolerated, not implemented" sharded path).
 LEVERS = {
     "w_split": 1,
     "row_wise": 1,
@@ -101,6 +114,7 @@ LEVERS = {
     "fp32_dest": 1,
     "multicore": 1,
     "double_buffer": 1,
+    "zero_copy": 1,
 }
 
 # --- classification ablation (perf-only; op_design.md §9.1) ------------------
@@ -334,7 +348,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # input CB, so a padded call can never alias the input tensor; single-core is
     # refused for a sharded call by validate() (a shard is inherently multi-core)
     # and the A0 off-arm forces one core, so both fall back to the accessor path.
-    shard_eligible = plan.use_multicore and bool(LEVERS["multicore"]) and not plan.has_pad_region
+    shard_eligible = (
+        plan.use_multicore and bool(LEVERS["multicore"]) and bool(LEVERS["zero_copy"]) and not plan.has_pad_region
+    )
     in_shard = shard_side_plan(input_tensor, plan.in_padded, tile_h, tile_w) if shard_eligible else None
     out_shard = shard_side_plan(output_tensor, target, tile_h, tile_w) if shard_eligible else None
 

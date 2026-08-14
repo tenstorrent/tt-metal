@@ -239,3 +239,202 @@ that is the noise band any later "win" has to clear.
   recorded ~35% gap to the 92%-of-DRAM-peak recipe; B8 trid double-issue as the `NT_BLK>1`
   knob-turn), R4 integer dtypes + rank 0 + both EXCLUSIONS lifted, R5 tiny tiles + retile,
   **R6 perf completeness audit** (Mode D, run-closing).
+
+---
+
+## Refinement 1 — Sharded placement: same-spec zero-copy + interleaved↔sharded crossover
+
+- **Date**: 2026-08-14
+- **Class**: knob-turn (design §1.2 — tilize has no dependent axis, so a shard only
+  pins `NUM_CORES`, the per-core row range and `WT_CHUNK`; the loop nest is unchanged).
+
+### What was done
+
+**Reused**: `derive_blocking()`'s L1 ceiling (factored out as `wt_cap()` so the
+sharded derivation shares the *same* single source), `cb_pages()` / `cb_bytes()`,
+the one reader/compute/writer kernel triple, the library reader
+(`read_sticks_for_tilize`) and the existing accessor write path. The compute
+kernel is **byte-identical** — it only ever sees `WT_CHUNK` and `num_blocks`.
+
+**Added** (small, orthogonal, all in the existing files):
+
+| Piece | Where |
+|---|---|
+| Per-side placement regime `P_ACCESSOR` / `P_LOCAL_SHARD` (design §5.2) | `tilize_program_descriptor.py` + a CT arg on reader/writer |
+| `shard_side_plan()` — folds a legacy 2-D **or** ND shard spec onto ONE (tile-row, tile-col) region model | `tilize_program_descriptor.py` |
+| `W_REGION` work assignment (core owns its shard's tile region, tile-row-major, W chunk innermost) | reader + writer |
+| Aliased CBs via `ttnn.cb_descriptor_from_sharded_tensor` (page size restated in TILE-page terms) | `tilize_program_descriptor.py` |
+| Zero-copy reader (publish-only) and writer (drain-only, so the CB keeps exactly one consumer) | `kernels/tilize_{reader,writer}.cpp` |
+| `derive_shard_blocking()` — coarsest exact divisor of the shard width that fits `wt_cap()` | `tilize_program_descriptor.py` |
+| `zero_copy` lever knob + its bench OFF arm | descriptor `LEVERS`, `_bench_tilize.py` |
+| SUPPORTED: `shard_api += [legacy_2d, nd]`, `out_scheme += [HEIGHT, WIDTH, BLOCK, nd]`, `orientation += [ROW_MAJOR, COL_MAJOR]` | `tilize.py` |
+| EXCLUSIONS: `use_multicore=False` × sharded (a shard is inherently multi-core); `pad_mode ∈ {auto, explicit}` × sharded (Refinement 2) | `tilize.py` |
+
+Three facts made this small:
+
+1. **A same-spec sharded call needs no addressing at all.** Both CBs alias the
+   same core's shard, so no page id, no core→region map, and no NoC transfer is
+   involved anywhere: the core tilizes its own resident RM shard into its own
+   resident TILE shard in place. That is why HEIGHT / WIDTH / BLOCK / nd × ROW /
+   COL_MAJOR all landed at once — the shard→core mapping cannot be got wrong on
+   this path because it is never consulted.
+2. **The crossovers are the same code with one side switched to the accessor**,
+   addressed off the local shard's tile region. `ttnn.get_optimal_worker_cores_
+   for_sharded_tensor` gives shard-order cores, and the shard index decomposes
+   row-major over the chunk grid — verified on device for BLOCK ROW *and* COL,
+   WIDTH, HEIGHT COL and nd (a wrong mapping scrambles the crossover, which is
+   what those unit cases exist to catch).
+3. **`WT_CHUNK` is pinned by whichever side is aliased.** An aliased RM shard
+   admits exactly one block width (a block of `WT_CHUNK` pages must be one
+   `tile_h × WT_CHUNK*32` row-major region = the full shard width). When only the
+   *output* is aliased, the width is free to chunk, and `derive_shard_blocking()`
+   takes the coarsest divisor that fits `wt_cap()` — which is what keeps a wide-W
+   crossover's streaming CB constant in W (pinned by
+   `test_wide_w_crossover_keeps_the_cb_bounded_in_w`, swept to W = 262144).
+   Should a shard pin a width whose streaming partner CB still cannot fit, the
+   host falls back to the accessor path on both sides rather than OOM.
+
+### Accuracy achieved
+
+Identity is **exact** on every sharded path (a permutation op has no error
+budget): `torch.equal` holds bit-for-bit for bf16 and fp32 on HEIGHT / WIDTH /
+BLOCK / nd × ROW_MAJOR / COL_MAJOR same-spec, on both crossovers, on the
+cross-spec 4→2-core reshard, and on the chunked (`WT_CHUNK < shard_wt`) aliased
+output. PCC = 1.0, rtol = atol = 0 on all of them. The only non-exact sharded
+case is the deliberate `float32 → bfloat16` pack (one bf16 ulp of representation
+error, unchanged from the Phase-0 precision baseline).
+
+### Golden test progress
+
+`eval/golden_tests/tilize/test_golden.py`: **168 passed** (was 102), **180
+xfailed** (was 246), **0 failed, 0 xpass-strict drift**, 592 INVALID-skipped
+(unchanged). The +66 are 11 sharded scenarios × the 6 supported dtype pairs:
+8 same-spec (legacy HEIGHT/WIDTH/BLOCK, nd rank-4/rank-3, HEIGHT/WIDTH COL_MAJOR,
+and the `use_double_buffer=False` sharded cell) + both crossovers + the
+cross-spec reshard. `test_regression.py`: 12 → **10 failures**, the two that
+flipped being its BLOCK-COL and nd-rank-3 sharded scenarios; all 10 remaining are
+integer dtypes (Refinement 4).
+
+### Perf gate
+
+Box: Wormhole B0, 8×8 grid, AICLK 0.985 GHz. `DEVICE KERNEL DURATION [ns]`,
+in-process profiler, one warm launch then one measured launch.
+
+**1. Bound classification for the NEW path (ablation, payload stubbed, sync kept).**
+The zero-copy rows had to be re-classified, not inherited: a local-shard side is
+L1-resident, not DRAM, so the DRAM floor does not describe them.
+
+| sharded shape | full | no-compute | sync-only | verdict |
+|---|---|---|---|---|
+| `[1,1,512,64]` H-sharded ×4 | 1,402 | 792 (−44%) | 719 | compute-bound over a ~720 ns dispatch floor |
+| `[1,1,2048,256]` H-sharded ×8 | 4,901 | 862 (−82%) | 856 | **compute-bound**; DM contributes ~6 ns (there is none) |
+
+So the same-spec sharded path has **no data movement left to optimize**: 512
+tiles / 8 cores = 64 tiles/core in 4,041 ns of payload ≈ 63 ns/tile ≈ 62 cycles
+per 32×32 tile, i.e. essentially the tilize LLK's own throughput. **Re-target
+recorded for Refinement 3**: the DRAM-floor ratio is meaningless on these rows;
+their ceiling is the packer.
+
+**2. The zero-copy lever (master.md C14 + C15 + A2), measured against its OFF arm**
+(`zero_copy=0` = the "tolerated, not implemented" path: re-read/re-write the
+resident shard through a `TensorAccessor` over the generic full-grid split):
+
+| shape | zero-copy ON | OFF (accessor over the resident shard) | speedup |
+|---|---|---|---|
+| `[1,1,512,64]` H-sharded ×4 (smallest sharded regime) | 1,402 ns | 5,257 ns | **3.75×** |
+| `[1,1,2048,256]` H-sharded ×8 | 4,901 ns | 46,548 ns | **9.50×** |
+
+It pays in *both* regimes, so it needs no work-per-core gate (master.md B0).
+Crossover reference (one DRAM leg left): `[1,1,512,64]` 7,360 ns,
+`[1,1,2048,256]` 14,768 ns (142 GB/s) — vs 46,548 ns for the all-NoC arm.
+
+**3. Cumulative bench set — non-regression** (every Phase-0 row re-measured):
+
+| shape | dtype | Phase 0 | Refinement 1 | delta |
+|---|---|---|---|---|
+| `[1,1,2048,2048]` | bf16 | 92,859 | 92,407 | −0.5% |
+| `[1,1,2048,2048]` | fp32 | 191,169 | 195,416 | +2.2% (in the ≤3% band) |
+| `[1,1,32,16384]` | bf16 | 13,315 | 12,966 | −2.6% |
+| `[1,1,32,16384]` | fp32 | 27,466 | 25,677 | −6.5% |
+| `[1,1,8192,1024]` | bf16 | 170,508 | 171,441 | +0.5% |
+| `[1,1,8192,1024]` | fp32 | 363,140 | 358,227 | −1.4% |
+| `[1,1,32,64]` | bf16 | 2,889 | 2,909 (median of 4: 2863/2893/2925/3019) | +0.7% |
+| `[1,1,32,64]` | fp32 | 3,101 | 3,052 (median of 4) | −1.6% |
+
+The smallest regime was re-measured 4× because its first sample (3,019 ns,
++4.5%) sat outside the noise band; the median is inside it. Nothing regressed:
+the interleaved path is byte-identical apart from two compile-time args and two
+dead (compile-time-eliminated) runtime args.
+
+**New cumulative rows, carried forward for later phases** — re-target these
+against L1/compute, not the DRAM floor:
+
+| shape | placement | dtype | ns |
+|---|---|---|---|
+| `[1,1,512,64]` | HEIGHT-sharded ×4, same spec (zero-copy) | bf16 | 1,402 |
+| `[1,1,512,64]` | HEIGHT-sharded ×4, same spec | fp32 | 2,213 |
+| `[1,1,2048,256]` | HEIGHT-sharded ×8, same spec | bf16 | 4,901 |
+| `[1,1,2048,256]` | HEIGHT-sharded ×8, same spec | fp32 | 12,347 |
+| `[1,1,512,64]` | DRAM → HEIGHT-sharded crossover | bf16 | 7,360 |
+| `[1,1,2048,256]` | DRAM → HEIGHT-sharded crossover | bf16 | 14,768 |
+
+**4. Lever ledger.** `python3 -m eval.verify_levers ... --phase 1` → **0
+blocking**, 10 signal (all "possibly unlocked" staleness from the topology block
+moving to three sharded plan paths). `C14`, `C15` and `A2` move
+`deferred → applied`, each with the `zero_copy` knob and both arms recorded; the
+`topology` block now lists the sharded plan paths and per-core block counts. Every
+stale negative closure was re-read and still holds (A1 is *inapplicable* on the
+sharded path rather than unlocked — `split_work_to_cores` is not called there);
+the re-read is recorded in the ledger's `notes`. **Newly applicable and
+deliberately NOT built here**: design lamp L4 / master.md example T2
+`split_reader` (~1.7×) — on a sharded-output plan the writer does no NoC work, so
+BRISC is free to take half the crossover's DRAM reads. Recorded in the ledger
+notes; it is Refinement 3's business.
+
+### Issues encountered
+
+1. **`nd_shard_spec` is always populated**, even for a legacy `ShardSpec`
+   MemoryConfig (it is derived), and a legacy config's `memory_layout` survives
+   while an ND config reports a *derived* `BLOCK_SHARDED`. So `validate()` cannot
+   tell `legacy_2d` from `nd` off a live tensor, and it projects every sharded
+   call as `shard_api="nd"` / `out_scheme="nd"`. Handled by making the gate
+   projection-robust rather than by guessing: both API values and all four
+   sharded `out_scheme` values are in SUPPORTED, and every new EXCLUSION is
+   written for **both** `shard_api` values so it fires whichever way the
+   projection lands. The upside is that the derived ND view is also what let one
+   `shard_side_plan()` cover both APIs.
+2. **Cross-spec cannot be gated by an axis dict** (a legacy HEIGHT→HEIGHT
+   grid change projects onto exactly the same axis tuple as the same-spec HEIGHT
+   cell). The sanctioned fix — a new `reshard` tagger — was **rejected on
+   purpose**: adding a key to `INPUT_TAGGERS` changes `case_id()` for *every*
+   golden cell, and the harness's no-regression check diffs prior-passing
+   **nodeids**, so all 102 Phase-0 passes would read as regressions. Instead the
+   cross-spec case is *served*: with the destination shard aliased and the source
+   read through the accessor it is the same code as the DRAM→shard crossover, and
+   it passes (6 cells). **Refinement 2 must know this**: do not add the tagger
+   mid-run either — and its remaining work is real, namely padded × sharded
+   (still in EXCLUSIONS), uneven/padded shard grids (they fall back to the
+   accessor path today), and a source shard **narrower than the full row**, where
+   an RM sharded page is a shard row rather than a stick, so the accessor's
+   page↔stick identity breaks (all golden cross-spec/crossover sources are
+   full-width, so nothing hits it yet).
+3. The first `float32 → bfloat16` sharded assertion used `torch.allclose`
+   defaults and failed on the (expected, Phase-0-recorded) one-ulp truncation —
+   a test-side tolerance bug, not an op bug.
+
+### Tests added
+
+`tests/ttnn/unit_tests/operations/tilize/test_tilize_sharded.py` (35 cases):
+placement-regime pins asserting the **mechanism** (`CBDescriptor.has_buffer()` +
+the `P_LOCAL_SHARD` compile-time arg, per side) for same-spec / both crossovers /
+cross-spec / interleaved-unchanged; A2 core-count pin; the aliased-input
+`WT_CHUNK == shard_wt` pin; the wide-W CB bound swept to W = 262144; a chunked
+(`WT_CHUNK < shard_wt`) aliased-output correctness case (L1 budget squeezed via
+monkeypatch, since only there does the aliased push order matter); identity over
+8 same-spec configs × bf16/fp32; 9 crossover/cross-spec configs; the sharded
+cast path; and the `use_multicore=False` × sharded refusal. Bench arms added:
+`test_bench_sharded_same_spec`, `test_bench_lever_zero_copy_off`,
+`test_bench_sharded_crossover`, `test_bench_sharded_ablation`. Whole tilize unit
+directory: **130 passed** (95 prior + 35 new), green in plain *and* `--dev` mode
+(watcher + CB sanitizer + LLK asserts), so the publish-only reader / drain-only
+writer handshake is race-clean.

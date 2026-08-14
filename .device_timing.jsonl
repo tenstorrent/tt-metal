@@ -50,3 +50,12 @@
 {"source":"run_safe_pytest","pid":221701,"started_at_ms":1786714697512,"wait_ms":2,"run_ms":10842,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_sharded.py","exit_code":1}
 {"source":"run_safe_pytest","pid":222118,"started_at_ms":1786714724588,"wait_ms":2,"run_ms":10045,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_sharded.py","exit_code":0}
 {"source":"run_safe_pytest","pid":222441,"started_at_ms":1786714738851,"wait_ms":2,"run_ms":16011,"test_path":"tests/ttnn/unit_tests/operations/tilize/","exit_code":0}
+{"source":"run_safe_pytest","pid":224206,"started_at_ms":1786714791390,"wait_ms":2,"run_ms":18780,"test_path":"eval/golden_tests/tilize/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":224937,"started_at_ms":1786714821315,"wait_ms":2,"run_ms":21212,"test_path":"eval/golden_tests/tilize/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":225767,"started_at_ms":1786714854385,"wait_ms":2,"run_ms":10519,"test_path":"eval/golden_tests/tilize/test_regression.py","exit_code":1}
+{"source":"run_safe_pytest","pid":226466,"started_at_ms":1786714939989,"wait_ms":2,"run_ms":13992,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":227143,"started_at_ms":1786714978213,"wait_ms":2,"run_ms":9711,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":227458,"started_at_ms":1786714987931,"wait_ms":2,"run_ms":10176,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":227776,"started_at_ms":1786714998114,"wait_ms":2,"run_ms":9673,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":228205,"started_at_ms":1786715034171,"wait_ms":2,"run_ms":12649,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":229521,"started_at_ms":1786715191072,"wait_ms":2,"run_ms":13183,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_sharded.py","exit_code":0}

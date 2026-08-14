@@ -63,7 +63,7 @@ tilize(
 
 ---
 
-### [ ] Refinement 1 — Sharded placement: same-spec zero-copy + interleaved↔sharded crossover
+### [x] Refinement 1 — Sharded placement: same-spec zero-copy + interleaved↔sharded crossover
 
 **Goal**: add the sharded placement surface to SUPPORTED —
 `shard_api += ["legacy_2d", "nd"]`, `out_scheme += [HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED, "nd"]`,
@@ -96,6 +96,24 @@ gate here. Cross-spec reshards stay excluded here and are Refinement 2.
 both orientations; no DRAM traffic on the sharded side; a wide-W HEIGHT crossover keeps per-core CB L1
 constant in W; `use_multicore=False` × sharded is refused by `validate()`; the Phase-0 cumulative bench
 set shows no regression.
+
+**Outcome**: done. Golden `test_golden.py` 102 → **168 passed**, 246 → 180 xfail, 0 failed, 0 xpass
+drift (+66 = 11 sharded scenarios × 6 dtype pairs: 8 same-spec, both crossovers, and — free, via
+destination-local + accessor-source — the cross-spec 4→2-core reshard). Both CBs are placed on the
+resident shard (`ttnn.cb_descriptor_from_sharded_tensor`), so the reader publishes pages it never
+fetched and the writer drains pages it never sent: measured **3.75× / 9.50×** against the
+`zero_copy=0` off-arm (accessor over the already-resident shard) on `[1,1,512,64]`×4 and
+`[1,1,2048,256]`×8. Ablation **re-targets** these rows away from the DRAM floor: full 4,901 →
+no-compute 862 → sync-only 856 ns, i.e. no data movement is left and the bound is the tilize LLK
+(~63 ns per 32×32 tile). Phase-0 bench set unchanged within the ≤3% band (smallest regime
+re-measured 4× for its median). `verify_levers --phase 1`: 0 blocking; C14 / C15 / A2 →
+`applied` with both arms. Left for Refinement 2 (as scoped): padded × sharded (in `EXCLUSIONS`),
+uneven/padded shard grids (they fall back to the accessor path), and a source shard narrower than
+the full row — an RM sharded page is a shard *row*, so the accessor's page↔stick identity breaks
+there. Newly applicable but deliberately not built: `split_reader` (lamp L4) on the sharded-output
+plan, where BRISC does no NoC work — recorded in `lever_ledger.json` notes for Refinement 3.
+**Do not add a `reshard` tagger mid-run**: a new `INPUT_TAGGERS` key rewrites every golden `case_id`,
+and the harness's no-regression gate diffs prior-passing nodeids.
 
 ---
 
