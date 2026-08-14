@@ -1,30 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-
-"""Reference (pure-PyTorch) XTTS-v2 audio *conditioning* path — ref audio -> GPT prompt.
-
-This is the speaker-conditioning branch that produces the latents XTTS prepends
-to the GPT input stream (the "prompt" in ``GPT.get_logits``). The flow, mirroring
-coqui ``Xtts.get_gpt_cond_latents`` + ``GPT.get_style_emb``:
-
-    wav  --preprocess-->  mel [b, 80, s]        (torch.stft + mel filterbank)
-    mel  --conditioning_encoder-->  [b, 1024, s]   (init conv1d + 6 attn blocks)
-    x    --conditioning_perceiver-->  [b, 1024, 32] (PerceiverResampler, 32 latents)
-
-The ``ConditioningEncoder``/``AttentionBlock`` and ``PerceiverResampler`` classes
-are faithful ports of coqui's ``TTS/tts/layers/xtts/latent_encoder.py`` and
-``TTS/tts/layers/xtts/perceiver_encoder.py`` (flash-attention path removed — CPU
-math path only). Weights come from the upstream checkpoint at
-https://huggingface.co/coqui/XTTS-v2 (``gpt.conditioning_encoder.*`` and
-``gpt.conditioning_perceiver.*``); ``mel_stats`` (the log-mel normalizer) is the
-checkpoint buffer of the same name.
-
-NOTE: coqui computes the mel with ``torchaudio``; torchaudio is unavailable in
-this env, so the mel here is an equivalent ``torch.stft`` + a slaney-normalized
-htk mel filterbank (``librosa.filters.mel``). The mel is computed once on the
-host and fed identically to the reference and the TTNN port, so PCC between them
-is independent of the exact mel implementation.
-"""
 
 import math
 
@@ -32,7 +7,7 @@ import torch
 from torch import einsum, nn
 from torch.nn import functional as F
 
-from models.experimental.xtts.config import (  # noqa: F401 — re-exported for callers
+from models.experimental.xtts.config import (  # noqa: F401
     COND_CHUNK_FRAMES,
     COND_CHUNK_SAMPLES,
     COND_CHUNK_SEC,
@@ -63,11 +38,7 @@ from models.experimental.xtts.config import (  # noqa: F401 — re-exported for 
 
 
 def chunk_cond_mel(mel, chunk_frames=COND_CHUNK_FRAMES, min_frames=COND_MIN_CHUNK_FRAMES, max_frames=COND_MAX_FRAMES):
-    """Split a log-mel ``[b, 80, s]`` along time into ``gpt_cond_chunk_len`` windows for
-    coqui-style style-embedding averaging. Returns a list of ``[b, 80, <=chunk_frames]``
-    mels. Anything past ``max_frames`` (``gpt_cond_len``) is dropped first, as coqui clips
-    the audio before chunking it; a trailing window shorter than ``min_frames`` is dropped;
-    a mel already shorter than one chunk is returned as-is (single window)."""
+    """Split conditioning mel into fixed-size chunks, dropping short tails."""
     mel = mel[..., :max_frames]
     s = mel.shape[-1]
     if s <= chunk_frames:
@@ -78,11 +49,7 @@ def chunk_cond_mel(mel, chunk_frames=COND_CHUNK_FRAMES, min_frames=COND_MIN_CHUN
 
 
 def chunk_wav(wav, chunk_samples=COND_CHUNK_SAMPLES, min_samples=COND_MIN_CHUNK_SAMPLES, max_samples=COND_MAX_SAMPLES):
-    """Split a waveform ``[1, L]`` (22.05 kHz) into ``gpt_cond_chunk_len`` windows — the
-    on-device analogue of :func:`chunk_cond_mel` (coqui chunks the audio, then mels each
-    chunk). Returns a list of ``[1, <=chunk_samples]`` wavs; audio past ``max_samples``
-    (``gpt_cond_len``, coqui's ``audio[:, : 22050 * length]``) is dropped; a trailing window
-    shorter than ``min_samples`` is dropped; a wav already under one chunk is returned as-is."""
+    """Split waveform into fixed-size chunks, dropping short tails."""
     wav = wav[..., :max_samples]
     length = wav.shape[-1]
     if length <= chunk_samples:
@@ -92,15 +59,14 @@ def chunk_wav(wav, chunk_samples=COND_CHUNK_SAMPLES, min_samples=COND_MIN_CHUNK_
     return kept or [wav]
 
 
-# ---------------------------------------------------------------------------
-# ConditioningEncoder — port of TTS/tts/layers/xtts/latent_encoder.py
-# ---------------------------------------------------------------------------
 class GroupNorm32(nn.GroupNorm):
     def forward(self, x):
+        """Apply GroupNorm in float32 then cast back to input dtype."""
         return super().forward(x.float()).type(x.dtype)
 
 
 def normalization(channels):
+    """Create GroupNorm32 with a channel-compatible group count."""
     groups = 32
     if channels <= 16:
         groups = 8
@@ -114,11 +80,12 @@ def normalization(channels):
 
 class QKVAttention(nn.Module):
     def __init__(self, n_heads):
+        """Store head count for packed QKV attention."""
         super().__init__()
         self.n_heads = n_heads
 
     def forward(self, qkv):
-        """qkv: [N, (H*3*C), T] -> [N, (H*C), T]."""
+        """Compute multi-head attention from packed QKV channels."""
         bs, width, length = qkv.shape
         assert width % (3 * self.n_heads) == 0
         ch = width // (3 * self.n_heads)
@@ -131,9 +98,8 @@ class QKVAttention(nn.Module):
 
 
 class AttentionBlock(nn.Module):
-    """Spatial self-attention block (non-causal), channels-first [b, c, t]."""
-
     def __init__(self, channels, num_heads=1):
+        """Build a residual QKV attention block over 1D features."""
         super().__init__()
         self.channels = channels
         self.num_heads = num_heads
@@ -144,6 +110,7 @@ class AttentionBlock(nn.Module):
         self.proj_out = nn.Conv1d(channels, channels, 1)
 
     def forward(self, x):
+        """Apply normed self-attention with residual projection."""
         b, c, *spatial = x.shape
         x = x.reshape(b, c, -1)
         x = self.norm(x)
@@ -156,48 +123,51 @@ class AttentionBlock(nn.Module):
 
 class ConditioningEncoder(nn.Module):
     def __init__(self, spec_dim, embedding_dim, attn_blocks=6, num_attn_heads=NUM_ATTN_HEADS):
+        """Build mel-to-embedding conv plus stacked attention blocks."""
         super().__init__()
         self.init = nn.Conv1d(spec_dim, embedding_dim, kernel_size=1)
         self.attn = nn.Sequential(*[AttentionBlock(embedding_dim, num_attn_heads) for _ in range(attn_blocks)])
         self.dim = embedding_dim
 
-    def forward(self, x):  # x: (b, 80, s) -> (b, dim, s)
+    def forward(self, x):
+        """Encode mel spectrogram into conditioning embeddings."""
         return self.attn(self.init(x))
 
 
-# ---------------------------------------------------------------------------
-# PerceiverResampler — port of TTS/tts/layers/xtts/perceiver_encoder.py
-# ---------------------------------------------------------------------------
 def _exists(x):
+    """Return True if value is not None."""
     return x is not None
 
 
 class RMSNorm(nn.Module):
     def __init__(self, dim, scale=True):
+        """Initialize RMSNorm with optional learned gamma."""
         super().__init__()
         self.scale = dim**0.5
         self.gamma = nn.Parameter(torch.ones(dim)) if scale else None
 
     def forward(self, x):
+        """Normalize last dim by RMS and apply scale/gamma."""
         gamma = self.gamma if _exists(self.gamma) else 1
         return F.normalize(x, dim=-1) * self.scale * gamma
 
 
 class GEGLU(nn.Module):
     def forward(self, x):
+        """Apply gated GELU activation on split channels."""
         x, gate = x.chunk(2, dim=-1)
         return F.gelu(gate) * x
 
 
 def FeedForward(dim, mult=4):
+    """Build a GEGLU feed-forward Sequential for the given dim."""
     dim_inner = int(dim * mult * 2 / 3)
     return nn.Sequential(nn.Linear(dim, dim_inner * 2), GEGLU(), nn.Linear(dim_inner, dim))
 
 
 class PerceiverAttention(nn.Module):
-    """Cross-attention; latents attend to [latents ; context] (CPU math path)."""
-
     def __init__(self, dim, dim_head=PERCEIVER_HEAD_DIM, heads=PERCEIVER_HEADS, cross_attn_include_queries=True):
+        """Build cross-attention over latents and optional query context."""
         super().__init__()
         self.heads = heads
         self.dim_head = dim_head
@@ -207,11 +177,13 @@ class PerceiverAttention(nn.Module):
         self.to_kv = nn.Linear(dim, dim_inner * 2, bias=False)
         self.to_out = nn.Linear(dim_inner, dim, bias=False)
 
-    def _split(self, t):  # [b, n, h*d] -> [b, h, n, d]
+    def _split(self, t):
+        """Reshape projected tensor into multi-head layout."""
         b, n, _ = t.shape
         return t.reshape(b, n, self.heads, self.dim_head).permute(0, 2, 1, 3)
 
     def forward(self, x, context):
+        """Cross-attend latents to context and project the output."""
         if self.cross_attn_include_queries:
             context = torch.cat((x, context), dim=-2)
         q, k, v = self.to_q(x), *self.to_kv(context).chunk(2, dim=-1)
@@ -235,6 +207,7 @@ class PerceiverResampler(nn.Module):
         heads=PERCEIVER_HEADS,
         ff_mult=PERCEIVER_FF_MULT,
     ):
+        """Build learned latents with stacked Perceiver attention/FF layers."""
         super().__init__()
         self.proj_context = nn.Identity()
         self.latents = nn.Parameter(torch.randn(num_latents, dim))
@@ -243,7 +216,8 @@ class PerceiverResampler(nn.Module):
         )
         self.norm = RMSNorm(dim)
 
-    def forward(self, x):  # x: (b, s, dim) -> (b, num_latents, dim)
+    def forward(self, x):
+        """Resample context features into a fixed set of latents."""
         batch = x.shape[0]
         x = self.proj_context(x)
         latents = self.latents.unsqueeze(0).expand(batch, -1, -1)
@@ -253,15 +227,8 @@ class PerceiverResampler(nn.Module):
         return self.norm(latents)
 
 
-# ---------------------------------------------------------------------------
-# audio preprocessing (torch.stft + mel filterbank; torchaudio-free)
-# ---------------------------------------------------------------------------
 def wav_to_mel(wav, mel_norms):
-    """waveform [1, samples] (22050 Hz) -> normalized log-mel [1, 80, frames].
-
-    Equivalent to coqui ``wav_to_mel_cloning`` (perceiver path params), computed
-    with ``torch.stft`` + a slaney-normalized htk mel filterbank.
-    """
+    """Convert waveform to log-mel spectrogram normalized by mel_norms."""
     import librosa
 
     window = torch.hann_window(MEL_WIN, dtype=torch.float32)
@@ -275,22 +242,19 @@ def wav_to_mel(wav, mel_norms):
         pad_mode="reflect",
         return_complex=True,
     )
-    power = stft.abs() ** 2  # [1, n_freqs, frames]
+    power = stft.abs() ** 2
 
     fb = librosa.filters.mel(
         sr=MEL_SR, n_fft=MEL_N_FFT, n_mels=N_MELS, fmin=MEL_FMIN, fmax=MEL_FMAX, htk=True, norm="slaney"
     )
-    fb = torch.from_numpy(fb).to(power.dtype)  # [n_mels, n_freqs]
-    mel = torch.matmul(fb, power)  # [1, n_mels, frames]
+    fb = torch.from_numpy(fb).to(power.dtype)
+    mel = torch.matmul(fb, power)
     mel = torch.log(torch.clamp(mel, min=1e-5))
     return mel / mel_norms.unsqueeze(0).unsqueeze(-1)
 
 
 def load_reference_audio(sample="en_sample.wav", max_seconds=COND_CHUNK_SEC):
-    """Download an XTTS-v2 sample wav, load mono @ 22050 Hz, clip to one chunk.
-
-    Returns waveform ``[1, samples]``.
-    """
+    """Download and resample an HF sample wav for conditioning."""
     import math
 
     import soundfile as sf
@@ -303,21 +267,13 @@ def load_reference_audio(sample="en_sample.wav", max_seconds=COND_CHUNK_SEC):
         audio = audio.mean(axis=1)
     if sr != MEL_SR:
         g = math.gcd(MEL_SR, sr)
-        audio = resample_poly(audio, MEL_SR // g, sr // g)  # e.g. 24000 -> 22050
+        audio = resample_poly(audio, MEL_SR // g, sr // g)
     audio = audio[: MEL_SR * max_seconds]
     return torch.from_numpy(audio.astype("float32")).unsqueeze(0)
 
 
 def load_coqui_test_audio(samples=("LJ001-0001.wav",), max_seconds=GPT_COND_LEN_SEC):
-    """Download coqui-ai/TTS LJSpeech test clips, load mono @ 22050 Hz, clip.
-
-    The XTTS-v2 HF samples are all ~3 s, too short to exercise more than one
-    ``gpt_cond_chunk_len`` window. These clips are ~2-10 s each and all one
-    speaker, so several of them concatenate into a realistic long reference
-    (as opposed to repeating a short one, which gives 8 identical windows).
-
-    Returns waveform ``[1, samples]``.
-    """
+    """Download, concat, and resample Coqui test wavs for conditioning."""
     import math
     import os
 
@@ -346,29 +302,22 @@ def load_coqui_test_audio(samples=("LJ001-0001.wav",), max_seconds=GPT_COND_LEN_
     return torch.from_numpy(audio).unsqueeze(0)
 
 
-# ---------------------------------------------------------------------------
-# reference conditioning module
-# ---------------------------------------------------------------------------
 class XttsReferenceConditioning(nn.Module):
-    """conditioning_encoder + conditioning_perceiver -> GPT conditioning latents.
-
-    ``forward(mel)`` takes normalized log-mel ``[b, 80, s]`` and returns the
-    conditioning latents ``[b, 1024, 32]`` (coqui ``get_style_emb``).
-    """
-
     def __init__(self):
+        """Build conditioning encoder and Perceiver resampler."""
         super().__init__()
         self.conditioning_encoder = ConditioningEncoder(N_MELS, HIDDEN_SIZE)
         self.conditioning_perceiver = PerceiverResampler(HIDDEN_SIZE)
 
     def forward(self, mel):
-        conds = self.conditioning_encoder(mel)  # (b, 1024, s)
-        conds = self.conditioning_perceiver(conds.permute(0, 2, 1)).transpose(1, 2)  # (b, 1024, 32)
+        """Encode mel into fixed conditioning latents via Perceiver."""
+        conds = self.conditioning_encoder(mel)
+        conds = self.conditioning_perceiver(conds.permute(0, 2, 1)).transpose(1, 2)
         return conds
 
 
 def reference_conditioning(state_dict):
-    """Build the audio conditioning path with real weights, in eval mode."""
+    """Load conditioning encoder and perceiver weights from checkpoint."""
     module = XttsReferenceConditioning()
 
     prefix = "gpt.conditioning_encoder."

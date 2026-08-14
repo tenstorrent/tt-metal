@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """XTTS-v2 on-device demo: text + reference audio -> spoken WAV.
@@ -83,10 +83,7 @@ _COQUI_CLIP_RE = re.compile(COQUI_CLIP_RE)
 
 
 def _load_audio_22k(ref_audio, max_seconds):
-    """Reference audio as ``[1, samples]`` @ 22.05 kHz — a local WAV path if it
-    exists, else a coqui-ai/TTS test clip name (e.g. ``LJ001-0001.wav``, or a
-    ``+``-joined list of them for a long reference), else an HF
-    ``coqui/XTTS-v2`` sample name (e.g. ``en_sample.wav``)."""
+    """Load reference audio as [1, samples] at 22.05 kHz from path or Coqui clips."""
     if os.path.exists(ref_audio):
         import soundfile as sf
         from scipy.signal import resample_poly
@@ -106,13 +103,10 @@ def _load_audio_22k(ref_audio, max_seconds):
 
 
 def _split_into_chunks(text, lang):
-    """Return the sentence groups to synthesise. One group whenever the whole text fits.
-
-    Over-budget text is split at sentence boundaries against ``CHUNKING.max_chunk_codes``.
-    A sentence is never split.
-    """
+    """Split text into sentence groups that fit one synthesis pass."""
 
     def ids_of(t):
+        """Count wrapped text token ids for a string."""
         return preprocess_text(re.sub(SENTENCE_FINAL_PUNCT_RE, "", t), lang=lang).shape[-1]
 
     whole = text.strip()
@@ -146,8 +140,7 @@ def _split_into_chunks(text, lang):
 
 
 def _postprocess(wav_np, cfg=AUDIO_POST):
-    """Fix the abrupt ("crimped") onset: short raised-cosine fade in/out + leading/trailing
-    silence (the vocoder starts at the first content code with no natural lead-in)."""
+    """Apply raised-cosine fade and silence padding to fix abrupt onset/offset."""
     fade_n = min(int(cfg.fade_seconds * OUTPUT_SAMPLE_RATE), wav_np.shape[0] // 2)
     if fade_n > 0:
         ramp = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, fade_n, dtype=wav_np.dtype)))
@@ -161,10 +154,7 @@ _ASR = {}
 
 
 def _score_take(wav_np, text, codes, cfg=SCORING):
-    """Rank a candidate take: lower is better. Primary = CER (``SCORING.asr_model_id``
-    transcription vs the input text — directly measures "does the audio say the text"). Falls back
-    to a code-diversity heuristic (1 - unique/total, which penalises collapsed/droning takes) if
-    the ASR/jiwer backends are unavailable. Returns (score, detail_str)."""
+    """Rank a take by CER (primary) with a code-diversity fallback."""
     try:
         import jiwer
         from scipy.signal import resample_poly
@@ -186,6 +176,7 @@ def _score_take(wav_np, text, codes, cfg=SCORING):
 
 
 def _audio_duration_s(wav_np, sample_rate=OUTPUT_SAMPLE_RATE) -> float:
+    """Return audio duration in seconds from sample count and sample rate."""
     return float(np.asarray(wav_np).reshape(-1).shape[0]) / float(sample_rate)
 
 
@@ -197,14 +188,7 @@ def _log_perf_metrics(
     label: str = "",
     compile_s: float | None = None,
 ):
-    """Log Coqui/HF-style TTS speed metrics.
-
-    * Wall time / latency — **trace replay only** (setup + decode + vocoder ``execute_trace``).
-      Warmup and capture are excluded; they are compile / data collection for the trace.
-    * RTF — ``replay_time / audio_duration``; RTF < 1 ⇒ faster than real-time.
-    * Time-to-first-chunk — first chunk's replay time (equals wall when single-pass).
-    * Compile (optional) — warmup + capture + other non-replay work inside the traced path.
-    """
+    """Log wall-time, RTF, and related TTS speed metrics for a take."""
     rtf = wall_s / audio_s if audio_s > 0 else float("inf")
     prefix = f"{label} " if label else ""
     logger.info(f"{prefix}---------- XTTS performance ----------")
@@ -227,11 +211,7 @@ def _log_perf_metrics(
 
 
 def _generate_one(tt, wrapped, cond_wav, spk_wav_tt, cfg):
-    """One full device generation + vocode + onset post-processing.
-
-    Returns ``(wav_np, codes, replay_s, compile_s)``. ``replay_s`` is final inference
-    (``execute_trace`` only); ``compile_s`` is warmup + capture (excluded from wall/RTF).
-    """
+    """Run one device generation, vocode, and onset post-processing."""
     # FULL-MODEL TRACE: the entire model runs inside ttnn traces — SETUP trace (on-device
     # conditioning mel + speaker encoder + prefill that seeds the KV cache), the DECODE-step trace
     # captured once and replayed per token, and the VOCODER trace. Needs the fixed KV-cache length:
@@ -260,13 +240,7 @@ def _generate_one(tt, wrapped, cond_wav, spk_wav_tt, cfg):
 
 
 def _generate_chunked(tt, chunks, cond_wav, spk_wav_tt, cfg):
-    """Every chunk of one take off a single warmup + capture.
-
-    Chunks are padded to one text length so the traces can be captured once and replayed.
-    Per chunk: rewrite text ids, SETUP replay (re-seed KV), decode per token, vocoder replay.
-
-    Returns ``(list of (wav_np, codes, replay_s), compile_s)`` with ``compile_s`` paid once.
-    """
+    """Synthesize all chunks of a take from one warmup and trace capture."""
     gen = cfg.generation
     budget = cfg.chunking.chunk_max_tokens
     text_len = chunks[0][1].shape[1]
@@ -305,14 +279,7 @@ def _generate_chunked(tt, chunks, cond_wav, spk_wav_tt, cfg):
 
 
 def _take_on_device(sd, ref_decoder_full, chunks, cond_wav, spk_wav, cfg, seed_offset):
-    """Open a FRESH device, build the model, synthesise the WHOLE take (all chunks), close it.
-
-    One device per TAKE, not per chunk: the fp32 HiFi-GAN vocoder exhausts L1_SMALL when several
-    full generations are *compiled* on one device, which is why best-of-N still isolates each take
-    (same reason the tests use a per-test device fixture). Chunks within a take no longer compile
-    anything — they replay one capture (see ``_generate_chunked``) — so they can share the device.
-
-    Returns ``(list of (wav_np, codes, replay_s), compile_s)``."""
+    """Open a fresh device, synthesize the full take, then close the device."""
     extra = {"trace_region_size": cfg.session_trace_region} if len(chunks) > 1 else {}
     device = ttnn.open_device(device_id=cfg.device_id, l1_small_size=cfg.l1_small_size, **extra)
     try:
@@ -333,6 +300,7 @@ def _take_on_device(sd, ref_decoder_full, chunks, cond_wav, spk_wav, cfg, seed_o
 
 
 def main():
+    """CLI entrypoint for the TTNN XTTS demo."""
     ap = argparse.ArgumentParser(description="XTTS-v2 on-device text-to-speech demo")
     ap.add_argument("--text", default=DEMO.text)
     ap.add_argument(

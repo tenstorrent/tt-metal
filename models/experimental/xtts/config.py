@@ -172,11 +172,7 @@ COQUI_CLIP_RE = r"^LJ\d{3}-\d{4}\.wav$"  # coqui-ai/TTS tests/data/ljspeech/wavs
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class GenerationConfig:
-    """Sampling knobs for the autoregressive GPT decode.
-
-    ``temperature=0`` is greedy (deterministic — the validated correctness path);
-    the non-zero defaults are XTTS's own, which give more natural prosody.
-    """
+    """Sampling knobs for the autoregressive GPT decode."""
 
     temperature: float = 0.65  # 0 = greedy; 0.65 = cleanest single take
     top_k: int = 50
@@ -202,12 +198,7 @@ GENERATION = GenerationConfig()
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class ChunkingConfig:
-    """How much text fits one pass, and how text over that is split.
-
-    Two code budgets: a single pass on a fresh device can go higher than a later chunk in the
-    same process (L1 circular-buffer collision, not a clean size limit). Chunk budget is lower
-    on purpose.
-    """
+    """Text-split budgets for single-pass vs chunked synthesis."""
 
     max_text_ids: int = 352  # keep the padded text under MAX_TEXT_POS (404) with headroom
     max_single_pass_codes: int = 205  # above this, split into chunks
@@ -228,11 +219,7 @@ CHUNKING = ChunkingConfig()
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class AudioPostConfig:
-    """Onset/offset cleanup on the vocoder output.
-
-    The vocoder starts at the first content code with no natural lead-in, which reads as an
-    abrupt ("crimped") onset — a short raised-cosine fade plus a little silence fixes it.
-    """
+    """Onset/offset fade and silence padding for vocoder output."""
 
     fade_seconds: float = 0.015  # ~15 ms raised-cosine fade in/out
     pad_seconds: float = 0.06  # ~60 ms of silence as lead-in/out
@@ -247,9 +234,7 @@ AUDIO_POST = AudioPostConfig()
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class ScoringConfig:
-    """Primary metric is CER (ASR transcription vs the input text — directly measures
-    "does the audio say the text"), with a code-diversity fallback when the ASR backends
-    are unavailable."""
+    """ASR settings for CER-based best-of-N take ranking."""
 
     asr_model_id: str = "openai/whisper-base.en"
     asr_device: str = "cpu"
@@ -276,12 +261,7 @@ EVAL_ECAPA2_SR = 16000
 # ---------------------------------------------------------------------------
 @dataclass
 class DemoConfig:
-    """Everything ``demo/xtts_demo.py`` runs with.
-
-    Only ``text`` / ``ref_audio`` / ``min_tokens`` are exposed on the command line; the rest
-    is fixed to the tuned XTTS-v2 defaults so the demo runs full-model-traced with no other
-    knobs. Change a default here rather than in the demo.
-    """
+    """Defaults for the TTNN XTTS demo (demo/xtts_demo.py)."""
 
     text: str = (
         "Voice synthesis has come a long way, and modern systems can already generate "
@@ -317,12 +297,7 @@ DEMO = DemoConfig()
 
 @dataclass
 class ReferenceDemoConfig:
-    """Everything ``demo/xtts_reference_demo.py`` (the host-only CPU twin) runs with.
-
-    Same text/voice defaults as :class:`DemoConfig` so the two demos A/B directly, but its
-    budgets are different: on CPU there are no L1 walls, only the checkpoint's learned position
-    tables, so a pass is much longer.
-    """
+    """Defaults for the host-only XTTS reference demo."""
 
     text: str = DemoConfig.text
     ref_audio: str = DemoConfig.ref_audio

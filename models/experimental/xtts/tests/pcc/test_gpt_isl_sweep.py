@@ -1,18 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-
-"""ISL sweep for the XTTS-v2 GPT prefill chain, and a max_seq sweep for decode.
-
-The GPT has two position tables (text 404, mel 608). Max text and max codes together are
-unreachable (``text + codes ≤ 980``). This file sweeps the text/prefill axis to 384 (last tile
-multiple under 404) and decode cache depth separately.
-
-Run:
-    source python_env/bin/activate
-    export TT_METAL_HOME=$(pwd)
-    export PYTHONPATH=$(pwd)
-    pytest models/experimental/xtts/tests/pcc/test_gpt_isl_sweep.py -s
-"""
 
 import pytest
 import torch
@@ -40,13 +27,9 @@ from models.experimental.xtts.tt.xtts_gpt_model import TtXttsGptModel
 
 TILE = 32
 
-# Text/prefill axis: tile multiples up to the 404-row text position table (384 is the last one).
 ISL_SWEEP = [32, 64, 96, 128, 192, 256, 320, 384]
 
-# Cache-depth axis for decode: fixed 128-position prompt, cache sized for a range of code budgets.
-# Every value MUST be a tile multiple — see the note in test_tt_gpt_decode_max_seq_sweep. 992 is the
-# largest tile multiple inside the 1012 n_positions budget.
-DECODE_PROMPT_TEXT_LEN = 96  # -> prompt_len 128 with the 32 conditioning latents
+DECODE_PROMPT_TEXT_LEN = 96
 MAX_SEQ_SWEEP = [160, 384, 608, 992]
 
 # Conditioning rows gated separately from text rows (fill_cache odd-tile bug; see xtts_gpt_model.py).
@@ -55,46 +38,39 @@ COND_ROW_PCC = 0.99
 
 @pytest.fixture(scope="module")
 def cond_latents(xtts_state_dict):
-    """Real conditioning latents [1, 32, 1024] — independent of text length, so build once."""
+    """Module fixture providing reference conditioning latents for ISL sweeps."""
     sd = xtts_state_dict
     wav = load_reference_audio(sample="en_sample.wav")
     mel = wav_to_mel(wav, sd["mel_stats"].cpu())
     with torch.no_grad():
-        return reference_conditioning(sd)(mel).transpose(1, 2)  # [1, 1024, 32] -> [1, 32, 1024]
+        return reference_conditioning(sd)(mel).transpose(1, 2)
 
 
 _SWEEP_TEXT = "the quick brown fox jumps over the lazy dog. " * 60
 
 
 def _wrapped_text(text_len):
-    """Real wrapped English text trimmed to exactly ``text_len`` ids.
-
-    Not ``[STOP]``-padded: long STOP filler is degenerate and is not what inference feeds.
-    """
+    """Return wrapped text token ids truncated to the requested length."""
     ids = wrap_text_ids(preprocess_text(_SWEEP_TEXT, lang="en"))
     assert ids.shape[1] >= text_len, f"_SWEEP_TEXT yields {ids.shape[1]} ids, need {text_len}"
     return ids[:, :text_len].contiguous()
 
 
-def _split_heads(t):  # [1, S, hidden] -> [1, heads, S, head_dim]
+def _split_heads(t):
+    """Reshape a [B, T, H] tensor into multi-head [B, heads, T, head_dim]."""
     return t.view(1, -1, NUM_HEADS, HEAD_DIM).permute(0, 2, 1, 3).contiguous()
 
 
 def _reference_prompt_embeds(ref_model, wrapped, cond):
-    """``[cond | text_emb]`` exactly as the model builds it (text positions 0..text_len-1)."""
+    """Build concatenated cond+text prompt embeddings from the reference GPT."""
     with torch.no_grad():
         text_pos = torch.arange(wrapped.shape[1])
         text_emb = ref_model.text_embedding(wrapped) + ref_model.text_pos_embedding(text_pos)
-        return torch.cat([cond, text_emb], dim=1).float()  # [1, prompt_len, hidden]
+        return torch.cat([cond, text_emb], dim=1).float()
 
 
 def _reference_layer_kv(ref_stack, prompt_emb):
-    """Per-layer (K, V) for the prompt, walking the reference stack layer by layer.
-
-    K/V are per-position projections of each layer's INPUT hidden (``ln_1 -> c_attn``), so
-    the prompt's K/V depend only on the prompt. Head split matches the TT path
-    (``nlp_create_qkv_heads``, ``transpose_k_heads=False``): [q|k|v] blocks, head-major.
-    """
+    """Compute per-layer reference K/V tensors for a prompt embedding."""
     kvs = []
     with torch.no_grad():
         mask = build_causal_mask(prompt_emb.shape[1], prompt_emb.dtype)
@@ -111,7 +87,7 @@ def _reference_layer_kv(ref_stack, prompt_emb):
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("pcc", [0.99])
 def test_tt_gpt_prefill_isl_sweep(device, xtts_state_dict, cond_latents, pcc, reset_seeds):
-    """Full 30-layer prefill at each text ISL, gated on the seeded KV cache."""
+    """Sweep prefill input lengths and gate KV/latent PCC against reference."""
     sd = xtts_state_dict
     cond = cond_latents
     n_cond = cond.shape[1]
@@ -130,8 +106,6 @@ def test_tt_gpt_prefill_isl_sweep(device, xtts_state_dict, cond_latents, pcc, re
         prompt_emb = _reference_prompt_embeds(ref_model, wrapped, cond)
         ref_kv = _reference_layer_kv(ref_stack, prompt_emb)
 
-        # Minimal tile-aligned cache: this test isolates PREFILL, so the cache only has to
-        # hold the prompt (the decode cache-depth axis is the second test).
         max_seq = -(-(prompt_len + 1) // TILE) * TILE
         kv = tt_model.prefill(wrapped, cond_tt, max_seq)
 
@@ -139,18 +113,15 @@ def test_tt_gpt_prefill_isl_sweep(device, xtts_state_dict, cond_latents, pcc, re
         for layer, (ref_k, ref_v) in enumerate(ref_kv):
             tt_k = ttnn.to_torch(kv[layer][0]).float()[:, :, :prompt_len, :]
             tt_v = ttnn.to_torch(kv[layer][1]).float()[:, :, :prompt_len, :]
-            # Per-position PCC, then median. A flat PCC mixes the 32 uploaded conditioning rows
-            # with GPT-computed text rows and is dominated by the former.
             kp = torch.tensor([float(comp_pcc(ref_k[:, :, p, :], tt_k[:, :, p, :], pcc)[1]) for p in range(prompt_len)])
             vp = torch.tensor([float(comp_pcc(ref_v[:, :, p, :], tt_v[:, :, p, :], pcc)[1]) for p in range(prompt_len)])
             k_meds.append(float(kp.median()))
             v_meds.append(float(vp.median()))
-            k_cond.append(float(kp[:n_cond].min()))  # reported, not gated
+            k_cond.append(float(kp[:n_cond].min()))
             v_cond.append(float(vp[:n_cond].min()))
 
-        k_med, v_med = min(k_meds), min(v_meds)  # worst layer's median
+        k_med, v_med = min(k_meds), min(v_meds)
 
-        # Decode latent off this prefill — what the vocoder consumes.
         with torch.no_grad():
             mel_emb = ref_model.mel_embedding(torch.tensor([[0]])) + ref_model.mel_pos_embedding(torch.arange(1))
             ref_latent = ref_model.final_norm(ref_stack(torch.cat([prompt_emb, mel_emb.float()], dim=1))[:, -1:, :])
@@ -191,34 +162,20 @@ def test_tt_gpt_prefill_isl_sweep(device, xtts_state_dict, cond_latents, pcc, re
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize("pcc", [0.99])
 def test_tt_gpt_decode_max_seq_sweep(device, xtts_state_dict, cond_latents, pcc, reset_seeds):
-    """One decode step at a fixed fill level, over a range of cache sizes.
-
-    Decode attends over the entire fixed cache regardless of position, so a wrong mask
-    would let the zeroed tail leak in — and would do so *differently* at each ``max_seq``.
-    Gating on both PCC-vs-reference and invariance across ``max_seq`` catches that.
-
-    **``max_seq`` must be a multiple of 32.** Bisecting this sweep showed the decode output
-    is bit-identical across every tile-aligned cache size (160 … 992, 1024) and silently
-    WRONG at every unaligned one (500 → max delta 1.75, 990 → 1.0, 1000 → 3.25, 1008 →
-    2.5) — it is a property of alignment, not of length. Production always tile-aligns
-    (``-(-(prompt_len + max_new_tokens + 1) // 32) * 32``), so this is an unguarded
-    precondition rather than a live bug, but nothing rejects an unaligned ``max_seq``.
-    """
+    """Sweep decode max_seq sizes and assert PCC and max_seq-invariance."""
     sd = xtts_state_dict
     cond = cond_latents
     prompt_len = cond.shape[1] + DECODE_PROMPT_TEXT_LEN
     wrapped = _wrapped_text(DECODE_PROMPT_TEXT_LEN)
 
-    # Reference: the decode step's hidden is the causal stack over [prompt | one mel token],
-    # taken at the last position. Build the mel token's embedding the way the model does.
     ref_model = reference_gpt_model(sd, num_layers=NUM_LAYERS)
     ref_stack = reference_gpt_stack(sd, num_layers=NUM_LAYERS)
     prompt_emb = _reference_prompt_embeds(ref_model, wrapped, cond)
     with torch.no_grad():
         mel_id = torch.tensor([[0]], dtype=torch.long)
         mel_emb = ref_model.mel_embedding(mel_id) + ref_model.mel_pos_embedding(torch.arange(1))
-        enc = ref_stack(torch.cat([prompt_emb, mel_emb.float()], dim=1))[:, -1:, :]  # ln_f applied
-        ref_hidden = ref_model.final_norm(enc)  # TT's `latent` is final_norm(ln_f(hidden))
+        enc = ref_stack(torch.cat([prompt_emb, mel_emb.float()], dim=1))[:, -1:, :]
+        ref_hidden = ref_model.final_norm(enc)
 
     tt_model = TtXttsGptModel(sd, device, num_layers=NUM_LAYERS)
     cond_tt = ttnn.from_torch(cond.float(), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
@@ -242,7 +199,6 @@ def test_tt_gpt_decode_max_seq_sweep(device, xtts_state_dict, cond_latents, pcc,
         if step_pcc < pcc:
             failures.append(f"max_seq={max_seq} decode PCC {step_pcc:.6f} < {pcc}")
 
-    # Invariance: the unfilled tail is masked, so the answer must not depend on cache size.
     sizes = sorted(outs)
     base = outs[sizes[0]]
     for ms in sizes[1:]:

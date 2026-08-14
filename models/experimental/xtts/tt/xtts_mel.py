@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import math
@@ -21,11 +21,13 @@ RESHAPE_PAGE_BUDGET = 192 * 1024
 
 def _flat_signal(wav, length):
     # Prefer [1, L]: [1, L, 1] ROW_MAJOR uses 4-byte pages and a costly reshape to flatten.
+    """Flatten waveform to [1, L] for framing."""
     return wav if len(wav.shape) == 2 else ttnn.reshape(wav, [1, length])
 
 
 class _Framer:
     def __init__(self, device, n_fft: int, hop: int):
+        """Initialize STFT framer caches and chunk sizing."""
         self.device = device
         self.n_fft = n_fft
         self.hop = hop
@@ -38,9 +40,11 @@ class _Framer:
         self._geom_cache = {}
 
     def num_frames(self, length: int) -> int:
+        """Return number of frames for a signal length."""
         return 1 + length // self.hop
 
     def _geometry(self, length: int):
+        """Cache reflect-pad geometry for a signal length."""
         if length not in self._geom_cache:
             frames = self.num_frames(length)
             rows_per_frame = self.rows_per_frame
@@ -54,6 +58,7 @@ class _Framer:
         return self._geom_cache[length]
 
     def _anti_identity(self, p: int):
+        """Build or fetch an anti-diagonal identity for reflect pad."""
         if p not in self._rev_cache:
             self._rev_cache[p] = ttnn.from_torch(
                 torch.flip(torch.eye(p), dims=[0]), layout=ttnn.TILE_LAYOUT, device=self.device, dtype=ttnn.float32
@@ -61,6 +66,7 @@ class _Framer:
         return self._rev_cache[p]
 
     def __call__(self, x, length: int):
+        """Center-pad and frame a waveform into STFT windows."""
         frames, rows_per_frame, num_rows, right = self._geometry(length)
         cp = self.center_pad
         parts = [ttnn.matmul(ttnn.slice(x, [0, 1], [1, cp + 1]), self._anti_identity(cp)), x]
@@ -83,6 +89,7 @@ class _Framer:
         return out
 
     def _frame_chunk(self, xpad, start, nf, rows_per_frame):
+        """Frame one chunk of the padded signal into windows."""
         hop = self.hop
         rows_needed = nf + rows_per_frame - 1
         seg = ttnn.slice(xpad, [0, start * hop], [1, (start + rows_needed) * hop])
@@ -102,10 +109,12 @@ class _Framer:
 
 
 def _stacked_mel_fb(mel_fb: torch.Tensor) -> torch.Tensor:
+    """Stack mel filterbank for real/imag magnitude path."""
     return torch.cat([mel_fb, mel_fb], dim=0).contiguous()
 
 
 def _dft_basis(window_400: torch.Tensor) -> torch.Tensor:
+    """Build windowed DFT cosine/sine basis for speaker mel."""
     win = torch.zeros(N_FFT)
     off = (N_FFT - WIN_LENGTH) // 2
     win[off : off + WIN_LENGTH] = window_400
@@ -119,6 +128,7 @@ def _dft_basis(window_400: torch.Tensor) -> torch.Tensor:
 
 class TtMelFrontend(LightweightModule):
     def __init__(self, device, ref):
+        """Load speaker-mel DFT and filterbank tensors."""
         super().__init__()
         self.device = device
         self.basis = ttnn.from_torch(_dft_basis(ref.window), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
@@ -129,12 +139,14 @@ class TtMelFrontend(LightweightModule):
 
     def _preemphasize(self, x, length):
         # Shift-and-subtract: ttnn.conv1d misreads C_in=1 kernels.
+        """Apply first-order pre-emphasis to the waveform."""
         first = ttnn.slice(x, [0, 1], [1, 2])
         head = ttnn.slice(x, [0, 0], [1, length - 1])
         prev = ttnn.concat([first, head], dim=1)
         return ttnn.sub(x, ttnn.mul(prev, PREEMPH))
 
     def forward(self, wav):
+        """Compute speaker-encoder mel spectrogram from wav."""
         length = wav.shape[1]
         x = self._preemphasize(_flat_signal(wav, length), length)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
@@ -162,6 +174,7 @@ C_NFREQS = C_NFFT // 2 + 1  # 1025
 
 
 def _cond_dft_basis():
+    """Build windowed DFT basis for conditioning mel."""
     win = torch.zeros(C_NFFT)
     off = (C_NFFT - C_WIN) // 2
     win[off : off + C_WIN] = torch.hann_window(C_WIN, dtype=torch.float32)
@@ -175,6 +188,7 @@ def _cond_dft_basis():
 
 class TtConditioningMel(LightweightModule):
     def __init__(self, device, mel_norms):
+        """Load conditioning-mel basis, filterbank, and norms."""
         super().__init__()
         self.device = device
         self.basis = ttnn.from_torch(_cond_dft_basis(), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
@@ -199,6 +213,7 @@ class TtConditioningMel(LightweightModule):
         self.framer = _Framer(device, C_NFFT, C_HOP)
 
     def forward(self, wav):
+        """Compute log-normalized conditioning mel from wav."""
         length = wav.shape[1]
         x = ttnn.to_layout(_flat_signal(wav, length), ttnn.TILE_LAYOUT)
         num_frames = self.framer.num_frames(length)

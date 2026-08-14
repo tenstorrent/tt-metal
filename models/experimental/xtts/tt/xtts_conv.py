@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import math
@@ -10,6 +10,7 @@ from models.common.lightweightmodule import LightweightModule
 
 
 def _interleaved(x: ttnn.Tensor, shape, *, row_major: bool) -> ttnn.Tensor:
+    """Gather to DRAM interleaved and reshape, optionally RM."""
     x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
     if row_major:
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
@@ -20,16 +21,19 @@ _SHARD_L1_BUDGET_BYTES = 48 * 1024
 
 
 def _shard_height(device, nhw: int) -> int:
+    """Compute height-shard row count rounded to 32."""
     grid = device.compute_with_storage_grid_size()
     ncores = int(grid.x) * int(grid.y)
     return math.ceil(math.ceil(nhw / ncores) / 32) * 32
 
 
 def sharded_chain_fits_l1(device, length: int, channels: int, dtype_bytes: int = 4) -> bool:
+    """Return whether a height-sharded chain fits L1 budget."""
     return _shard_height(device, length) * channels * dtype_bytes <= _SHARD_L1_BUDGET_BYTES
 
 
 def height_shard_l1(device, x: ttnn.Tensor, channels: int) -> ttnn.Tensor:
+    """Reshard a tensor to height-sharded L1."""
     mem = ttnn.create_sharded_memory_config(
         shape=(_shard_height(device, x.shape[-2]), channels),
         core_grid=ttnn.CoreGrid(
@@ -43,6 +47,7 @@ def height_shard_l1(device, x: ttnn.Tensor, channels: int) -> ttnn.Tensor:
 
 
 def block_shard_grid(device, length: int, channels: int):
+    """Plan block-shard grid for length and channels."""
     grid = device.compute_with_storage_grid_size()
     if channels % 32:
         return None
@@ -56,6 +61,7 @@ def block_shard_grid(device, length: int, channels: int):
 
 
 def block_chain_fits_l1(device, length: int, channels: int, dtype_bytes: int = 4) -> bool:
+    """Return whether a block-sharded chain fits L1 budget."""
     plan = block_shard_grid(device, length, channels)
     if plan is None:
         return False
@@ -64,6 +70,7 @@ def block_chain_fits_l1(device, length: int, channels: int, dtype_bytes: int = 4
 
 
 def block_shard_l1(device, x: ttnn.Tensor, channels: int) -> ttnn.Tensor:
+    """Reshard a tensor to block-sharded L1."""
     gx, gy, rows_per_core = block_shard_grid(device, x.shape[-2], channels)
     mem = ttnn.create_sharded_memory_config(
         shape=(rows_per_core, channels // gx),
@@ -76,6 +83,7 @@ def block_shard_l1(device, x: ttnn.Tensor, channels: int) -> ttnn.Tensor:
 
 
 def _subpixel_weight(weight: torch.Tensor, bias: torch.Tensor | None, stride: int):
+    """Convert transpose-conv weights to sub-pixel conv form."""
     in_ch, out_ch, k = weight.shape
     pad_t = (k - stride) // 2
     phases = []
@@ -118,6 +126,7 @@ class TtConv1d(LightweightModule):
         weight_scale: float = 1.0,
         conv_config_overrides: dict | None = None,
     ):
+        """Prepare a 1D convolution with optional folded bias."""
         super().__init__()
         assert weight.dim() == 3, f"expected Conv1d weight [out, in/groups, k], got {tuple(weight.shape)}"
         out_channels, in_per_group, kernel_size = weight.shape
@@ -164,6 +173,7 @@ class TtConv1d(LightweightModule):
         )
 
     def forward(self, x: ttnn.Tensor, cond_bias: ttnn.Tensor | None = None, keep_sharded: bool = False) -> ttnn.Tensor:
+        """Run conv1d, folding speaker cond bias when provided."""
         batch_size, input_length, _ = x.shape
         # Prepared weights are shape-specific; ttnn cannot detect a stale cache.
         key = (batch_size, input_length, x.dtype, x.layout, x.memory_config())
@@ -222,6 +232,7 @@ class TtConvTranspose1d(LightweightModule):
         stride: int,
         **conv_kwargs,
     ):
+        """Build a sub-pixel transpose-conv via inner TtConv1d."""
         super().__init__()
         assert weight.dim() == 3, f"expected ConvTranspose1d weight [in, out, k], got {tuple(weight.shape)}"
         in_channels, out_channels, kernel_size = weight.shape
@@ -235,6 +246,7 @@ class TtConvTranspose1d(LightweightModule):
         self._inner_cond_cache = {}
 
     def _inner_cond(self, cond_bias: ttnn.Tensor) -> ttnn.Tensor:
+        """Tile and cache stride-repeated conditioning bias."""
         hit = self._inner_cond_cache.get(id(cond_bias))
         if hit is not None and hit[0] is cond_bias:
             return hit[1]
@@ -243,6 +255,7 @@ class TtConvTranspose1d(LightweightModule):
         return tiled
 
     def release_cond_cache(self):
+        """Free cached conditioning bias tensors."""
         for _, tiled in self._inner_cond_cache.values():
             if tiled.is_allocated():
                 ttnn.deallocate(tiled)
@@ -250,6 +263,7 @@ class TtConvTranspose1d(LightweightModule):
         self.conv._folded_bias.clear()
 
     def forward(self, x: ttnn.Tensor, cond_bias: ttnn.Tensor | None = None) -> ttnn.Tensor:
+        """Run transpose-conv via sub-pixel conv and reshape."""
         batch_size, input_length, _ = x.shape
         inner_cond = self._inner_cond(cond_bias) if cond_bias is not None else None
         z = self.conv(x, cond_bias=inner_cond, keep_sharded=self.stride <= 2)
@@ -278,6 +292,7 @@ class TtConv2d(LightweightModule):
         fp32_dest_acc_en: bool = True,
         packer_l1_acc: bool = True,
     ):
+        """Prepare a 2D convolution with double-buffer defaults."""
         super().__init__()
         assert weight.dim() == 4, f"expected Conv2d weight [out, in, kh, kw], got {tuple(weight.shape)}"
         out_channels, in_channels, kh, kw = weight.shape
@@ -315,11 +330,7 @@ class TtConv2d(LightweightModule):
         )
 
     def set_double_buffer(self, enabled: bool) -> None:
-        """Act/weights double buffering, which doubles the conv's activation CB.
-
-        Callers whose input is long enough that the doubled CBs collide with the L1 buffers turn it
-        off for those shapes (see the speaker encoder). Numerically identical either way.
-        """
+        """Enable or disable activation and weight double buffering."""
         self.conv_config.enable_act_double_buffer = enabled
         self.conv_config.enable_weights_double_buffer = enabled
 
@@ -333,6 +344,7 @@ class TtConv2d(LightweightModule):
         # Prepared weights are shape-specific; ttnn cannot detect a stale cache. The double-buffer
         # flags belong in the key too: strided layers map several input lengths onto the same
         # height, so a toggle can land on an otherwise identical key.
+        """Run conv2d for the given input height and width."""
         key = (
             x.shape[0],
             input_height,

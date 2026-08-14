@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """Objective TTS evaluation metrics for XTTS-v2 synthesized audio.
@@ -47,11 +47,12 @@ from models.experimental.xtts.config import (  # noqa: F401 — re-exported for 
 
 
 def _as_mono_f32(wav) -> np.ndarray:
+    """Coerce audio to a 1-D float32 mono numpy array."""
     return np.asarray(wav, dtype="float32").reshape(-1)
 
 
 def _resample(wav: np.ndarray, sr: int, target: int) -> np.ndarray:
-    """Polyphase resample a 1-D signal ``sr -> target`` (no-op if already target)."""
+    """Polyphase resample a 1-D signal from sr to target (no-op if equal)."""
     if sr == target:
         return wav
     from scipy.signal import resample_poly
@@ -61,11 +62,7 @@ def _resample(wav: np.ndarray, sr: int, target: int) -> np.ndarray:
 
 
 def compute_cer(wav, sr, reference_text, model_id=WHISPER_MODEL_ID, language="english"):
-    """CER of ``wav`` (Whisper-large-v3 transcription) against ``reference_text``.
-
-    Returns ``(cer, hypothesis)``. Comparison is case-insensitive and whitespace
-    trimmed. ``cer`` is a fraction (0 = perfect); it can exceed 1 for very bad output.
-    """
+    """Compute CER of Whisper transcription against the reference text."""
     import jiwer
     from transformers import pipeline
 
@@ -85,7 +82,7 @@ def compute_cer(wav, sr, reference_text, model_id=WHISPER_MODEL_ID, language="en
 
 
 def compute_utmos(wav, sr):
-    """Naturalness MOS (1-5) of ``wav`` via the UTMOS22-strong predictor."""
+    """Return UTMOS22 naturalness MOS (1-5) for the synthesized waveform."""
     global _UTMOS
     if _UTMOS is None:
         _UTMOS = torch.hub.load(UTMOS_HUB_REPO, "utmos22_strong", trust_repo=True)
@@ -96,6 +93,7 @@ def compute_utmos(wav, sr):
 
 
 def _ecapa2_embed(wav, sr) -> torch.Tensor:
+    """Return an L2-normalized ECAPA2 speaker embedding for the waveform."""
     global _ECAPA2
     if _ECAPA2 is None:
         from huggingface_hub import hf_hub_download
@@ -111,11 +109,7 @@ def _ecapa2_embed(wav, sr) -> torch.Tensor:
 
 
 def compute_secs(wav, sr, ref_wav, ref_sr):
-    """Speaker Encoder Cosine Similarity between ``wav`` and ``ref_wav`` (ECAPA2).
-
-    Returns the cosine similarity of the two L2-normalized speaker embeddings
-    (higher = more similar speaker).
-    """
+    """Compute ECAPA2 speaker cosine similarity between wav and ref_wav."""
     a = _ecapa2_embed(wav, sr)
     b = _ecapa2_embed(ref_wav, ref_sr)
     return float((a * b).sum().item())

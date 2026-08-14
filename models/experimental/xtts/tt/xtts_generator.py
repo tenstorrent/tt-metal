@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import time
@@ -18,10 +18,12 @@ from models.experimental.xtts.tt.xtts_sampler import TtSampler
 
 class TtXttsGenerator:
     def __init__(self, model):
+        """Wrap a GPT model for autoregressive code generation."""
         self.model = model
 
     def _argmax(self, logits):
         # TILE argmax avoids a per-token untilize in the decode hot loop.
+        """Return the argmax token id from logits."""
         idx = ttnn.argmax(logits, dim=-1)
         return int(ttnn.to_torch(idx).flatten()[0].item())
 
@@ -36,6 +38,7 @@ class TtXttsGenerator:
         top_p=1.0,
         min_new_tokens=0,
     ):
+        """Autoregressively generate audio codes and latents."""
         sampler = None
         if temperature and temperature > 0.0:
             sampler = TtSampler(self.model.device, NUM_AUDIO_TOKENS, temperature, top_k, repetition_penalty, top_p)
@@ -48,6 +51,7 @@ class TtXttsGenerator:
             stop_mask = ttnn.from_torch(m, device=self.model.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
         def _pick(logits, n_done):
+            """Pick next token, masking STOP until min_new_tokens."""
             return pick(ttnn.add(logits, stop_mask) if (stop_mask is not None and n_done < min_new_tokens) else logits)
 
         prompt_len = cond_latents.shape[1] + text_ids.shape[1]
@@ -72,6 +76,7 @@ class TtXttsGenerator:
         return torch.tensor([codes], dtype=torch.long), latents_cat
 
     def latents_for_codes(self, text_ids, cond_latents, codes):
+        """Teacher-force codes to collect latents and predictions."""
         prompt_len = cond_latents.shape[1] + text_ids.shape[1]
         max_seq = -(-(prompt_len + len(codes) + 2) // 32) * 32
         kv = self.model.prefill(text_ids, cond_latents, max_seq)
@@ -88,6 +93,7 @@ class TtXttsGenerator:
     def generate_ondevice_traced(
         self, prompt_len, max_new_tokens, temperature, top_k, top_p, repetition_penalty, min_new_tokens=0
     ):
+        """Run traced on-device decode and return codes and latents."""
         dec = TtTracedDecoder(
             self.model,
             prompt_len,
@@ -119,6 +125,7 @@ class TtTracedDecoder:
         min_new_tokens=0,
         capture=True,
     ):
+        """Capture and replay a traced single-step decode loop."""
         self.model = model
         dev = model.device
         self.device = dev
@@ -130,6 +137,7 @@ class TtTracedDecoder:
         T32 = ttnn.TILE_LAYOUT
 
         def f32(t):
+            """Upload a host tensor as float32 tiles on device."""
             return ttnn.from_torch(t, device=dev, dtype=ttnn.float32, layout=T32)
 
         self._f32 = f32
@@ -162,11 +170,13 @@ class TtTracedDecoder:
             self.capture()
 
     def warmup(self):
+        """Warm up decode ops and reset buffers."""
         self._step_ops()
         ttnn.synchronize_device(self.device)
         self.reset()
 
     def capture(self):
+        """Capture the decode step into a device trace."""
         self.tid = ttnn.begin_trace_capture(self.device, cq_id=0)
         self._step_ops()
         ttnn.end_trace_capture(self.device, self.tid, cq_id=0)
@@ -174,13 +184,16 @@ class TtTracedDecoder:
         self.reset()
 
     def _draw_gumbel(self):
+        """Draw Gumbel noise for all decode steps."""
         u = torch.rand(self.N, NUM_AUDIO_TOKENS).clamp_(1e-4, 1.0 - 1e-3)
         return -torch.log(-torch.log(u))
 
     def _step_ops(self):
+        """Execute one decode step writing codes and latents."""
         m, N = self.model, self.N
 
         def _select_row(table_nv, oh_1n, dest_1v):
+            """Select one row from a table via one-hot matmul."""
             ttnn.copy(ttnn.matmul(oh_1n, table_nv), dest_1v)
 
         oh_c = ttnn.typecast(ttnn.eq(self.arange_col, self.step_f), ttnn.float32)
@@ -204,6 +217,7 @@ class TtTracedDecoder:
 
     def reset(self, redraw_noise=False):
         # In-place only: capture bound these addresses; rebinding detaches from the trace.
+        """Reset step buffers in place for a new replay."""
         ttnn.multiply(self.step_f, 0.0, output_tensor=self.step_f)
         ttnn.copy(self.model.cache_pos(self.prompt_len), self.cpos_buf)
         ttnn.copy(self.model._pos_ids(START_AUDIO_TOKEN), self.tok_buf)
@@ -214,6 +228,7 @@ class TtTracedDecoder:
         self.sampler.reset()
 
     def run(self):
+        """Replay the decode trace until STOP or max tokens."""
         dev, N, floor = self.device, self.N, self.floor
         # Poll every step: less-frequent polls run extra decode past STOP.
         t_replay = time.perf_counter()
@@ -244,6 +259,7 @@ class TtTracedDecoder:
         return codes_out, lat[:, 1 : cut + 1, :].to(torch.bfloat16), decode_replay_s
 
     def release(self):
+        """Release the decode trace and free scratch tensors."""
         if self.tid is not None:
             ttnn.release_trace(self.device, self.tid)
             self.tid = None

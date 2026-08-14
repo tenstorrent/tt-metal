@@ -1,18 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-
-"""PCC test for the XTTS-v2 speaker encoder body (ResNetSpeakerEncoder).
-
-Validates the TTNN SE-ResNet + attentive-statistics pooling against the pure-
-PyTorch reference, both from the real coqui/XTTS-v2 checkpoint. Input is a log-mel
-``[1, 64, T]``; output is the 512-d L2-normalized speaker embedding ``g``.
-
-Run:
-    source python_env/bin/activate
-    export TT_METAL_HOME=$(pwd)
-    export PYTHONPATH=$(pwd)
-    pytest models/experimental/xtts/tests/pcc/test_speaker_encoder.py
-"""
 
 import pytest
 import torch
@@ -28,12 +15,12 @@ from models.experimental.xtts.tt.xtts_speaker_encoder import TtResNetSpeakerEnco
 @pytest.mark.parametrize("mel_len", [200])
 @pytest.mark.parametrize("pcc", [0.99])
 def test_tt_speaker_encoder(device, xtts_state_dict, mel_len, pcc, reset_seeds):
+    """Compare TTNN speaker-encoder embedding to the PyTorch reference via PCC."""
     reference = build_reference_speaker_encoder(xtts_state_dict)
 
-    # mel magnitudes [B, 64, T] (positive, as a real mel spectrogram would be).
     mel = torch.randn(1, 64, mel_len).abs() + 0.1
     with torch.no_grad():
-        ref_g = reference(mel)  # [1, 512]
+        ref_g = reference(mel)
 
     tt_enc = TtResNetSpeakerEncoder(device, reference)
     mel_dev = ttnn.from_torch(mel.float(), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
@@ -49,23 +36,12 @@ def test_tt_speaker_encoder(device, xtts_state_dict, mel_len, pcc, reset_seeds):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("pcc", [0.99])
 def test_tt_speaker_encoder_shape_reuse(device, xtts_state_dict, pcc, reset_seeds):
-    """One encoder instance, two reference clips of different length — both must be right.
-
-    ``TtConv2d`` caches ttnn.conv2d's preprocessed weights, and those are only valid for the
-    parallelization the conv picked from the *first* call's shape. ttnn cannot detect a stale one
-    (``is_valid_device_conv_weights`` checks only layout/rank/out_channels/dtype), so before
-    ``TtConv2d.forward`` learned to key that cache this returned a plausible but badly wrong
-    embedding on the second length — silently, with no error. 200 then 512 is the smallest pair
-    that trips it: at 512 layer3 crosses ``_stage_memory_config``'s sharding threshold, so its
-    convs get a different parallelization than the cached weights were built for.
-
-    Both lengths are checked against a *fresh* encoder too, so a regression here is attributed to
-    the reuse rather than to the lengths themselves.
-    """
+    """Check a reused TTNN speaker encoder matches a fresh instance across mel lengths."""
     reference = build_reference_speaker_encoder(xtts_state_dict)
     lengths = [200, 512]
 
     def embed(tt_enc, mel_len):
+        """Embed a random mel of the given length with both reference and TTNN encoders."""
         torch.manual_seed(0)
         mel = torch.randn(1, 64, mel_len).abs() + 0.1
         with torch.no_grad():
@@ -81,8 +57,7 @@ def test_tt_speaker_encoder_shape_reuse(device, xtts_state_dict, pcc, reset_seed
         does_pass, msg = comp_pcc(ref_g, reused_g, pcc)
         logger.info(f"speaker_encoder reused-instance mel_len={mel_len}: {msg}")
         assert does_pass, f"reused encoder at mel_len={mel_len} scored below {pcc}: {msg}"
-        # The reused instance must match the fresh one, not merely clear the PCC bar: a stale
-        # conv weight shifts the embedding well before it would fail an absolute threshold.
+        # Stale TtConv2d weight cache can pass absolute PCC but disagree with a fresh encoder.
         assert torch.allclose(reused_g, fresh_g, atol=1e-6), (
             f"reused encoder at mel_len={mel_len} disagrees with a fresh one "
             f"(max abs diff {(reused_g - fresh_g).abs().max().item():.3e})"

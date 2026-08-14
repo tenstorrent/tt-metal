@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """XTTS-v2 **reference** demo: text + reference audio -> spoken WAV, entirely on CPU.
@@ -81,9 +81,7 @@ CODES_PER_ID = REFERENCE_DEMO.codes_per_id
 
 
 def _load_audio_22k(ref_audio, max_seconds):
-    """Reference audio as ``[1, samples]`` @ 22.05 kHz — a local WAV path if it exists, else a
-    coqui-ai/TTS test clip name (e.g. ``LJ001-0001.wav``, or a ``+``-joined list of them for a
-    long reference), else an HF ``coqui/XTTS-v2`` sample name (e.g. ``en_sample.wav``)."""
+    """Load reference audio as [1, samples] at 22.05 kHz from path or Coqui clips."""
     if os.path.exists(ref_audio):
         import soundfile as sf
         from scipy.signal import resample_poly
@@ -103,14 +101,10 @@ def _load_audio_22k(ref_audio, max_seconds):
 
 
 def _split_into_chunks(text, lang):
-    """Sentence groups to synthesise — ONE group (single pass) whenever the whole text fits.
-
-    XTTS generates one utterance per pass, bounded by the position tables (see the budgets above).
-    Only text that cannot fit one pass is split at sentence boundaries; a sentence is never split,
-    so an over-long single sentence is warned about rather than silently truncated mid-generation.
-    """
+    """Split text into sentence groups that fit one CPU synthesis pass."""
 
     def ids_of(t):
+        """Count wrapped text token ids for a string."""
         return preprocess_text(re.sub(SENTENCE_FINAL_PUNCT_RE, "", t), lang=lang).shape[-1]
 
     whole = text.strip()
@@ -140,8 +134,7 @@ def _split_into_chunks(text, lang):
 
 
 def _postprocess(wav_np, cfg=REFERENCE_DEMO.audio_post):
-    """Fix the abrupt ("crimped") onset: short raised-cosine fade in/out + leading/trailing
-    silence (the vocoder starts at the first content code with no natural lead-in)."""
+    """Apply raised-cosine fade and silence padding to fix abrupt onset/offset."""
     fade_n = min(int(cfg.fade_seconds * OUTPUT_SAMPLE_RATE), wav_np.shape[0] // 2)
     if fade_n > 0:
         ramp = 0.5 * (1.0 - np.cos(np.linspace(0.0, np.pi, fade_n, dtype=wav_np.dtype)))
@@ -155,10 +148,7 @@ def _postprocess(wav_np, cfg=REFERENCE_DEMO.audio_post):
 # sampling — the host mirror of tt/xtts_sampler.py
 # ---------------------------------------------------------------------------
 def _sample(logits, seen, *, temperature, top_k, top_p, rep, suppress=()):
-    """Shape ``logits`` ``[V]`` and draw one id. Same order as ``TtSampler``: repetition penalty
-    (positive logits divided, negative multiplied — the HF/coqui convention) -> temperature ->
-    top-k truncation -> nucleus *within the top-k window* -> suppression bias -> categorical draw.
-    ``temperature <= 0`` is greedy (argmax, no scaling — the deterministic reference path)."""
+    """Sample one token id from logits with repetition penalty, top-k, and top-p."""
     L = logits.detach().float().reshape(-1).clone()
 
     if rep != 1.0 and seen:
@@ -193,9 +183,7 @@ def _sample(logits, seen, *, temperature, top_k, top_p, rep, suppress=()):
 # GPT decode
 # ---------------------------------------------------------------------------
 def _gpt_forward_cached(gpt, hidden, cache, mask):
-    """Run the 30 blocks (KV-cached) + ``ln_f`` + ``final_norm`` over ``hidden``. Both norms are
-    per-position, so applying them to a single decode step is identical to the reference running
-    them over the whole stream and slicing."""
+    """Run cached GPT blocks plus ln_f and final_norm over hidden states."""
     for block in gpt.stack.h:
         out = block(hidden, past_key_values=cache, attention_mask=mask, use_cache=True)
         hidden = out[0] if isinstance(out, tuple) else out
@@ -204,13 +192,7 @@ def _gpt_forward_cached(gpt, hidden, cache, mask):
 
 @torch.no_grad()
 def generate_cached(gpt, text_ids, cond_latents, *, max_new_tokens, min_new_tokens, sampler_kw):
-    """Autoregressive decode with a KV cache. Returns ``(codes [1, T], latents [1, T, 1024])``.
-
-    Latent alignment matches the reference: code ``c_i`` sits at mel position ``i + 1`` (the
-    ``start_audio`` token holds position 0), and its latent is the post-``final_norm`` hidden state
-    at that position — which is exactly the state produced by the step that *feeds* ``c_i``. So the
-    loop samples a code, feeds it, and keeps that step's hidden state as the code's latent.
-    """
+    """Autoregressive decode with a KV cache, returning codes and latents."""
     text_len = text_ids.shape[1]
     text_emb = gpt.text_embedding(text_ids) + gpt.text_pos_embedding(torch.arange(text_len))
     start = torch.full((1, 1), START_AUDIO_TOKEN, dtype=torch.long)
@@ -252,9 +234,7 @@ def generate_cached(gpt, text_ids, cond_latents, *, max_new_tokens, min_new_toke
 
 @torch.no_grad()
 def generate_recompute(gpt, text_ids, cond_latents, *, max_new_tokens, min_new_tokens, sampler_kw):
-    """The naive loop the reference uses: no cache, the whole stream re-run every step, with one
-    final ``return_latent`` pass to harvest the latents. Same numbers as :func:`generate_cached`,
-    ~100x slower — kept as the check that the cache changes nothing but speed."""
+    """Naive recomputing decode loop without a KV cache."""
     mel_ids = torch.full((1, 1), START_AUDIO_TOKEN, dtype=torch.long)
     codes, seen = [], set()
     while len(codes) < max_new_tokens:
@@ -278,14 +258,14 @@ def generate_recompute(gpt, text_ids, cond_latents, *, max_new_tokens, min_new_t
 # ---------------------------------------------------------------------------
 @torch.no_grad()
 def cond_latents_from_wav(reference, wav, mel_stats):
-    """coqui ``get_gpt_cond_latents``: chunk the reference into ``gpt_cond_chunk_len`` windows, mel
-    each window, run ``get_style_emb`` per window and average -> ``[1, 32, 1024]``."""
+    """Average per-chunk GPT conditioning latents from reference wav."""
     parts = [reference.conditioning(wav_to_mel(w, mel_stats)) for w in chunk_wav(wav)]  # each [1, 1024, 32]
     style = torch.stack(parts, dim=0).mean(dim=0) if len(parts) > 1 else parts[0]
     return style.transpose(1, 2)
 
 
 def _audio_duration_s(wav_np, sample_rate=OUTPUT_SAMPLE_RATE):
+    """Return audio duration in seconds from sample count and sample rate."""
     return float(np.asarray(wav_np).reshape(-1).shape[0]) / float(sample_rate)
 
 
@@ -340,6 +320,7 @@ def synthesize(reference, wrapped, cond_latents, g, args):
 
 
 def main():
+    """CLI entrypoint for the host-only XTTS reference demo."""
     ap = argparse.ArgumentParser(description="XTTS-v2 CPU reference text-to-speech demo")
     cfg, gen = REFERENCE_DEMO, REFERENCE_DEMO.generation
     ap.add_argument("--text", default=cfg.text)

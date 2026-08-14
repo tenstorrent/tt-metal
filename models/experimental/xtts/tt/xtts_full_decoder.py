@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -12,6 +12,7 @@ from models.experimental.xtts.tt.xtts_speaker_encoder import TtResNetSpeakerEnco
 
 class TtXttsHifiDecoder(LightweightModule):
     def __init__(self, device, ref_full):
+        """Wire mel frontend, speaker encoder, and HiFi decoder."""
         super().__init__()
         self.device = device
         self.mel_frontend = TtMelFrontend(device, ref_full.mel_frontend)
@@ -19,6 +20,7 @@ class TtXttsHifiDecoder(LightweightModule):
         self.decoder = TtHifiDecoder(device, ref_full.decoder.waveform_decoder.state_dict())
 
     def speaker_embedding(self, ref_wav):
+        """Compute speaker embedding from reference waveform."""
         mel = self.mel_frontend(ref_wav)
         g = self.speaker_encoder(mel)
         if mel.is_allocated():
@@ -27,4 +29,5 @@ class TtXttsHifiDecoder(LightweightModule):
         return ttnn.to_layout(g, ttnn.ROW_MAJOR_LAYOUT)
 
     def forward(self, latents, ref_wav):
+        """Decode latents to waveform using speaker conditioning."""
         return self.decoder(latents, self.speaker_embedding(ref_wav))

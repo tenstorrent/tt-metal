@@ -1,22 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-
-"""How long an utterance can one traced pass produce?
-
-Sweeps wrapped text length through ``inference_fully_traced`` (GPT + KV cache + three live
-traces). Vocoder length follows the text (~2.2 codes per id); padding ``max_new_tokens`` does
-not make a longer utterance. Each point opens its own device. Allocation failures are classified
-(CB clash / L1_SMALL / OOM), not asserted — only the demo default text length is gated.
-
-Run:
-    source python_env/bin/activate
-    export TT_METAL_HOME=$(pwd)
-    export PYTHONPATH=$(pwd)
-    pytest models/experimental/xtts/tests/perf/test_traced_pass_len_sweep.py -v -s
-
-Env:
-  ``XTTS_TRACED_SWEEP`` — comma list of wrapped text lengths (ids), e.g. ``96,224``.
-"""
 
 import math
 import os
@@ -36,40 +19,35 @@ from models.experimental.xtts.reference.xtts_text_embedding import preprocess_te
 from models.experimental.xtts.tt.xtts_inference import TtXtts
 
 TILE = 32
-SECONDS_PER_CODE = 4 * (24000 / 22050) * 256 / 24000  # one code = 46.4 ms of 24 kHz audio
+SECONDS_PER_CODE = 4 * (24000 / 22050) * 256 / 24000
 
-# Wrapped, tile-padded text lengths. 96 is the demo default; 272 is ~the 602-code checkpoint cap.
 DEFAULT_SWEEP = [96, 128, 160, 192, 224, 256, 272]
 
-FLOOR_TEXT_LEN = 96  # demo default; must keep working
+FLOOR_TEXT_LEN = 96
 
-# Per-point budget from the text (as the demo does), with headroom for sampler overshoot.
 OVERSHOOT = 1.2
 CODES_PER_ID = CHUNKING.codes_per_id
 
 
 def _budget_for(text_len):
-    """Tile-aligned code budget for a text length, capped at the checkpoint's own limit."""
+    """Estimate a tile-aligned code budget for a given wrapped text length."""
     est = int(text_len * CODES_PER_ID * OVERSHOOT)
     return min(MAX_AUDIO_TOKENS, -(-est // TILE) * TILE)
 
 
-# Real English prose, repeated then trimmed to each length — the same approach test_e2e_isl_sweep_perf
-# uses, and for the same reason: [STOP]-padded filler does not generate like real text.
 SWEEP_TEXT = (
     "Voice synthesis has come a long way, and modern systems can already generate natural sounding "
     "speech with remarkable accuracy. "
 ) * 30
 
-# Budget ladder for the 2-D envelope map. Every rung is TILE-aligned; the top rung is the
-# checkpoint's own cap.
 BUDGET_LADDER = [224, 256, 288, 320, 352, 384, 448, 512, 576, MAX_AUDIO_TOKENS]
 
 L1_SMALL_SIZE = 65536
-TRACE_REGION_SIZE = 52428800  # 50 MB — the three chained traces, as test_e2e_isl_sweep_perf uses
+TRACE_REGION_SIZE = 52428800
 
 
 def _budget_ladder():
+    """Return the traced budget ladder from env or defaults."""
     raw = os.environ.get("XTTS_TRACED_BUDGETS")
     if not raw or not raw.strip():
         return list(BUDGET_LADDER)
@@ -77,11 +55,7 @@ def _budget_ladder():
 
 
 def _grid():
-    """``(text_len, [budgets])`` pairs worth measuring.
-
-    Only budgets that can hold the text's estimated codes are included: a budget below the estimate
-    truncates the utterance mid-sentence, so it says nothing about whether a full pass fits.
-    """
+    """Build (text_len, budgets) pairs for the envelope map."""
     pairs = []
     for text_len in _sweep_points():
         need = -(-int(text_len * CODES_PER_ID) // TILE) * TILE
@@ -90,6 +64,7 @@ def _grid():
 
 
 def _sweep_points():
+    """Return traced text-length sweep points from env or defaults."""
     raw = os.environ.get("XTTS_TRACED_SWEEP")
     if not raw or not raw.strip():
         return list(DEFAULT_SWEEP)
@@ -97,7 +72,7 @@ def _sweep_points():
 
 
 def _classify(exc):
-    """Bucket a device-side failure; the bucket is the finding."""
+    """Classify an allocation/runtime failure into a short failure tag."""
     msg = str(exc)
     if "clash with L1 buffers" in msg or "Statically allocated circular buffers" in msg:
         return "CB_CLASH"
@@ -109,7 +84,7 @@ def _classify(exc):
 
 
 def _inputs():
-    """The demo's real conditioning: 30 s reference (8 windows) and an 8 s speaker window."""
+    """Load reference and speaker wav inputs for traced pass sweeps."""
     from scipy.signal import resample_poly
 
     wav = load_coqui_test_audio(samples=DEMO.ref_audio.split("+"), max_seconds=DEMO.ref_seconds)
@@ -121,9 +96,8 @@ def _inputs():
 
 
 def _text_at(text_len):
-    """Wrapped ids for real prose trimmed to exactly ``text_len``, padded with STOP_TEXT_TOKEN if the
-    trim lands short — the same wrap-then-pad the demo applies."""
-    ids = preprocess_text(SWEEP_TEXT, lang=DEMO.language)[:, : text_len - 2]  # leave room for the wrappers
+    """Build wrapped text ids padded or trimmed to the requested length."""
+    ids = preprocess_text(SWEEP_TEXT, lang=DEMO.language)[:, : text_len - 2]
     wrapped = wrap_text_ids(ids)
     if wrapped.shape[1] < text_len:
         wrapped = F.pad(wrapped, (0, text_len - wrapped.shape[1]), value=STOP_TEXT_TOKEN)
@@ -131,8 +105,7 @@ def _text_at(text_len):
 
 
 def _run_one(state_dict, ref_decoder_full, wav, spk_wav, wrapped, text_len, budget):
-    """One traced pass on a FRESH device. Returns a result row; an allocation failure IS the
-    measurement, so it is classified and returned rather than raised."""
+    """Run one fully-traced pass on a fresh device and record PASS/failure."""
     max_seq = -(-(NUM_LATENTS + text_len + budget + 2) // TILE) * TILE
     row = {"text_len": text_len, "budget": budget, "max_seq": max_seq}
     device = ttnn.open_device(device_id=0, l1_small_size=L1_SMALL_SIZE, trace_region_size=TRACE_REGION_SIZE)
@@ -151,8 +124,7 @@ def _run_one(state_dict, ref_decoder_full, wav, spk_wav, wrapped, text_len, budg
             top_k=GENERATION.top_k,
             top_p=GENERATION.top_p,
             repetition_penalty=GENERATION.repetition_penalty,
-            # STOP left free on purpose: the pass should end where the TEXT ends. Suppressing it
-            # only produces drone that TtTracedDecoder.run trims away again (see the docstring).
+            # STOP left free so the pass ends with the text (not drone past it).
             min_new_tokens=0,
         )
         out = ttnn.to_torch(wav_dev).float().reshape(-1)
@@ -177,11 +149,7 @@ def _run_one(state_dict, ref_decoder_full, wav, spk_wav, wrapped, text_len, budg
 @pytest.mark.timeout(7200)
 @pytest.mark.models_performance_bare_metal
 def test_traced_pass_envelope_map(xtts_state_dict):
-    """Pass/fail map over (text_len, code budget). Allocation is not monotone in either axis.
-
-    Budgets below a text's estimated codes are skipped (they would truncate mid-sentence).
-    Env: ``XTTS_TRACED_SWEEP`` (rows), ``XTTS_TRACED_BUDGETS`` (columns).
-    """
+    """Map which (text_len, budget) pairs allocate for a single traced pass."""
     wav, spk_wav = _inputs()
     reference = XttsReference(xtts_state_dict)
     grid = _grid()
@@ -230,10 +198,9 @@ def test_traced_pass_envelope_map(xtts_state_dict):
 @pytest.mark.timeout(7200)
 @pytest.mark.models_performance_bare_metal
 def test_traced_pass_len_sweep(xtts_state_dict):
-    """1-D floor regression: demo-shaped budget per text length. Kept because it is cheap and gates
-    the one pair production depends on; the MAP above is what characterises the envelope."""
+    """Sweep traced single-pass text lengths and assert the demo floor still passes."""
     wav, spk_wav = _inputs()
-    reference = XttsReference(xtts_state_dict)  # supplies the decoder/speaker/mel weights
+    reference = XttsReference(xtts_state_dict)
 
     rows = []
     for text_len in _sweep_points():
@@ -269,7 +236,6 @@ def test_traced_pass_len_sweep(xtts_state_dict):
             f"vs CHUNKING.max_single_pass_codes {CHUNKING.max_single_pass_codes} (text-split threshold), "
             f"max_chunk_codes {CHUNKING.max_chunk_codes}, GENERATION.max_tokens {GENERATION.max_tokens}"
         )
-        # The whole point of the sweep: if audio_s does not grow with text_len, the axis is inert.
         span = max(r["audio_s"] for r in passed) - min(r["audio_s"] for r in passed)
         logger.info(f"audio_s span across passing rows: {span:.2f} s (must grow with text_len, else axis is inert)")
     else:

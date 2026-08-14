@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -56,6 +56,7 @@ INIT_KERNEL_CONFIG = ttnn.WormholeComputeKernelConfig(
 
 
 def _lin(torch_tensor, device):
+    """Upload a linear weight transposed to device tiles."""
     w = torch_tensor
     if w.dim() == 3:
         w = w.squeeze(-1)
@@ -65,15 +66,18 @@ def _lin(torch_tensor, device):
 
 
 def _vec(torch_tensor, device):
+    """Upload a bias/vector tensor to device tiles."""
     return ttnn.from_torch(torch_tensor.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
 
 
 def _perm_qkv_out(t):
+    """Reorder packed QKV weights to head-major layout."""
     idx = torch.arange(3 * HIDDEN_SIZE).reshape(NUM_ATTN_HEADS, 3, ENC_HEAD_DIM).permute(1, 0, 2).reshape(-1)
     return t[idx]
 
 
 def _clamp_gx(preferred_gx, grid_x, nt):
+    """Clamp preferred GX to a divisor of Nt within grid."""
     max_gx = max(1, min(int(preferred_gx), int(grid_x)))
     for gx in range(max_gx, 0, -1):
         if nt % gx == 0:
@@ -82,6 +86,7 @@ def _clamp_gx(preferred_gx, grid_x, nt):
 
 
 def _1d_grid_covering(n_tiles, grid):
+    """Pick a compact 1D grid covering at least n_tiles cores."""
     max_x, max_y = int(grid.x), int(grid.y)
     best = None
     for gy in range(1, max_y + 1):
@@ -98,6 +103,7 @@ def _1d_grid_covering(n_tiles, grid):
 
 
 def _mm_2d(grid, mt, kt, nt, gx=8, ibw=None, fp32_acc=False):
+    """Build a 2D multicast matmul program config."""
     gx = _clamp_gx(gx, grid.x, nt)
     gy = max(1, min(mt, grid.y))
     per_core_m, per_core_n = -(-mt // gy), -(-nt // gx)
@@ -119,6 +125,7 @@ def _mm_2d(grid, mt, kt, nt, gx=8, ibw=None, fp32_acc=False):
 
 class TtXttsConditioning(LightweightModule):
     def __init__(self, state_dict, device):
+        """Load conditioning encoder and perceiver weights."""
         super().__init__()
         self.device = device
         e = "gpt.conditioning_encoder."
@@ -203,6 +210,7 @@ class TtXttsConditioning(LightweightModule):
 
     def _gn_operands(self, s, blk):
         # Cache DRAM mask/affine: host->device writes are fatal inside a trace capture.
+        """Cache group-norm mask and affine operands for length S."""
         cached = blk.setdefault("_gn", {}).get(s)
         if cached is None:
             grid = ttnn.determine_expected_group_norm_dram_grid_size(
@@ -234,6 +242,7 @@ class TtXttsConditioning(LightweightModule):
         return cached
 
     def _group_norm(self, x, blk):
+        """Apply group norm over the sequence channel axis."""
         s = x.shape[1]
         grid, mask, gamma, beta = self._gn_operands(s, blk)
         y = ttnn.group_norm(
@@ -253,6 +262,7 @@ class TtXttsConditioning(LightweightModule):
         return ttnn.reshape(y, (1, s, HIDDEN_SIZE))
 
     def _attn_pcs(self, s):
+        """Cache QKV and proj matmul configs for sequence length S."""
         pcs = self._pc_cache.get(s)
         if pcs is None:
             mt, kt = -(-s // 32), HIDDEN_SIZE // 32
@@ -264,6 +274,7 @@ class TtXttsConditioning(LightweightModule):
         return pcs
 
     def _attn_block(self, x, blk):
+        """Run one conditioning attention block with residual."""
         y = self._group_norm(x, blk)
         qkv_pc, proj_pc = self._attn_pcs(y.shape[1])
         qkv = ttnn.linear(
@@ -302,6 +313,7 @@ class TtXttsConditioning(LightweightModule):
 
     @staticmethod
     def _tile_concat(latents, context):
+        """Concat latents and context with tile-aligned padding."""
         n_lat, n_ctx = latents.shape[1], context.shape[1]
         ctx_pad = context.padded_shape[1]
         c = context.shape[-1]
@@ -310,6 +322,7 @@ class TtXttsConditioning(LightweightModule):
         return ttnn.reshape(cat, ttnn.Shape([1, n_lat + n_ctx, c]), ttnn.Shape([1, n_lat + ctx_pad, c]))
 
     def _perceiver_attn(self, latents, context, layer):
+        """Run one perceiver cross-attention layer."""
         ctx = self._tile_concat(latents, context)
         n = ctx.shape[1]
         pc = self._perc_qkv_pc.get(n)
@@ -341,6 +354,7 @@ class TtXttsConditioning(LightweightModule):
         return proj
 
     def _perceiver_ff(self, x, layer):
+        """Run gated perceiver feed-forward layer."""
         val = ttnn.linear(
             x,
             layer["ff_val_w"],
@@ -367,14 +381,17 @@ class TtXttsConditioning(LightweightModule):
         return out
 
     def mel_to_device(self, mel):
+        """Upload mel spectrogram to device L1 tiles."""
         return ttnn.from_torch(
             mel.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=self.device, dtype=ttnn.bfloat16, memory_config=L1
         )
 
     def forward(self, mel):
+        """Encode host mel into conditioning latents."""
         return self.forward_dev(self.mel_to_device(mel))
 
     def forward_dev(self, mel_tt):
+        """Encode device mel through encoder and perceiver."""
         x = ttnn.permute(mel_tt, (0, 2, 1), memory_config=L1)
         s = x.shape[1]
         h = ttnn.linear(
