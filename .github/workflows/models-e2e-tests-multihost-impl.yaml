@@ -44,6 +44,7 @@ jobs:
       VIRTUAL_ENV: /opt/venv
       HOME: /home/user
       PIP_CACHE_DIR: /home/user/.cache/pip
+      LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
       TT_METAL_HOME: /home/user/tt-metal
       TT_METAL_RUNTIME_ROOT: /home/user/tt-metal
       TT_METAL_CACHE: /home/user/.cache
@@ -85,10 +86,6 @@ jobs:
           working-directory: /home/user/tt-metal
           log-file: generated/test_logs/${{ matrix.test-group.name }}.log
           run: |
-            # ttrun.py defaults LD_LIBRARY_PATH to $CWD/build/lib when the var is
-            # unset, which would overlay the cmake tarball on the pip-installed
-            # wheel. Keep it set-but-empty so ranks use the wheel's RPATH.
-            export LD_LIBRARY_PATH=
             # Store command safely using heredoc
             CMD=$(cat << 'EOF'
             ${{ matrix.test-group.cmd }}

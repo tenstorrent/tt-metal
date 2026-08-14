@@ -149,7 +149,7 @@ jobs:
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
-        # Native libs come from the pip-installed wheel (auditwheel RPATH), not the cmake tarball.
+        LD_LIBRARY_PATH: /work/build/lib
         # Only the per-runner BH cache modes (local-disk, lfc) need HF online
         # so first-use can populate the cache. Shared NFS modes (cloud-mlperf
         # for BH and the implicit WH mount) keep HF offline — those are :ro
