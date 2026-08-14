@@ -29,6 +29,25 @@ class _NoCallbackGenerator:
         return [11, 12, 13][:max_new_tokens]
 
 
+class _CompatibilityGenerator(_CallbackGenerator):
+    def generate(
+        self,
+        prompt_token_ids,
+        max_new_tokens,
+        *,
+        next_input=None,
+        enable_trace=True,
+        host_sampling_compatibility=False,
+    ):
+        assert host_sampling_compatibility is True
+        return super().generate(
+            prompt_token_ids,
+            max_new_tokens,
+            next_input=next_input,
+            enable_trace=enable_trace,
+        )
+
+
 def _make_accuracy() -> TokenAccuracy:
     reference = Reference(
         k=5,
@@ -60,6 +79,11 @@ def test_run_one_entry_scores_full_teacher_forcing_run():
     assert stats["total"] == 3
     assert stats["matches_top1"] == 3
     assert stats["top1"] == 1.0
+
+
+def test_run_one_entry_explicitly_enables_host_sampling_compatibility():
+    stats = _run_one_entry(generator=_CompatibilityGenerator([11, 12, 13]), acc=_make_accuracy(), entry_idx=0)
+    assert stats["matches_top1"] == 3
 
 
 def test_run_one_entry_fails_when_generate_stops_before_reference_length():

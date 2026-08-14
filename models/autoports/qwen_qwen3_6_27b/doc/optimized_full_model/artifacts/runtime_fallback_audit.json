@@ -1,0 +1,31 @@
+{
+  "measured_path": "default TP4 split-trace greedy token-out",
+  "artifact": "final_default_split_no_readback_b1_s128_g128.json",
+  "dynamic": {
+    "canonical_split_sampling": true,
+    "semantic_greedy_exact": true,
+    "model_trace_replays": 128,
+    "sampler_trace_live": true,
+    "token_host_refreshes": 0,
+    "position_host_refreshes": 0,
+    "page_table_refreshes": 0,
+    "per_token_readback_in_measured_interval": false,
+    "total_probe_and_reporting_readbacks_outside_interval": 4,
+    "blocking_model_replay": false
+  },
+  "static": {
+    "cpu_operation_in_token_out_decode_step": false,
+    "logits_to_torch_in_token_out_decode_step": false,
+    "full_vocab_all_gather_in_split_sampler": false,
+    "force_argmax_default": false,
+    "generic_single_core_local_topk": false,
+    "changed_only_page_table_refresh": true
+  },
+  "intentional_boundaries_outside_measured_path": [
+    "prefill first-token logits for the benchmark setup",
+    "semantic-greedy probe before timing",
+    "final reporting after the measured replay interval",
+    "teacher-forcing host_sampling_compatibility path"
+  ],
+  "status": "clean"
+}

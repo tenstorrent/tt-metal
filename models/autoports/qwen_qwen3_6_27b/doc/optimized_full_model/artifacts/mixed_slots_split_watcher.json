@@ -1,0 +1,37 @@
+{
+  "status": "FULL_MODEL_MIXED_SLOTS_OK",
+  "mesh": [
+    1,
+    4
+  ],
+  "layer_indices": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "prompt_lengths": [
+    65,
+    63
+  ],
+  "active_mask": [
+    1,
+    0
+  ],
+  "sampling": {
+    "temperature": 0.8,
+    "top_k": 5,
+    "top_p": 0.9,
+    "force_argmax": false
+  },
+  "sampled_tokens": [
+    198,
+    220
+  ],
+  "positions": [
+    68,
+    63
+  ],
+  "inactive_kv_exact": true,
+  "reset_reuse_ok": true
+}
