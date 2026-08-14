@@ -89,6 +89,8 @@ import ttnn
 # ``importlib.util.spec_from_file_location`` under a synthetic module name and no
 # package, so ``from .model import ...`` raises *"attempted relative import with no
 # known parent package"* before the generator is ever constructed.
+from models.autoports.meta_models_muse_glimmer_30b.tt import model as model_mod
+from models.autoports.meta_models_muse_glimmer_30b.tt import optimized_decoder as dec_mod
 from models.autoports.meta_models_muse_glimmer_30b.tt.functional_decoder import TILE_SIZE
 from models.autoports.meta_models_muse_glimmer_30b.tt.model import (
     DECODE_ROWS,
@@ -715,12 +717,21 @@ class MuseGlimmerGenerator(Generator):
                 released = True
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"failed to release the decode trace: {exc}")
+            if not released:
+                # Round 7: making only the *decrement* conditional was half a fix. Clearing
+                # the id discarded the only handle, so the trace could never be retried and
+                # the counter had no reachable decrement left -- which turned the
+                # ``deallocate()`` warning into a permanent false positive. And freeing the
+                # logits a possibly-live trace still reads is the very use-after-free the
+                # counter exists to warn about. So a failed release changes *nothing*: the
+                # id, the logits and the count all stay, and the next ``teardown()`` retries.
+                logger.warning(
+                    "MuseGlimmerGenerator: retaining the decode trace and its logits after a failed "
+                    "release; the live-trace count stays raised and teardown() will retry."
+                )
+                return
             self._trace_id = None
-            # Only on success.  Round 6: decrementing unconditionally made the counter read
-            # zero while a trace was still alive, so ``deallocate()``'s warning would fail
-            # to fire in exactly the case it exists for -- a release that did not happen.
-            if released:
-                self.model.note_trace_released()
+            self.model.note_trace_released()
         ttnn.synchronize_device(self.mesh_device)
         if self._trace_logits is not None:
             try:
@@ -755,6 +766,7 @@ class MuseGlimmerGenerator(Generator):
         if self._prefill_traces:
             ttnn.synchronize_device(self.mesh_device)
             self.counters["synchronizations"] += 1
+        retained = {}
         for padded_len, entry in list(self._prefill_traces.items()):
             released = False
             try:
@@ -762,15 +774,26 @@ class MuseGlimmerGenerator(Generator):
                 released = True
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"failed to release the prefill trace for {padded_len}: {exc}")
+            if not released:
+                # Same as _release_decode_trace: keep the entry and its buffers so a retry is
+                # possible and the count stays honest, rather than freeing tensors a live
+                # trace holds and losing the handle.
+                retained[padded_len] = entry
+                continue
             ttnn.synchronize_device(self.mesh_device)
             for key in ("tokens", "page_table", "logits"):
                 try:
                     ttnn.deallocate(entry[key])
                 except Exception:  # noqa: BLE001
                     pass
-            if released:  # see _release_decode_trace on why this is conditional
-                self.model.note_trace_released()
-        self._prefill_traces.clear()
+            self.model.note_trace_released()
+        self._prefill_traces = retained
+        if retained:
+            logger.warning(
+                f"MuseGlimmerGenerator: retained {len(retained)} prefill trace(s) after a failed "
+                "release; teardown() will retry."
+            )
+            return
         self._prefill_trace_cache_sig = ()
 
     def prefill_forward(
@@ -1225,6 +1248,18 @@ class MuseGlimmerGenerator(Generator):
             "layer_kinds": list(config.layer_kinds),
             "force_argmax": bool(self.sampling.tt_sampling.force_argmax_sampling),
             "sampling_implementation": "models.common.sampling.SamplingGenerator",
+            # This stage's own three decode-path flags plus the opt-in prefill trace, read off
+            # the *modules* rather than from prose.  Round 7 pointed out that without them the
+            # ``capacity`` blocks of the baseline and shipped evidence arms are byte-identical
+            # on exactly the settings that separate them, so the only thing distinguishing the
+            # arms was ``performance.baseline_arm``.  Same reasoning as the carried-forward
+            # decoder contract above: a build that silently flipped one of these would be a
+            # different model and should say so in its own evidence.
+            "lm_head_softcap_in_l1": bool(model_mod.LM_HEAD_SOFTCAP_IN_L1),
+            "embed_decode_gather_sharded": bool(model_mod.EMBED_DECODE_GATHER_SHARDED),
+            "decode_swiglu_mul_cores": dec_mod.DECODE_SWIGLU_MUL_CORES,
+            "prefill_trace": bool(self.gen_config.prefill_trace),
+            "prefill_trace_max_entries": int(self.gen_config.prefill_trace_max_entries),
             "lm_head_dtype": str(self.gen_config.lm_head_dtype),
             "lm_head_matmul": self.gen_config.lm_head_matmul,
             "lm_head_cores": self.gen_config.lm_head_cores,

@@ -71,7 +71,8 @@ def main() -> int:
                     (
                         # The HF arm is the previous stage's control, reused rather than re-run.
                         "python doc/full_model/bench/qualitative.py --arm hf "
-                        "(the previous stage's control, reused here via --reuse-hf-control)"
+                        "(run by the previous stage; this stage reuses its output rather than "
+                        "re-running it, via the wrapper's --reuse-hf-control)"
                         if "--arm hf" in command
                         else command.replace("doc/full_model/", f"{stage_dir}/")
                     )
@@ -114,10 +115,35 @@ def main() -> int:
             ),
         }
         notes = contract.get("notes", "")
-        contract["notes"] = notes.replace(
+        notes = notes.replace(
             "The full-model stage takes no capability reduction",
             "The optimized-full-model stage takes no capability reduction",
         )
+        # Round 7: the parent hardcodes a restore key in this sentence, so it named the wrong
+        # predecessor -- the previous top level was ``full_model``, whose block is separately
+        # present.  Derive it from the blocks actually nested here instead of asserting one.
+        nested = [key for key in contract if isinstance(contract.get(key), dict) and "stage" in contract[key]]
+        previous = "full_model" if "full_model" in contract else (nested[0] if nested else "the previous stage")
+        for wrong in ("optimized_multichip_decoder", "full_model"):
+            notes = notes.replace(
+                f"the previous top level is now the '{wrong}' block.",
+                f"the previous top level is now the '{previous}' block.",
+            )
+        contract["notes"] = notes
+        # The commands recorded are the ones this stage ran, including the wrapper flag that
+        # makes the TT and compare arms reuse the previous stage's HF control.
+        tested = contract.get("tested")
+        if isinstance(tested, dict) and isinstance(tested.get("commands"), list):
+            tested["commands"] = [
+                (
+                    command + " --reuse-hf-control"
+                    if f"{stage_dir}/bench/qualitative.py" in command
+                    and "--reuse-hf-control" not in command
+                    and ("--arm tt" in command or "--arm compare" in command)
+                    else command
+                )
+                for command in tested["commands"]
+            ]
         return contract
 
     module.build = build

@@ -34,15 +34,16 @@ checks = 0
 #: five wrong per-round spreads surviving a 195/195 pass, because the checks asserted
 #: "the artifact says X" and only ~20 of them asserted "and the README still says X".
 resolved: list[tuple[str, str]] = []
-#: The count this file advertises in the README and the work log.  Asserted, so the
-#: number cannot drift the way the previous one did.
+#: The count this file expects of itself -- a drift tripwire, asserted so a check cannot be
+#: silently dropped.  Round 7 was right that the old comment oversold it: no other document
+#: states this number, so it is internal and is not a cross-document binding.
 #:
 #: Round 3 of the stage review pointed out the obvious limit of this: the count freezes
 #: how many checks there are, not what they cover, and 328/328 passed while six figures in
 #: sections this file never opened were wrong.  ``SOURCES`` below is the other half --
 #: adding an unchecked section that needs a new artifact now fails on a missing source
 #: rather than sliding past on an unchanged count.
-ADVERTISED_CHECKS = 635
+ADVERTISED_CHECKS = 651
 #: Of that total, how many are real assertions (``close``/``same``) as opposed to README
 #: bindings (``bind``/``perf``), which assert nothing on their own.  Round 4 asked for the
 #: split to be stated next to the number rather than folded into it.
@@ -901,7 +902,14 @@ def main() -> int:
         deliberately did not run.  The rule is right for everything else, so the exception is
         named rather than the rule dropped.
         """
-        return "\n".join(line for line in json.dumps(value, indent=1).splitlines() if "--arm hf" not in line)
+        # Exact-command match, not a substring escape hatch: round 7 showed that dropping any
+        # line containing "--arm hf" let an unrelated previous-stage reference through simply
+        # by mentioning the flag (and that "--arm hfoo" matched too).
+        return "\n".join(
+            line
+            for line in json.dumps(value, indent=1).splitlines()
+            if "python doc/full_model/bench/qualitative.py --arm hf " not in line
+        )
 
     stale = sorted(
         key
@@ -924,10 +932,14 @@ def main() -> int:
     miss_ref = note.rsplit(" ", 1)[-1]
     same("the miss-detail note names this stage", miss_ref.startswith("doc/optimized_full_model/"), True)
     same("...and the file it names exists", (ROOT / miss_ref).is_file(), True)
-    for command in contract_perf["tested"]["commands"]:
-        for token in command.split():
-            if token.startswith("doc/") and token.endswith(".py"):
-                same(f"contract command script exists: {token}", (ROOT / token).is_file(), True)
+    # Round 7: only ``doc/**.py`` tokens inside ``tested.commands`` were stat'ed, so a
+    # dangling ``prefill_trace_retained_dram_source`` passed.  Resolve every doc/ path in the
+    # current-stage subtree.
+    current_stage_blob = json.dumps({key: value for key, value in contract_perf.items() if key not in HISTORICAL})
+    referenced = sorted(set(re.findall(r"doc/[\w./-]+\.(?:py|json|log|csv|md)", current_stage_blob)))
+    same("the contract references at least a dozen artifacts", len(referenced) >= 8, True)
+    for token in referenced:
+        same(f"contract-referenced path exists: {token}", (ROOT / token).is_file(), True)
     same(
         "the HF qualitative arm is still attributed to the stage that ran it",
         any("doc/full_model/bench/qualitative.py --arm hf" in c for c in contract_perf["tested"]["commands"]),
@@ -1155,7 +1167,9 @@ def main() -> int:
         readme.count("p = 0.00021") >= 1 and readme.count("p = 0.0119") >= 1,
         True,
     )
-    same("the README reports 28 watcher processes", "Twenty-eight watcher processes" in readme, True)
+    # The count is derived from the parsed arm table above, not matched as a word -- round 7's
+    # P1 was that this assertion held an unsupported figure in place precisely because the
+    # digit-bounded literal binder cannot see numbers spelled out.
     same("...and states the multiplicity caveat round 6 asked for", "no multiplicity correction" in readme, True)
     same("...and the independence caveat", "assumes independence" in readme, True)
 
@@ -1179,7 +1193,7 @@ def main() -> int:
     close(
         "token-out over the same-context floor %",
         round((after["token_out_decode_ms_per_token"]["min"] - floor256) / floor256 * 100, 2),
-        3.99,
+        3.91,
         tol=2e-2,
     )
     same(
@@ -1350,8 +1364,8 @@ def main() -> int:
                 candidates.add(str(int(value)))
             # A README may print the same value with a trailing zero (14.6 as "14.60").
             decimals = len(literal.split(".")[1]) if "." in literal else 0
-            for extra in (1, 2):
-                candidates.add(f"{value:.{decimals + extra}f}")
+            for extra_places in (1, 2):
+                candidates.add(f"{value:.{decimals + extra_places}f}")
         # Digit-boundary match.  A plain substring search lets `1.0` match `21.05` and
         # `128` match `1280`, which round 3 flagged as weak binding for exactly the
         # generic values where binding matters most.
@@ -1367,27 +1381,85 @@ def main() -> int:
     limitations = readme[readme.index("## Limitations and known issues") :]
     watcher_section = readme[readme.index("### Watcher") : readme.index("### The allocator's active-trace warning")]
     limitation6 = limitations[limitations.index("6. **Both opt-in") : limitations.index("7. **A watcher-enabled")]
+
+    # Round 7 defeated the previous version of this check three ways, all because it asserted
+    # that a *set of strings* appeared in each section rather than binding a tally to the row
+    # it describes.  Swapping two rows' tallies passed; injecting a contradictory paragraph
+    # passed; a paraphrased superseded phrase passed.  So the arm table is parsed and each row
+    # is matched to the tally this gate derived from the logs.
+    derived = {
+        "the ten gated cases": ten,
+        "**alone**": extra["the opt-in pair alone"],
+        "--arm rebuild": (0, 1),
+        "(count-matched)": c_ctrl,
+        "(**work-matched**)": extra["work-matched twelve"],
+        "both opt-in": c_optin,
+    }
+    parsed = {}
+    for line in watcher_section.splitlines():
+        if not line.startswith("| ") or "---" in line or "| runs |" in line:
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 3:
+            continue
+        try:
+            trips = int(cells[-1].replace("*", ""))
+            runs = int(cells[-2].replace("*", ""))
+        except ValueError:
+            continue
+        for key in derived:
+            if key in cells[0]:
+                parsed[key] = (trips, runs)
+                break
+    same("every arm row in the Watcher table parsed", sorted(parsed), sorted(derived))
+    for key, value in derived.items():
+        same(f"the Watcher table's {key!r} row matches the logs", parsed.get(key), value)
+    same(
+        "the arm table's run column sums to the stated process count",
+        sum(runs for _, runs in parsed.values()),
+        25,
+    )
+    same(
+        "...and the README states the five-arm count, not the total",
+        f"Twenty-four watcher processes" in watcher_section,
+        True,
+    )
+    # Limitation 6 must state the same tallies, and must name the control arm's trips rather
+    # than leaving them inside the pooled figure.
     for label, needle in (
         ("the opt-in arm tally", "6 of 6"),
-        ("the pooled-rest tally", "2 of 18"),
+        ("the control arm's own trips", "2 of 6"),
         ("the work-matched tally", "0 of 3"),
         ("the pair-alone tally", "0 of 4"),
+        ("the matched contrast", "p = 0.061"),
     ):
         same(f"limitation 6 states {label}", needle in limitation6, True)
-    for needle in ("| 6 | **6** |", "| 6 | **2** |", "| 5 | **0** |", "| 3 | **0** |", "| 4 | **0** |"):
-        same(f"the Watcher arm table has row {needle!r}", needle in watcher_section, True)
     same(
-        "limitation 6 and the Watcher section agree on the primary contrast",
+        "limitation 6 does not claim the prefill trace is required",
+        "neither alone is sufficient" in limitation6,
+        False,
+    )
+    same(
+        "limitation 6 and the Watcher section agree on the pooled contrast",
         "p = 0.00021" in limitation6 and "p = 0.00021" in watcher_section,
         True,
     )
-    for stale in ("fifteen processes", "p = 0.400", "is not separable at this sample size"):
-        same(f"the superseded phrase {stale!r} is gone from the README", stale in readme, False)
-    same(
-        "limitation 6 does not repeat the withdrawn gate rationale",
-        "largest size measured with zero trips" in limitations,
-        False,
-    )
+    # A contradictory *added* claim is what containment cannot see, so assert no other tally
+    # for these arms appears anywhere in the README.
+    for wrong in ("6 of 6 with two other sampling", "0 of 6", "6 of 18", "2 of 3"):
+        same(f"no contradictory tally {wrong!r} in the README", wrong in readme, False)
+    # Whitespace- and punctuation-normalised, because round 7 defeated the exact-substring
+    # version by re-adding the retracted contrast as "p=0.400" and paraphrasing "at this
+    # sample size" to "at these sample sizes".
+    squashed = re.sub(r"[\s*_`]+", "", normalised).lower()
+    for stale, needle in (
+        ("fifteen processes", "fifteenprocesses"),
+        ("twenty-eight processes", "twenty-eightwatcherprocesses"),
+        ("the retracted p = 0.400", "p=0.400"),
+        ("'not separable at this/these sample size(s)'", "notseparableatth"),
+        ("the withdrawn gate rationale", "largestsizemeasuredwithzerotrips"),
+    ):
+        same(f"the superseded phrase {stale} is gone from the README", needle in squashed, False)
 
     same("README has a before/after table at the top", readme.index("## Result") < readme.index("## What ships"), True)
     same("no TODO left in the README", bool(re.search(r"\bTODO\b", readme)), False)

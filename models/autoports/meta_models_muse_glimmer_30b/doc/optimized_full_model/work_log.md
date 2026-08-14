@@ -426,7 +426,7 @@ real defect:
 | **P1** the host-dispatch gap was declined on an *unmeasured* cost model, and TTFT did not improve | the stage named a prefill trace as the only mechanism and never captured one; the two inputs to the "does not pay back" argument were estimates | captured it (`bench/prefill_trace_probe.py`): **59.80 → 44.96 ms, bit-identical, 98.16 ms capture, 3.3 MB retained, coexists with the decode traces**, then **shipped it** as `GeneratorConfig.prefill_trace` with a bounded bucket cache and a contract test. TTFT **63.66 → 50.19 ms, −21.2 %** (§2.5) |
 | **P2** the host attribution had a 2x hole and a contradiction | the collective probe used a **BF16** payload in a hot loop and reproduced 60 µs against the model's 125–140; `perf_summary.json` said 12.1 ms where the README said 19.1 | re-measured at the model's **BFP8** payload, with a loaded queue, and with the device drained before each in-model collective: **117.05 µs loaded against 114.6 in-model drained** — the gap is the instruction stream, nothing is unattributed. `perf_summary.json` and the README now both say 20.93 ms, and the retracted "nothing moves it" is replaced by the measured **−14/−17 % from persistent buffers**, blocked on the decoder stage's correctness race (§2.4) |
 | **P2** the teacher-forcing "after" range dropped this stage's own lowest measurement | the README quoted 37.51–38.50 while `evidence_accuracy.json` said 37.19 | all three runs reported, the ranges noted as overlapping, and **the +1.3 % claim withdrawn** |
-| **P2** "none of the three changes allocates anything" was false for L1 | `ttnn.tanh`/`ttnn.multiply` have no in-place form, so change 1 moves two 3.24 MB transients into width-sharded L1 | measured (`bench/l1_highwater_probe.py`): **+126,976 B/bank of peak L1**, 1.24 MB/bank still free there; the sentence corrected, the pool/moment confusion with the 7,296 B semaphore figure explained, and it is now limitation 7 |
+| **P2** "none of the three changes allocates anything" was false for L1 | `ttnn.tanh`/`ttnn.multiply` have no in-place form, so change 1 moves two 3.24 MB transients into width-sharded L1 | measured (`bench/l1_highwater_probe.py`): **+126,976 B/bank of peak L1**, 1.24 MB/bank still free there; the sentence corrected, the pool/moment confusion with the 7,296 B semaphore figure explained, and it is now limitation 8 |
 
 Its other concerns were all taken as well: the LM-head share was **26 % where it is
 2.6 %**; the `in0_block_w` L1 blocker cited 3 where the evidence says 4; the `o_proj`
@@ -655,14 +655,14 @@ agree on every arm tally and on the primary contrast.
 | **P2** the closure statement called the ctx-256 floor "not conservative" | it is a *comparator*, not a bound, and the document now proves it with its own numbers: 22.421 + 0.691 = 23.112 ms for bare layers plus the terminal term, against a 22.657 ms measured step that also contains the terminal path — the real step beats the sum of its separately-measured parts by **0.456 ms**, so the per-layer harness overprices by ~2 %. The contract's floor-plus-terminal comparison is stated alongside, and `perf_summary.json` now carries the ctx-256 comparator |
 | **P2** the round-5 contract substitution broke two things it touched: it rewrote the `qualitative.py --arm hf` command this stage deliberately did **not** run, and an `evidence_misses_*.json` glob that matches nothing here | the blanket substitution is replaced by explicit per-command handling; the HF arm is attributed to the stage that ran it with the reason; the miss note is derived from the file that exists. The gate now **resolves** contract-referenced paths instead of pattern-matching the string, and the "no `doc/full_model/`" rule carries a named exception rather than being dropped |
 | **P2** the trace-counter guard over-decremented on a failed release and had no behavioural coverage | decrement only on a successful release — otherwise the counter reads zero while a trace is alive, silencing the guard in exactly the case it exists for. New test `test_the_live_trace_count_round_trips_over_both_trace_kinds` drives both kinds through capture and release and pins the round-trip and the clamp |
-| three stale suite sizes (53 / "five new tests" / "53-case suite") | 54 / six / 54, checked against `test_results.xml` |
+| three stale suite sizes | corrected against `test_results.xml`; the suite ended round 6 at **55** cases with nine new, and round 7 found a fourth stale `54` the round-6 sweep missed |
 | `DECODE_SWIGLU_MUL_CORES` had no divisibility guard | asserted where it is relied on: 80 divides *this* checkpoint's 160-tile width, which is a property of (intermediate_size, tp), not a constant |
 | `trace_counter_smoke.log` was referenced nowhere | removed; the new test supersedes it |
 | the "partial revert" label and the historical `ttft_breakdown_before.json` name | both stated where a reader meets them |
 
 ### Round 6's own finding: the sixth statement is the third one, with the controls it lacked
 
-Five arms, 28 processes:
+Five arms, 24 processes (25 with the single `--arm rebuild` run, which is not one of the five):
 
 | configuration | runs | tripped |
 | --- | --- | --- |
@@ -684,6 +684,37 @@ had been left out, and two of the six fell to nothing more than n = 3.** The arm
 separated it (hold work constant; run the suspect pair alone) each cost about twelve minutes
 and could have been run at round 3.
 
+### Round 7 — `more-work-needed`
+
+The P1 was round 6's P1 recurring **inside the commit that fixed it**: a figure that resolves
+to nothing, held in place by the gate. "Twenty-eight watcher processes" — the arms sum to
+**24** — was asserted by a bare string-presence check on the *word*, which the digit-bounded
+literal binder cannot see. The reviewer mutation-tested it: correcting the word to the
+derivable value made the gate fail. The count is now summed from the parsed arm table.
+
+| finding | what was done |
+| --- | --- |
+| **P1** an unsupported process count enforced by the gate | derived from the table's `runs` column; the word-matching assertion deleted |
+| **P2** the five-arm conclusion asserted an interaction its own control arm falsifies | the count-matched twelve — twelve cases, no prefill trace, no extra generator, no cache churn — trips **2 of 6**, so "a preceding workload alone is not sufficient" was false and "0 of 3 excludes process length, generator churn and trace lifecycle" was an overclaim from an underpowered arm (0/3 vs 2/6 is p = 0.500). Restated as what it is: **the opt-in pair takes the rate from a 0–33 % background to 100 %**, directional and well supported, with the mechanism unavailable from this design. Limitation 6 now names the control's 2/6 instead of hiding it inside the pooled 2/18, and the pool's heterogeneity and its one excluded row are stated |
+| **P2** the cross-section gate was defeatable three ways, all demonstrated | the Watcher arm table is now **parsed** into (configuration, runs, trips) rows and each row is matched to the tally the gate derives from the logs; limitation 6's numbers are bound the same way; the superseded-phrase blacklist is whitespace/punctuation-normalised. All three of round 7's mutations — swapped tallies, an injected contradictory paragraph, a paraphrased retracted claim — now fail the gate, verified on a scratch copy |
+| **P2** the trace-counter failure path leaked unrecoverably | round 6 made only the *decrement* conditional, which was half a fix: clearing the id discarded the only handle so no retry was possible, the counter had no reachable decrement left (turning the `deallocate()` warning into a permanent false positive), and the buffers a possibly-live trace held were freed anyway. A failed release now changes **nothing** — id, buffers and count all stay and `teardown()` retries |
+| **P2** the clamp assertion was vacuous | both release paths short-circuit on empty state, so `max(0, ...)` was never executed and removing it left the test green. The test now calls `note_trace_released()` directly to exercise it |
+| **P2** contract path resolution was narrow and the HF exception was a line-level escape hatch | every `doc/` artifact path in the current-stage subtree is resolved, not just `.py` tokens in `tested.commands`; the exception matches the exact HF command string rather than any line containing `--arm hf` |
+| a fourth stale suite size, and this log's own record of the round-6 fix was stale by one | both corrected against `test_results.xml` |
+| limitation cross-references off by one (the prefill norms are limitation 9, not 8) | fixed in both documents |
+| the contract's notes named the wrong predecessor block | derived from the blocks actually nested rather than hardcoded, and the recorded `--arm tt` / `--arm compare` commands now carry the `--reuse-hf-control` flag they were run with |
+| the "nine new cases" table listed eight | the ninth added |
+| `ADVERTISED_CHECKS`' comment claimed a cross-document binding | described as what it is: an internal drift tripwire |
+
+Two things were added that no round asked for but that the findings implied. The opt-in
+prefill trace's **three eligibility conditions** (`prompt_len <= 8192`, `user_id == 0`,
+`not return_all_logits`) are now documented next to the advertisement, because a serving stage
+reading "turn it on and raise the bucket count" would otherwise not know the 21 % win is
+silently absent above 8192, for every batch row but the first, and on the all-logits path.
+And `capability_report()` now reports this stage's own four flags, so the baseline and shipped
+evidence arms are no longer byte-identical in their `capacity` blocks on exactly the settings
+that separate them.
+
 ## 11. Commits
 
 Local checkpoints on `agentic-research/hous/muse-glimmer-30b`, on top of the full-model
@@ -696,7 +727,8 @@ stage's `93adb25b7a8`. Never pushed.
 | `5e6022db622` | round-3 review fixes: the audit-table partition, the corrected prefill-128 and host-dispatch figures, the retracted retirement flag, the `--arm rebuild` probe and the gate's coverage extension |
 | `c28f91010d0` | round-4 review fixes: the decode-trace cache invalidation and its test, the fabric-ERISC length control, the context-contract provenance, and the gate's opened-artifact coverage |
 | `40e3fd71014` | round-5 review fixes: one trace-release path with a drain, the fixture finalizer, the model's live-trace guard and semaphore-cache cleanup, the re-measured limitation-6 arms, all three Fisher contrasts, and the contract's `tested` provenance |
-| *(this commit)* | round-6 review fixes: limitation 6 rewritten from current data with cross-section gate checks, the work-matched and pair-alone arms, the comparator-not-a-bound correction, the contract-substitution repair, and the trace-counter test |
+| `24cdea2f559` | round-6 review fixes: limitation 6 rewritten from current data with cross-section gate checks, the work-matched and pair-alone arms, the comparator-not-a-bound correction, the contract-substitution repair, and the trace-counter test |
+| *(this commit)* | round-7 review fixes: the derived process count, the conclusion restated to what the arms support, a parse-and-bind cross-section gate, the recoverable trace-release failure path, and the documented prefill-trace eligibility |
 
 Nothing unrelated is in any of them: `git status` is clean at each, and the
 only files touched outside `doc/optimized_full_model/` are the four implementation/test

@@ -1051,13 +1051,25 @@ def test_the_live_trace_count_round_trips_over_both_trace_kinds(mesh):
         generator._release_decode_trace()
         assert model.live_traces_over_kv_cache == 0, "the count round-trips"
 
-        # Idempotent: releasing either kind again must not drive it negative, because a
-        # negative count reads as "no live traces" and silences the guard permanently.
+        # Idempotent at the generator level: both release paths are no-ops on empty state,
+        # so neither calls note_trace_released() again.
         generator._release_prefill_traces()
         generator._release_decode_trace()
         assert model.live_traces_over_kv_cache == 0
         generator.teardown()
         assert model.live_traces_over_kv_cache == 0, "and teardown leaves it at zero"
+
+        # The clamp itself, exercised rather than asserted about.  Round 7 pointed out that
+        # the double-release above cannot reach it -- both paths short-circuit on empty state,
+        # so `max(0, ...)` was never executed and removing it left this test green.  A count
+        # that can go negative reads as "no live traces" and silences the guard for good, so
+        # it is worth one direct call.
+        model.note_trace_released()
+        assert model.live_traces_over_kv_cache == 0, "the count clamps at zero"
+        model.note_trace_captured()
+        assert model.live_traces_over_kv_cache == 1, "and still counts up from the clamp"
+        model.note_trace_released()
+        assert model.live_traces_over_kv_cache == 0
     finally:
         generator.teardown()
         generator.model.deallocate()

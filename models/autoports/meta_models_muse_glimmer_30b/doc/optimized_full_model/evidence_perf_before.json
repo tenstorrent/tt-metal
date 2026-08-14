@@ -8,7 +8,7 @@
   "cache_slots": 1,
   "layers": "all",
   "build_kwargs": {},
-  "build_seconds": 156.0,
+  "build_seconds": 156.2,
   "capacity": {
     "hf_model": "meta-models/Muse-Glimmer-30B",
     "supported_context": 131072,
@@ -77,6 +77,11 @@
     ],
     "force_argmax": false,
     "sampling_implementation": "models.common.sampling.SamplingGenerator",
+    "lm_head_softcap_in_l1": false,
+    "embed_decode_gather_sharded": false,
+    "decode_swiglu_mul_cores": null,
+    "prefill_trace": false,
+    "prefill_trace_max_entries": 1,
     "lm_head_dtype": "DataType.BFLOAT4_B",
     "lm_head_matmul": "dram_sharded",
     "lm_head_cores": 52,
@@ -145,38 +150,38 @@
       "batch": 1
     },
     "ttft_ms": {
-      "min": 64.64119398151524,
-      "mean": 66.2597419868689,
+      "min": 65.41487798676826,
+      "mean": 67.92843466973864,
       "rounds": [
-        65.75341799180023,
-        68.38461398729123,
-        64.64119398151524
+        70.68849200732075,
+        67.6819340151269,
+        65.41487798676826
       ]
     },
     "token_out_decode_ms_per_token": {
-      "min": 23.825498007688907,
-      "mean": 23.85471622826864,
+      "min": 23.844390661606024,
+      "mean": 23.86084160635497,
       "rounds": [
-        23.858526047167008,
-        23.880124629950004,
-        23.825498007688907
+        23.853892692837746,
+        23.844390661606024,
+        23.884241464621145
       ]
     },
-    "token_out_decode_tok_s_u": 41.97184040716725,
+    "token_out_decode_tok_s_u": 41.938584809809754,
     "traced_decode_logits_only_ms_per_token": {
-      "min": 23.16347775013128,
-      "mean": 23.16432762503003,
+      "min": 23.163580249274673,
+      "mean": 23.164214156167873,
       "replays_per_round": 32,
       "rounds": [
-        23.16347775013128,
-        23.1649534061944,
-        23.164551718764415
+        23.163861374996486,
+        23.163580249274673,
+        23.16520084423246
       ]
     },
-    "traced_decode_logits_only_tok_s_u": 43.171410216858845,
+    "traced_decode_logits_only_tok_s_u": 43.17121918280803,
     "sampling_trace_ms_per_token": {
-      "min": 0.6321464688880951,
-      "mean": 0.6323355834562486
+      "min": 0.6320326247077901,
+      "mean": 0.6321878330102967
     },
     "layer_stack_lower_bound_ms_per_token": {
       "sliding_layers": 39,

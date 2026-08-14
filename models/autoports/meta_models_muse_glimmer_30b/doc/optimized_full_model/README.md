@@ -17,11 +17,11 @@ exactly the three changes ([`logs/evidence_perf_before.log`](logs/evidence_perf_
 
 | | before | **after** | delta |
 | --- | --- | --- | --- |
-| **token-out decode** | 23.825 ms/token · 41.97 t/s/u | **23.315 ms/token · 42.89 t/s/u** | **-2.14 %** |
-| **traced logits-only decode** | 23.163 ms/token · 43.17 t/s/u | **22.657 ms/token · 44.14 t/s/u** | **-2.19 %** |
+| **token-out decode** | 23.844 ms/token · 41.94 t/s/u | **23.298 ms/token · 42.92 t/s/u** | **-2.29 %** |
+| **traced logits-only decode** | 23.164 ms/token · 43.17 t/s/u | **22.656 ms/token · 44.14 t/s/u** | **-2.19 %** |
 | traced teacher-forcing decode | 36.88–37.99 t/s/u † | **37.07–38.15 t/s/u** † | overlapping ranges; no claim † |
 | sampling trace | 0.632 ms | 0.632 ms | unchanged |
-| **TTFT**, prompt 128, shipped default | 64.64 ms (min of 3) | 63.66 ms (min of 3) | inside the process spread; it is not device-bound, see below |
+| **TTFT**, prompt 128, shipped default | 65.41 ms (min of 3) | 63.68 ms (min of 3) | inside the process spread; it is not device-bound, see below |
 | **TTFT**, prompt 128, `prefill_trace=True` | — | **50.19 ms (min of 3)** | **-21.2 %** against the default arm |
 | layer-stack lower bound | 23.239 ms/token | **22.858 ms/token** | −1.64 % |
 | decode accuracy (teacher forcing) | top-1 0.990 · top-5 **1.000** · top-100 **1.000** | same | — |
@@ -94,7 +94,7 @@ x 64 replays, **one invocation** so the arms are like-for-like
 
 The two terminal changes are once per step, so their 0.0159 ms carries to the 52-layer
 model unchanged; change 3 is per layer, so its 0.0130 ms becomes 26x that. Predicted
-52-layer step: 23.163 − 0.016 − 0.338 = 22.81 ms. **Measured: 22.657 ms.** The
+52-layer step: 23.164 − 0.016 − 0.338 = 22.81 ms. **Measured: 22.656 ms.** The
 prediction is 0.7 % pessimistic, which is the right direction for a per-layer effect
 extrapolated from two layers.
 
@@ -248,8 +248,8 @@ Three numbers from the same configuration, reconciled
 | --- | --- | --- |
 | roofline | **8.829 ms/token** | 4,520,382,464 B/device ÷ 512 GB/s |
 | device-time decode | **22.838 ms/token** | 39 x 431.48 µs + 13 x 409.16 µs + 691.07 µs |
-| end-to-end token-out | **23.315 ms/token** | `evidence_perf.json`, min of 3 |
-| end-to-end logits-only | **22.657 ms/token** | same run, decode trace alone |
+| end-to-end token-out | **23.298 ms/token** | `evidence_perf.json`, min of 3 |
+| end-to-end logits-only | **22.656 ms/token** | same run, decode trace alone |
 
 The bytes are per device per token: 4,327,784,448 of layer weights (measured from the
 built model, not a formula), 189,775,872 of BFP4 LM head, 106,496 of embedding rows and
@@ -299,25 +299,26 @@ the first op of the graph, so its "previous operation" is the last op of the *wa
 replay that ran before the signpost, across a profiler flush.
 
 What bounds it is arithmetic rather than the mechanism: summed device time is
-**22.838 ms** against a measured logits-only replay of **22.657 ms**, so there is no room
+**22.838 ms** against a measured logits-only replay of **22.656 ms**, so there is no room
 for a real 311 µs per-step bubble in the un-profiled run — and the steady-state loop's
 token, position and synchronisation counters are all zero per token
 ([`evidence_accuracy.json`](evidence_accuracy.json)`:fallback_audit`). Every percentage
 in this document comes from device-time sums, which exclude gap entirely.
 
 **Device time is 0.8 % *above* the traced replay it is meant to explain** (22.838 ms
-against 22.657 ms of logits-only replay), which is worth naming rather than hiding.
+against 22.656 ms of logits-only replay), which is worth naming rather than hiding.
 `tt-perf-report` merges a 4-device capture by taking the **max** per op, so a step
 where different devices peak on different ops sums higher than any one device's
 critical path, and profiler instrumentation adds to each row. The direction is the
 useful part: there is no room left between device time and end-to-end for host work,
 which is what the zero per-token refresh counters independently say.
 
-`22.657 + 0.632 = 23.289` against a measured token-out of `23.315` — **the two traces
-account for the whole step to within 27 µs**, and that 27 µs is the caller's token
-readback. (Recomputing from the three *printed* figures gives 26 µs; the residual on the
-unrounded values in [`evidence_perf.json`](evidence_perf.json) is **26.8 µs**, which is what
-the figure gate computes and rounds. Round 5 noticed the discrepancy a reader hits.)
+`22.656 + 0.632 = 23.288` against a measured token-out of `23.298` — **the two traces
+account for the whole step to within 10 µs**, and that 10 µs is the caller's token readback.
+(The residual on the unrounded values in [`evidence_perf.json`](evidence_perf.json) is
+**9.9 µs**, which is what the figure gate computes and rounds; it was 26.8 µs in the run this
+figure was first taken from, and the difference is process-to-process variance in a ~10 µs
+quantity, not a change in the path.)
 
 ### Against the layer-stack lower bound
 
@@ -347,9 +348,9 @@ would have cost a second 52-layer decoder A/B for a number the A/B already gives
 Both arms report identical PCC — prefill 0.993700, decode 0.993488 (sliding) and
 0.992220 / 0.992188 (full) — so the 1.6 % is not bought with numerics.
 
-* the model decode trace is **22.657 ms**, i.e. **-0.9 %** against the 22.858 ms
+* the model decode trace is **22.656 ms**, i.e. **-0.9 %** against the 22.858 ms
   context-2048 floor;
-* token-out is **23.315 ms**, i.e. **+2.0 %** on that floor and **-3.6 %** on
+* token-out is **23.298 ms**, i.e. **+1.9 %** on that floor and **-3.7 %** on
   floor-plus-terminal (22.858 + 0.691 device terminal + 0.632 sampling = 24.181).
 
 The gate is 10–15 % over floor-plus-terminal, and on those numbers there is no gap to
@@ -367,17 +368,17 @@ the benchmark's own context ([`logs/layer_ab_after_ctx256.log`](logs/layer_ab_af
 
 Against that tighter comparator:
 
-* the model decode trace is **22.657 ms**, i.e. **+1.05 %** over 22.421 ms — the 52 layers
+* the model decode trace is **22.656 ms**, i.e. **+1.05 %** over 22.421 ms — the 52 layers
   plus the whole terminal path cost 1 % more than the 52 layers alone cost when measured one
   at a time;
-* token-out is **23.315 ms**, **+3.99 %** on it, of which the sampling trace is 632 µs
+* token-out is **23.298 ms**, **+3.91 %** on it, of which the sampling trace is 632 µs
   (2.8 %);
 * the goal's comparison is against floor **plus terminal work**: 22.421 + 0.691 device
-  terminal + 0.632 sampling = **23.744 ms**, and token-out is **1.8 % below** that.
+  terminal + 0.632 sampling = **23.744 ms**, and token-out is **1.9 % below** that.
 
 **It is a comparator, not a lower bound, and round 6 was right that calling it "not
 conservative" overstated it.** The proof is in the document's own numbers: 22.421 + 0.691 =
-**23.112 ms** for 52 bare layers plus the terminal device term, against a **22.657 ms**
+**23.112 ms** for 52 bare layers plus the terminal device term, against a **22.656 ms**
 measured 52-layer traced replay that also contains the embedding, the gather, the terminal
 norm, the LM head, the softcap and two `plus_one`s. The real step beats the sum of its
 separately-measured parts by **0.456 ms**, so the per-layer harness overprices the stack by
@@ -391,7 +392,7 @@ falsifiable bound: 22.421 instead of 22.858 removes 1.9 % of unrelated slack, an
 `+1.05 %` figure is a real reading rather than the `−0.9 %` that made the old comparison
 uninterpretable. Both remain far inside the 10–15 % bar, and the honest statement of *why*
 there is no gap to close is the one that does not depend on the floor at all: the fallback
-audit is zero per-token host work, the two traces account for the step to 26.8 µs, and the
+audit is zero per-token host work, the two traces account for the step to 9.9 µs, and the
 terminal path is priced directly in the profile.
 
 `tp4b`, the same-config repeat control, reproduces `tp4` to 1e-4 at this context too
@@ -401,11 +402,11 @@ cheaper floor, not a different model.
 
 ## Where TTFT actually goes
 
-TTFT at prompt 128 on the shipped default is **63.66 ms**, of which the 52-layer stack
+TTFT at prompt 128 on the shipped default is **63.68 ms**, of which the 52-layer stack
 is **60.3 ms** ([`ttft_breakdown_before.json`](ttft_breakdown_before.json) — the name is historical: `bench/ttft_breakdown.py` has no `--baseline` flag and this file is the **shipped default's** phase table, not a before-arm). The phase
 table below is the **min of each phase across three rounds** of that probe, which is not
 one run — the phases are timed with a device synchronisation around each, and the sum
-(64.45 ms) is quoted against a 63.66 ms TTFT measured in a different process. It is a
+(64.45 ms) is quoted against a 63.68 ms TTFT measured in a different process. It is a
 budget, not an accounting identity; what it establishes is which phase dominates.
 
 | phase | ms (min of 3) | |
@@ -538,12 +539,12 @@ padded-length buckets may hold one, and through the same evidence harness it giv
 
 | | shipped default | **`--prefill-trace`** |
 | --- | --- | --- |
-| **TTFT**, prompt 128 | 63.66 ms (min of 3; 67.44 / 63.66 / 65.04) | **50.19 ms (min of 3; 50.62 / 50.19 / 50.20)** |
-| token-out decode | 23.315 ms/token | 23.328 ms/token |
-| traced logits-only decode | 22.657 ms/token | 22.657 ms/token |
+| **TTFT**, prompt 128 | 63.68 ms (min of 3; 67.74 / 63.68 / 67.43) | **50.19 ms (min of 3; 50.62 / 50.19 / 50.20)** |
+| token-out decode | 23.298 ms/token | 23.328 ms/token |
+| traced logits-only decode | 22.656 ms/token | 22.657 ms/token |
 | prefill trace buckets captured | — | `[128]` |
 
-**-21.2 % of TTFT**, with decode untouched to 0.06 %
+**-21.2 % of TTFT**, with decode untouched to 0.13 %
 ([`evidence_perf_prefill_trace.json`](evidence_perf_prefill_trace.json),
 [`logs/evidence_perf_prefill_trace.log`](logs/evidence_perf_prefill_trace.log)).
 
@@ -557,6 +558,16 @@ cannot tell which it is. A serving stage that buckets prompt lengths should turn
 and raise `prefill_trace_max_entries` to its bucket count; DRAM per entry scales with
 the padded row count, so the 3.3 MB at 128 rows is ~210 MB at 8192.
 
+**Three eligibility conditions the advertisement above does not imply**, and round 7 was
+right that a caller reading only the headline would not know them
+(`tt/generator.py:_prefill_user`): the trace is used only when `prompt_len <=
+config.prefill_chunk_size` (**8192**), only for `user_id == 0`, and only when
+`return_all_logits` is false. Outside any of those the call falls back to the eager path —
+**correctly**, and with no error, which is the right behaviour but means the 21 % win is
+silently absent for a prompt above 8192, for every batch row but the first, and for the
+teacher-forcing all-logits path. A serving stage that chunks long prompts or batches users
+gets the flag's benefit on the short single-user requests only.
+
 `test_prefill_trace_is_opt_in_and_matches_the_eager_path` pins the contract that a
 caller turning it on depends on: the traced prompt returns exactly the tokens the eager
 path returned, a second call on the same bucket replays instead of recapturing, a
@@ -568,12 +579,12 @@ prefill trace, because the trace bakes in the cache buffer addresses it writes.
 ### The default TTFT does not move, and its spread is why
 
 TTFT is the one figure in this document that moves between processes. On the shipped
-default it is 67.44 / 63.66 / 65.04 ms in this run; the baseline arm measured
-65.75 / 68.38 / 64.64 ms in its own process. The full-model stage documented four passes of
+default it is 67.74 / 63.68 / 67.43 ms in this run; the baseline arm measured
+70.69 / 67.68 / 65.41 ms in its own process. The full-model stage documented four passes of
 *identical* code spanning 61.09–66.04 ms, an 8 % spread that no round-to-round variance
 predicts, and attributed it to prefill being compiled, allocated and scheduled once per
-process. The decode figures do not do this: 23.315 / 23.345 / 23.340 here,
-23.859 / 23.880 / 23.825 in the baseline arm — a 0.2 % spread,
+process. The decode figures do not do this: 23.334 / 23.340 / 23.298 here,
+23.854 / 23.844 / 23.884 in the baseline arm — a 0.2 % spread,
 and the two arms do not overlap.
 Read the default TTFT as ~61–70 ms in both arms and the decode numbers as exact. Nothing
 this stage changed touches prefill except the terminal softcap, which is ~30 µs of a
@@ -589,7 +600,7 @@ ids **3886** and **3579**), against 8.8 µs for the same norm width-sharded in d
 these run on a 32-row slice. That is 0.27 ms of a 65 ms TTFT (0.4 %), and it is left
 alone deliberately: the fix is to route both through the sharded form, which changes
 prefill *numerics* — the two norms sit on the accuracy gates' critical path — for 0.4 %
-of a figure whose process-to-process spread is 8 %. Recorded as limitation 8 with the
+of a figure whose process-to-process spread is 8 %. Recorded as limitation 9 with the
 measurement so a later stage can take it with the accuracy re-run it needs.
 ## Operation-topology audit
 
@@ -610,7 +621,7 @@ capture; nothing in this column is a pre-change value wearing a post-change labe
 
 | op group | ids | device µs | candidate | action |
 | --- | --- | --- | --- | --- |
-| LM-head matmul, 32 x 6656 x 50688 BFP4 | 3139 | 603.798 | **2.6 %** of the 23.315 ms token-out step, and 40.8 % of this one-layer profiling window (the CSV's own `Total %` cell); DRAM-bound at 279.38 GB/s reading 190 MB of weights | kept: the geometry ladder (`dram_sharded`, cores=52, `in0_block_w=2`) is the full-model stage's measured winner over the legal values 1/2/4 at BFP4, and `in0_block_w=4` fails with an exact L1 blocker (*"Statically allocated circular buffers ... grow to 1821824 B which is beyond max L1 size of 1572864 B"*) |
+| LM-head matmul, 32 x 6656 x 50688 BFP4 | 3139 | 603.798 | **2.6 %** of the 23.298 ms token-out step, and 40.8 % of this one-layer profiling window (the CSV's own `Total %` cell); DRAM-bound at 279.38 GB/s reading 190 MB of weights | kept: the geometry ladder (`dram_sharded`, cores=52, `in0_block_w=2`) is the full-model stage's measured winner over the legal values 1/2/4 at BFP4, and `in0_block_w=4` fails with an exact L1 blocker (*"Statically allocated circular buffers ... grow to 1821824 B which is beyond max L1 size of 1572864 B"*) |
 | MLP gate/up/down, 3 x BFP4 | 3071, 3127, 3132 | 190.266 | `in0_block_w` already at the largest legal divisor (13/13/10); packed gate/up measured +5.5 % by the decoder stage | kept |
 | `wqkv` + `attn_gate`, 2 x BFP8, same input | 3039, 3172 | 40.772 | OPT-001: two projections consuming the same post-norm activation could be one | **not taken, with a reason**: both rows are the *best* DRAM utilisation in the layer (77.12 % and 69.35 %), so packing cannot reduce the bytes, and the two outputs need different downstream layouts — QKV `sharded_to_interleaved` into head creation, the gate kept sharded until after SDPA — so a packed output needs an unshard plus two slices plus a reshard to split |
 | `o_proj`, BFP8 | 3065 | 21.368 | OPT-011 narrower working shard (8 cores / `in0_block_w=4`) | **re-measured on this stage's shipped path** rather than re-declined on the decoder stage's note ([`logs/layer_ab_oproj.log`](logs/layer_ab_oproj.log), `layer_ab.py --candidates tp4,tp4b,oproj_c8_bw4`): **sliding 0.4467 against 0.4474 / 0.4475**, i.e. −0.17 %, and **full 0.4163 against 0.4166 / 0.4162**, i.e. inside the repeat control's own spread. HF-reference PCC is unchanged on prefill (0.993700 / 0.992220) and marginally *better* on decode (0.993503 vs 0.993488 sliding, 0.992196 vs 0.992188 full). Worth **−0.03 ms/token, 0.12 %** of the step. Declined, and the reason is now specific: adopting it changes the **decoder stage's** shipped geometry and its single-grid invariant, which three of that stage's tests assert and whose multichip-vs-single-chip gate (0.999183 against a 0.999 bar) this stage's harness does not run. 0.12 % is not worth moving another stage's default and gate from here; the measurement is committed so that stage can take it |
@@ -620,7 +631,7 @@ capture; nothing in this column is a pre-change value wearing a post-change labe
 | reduce-scatter + all-gather x2 | 3231, 3232, 3243, 3244 | 54.886 | fewer/cheaper collectives | not available at this residual contract: `ttnn.all_reduce` costs two dispatches, the wrappers cost what the primitives cost, and the count is the preserved replicated-residual contract. Persistent buffers *are* worth 14–17 % of the reduce-scatter's **host** cost and are blocked on the decoder stage's correctness race |
 | `SdpaDecode` | 3168 | 15.136 | — | kept: explicit program config, BFP8 cache, `max_cores_per_head_batch=32`, all from the decoder stage |
 | embedding all-gather | 3201 | 16.498 | collective writes the boundary layout | **taken**: change 2 removes the `interleaved_to_sharded` that used to follow it — **1.992 µs**, `../full_model/tracy/decode_perf_report.csv` id 4289 — so this group is one row here and two there (15.838 + 1.992 = 17.830). The gather itself measures 0.66 µs *slower* writing the sharded layout — one row, well inside the ±0.5 µs these rows move between captures — so the honest reading of change 2 is **the removed conversion, −2.0 µs/step**, and the group as a whole is −1.33 µs. It is 0.008 % of the step either way; it is taken because it removes an op, not because the profile can resolve it |
-| embeddings (token lookup + the two RoPE tables) | 3145, 3158, 3161 | 14.331 | — | kept: 1-core lookups on a 32-row slice, the same shape as the prefill norms in limitation 8 |
+| embeddings (token lookup + the two RoPE tables) | 3145, 3158, 3161 | 14.331 | — | kept: 1-core lookups on a 32-row slice, the same shape as the prefill norms in limitation 9 |
 | attention glue (RoPE apply x2, qkv-head create, concat-heads, transpose x2, paged cache update x2, the attention-gate multiply, residual adds x2) | 3054, 3055, 3096, 3107, 3112, 3115, 3119, 3124, 3191, 3214, 3221 | 39.604 | — | kept: all of these are the decoder stage's optimized composite ops already |
 | layout conversions (`i2s`/`s2i`/`reshard`) | 3073, 3076, 3095, 3099, 3100, 3105, 3108, 3116, 3118, 3129, 3193, 3197, 3207, 3212, 3224 | 33.886 | — | 5.907 µs of it is change 3's own three reshards (3073, 3129, 3076), which buy 13.28 µs of multiply; 13.283 µs of it is the LM head's own input reshard and output unshard (3193, 3197), i.e. terminal rather than layer work |
 | `plus_one` x2 | 3143, 3254 | 1.845 | — | kept: this is the device-side position/RoPE advance |
@@ -862,8 +873,11 @@ twelve cases and every clean one had ten, so the attribution to the prefill-trac
 confounded with plain process length. That was also right. The missing control is twelve
 device cases *without* those two, and it has now been run three times.
 
-**Twenty-eight watcher processes across five configurations**, each with a device reset
-before it. Rounds 3, 4 and 5 each attributed this to something the next round's missing
+**Twenty-four watcher processes across five configurations** (25 including the
+single-purpose `--arm rebuild` row below, which is not one of the five), each with a device
+reset before it. The count is the `runs` column of the table, and round 7 caught that this
+sentence had said twenty-eight — a figure that resolved to nothing, held in place by a gate
+check that matched the *word*. The gate now sums the column instead. Rounds 3, 4 and 5 each attributed this to something the next round's missing
 control refuted, so round 6's design adds the two arms that were still absent: a **work-matched**
 twelve-case arm, and the **opt-in pair alone** repeated.
 
@@ -884,12 +898,20 @@ everything the opt-in cases do — builds its own `reuse=False` generator, clone
 
 | contrast | rates | two-sided Fisher |
 | --- | --- | --- |
-| opt-in twelve vs **everything else pooled** | 6/6 vs 2/18 | **p = 0.00021** |
+| opt-in twelve vs **everything else pooled** † | 6/6 vs 2/18 | **p = 0.00021** |
 | opt-in twelve vs ten | 6/6 vs 0/5 | p = 0.0022 |
 | opt-in twelve vs the **work-matched** twelve | 6/6 vs 0/3 | **p = 0.0119** |
 | opt-in twelve vs the pair **alone** | 6/6 vs 0/4 | p = 0.0048 |
 | opt-in twelve vs the count-matched twelve | 6/6 vs 2/6 | p = 0.061 |
 | work-matched twelve vs count-matched twelve | 0/3 vs 2/6 | p = 0.500 |
+
+† The pool is **heterogeneous** — 2-case, 10-case and 12-case arms — and **both** of its
+trips come from the single arm that is the design's own matched control, so pooling dilutes
+33 % to 11 % and turns the matched contrast (p = 0.061) into p = 0.00021. It also omits the
+one `--arm rebuild` run, which is clean; including it gives p = 0.000158, so the omission is
+conservative but was unstated before round 7. **The contrast to weigh is the matched one at
+p = 0.061**; the pooled figure is reported because it is what "against everything else we
+tried" means, not because it is the stronger inference.
 
 These are six post-hoc contrasts on one run set and carry **no multiplicity correction**;
 Bonferroni at ×6 leaves the primary contrast at p = 0.0013 and the work-matched one at
@@ -897,13 +919,29 @@ p = 0.071. Fisher also assumes independence, and these are sequential runs on on
 mesh of a device-state phenomenon — the resets between runs are the only thing standing in
 for that assumption. Treat the ordering as solid and the exact p-values as indicative.
 
-**What the five arms support: the trip needs *both* the prefill-trace cases and a preceding
-workload, and neither alone is sufficient.**
+**What the five arms support: the opt-in pair takes the rate from a background of roughly
+0–33 % to 100 %.** That is weaker than "an interaction, and neither half alone is
+sufficient", which is what this section said before round 7 pointed out that the stage's own
+control arm refutes it:
 
-* the pair **alone** is 0 of 4 — so it is not the prefill trace by itself;
-* a **work-matched** twelve-case process is 0 of 3 — so it is not process length, not
-  building an extra generator, not cache churn, and not trace capture/release in general;
-* the two together are **6 of 6**.
+* the pair **alone** is 0 of 4 — so the prefill trace by itself has not reproduced it;
+* **a preceding workload alone *is* sometimes sufficient**: the count-matched twelve — twelve
+  cases, no prefill trace, no extra generator, no cache churn — is **2 of 6**. Any claim that
+  the trip *requires* the prefill-trace cases is contradicted by those two runs;
+* the two together are **6 of 6**, which is the only configuration that reproduces every time.
+
+The work-matched arm's 0 of 3 is therefore **not** an exclusion of "process length, generator
+churn or trace lifecycle in general" — the document said that and it was wrong. 0 of 3 against
+the count-matched 2 of 6 is **p = 0.500**: the two twelve-case arms are statistically
+indistinguishable, and a 0-of-3 arm cannot exclude what a 2-of-6 arm demonstrates. What the
+work-matched arm does establish is narrower and still useful: whatever raises the rate to
+100 % is **not** reproduced by building an extra generator, cloning and freeing the whole
+cache, and capturing and releasing a *decode* trace, in three attempts.
+
+So the directional finding — the opt-in pair is associated with a large rate increase over a
+non-zero background — is solid. The mechanistic one is not available from this design, and the
+background rate is the reason: with a ~33 % baseline in the matched arm, separating "raises
+the rate" from "is required" needs far more runs than 6 per arm.
 
 That is, with the controls it always lacked, close to the round-3 statement that round 4
 retracted. The honest reading of the sequence is not that any one round was careless but
@@ -956,7 +994,7 @@ What follows for the shipped code:
   is watched **together in its own process** (0 of 1), so the trace-lifecycle code this stage
   ships is still under watcher, which is what `$optimize` asks for with async CCLs in play;
 * the shipped default never captures a prefill trace, so **none of this is on its path** —
-  which is why the gated ten and the 54-case suite are unaffected either way;
+  which is why the gated ten and the 55-case suite are unaffected either way;
 * the operational note for a serving stage is now specific rather than the withdrawn
   "reset between builds": **with `prefill_trace=True`, expect a watcher-enabled process that
   also runs a substantial other workload to abort at teardown.** Reset afterwards, never read
@@ -1088,12 +1126,13 @@ Nine cases are new (three of them parametrizations of one test) and each pins on
 | `test_prefill_trace_is_opt_in_and_matches_the_eager_path` | the opt-in prefill trace: same tokens, one bucket, non-aligned lengths inside it, eager fallback past the bound, released on teardown |
 | `test_prefill_trace_survives_rebinding_the_same_external_cache` | the serving path: the **same** external cache every request keeps its trace; a cache bound to **different** buffers releases it, recaptures against the new ones and still answers correctly |
 | `test_decode_follows_the_cache_it_is_rebound_to_after_the_trace_is_captured` | the **decode** trace bakes the same cache addresses, so a rebind to different buffers must release and recapture it. Against the pre-fix code it fails, and that failure is committed as a negative control ([`logs/decode_rebind_prefix_negative_control.log`](logs/decode_rebind_prefix_negative_control.log): `AssertionError: a moved cache must release the decode trace`, with the shipped source restored afterwards. It is a **partial** revert — the signature is still recorded, only the comparison and the release are removed — because a full revert to `5e6022db622` fails on a missing attribute instead of on the behaviour). Two of its assertions do different jobs: that one catches the missing release, and the last one — the **traced** decode off the rebound cache must agree with the **eager** decode off the same cache — catches a release that recaptured against the wrong buffers. The committed control trips the first, because that is the one the pre-fix code violates |
+| `test_the_live_trace_count_round_trips_over_both_trace_kinds` | the model's live-trace count balances across capture and release of both kinds, and the clamp is exercised directly rather than asserted about |
 
 ## Limitations and known issues
 
 1. **Batch-1 TTFT is host-dispatch bound; the fix ships but is opt-in.** ~17 ms of the
    ~64 ms default TTFT is host issue over 4122 ttnn dispatches, and the 209 collective
-   dispatches are 33 % of it. `prefill_trace=True` removes 21 % of TTFT (63.66 →
+   dispatches are 33 % of it. `prefill_trace=True` removes 21 % of TTFT (63.68 →
    50.19 ms) with bit-identical logits, and is **off by default** because one trace
    serves one 32-row padded-length bucket and capture costs 98 ms against a ~15 ms
    per-replay saving — a win for a caller that repeats or buckets prompt lengths, a
@@ -1132,12 +1171,16 @@ Nine cases are new (three of them parametrizations of one test) and each pins on
    substantial other device work trip a fabric ERISC assert at teardown.**
    `subordinate_erisc detected invalid NOC command buffer state … fabric_erisc_router.cpp`,
    **after every test in the process has passed**, in the watcher's teardown poll.
-   **6 of 6** for that configuration, against **2 of 18** across every other configuration
-   tested (Fisher **p = 0.00021**, no multiplicity correction; see
-   [Watcher](#watcher) for all five arms and six contrasts). Neither half reproduces it
-   alone: the pair **by itself** is 0 of 4, and a **work-matched** twelve-case process —
-   same case count, its own extra generator, all 104 cache tensors cloned and freed, a trace
-   captured *and released*, but a **decode** trace rather than a prefill one — is 0 of 3.
+   **6 of 6** for that configuration. **It is a rate increase over a non-zero background, not
+   a requirement.** The length-matched control — twelve cases, *no* prefill trace, no extra
+   generator, no cache churn — trips **2 of 6** on its own, so a long watcher process can abort
+   at teardown with no prefill trace involved at all. The pair **by itself** is 0 of 4, and a
+   **work-matched** twelve-case process (its own extra generator, all 104 cache tensors cloned
+   and freed, a trace captured *and released* — but a **decode** trace) is 0 of 3. Pooled
+   against everything else the opt-in arm is 6/6 vs 2/18 at Fisher **p = 0.00021**, but that
+   pool is heterogeneous and both its trips are the matched control's; the contrast to weigh is
+   the **case-count-matched** one at **p = 0.061**, and 0-of-3 against 2-of-6 is p = 0.500.
+   See [Watcher](#watcher) for all five arms, six contrasts and the multiplicity caveat.
    *This is the sixth statement of this limitation and it is close to the third; the four in
    between were each refuted by one control the next round found missing, which is recorded
    in the Watcher section rather than smoothed over.* Consequences are bounded: **no test
@@ -1150,7 +1193,9 @@ Nine cases are new (three of them parametrizations of one test) and each pins on
    mechanism is unidentified. The gated set is the ten cases and the opt-in pair is watched
    in its own process; a serving stage enabling `prefill_trace` under watcher alongside other
    work should expect the teardown abort, reset afterwards, and never read a truncated
-   watcher log as a clean one.
+   watcher log as a clean one. Giving the prefill-trace path its own process is **necessary
+   but may not be sufficient** — the 2-of-6 length-matched control says a long watcher process
+   can abort at teardown with no prefill trace anywhere in it.
 
 7. **A watcher-enabled run still aborts at device close.** Inherited unchanged from the
    full-model stage (its limitation 11); watcher-only, recoverable with a reset, not
@@ -1184,14 +1229,14 @@ Nine cases are new (three of them parametrizations of one test) and each pins on
 
 | item | status | evidence |
 | --- | --- | --- |
-| decode path fully traced, no host fallback | yes | fallback audit: 0 token/position/sync refreshes per token; two traces account for the step to 27 µs (26.8 µs, re-derived by the figure gate from `evidence_perf.json` rather than transcribed) |
+| decode path fully traced, no host fallback | yes | fallback audit: 0 token/position/sync refreshes per token; two traces account for the step to 10 µs (9.9 µs, re-derived by the figure gate from `evidence_perf.json` rather than transcribed) |
 | decode activations width-sharded in L1 across norm/attention/residual/MLP/output | yes | `tracy/decode_sliding_perf_report.csv`: every matmul `in0` is `L1_WIDTH_SHARDED`; the boundary is a fixed point at every layer |
 | prefill activations DRAM interleaved, 2D matmul program configs for large prefill matmuls | yes | `tracy/prefill_128_perf_report.csv`; `mcast2d` specs in `multichip_decoder.py` |
 | operation-topology audit recorded | yes | [above](#operation-topology-audit) |
 | multi-device topology candidates measured as coherent families | yes | 12 collective arms in `ccl_host_probe.json` (implementation x worker count x persistence x wrapper/primitive/fused), all at the real payload |
 | lower-movement residual candidates measured without an old-contract restore | inherited | the residual contract is preserved by the goal; the decoder stage owns the fractured-residual family (`fractured_decode_probe.py`) and this stage did not re-open it |
-| best-candidate comparison against the strongest prior artifact | yes | `--baseline` reproduces the full-model stage's committed numbers to 0.06 % (23.825 vs 23.811 token-out, 23.163 vs 23.164 logits-only) before the changes are applied |
-| final default reproduces the selected candidate | yes | predicted 22.81 from the reduced A/B, measured 22.657 on the all-layer default |
+| best-candidate comparison against the strongest prior artifact | yes | `--baseline` reproduces the full-model stage's committed numbers to 0.14 % (23.844 vs 23.811 token-out, 23.164 vs 23.164 logits-only) before the changes are applied |
+| final default reproduces the selected candidate | yes | predicted 22.81 from the reduced A/B, measured 22.656 on the all-layer default |
 | dtype/fidelity policy verified in the measured rows | yes | [the row table above](#carried-forward-decoder-contract-unchanged); LM head is `BF16 x BFP4 => BF16` LoFi, MLP `BFP4`, attention `BFP8`, cache `BFP8` |
 | SDPA / optimized composite ops used | yes | `SdpaDecodeDeviceOperation`, `nlp_create_qkv_heads_decode`, `nlp_concat_heads_decode`, `rotary_embedding_hf`, `paged_update_cache`, `paged_fill_cache` |
 | repeated same-input projections packed or rejected with evidence | yes | QKV already packed; `attn_gate` rejected with DRAM% and layout evidence in the audit |

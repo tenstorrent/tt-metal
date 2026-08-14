@@ -6,8 +6,8 @@
     "batch": 1,
     "mesh": "1x4 Blackhole P300_X2, FABRIC_1D_RING, ttnn.Topology.Ring, 2 links"
   },
-  "ttft_ms": 63.66,
-  "decode_ms_per_token_e2e": 23.315,
+  "ttft_ms": 63.68,
+  "decode_ms_per_token_e2e": 23.298,
   "decode_ms_per_token_e2e_logits_only": 22.657,
   "decode_ms_per_token_device": 22.838,
   "sampling_trace_ms_per_token": 0.632,

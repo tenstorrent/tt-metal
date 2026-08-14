@@ -104,7 +104,7 @@
     "device_op_ceiling_source": "nlp_create_qkv_heads_decode_device_operation.cpp:45-51 hard-caps num_users at 32",
     "full_context_sequences_that_fit": 15
   },
-  "notes": "The optimized-full-model stage takes no capability reduction. The advertised 131072-token context is supported and exercised end to end (52-layer paged prefill fill plus paged traced decode) at batch 1, and prompt lengths that are not divisible by the tile, the 64-token page or the 8192-token prefill chunk are ordinary inputs: the generator pads the token ids with a zero-embedding pad id, the layer stack sees an aligned prompt, and the logits are sliced back to the logical last position. Earlier stages keep their own blocks below; the previous top level is now the 'optimized_multichip_decoder' block.",
+  "notes": "The optimized-full-model stage takes no capability reduction. The advertised 131072-token context is supported and exercised end to end (52-layer paged prefill fill plus paged traced decode) at batch 1, and prompt lengths that are not divisible by the tile, the 64-token page or the 8192-token prefill chunk are ordinary inputs: the generator pads the token ids with a zero-embedding pad id, the layer stack sees an aligned prompt, and the logits are sliced back to the logical last position. Earlier stages keep their own blocks below; the previous top level is now the 'full_model' block.",
   "performance": {
     "workload": {
       "prompt_len": 128,
@@ -125,10 +125,10 @@
       "python doc/optimized_full_model/bench/evidence.py --stages capacity,prefill,teacher,sampling,shapes,fallback",
       "python doc/optimized_full_model/bench/evidence.py --stages autoregress",
       "python doc/optimized_full_model/bench/evidence.py --stages perf",
-      "python doc/full_model/bench/qualitative.py --arm hf (the previous stage's control, reused here via --reuse-hf-control)",
-      "python doc/optimized_full_model/bench/qualitative.py --arm tt",
+      "python doc/full_model/bench/qualitative.py --arm hf (run by the previous stage; this stage reuses its output rather than re-running it, via the wrapper's --reuse-hf-control)",
+      "python doc/optimized_full_model/bench/qualitative.py --arm tt --reuse-hf-control",
       "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py",
-      "python doc/optimized_full_model/bench/qualitative.py --arm compare"
+      "python doc/optimized_full_model/bench/qualitative.py --arm compare --reuse-hf-control"
     ],
     "prompt_shapes": {
       "lengths": [
