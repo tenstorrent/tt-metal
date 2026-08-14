@@ -127,6 +127,10 @@ jobs:
       skip-tt-train: false
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+      # TEMP (issue #53141 bisect Cell 0): this branch's tree is byte-identical to
+      # 14d334880d1f except for this workflow file and the probe test entries below,
+      # so reuse the real nightly build from that exact commit instead of recompiling.
+      use-artifacts-from-run: "31569965089"
   generate-arch-matrix:
     runs-on: ubuntu-slim
     outputs:
