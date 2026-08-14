@@ -422,6 +422,25 @@ def test_topk_narrower_indices_tensor_raise(device, expect_error):
         ttnn.topk(ttnn_input, k=k, dim=-1, largest=True, sorted=True, indices_tensor=indices_tensor)
 
 
+def test_topk_indices_tensor_on_non_last_dim_raise(device, expect_error):
+    # The front end transposes the reduced dim to last and leaves the indices tensor alone, so the
+    # indices are paged in the input's post-transpose layout and come back rounded to a tile.
+    torch.manual_seed(0)
+    k = 32
+    shape = [1, 1, 8192, 32]
+
+    input_torch = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    indices_torch = torch.zeros(shape, dtype=torch.uint16)
+    for i in range(shape[2]):
+        indices_torch[:, :, i, :] = i
+    indices_tensor = ttnn.from_torch(indices_torch, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+
+    with expect_error(RuntimeError, "only supported for a reduction on the last dimension"):
+        ttnn.topk(ttnn_input, k=k, dim=2, largest=True, sorted=True, indices_tensor=indices_tensor)
+
+
 @pytest.mark.parametrize("largest", [True, False])
 def test_topk_multicore_local_write_correctness(largest, device):
     """

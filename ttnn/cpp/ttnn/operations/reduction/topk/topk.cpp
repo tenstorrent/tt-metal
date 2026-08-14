@@ -257,6 +257,15 @@ std::vector<Tensor> topk(
             "Indices tensor has incorrect shape! Got : {}, expected: {}",
             indices_tensor->logical_shape(),
             input_tensor.logical_shape());
+        // Matching shapes are not enough when the reduced dim is not already last: the transpose
+        // below is applied to the input and not to the indices tensor, so the reader pages the
+        // indices in the input's post-transpose layout. At [1, 1, 8192, 32] with dim=2 that returns
+        // every index rounded down to a multiple of the tile height.
+        TT_FATAL(
+            is_dim_last_idx,
+            "Indices tensor is only supported for a reduction on the last dimension, got dim={} for rank {}",
+            dim,
+            rank);
     }
 
     // When input is a scalar, PyTorch returns the copy of the input tensor (that is the 1 top element)
