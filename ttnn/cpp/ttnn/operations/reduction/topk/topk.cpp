@@ -361,6 +361,10 @@ std::vector<Tensor> topk(
     // Choose padding value based on whether we want largest or smallest values
     const auto pad_val = largest ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
 
+    // A caller-supplied indices tensor must keep describing the same tile grid as the input the
+    // device op actually sees, so it is padded in lockstep. The pad slots hold +/-inf values and
+    // can never be selected, so the index value used to pad is irrelevant.
+    auto padded_indices_tensor = indices_tensor;
     if (pad_amount > 0) {
         ttsl::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, 0}, {0, pad_amount}};
 
@@ -368,6 +372,9 @@ std::vector<Tensor> topk(
         const bool pad_multicore = transformed_tensor.dtype() == DataType::BFLOAT16 &&
                                    transformed_tensor.memory_config().buffer_type() != BufferType::L1;
         padded_tensor = ttnn::pad(transformed_tensor, padding, pad_val, pad_multicore);
+        if (padded_indices_tensor.has_value()) {
+            padded_indices_tensor = ttnn::pad(padded_indices_tensor.value(), padding, 0.0f, false);
+        }
     }
 
     // Fill any implicit tile padding with appropriate values
@@ -396,7 +403,7 @@ std::vector<Tensor> topk(
         stable,
         input_memory_config,
         used_sub_core_grids,
-        indices_tensor,
+        padded_indices_tensor,
         output_tensors);
 
     // Package results into vector format expected by post-processing
