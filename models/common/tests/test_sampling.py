@@ -923,3 +923,50 @@ def test_ttsampling_topk_matches_argmax_on_single_device(vocab_size, mesh_device
 
     header = f"{len(failures)}/{batch_size} users did not sample the row maximum (vocab_size={vocab_size})"
     assert not failures, header + ":\n" + "\n".join(failures)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_ttsampling_duplicate_request_seeds_sample_diverse_tokens(mesh_device):
+    """A batch of users sharing one request seed must not all sample the same token.
+
+    Device-level regression test for #53077: every user gets identical logits (a flat-ish
+    top-32 so the multinomial draw is what differentiates them) and the identical request
+    seed. Before per-slot seed salting, every slot derived the same device seed at the same
+    position and the whole batch sampled the same token. The draw must also be reproducible:
+    a fresh manager with the same seed produces the same tokens.
+    """
+    torch.manual_seed(7)
+    batch_size = 32
+    vocab_size = 32768
+
+    def _sample_once():
+        sampler = TTSampling(
+            args=_single_device_sampling_args(mesh_device, vocab_size),
+            mesh_device=mesh_device,
+            tt_ccl=None,
+            k=torch.full((batch_size,), 32),
+            p=torch.ones(batch_size),
+            temp=torch.ones(batch_size),
+        )
+        assert not sampler.force_argmax_sampling
+        seed_manager = SeedManager(sampler, max_batch_size=batch_size)
+        seed_manager.reset_seed([1234] * batch_size, list(range(batch_size)))
+        seed_manager.get_new_values(list(range(batch_size)))
+
+        # One logits row replicated across the batch: only the RNG stream can differ.
+        row = torch.zeros(1, 1, 1, vocab_size)
+        row[..., :32] = 5.0  # 32 equally-likely candidates, everything else improbable
+        logits_host = row.expand(1, 1, batch_size, vocab_size).contiguous()
+        logits_tt = ttnn.from_torch(logits_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+        tokens_tt, _ = sampler(logits_tt)
+        return ttnn.to_torch(tokens_tt).flatten()[:batch_size].long().tolist()
+
+    tokens_first = _sample_once()
+    tokens_second = _sample_once()
+
+    assert all(0 <= t < vocab_size for t in tokens_first)
+    assert len(set(tokens_first)) > 1, (
+        f"all {batch_size} users with the same request seed sampled token {tokens_first[0]} -- "
+        "duplicate-seed slots are drawing from identical RNG streams (#53077)"
+    )
+    assert tokens_first == tokens_second, "same request seed must reproduce the same tokens across runs"
