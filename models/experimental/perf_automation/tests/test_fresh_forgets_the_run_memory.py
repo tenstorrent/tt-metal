@@ -109,3 +109,23 @@ def test_the_flag_is_wired_into_optimize():
     assert src.index('getattr(args, "fresh", False)') < src.index("result = run_cc("), "cleared after the run starts"
     cli = (_PA.parent.parent.parent / "scripts" / "tt_hw_planner" / "cli.py").read_text()
     assert '"--fresh"' in cli
+    # NAMES MUST BE IN SCOPE. The first wiring referenced `tt_root`, which does not exist in that
+    # function: --fresh printed "skipped: name 'tt_root' is not defined", failed safe, and the run
+    # continued on the very state it was asked to clear. A flag that silently does nothing is worse
+    # than no flag, because the operator believes the run is clean.
+    import ast as _ast
+
+    src_o = (_PA.parent.parent.parent / "scripts" / "tt_hw_planner" / "commands" / "optimize.py").read_text()
+    tree = _ast.parse(src_o)
+    fn = next(
+        n
+        for n in _ast.walk(tree)
+        if isinstance(n, _ast.FunctionDef) and "getattr(args, 'fresh', False)" in _ast.unparse(n)
+    )
+    bound = {t.id for n in _ast.walk(fn) if isinstance(n, _ast.Name) and isinstance(n.ctx, _ast.Store) for t in [n]}
+    bound |= {a.arg for a in fn.args.args}
+    used = _ast.unparse(fn)
+    i = used.index("getattr(args, 'fresh', False)")
+    for name in ("run_root", "run_demo"):
+        assert name in bound, "%s is not bound in the function that clears state" % name
+    assert "tt_root" not in used[i : i + 900], "the clear still references a name that is not in scope"

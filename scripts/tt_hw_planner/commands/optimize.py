@@ -677,13 +677,13 @@ def cmd_optimize(args) -> int:
         # it: it lives in the persistent ledger.
         if getattr(args, "fresh", False):
             try:
-                sys.path.insert(0, str(tt_root / "models" / "experimental" / "perf_automation"))
+                sys.path.insert(0, str(Path(run_root) / "models" / "experimental" / "perf_automation"))
                 from agent.fresh_start import describe as _fresh_describe, wipe as _fresh_wipe
 
                 _sd = os.environ.get("PERF_MCP_STATE_DIR") or tempfile.gettempdir()
                 _removed = _fresh_wipe(
                     _sd,
-                    tool_root=tt_root / "models" / "experimental" / "perf_automation",
+                    tool_root=Path(run_root) / "models" / "experimental" / "perf_automation",
                     model_dir=run_demo,
                 )
                 print("  [optimize/cc] --fresh: %s" % _fresh_describe(_removed))
