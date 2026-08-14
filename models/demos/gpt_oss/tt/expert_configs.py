@@ -17,10 +17,12 @@ class GPTOSSProgramConfig(ProgramConfig):
     """
 
     # Decode
-    decode_gate_up_cores: tuple[int, int] = (3, 4)
-    decode_gate_up_in0_block_w: int = 30
-    decode_down_cores: tuple[int, int] = (5, 6)
-    decode_down_in0_block_w: int = 12
+    decode_gate_up_cores: tuple[int, int] = (10, 3)
+    decode_gate_up_in0_block_w: int = 90
+    decode_gate_up_subblock_w: int = 3
+    decode_down_cores: tuple[int, int] = (10, 3)
+    decode_down_in0_block_w: int = 90
+    decode_down_subblock_w: int = 3
 
     # Prefill
     prefill_gate_up_cores: tuple[int, int] = (3, 4)
