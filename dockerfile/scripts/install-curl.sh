@@ -30,9 +30,10 @@
 set -euo pipefail
 
 CURL_VERSION="${CURL_VERSION:?CURL_VERSION is required}"
-# SHA256 for curl-${CURL_VERSION}.tar.gz from curl's official GitHub release.
-# The GitHub asset is byte-identical to the curl.se archive, but is reachable
-# from CI builders whose egress policy rejects curl.se.
+# SHA256 for curl-${CURL_VERSION}.tar.gz from the official curl.se release archive.
+# curl.se publishes PGP signatures (.asc) rather than a plain sidecar checksum file,
+# so this hash is computed directly from a signature-verified download (same
+# trust model already used here for gdb/doxygen; see compute-hashes.sh).
 CURL_SHA256="${CURL_SHA256:?CURL_SHA256 is required}"
 
 OPENSSL_VERSION="${OPENSSL_VERSION:?OPENSSL_VERSION is required}"
@@ -42,7 +43,7 @@ OPENSSL_SHA256="${OPENSSL_SHA256:?OPENSSL_SHA256 is required}"
 
 INSTALL_PREFIX="${INSTALL_PREFIX:-/usr/local}"
 OPENSSL_URL="https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
-CURL_URL="https://github.com/curl/curl/releases/download/curl-${CURL_VERSION//./_}/curl-${CURL_VERSION}.tar.gz"
+CURL_URL="https://curl.se/download/curl-${CURL_VERSION}.tar.gz"
 OPENSSL_TMPDIR="/tmp/openssl-build"
 OPENSSL_STATIC_PREFIX="/tmp/openssl-static"
 CURL_TMPDIR="/tmp/curl-build"
