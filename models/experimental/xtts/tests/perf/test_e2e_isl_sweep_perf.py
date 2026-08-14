@@ -1,32 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-
-"""End-to-end performance cases across input sequence length (ISL) for XTTS-v2.
-
-One pytest case per ISL. Each case opens/closes its own device (same as the demo per
-take) — no shared pytest ``device`` fixture — so compiles do not stack L1 leftovers.
-
-Path matches ``demo/xtts_demo.py``: text that fits one pass goes through
-``inference_fully_traced``; text over the single-pass code budget is sentence-split
-(``CHUNKING``) and replayed off one ``traced_session`` capture.
-
-Single-pass opens with the ~50 MB one-shot trace region (like ``test_e2e_perf``);
-chunked opens with ``SESSION_TRACE_REGION`` (all three traces live). Decode budget is
-``chunk_max_tokens`` (192) — under the ~205-code vocoder wall (see ``ChunkingConfig``).
-
-Run all ISLs:
-    source python_env/bin/activate
-    export TT_METAL_HOME=$(pwd)
-    export PYTHONPATH=$(pwd)
-    pytest models/experimental/xtts/tests/perf/test_e2e_isl_sweep_perf.py -v -s
-
-Run one ISL:
-    pytest models/experimental/xtts/tests/perf/test_e2e_isl_sweep_perf.py -v -s -k isl_96
-
-Env:
-  ``XTTS_ISL_SWEEP`` — comma list of text lengths to collect as cases
-                       (e.g. ``XTTS_ISL_SWEEP=32,96``).
-"""
 
 import math
 import os
@@ -48,13 +21,9 @@ from models.experimental.xtts.config import (
     TILE,
 )
 
-# Demo-validated envelope: MAX_TEXT_IDS 352, tile-aligned.
-# Single-pass vs chunked (SWEEP_TEXT sentence ≈73 wrapped ids, CHUNKING.max_single_pass_codes=205):
-#   ISL 32–64 → one pass (``inference_fully_traced``); ISL 96+ → sentence-chunked (``traced_session``).
 DEFAULT_ISL_SWEEP = [32, 64, 96, 128, 192, 256, 320, 352]
 LANG = DEMO.language
 
-# One-shot path (setup released before decode, decode before vocoder) — same as test_e2e_perf.
 ONESHOT_TRACE_REGION = 52_428_800
 
 REF_CLIPS = ("LJ001-0001.wav", "LJ001-0003.wav", "LJ001-0004.wav", "LJ001-0005.wav")
@@ -67,6 +36,7 @@ SWEEP_TEXT = (
 
 
 def _isl_sweep():
+    """Return the ISL text-length sweep list from env or defaults."""
     raw = os.environ.get("XTTS_ISL_SWEEP")
     if not raw or not raw.strip():
         return list(DEFAULT_ISL_SWEEP)
@@ -74,6 +44,7 @@ def _isl_sweep():
 
 
 def _ids_of(text, lang=LANG):
+    """Count wrapped text token ids for a string."""
     from models.experimental.xtts.reference.xtts_gpt_generate import wrap_text_ids
     from models.experimental.xtts.reference.xtts_text_embedding import preprocess_text
 
@@ -82,7 +53,7 @@ def _ids_of(text, lang=LANG):
 
 
 def _text_for_isl(target_ids, lang=LANG):
-    """Accumulate whole sentences until wrapped length reaches ``target_ids``."""
+    """Grow sweep sentences until wrapped text reaches the target id count."""
     sentences = [p.strip() for p in re.split(SENTENCE_SPLIT_RE, SWEEP_TEXT) if p.strip()]
     assert sentences, "SWEEP_TEXT produced no sentences"
     acc, i = [], 0
@@ -95,7 +66,7 @@ def _text_for_isl(target_ids, lang=LANG):
 
 
 def _prepare_chunks(text, lang=LANG):
-    """Demo-identical: sentence-split if needed, wrap, pad all chunks to a common tile length."""
+    """Split text into tile-padded chunks for traced session replay."""
     from models.experimental.xtts.demo.xtts_demo import _split_into_chunks
     from models.experimental.xtts.reference.xtts_gpt_generate import STOP_TEXT_TOKEN, wrap_text_ids
     from models.experimental.xtts.reference.xtts_text_embedding import preprocess_text
@@ -111,6 +82,7 @@ def _prepare_chunks(text, lang=LANG):
 
 
 def _run_single(tt, wrapped, cond_wav, spk_wav_tt, gen, budget):
+    """Run a single-pass fully-traced inference and return timing metrics."""
     prompt_len = NUM_LATENTS + wrapped.shape[1]
     max_seq = -(-(prompt_len + budget + 2) // TILE) * TILE
     wav_dev, codes, perf = tt.inference_fully_traced(
@@ -147,6 +119,7 @@ def _run_single(tt, wrapped, cond_wav, spk_wav_tt, gen, budget):
 
 
 def _run_chunked(tt, chunks, cond_wav, spk_wav_tt, gen, budget):
+    """Run chunked traced-session inference and return aggregated timing metrics."""
     from models.experimental.xtts.reference.xtts_hifi_decoder import OUTPUT_SAMPLE_RATE
 
     text_len = chunks[0][1].shape[1]
@@ -206,7 +179,7 @@ def _run_chunked(tt, chunks, cond_wav, spk_wav_tt, gen, budget):
 
 
 def _run_isl_case(text_len):
-    """Open device, run one ISL, close device. Meant to run in a fresh process."""
+    """Open a fresh device and measure e2e perf for one ISL text length."""
     import random
 
     import numpy as np
@@ -230,7 +203,6 @@ def _run_isl_case(text_len):
     text = _text_for_isl(text_len)
     chunks, pad_to = _prepare_chunks(text)
     chunked = len(chunks) > 1
-    # 192 stays under the ~205-code vocoder CB/L1 wall with margin (ChunkingConfig).
     budget = CHUNKING.chunk_max_tokens
     trace_region = SESSION_TRACE_REGION if chunked else ONESHOT_TRACE_REGION
     mode = f"chunked ({len(chunks)} chunks)" if chunked else "single-pass"
@@ -290,7 +262,7 @@ def _run_isl_case(text_len):
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("text_len", _isl_sweep(), ids=lambda n: f"isl_{n}")
 def test_xtts_e2e_isl_perf(text_len, reset_seeds):
-    """One ISL with its own open_device/close_device (no shared device fixture)."""
+    """Parametrized e2e ISL sweep that logs TTFT, decode ms/code, and RTF."""
     r = _run_isl_case(text_len)
     logger.info(
         f"ISL={r['isl']:>3} chunks={r['n_chunks']} pad_to={r['pad_to']:>3} "

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -17,6 +17,7 @@ from models.experimental.xtts.tt.xtts_gpt_block import (
 
 class TtXttsGptStack(LightweightModule):
     def __init__(self, state_dict, device, num_layers=NUM_LAYERS, max_seq=0):
+        """Build the GPT block stack and final layer-norm weights."""
         super().__init__()
         self.device = device
         self.num_layers = num_layers
@@ -28,6 +29,7 @@ class TtXttsGptStack(LightweightModule):
             self.init_static(max_seq)
 
     def init_static(self, max_seq):
+        """Allocate static arange buffer for decode masking."""
         self.max_seq = max_seq
         self.arange = ttnn.from_torch(
             torch.arange(max_seq, dtype=torch.float32).reshape(1, 1, 1, max_seq),
@@ -38,6 +40,7 @@ class TtXttsGptStack(LightweightModule):
 
     def forward_decode(self, x, kv, pos, write_idx=None):
         # add_mask must stay DRAM (SDPA asserts DRAM mask).
+        """Run one decode step through all blocks and final LN."""
         gt = ttnn.typecast(ttnn.gt(self.arange, pos), ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
         add_mask = ttnn.multiply(gt, NEG_INF, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         onehot = None
@@ -49,11 +52,13 @@ class TtXttsGptStack(LightweightModule):
         return sharded_decode_ln(x, self.ln_f_weight, self.ln_f_bias, self.device)
 
     def forward(self, x):
+        """Run prefill through all blocks without returning KV."""
         for block in self.blocks:
             x, _, _ = block.forward_prefill(x)
         return sharded_prefill_ln(x, self.ln_f_weight, self.ln_f_bias, self.device)
 
     def forward_prefill(self, x):
+        """Run prefill through all blocks and collect KV caches."""
         kv = []
         for block in self.blocks:
             x, k, v = block.forward_prefill(x)

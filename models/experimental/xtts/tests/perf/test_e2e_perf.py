@@ -1,18 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-
-"""End-to-end performance test for XTTS-v2 on Blackhole P150.
-
-Times ``TtXtts.inference_fully_traced()`` (setup + decode + vocoder) on the demo's default text
-and 30 s reference voice. Replay legs and RTF are gated with a 40% margin of the README baseline.
-Decode/vocoder gates are per-code rates because sampled code count varies.
-
-Run:
-    source python_env/bin/activate
-    export TT_METAL_HOME=$(pwd)
-    export PYTHONPATH=$(pwd)
-    pytest models/experimental/xtts/tests/perf/test_e2e_perf.py -v -s
-"""
 
 import math
 
@@ -35,12 +22,10 @@ from models.perf.perf_utils import prep_perf_report
 
 TILE = 32
 
-# Same reference voice as the demo default: four LJSpeech clips, clipped to 30 s (8 windows).
 REF_CLIPS = ("LJ001-0001.wav", "LJ001-0003.wav", "LJ001-0004.wav", "LJ001-0005.wav")
 COND_SECONDS = GPT_COND_LEN_SEC
-SPK_SECONDS = DEMO.spk_seconds  # follow the demo's speaker-embedding window
+SPK_SECONDS = DEMO.spk_seconds
 
-# Same default text (after trailing-punctuation strip) and sampling as the demo.
 DEMO_TEXT = (
     "Voice synthesis has come a long way, and modern systems can already generate natural sounding "
     "speech with remarkable accuracy. Hey how are you doing"
@@ -48,28 +33,25 @@ DEMO_TEXT = (
 MAX_NEW_TOKENS = 240
 TEMPERATURE, TOP_K, TOP_P, REP_PENALTY = 0.65, 50, 0.85, 5.0
 
-# Baseline on Blackhole P150 (see README.md). 40% margin.
 MARGIN = 0.40
 EXPECTED_SETUP_S = 0.044
 EXPECTED_DECODE_MS_PER_CODE = 8.12
 EXPECTED_VOCODER_MS_PER_CODE = 0.116
 EXPECTED_RTF = 0.180
-EXPECTED_COMPILE_S = 44.0  # one-time capture + JIT; logged, not gated
+EXPECTED_COMPILE_S = 44.0
 
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 65536, "trace_region_size": 52428800}], indirect=True)
 def test_xtts_e2e_perf(device, reset_seeds):
+    """Measure fully-traced e2e replay and assert setup/decode/vocoder/RTF bounds."""
     from scipy.signal import resample_poly
 
     sd = load_xtts_state_dict()
     tt = TtXtts(device, sd, XttsHifiDecoderFull(sd))
 
-    wav = load_coqui_test_audio(samples=REF_CLIPS, max_seconds=COND_SECONDS)  # [1, s] @ 22050
+    wav = load_coqui_test_audio(samples=REF_CLIPS, max_seconds=COND_SECONDS)
     g = math.gcd(SPK_SR, MEL_SR)
-    # The speaker path is capped independently at SPK_SECONDS, exactly as the demo does: the speaker
-    # encoder does not fit a 30 s mel (L1 clash in its ResNet), and a time-pooled speaker embedding
-    # saturates well before that. The GPT conditioning above uses the FULL 30 s.
     spk_src = wav[0].numpy()[: MEL_SR * SPK_SECONDS]
     spk_wav = torch.from_numpy(resample_poly(spk_src, SPK_SR // g, MEL_SR // g).astype("float32")).unsqueeze(0)
     spk_wav_tt = ttnn.from_torch(
@@ -81,13 +63,13 @@ def test_xtts_e2e_perf(device, reset_seeds):
     if pad:
         wrapped = F.pad(wrapped, (0, pad), value=STOP_TEXT_TOKEN)
 
-    prompt_len = 32 + wrapped.shape[1]  # 32 conditioning latents + wrapped text tokens
+    prompt_len = 32 + wrapped.shape[1]
     max_seq = -(-(prompt_len + MAX_NEW_TOKENS + 2) // TILE) * TILE
 
     profiler.start("inference_and_compile_time")
     wav_dev, codes, perf = tt.inference_fully_traced(
         wrapped,
-        wav,  # raw reference wav; 80-mel computed on device inside the setup trace
+        wav,
         spk_wav_tt,
         max_seq,
         max_new_tokens=MAX_NEW_TOKENS,
@@ -122,6 +104,7 @@ def test_xtts_e2e_perf(device, reset_seeds):
     )
 
     def _bound(expected):
+        """Return the expected value inflated by the allowed margin."""
         return expected * (1 + MARGIN)
 
     assert perf["setup_replay_s"] <= _bound(EXPECTED_SETUP_S), (

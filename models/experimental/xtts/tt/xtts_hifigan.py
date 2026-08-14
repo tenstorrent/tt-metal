@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -35,6 +35,7 @@ _UPS_SHARD_OVERRIDE = {0: ttnn.TensorMemoryLayout.BLOCK_SHARDED}
 
 
 def _ups_conv_overrides(i):
+    """Build upsample conv config overrides for stage i."""
     ov = dict(_INTERLEAVED_CONV_DB)
     if i in _UPS_SHARD_OVERRIDE:
         ov["shard_layout"] = _UPS_SHARD_OVERRIDE[i]
@@ -52,6 +53,7 @@ _COND_MM_CFG = {
 
 class TtCondProj(LightweightModule):
     def __init__(self, device, weight, bias, dtype=ttnn.float32):
+        """Load a 1x1 speaker conditioning projection matmul."""
         super().__init__()
         self.device = device
         self.dtype = dtype
@@ -97,6 +99,7 @@ class TtCondProj(LightweightModule):
         )
 
     def forward(self, g_mm):
+        """Project speaker embedding to conditioning channels."""
         return ttnn.linear(
             g_mm,
             self.tt_weight,
@@ -114,15 +117,18 @@ _SHARDED_STAGE_HANDOFF = True
 
 
 def _is_l1_clash(exc):
+    """Return whether an exception indicates an L1 CB clash."""
     msg = str(exc).lower()
     return "circular buffer" in msg or "clash" in msg
 
 
 def _fused_pre_act_plan(stage_i, sharded):
+    """Decide whether to fuse pre-activation into residual add."""
     return sharded and stage_i >= _FUSED_PRE_ACT_MIN_STAGE
 
 
 def _shard_plan(stage_i, kernel_size):
+    """Decide sharding and act double-buffer for a resblock."""
     if not _SHARD_RESBLOCKS:
         return False, True
     if stage_i in _BLOCK_SHARD_STAGES:
@@ -148,6 +154,7 @@ class TtResBlock1(LightweightModule):
         fused_pre_act=False,
         block_shard=False,
     ):
+        """Build dilated residual conv pairs for one MRF branch."""
         super().__init__()
         self.device = device
         self.block_shard = block_shard
@@ -188,15 +195,19 @@ class TtResBlock1(LightweightModule):
         ]
 
     def shard(self, x, channels):
+        """Shard activations height- or block-wise in L1."""
         return (block_shard_l1 if self.block_shard else height_shard_l1)(self.device, x, channels)
 
     def chain_fits_l1(self, length, channels):
+        """Return whether the sharded residual chain fits L1."""
         return (block_chain_fits_l1 if self.block_shard else sharded_chain_fits_l1)(self.device, length, channels)
 
     def will_shard(self, length, channels):
+        """Return whether this length will use the sharded path."""
         return self.sharded and length not in self._blocked_lengths and self.chain_fits_l1(length, channels)
 
     def forward(self, x, pre_act=None):
+        """Run residual block, falling back if L1 clashes."""
         length = x.shape[1]
         if self.sharded and length not in self._blocked_lengths and self.chain_fits_l1(length, x.shape[2]):
             try:
@@ -208,6 +219,7 @@ class TtResBlock1(LightweightModule):
         return self._forward_interleaved(x, pre_act=pre_act)
 
     def _forward_interleaved(self, x, pre_act=None):
+        """Run residual block on interleaved DRAM activations."""
         for idx, (c1, c2) in enumerate(zip(self.convs1, self.convs2)):
             if idx == 0 and pre_act is not None:
                 b = c1(pre_act)
@@ -225,6 +237,7 @@ class TtResBlock1(LightweightModule):
         return x
 
     def _forward_sharded(self, x, return_sharded=False, pre_sharded=False, pre_act=None):
+        """Run residual block on sharded L1 activations."""
         _, length, channels = x.shape
         b = d = nxt = None
         xs = x if pre_sharded else self.shard(x, channels)
@@ -275,6 +288,7 @@ class TtResBlock1(LightweightModule):
 
 class TtHifiganGenerator(LightweightModule):
     def __init__(self, device, state_dict):
+        """Load HiFi-GAN upsamplers, residuals, and cond layers."""
         super().__init__()
         self.device = device
         self.num_kernels = len(RESBLOCK_KERNEL_SIZES)
@@ -359,6 +373,7 @@ class TtHifiganGenerator(LightweightModule):
         self._final_act = ttnn.UnaryWithParam(ttnn.UnaryOpType.LEAKY_RELU, FINAL_LRELU_SLOPE)
 
     def _conditioning(self, g):
+        """Cache global and per-stage speaker conditioning biases."""
         hit = self._cond.get(id(g))
         if hit is not None and hit[0] is g:
             return hit[1], hit[2]
@@ -377,6 +392,7 @@ class TtHifiganGenerator(LightweightModule):
         return cond_global, cond_biases
 
     def release_conditioning(self):
+        """Free cached conditioning tensors and upsample caches."""
         for entry in self._cond.values():
             for t in (entry[1], *entry[2]):
                 if t.is_allocated():
@@ -386,6 +402,7 @@ class TtHifiganGenerator(LightweightModule):
             u.release_cond_cache()
 
     def _mrf(self, i, o, post_act):
+        """Sum multi-receptive-field residual branches for a stage."""
         nk = self.num_kernels
         rbs = self.resblocks[i * nk : (i + 1) * nk]
         length, channels = o.shape[1], o.shape[2]
@@ -408,6 +425,7 @@ class TtHifiganGenerator(LightweightModule):
         return out
 
     def _mrf_sharded(self, rbs, o, post_act, keep_sharded=False):
+        """Run MRF residual sum on sharded activations."""
         channels = o.shape[2]
         o_shard = rbs[0].shard(o, channels)
         pre_act = z_sum = None
@@ -438,6 +456,7 @@ class TtHifiganGenerator(LightweightModule):
         return out
 
     def _mrf_interleaved(self, rbs, o, post_act):
+        """Run MRF residual sum on interleaved activations."""
         length, channels = o.shape[1], o.shape[2]
         pre_act = z_sum = None
         for n, rb in enumerate(rbs):
@@ -459,6 +478,7 @@ class TtHifiganGenerator(LightweightModule):
         return z_sum
 
     def forward(self, x, g):
+        """Generate waveform from upsampled latents and speaker emb."""
         cond_global, cond_biases = self._conditioning(g)
         pre = self.conv_pre(x)
         ttnn.deallocate(x)

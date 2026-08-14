@@ -1,20 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-
-"""PCC test for the full XTTS-v2 GPT decoder stack (30 blocks + final LayerNorm).
-
-Validates the TTNN port of the whole GPT-2 decoder — the 30 repeating blocks
-followed by ``ln_f`` — against the pure-PyTorch HuggingFace reference, using the
-*real* weights from the upstream checkpoint at
-https://huggingface.co/coqui/XTTS-v2 (``model.pth``).
-
-Run:
-    source python_env/bin/activate
-    export TT_METAL_HOME=$(pwd)
-    export PYTHONPATH=$(pwd)
-    # first run downloads ~1.9 GB of XTTS-v2 weights to the HF cache
-    pytest models/experimental/xtts/tests/pcc/test_gpt_stack.py
-"""
 
 import pytest
 import torch
@@ -35,13 +20,13 @@ from models.experimental.xtts.tt.xtts_gpt_stack import TtXttsGptStack
 @pytest.mark.parametrize(
     "seq_len",
     [
-        MAX_TEXT_POS,  # 404 — max text stream
-        MAX_MEL_POS,  # 608 — max mel stream (1012 is unreachable: text + codes ≤ 980)
+        MAX_TEXT_POS,
+        MAX_MEL_POS,
     ],
 )
 @pytest.mark.parametrize("pcc", [0.99])
 def test_xtts_gpt_stack(device, xtts_state_dict, seq_len, pcc, reset_seeds):
-    # Reference: all 30 GPT decoder blocks + final LayerNorm, with real weights.
+    """Compare the full TTNN GPT stack to the PyTorch reference via PCC."""
     reference = reference_gpt_stack(xtts_state_dict, num_layers=NUM_LAYERS)
     logger.info(f"XTTS reference GPT decoder stack ({NUM_LAYERS} blocks + ln_f):\n{reference}")
 
@@ -49,7 +34,6 @@ def test_xtts_gpt_stack(device, xtts_state_dict, seq_len, pcc, reset_seeds):
     with torch.no_grad():
         reference_output = reference(torch_input)
 
-    # TTNN port of the same 30-block stack.
     tt_stack = TtXttsGptStack(xtts_state_dict, device, num_layers=NUM_LAYERS)
     tt_input = ttnn.from_torch(
         torch_input.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16

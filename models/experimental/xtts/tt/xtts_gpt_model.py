@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -24,6 +24,7 @@ TILE = 32
 
 
 def _to_device_rm(torch_tensor, device, memory_config=None):
+    """Upload a torch tensor to device in row-major bfloat16."""
     return ttnn.from_torch(
         torch_tensor.to(torch.bfloat16),
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -35,6 +36,7 @@ def _to_device_rm(torch_tensor, device, memory_config=None):
 
 class TtXttsGptModel(LightweightModule):
     def __init__(self, state_dict, device, num_layers=NUM_LAYERS):
+        """Load GPT embeddings, stack, norms, and heads onto device."""
         super().__init__()
         self.device = device
 
@@ -57,6 +59,7 @@ class TtXttsGptModel(LightweightModule):
         self.mel_head_bias = _to_device(state_dict["gpt.mel_head.bias"].reshape(1, -1), device)
 
     def _embed(self, ids, tok_weight, pos_weight):
+        """Embed token ids with matching positional table."""
         seq = ids.shape[1]
         ids_tt = ttnn.from_torch(
             ids.to(torch.int32), layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, dtype=ttnn.uint32
@@ -74,6 +77,7 @@ class TtXttsGptModel(LightweightModule):
         return emb
 
     def forward(self, text_ids, mel_ids, cond_latents=None):
+        """Run full GPT forward for text and mel logits."""
         text_len, mel_len = text_ids.shape[1], mel_ids.shape[1]
 
         text_emb = self._embed(text_ids, self.text_emb_weight, self.text_pos_weight)
@@ -106,11 +110,13 @@ class TtXttsGptModel(LightweightModule):
         return text_logits, mel_logits
 
     def prefill(self, text_ids, cond_latents, max_seq):
+        """Prefill prompt into static KV and return the cache."""
         self.alloc_static_kv(max_seq)
         self.prompt_len = self.prefill_on_device(self.text_ids_to_device(text_ids), cond_latents)
         return self._static_kv
 
     def decode(self, token_id, mel_pos, kv):
+        """Decode one mel token against the KV cache."""
         pos = self.prompt_len + mel_pos
         logits, latent = self.decode_on_device(
             self._pos_ids(token_id), self._pos_ids(mel_pos), self.cache_pos(pos), kv, write_idx=pos
@@ -118,10 +124,12 @@ class TtXttsGptModel(LightweightModule):
         return logits, latent, kv
 
     def init_static_decode(self, max_seq):
+        """Initialize stack static buffers for decode."""
         self.max_seq = max_seq
         self.stack.init_static(max_seq)
 
     def _pos_ids(self, value):
+        """Build a 1x1 uint32 id tensor on device."""
         return ttnn.from_torch(
             torch.tensor([[value]], dtype=torch.int32),
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -130,6 +138,7 @@ class TtXttsGptModel(LightweightModule):
         )
 
     def cache_pos(self, value):
+        """Build a broadcast cache-position tensor for decode."""
         return ttnn.from_torch(
             torch.full((1, 1, 1, self.max_seq), float(value), dtype=torch.float32),
             layout=ttnn.TILE_LAYOUT,
@@ -139,6 +148,7 @@ class TtXttsGptModel(LightweightModule):
 
     def decode_on_device(self, token_ids, mel_pos_ids, cache_pos, kv, write_idx=None):
         # RM emb + add, then one tilize (avoids two TilizeWithValPadding).
+        """Run on-device decode step returning logits and latent."""
         tok = ttnn.embedding(token_ids, self.mel_emb_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
         posn = ttnn.embedding(mel_pos_ids, self.mel_pos_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.to_layout(
@@ -162,6 +172,7 @@ class TtXttsGptModel(LightweightModule):
         return logits, latent
 
     def alloc_static_kv(self, max_seq):
+        """Allocate static KV caches and text position table."""
         self.init_static_decode(max_seq)
         self._text_pos_full = ttnn.from_torch(
             torch.arange(max_seq, dtype=torch.int32).reshape(1, max_seq),
@@ -188,6 +199,7 @@ class TtXttsGptModel(LightweightModule):
         return self._static_kv
 
     def text_ids_to_device(self, text_ids):
+        """Upload text token ids to device as uint32."""
         return ttnn.from_torch(
             text_ids.to(torch.int32),
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -197,6 +209,7 @@ class TtXttsGptModel(LightweightModule):
         )
 
     def _embed_dev(self, ids_tt, tok_weight, pos_weight):
+        """Embed device ids using a sliced position table."""
         seq = ids_tt.shape[1]
         pos_tt = ttnn.slice(self._text_pos_full, [0, 0], [1, seq], memory_config=ttnn.L1_MEMORY_CONFIG)
         tok = ttnn.embedding(ids_tt, tok_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -212,6 +225,7 @@ class TtXttsGptModel(LightweightModule):
         return emb
 
     def prefill_on_device(self, text_ids_tt, cond_latents):
+        """Prefill on-device and fill static KV caches."""
         text_emb = self._embed_dev(text_ids_tt, self.text_emb_weight, self.text_pos_weight)
         prefix = ttnn.concat([cond_latents, text_emb], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(text_emb)

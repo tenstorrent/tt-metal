@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import time
@@ -20,11 +20,13 @@ from models.experimental.xtts.tt.xtts_mel import TtConditioningMel
 
 
 def _interp_len(frames):
+    """Map mel frames to waveform samples after upsample scales."""
     return int(int(frames * LATENT_SCALE) * SR_SCALE)
 
 
 class TtXtts(LightweightModule):
     def __init__(self, device, state_dict, ref_decoder_full):
+        """Build conditioning, GPT, generator, and HiFi decoder."""
         super().__init__()
         self.device = device
         self.conditioning = TtXttsConditioning(state_dict, device)
@@ -34,14 +36,17 @@ class TtXtts(LightweightModule):
         self.decoder = TtXttsHifiDecoder(device, ref_decoder_full)
 
     def _wav_chunk_to_device(self, chunk):
+        """Upload a waveform chunk to device as float32."""
         return ttnn.from_torch(
             chunk.reshape(1, -1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device, dtype=ttnn.float32
         )
 
     def _style_from_mel(self, mel_dev):
+        """Run conditioning encoder on device mel."""
         return self.conditioning.forward_dev(ttnn.typecast(mel_dev, ttnn.bfloat16))
 
     def _style_window(self, wav_dev):
+        """Compute style latents for one waveform window."""
         mel = self.cond_mel_fe(wav_dev)
         mel_bf = ttnn.typecast(mel, ttnn.bfloat16)
         style = self.conditioning.forward_dev(mel_bf)
@@ -54,6 +59,7 @@ class TtXtts(LightweightModule):
         return out
 
     def _style_mean(self, wav_devs):
+        """Average style latents across waveform windows."""
         dram = ttnn.DRAM_MEMORY_CONFIG
         acc = self._style_window(wav_devs[0])
         for w in wav_devs[1:]:
@@ -71,9 +77,11 @@ class TtXtts(LightweightModule):
         return out
 
     def _cond_latents(self, cond_wav):
+        """Chunk conditioning wav and return mean style latents."""
         return self._style_mean([self._wav_chunk_to_device(c) for c in chunk_wav(cond_wav)])
 
     def _decode_wav(self, latents_tt, ref_wav_spk):
+        """Decode GPT latents to waveform with reference speaker."""
         return self.decoder(latents_tt, ref_wav_spk)
 
     def inference(
@@ -89,6 +97,7 @@ class TtXtts(LightweightModule):
         top_p=1.0,
         min_new_tokens=0,
     ):
+        """Run end-to-end TTS inference returning wav and codes."""
         cond_latents = self._cond_latents(cond_wav)
         if force_codes is not None:
             _, latents_tt = self.generator.latents_for_codes(text_ids, cond_latents, force_codes)
@@ -120,6 +129,7 @@ class TtXtts(LightweightModule):
         repetition_penalty=1.0,
         min_new_tokens=0,
     ):
+        """Run fully traced setup, decode, and vocoder inference."""
         dev = self.device
         gpt = self.gpt
         t_all0 = time.perf_counter()
@@ -129,6 +139,7 @@ class TtXtts(LightweightModule):
         gpt.alloc_static_kv(max_seq)
 
         def _setup():
+            """Compute speaker emb and prefill for setup capture."""
             cl = self._style_mean(wav_devs)
             g = self.decoder.speaker_embedding(ref_wav_spk)
             return g, gpt.prefill_on_device(text_dev, cl)
@@ -197,6 +208,7 @@ class TtXtts(LightweightModule):
         return wav_dev, codes, perf
 
     def traced_session(self, cond_wav, ref_wav_spk, text_len, max_seq, max_new_tokens, **sampling):
+        """Create a reusable traced inference session."""
         return TtXttsTracedSession(self, cond_wav, ref_wav_spk, text_len, max_seq, max_new_tokens, **sampling)
 
 
@@ -215,6 +227,7 @@ class TtXttsTracedSession:
         repetition_penalty=1.0,
         min_new_tokens=0,
     ):
+        """Capture setup, decode, and vocoder traces for reuse."""
         t0 = time.perf_counter()
         self.tt = tt
         self.device = dev = tt.device
@@ -247,6 +260,7 @@ class TtXttsTracedSession:
         )
 
         def _setup():
+            """Run style mean, speaker emb, and GPT prefill."""
             cl = tt._style_mean(self.wav_devs)
             g = tt.decoder.speaker_embedding(ref_wav_spk)
             g_dram = ttnn.to_memory_config(g, ttnn.DRAM_MEMORY_CONFIG)
@@ -276,9 +290,11 @@ class TtXttsTracedSession:
         self.compile_s = time.perf_counter() - t0
 
     def _samples_for(self, frames):
+        """Convert latent frames to output sample count."""
         return _interp_len(frames) * self.upsample
 
     def run(self, text_ids):
+        """Replay traced session for new text ids."""
         dev = self.device
         assert text_ids.shape[1] == self.text_dev.shape[1], (
             f"session captured for {self.text_dev.shape[1]} text tokens, got {text_ids.shape[1]} — "
@@ -318,6 +334,7 @@ class TtXttsTracedSession:
         return wav, codes, perf
 
     def close(self):
+        """Release traces and deallocate session buffers."""
         for tid in (self.setup_tid, self.voc_tid):
             ttnn.release_trace(self.device, tid)
         self.decoder.release()

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import math
@@ -21,6 +21,7 @@ L1 = ttnn.L1_MEMORY_CONFIG
 
 
 def _to_device(torch_tensor, device):
+    """Upload a torch tensor to device as tiled bfloat16."""
     return ttnn.from_torch(
         torch_tensor.to(torch.bfloat16),
         layout=ttnn.TILE_LAYOUT,
@@ -30,6 +31,7 @@ def _to_device(torch_tensor, device):
 
 
 def _to_device_w8(torch_tensor, device, dtype=ttnn.bfloat8_b):
+    """Upload a torch weight tensor with the given dtype."""
     return ttnn.from_torch(
         torch_tensor.to(torch.bfloat16),
         layout=ttnn.TILE_LAYOUT,
@@ -39,6 +41,7 @@ def _to_device_w8(torch_tensor, device, dtype=ttnn.bfloat8_b):
 
 
 def _to_device_bias(torch_tensor, device):
+    """Upload a bias vector reshaped for linear."""
     return _to_device(torch_tensor.reshape(1, -1), device)
 
 
@@ -48,6 +51,7 @@ _PREFILL_MLP_CPROJ_CACHE = {}
 
 
 def _fit_core_grid(nc, max_x, max_y):
+    """Find a core-grid factorization that fits device limits."""
     for gx in range(min(nc, max_x), 0, -1):
         if nc % gx == 0 and nc // gx <= max_y:
             return gx, nc // gx
@@ -57,10 +61,12 @@ def _fit_core_grid(nc, max_x, max_y):
 def _prefill_shard_cores(mt):
     # 16-core width LN is block_w=2; at short Mt that drops decode-latent PCC (ISL 64).
     # 8-core (block_w=4) restores it, but FFN shards CB-clash around Mt>=9 — use 16 there.
+    """Choose prefill LN shard core count for Mt."""
     return 8 if mt <= 4 else 16
 
 
 def _decode_ln_cfg(device):
+    """Cache and return decode sharded LN memory/program config."""
     key = id(device)
     if key not in _LN_SHARD_CACHE:
         nc = 8
@@ -80,6 +86,7 @@ def _decode_ln_cfg(device):
 
 
 def _prefill_ln_cfg(device, mt):
+    """Cache and return prefill sharded LN configs for Mt."""
     key = (id(device), mt)
     if key not in _PREFILL_LN_CACHE:
         grid = device.compute_with_storage_grid_size()
@@ -112,6 +119,7 @@ def _prefill_ln_cfg(device, mt):
 
 
 def sharded_decode_ln(x, weight, bias, device):
+    """Apply width-sharded layer norm for decode."""
     mc, pc = _decode_ln_cfg(device)
     xs = ttnn.to_memory_config(x, mc)
     h = ttnn.layer_norm(xs, weight=weight, bias=bias, epsilon=LAYER_NORM_EPS, program_config=pc, memory_config=mc)
@@ -122,6 +130,7 @@ def sharded_decode_ln(x, weight, bias, device):
 
 
 def sharded_prefill_ln(x, weight, bias, device):
+    """Apply width-sharded layer norm for prefill."""
     mt = -(-x.shape[-2] // 32)
     mc, pc, _, _, _ = _prefill_ln_cfg(device, mt)
     if x.is_sharded() and x.memory_config() == mc:
@@ -136,6 +145,7 @@ def sharded_prefill_ln(x, weight, bias, device):
 
 
 def _prefill_mlp_cproj_cfg(device, m):
+    """Cache MLP c_proj sharded matmul configs for prefill."""
     key = (id(device), m)
     if key not in _PREFILL_MLP_CPROJ_CACHE:
         mt = math.ceil(m / 32)
@@ -167,6 +177,7 @@ def _prefill_mlp_cproj_cfg(device, m):
 
 
 def _mm_1d_config(device, m, k, n, fused_activation=None):
+    """Build a 1D or 2D matmul program config for M/K/N."""
     grid = device.compute_with_storage_grid_size()
     gx, gy = int(grid.x), int(grid.y)
     mt, kt, nt = math.ceil(m / 32), math.ceil(k / 32), math.ceil(n / 32)
@@ -242,6 +253,7 @@ class TtXttsGptBlock(LightweightModule):
         device,
         layer_idx=0,
     ):
+        """Load one GPT transformer block weights onto device."""
         super().__init__()
         self.device = device
         self.layer_idx = layer_idx
@@ -254,6 +266,7 @@ class TtXttsGptBlock(LightweightModule):
         self.ln_2_bias = _to_device(state_dict[prefix + "ln_2.bias"], device)
 
         def _w(name):
+            """Fetch a block weight with optional bfp4/bfp8 dtype."""
             dtype = ttnn.bfloat4_b if name in _BFP4_WEIGHTS else ttnn.bfloat8_b
             return _to_device_w8(state_dict[prefix + name], device, dtype=dtype)
 
@@ -268,6 +281,7 @@ class TtXttsGptBlock(LightweightModule):
         self.mlp_c_proj_bias = _to_device_bias(state_dict[prefix + "mlp.c_proj.bias"], device)
 
     def _qkv(self, x):
+        """Project hidden states to Q, K, and V heads."""
         qkv = ttnn.linear(
             x,
             self.attn_c_attn_weight,
@@ -284,6 +298,7 @@ class TtXttsGptBlock(LightweightModule):
         return q, k, v
 
     def _attn_out(self, attn, shard_out=False):
+        """Concatenate heads and project attention output."""
         out = ttnn.transformer.concatenate_heads(attn, memory_config=L1)
         ttnn.deallocate(attn)
         m, k, n = out.shape[-2], out.shape[-1], self.attn_c_proj_weight.shape[-1]
@@ -324,6 +339,7 @@ class TtXttsGptBlock(LightweightModule):
         return proj
 
     def _mlp(self, x, decode=False):
+        """Run the MLP with optional sharded prefill path."""
         h = ttnn.linear(
             x,
             self.mlp_c_fc_weight,
@@ -370,9 +386,11 @@ class TtXttsGptBlock(LightweightModule):
         return out
 
     def _ln(self, x, weight, bias):
+        """Apply decode sharded layer norm."""
         return sharded_decode_ln(x, weight, bias, self.device)
 
     def _residual_ffn(self, x, decode=False):
+        """Apply LN2, MLP, and residual add."""
         h = (
             self._ln(x, self.ln_2_weight, self.ln_2_bias)
             if decode
@@ -388,6 +406,7 @@ class TtXttsGptBlock(LightweightModule):
         return y
 
     def forward_prefill(self, x):
+        """Run prefill attention and FFN; return output and KV."""
         h = sharded_prefill_ln(x, self.ln_1_weight, self.ln_1_bias, self.device)
         q, k, v = self._qkv(h)
         ttnn.deallocate(h)
@@ -400,6 +419,7 @@ class TtXttsGptBlock(LightweightModule):
         return self._residual_ffn(xa), k, v
 
     def forward_decode(self, x, k_cache, v_cache, onehot, add_mask, write_idx=None):
+        """Run decode attention against KV cache and FFN."""
         h = self._ln(x, self.ln_1_weight, self.ln_1_bias)
         q, k, v = self._qkv(h)
         ttnn.deallocate(h)

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
@@ -9,6 +9,7 @@ from models.experimental.xtts.config import NEG_INF  # noqa: F401 — re-exporte
 
 class TtSampler:
     def __init__(self, device, vocab_size, temperature, top_k=0, repetition_penalty=1.0, top_p=1.0):
+        """Initialize sampler tables and repetition-penalty state."""
         self.device = device
         self.v = vocab_size
         self.temperature = float(temperature)
@@ -30,6 +31,7 @@ class TtSampler:
 
     def reset(self):
         # Clear seen in place so traced pick_dev keeps binding this buffer.
+        """Clear or allocate the seen-token buffer for a new sequence."""
         if getattr(self, "seen", None) is not None:
             ttnn.multiply(self.seen, 0.0, output_tensor=self.seen)
             return
@@ -47,12 +49,14 @@ class TtSampler:
             setattr(self, name, None)
 
     def _mark(self, token):
+        """Mark a sampled token as seen for repetition penalty."""
         idx = ttnn.from_torch(
             torch.tensor([[token]], dtype=torch.int32), device=self.device, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT
         )
         self.seen = ttnn.scatter(self.seen, 1, idx, self._one)
 
     def pick(self, logits):
+        """Sample one token from logits with penalty, temp, and top-k/p."""
         L = ttnn.typecast(ttnn.reshape(logits, [1, self.v]), ttnn.bfloat16)
 
         if self.rep != 1.0:
@@ -88,6 +92,7 @@ class TtSampler:
         return token
 
     def _apply_penalty_temp_topk(self, logits):
+        """Apply repetition penalty, temperature, and top-k/p to logits."""
         L = ttnn.typecast(ttnn.reshape(logits, [1, self.v]), ttnn.bfloat16)
         if self.rep != 1.0:
             pos = ttnn.gt(L, 0.0)
@@ -110,6 +115,7 @@ class TtSampler:
         return L
 
     def pick_dev(self, logits, gumbel=None, bias=None):
+        """Argmax-sample on device with optional Gumbel noise and stop bias."""
         L = self._apply_penalty_temp_topk(logits)
         Lf = ttnn.typecast(L, ttnn.float32)
         if bias is not None:

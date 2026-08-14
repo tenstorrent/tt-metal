@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 from functools import lru_cache
@@ -39,6 +39,7 @@ CLAMP_ASP_EPS = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU_MIN, ASP_EPS)
 
 
 def _to_tile(t: torch.Tensor, device, dtype=None, memory_config=None) -> ttnn.Tensor:
+    """Upload a torch tensor as tiled device weights."""
     return ttnn.from_torch(
         t.float(),
         layout=ttnn.TILE_LAYOUT,
@@ -49,33 +50,39 @@ def _to_tile(t: torch.Tensor, device, dtype=None, memory_config=None) -> ttnn.Te
 
 
 def _to_body(t: torch.Tensor, device) -> ttnn.Tensor:
+    """Upload a tensor in body bfloat16 dtype."""
     return _to_tile(t, device, BODY_DTYPE)
 
 
 def _bn_scale_shift(bn, eps=BN_EPS):
+    """Fold batch-norm scale and shift from running stats."""
     scale = bn.weight.detach() / torch.sqrt(bn.running_var.detach() + eps)
     shift = bn.bias.detach() - bn.running_mean.detach() * scale
     return scale, shift
 
 
 def _body_compute_config(device):
+    """Build HiFi4 compute kernel config for body ops."""
     return ttnn.init_device_compute_kernel_config(
         device.arch(), math_fidelity=BODY_FIDELITY, fp32_dest_acc_en=True, packer_l1_acc=True
     )
 
 
 def _max_subblock(per_core_M, per_core_N, max_dst=4):
+    """Pick max DEST-fitting matmul out subblock sizes."""
     cands = [(1, w) for w in range(1, per_core_N + 1) if per_core_N % w == 0]
     cands += [(h, per_core_N) for h in range(2, per_core_M + 1) if per_core_M % h == 0]
     return max((c for c in cands if c[0] * c[1] <= max_dst), key=lambda c: c[0] * c[1], default=(1, 1))
 
 
 def _largest_divisor(n, cap):
+    """Return the largest divisor of n not exceeding cap."""
     return max(d for d in range(1, min(n, cap) + 1) if n % d == 0)
 
 
 @lru_cache(maxsize=None)
 def _matmul_1d(per_core_M, per_core_N, in0_block_w, grid_x, grid_y):
+    """Build a cached 1D multicast matmul program config."""
     sub_h, sub_w = _max_subblock(per_core_M, per_core_N)
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
@@ -93,6 +100,7 @@ def _matmul_1d(per_core_M, per_core_N, in0_block_w, grid_x, grid_y):
 
 @lru_cache(maxsize=None)
 def _matmul_2d(per_core_M, per_core_N, in0_block_w, grid_x, grid_y):
+    """Build a cached 2D multicast matmul program config."""
     sub_h, sub_w = _max_subblock(per_core_M, per_core_N)
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=(grid_x, grid_y),
@@ -110,6 +118,7 @@ def _matmul_2d(per_core_M, per_core_N, in0_block_w, grid_x, grid_y):
 
 
 def _scale_channels(x, diag, compute_config, core_grid, bias=None):
+    """Scale channels via diagonal matmul with optional bias."""
     mem = x.memory_config()
     program_config = None
     if mem.shard_spec is not None:
@@ -130,6 +139,7 @@ def _scale_channels(x, diag, compute_config, core_grid, bias=None):
 
 class _ChannelAffine(LightweightModule):
     def __init__(self, device, scale, shift):
+        """Store diagonal scale and shift for channel affine."""
         super().__init__()
         self.diag = _to_body(torch.diag(scale), device)
         self.bias = _to_body(shift.reshape(1, -1), device)
@@ -138,26 +148,33 @@ class _ChannelAffine(LightweightModule):
         self.core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
 
     def forward(self, x):
+        """Apply channel-wise affine transform."""
         return _scale_channels(x, self.diag, self.compute_config, self.core_grid, bias=self.bias)
 
 
 def _time_major(weight):
+    """Transpose last two dims of a conv weight."""
     return weight.transpose(-1, -2).contiguous()
 
 
 def _fold_bn(weight, bias, bn):
+    """Fold batch-norm into conv weight and bias."""
     scale, shift = _bn_scale_shift(bn)
     folded_bias = shift if bias is None else bias * scale + shift
     return weight * scale.reshape(-1, 1, 1, 1), folded_bias
 
 
 def _stage_memory_config(ncores, hw):
+    """Choose L1 vs interleaved memory for a stage HW."""
     return None if hw >= ncores * (TILE // 2) else ttnn.L1_MEMORY_CONFIG
 
 
 @lru_cache(maxsize=None)
 def _mean_block(tiles, ncores):
+    """Pick mean-reduction block size minimizing cost."""
+
     def cost(n):
+        """Score a candidate mean-reduction block factor."""
         return -(-n // ncores) * (tiles // n) + -(-n // TILE)
 
     n = min((d for d in range(1, tiles + 1) if tiles % d == 0), key=lambda d: (cost(d), d))
@@ -166,6 +183,7 @@ def _mean_block(tiles, ncores):
 
 def _global_mean(x, hw, ncores):
     # Staged single-axis means on purpose; do not revert to dim=[1, 2] (FW-column is misleading).
+    """Compute global mean over spatial dims for SE."""
     x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
     tiles = -(-hw // TILE)
     if tiles < _MEAN_BATCH_MIN_TILES:
@@ -179,6 +197,7 @@ def _global_mean(x, hw, ncores):
 
 
 def _se_core_grid(out_channels, grid):
+    """Pick SE linear core grid for out_channels."""
     tiles = max(1, out_channels // TILE)
     x = _largest_divisor(tiles, grid.x)
     return ttnn.CoreGrid(y=min(tiles // x, grid.y), x=x)
@@ -186,6 +205,7 @@ def _se_core_grid(out_channels, grid):
 
 class TtSELayer(LightweightModule):
     def __init__(self, device, se):
+        """Load squeeze-excitation FC weights and grids."""
         super().__init__()
         self.w1 = _to_body(se.fc[0].weight.t(), device)
         self.b1 = _to_body(se.fc[0].bias.reshape(1, -1), device)
@@ -201,6 +221,7 @@ class TtSELayer(LightweightModule):
         self.compute_config = _body_compute_config(device)
 
     def forward(self, x, hw):
+        """Apply SE channel gating with global mean."""
         broadcast = hw <= _SE_BROADCAST_MAX_TILES * TILE
         y = _global_mean(x, hw, self.ncores)
         y = ttnn.linear(
@@ -229,6 +250,7 @@ class TtSELayer(LightweightModule):
 
 class TtSEBasicBlock(LightweightModule):
     def __init__(self, device, block, **conv_kwargs):
+        """Load an SE-ResNet basic block with folded BN."""
         super().__init__()
         self.stride = stride = block.stride[0] if isinstance(block.stride, tuple) else block.stride
         self.conv1 = TtConv2d(
@@ -255,9 +277,11 @@ class TtSEBasicBlock(LightweightModule):
 
     @property
     def convs(self):
+        """List conv modules used in this block."""
         return [c for c in (self.conv1, self.conv2, self.downsample_conv) if c is not None]
 
     def forward(self, x, h, w):
+        """Run SE basic block forward returning output and HW."""
         oh, ow = (h - 1) // self.stride + 1, (w - 1) // self.stride + 1
         mem = _stage_memory_config(self.ncores, oh * ow)
         out, oh, ow = self.conv1(x, h, w, mem)
@@ -270,6 +294,7 @@ class TtSEBasicBlock(LightweightModule):
 
 class TtResNetSpeakerEncoder(LightweightModule):
     def __init__(self, device, ref):
+        """Load ResNet speaker encoder body and ASP/FC tail."""
         super().__init__()
         self.device = device
         body = {"activations_dtype": BODY_DTYPE, "math_fidelity": BODY_FIDELITY}
@@ -317,6 +342,7 @@ class TtResNetSpeakerEncoder(LightweightModule):
         self.fc_config = _matmul_2d(fc_mt // fc_gy, 1, _largest_divisor(fc_kt, 8), 1, fc_gy)
 
     def forward(self, mel):
+        """Encode mel into an L2-normalized speaker embedding."""
         _, freq, time = mel.shape
         for conv in self.body_convs:
             conv.set_double_buffer(time < SINGLE_BUFFER_FRAMES)

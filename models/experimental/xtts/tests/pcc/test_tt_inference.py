@@ -1,26 +1,5 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-
-"""End-to-end test: text + reference audio -> waveform, TTNN vs torch reference.
-
-Wires the whole XTTS-v2 model on device (conditioning -> GPT KV-cache greedy decode ->
-HiFi-GAN decoder) and validates the waveform against the full torch reference with real
-coqui/XTTS-v2 weights and a real reference clip.
-
-Teacher-forced on the reference codes: greedy code sequences drift under bf16 (see
-test_tt_gpt_generate), so both paths decode the *same* codes, making the waveforms
-comparable. This validates the end-to-end wiring + the GPT-latents -> decoder handoff
-with real latents (individual modules are validated in their own tests).
-
-The conditioning 80-mel is computed on host (the one remaining host tensor op); the
-speaker-encoder mel frontend runs on device.
-
-Run:
-    source python_env/bin/activate
-    export TT_METAL_HOME=$(pwd)
-    export PYTHONPATH=$(pwd)
-    pytest models/experimental/xtts/tests/pcc/test_tt_inference.py -s
-"""
 
 import math
 
@@ -51,47 +30,36 @@ from models.experimental.xtts.tt.xtts_inference import TtXtts
 TILE = 32
 MAX_NEW_TOKENS = 16
 COND_SECONDS = 3
-# Long-reference case: over two gpt_cond_chunk_len windows, so the style average has 3 terms and
-# each window is a FULL 4 s one (the length that forces the mel frontend to frame in chunks).
 COND_LONG_SECONDS = 10
-COND_LONG_CLIPS = ("LJ001-0001.wav", "LJ001-0003.wav")  # 9.66 s + 9.67 s, same speaker
+COND_LONG_CLIPS = ("LJ001-0001.wav", "LJ001-0003.wav")
 
-# A bigger, real sentence for the objective eval metrics (CER/UTMOS/SECS), which need
-# natural, intelligible speech of some length to be meaningful.
 EVAL_TEXT = (
     "The quick brown fox jumps over the lazy dog while the sun sets slowly over the hills. "
     "Text to speech synthesis on Tenstorrent hardware is fast, natural, and efficient."
 )
-# Cap on the real (sampled) generation used for eval. The fp32 HiFi-GAN vocoder decodes the
-# whole code sequence in one shot; ~150 codes stays under its single-shot memory ceiling on a
-# fresh device while giving Whisper / UTMOS / ECAPA2 enough speech to score. Generation usually
-# self-terminates (STOP) before this cap.
 EVAL_MAX_TOKENS = 150
-# XTTS's natural sampling settings (self-terminates via STOP with healthy output).
 EVAL_TEMPERATURE = 0.75
 EVAL_TOP_K = 50
-EVAL_TOP_P = 0.85  # nucleus sampling (coqui XTTS default)
+EVAL_TOP_P = 0.85
 EVAL_REP_PENALTY = 5.0
 
 
 def _stft_mag(wav):
-    """Magnitude STFT of a ``[1, 1, T]`` waveform — the perceptual comparison domain."""
+    """Return STFT magnitude spectrogram of a waveform for PCC comparison."""
     return torch.stft(wav.reshape(1, -1), 1024, 256, window=torch.hann_window(1024), return_complex=True).abs()
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-# Spectrogram-domain gate: a GAN vocoder turns tiny bf16 latent differences into phase shifts
-# that wreck sample-wise waveform PCC without changing what is heard.
+# Spectrogram gate: GAN vocoder turns tiny bf16 latent diffs into phase shifts that wreck waveform PCC.
 @pytest.mark.parametrize("pcc", [0.99])
 def test_tt_inference(device, xtts_state_dict, pcc, reset_seeds):
+    """Compare end-to-end TTNN inference spectrogram to the PyTorch reference via PCC."""
     from scipy.signal import resample_poly
 
     sd = xtts_state_dict
 
-    # Inputs: real reference audio (22.05 kHz for conditioning, resampled to 16 kHz for
-    # the speaker encoder) + text.
-    wav = load_reference_audio(sample="en_sample.wav", max_seconds=COND_SECONDS)  # [1, samples] @ 22050
-    cond_mel = wav_to_mel(wav, sd["mel_stats"].cpu())  # host 80-mel [1, 80, s]
+    wav = load_reference_audio(sample="en_sample.wav", max_seconds=COND_SECONDS)
+    cond_mel = wav_to_mel(wav, sd["mel_stats"].cpu())
     g = math.gcd(SPK_SR, MEL_SR)
     spk_wav = torch.from_numpy(resample_poly(wav[0].numpy(), SPK_SR // g, MEL_SR // g).astype("float32")).unsqueeze(0)
 
@@ -100,24 +68,19 @@ def test_tt_inference(device, xtts_state_dict, pcc, reset_seeds):
     if pad:
         wrapped = F.pad(wrapped, (0, pad), value=STOP_TEXT_TOKEN)
 
-    # Reference end to end (also the source of the codes teacher-forced into TT).
     reference = XttsReference(sd)
     wav_ref, codes_ref = reference.inference(wrapped, cond_mel, spk_wav, max_new_tokens=MAX_NEW_TOKENS)
 
-    # TTNN end to end, same codes.
     tt = TtXtts(device, sd, reference.decoder_full)
     spk_wav_tt = ttnn.from_torch(
         spk_wav.reshape(1, -1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
     )
-    wav_tt_dev, _ = tt.inference(wrapped, wav, spk_wav_tt, force_codes=codes_ref[0].tolist())  # mel on device
-    wav_tt = ttnn.to_torch(wav_tt_dev).float().permute(0, 2, 1)  # [1, T_out, 1] -> [1, 1, T_out]
+    wav_tt_dev, _ = tt.inference(wrapped, wav, spk_wav_tt, force_codes=codes_ref[0].tolist())
+    wav_tt = ttnn.to_torch(wav_tt_dev).float().permute(0, 2, 1)
 
     logger.info(f"codes={codes_ref.shape[1]}, ref wav {tuple(wav_ref.shape)}, tt wav {tuple(wav_tt.shape)}")
     assert wav_tt.shape == wav_ref.shape, f"waveform shape {tuple(wav_tt.shape)} != {tuple(wav_ref.shape)}"
 
-    # A GAN vocoder maps tiny bf16-GPT latent differences to small phase/sample shifts that
-    # tank sample-wise waveform correlation without changing what is heard. The perceptually
-    # meaningful gate is the magnitude-spectrogram PCC; raw-waveform PCC is informational.
     wave_pcc = comp_pcc(wav_ref, wav_tt, 0.0)[1]
     spec_pass, spec_msg = comp_pcc(_stft_mag(wav_ref), _stft_mag(wav_tt), pcc)
     logger.info(comp_allclose(wav_ref, wav_tt))
@@ -129,22 +92,9 @@ def test_tt_inference(device, xtts_state_dict, pcc, reset_seeds):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("pcc", [0.99])
 def test_tt_cond_latents_long_reference(device, xtts_state_dict, pcc, reset_seeds):
-    """LONG reference audio -> conditioning latents, on device vs torch.
-
-    coqui ``get_gpt_cond_latents`` conditions on up to ``gpt_cond_len`` (30 s) of reference audio by
-    slicing the AUDIO into ``gpt_cond_chunk_len`` (4 s) windows, computing each window's mel, and
-    AVERAGING the per-window style embeddings — the whole point of accepting a long reference. The
-    device does the same, computing every window's 80-mel on device, so the torch reference here
-    windows the audio too (``XttsReference._cond_latents`` instead windows the precomputed mel, which
-    is only equivalent up to the few STFT frames straddling a boundary — logged below for reference).
-
-    A reference this long also makes every window a full 4 s one, which is what forces the device mel
-    frontend to frame in several reshape chunks (one whole 4 s window does not fit L1 in one reshape).
-    """
+    """Compare long-reference multi-window conditioning latents to PyTorch via PCC."""
     sd = xtts_state_dict
 
-    # The HF samples are all ~3 s (under one window), so use the upstream coqui LJSpeech test
-    # clips: real, distinct, single-speaker speech, so the averaged windows differ from each other.
     wav = load_coqui_test_audio(samples=COND_LONG_CLIPS, max_seconds=COND_LONG_SECONDS)
     windows = chunk_wav(wav)
     logger.info(
@@ -153,15 +103,13 @@ def test_tt_cond_latents_long_reference(device, xtts_state_dict, pcc, reset_seed
     )
     assert len(windows) > 2, "test needs a reference spanning more than two conditioning windows"
 
-    # Reference: window the audio -> mel + get_style_emb per window -> average (coqui order).
     ref_cond = reference_conditioning(sd)
     mel_stats = sd["mel_stats"].cpu()
     with torch.no_grad():
         parts = [ref_cond(wav_to_mel(w, mel_stats)) for w in windows]
         mel_windowed = [ref_cond(m) for m in chunk_cond_mel(wav_to_mel(wav, mel_stats))]
-    ref_latents = torch.stack(parts, dim=0).mean(dim=0).transpose(1, 2)  # [1, 32, 1024]
+    ref_latents = torch.stack(parts, dim=0).mean(dim=0).transpose(1, 2)
 
-    # Device: chunk the audio -> mel + style per window on device -> average.
     tt = TtXtts(device, sd, XttsHifiDecoderFull(sd))
     tt_latents = ttnn.to_torch(tt._cond_latents(wav)).float()
 
@@ -176,25 +124,10 @@ def test_tt_cond_latents_long_reference(device, xtts_state_dict, pcc, reset_seed
     assert does_pass, f"long-reference conditioning PCC below {pcc}: {pcc_message}"
 
 
-# A real sampled generation + three heavy eval backends (Whisper-large-v3, UTMOS22, ECAPA2,
-# downloaded on first use), so it needs well beyond the repo-wide 300s pytest timeout.
 @pytest.mark.timeout(2400)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 65536}], indirect=True)
 def test_tt_eval(device, xtts_state_dict, reset_seeds):
-    """Objective quality eval of a *real* on-device sampled generation of EVAL_TEXT.
-
-    Runs the full text + reference-audio -> waveform pipeline with XTTS's natural sampling
-    (not teacher-forced), writes the audio, and reports three standard TTS metrics computed
-    on the device output:
-
-      * CER   — Whisper-large-v3 transcript vs the input text (pronunciation/intelligibility).
-      * UTMOS — UTMOS22 naturalness MOS (objective proxy for perceived quality).
-      * SECS  — ECAPA2 speaker-embedding cosine similarity to the reference speaker.
-
-    Each metric is best-effort: a missing/failing backend logs a skip rather than failing the
-    test. Generation length is capped (EVAL_MAX_TOKENS) to stay under the fp32 HiFi-GAN
-    vocoder's single-shot memory ceiling on this device.
-    """
+    """Run sampled TTNN inference and log CER/UTMOS/SECS eval metrics."""
     import os
 
     import soundfile as sf
@@ -202,9 +135,7 @@ def test_tt_eval(device, xtts_state_dict, reset_seeds):
 
     sd = xtts_state_dict
 
-    # Inputs: real reference audio (22.05 kHz conditioning; resampled to 16 kHz for the speaker
-    # encoder + SECS target) + a bigger, real text sentence.
-    wav = load_reference_audio(sample="en_sample.wav", max_seconds=COND_SECONDS)  # [1, s] @ 22050
+    wav = load_reference_audio(sample="en_sample.wav", max_seconds=COND_SECONDS)
     g = math.gcd(SPK_SR, MEL_SR)
     spk_wav = torch.from_numpy(resample_poly(wav[0].numpy(), SPK_SR // g, MEL_SR // g).astype("float32")).unsqueeze(0)
 
@@ -213,19 +144,15 @@ def test_tt_eval(device, xtts_state_dict, reset_seeds):
     if pad:
         wrapped = F.pad(wrapped, (0, pad), value=STOP_TEXT_TOKEN)
 
-    # TtXtts needs a reference HiFi decoder only to source decoder / speaker-encoder / mel
-    # weights (no torch GPT here — generation is entirely on device).
     tt = TtXtts(device, sd, XttsHifiDecoderFull(sd))
     spk_wav_tt = ttnn.from_torch(
         spk_wav.reshape(1, -1).float(), layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.float32
     )
 
-    # Real (sampled) generation of the whole sentence — self-terminates via STOP; greedy is
-    # intentionally NOT used (it collapses/repeats and never stops, so it can't make a sentence).
-    ttnn.manual_seed(1234, device=device)  # reproducible-ish sampled decode
+    ttnn.manual_seed(1234, device=device)
     wav_eval_dev, codes_eval = tt.inference(
         wrapped,
-        wav,  # raw reference wav; 80-mel computed on device
+        wav,
         spk_wav_tt,
         max_new_tokens=EVAL_MAX_TOKENS,
         temperature=EVAL_TEMPERATURE,
@@ -243,7 +170,7 @@ def test_tt_eval(device, xtts_state_dict, reset_seeds):
         f"audio at {out_dir}/tt_eval_device.wav"
     )
 
-    spk_np = spk_wav[0].numpy()  # 16 kHz reference-speaker audio (SECS target)
+    spk_np = spk_wav[0].numpy()
     logger.info("================ XTTS objective eval metrics ================")
     try:
         from models.experimental.xtts.eval.xtts_eval import compute_cer
