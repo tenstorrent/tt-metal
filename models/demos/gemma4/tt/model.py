@@ -380,6 +380,9 @@ class Gemma4Model:
         router_dtype = precision.get("router", dtype)
         embedding_dtype = precision.get("embedding", dtype)
         lm_head_dtype = precision.get("lm_head", dtype)
+        # Paged K/V storage, not a weight: it sizes with context rather than with the model,
+        # so it is the one tensor whose precision trades against how long a prompt fits.
+        kv_cache_dtype = precision.get("kv_cache", dtype)
 
         # KV sharing map: layers after (full_n_layers - num_kv_shared_layers) share KV
         # from the last non-shared layer of the same type
@@ -575,7 +578,7 @@ class Gemma4Model:
                     max_batch_size=max_local_batch_size,
                     max_seq_len=max_seq_len,
                     paged_attention_config=paged_attention_config,
-                    cache_dtype=ttnn.bfloat16,
+                    cache_dtype=kv_cache_dtype,
                     max_num_blocks_override=max_num_blocks_override,
                 )
                 layer.self_attn.kv_cache = kv_cache

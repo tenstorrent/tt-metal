@@ -11,6 +11,7 @@ Follows gpt-oss kv_cache.py pattern.
 import torch
 
 import ttnn
+from models.demos.gemma4.tt.precision import dtype_to_str
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
 # Hot cache blocks held in staging per decode slot for the loop-free packed KV
@@ -81,13 +82,19 @@ def init_kv_cache(
 
     mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
 
+    # Tag the filename with the dtype, as the weight tensors do. as_tensor returns a cache hit
+    # AS STORED, ignoring the dtype it was asked for, so a name that omits it would hand back a
+    # bf16 cache after the precision override moved K/V to bfp8 -- silently, and only detectable
+    # downstream where SDPA expects the narrower format.
+    dtype_suffix = f"_{dtype_to_str(cache_dtype)}"
+
     k_cache = ttnn.as_tensor(
         torch.zeros(cache_shape),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
         mesh_mapper=mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"k_cache_{cache_shape}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"k_cache_{cache_shape}{dtype_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -97,7 +104,7 @@ def init_kv_cache(
         layout=ttnn.TILE_LAYOUT,
         dtype=cache_dtype,
         mesh_mapper=mesh_mapper,
-        cache_file_name=get_cache_file_name(tensor_cache_path, f"v_cache_{cache_shape}"),
+        cache_file_name=get_cache_file_name(tensor_cache_path, f"v_cache_{cache_shape}{dtype_suffix}"),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
