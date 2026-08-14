@@ -39,6 +39,14 @@
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 
 namespace tt::tt_metal {
+namespace {
+
+BufferShardingArgsImpl make_sharding_args_impl(std::optional<BufferDistributionSpec> spec) {
+    const auto layout = spec.has_value() ? TensorMemoryLayout::BLOCK_SHARDED : TensorMemoryLayout::INTERLEAVED;
+    return BufferShardingArgsImpl{std::move(spec), std::nullopt, layout};
+}
+
+}  // namespace
 
 BufferShardingArgs::BufferShardingArgs(BufferShardingArgsImpl impl) :
     impl_(std::make_unique<BufferShardingArgsImpl>(std::move(impl))) {}
@@ -51,13 +59,8 @@ BufferShardingArgs::BufferShardingArgs(BufferDistributionSpec buffer_distributio
     BufferShardingArgs(
         BufferShardingArgsImpl{std::move(buffer_distribution_spec), std::nullopt, TensorMemoryLayout::BLOCK_SHARDED}) {}
 
-BufferShardingArgs::BufferShardingArgs(std::optional<BufferDistributionSpec> buffer_distribution_spec) {
-    const bool has_spec = buffer_distribution_spec.has_value();
-    *this = BufferShardingArgs(BufferShardingArgsImpl{
-        std::move(buffer_distribution_spec),
-        std::nullopt,
-        has_spec ? TensorMemoryLayout::BLOCK_SHARDED : TensorMemoryLayout::INTERLEAVED});
-}
+BufferShardingArgs::BufferShardingArgs(std::optional<BufferDistributionSpec> buffer_distribution_spec) :
+    BufferShardingArgs(make_sharding_args_impl(std::move(buffer_distribution_spec))) {}
 
 BufferShardingArgs::BufferShardingArgs(ShardSpecBuffer shard_spec, TensorMemoryLayout buffer_layout) :
     BufferShardingArgs(BufferShardingArgsImpl{std::nullopt, std::move(shard_spec), buffer_layout}) {}
@@ -72,12 +75,11 @@ BufferShardingArgs::BufferShardingArgs(
     BufferShardingArgs(
         BufferShardingArgsImpl{std::move(buffer_distribution_spec), std::move(shard_spec), buffer_layout}) {}
 
-BufferShardingArgs::BufferShardingArgs(const BufferShardingArgs& other) :
-    impl_(other.impl_ ? std::make_unique<BufferShardingArgsImpl>(*other.impl_) : nullptr) {}
+BufferShardingArgs::BufferShardingArgs(const BufferShardingArgs& other) : BufferShardingArgs(other.impl()) {}
 
 BufferShardingArgs& BufferShardingArgs::operator=(const BufferShardingArgs& other) {
     if (this != &other) {
-        impl_ = other.impl_ ? std::make_unique<BufferShardingArgsImpl>(*other.impl_) : nullptr;
+        impl_ = std::make_unique<BufferShardingArgsImpl>(other.impl());
     }
     return *this;
 }
@@ -94,12 +96,12 @@ const std::optional<ShardSpecBuffer>& BufferShardingArgs::shard_spec() const { r
 
 TensorMemoryLayout BufferShardingArgs::buffer_layout() const { return impl().buffer_layout_; }
 
-BufferShardingArgsImpl& BufferShardingArgs::impl() {
+const BufferShardingArgsImpl& BufferShardingArgs::impl() const {
     TT_FATAL(impl_ != nullptr, "BufferShardingArgs is in a moved-from state.");
     return *impl_;
 }
 
-const BufferShardingArgsImpl& BufferShardingArgs::impl() const {
+BufferShardingArgsImpl& BufferShardingArgs::impl() {
     TT_FATAL(impl_ != nullptr, "BufferShardingArgs is in a moved-from state.");
     return *impl_;
 }
@@ -430,12 +432,12 @@ BufferImpl::BufferImpl(
 
 Buffer::Buffer(BufferImpl impl) : impl_(std::make_unique<BufferImpl>(std::move(impl))) {}
 
-BufferImpl& Buffer::impl() {
+const BufferImpl& Buffer::impl() const {
     TT_FATAL(impl_ != nullptr, "Buffer is in a moved-from state.");
     return *impl_;
 }
 
-const BufferImpl& Buffer::impl() const {
+BufferImpl& Buffer::impl() {
     TT_FATAL(impl_ != nullptr, "Buffer is in a moved-from state.");
     return *impl_;
 }

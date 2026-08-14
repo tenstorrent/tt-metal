@@ -137,8 +137,8 @@ public:
     const std::optional<ShardSpecBuffer>& shard_spec() const;
     TensorMemoryLayout buffer_layout() const;
 
-    BufferShardingArgsImpl& impl();
     const BufferShardingArgsImpl& impl() const;
+    BufferShardingArgsImpl& impl();
 
 private:
     std::unique_ptr<BufferShardingArgsImpl> impl_;
@@ -200,8 +200,8 @@ public:
 
     size_t unique_id() const;
 
-    BufferImpl& impl();
     const BufferImpl& impl() const;
+    BufferImpl& impl();
 
 private:
     std::unique_ptr<BufferImpl> impl_;
