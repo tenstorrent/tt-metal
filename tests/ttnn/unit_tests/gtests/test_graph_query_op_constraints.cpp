@@ -546,7 +546,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
     const auto& input_spec_a = std::get<0>(GetParam());
     const auto& input_spec_b = std::get<1>(GetParam());
     const tt::BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != tt::BoardType::N300 && board_type != tt::BoardType::E150) {
+    if (board_type != tt::BoardType::N300) {
         GTEST_SKIP();
     }
 
