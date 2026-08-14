@@ -247,6 +247,9 @@ enum class EnvVarID {
     // ALLOCATOR CONFIGURATION
     // ========================================
     TT_METAL_ALLOCATOR_MODE_HYBRID,  // Enable hybrid lockstep + per-core L1 allocator mode
+    TT_METAL_TRACE_ALLOC_TRACKING,  // Enable per-trace unsafe allocation accounting
+    TT_METAL_TRACE_ALLOC_TRACEBACKS,  // Capture diagnostics for unsafe trace allocations
+    TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE,  // Exclude program-cache buffers from trace accounting
 
     // ========================================
     // SHM TRACKING
@@ -356,6 +359,9 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         this->root_dir = p.string();
     }
 
+    trace_allocation_tracking_enabled_ = false;
+    trace_allocation_diagnostics_enabled_ = false;
+    trace_allocation_skip_program_cache_enabled_ = false;
     InitializeFromEnvVars();
 
     // Mock devices mirror real silicon of the same architecture: leave the 2-erisc default (and any
@@ -1672,6 +1678,20 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (lockstep-only allocation)
         // Usage: export TT_METAL_ALLOCATOR_MODE_HYBRID=1
         case EnvVarID::TT_METAL_ALLOCATOR_MODE_HYBRID: this->allocator_mode_hybrid = is_env_enabled(value); break;
+
+        // Trace-allocation tracker settings are process-start options. Keep their
+        // cached values in RunTimeOptions so runtime hot paths never call getenv.
+        case EnvVarID::TT_METAL_TRACE_ALLOC_TRACKING:
+            trace_allocation_tracking_enabled_ = std::strcmp(value, "1") == 0;
+            break;
+        case EnvVarID::TT_METAL_TRACE_ALLOC_TRACEBACKS:
+            trace_allocation_diagnostics_enabled_ =
+                trace_allocation_tracking_enabled_ && std::strcmp(value, "1") == 0;
+            break;
+        case EnvVarID::TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE:
+            trace_allocation_skip_program_cache_enabled_ =
+                trace_allocation_tracking_enabled_ && std::strcmp(value, "1") == 0;
+            break;
 
         // TT_METAL_SHM_TRACKING_DISABLED
         // Disable shared memory tracking for tt-smi.
