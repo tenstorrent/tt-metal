@@ -568,27 +568,29 @@ def test_audio_decode_t_parallel(mesh_device):
 
         if baseline_out is None:
             baseline_out, baseline_s = out, seconds
-            psnr = float("inf")
+            psnr_db = float("inf")
         else:
             assert out.shape == baseline_out.shape, f"factor {factor}: {out.shape} != {baseline_out.shape}"
-            psnr = psnr(baseline_out, out)
-        results.append((factor, axis, seconds, psnr))
+            # `psnr_db`, not `psnr`: binding the float to `psnr` shadows the imported helper, so the
+            # first factor's `float("inf")` makes the second factor's call a TypeError.
+            psnr_db = psnr(baseline_out, out)
+        results.append((factor, axis, seconds, psnr_db))
         logger.info(
             f"PERF audio_decode t_factor={factor} axis={axis}: {seconds:.4f} s "
-            f"({baseline_s / seconds:.2f}x) PSNR vs 1-device {psnr:.1f} dB"
+            f"({baseline_s / seconds:.2f}x) PSNR vs 1-device {psnr_db:.1f} dB"
         )
-        if psnr < 40.0 and out is not baseline_out:
+        if psnr_db < 40.0 and out is not baseline_out:
             _localize_divergence(baseline_out.float(), out.float(), factor=factor, logger=logger)
         del decoder
 
     logger.info("=== audio decode T-parallel summary ===")
-    for factor, axis, seconds, psnr in results:
+    for factor, axis, seconds, psnr_db in results:
         if seconds is None:
             logger.info(f"  t_factor={factor:2d} axis={axis}: unsupported")
         else:
             logger.info(
                 f"  t_factor={factor:2d} axis={axis}: {seconds:.4f} s  {baseline_s / seconds:5.2f}x  "
-                f"PSNR {psnr:6.1f} dB"
+                f"PSNR {psnr_db:6.1f} dB"
             )
 
     # The baseline must have run, or there is nothing to compare against and every other factor was
@@ -615,7 +617,7 @@ def test_audio_decode_t_parallel(mesh_device):
     assert ran, "no parallel factor ran at all; the T-parallel path is entirely unavailable"
 
     # Any factor that ran must agree with the single-device path; a fast wrong answer fails.
-    for factor, axis, seconds, psnr in results:
+    for factor, axis, seconds, psnr_db in results:
         if seconds is None or (factor, axis) in KNOWN_BROKEN:
             continue
-        assert psnr > 40.0, f"t_factor={factor} axis={axis} diverges from 1-device: PSNR {psnr:.1f} dB"
+        assert psnr_db > 40.0, f"t_factor={factor} axis={axis} diverges from 1-device: PSNR {psnr_db:.1f} dB"
