@@ -30,6 +30,16 @@ inline void llk_unpack_AB_init(
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
+    // Neither LLK below takes a TensorShape, so neither scales its L1 tile index by the face count
+    // (a tiny tile is registered as one HW tile per face, so they would move only a fraction of the
+    // tile and step L1 by a single face). Full-tile only until they are converted (tt-metal #47597).
+    LLK_ASSERT(
+        get_operand_tensor_shape(operandA_id).total_num_faces() == ckernel::MAX_NUM_FACES,
+        "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
+    LLK_ASSERT(
+        get_operand_tensor_shape(operandB_id).total_num_faces() == ckernel::MAX_NUM_FACES,
+        "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
+
     if constexpr (BType == BroadcastType::NONE) {
         _llk_unpack_binary_operands_init_(operandA_id, operandB_id, 1);
     } else {

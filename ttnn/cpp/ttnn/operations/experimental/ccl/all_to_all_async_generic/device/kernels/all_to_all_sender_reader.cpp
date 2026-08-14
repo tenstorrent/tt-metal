@@ -26,6 +26,7 @@ constexpr uint32_t has_reader_tail = get_compile_time_arg_val(7);
 constexpr uint32_t has_writer_tail = get_compile_time_arg_val(8);
 constexpr uint32_t concat_num_tiles = get_compile_time_arg_val(9);
 constexpr uint32_t dst_inner_dims_size = get_compile_time_arg_val(10);
+constexpr uint32_t max_pages_per_packet = get_compile_time_arg_val(11);
 
 template <typename AddrGenType>
 void read_data(
@@ -97,7 +98,7 @@ void kernel_main() {
     size_t arg_idx = 0;
     address_t input_address = get_arg_val<address_t>(arg_idx++);
     uint32_t local_num_devices = get_arg_val<uint32_t>(arg_idx++);
-    constexpr auto input_tensor_args = TensorAccessorArgs<11>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<12>();
     auto input_addrgen = TensorAccessor(input_tensor_args, input_address);
     constexpr uint32_t split_num_half_tiles = split_dim_size * 2 / num_devices;
     constexpr uint32_t split_num_tiles = (split_num_half_tiles + 1) / 2;
@@ -108,11 +109,9 @@ void kernel_main() {
     CircularBuffer cb0(cb0_id);
 
     for (uint32_t did = 0; did < local_num_devices; ++did) {
-        int32_t device_offset = get_arg_val<int32_t>(arg_idx++);
-        uint32_t device_id = (current_device_id + device_offset + num_devices) % num_devices;
-
+        const int32_t device_offset = get_arg_val<int32_t>(arg_idx++);
+        const uint32_t device_id = (current_device_id + device_offset + num_devices) % num_devices;
         const uint32_t device_read_offset = (split_num_half_tiles * device_id) / 2;
-
         auto calculate_tile = [&](int b) {
             const uint32_t o = b / (split_num_tiles * inner_dims_size);
             const uint32_t s = (b / inner_dims_size) % split_num_tiles;
@@ -127,44 +126,37 @@ void kernel_main() {
         };
 
         uint32_t block_idx = get_arg_val<uint32_t>(arg_idx++);
-        uint32_t block_end_id = get_arg_val<uint32_t>(arg_idx++);
-        cb0.reserve_back(1);
-        address_t l1_write_addr = cb0.get_write_ptr();
-        uint32_t current_package_payload = 0;
-        uint32_t current_tile = 0;
-
+        const uint32_t block_end_id = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t block_stride = get_arg_val<uint32_t>(arg_idx++);
         while (block_idx < block_end_id) {
-            auto [split_idx, inner_idx, concat_idx, tile_id, payload_size] = calculate_tile(block_idx);
+            cb0.reserve_back(1);
+            address_t l1_write_addr = cb0.get_write_ptr();
+            uint32_t current_package_payload = 0;
+            uint32_t current_tile = 0;
+            while (current_tile < max_pages_per_packet) {
+                if (block_idx >= block_end_id) {
+                    break;
+                }
 
-            // If package is full, flush and start new package
-            if (current_tile == 4 || current_package_payload + payload_size > 2 * input_page_size) {
-                noc_obj.async_read_barrier();
-                cb0.push_back(1);
-                cb0.reserve_back(1);
-                l1_write_addr = cb0.get_write_ptr();
-                current_package_payload = 0;
-                current_tile = 0;
+                auto [split_idx, inner_idx, concat_idx, tile_id, payload_size] = calculate_tile(block_idx);
+                if (current_package_payload + payload_size > max_pages_per_packet * input_page_size) {
+                    break;
+                }
+                read_data(
+                    noc_obj,
+                    device_id,
+                    tile_id,
+                    l1_write_addr,
+                    input_addrgen,
+                    concat_idx,
+                    split_idx == split_num_tiles - 1,
+                    payload_size);
+                current_package_payload += payload_size;
+                current_tile++;
+                block_idx += block_stride;
             }
-
-            read_data(
-                noc_obj,
-                device_id,
-                tile_id,
-                l1_write_addr,
-                input_addrgen,
-                concat_idx,
-                split_idx == split_num_tiles - 1,
-                payload_size);
-
-            current_package_payload += payload_size;
-            current_tile++;
-            block_idx++;
-        }
-
-        // Flush remaining tiles in the last package
-        if (current_tile > 0) {
             noc_obj.async_read_barrier();
+            cb0.push_back(1);
         }
-        cb0.push_back(1);
     }
 }

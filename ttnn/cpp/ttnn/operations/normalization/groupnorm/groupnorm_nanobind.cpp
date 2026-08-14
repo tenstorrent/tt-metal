@@ -152,9 +152,16 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
            int64_t num_cores_across_channel,
            DataType data_type,
            int64_t tile_height,
-           int64_t tile_width) {
+           int64_t tile_width,
+           int64_t rows_in_last_tile) {
             return create_group_norm_input_mask(
-                num_channel, num_groups, num_cores_across_channel, data_type, tile_height, tile_width);
+                num_channel,
+                num_groups,
+                num_cores_across_channel,
+                data_type,
+                tile_height,
+                tile_width,
+                rows_in_last_tile);
         },
         nb::arg("num_channel"),
         nb::arg("num_groups"),
@@ -162,9 +169,16 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
         nb::arg("data_type") = DataType::BFLOAT16,
         nb::arg("tile_height") = 32,
         nb::arg("tile_width") = 32,
+        nb::arg("rows_in_last_tile") = 0,
         R"doc(
             C++ implementation of create_group_norm_input_mask.
             Returns a ttnn.Tensor of shape [1, num_groups, 32, 32*block_wt], dtype=ttnn.DataType.BFLOAT16.
+
+            rows_in_last_tile (= ``logical_hw % 32``) is for non-tile-aligned H*W. It appends a
+            second set of groups -- shape becomes [1, 2*num_groups, 32, 32*block_wt] -- identical
+            to the first but with rows >= rows_in_last_tile zeroed, which group_norm selects on
+            each batch's final row-tile. Leave at 0 for tile-aligned H*W; without it, group_norm
+            derives the second set with a device-side multiply+concat on every call.
         )doc");
     mod.def(
         "create_group_norm_input_negative_mask",

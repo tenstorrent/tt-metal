@@ -206,6 +206,15 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor_a.dtype() != DataType::FP8_E4M3 || (is_floating_point(out_dt) && out_dt != DataType::FP8_E4M3),
             "FP8_E4M3 input to tilize requires a float TILE output (FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B)");
+        // The Blackhole 8-bit unpack-tilize path corrupts odd rows when the block is a single column
+        // tile (ct_dim == 1, i.e. one tile per row); wider outputs are correct. Reject the broken
+        // narrow case for fp8 to avoid silently-wrong data (tt-llk narrow 8-bit tilize bug).
+        TT_FATAL(
+            input_tensor_a.dtype() != DataType::FP8_E4M3 || (width / tile_width) > 1,
+            "FP8_E4M3 tilize requires more than one tile per row (padded width {} must exceed one tile of {}); "
+            "the single-tile-per-row 8-bit unpack-tilize path is currently broken on this architecture",
+            width,
+            tile_width);
     }
 
     uint32_t stick_size = stick_s * input_tensor_a.element_size();  // Assuming bfloat16 dataformat
@@ -426,7 +435,11 @@ ttnn::Tensor tilize(
     return ttnn::device_operation::launch<TilizeDeviceOperation>(
         TilizeParams{
             .output_mem_config = output_mem_config.value_or(input_tensor.memory_config()),
-            .output_dtype = output_dtype.value_or(input_tensor.dtype()),
+            // FP8_E4M3 is ROW_MAJOR-only, so it can never be the TILE output dtype. When the caller
+            // doesn't request a specific output dtype, default an FP8 input to FLOAT32 (the format it
+            // unpacks to in DEST) instead of echoing the illegal FP8 dtype.
+            .output_dtype = output_dtype.value_or(
+                input_tensor.dtype() == DataType::FP8_E4M3 ? DataType::FLOAT32 : input_tensor.dtype()),
             .use_multicore = use_multicore,
             .enough_space_height = enough_space_height,
             .use_low_perf = use_low_perf,

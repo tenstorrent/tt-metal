@@ -18,7 +18,8 @@ uint32_t GroupNormPadCorrection::scaler_bits(uint32_t reduce_factor_w) const {
     return std::bit_cast<uint32_t>(sc);
 }
 
-GroupNormPadCorrection make_group_norm_pad_correction(uint32_t logical_hw, uint32_t padded_hw, bool use_welford) {
+GroupNormPadCorrection make_group_norm_pad_correction(
+    uint32_t logical_hw, uint32_t padded_hw, bool use_welford, uint32_t tile_height) {
     // Welford cannot express this: its kernels transpose H*W into the tile columns and track the
     // sample count in tile units, so the padding rows cannot be excluded. ttnn::group_norm routes
     // non-tile-aligned Welford requests to the two-pass path instead.
@@ -27,31 +28,9 @@ GroupNormPadCorrection make_group_norm_pad_correction(uint32_t logical_hw, uint3
     pad.logical_hw = logical_hw;
     pad.padded_hw = padded_hw;
     pad.kernel_logical_hw = pad.active ? logical_hw : padded_hw;
-    pad.k_bits = std::bit_cast<uint32_t>(static_cast<float>(padded_hw) / static_cast<float>(logical_hw) - 1.0f);
+    // padded_hw is logical_hw rounded up to a tile, so active implies a non-zero remainder.
+    pad.rows_in_last_tile = pad.active ? (logical_hw % tile_height) : 0;
     return pad;
-}
-
-void append_group_norm_pad_correction_cbs(
-    tt::tt_metal::ProgramDescriptor::CBDescriptors& cbs,
-    const GroupNormPadCorrection& pad,
-    std::array<uint32_t, 3> cb_indices,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    tt::DataFormat data_format,
-    uint32_t single_tile_size) {
-    if (!pad.active) {
-        return;
-    }
-    for (uint32_t cb_index : cb_indices) {
-        cbs.push_back(tt::tt_metal::CBDescriptor{
-            .total_size = single_tile_size,
-            .core_ranges = core_ranges,
-            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb_index),
-                .data_format = data_format,
-                .page_size = single_tile_size,
-            }}},
-        });
-    }
 }
 
 bool groupnorm_needs_fp32_reconfig(std::initializer_list<tt::DataFormat> reconfig_formats) {

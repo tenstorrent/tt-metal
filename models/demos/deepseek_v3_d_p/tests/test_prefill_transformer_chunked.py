@@ -136,22 +136,27 @@ LAYER_PCC_THRESHOLD = 0.88
 KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
 
-# Per-chunk baseline medians (seconds) for the no-PCC perf gate, pulled from a known-good CI run. Keyed
-# by (num_layers, n_chunks, num_iters) so only the exact config we have a CI number for is gated; every
-# other combo in the no-PCC sweep stays record-only. Each list has one entry per chunk (index c ==
-# chunk c). A single margin (the perf_margin pytest arg) is applied to every chunk. Recalibrate by
-# re-reading the "chunk timing stats" table from a fresh green CI run.
+# Per-chunk baseline medians (seconds) for the perf gate, pulled from a known-good CI run. Keyed by
+# (num_layers, n_chunks, num_iters) so only the exact config we have a CI number for is gated; every
+# other combo in the sweep stays record-only. Each list has one entry per chunk (index c == chunk c). A
+# single margin (the perf_margin pytest arg) is applied to every chunk. Recalibrate by re-reading the
+# "chunk timing stats" table from a fresh green CI run.
+#
+# TRACED ONLY. These are trace-replay numbers, and the gate is hard-wired to use_trace=True at the call
+# site -- the untraced variant is never gated, whatever this table holds. The two are different regimes,
+# not a small delta: this config measures 0.6-0.95 s/chunk traced (a ramp, since chunk c attends to
+# KV[0:c*CHUNK]) but a flat ~1.10 s/chunk untraced, host-dispatch bound so the depth ramp disappears
+# entirely. Untraced per-chunk stddev also reaches 0.22 s within a single run (~20%; run 31670499441
+# job 94387075128), which no meaningful band would survive.
 KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S = {
-    # test_kimi_prefill_transformer_chunked_no_pcc[...-L61-chunks_eleven-ten_iters] (55k / code_debug).
-    # TODO: populate the 11 per-chunk medians from the first green code_debug 55k CI run's
-    # "chunk timing stats" table; until then this config runs record-only (no perf gate). The old 5-chunk
-    # longbook baseline was [1.330, 1.326, 1.326, 1.340, 1.369] (run 28753487696) -- chunks 0-4 should be
-    # ~unchanged (chunk c attends to KV[0:c*CHUNK] regardless of n_chunks); chunks 5-10 are new.
-    # (61, 11, 10): [...],
+    # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
+    # (55k / code_debug), from run 31675454129 job 94407856609 -- green, and stable within the run
+    # (per-chunk stddev <= 0.002 s over the 9 post-warmup iterations).
+    (61, 11, 10): [0.605, 0.606, 0.653, 0.681, 0.711, 0.743, 0.760, 0.793, 0.842, 0.869, 0.905],
 }
 # Default +/- tolerance band around each baseline chunk median (fraction). Overridable per test via the
 # perf_margin pytest argument (see test_prefill_block_perf.py's `margin` column for the design).
-DEFAULT_PERF_MARGIN = 0.05
+DEFAULT_PERF_MARGIN = 0.03
 
 # Deepest config whose per-layer PCC is asserted; deeper runs (L61) stay record-only until their
 # accumulation headroom is pinned.
@@ -970,7 +975,7 @@ _PADDED_MODES = ["notrace", "traced"]
                 # semaphores there (use_l1_small_for_semaphores) instead of pinning the main-L1 floor.
                 # Kept minimal: L1_SMALL is carved from the top of L1, so a large value would shift the
                 # main-L1 buffer floor down and could re-introduce the clash.
-                "l1_small_size": 512,
+                "l1_small_size": 768,
                 # Needed only by mode="traced"; device_params is a separate parametrize axis so it
                 # cannot be conditioned on `mode`. Reserving it for every mode costs DRAM headroom the
                 # non-traced modes do not use — harmless here (the traced L61/full55k case, which has
@@ -991,7 +996,7 @@ _PADDED_MODES = ["notrace", "traced"]
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                "l1_small_size": 512,
+                "l1_small_size": 768,
                 "trace_region_size": 256 * 1024 * 1024,
             },
             2,
@@ -1063,9 +1068,8 @@ def test_kimi_prefill_transformer_chunked_padded(
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
-                # Small L1_SMALL region for the MoE routing all-gather's global semaphores
-                # (use_l1_small_for_semaphores); see the Kimi chunked test for the rationale.
-                "l1_small_size": 512,
+                # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores and rest for other needs.
+                "l1_small_size": 1152,
             },
             2,
             ttnn.Topology.Linear,
@@ -1682,7 +1686,7 @@ def run_chunked_transformer_updated(
 # ids: "traced" not "trace" — "notrace" CONTAINS "trace", so a -k "trace" term would match BOTH
 # modes and silently double a CI job. Matches the padded test's convention.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
-@pytest.mark.parametrize("perf_margin", [DEFAULT_PERF_MARGIN], ids=["margin5pct"])
+@pytest.mark.parametrize("perf_margin", [DEFAULT_PERF_MARGIN], ids=["margin3pct"])
 @pytest.mark.parametrize(
     "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
 )
@@ -1711,7 +1715,7 @@ def run_chunked_transformer_updated(
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
                 # L1_SMALL region for the MoE routing all-gather's semaphores (see TtMoERoutingSetup).
-                "l1_small_size": 512,
+                "l1_small_size": 768,
                 # Required by mode="traced": without it conftest logs "No trace region size" and the
                 # captured trace buffers come out of general DRAM instead of a reserved region —
                 # unbounded, and trace_bytes() then reports 0.00 MB because the TRACE pool is empty.
@@ -1750,10 +1754,16 @@ def test_kimi_prefill_transformer_chunked_perf(
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
     # Gate against the CI baseline only for the exact config we have a recorded number for; every other
-    # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert). The
-    # baseline is only meaningful at preload_isl=0 (the recorded runs started from an empty cache).
+    # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert). Two
+    # hard conditions on top of the table lookup:
+    #   use_trace   -- the baselines are trace-replay numbers, and the untraced path is a different
+    #                  regime (flat ~1.10 s/chunk, ~20% within-run spread), so it is NEVER gated. This
+    #                  is the guard, not the table's contents: adding an untraced entry cannot arm it.
+    #   preload_isl -- the baseline only means anything at 0 (the recorded runs started from an empty cache).
     baseline_chunk_times_s = (
-        KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
+        KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters))
+        if (use_trace and preload_isl == 0)
+        else None
     )
     run_chunked_transformer_updated(
         variant,
@@ -1778,7 +1788,7 @@ def test_kimi_prefill_transformer_chunked_perf(
 # ids: "traced" not "trace" — "notrace" CONTAINS "trace", so a -k "trace" term would match BOTH
 # modes and silently double a CI job. Matches the padded test's convention.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
-@pytest.mark.parametrize("perf_margin", [DEFAULT_PERF_MARGIN], ids=["margin5pct"])
+@pytest.mark.parametrize("perf_margin", [DEFAULT_PERF_MARGIN], ids=["margin3pct"])
 @pytest.mark.parametrize(
     "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
 )
@@ -1807,7 +1817,7 @@ def test_kimi_prefill_transformer_chunked_perf(
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
                 # L1_SMALL region for the MoE routing all-gather's semaphores (see TtMoERoutingSetup).
-                "l1_small_size": 512,
+                "l1_small_size": 768,
                 # Required by mode="traced": without it conftest logs "No trace region size" and the
                 # captured trace buffers come out of general DRAM instead of a reserved region —
                 # unbounded, and trace_bytes() then reports 0.00 MB because the TRACE pool is empty.
@@ -1841,12 +1851,13 @@ def test_kimi_prefill_transformer_chunked(
 ):
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
         pytest.skip(f"preload_isl {preload_isl} + {n_chunks} chunks exceeds the {SEQ_CACHE_NOPCC}-token cache")
-    # Gate against the CI baseline only for the exact config we have a recorded number for; every other
-    # combo in the sweep stays record-only (baseline None -> print_duration_table does not assert). The
-    # baseline is only meaningful at preload_isl=0 (the recorded runs started from an empty cache).
-    baseline_chunk_times_s = (
-        KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S.get((num_layers, n_chunks, num_iters)) if preload_isl == 0 else None
-    )
+    # ALWAYS record-only -- this accuracy test is never perf-gated. It shares the perf test's
+    # parametrization but NOT its is_high_power() skipif, so it can run on a standard-power Blackhole,
+    # where KIMI_NO_PCC_BASELINE_CHUNK_TIMES_S -- measured on a >=130W galaxy -- describes nothing. Gating
+    # here would fail an accuracy run for a timing reason, on hardware the baseline never covered, and the
+    # timing table is incidental to this test anyway (see check_pcc below). The perf gate belongs to, and
+    # stays in, test_kimi_prefill_transformer_chunked_perf.
+    baseline_chunk_times_s = None
     run_chunked_transformer_updated(
         variant,
         config_only,
@@ -1860,6 +1871,8 @@ def test_kimi_prefill_transformer_chunked(
         num_iters,
         routing_use_l1_small_for_semaphores=True,
         baseline_chunk_times_s=baseline_chunk_times_s,
+        # Inert while baseline_chunk_times_s is None (print_duration_table only uses the margin when it
+        # has a baseline); kept for id/signature symmetry with the perf test.
         perf_margin=perf_margin,
         preload_isl=preload_isl,
         check_pcc=True,  # this test exists for the KV PCC; the timing table is incidental
@@ -1965,9 +1978,8 @@ def test_ds_prefill_transformer_chunked_no_pcc(
                 "fabric_config": ttnn.FabricConfig.FABRIC_2D,
                 "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                # Small L1_SMALL region for the MoE routing all-gather's global semaphores
-                # (use_l1_small_for_semaphores); see test_glm_prefill_transformer_chunked.
-                "l1_small_size": 512,
+                # Routing consumes 512 B; leave 256 B for sparse-MLA high-bandwidth-gather semaphores and rest for other needs.
+                "l1_small_size": 1152,
             },
             2,
             ttnn.Topology.Linear,

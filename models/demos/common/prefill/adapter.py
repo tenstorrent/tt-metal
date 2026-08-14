@@ -5,7 +5,7 @@
 
 The prefill runner (``prefill_runner.py``) is a model-agnostic orchestration
 engine: it owns rank topology, the layer split, the H2D/D2D sockets, the
-request/standalone loops, lease/reclaim, LayerAck, and shutdown. Everything that
+the request serving loop, lease/reclaim, LayerAck, and shutdown. Everything that
 differs per model lives behind a ``PrefillModelAdapter``.
 
 To add a model you implement (or subclass) one adapter and register it; the

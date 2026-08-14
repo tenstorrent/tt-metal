@@ -79,9 +79,9 @@ std::shared_ptr<Kernel> make_offline_kernel(
         [&](const auto& cfg) -> std::shared_ptr<Kernel> {
             using T = std::decay_t<decltype(cfg)>;
             if constexpr (std::is_same_v<T, DataMovementConfig>) {
-                return std::make_shared<DataMovementKernel>(kernel_src, core_range_set, cfg);
+                return std::make_shared<DataMovementKernel>(DEFAULT_CONTEXT_ID, kernel_src, core_range_set, cfg);
             } else {
-                return std::make_shared<ComputeKernel>(kernel_src, core_range_set, cfg);
+                return std::make_shared<ComputeKernel>(DEFAULT_CONTEXT_ID, kernel_src, core_range_set, cfg);
             }
         },
         config);
@@ -218,7 +218,7 @@ void CompileKernelOffline(
             // The kernel's content (source, compile args, defines) is identical per config; the
             // per-config state (build options, full name, hash) is stored on JitBuildOptions and
             // refreshed on the kernel via set_full_name() each iteration.
-            const KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
+            const KernelSource kernel_src = KernelSource::from_path(DEFAULT_CONTEXT_ID, file_name);
             const CoreRangeSet placeholder_core_range_set(CoreRange{CoreCoord{0, 0}, CoreCoord{0, 0}});
             const std::shared_ptr<Kernel> kernel = make_offline_kernel(kernel_src, placeholder_core_range_set, config);
 
