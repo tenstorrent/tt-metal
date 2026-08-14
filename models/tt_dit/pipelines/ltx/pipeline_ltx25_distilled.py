@@ -69,6 +69,7 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
         audio_vae_path: str | None = None,
         upsampler_path: str | None = None,
         use_ancestral_sampler: bool = True,
+        diffusion_decoder: bool = False,
         **kwargs,
     ):
         # Set before ``super().__init__`` — ``_make_gemma_encoder_pair`` / ``_instantiate_modules``
@@ -76,6 +77,7 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
         self._ltx25_video_vae_path = video_vae_path
         self._ltx25_audio_vae_path = audio_vae_path
         self._ltx25_upsampler_path = upsampler_path
+        self._diffusion_decoder = diffusion_decoder
         # Stage-1 ancestral Euler for 2.5+ (upstream ``should_use_ancestral_sampler``); stage 2 stays
         # deterministic. Override False only for A/B against the plain Euler path.
         self.use_ancestral_sampler = use_ancestral_sampler
@@ -144,11 +146,13 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
             num_frames=self._init_num_frames,
             height=self._init_height,
             width=self._init_width,
+            diffusion_decoder=self._diffusion_decoder,
         )
-        if not self.vae.decoder_blocks:
+        if not self._diffusion_decoder and not self.vae.decoder_blocks:
             raise RuntimeError(
                 f"Video VAE at {video_vae!r} has no conv decoder_blocks "
-                "(DiffVAE / wrong file). Use ltx-2.5-video-vae-conv-bf16 or a 2.3 monolith."
+                "(DiffVAE / wrong file). Use ltx-2.5-video-vae-conv-bf16, a 2.3 monolith, "
+                "or LTX25_DIFFVAE=1 to decode with the diffusion decoder."
             )
 
         self.transformer_checkpoint = LTXTransformerCheckpoint(self.checkpoint_name, inner_dim=self.inner_dim)
@@ -208,12 +212,15 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
         video_vae: str | None = None,
         audio_vae: str | None = None,
         upsampler: str | None = None,
+        diffusion_decoder: bool | None = None,
         **kwargs,
     ) -> "LTX25DistilledPipeline":
         """Resolve the five LTX-2.5 split paths, then build via the shared mesh defaults."""
+        if diffusion_decoder is None:
+            diffusion_decoder = os.environ.get("LTX25_DIFFVAE", "0") != "0"
         text_encoder = text_encoder or gemma_path or default_ltx25_path(LTX25_TEXT_ENCODER)
         transformer = transformer or checkpoint_name or default_ltx25_path(LTX25_DISTILLED_TRANSFORMER)
-        video_vae = video_vae or default_ltx25_video_vae()
+        video_vae = video_vae or default_ltx25_video_vae(diffusion=diffusion_decoder)
         audio_vae = audio_vae or default_ltx25_path(LTX25_AUDIO_VAE)
         upsampler = upsampler or default_ltx25_path(LTX25_SPATIAL_UPSAMPLER)
         missing = {
@@ -231,7 +238,9 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
                 + " (set LTX25_ROOT or populate ~/.cache/ltx-checkpoints/ltx-2.5; "
                 "video VAE can fall back to a local 2.3 monolith)"
             )
-        if "ltx-2.3" in os.path.basename(video_vae) or "LTX-2.3" in video_vae:
+        if diffusion_decoder:
+            logger.info(f"LTX-2.5 decoding with DiffVAE from {video_vae}")
+        elif "ltx-2.3" in os.path.basename(video_vae) or "LTX-2.3" in video_vae:
             logger.warning(
                 f"LTX-2.5 video VAE falling back to 2.3 monolith {video_vae} "
                 "(download vae/ltx-2.5-video-vae-conv-bf16.safetensors when HF access allows)"
@@ -247,5 +256,6 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
             video_vae_path=video_vae,
             audio_vae_path=audio_vae,
             upsampler_path=upsampler,
+            diffusion_decoder=diffusion_decoder,
             **kwargs,
         )

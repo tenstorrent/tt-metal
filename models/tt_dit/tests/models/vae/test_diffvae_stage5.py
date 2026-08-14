@@ -235,6 +235,7 @@ def test_rope_matches_upstream(mesh_device: ttnn.MeshDevice):
     """The RoPE prelude in isolation: pair-swap matmul + fused cos/sin table against
     upstream's per-axis W-slabbed rotation."""
     from models.tt_dit.models.vae.diffvae_ltx_stage5 import (
+        _apply_rope,
         _build_rope_tables,
         _reshape_retiled,
         _rope_inv_freqs,
@@ -276,12 +277,12 @@ def test_rope_matches_upstream(mesh_device: ttnn.MeshDevice):
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
-    flat_shape = (1, grid.batch, grid.sites * config.num_heads, config.head_dim)
+    # Frames are their own axis so the two table pieces broadcast; see _build_rope_tables.
+    frame_shape = (1, grid.t, grid.h * grid.w * config.num_heads, config.head_dim)
     tt_x = ttnn.from_torch(
-        x.reshape(flat_shape).contiguous(), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32
+        x.reshape(frame_shape).contiguous(), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32
     )
-    swapped = ttnn.matmul(tt_x, swap, compute_kernel_config=compute)
-    got = ttnn.add(ttnn.multiply(tt_x, tables.cos), ttnn.multiply(swapped, tables.sin))
+    got = _apply_rope(tt_x, tables, pair_swap=swap, compute_kernel_config=compute)
     got = _reshape_retiled(got, tuple(x.shape))
 
     assert_quality(expected, ttnn.to_torch(got), pcc=0.9999)
@@ -386,20 +387,30 @@ def test_stage5_parity(mesh_device: ttnn.MeshDevice, dtype: ttnn.DataType, pcc: 
     )
     tt_t = tt_timestep(timestep, mesh_device)
 
-    buffer = ttnn.concat([tt_context, model.embed_x_t(x_t)], dim=-1)
+    # Bands come from the model so this covers whatever DIFFVAE_SLAB_FRAMES asks for: unset it
+    # runs the volume whole, and setting it holds the banded path to the same per-block reference.
+    bands = model.bands(grid)
+
+    def join(parts):
+        return parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=-2)
+
+    x_bands = model.embed_x_t(x_t, bands)
     scaled_t = ttnn.multiply(tt_t, config.timestep_scale_multiplier)
     modulation = model.shared_adaln(model.t_embedder(scaled_t), grid.batch)
     tables = model.rope_tables(grid)
+    band_tables = tuple(tables.frames(band.pad_lo, band.pad_hi) for band in bands)
 
+    # Only to hold upstream's joint ``[context | x]`` buffer to its exact round trip; the blocks
+    # below read the context half out of it.
+    buffer = ttnn.concat([tt_context, join(x_bands)], dim=-1)
     tt_ctx_half = _slice_last(buffer, 0, config.context_channels)
-    x = _slice_last(buffer, config.context_channels, config.context_channels + config.dim)
 
     failures = []
     for i, block in enumerate(model.diff_blocks):
-        x = block(x, tt_ctx_half, modulation, grid, tables)
+        x_bands = block(x_bands, tt_ctx_half, modulation, grid, bands, band_tables)
         logger.info(f"block {i}")
         try:
-            assert_quality(flat(ref_blocks[i], config.dim), ttnn.to_torch(x), pcc=pcc)
+            assert_quality(flat(ref_blocks[i], config.dim), ttnn.to_torch(join(x_bands)), pcc=pcc)
         except Exception as err:  # noqa: BLE001
             failures.append(f"block {i}: {err}")
 

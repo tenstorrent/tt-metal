@@ -607,9 +607,23 @@ class LTXPipeline:
         """All transformer variants exclude each other AND the VAE. LTX-22B +
         LTX-VAE don't both fit on BH LB; VAE must evict the active transformer
         before decode. LTX needs the eviction on both WH and BH."""
-        if not self.dynamic_load:
-            return
         models = [s.model for s in self.transformer_states]
+        if not self.dynamic_load:
+            # Static loading deliberately keeps everything resident, but a decoder that cannot fit
+            # beside the transformer has to evict it regardless of the request's load policy.
+            # ``_prepare_transformer`` reloads from the disk cache before the next stage 1.
+            # Static loading registers nothing: a decoder that needs the mesh to itself is served by
+            # ``_prepare_vae``, which evicts at decode time. Registration cannot do it — this runs
+            # before ``_prime_caches``, so the lazily built peers (Gemma encoder, connectors) do not
+            # exist yet, and the exclusion set is only consulted when a module loads anyway.
+            decoder = self.vae_decoder
+            if decoder is not None and getattr(decoder, "requires_exclusive_residency", False) and self._traced:
+                raise RuntimeError(
+                    f"{type(decoder).__name__} must evict its peers to decode, which invalidates "
+                    "their captured traces under static loading. Run with LTX_TRACED=0, or use a "
+                    "dynamic_load config, which pages weights per request."
+                )
+            return
 
         for i, m in enumerate(models):
             m._coresident_peers = [*models[:i], *models[i + 1 :], self.vae_decoder, self.vae_encoder]
@@ -628,6 +642,33 @@ class LTXPipeline:
 
         encoder_peers = [*models] + ([self.vae_decoder] if self.vae_decoder is not None else [])
         self.gemma_encoder_pair.register_coresident_peers(encoder_peers)
+
+    def _video_decode_evictable(self) -> list:
+        """Every module whose weights are dead space while the video decoder runs.
+
+        For a decoder that needs the mesh to itself, "not the transformer" is not enough: with the
+        DiT evicted, the text encoder, its projection and connectors, the upsampler and the audio
+        decoder still held ~8 GB, which is most of what DiffVAE needs for its activations. Each of
+        these is reloaded from the disk cache by its own ``_prepare_*`` before next use, and audio
+        decode runs *after* video decode so it can page back in then.
+
+        The Gemma encoder and its connectors go together on purpose: ``ensure_loaded`` decides
+        whether to reload from the encoder's state alone, so evicting the connectors without it
+        would leave them deallocated and never restored.
+        """
+        pair = self.gemma_encoder_pair
+        candidates = [
+            *(state.model for state in self.transformer_states),
+            self.upsampler,
+            self.vae_encoder,
+            self.tt_mel_decoder,
+            self.tt_vocoder_with_bwe,
+            getattr(pair, "gemma_encoder", None),
+            getattr(pair, "feature_extractor", None),
+            getattr(pair, "video_connector", None),
+            getattr(pair, "audio_connector", None),
+        ]
+        return [module for module in candidates if module is not None]
 
     def _prime_caches(self) -> None:
         """Load every module in reverse use order so variant 0 is resident in
@@ -782,9 +823,20 @@ class LTXPipeline:
         return results
 
     def _prepare_vae(self) -> None:
-        """Delegate: push VAE decoder weights onto the mesh (see ``LTXVideoVAEAdapter``)."""
-        if self.vae is not None:
-            self.vae.reload_decoder()
+        """Delegate: push VAE decoder weights onto the mesh (see ``LTXVideoVAEAdapter``).
+
+        Eviction is asked for here rather than left to the weight load. The exclusion set is only
+        walked when a module *loads*, so an already-resident decoder would go on to decode beside
+        the transformer — which is fine for the conv decoder and fatal for DiffVAE.
+        """
+        if self.vae is None:
+            return
+        if (decoder := self.vae_decoder) is not None:
+            decoder.evict_coresident_exclusions()
+            if getattr(decoder, "requires_exclusive_residency", False):
+                for module in self._video_decode_evictable():
+                    module.deallocate_weights()
+        self.vae.reload_decoder()
 
     def _prepare_vae_encoder(self) -> None:
         """Delegate: push VAE encoder weights onto the mesh (see ``LTXVideoVAEAdapter``)."""

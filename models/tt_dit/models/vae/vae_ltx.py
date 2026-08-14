@@ -39,6 +39,8 @@ from ...utils.ltx import pad_hw_replicate
 from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor, typed_tensor_2dshard
 from ...utils.tracing import traced_function
 from ...utils.yuv_d2h import fast_device_to_host_yuv
+from .diffvae_ltx import DiffVAEDecoder
+from .diffvae_ltx import decoder_config as diffvae_config
 
 if TYPE_CHECKING:
     from ..upsampler.latent_upsampler_ltx import LTXLatentUpsampler
@@ -761,6 +763,10 @@ def _compute_ltx_decoder_dims(
 
 class LTXVideoDecoder(Module):
     """LTX-2 Video VAE decoder (TTNN): (B, 128, F', H', W') latent → (B, 3, F, H, W) pixels."""
+
+    #: This decoder can convert and gather YUV 4:2:0 on device (``output_type="yuv"``), which the
+    #: mp4 export path prefers. DiffVAE cannot, so the pipeline checks before asking.
+    supports_yuv = True
 
     def __init__(
         self,
@@ -1575,6 +1581,7 @@ class LTXVideoVAEAdapter:
         num_frames: int,
         height: int,
         width: int,
+        diffusion_decoder: bool = False,
     ) -> None:
         self._checkpoint_path = checkpoint_path
         self._mesh_device = mesh_device
@@ -1598,8 +1605,16 @@ class LTXVideoVAEAdapter:
         if self.encoder_blocks:
             logger.info(f"VAE encoder config: {len(self.encoder_blocks)} blocks")
 
-        self._decoder: LTXVideoDecoder | None = None
-        if self.decoder_blocks:
+        # LTX-2.5's own video-VAE file ships the diffusion decoder in place of conv
+        # ``decoder_blocks``, so which decoder is built is a property of the request, not of the
+        # file: a 2.3 monolith has only the conv one, and 2.5 can be decoded either way.
+        self._decoder: LTXVideoDecoder | DiffVAEDecoder | None = None
+        if diffusion_decoder:
+            self._decoder = DiffVAEDecoder(
+                diffvae_config(checkpoint_path), mesh_device=mesh_device, ccl_manager=vae_ccl_manager
+            )
+            logger.info("VAE config: DiffVAE diffusion decoder")
+        elif self.decoder_blocks:
             self._decoder = LTXVideoDecoder(
                 decoder_blocks=self.decoder_blocks,
                 causal=self._causal,
@@ -1627,7 +1642,7 @@ class LTXVideoVAEAdapter:
             )
 
     @property
-    def decoder(self) -> "LTXVideoDecoder | None":
+    def decoder(self) -> "LTXVideoDecoder | DiffVAEDecoder | None":
         return self._decoder
 
     @property
@@ -1646,6 +1661,22 @@ class LTXVideoVAEAdapter:
         forces re-load when conv3d ``C_in_block`` changes (mirrors Wan). A static load keeps the
         VAE resident across the audio decode — skip the per-request reload once loaded."""
         if self._decoder is None or self._decoder.is_loaded():
+            return
+
+        if isinstance(self._decoder, DiffVAEDecoder):
+            # No conv3d blocking to key on, and the remapping (folded statistics, permuted
+            # upsample projections) lives on the decoder itself.
+            decoder = self._decoder
+            cache_module.load_model(
+                decoder,
+                model_name=os.path.basename(self._checkpoint_path).removesuffix(".safetensors"),
+                subfolder="diffvae",
+                parallel_config=self._dit_parallel_config,
+                mesh_shape=tuple(self._mesh_device.shape),
+                mesh_device=self._mesh_device,
+                get_torch_state_dict=lambda: decoder.torch_state_from_checkpoint(self._checkpoint_path),
+            )
+            logger.info("Loaded TTNN DiffVAE decoder")
             return
 
         def _state_provider() -> dict[str, torch.Tensor]:

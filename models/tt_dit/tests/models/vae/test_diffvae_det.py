@@ -23,6 +23,7 @@ from safetensors import safe_open
 
 import ttnn
 from models.tt_dit.layers.na3d import build_device_plan, plan_na3d
+from models.tt_dit.models.vae import diffvae_ltx
 from models.tt_dit.models.vae.diffvae_ltx import (
     DeterministicStages,
     NABlock,
@@ -84,6 +85,54 @@ def test_na_block_matches_upstream(*, device, block_index):
     actual = ttnn.to_torch(actual).reshape(1, t, h, w, dim)
 
     assert_quality(expected, actual, pcc=0.99)
+
+
+def test_row_chunking_is_exact(*, device, monkeypatch):
+    """Chunking the pointwise parts changes nothing about the result.
+
+    A block's peak is set by its SwiGLU, whose hidden width is 4x the activation, so at 6s
+    1920x1088 its three intermediates come to 30 GiB. Running those in row chunks is only sound
+    because they are pointwise in the site axis, and that is what this pins: same weights, same
+    input, chunked against whole, bit for bit. Sizes here are far below :data:`CHUNK_BYTES`, so
+    the budget is shrunk to force the loop, with a row count that leaves a short final chunk.
+    """
+    torch.manual_seed(0)
+    dim, head_dim, kernel = 128, 64, (3, 3, 3)
+    hidden = (int(dim * 4.0) + 15) // 16 * 16
+    dims = (4, 8, 7)
+    tokens = dims[0] * dims[1] * dims[2]
+    assert tokens % diffvae_ltx.TILE != 0, "want a ragged final chunk"
+
+    weights = {
+        "norm1.weight": (dim,),
+        "norm2.weight": (dim,),
+        "attn.qkv.weight": (3 * dim, dim),
+        "attn.qkv.bias": (3 * dim,),
+        "attn.proj.weight": (dim, dim),
+        "attn.proj.bias": (dim,),
+        "attn.q_norm.weight": (head_dim,),
+        "attn.k_norm.weight": (head_dim,),
+        "mlp.w_gate.weight": (hidden, dim),
+        "mlp.w_up.weight": (hidden, dim),
+        "mlp.w_down.weight": (dim, hidden),
+    }
+    state = {name: torch.randn(shape) * 0.1 for name, shape in weights.items()}
+    hidden_states = torch.randn(tokens, dim)
+
+    cos, sin = rope_tables(dims, default_rope_dim_split(head_dim), mesh_device=device)
+    plan = build_device_plan(plan_na3d(dims, kernel), mesh_device=device)
+
+    def run() -> torch.Tensor:
+        block = NABlock(dim, kernel, head_dim=head_dim, mesh_device=device)
+        block.load_state_dict({key: value.clone() for key, value in state.items()})
+        tt_hidden = ttnn.from_torch(hidden_states, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        return ttnn.to_torch(block(tt_hidden, dims=dims, cos=cos, sin=sin, device_plan=plan))
+
+    whole = run()
+    monkeypatch.setattr(diffvae_ltx, "CHUNK_BYTES", 2 * diffvae_ltx.TILE * hidden * 2)
+    chunked = run()
+
+    assert torch.equal(whole, chunked), (whole - chunked).abs().max()
 
 
 def test_det_stages_match_upstream(*, device):

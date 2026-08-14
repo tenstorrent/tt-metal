@@ -102,8 +102,11 @@ def default_ltx_gemma() -> str:
 # Relative paths under an LTX-2.5 split checkpoint root (HF hub layout).
 LTX25_TEXT_ENCODER = "text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors"
 LTX25_DISTILLED_TRANSFORMER = "diffusion_models/ltx-2.5-22b-distilled-transformer-bf16.safetensors"
-# Conv decoder (runnable with our VAE). The plain ``video-vae-bf16`` file is DiffVAE — deferred.
+# Two video VAEs ship for 2.5 and they are not interchangeable files: the ``-conv-`` one holds the
+# convolutional decoder (gated on HF), and the plain one holds the diffusion decoder (DiffVAE),
+# which is what the distilled recipe actually decodes with.
 LTX25_VIDEO_VAE_CONV = "vae/ltx-2.5-video-vae-conv-bf16.safetensors"
+LTX25_VIDEO_VAE_DIFF = "vae/ltx-2.5-video-vae-bf16.safetensors"
 LTX25_VIDEO_VAE = LTX25_VIDEO_VAE_CONV  # alias used by the distilled pipeline
 LTX25_AUDIO_VAE = "vae/ltx-2.5-audio-vae-bf16.safetensors"
 LTX25_SPATIAL_UPSAMPLER = "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
@@ -143,13 +146,18 @@ def default_ltx25_path(rel: str) -> str | None:
     return path if os.path.exists(path) else None
 
 
-def default_ltx25_video_vae() -> str | None:
-    """Conv video VAE for 2.5 decode.
+def default_ltx25_video_vae(*, diffusion: bool = False) -> str | None:
+    """Video VAE for 2.5 decode.
 
-    Prefer the split ``*-video-vae-conv-bf16`` file. If it is not on disk yet (gated HF /
+    With ``diffusion``, resolve the DiffVAE file and nothing else: its decoder weights exist in no
+    other checkpoint, so falling back would silently decode with a different model.
+
+    Otherwise prefer the split ``*-video-vae-conv-bf16`` file. If it is not on disk yet (gated HF /
     incomplete MLPerf mirror), fall back to a local 2.3 monolith — PORT notes the conv VAE
     arch is identical, so this unblocks generate until the 2.5 conv file is available.
     """
+    if diffusion:
+        return default_ltx25_path(LTX25_VIDEO_VAE_DIFF)
     conv = default_ltx25_path(LTX25_VIDEO_VAE_CONV)
     if conv:
         return conv

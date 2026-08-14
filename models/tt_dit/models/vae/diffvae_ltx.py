@@ -25,6 +25,7 @@ from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList
 from ...layers.na3d import NA3DDevicePlan, build_device_plan, neighborhood_attention_3d, plan_na3d
 from ...layers.normalization import RMSNorm
+from .diffvae_ltx_stage5 import TILE, log_dram
 
 ROPE_BASE = 10000.0
 
@@ -124,21 +125,88 @@ def rope_tables(
     return upload(cos_columns), upload(sin_columns)
 
 
+#: Bytes one pointwise chunk may hold. Everything in a deterministic block except the attention
+#: gather is pointwise in the site axis, and the widths involved are multiples of the activation:
+#: the SwiGLU's hidden width is 4x, so its three intermediates come to 30 GiB where the block's own
+#: activation is 2.5 GiB at 6s 1920x1088. Chunking bounds that by the chunk instead of the volume.
+#: A GiB keeps per-chunk dispatch negligible against a 2.6M-row volume.
+CHUNK_BYTES = 1 << 30
+
+
+def _chunk_rows(width: int, *, dtype_bytes: int = 2) -> int:
+    """Rows whose ``width``-wide intermediate fits :data:`CHUNK_BYTES`, tile-aligned."""
+    rows = CHUNK_BYTES // (width * dtype_bytes)
+    return max(TILE, rows // TILE * TILE)
+
+
+def _pointwise_in_chunks(x: ttnn.Tensor, fn, *, width: int) -> ttnn.Tensor:
+    """Apply the pointwise ``fn`` to row chunks of ``(rows, ·)`` ``x``. **Consumes** ``x``.
+
+    ``width`` is the widest intermediate ``fn`` builds per row, which is what sets the chunk size.
+    Running whole is kept as a distinct path so short videos pay nothing: a single chunk would
+    otherwise add a concat of the entire output.
+    """
+    rows, columns = int(x.shape[-2]), int(x.shape[-1])
+    step = _chunk_rows(width)
+    if step >= rows:
+        out = fn(x)
+        ttnn.deallocate(x)
+        return out
+
+    parts = []
+    for start in range(0, rows, step):
+        chunk = ttnn.slice(x, [start, 0], [min(start + step, rows), columns])
+        parts.append(fn(chunk))
+        ttnn.deallocate(chunk)
+    ttnn.deallocate(x)
+    joined = ttnn.concat(parts, dim=-2)
+    for part in parts:
+        ttnn.deallocate(part)
+    return joined
+
+
+def _consume(x: ttnn.Tensor, op, *args) -> ttnn.Tensor:
+    """``op(x, *args)``, freeing ``x`` unless ``op`` handed it straight back.
+
+    Only for ops that copy — retiling, permuting, slicing. Leaving ``x`` to Python's next rebind
+    keeps a second copy of the volume live across the following allocation, and at 6s 1920x1088
+    those copies are 10 GiB each.
+    """
+    out = op(x, *args)
+    if out is not x:
+        ttnn.deallocate(x)
+    return out
+
+
+def _consume_pair(op, a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
+    """``op(a, b)``, freeing both operands. These are half-volume tensors at full resolution."""
+    out = op(a, b)
+    ttnn.deallocate(a)
+    ttnn.deallocate(b)
+    return out
+
+
 def apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-    """Rotate a permuted ``(1, T, H, W, heads, head_dim)`` tensor using contiguous halves."""
+    """Rotate a permuted ``(1, T, H, W, heads, head_dim)`` tensor using contiguous halves.
+
+    **Consumes** ``x``, and builds the two output halves one after the other rather than as one
+    expression. The single-expression form keeps all four products live at once, which at 6s
+    1920x1088 is 5 GiB of temporaries on top of the halves and the result.
+    """
     shape = list(x.shape)
     half = shape[-1] // 2
     low = ttnn.slice(x, [0] * len(shape), shape[:-1] + [half])
     high = ttnn.slice(x, [0] * (len(shape) - 1) + [half], shape[:-1] + [2 * half])
-    rotated = ttnn.concat(
-        [
-            ttnn.subtract(ttnn.multiply(low, cos), ttnn.multiply(high, sin)),
-            ttnn.add(ttnn.multiply(low, sin), ttnn.multiply(high, cos)),
-        ],
-        dim=-1,
-    )
+    ttnn.deallocate(x)
+
+    first = _consume_pair(ttnn.subtract, ttnn.multiply(low, cos), ttnn.multiply(high, sin))
+    second = _consume_pair(ttnn.add, ttnn.multiply(low, sin), ttnn.multiply(high, cos))
     ttnn.deallocate(low)
     ttnn.deallocate(high)
+
+    rotated = ttnn.concat([first, second], dim=-1)
+    ttnn.deallocate(first)
+    ttnn.deallocate(second)
     return rotated
 
 
@@ -147,6 +215,8 @@ class NeighborhoodAttention(Module):
 
     def __init__(self, dim: int, kernel_size: tuple[int, int, int], *, head_dim: int = 64, mesh_device=None):
         super().__init__()
+        # No ccl_manager here: the deterministic stages build their device plans up front and
+        # pass them in, and a sharded plan already carries the manager that reassembles it.
         assert dim % head_dim == 0, f"dim={dim} not divisible by head_dim={head_dim}"
         self.dim = dim
         self.head_dim = head_dim
@@ -155,13 +225,19 @@ class NeighborhoodAttention(Module):
         self.scale = head_dim**-0.5
         self.rope_dim_split = default_rope_dim_split(head_dim)
 
-        self.qkv = Linear(dim, 3 * dim, bias=True, mesh_device=mesh_device)
+        # Three projections rather than the checkpoint's fused one. Fused, the (rows, 3*dim) output
+        # and the three slices taken from it are live together -- six activations, 15 GiB at 6s
+        # 1920x1088 -- where separate matmuls hold three. The weight is split at load instead.
+        self.to_q = Linear(dim, dim, bias=True, mesh_device=mesh_device)
+        self.to_k = Linear(dim, dim, bias=True, mesh_device=mesh_device)
+        self.to_v = Linear(dim, dim, bias=True, mesh_device=mesh_device)
         self.proj = Linear(dim, dim, bias=True, mesh_device=mesh_device)
         self.q_norm = RMSNorm(head_dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
         self.k_norm = RMSNorm(head_dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
-        """Fold the RoPE reordering into q/k weights; v and the output projection are untouched."""
+        """Split the shipped fused ``qkv`` into three projections and fold the RoPE reordering
+        into the q/k halves; v and the output projection are untouched."""
         perm = rope_permutation(self.rope_dim_split)
 
         def reorder_head_dim(tensor: torch.Tensor) -> torch.Tensor:
@@ -171,8 +247,10 @@ class NeighborhoodAttention(Module):
         for leaf in ("weight", "bias"):
             key = f"qkv.{leaf}"
             if key in state:
-                q, k, v = state[key].chunk(3, dim=0)
-                state[key] = torch.cat([reorder_head_dim(q), reorder_head_dim(k), v], dim=0)
+                q, k, v = state.pop(key).chunk(3, dim=0)
+                state[f"to_q.{leaf}"] = reorder_head_dim(q)
+                state[f"to_k.{leaf}"] = reorder_head_dim(k)
+                state[f"to_v.{leaf}"] = v
         for key in ("q_norm.weight", "k_norm.weight"):
             if key in state:
                 state[key] = state[key][perm]
@@ -186,25 +264,24 @@ class NeighborhoodAttention(Module):
         sin: ttnn.Tensor,
         device_plan: NA3DDevicePlan,
     ) -> ttnn.Tensor:
-        """``x`` is ``(tokens, dim)`` in TILE layout; returns the same shape."""
+        """``x`` is ``(tokens, dim)`` in TILE layout; returns the same shape. **Consumes** ``x``."""
         t, h, w = dims
         tokens = t * h * w
-        fused = self.qkv(x)
-
-        parts = []
-        for index in range(3):
-            part = ttnn.slice(fused, [0, index * self.dim], [tokens, (index + 1) * self.dim])
-            part = ttnn.reshape(part, (tokens * self.num_heads, self.head_dim))
-            parts.append(part)
-        ttnn.deallocate(fused)
-        q, k, v = parts
+        heads_shape = (tokens * self.num_heads, self.head_dim)
+        q, k, v = (ttnn.reshape(project(x), heads_shape) for project in (self.to_q, self.to_k, self.to_v))
+        ttnn.deallocate(x)
 
         q = self.q_norm(q)
         k = self.k_norm(k)
         q = ttnn.multiply(q, self.scale)
 
+        # Untilize before splitting out the head axis, never after. TILE rounds both of the last
+        # two dims up to 32, so a trailing (num_heads, head_dim) of (4, 64) is padded 8x: at
+        # 1920x1088 that turns a 1.35 GB activation into a 10.83 GB allocation, three times over
+        # for q/k/v, and it was what stopped a 6s decode. In ROW_MAJOR the same split is a pure
+        # stride change, and the attention gathers rows in ROW_MAJOR anyway.
         shape = (1, t, h, w, self.num_heads, self.head_dim)
-        q, k, v = (ttnn.to_layout(ttnn.reshape(part, shape), ttnn.ROW_MAJOR_LAYOUT) for part in (q, k, v))
+        q, k, v = (ttnn.reshape(_consume(part, ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT), shape) for part in (q, k, v))
         q = apply_rope(q, cos, sin)
         k = apply_rope(k, cos, sin)
 
@@ -220,11 +297,22 @@ class SwiGLU(Module):
 
     def __init__(self, dim: int, hidden_dim: int, *, mesh_device=None):
         super().__init__()
+        self.hidden_dim = hidden_dim
         self.w_gate = Linear(dim, hidden_dim, bias=False, mesh_device=mesh_device)
         self.w_up = Linear(dim, hidden_dim, bias=False, mesh_device=mesh_device)
         self.w_down = Linear(hidden_dim, dim, bias=False, mesh_device=mesh_device)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """**Consumes** ``x``.
+
+        Run in row chunks because this is where a block peaks: ``hidden_dim`` is 4x the
+        activation, so ``gate``, ``up`` and their product together are 12 activations, which at 6s
+        1920x1088 is 30 GiB against 31 GiB of usable DRAM. It is pointwise in the site axis, so
+        chunking is exact and needs no halo.
+        """
+        return _pointwise_in_chunks(x, self._project, width=self.hidden_dim)
+
+    def _project(self, x: ttnn.Tensor) -> ttnn.Tensor:
         gate = ttnn.silu(self.w_gate(x))
         up = self.w_up(x)
         product = ttnn.multiply(gate, up)
@@ -309,23 +397,41 @@ class LinearPixelShuffleUpsample(Module):
         """``x`` is ``(tokens, in_channels)``; returns ``(tokens', out_channels)`` and new dims."""
         t, h, w = dims
         p1, p2, p3 = self.stride
-        projected = self.proj(x)
-        projected = ttnn.to_layout(projected, ttnn.ROW_MAJOR_LAYOUT)
+
+        # Each step below is retiled, permuted or sliced, so it allocates a second copy of the
+        # widened volume rather than aliasing. The projection widens by the stride span, which at
+        # the last 6s 1920x1088 upsample is 10 GiB a copy, so each is freed as soon as it is dead
+        # instead of at the next rebind.
+        projected = _consume(self.proj(x), ttnn.to_layout, ttnn.ROW_MAJOR_LAYOUT)
 
         # (t, h, w, p1, p2, p3, c) -> (t, p1, h, p2, w, p3, c), channels innermost throughout.
-        projected = ttnn.reshape(projected, (t, h, w, p1, p2, p3, self.out_channels))
-        projected = ttnn.permute(projected, (0, 3, 1, 4, 2, 5, 6))
+        projected = _consume(
+            projected,
+            lambda volume: ttnn.permute(
+                ttnn.reshape(volume, (t, h, w, p1, p2, p3, self.out_channels)), (0, 3, 1, 4, 2, 5, 6)
+            ),
+        )
         out_dims = (t * p1, h * p2, w * p3)
-        projected = ttnn.reshape(projected, (out_dims[0], out_dims[1] * out_dims[2], self.out_channels))
+        rows = out_dims[1] * out_dims[2]
 
         if p1 == 2 and drop_leading_frame:
             # The temporal shuffle emits a duplicate first frame; dropping it preserves the
             # causal 1:2 (composed 1:8) mapping. Only the chunk holding the true t=0 has one.
-            projected = ttnn.slice(projected, [1, 0, 0], [out_dims[0], out_dims[1] * out_dims[2], self.out_channels])
+            projected = _consume(
+                projected,
+                lambda volume: ttnn.slice(
+                    ttnn.reshape(volume, (out_dims[0], rows, self.out_channels)),
+                    [1, 0, 0],
+                    [out_dims[0], rows, self.out_channels],
+                ),
+            )
             out_dims = (out_dims[0] - 1, out_dims[1], out_dims[2])
 
         tokens = out_dims[0] * out_dims[1] * out_dims[2]
-        projected = ttnn.to_layout(ttnn.reshape(projected, (tokens, self.out_channels)), ttnn.TILE_LAYOUT)
+        projected = _consume(
+            projected,
+            lambda volume: ttnn.to_layout(ttnn.reshape(volume, (tokens, self.out_channels)), ttnn.TILE_LAYOUT),
+        )
         return projected, out_dims
 
 
@@ -347,12 +453,14 @@ class DeterministicStages(Module):
         upsamples: tuple[tuple[tuple[int, int, int], int], ...],
         head_dim: int = 64,
         mesh_device=None,
+        ccl_manager=None,
     ):
         super().__init__()
         assert len(upsamples) == len(stage_channels) - 1, "one upsample between consecutive stages"
         self.stage_kernels = stage_kernels
         self.head_dim = head_dim
         self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
         self.conv_in = Linear(in_channels, stage_channels[0], bias=True, mesh_device=mesh_device)
 
         self.det_stages = ModuleList(
@@ -385,7 +493,9 @@ class DeterministicStages(Module):
     def _plan(self, dims: tuple[int, int, int], kernel: tuple[int, int, int]) -> NA3DDevicePlan:
         key = (dims, kernel)
         if key not in self._plan_cache:
-            self._plan_cache[key] = build_device_plan(plan_na3d(dims, kernel), mesh_device=self.mesh_device)
+            self._plan_cache[key] = build_device_plan(
+                plan_na3d(dims, kernel), mesh_device=self.mesh_device, ccl_manager=self.ccl_manager
+            )
         return self._plan_cache[key]
 
     def _rope(self, dims: tuple[int, int, int]) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -447,9 +557,11 @@ class DeterministicStages(Module):
         for stage in range(count):
             cos, sin = self._rope(dims)
             plan = self._plan(dims, self.stage_kernels[stage])
-            for block in self.det_stages[stage]:
+            for index, block in enumerate(self.det_stages[stage]):
                 x = block(x, dims=dims, cos=cos, sin=sin, device_plan=plan)
+                log_dram(self.mesh_device, f"det stage {stage} block {index} dims={dims}")
             x, dims = self.upsamples[stage](x, dims=dims, drop_leading_frame=drop_leading_frame)
+            log_dram(self.mesh_device, f"det stage {stage} upsampled to {dims}")
         return x, dims
 
 
@@ -466,12 +578,24 @@ class DiffVAEDecoder(Module):
     16 spurious frames.
     """
 
-    def __init__(self, config: dict, *, mesh_device, dtype: ttnn.DataType = ttnn.bfloat16):
+    #: The conv decoder can hand back YUV 4:2:0 straight off the mesh; this one returns host
+    #: pixels, so the pipeline keeps the float export path when this decoder is installed.
+    supports_yuv = False
+
+    #: Unlike the conv decoder, this one cannot share the mesh with the transformer: its stage-5
+    #: activations are ~8.5 GB at 1920x1088, against the ~2.6 GB a resident 22B DiT leaves free.
+    #: The pipeline therefore evicts the DiT before decode even under static loading.
+    requires_exclusive_residency = True
+
+    def __init__(self, config: dict, *, mesh_device, dtype: ttnn.DataType = ttnn.bfloat16, ccl_manager=None):
         super().__init__()
         from .diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config
 
         self.config = config
         self.mesh_device = mesh_device
+        # Without a manager every chip decodes the whole volume, which is correct but costs the
+        # mesh: memory per chip then scales with frame count rather than with frames/mesh size.
+        self.ccl_manager = ccl_manager
         self.patch_size = config["patch_size"]
         self.out_channels = config["out_channels"]
         self.in_channels = config["in_channels"]
@@ -489,6 +613,7 @@ class DiffVAEDecoder(Module):
             upsamples=config["upsamples"],
             head_dim=config["head_dim"],
             mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
         )
         self.stage5 = DiffVAEStage5(
             DiffVAEStage5Config(
@@ -504,25 +629,35 @@ class DiffVAEDecoder(Module):
             ),
             mesh_device=mesh_device,
             dtype=dtype,
+            ccl_manager=ccl_manager,
         )
         self.dtype = dtype
 
-    def load_checkpoint(self, path) -> None:
-        """Load both halves from one LTX-2.5 video-VAE safetensors file."""
+    def torch_state_from_checkpoint(self, path, *, statistics: bool = True) -> dict[str, torch.Tensor]:
+        """One state dict for the whole decoder, keyed for :meth:`load_torch_state_dict`.
+
+        Kept separate from applying it so the weights can go through the tt_dit disk cache, which
+        wants a provider it can skip calling on a cache hit. Both halves come from the same file
+        but need different remapping (folded statistics, permuted upsample projections), so each
+        half maps its own keys and they are prefixed by attribute name here.
+        """
         from safetensors import safe_open
 
-        self.stages.load_checkpoint(path)
+        state = {f"stages.{k}": v for k, v in self.stages.state_from_checkpoint(path, statistics=statistics).items()}
 
         prefixes = ("diff_blocks.", "shared_adaln.", "t_embedder.", "conv_in_x_t.", "conv_out.", "norm_out.")
-        state: dict[str, torch.Tensor] = {}
         with safe_open(str(path), "pt") as handle:
             for key in handle.keys():
                 if not key.startswith("decoder."):
                     continue
                 name = key[len("decoder.") :]
                 if name.startswith(prefixes):
-                    state[name] = handle.get_tensor(key).float()
-        self.stage5.load_torch_state_dict(state)
+                    state[f"stage5.{name}"] = handle.get_tensor(key).float()
+        return state
+
+    def load_checkpoint(self, path, *, statistics: bool = True) -> None:
+        """Load both halves from one LTX-2.5 video-VAE safetensors file, bypassing the cache."""
+        self.load_torch_state_dict(self.torch_state_from_checkpoint(path, statistics=statistics))
 
     def context_frames(self, latent_frames: int) -> int:
         """Stage-5 temporal extent for a latent of ``latent_frames``, after pad and crop."""
@@ -546,9 +681,14 @@ class DiffVAEDecoder(Module):
         keep = self.context_frames(t)
         if keep < dims[0]:
             channels_out = self.config["stage_channels"][-1]
-            x = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (dims[0], dims[1] * dims[2], channels_out))
-            x = ttnn.slice(x, [0, 0, 0], [keep, dims[1] * dims[2], channels_out])
-            x = ttnn.to_layout(ttnn.reshape(x, (keep * dims[1] * dims[2], channels_out)), ttnn.TILE_LAYOUT)
+            # Each step here allocates a full copy of the uncropped volume, which at 1920x1088 is
+            # 2.7 GB against 31.8 GB of DRAM, so they are freed as they die rather than at GC.
+            frames = ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (dims[0], dims[1] * dims[2], channels_out))
+            ttnn.deallocate(x)
+            cropped = ttnn.slice(frames, [0, 0, 0], [keep, dims[1] * dims[2], channels_out])
+            ttnn.deallocate(frames)
+            x = ttnn.to_layout(ttnn.reshape(cropped, (keep * dims[1] * dims[2], channels_out)), ttnn.TILE_LAYOUT)
+            ttnn.deallocate(cropped)
             dims = (keep, dims[1], dims[2])
         return x, dims
 
@@ -580,5 +720,30 @@ class DiffVAEDecoder(Module):
         )
         return self.stage5.forward(context, noise, timestep, grid)
 
-    def forward(self, latent: torch.Tensor, *, noise: torch.Tensor | None = None, seed: int = 0) -> torch.Tensor:
-        return self.decode(latent, noise=noise, seed=seed)
+    def forward(
+        self,
+        latent: torch.Tensor,
+        *,
+        output_type: str = "float",
+        noise: torch.Tensor | None = None,
+        seed: int = 0,
+    ) -> torch.Tensor:
+        """``decode`` behind the pipeline's decoder signature, so this can stand in for the
+        conv decoder in ``decode_latents``.
+
+        ``output_type`` matches ``LTXVideoDecoder.forward``: ``float`` keeps ``[-1, 1]``, ``rgb``
+        maps it to planar uint8 the same way ``utils.tensor.float_to_uint8`` does on device.
+        ``yuv`` is a device-side export shortcut this decoder does not have (see
+        :attr:`supports_yuv`), so it is rejected rather than silently returning the wrong layout.
+        """
+        if output_type == "yuv":
+            raise ValueError("DiffVAE decodes on host; use output_type='float' (see supports_yuv)")
+        pixels = self.decode(latent, noise=noise, seed=seed)
+        if output_type == "float":
+            return pixels
+        if output_type == "rgb":
+            return pixels.add(1.0).mul(0.5 * 255.0).clamp(0.0, 255.0).to(torch.uint8)
+        raise ValueError(f"unknown output_type {output_type!r}")
+
+    def release_trace(self) -> None:
+        """No-op: this decoder is not traced yet, but the pipeline releases traces blindly."""

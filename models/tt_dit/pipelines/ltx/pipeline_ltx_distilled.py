@@ -840,8 +840,13 @@ class LTXDistilledPipeline(LTXPipeline):
             logger.info(f"VAE prepare: {time.time() - t0:.1f}s")
 
         latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
-        # LTX_YUV_EXPORT routes the mp4 path through the on-device YUV 4:2:0 fast gather
-        yuv_export = output_path is not None and os.environ.get("LTX_YUV_EXPORT", "0") != "0"
+        # LTX_YUV_EXPORT routes the mp4 path through the on-device YUV 4:2:0 fast gather, which
+        # only the conv decoder has; DiffVAE returns host pixels and takes the float path.
+        yuv_export = (
+            output_path is not None
+            and os.environ.get("LTX_YUV_EXPORT", "0") != "0"
+            and getattr(self.vae_decoder, "supports_yuv", True)
+        )
         # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
         decode_type = ("yuv" if yuv_export else "float") if output_path is not None else output_type
         t0 = time.time()

@@ -18,10 +18,12 @@ here -- see :func:`neighborhood_attention_3d`.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -29,7 +31,9 @@ from ...layers.embeddings import TimestepEmbedding, Timesteps
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.na3d import neighborhood_attention_3d as na3d_on_device
+from ...layers.na3d import window_bounds
 from ...layers.normalization import RMSNorm
+from ...utils.tensor import local_device_to_torch
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -119,6 +123,7 @@ def neighborhood_attention_3d(
     *,
     kernel_size: tuple[int, int, int],
     scale: float = 1.0,
+    ccl_manager=None,
 ) -> ttnn.Tensor:
     """3D neighborhood attention over ``(B, T, H, W, num_heads, head_dim)`` tensors.
 
@@ -126,12 +131,16 @@ def neighborhood_attention_3d(
     Returns ``(B, T, H, W, num_heads * head_dim)``. Mirrors upstream's
     ``NAAttentionCallable`` contract.
 
+    With a ``ccl_manager`` the attention is split across the mesh instead of every chip
+    evaluating the whole volume; without one it runs replicated. Either way the result is the
+    full volume on every chip, so nothing downstream changes.
+
     This was a swap point for a host fallback while the device primitive was being written.
     The dispatch is now direct and unconditional on purpose: a fallback selected by
     ``except ImportError`` would move attention to the host silently, and every parity test
     here would still pass — slower, and no longer measuring the device.
     """
-    return na3d_on_device(q, k, v, kernel_size=kernel_size, scale=scale)
+    return na3d_on_device(q, k, v, kernel_size=kernel_size, scale=scale, ccl_manager=ccl_manager)
 
 
 # ---------------------------------------------------------------------------
@@ -188,9 +197,33 @@ def _rope_inv_freqs(dim: int, base: float) -> torch.Tensor:
     return (1.0 / base**exponents).to(torch.float32)
 
 
-class _RopeTables(NamedTuple):
+class _RopeParts(NamedTuple):
     cos: ttnn.Tensor
     sin: ttnn.Tensor
+
+
+@dataclass(frozen=True)
+class _RopeTables:
+    """The fused table as two broadcastable pieces instead of one volume-sized tensor.
+
+    ``frame`` is ``(1, 1, rows_per_frame, head_dim)`` and carries the H and W lanes, which are the
+    same in every frame; ``time`` is ``(1, t, 1, head_dim)`` and carries the T lanes, which are the
+    same at every site within a frame. See :func:`_build_rope_tables`.
+    """
+
+    frame: _RopeParts
+    time: _RopeParts
+    rows_per_frame: int
+
+    def frames(self, lo: int, hi: int) -> _RopeTables:
+        """The same tables restricted to frames ``[lo, hi)``, for a slab of the volume."""
+        if (lo, hi) == (0, self.time.cos.shape[1]):
+            return self
+        return _RopeTables(
+            frame=self.frame,
+            time=_RopeParts(*(ttnn.slice(part, [0, lo, 0, 0], [1, hi, 1, part.shape[-1]]) for part in self.time)),
+            rows_per_frame=self.rows_per_frame,
+        )
 
 
 def _rope_pair_swap_matrix(head_dim: int) -> torch.Tensor:
@@ -216,41 +249,82 @@ def _build_rope_tables(
     mesh_device: ttnn.MeshDevice,
     dtype: ttnn.DataType,
 ) -> _RopeTables:
-    """Fused (T, H, W) absolute-RoPE cos/sin at ``(1, 1, sites * num_heads, head_dim)``.
+    """Fused (T, H, W) absolute RoPE, factored into one frame and one row per frame.
 
     Upstream rotates in W-slabs of ``rope_num_tiles`` with running absolute offsets, which
     is arithmetically one full-volume rotation over positions ``0..W-1``; the slabbing is
     a Dynamo-shape concern only.
+
+    A row of the fused table is ``[T-lanes(t) | H-lanes(h) | W-lanes(w)]``, so the H and W lanes
+    repeat in every frame and the T lanes repeat at every site within a frame. Storing those two
+    pieces rather than their combination keeps the table off the critical memory path: the volume
+    form is a full activation per table, 9.7 GB each at 6s 1920x1088, and cos plus sin were more
+    than half of everything stage 5 held. Each piece is zero outside its own lanes, so
+    ``cos == frame.cos + time.cos`` exactly, and :func:`_apply_rope` distributes the multiply over
+    the two instead of reassembling the row.
     """
     d_t, d_h, d_w = dim_split
     head_dim = d_t + d_h + d_w
-    positions = (
-        torch.arange(grid.t, dtype=torch.float32),
-        torch.arange(grid.h, dtype=torch.float32),
-        torch.arange(grid.w, dtype=torch.float32),
-    )
-    inv = (
-        _rope_inv_freqs(d_t, base),
-        _rope_inv_freqs(d_h, base),
-        _rope_inv_freqs(d_w, base),
-    )
-    # angles[t, h, w, j] for pair j; axis chunks are contiguous in head_dim, so the
-    # global pair index j maps to lanes (2j, 2j+1) with no reordering.
-    per_axis = [
-        pos.reshape(*([1] * axis), -1, *([1] * (2 - axis)), 1) * freq.reshape(1, 1, 1, -1)
-        for axis, (pos, freq) in enumerate(zip(positions, inv, strict=True))
-    ]
-    angles = torch.cat(
-        [chunk.expand(grid.t, grid.h, grid.w, chunk.shape[-1]) for chunk in per_axis],
-        dim=-1,
+    offsets = (0, d_t, d_t + d_h)
+
+    def lanes(fn, axis: int, positions: torch.Tensor) -> torch.Tensor:
+        """``fn`` of this axis's angles, written into this axis's lanes and zero elsewhere.
+
+        Pairs are ``repeat_interleave``d, so pair ``j`` lands on lanes ``(2j, 2j+1)`` of the axis
+        chunk with no reordering.
+        """
+        width = dim_split[axis]
+        angles = positions.reshape(-1, 1) * _rope_inv_freqs(width, base).reshape(1, -1)
+        rows = torch.zeros(positions.numel(), head_dim, dtype=torch.float32)
+        rows[:, offsets[axis] : offsets[axis] + width] = fn(angles).repeat_interleave(2, dim=-1)
+        return rows
+
+    within = torch.arange(grid.h * grid.w)
+    rows_h = torch.div(within, grid.w, rounding_mode="floor").to(torch.float32)
+    rows_w = (within % grid.w).to(torch.float32)
+    rows_per_frame = grid.h * grid.w * num_heads
+
+    def upload(rows: torch.Tensor, shape: tuple[int, ...]) -> ttnn.Tensor:
+        return ttnn.from_torch(
+            rows.reshape(shape).contiguous(), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype
+        )
+
+    def frame_piece(fn) -> ttnn.Tensor:
+        # q and k carry heads inside the row axis and the rotation is per-site, so each site's row
+        # repeats once per head.
+        rows = (lanes(fn, 1, rows_h) + lanes(fn, 2, rows_w)).reshape(grid.h * grid.w, 1, head_dim)
+        return upload(rows.repeat(1, num_heads, 1), (1, 1, rows_per_frame, head_dim))
+
+    def time_piece(fn) -> ttnn.Tensor:
+        return upload(lanes(fn, 0, torch.arange(grid.t, dtype=torch.float32)), (1, grid.t, 1, head_dim))
+
+    return _RopeTables(
+        frame=_RopeParts(cos=frame_piece(torch.cos), sin=frame_piece(torch.sin)),
+        time=_RopeParts(cos=time_piece(torch.cos), sin=time_piece(torch.sin)),
+        rows_per_frame=rows_per_frame,
     )
 
-    def table(fn) -> ttnn.Tensor:
-        pairs = fn(angles).repeat_interleave(2, dim=-1).reshape(grid.sites, 1, head_dim)
-        flat = pairs.repeat(1, num_heads, 1).reshape(1, 1, grid.sites * num_heads, head_dim)
-        return ttnn.from_torch(flat.contiguous(), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
 
-    return _RopeTables(cos=table(torch.cos), sin=table(torch.sin))
+def _apply_rope(
+    x: ttnn.Tensor,
+    tables: _RopeTables,
+    *,
+    pair_swap: ttnn.Tensor,
+    compute_kernel_config,
+) -> ttnn.Tensor:
+    """Rotate ``x`` at ``(1, frames, rows_per_frame, head_dim)``. **Consumes** ``x``.
+
+    ``x * cos`` is evaluated as ``x * frame.cos + x * time.cos``, the two pieces broadcasting over
+    the frame axis and the row axis respectively. That is two extra multiplies against not
+    materialising a table the size of the activation, and it holds no more live tensors than the
+    fused form did.
+    """
+    swapped = ttnn.matmul(x, pair_swap, compute_kernel_config=compute_kernel_config)
+    aligned = _add_consuming(ttnn.multiply(x, tables.frame.cos), ttnn.multiply(x, tables.time.cos))
+    ttnn.deallocate(x)
+    rotated = _add_consuming(ttnn.multiply(swapped, tables.frame.sin), ttnn.multiply(swapped, tables.time.sin))
+    ttnn.deallocate(swapped)
+    return _add_consuming(aligned, rotated)
 
 
 # ---------------------------------------------------------------------------
@@ -268,8 +342,31 @@ def _reshape_retiled(x: ttnn.Tensor, shape: Sequence[int]) -> ttnn.Tensor:
     if tuple(x.shape) == shape:
         return x
     rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-    rm = ttnn.reshape(rm, shape)
-    return ttnn.to_layout(rm, ttnn.TILE_LAYOUT)
+    out = ttnn.to_layout(ttnn.reshape(rm, shape), ttnn.TILE_LAYOUT)
+    # The untilized copy is dead once `out` exists, and at 1920x1088 it is 1.7 GB. Left to
+    # refcounting it survives long enough to matter: stage 5 calls this six times per block.
+    # Guarded because a ROW_MAJOR input is returned as-is, and that one belongs to the caller.
+    if rm is not x:
+        ttnn.deallocate(rm)
+    return out
+
+
+def log_dram(mesh_device, label: str) -> None:
+    """Log allocated DRAM when ``DIFFVAE_MEM_LOG`` is set.
+
+    Peak memory is what stops this decoder at full resolution, and it is not obvious from the
+    source which tensors are still resident: an allocation failure names the op that asked for
+    memory, never the ones holding it. This makes the residency curve visible per block.
+    """
+    if not os.environ.get("DIFFVAE_MEM_LOG"):
+        return
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    banks = view.num_banks
+    logger.info(
+        f"[dram] {label}: allocated {view.total_bytes_allocated_per_bank * banks / 2**30:6.2f} GiB"
+        f" of {view.total_bytes_per_bank * banks / 2**30:.2f} GiB,"
+        f" largest contiguous free {view.largest_contiguous_bytes_free_per_bank * banks / 2**30:5.2f} GiB"
+    )
 
 
 def _reshape_row_major(x: ttnn.Tensor, shape: Sequence[int]) -> ttnn.Tensor:
@@ -284,6 +381,59 @@ def _reshape_row_major(x: ttnn.Tensor, shape: Sequence[int]) -> ttnn.Tensor:
     return ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), tuple(shape))
 
 
+@dataclass(frozen=True)
+class _Band:
+    """A frame band of the volume: interior ``[lo, hi)`` plus the halo attention reaches into."""
+
+    lo: int
+    hi: int
+    pad_lo: int
+    pad_hi: int
+
+    @property
+    def frames(self) -> int:
+        return self.hi - self.lo
+
+    @property
+    def pad_frames(self) -> int:
+        return self.pad_hi - self.pad_lo
+
+
+def _bands(t: int, *, frames: int | None, kernel: int) -> tuple[_Band, ...]:
+    """Split ``t`` frames into bands of ``frames``, each with the halo its windows reach into.
+
+    ``frames=None``, or a band long enough to cover everything, gives one band whose halo is
+    empty: every slice downstream is then a no-op and the volume runs whole, which is what short
+    videos and the parity tests do.
+
+    The halo comes from :func:`window_bounds`, the rule the attention plan itself is built from,
+    rather than from half the kernel: a query within half a kernel of either end has its window
+    shifted inward instead of truncated, so it reaches as far as ``kernel - 1`` frames the other
+    way. Taking the bound from the shared function also means a band's local windows are the global
+    ones shifted by ``pad_lo``, so the attention masks a band builds are the volume's own.
+    """
+    if frames is None or frames >= t:
+        return (_Band(0, t, 0, t),)
+    starts, ends = window_bounds(t, kernel)
+    bands = []
+    for lo in range(0, t, frames):
+        hi = min(lo + frames, t)
+        bands.append(_Band(lo, hi, starts[lo], ends[hi - 1]))
+    return tuple(bands)
+
+
+def _slice_rows(x: ttnn.Tensor, lo: int, hi: int) -> ttnn.Tensor:
+    """Rows ``[lo, hi)`` of a ``(1, batch, rows, ·)`` tensor, or ``x`` itself if that is every row.
+
+    Returning the input unsliced matters for more than speed: it keeps the single-band path free of
+    copies, so running unslabbed costs exactly what it did before bands existed.
+    """
+    shape = tuple(x.shape)
+    if (lo, hi) == (0, shape[-2]):
+        return x
+    return ttnn.slice(x, [0, 0, lo, 0], [shape[0], shape[1], hi, shape[-1]])
+
+
 def _slice_last(x: ttnn.Tensor, start: int, stop: int) -> ttnn.Tensor:
     """Slice the channel dim. Callers keep ``start``/``stop`` tile-aligned."""
     starts = [0] * (len(x.shape) - 1) + [start]
@@ -294,6 +444,23 @@ def _slice_last(x: ttnn.Tensor, start: int, stop: int) -> ttnn.Tensor:
 def _modulate(x: ttnn.Tensor, scale: ttnn.Tensor, shift: ttnn.Tensor) -> ttnn.Tensor:
     """``x * (1 + scale) + shift``. ``scale``/``shift`` broadcast over the site axis."""
     return ttnn.add(ttnn.multiply(x, ttnn.add(scale, 1.0)), shift)
+
+
+def _modulate_consuming(x: ttnn.Tensor, scale: ttnn.Tensor, shift: ttnn.Tensor) -> ttnn.Tensor:
+    """``_modulate`` that frees ``x`` and its own intermediate, for volume-sized inputs."""
+    scaled = ttnn.multiply(x, ttnn.add(scale, 1.0))
+    ttnn.deallocate(x)
+    out = ttnn.add(scaled, shift)
+    ttnn.deallocate(scaled)
+    return out
+
+
+def _add_consuming(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
+    """``a + b``, freeing both operands. Residual adds are where a block's copies pile up."""
+    out = ttnn.add(a, b)
+    ttnn.deallocate(a)
+    ttnn.deallocate(b)
+    return out
 
 
 def _pad_out_features(w: torch.Tensor, out_features: int) -> torch.Tensor:
@@ -345,10 +512,12 @@ class _NeighborhoodAttention3D(Module):
         *,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType,
+        ccl_manager=None,
     ) -> None:
         super().__init__()
         self.config = config
         self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
         self.scale = config.head_dim**-0.5
 
         linear = {"bias": True, "mesh_device": mesh_device, "dtype": dtype}
@@ -398,31 +567,61 @@ class _NeighborhoodAttention3D(Module):
             state[f"to_v.{leaf}"] = fused[2 * d :].clone()
 
     def _rope(self, x: ttnn.Tensor, tables: _RopeTables) -> ttnn.Tensor:
-        swapped = ttnn.matmul(x, self.pair_swap, compute_kernel_config=self.swap_compute_config)
-        return ttnn.add(ttnn.multiply(x, tables.cos), ttnn.multiply(swapped, tables.sin))
+        """**Consumes** ``x``, which callers pass as a temporary."""
+        return _apply_rope(x, tables, pair_swap=self.pair_swap, compute_kernel_config=self.swap_compute_config)
+
+    def _projected(self, projection, y: ttnn.Tensor, shape: tuple[int, ...]) -> ttnn.Tensor:
+        """``projection(y)`` reshaped to per-head form, without keeping the flat result."""
+        flat = projection(y)
+        out = _reshape_retiled(flat, shape)
+        if out is not flat:
+            ttnn.deallocate(flat)
+        return out
+
+    def _normed(self, norm, x: ttnn.Tensor, *, scale: float | None = None) -> ttnn.Tensor:
+        """``norm(x)``, optionally scaled, consuming ``x``."""
+        out = norm(x)
+        ttnn.deallocate(x)
+        if scale is not None:
+            scaled = ttnn.multiply(out, scale)
+            ttnn.deallocate(out)
+            return scaled
+        return out
 
     def forward(self, y: ttnn.Tensor, grid: Grid, tables: _RopeTables) -> ttnn.Tensor:
         """``y``: ``(1, batch, sites, dim)``. Returns the same shape."""
         cfg = self.config
-        heads_shape = (1, grid.batch, grid.sites * cfg.num_heads, cfg.head_dim)
+        assert grid.batch == 1, f"batched stage 5 is not implemented; got batch={grid.batch}"
+        # Frames are a separate axis rather than folded into the rows, which is what lets the RoPE
+        # pieces broadcast: the H/W piece over frames, the T piece over the rows within one.
+        heads_shape = (1, grid.t, grid.h * grid.w * cfg.num_heads, cfg.head_dim)
         volume_shape = (grid.batch, grid.t, grid.h, grid.w, cfg.num_heads, cfg.head_dim)
 
-        q = _reshape_retiled(self.to_q(y), heads_shape)
-        k = _reshape_retiled(self.to_k(y), heads_shape)
-        v = _reshape_retiled(self.to_v(y), heads_shape)
+        def to_volume(x: ttnn.Tensor) -> ttnn.Tensor:
+            """Untilize into the volume shape NA3D gathers from, consuming ``x``."""
+            out = _reshape_row_major(x, volume_shape)
+            if out is not x:
+                ttnn.deallocate(x)
+            return out
 
-        q = self._rope(ttnn.multiply(self.q_norm(q), self.scale), tables)
-        k = self._rope(self.k_norm(k), tables)
-
-        out = neighborhood_attention_3d(
-            _reshape_row_major(q, volume_shape),
-            _reshape_row_major(k, volume_shape),
-            _reshape_row_major(v, volume_shape),
-            kernel_size=cfg.kernel_size,
-            scale=1.0,
+        # Built and consumed one at a time. Holding q, k and v plus each one's untilized copy
+        # and RoPE temporaries is what exhausts DRAM at full resolution.
+        q = to_volume(
+            self._rope(self._normed(self.q_norm, self._projected(self.to_q, y, heads_shape), scale=self.scale), tables)
         )
-        out = _reshape_retiled(out, (1, grid.batch, grid.sites, cfg.dim))
-        return self.proj(out)
+        k = to_volume(self._rope(self._normed(self.k_norm, self._projected(self.to_k, y, heads_shape)), tables))
+        v = to_volume(self._projected(self.to_v, y, heads_shape))
+
+        out = neighborhood_attention_3d(q, k, v, kernel_size=cfg.kernel_size, scale=1.0, ccl_manager=self.ccl_manager)
+        for tensor in (q, k, v):
+            ttnn.deallocate(tensor)
+
+        flat = _reshape_retiled(out, (1, grid.batch, grid.sites, cfg.dim))
+        if flat is not out:
+            ttnn.deallocate(out)
+        projected = self.proj(flat)
+        ttnn.deallocate(flat)
+        return projected
 
 
 class DiffusionNABlock(Module):
@@ -434,6 +633,7 @@ class DiffusionNABlock(Module):
         *,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType,
+        ccl_manager=None,
     ) -> None:
         super().__init__()
         self.config = config
@@ -449,7 +649,7 @@ class DiffusionNABlock(Module):
             "dtype": dtype,
         }
         self.norm1 = RMSNorm(config.dim, **norm)
-        self.attn = _NeighborhoodAttention3D(config, mesh_device=mesh_device, dtype=dtype)
+        self.attn = _NeighborhoodAttention3D(config, mesh_device=mesh_device, dtype=dtype, ccl_manager=ccl_manager)
         self.norm2 = RMSNorm(config.dim, **norm)
         # Fused [up | gate] projection: Linear's swiglu path packs the two halves into
         # one GEMM and emits silu(gate) * up.
@@ -472,13 +672,29 @@ class DiffusionNABlock(Module):
 
     def forward(
         self,
-        x: ttnn.Tensor,
+        x: list[ttnn.Tensor],
         context: ttnn.Tensor,
         shared_modulation: ttnn.Tensor,
         grid: Grid,
-        tables: _RopeTables,
-    ) -> ttnn.Tensor:
-        """``x``/``context``: ``(1, batch, sites, dim)``. Returns the updated ``x`` half."""
+        bands: tuple[_Band, ...],
+        tables: tuple[_RopeTables, ...],
+    ) -> list[ttnn.Tensor]:
+        """``x``: the volume as one ``(1, batch, band rows, dim)`` tensor per band, and the return
+        is the updated volume in the same form. **Consumes** ``x``; ``context`` is read by every
+        block and left alone.
+
+        Attention is the only part that reads across sites, so each band runs on its own rows and
+        only the attention sees the band plus its halo, cropped back afterwards. Because the halo is
+        exactly what :func:`window_bounds` reaches (see :func:`_bands`), a padded band's local
+        windows are the volume's own shifted by ``pad_lo``, so every query kept sees the window it
+        would have seen whole and the crop is exact. One band is the whole volume with an empty
+        halo, so that path is unchanged.
+
+        Written as a sequence with each temporary freed as it dies rather than as nested
+        expressions, which is worth the verbosity: the nested form holds five or six band-sized
+        tensors at once and that is most of a block's peak. ``mod`` and its chunks are
+        ``(1, batch, 1, ·)``, so they cost nothing.
+        """
         dim = self.config.dim
         # Adding the table to all 7 chunks and then reading 4 is upstream's
         # _modulation: the gate chunks are computed and discarded.
@@ -488,9 +704,84 @@ class DiffusionNABlock(Module):
         scale_mlp = _slice_last(mod, 3 * dim, 4 * dim)
         shift_mlp = _slice_last(mod, 4 * dim, 5 * dim)
 
-        x = ttnn.add(x, self.context_proj(context))
-        x = ttnn.add(x, self.attn(_modulate(self.norm1(x), scale_msa, shift_msa), grid, tables))
-        return ttnn.add(x, self.mlp_down(self.mlp_gate_up(_modulate(self.norm2(x), scale_mlp, shift_mlp))))
+        rows = grid.h * grid.w
+        # A local view of the volume so the caller's list is left alone; entries become None as
+        # this loop releases them.
+        live: list[ttnn.Tensor | None] = list(x)
+        out: list[ttnn.Tensor] = []
+        for index, band in enumerate(bands):
+            # Bands own nothing they were handed: ``live`` is freed by this loop's own bookkeeping
+            # below, so anything derived from it is released here the moment it stops being read.
+            padded = self._padded_rows(live, index, bands, rows)
+            interior = ((band.lo - band.pad_lo) * rows, (band.hi - band.pad_lo) * rows)
+
+            context_rows = _slice_rows(context, band.pad_lo * rows, band.pad_hi * rows)
+            injected = self.context_proj(context_rows)
+            if context_rows is not context:
+                ttnn.deallocate(context_rows)
+            xs = ttnn.add(padded, injected)
+            ttnn.deallocate(injected)
+            if padded is not live[index]:
+                ttnn.deallocate(padded)
+
+            modulated = _modulate_consuming(self.norm1(xs), scale_msa, shift_msa)
+            attended = self.attn(
+                modulated,
+                Grid(grid.batch, band.pad_frames, grid.h, grid.w),
+                tables[index],
+            )
+            ttnn.deallocate(modulated)
+
+            residual = _slice_rows(xs, *interior)
+            if residual is not xs:
+                ttnn.deallocate(xs)
+            cropped = _slice_rows(attended, *interior)
+            if cropped is not attended:
+                ttnn.deallocate(attended)
+            y = _add_consuming(residual, cropped)
+
+            modulated = _modulate_consuming(self.norm2(y), scale_mlp, shift_mlp)
+            hidden = self.mlp_gate_up(modulated)
+            ttnn.deallocate(modulated)
+            projected = self.mlp_down(hidden)
+            ttnn.deallocate(hidden)
+            out.append(_add_consuming(y, projected))
+
+            # A band's input rows are read as halo by its neighbours, so they die a beat after the
+            # band itself. Releasing them as soon as no band still to come reaches back that far is
+            # what keeps the volume from being resident twice while the new one is built up.
+            reach = bands[index + 1].pad_lo if index + 1 < len(bands) else bands[-1].pad_hi
+            for other, entry in enumerate(live):
+                if entry is not None and bands[other].hi <= reach:
+                    ttnn.deallocate(entry)
+                    live[other] = None
+        return out
+
+    def _padded_rows(
+        self,
+        live: list[ttnn.Tensor | None],
+        index: int,
+        bands: tuple[_Band, ...],
+        rows: int,
+    ) -> ttnn.Tensor:
+        """Band ``index``'s rows plus its halo, read out of whichever bands the halo spans."""
+        band = bands[index]
+        parts = []
+        for other, source in enumerate(bands):
+            lo = max(band.pad_lo, source.lo)
+            hi = min(band.pad_hi, source.hi)
+            if lo < hi:
+                assert live[other] is not None, f"band {other} was released before band {index} read it"
+                parts.append(_slice_rows(live[other], (lo - source.lo) * rows, (hi - source.lo) * rows))
+        if len(parts) == 1:
+            return parts[0]
+        joined = ttnn.concat(parts, dim=-2)
+        # The halo slices are copies, but a part that happens to be a whole band is that band's own
+        # tensor, borrowed: the bands around this one still have to read it.
+        for part in parts:
+            if not any(part is entry for entry in live):
+                ttnn.deallocate(part)
+        return joined
 
 
 class _SharedAdaLNZero(Module):
@@ -541,11 +832,13 @@ class DiffVAEStage5(Module):
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.bfloat16,
         modulation_dtype: ttnn.DataType = ttnn.float32,
+        ccl_manager=None,
     ) -> None:
         super().__init__()
         self.config = config or DiffVAEStage5Config()
         cfg = self.config
         self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
         self.dtype = dtype
         self.modulation_dtype = modulation_dtype
         # The tile-aligned width the 48 patch channels are zero-padded to. The pad has to
@@ -560,7 +853,8 @@ class DiffVAEStage5(Module):
         self.t_embedder = _TimestepEmbedder(cfg.t_emb_dim, mesh_device=mesh_device, dtype=modulation_dtype)
         self.shared_adaln = _SharedAdaLNZero(cfg, mesh_device=mesh_device, dtype=modulation_dtype, out_dtype=dtype)
         self.diff_blocks = ModuleList(
-            DiffusionNABlock(cfg, mesh_device=mesh_device, dtype=dtype) for _ in range(cfg.num_blocks)
+            DiffusionNABlock(cfg, mesh_device=mesh_device, dtype=dtype, ccl_manager=ccl_manager)
+            for _ in range(cfg.num_blocks)
         )
         self.norm_out = RMSNorm(cfg.dim, norm_eps=cfg.norm_eps, bias=False, mesh_device=mesh_device, dtype=dtype)
         self.conv_out = Linear(cfg.dim, self.padded_patch_channels, bias=True, mesh_device=mesh_device, dtype=dtype)
@@ -598,40 +892,83 @@ class DiffVAEStage5(Module):
             self._rope_cache[grid] = tables
         return tables
 
-    def embed_x_t(self, x_t: torch.Tensor) -> ttnn.Tensor:
-        """Patchify pixel-space ``(B, C, T, H, W)`` noise and project it to ``(1, B, S, dim)``."""
+    def bands(self, grid: Grid) -> tuple[_Band, ...]:
+        """How to split the volume into frame bands, from ``DIFFVAE_SLAB_FRAMES``.
+
+        Off by default: banding buys peak memory with redundant halo work, so it is not worth
+        paying until the volume needs it. The row slices are on a tiled dim, so a band boundary has
+        to be tile-aligned, which holds exactly when ``h * w`` is a multiple of ``TILE``.
+        """
+        frames = os.environ.get("DIFFVAE_SLAB_FRAMES")
+        kernel = self.config.kernel_size[0]
+        if frames and (grid.h * grid.w) % TILE != 0:
+            logger.warning(
+                f"[diffvae] ignoring DIFFVAE_SLAB_FRAMES: h*w={grid.h * grid.w} is not a multiple of {TILE}, "
+                "so a frame boundary is not a tile boundary"
+            )
+            frames = None
+        return _bands(grid.t, frames=int(frames) if frames else None, kernel=kernel)
+
+    def embed_x_t(self, x_t: torch.Tensor, bands: tuple[_Band, ...]) -> list[ttnn.Tensor]:
+        """Patchify pixel-space ``(B, C, T, H, W)`` noise and project it, one tensor per band.
+
+        Uploaded a band at a time rather than whole and split afterwards, which would need the
+        volume and its projection resident together.
+        """
         cfg = self.config
         patched = patchify(x_t, cfg.patch_size)
-        batch, _, t, h, w = patched.shape
-        flat = patched.permute(0, 2, 3, 4, 1).reshape(1, batch, t * h * w, cfg.patch_channels)
-        flat = torch.nn.functional.pad(flat, (0, self.padded_patch_channels - cfg.patch_channels))
-        return self.conv_in_x_t(
-            ttnn.from_torch(flat.contiguous(), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=self.dtype)
-        )
+        batch = patched.shape[0]
+        out = []
+        for band in bands:
+            rows = patched[:, :, band.lo : band.hi]
+            t, h, w = rows.shape[2:]
+            flat = rows.permute(0, 2, 3, 4, 1).reshape(1, batch, t * h * w, cfg.patch_channels)
+            flat = torch.nn.functional.pad(flat, (0, self.padded_patch_channels - cfg.patch_channels))
+            uploaded = ttnn.from_torch(
+                flat.contiguous(), device=self.mesh_device, layout=ttnn.TILE_LAYOUT, dtype=self.dtype
+            )
+            out.append(self.conv_in_x_t(uploaded))
+            ttnn.deallocate(uploaded)
+        return out
 
     def forward_diff_step(
         self,
-        context_and_x: ttnn.Tensor,
+        context: ttnn.Tensor,
+        x: list[ttnn.Tensor],
         timestep: ttnn.Tensor,
         grid: Grid,
+        bands: tuple[_Band, ...],
     ) -> ttnn.Tensor:
-        """One stage-5 step on the block-ready buffer.
+        """One stage-5 step. Returns padded patch channels at ``(1, batch, sites, ·)``.
 
-        ``context_and_x`` is ``[context | conv_in_x_t(x)]`` at ``(1, batch, sites, 2 * dim)``.
-        Splitting it once here rather than per block is equivalent because no block writes
-        the context half. Returns padded patch channels at ``(1, batch, sites, ·)``.
+        Upstream carries context and x as one ``[context | conv_in_x_t(x)]`` buffer of
+        ``2 * dim`` channels and slices it here. They are kept apart instead: both halves are
+        tile-aligned, so building the joint buffer and splitting it straight back is an exact
+        round trip, and at 1920x1088 it costs 3.3 GB plus two full-size copies for nothing. No
+        block writes the context half, so nothing depends on them being adjacent.
         """
         cfg = self.config
-        context = _slice_last(context_and_x, 0, cfg.context_channels)
-        x = _slice_last(context_and_x, cfg.context_channels, cfg.context_channels + cfg.dim)
-
         scaled_t = ttnn.multiply(timestep, cfg.timestep_scale_multiplier)
         modulation = self.shared_adaln(self.t_embedder(scaled_t), grid.batch)
         tables = self.rope_tables(grid)
-        for block in self.diff_blocks:
-            x = block(x, context, modulation, grid, tables)
+        band_tables = tuple(tables.frames(band.pad_lo, band.pad_hi) for band in bands)
+        log_dram(self.mesh_device, f"stage5 entry ({len(bands)} band(s))")
+        for index, block in enumerate(self.diff_blocks):
+            x = block(x, context, modulation, grid, bands, band_tables)
+            log_dram(self.mesh_device, f"stage5 block {index}")
 
-        return self.conv_out(self.norm_out(x))
+        # The tail runs per band too: its output is a quarter the width of the volume it comes
+        # from, so joining after the projection rather than before is the cheap order.
+        tail = []
+        for band in x:
+            tail.append(self.conv_out(self.norm_out(band)))
+            ttnn.deallocate(band)
+        if len(tail) == 1:
+            return tail[0]
+        joined = ttnn.concat(tail, dim=-2)
+        for part in tail:
+            ttnn.deallocate(part)
+        return joined
 
     def forward(
         self,
@@ -644,10 +981,15 @@ class DiffVAEStage5(Module):
         with a single inference step, which is what the shipped 2.5 DiffVAE config asks for.
         """
         cfg = self.config
-        context_and_x = ttnn.concat([context, self.embed_x_t(x_t)], dim=-1)
-        out = self.forward_diff_step(context_and_x, timestep, grid)
+        bands = self.bands(grid)
+        out = self.forward_diff_step(context, self.embed_x_t(x_t, bands), timestep, grid, bands)
 
-        packed = ttnn.to_torch(out)[..., : cfg.patch_channels]
+        # This tensor is replicated across the mesh, so a bare ttnn.to_torch sees one buffer per
+        # device and fails. Reading a single chip's copy is what that replication means; the
+        # composing helper instead pulls all 32 copies to the host and indexes one out of them,
+        # which for a 418 MB output is 13 GB over PCIe and was 100s of a 190s decode.
+        packed = local_device_to_torch(out)[..., : cfg.patch_channels]
+        ttnn.deallocate(out)
         packed = packed.reshape(grid.batch, grid.t, grid.h, grid.w, cfg.patch_channels)
         packed = packed.permute(0, 4, 1, 2, 3)
         return unpatchify(packed, cfg.patch_size)

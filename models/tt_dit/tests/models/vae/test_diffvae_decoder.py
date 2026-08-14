@@ -25,7 +25,9 @@ import torch
 from safetensors import safe_open
 
 import ttnn
+from models.tt_dit.layers.na3d import window_bounds
 from models.tt_dit.models.vae.diffvae_ltx import DiffVAEDecoder, decoder_config
+from models.tt_dit.models.vae.diffvae_ltx_stage5 import _bands
 from models.tt_dit.utils.check import assert_quality
 
 CAPTURE = Path(os.environ.get("DIFFVAE_CAPTURE", "/home/noblewoodall/ltx25_diffvae/stages/crop10.safetensors"))
@@ -76,6 +78,35 @@ def test_context_matches_upstream(*, decoder):
 
     actual = ttnn.to_torch(context).reshape(1, *dims, expected.shape[-1])
     assert_quality(expected, actual, pcc=0.99)
+
+
+@pytest.mark.parametrize("t", [12, 25, 145])
+@pytest.mark.parametrize("frames", [1, 3, 8, 16, 64])
+def test_band_halo_covers_every_window(t: int, frames: int):
+    """A band's local windows must be the volume's own, shifted by the band's halo.
+
+    Stage 5 runs long videos as frame bands and attends each one as a standalone volume, so a
+    query whose window reaches outside its band would quietly attend to the wrong frames: wrong
+    pixels, no error. The inward window shift makes the bound easy to get wrong, since a query
+    near either end reaches ``kernel - 1`` frames the other way rather than ``kernel // 2``.
+
+    Needs no device or capture: it is arithmetic against the same ``window_bounds`` the attention
+    plan is built from.
+    """
+    kernel = 11
+    starts, ends = window_bounds(t, kernel)
+    bands = _bands(t, frames=frames, kernel=kernel)
+
+    assert bands[0].lo == 0 and bands[-1].hi == t, f"bands do not cover {t} frames: {bands}"
+    for before, after in zip(bands, bands[1:], strict=False):
+        assert before.hi == after.lo, f"bands are not contiguous: {before} then {after}"
+
+    for band in bands:
+        local_starts, local_ends = window_bounds(band.pad_frames, kernel)
+        for q in range(band.lo, band.hi):
+            local = q - band.pad_lo
+            assert local_starts[local] + band.pad_lo == starts[q], f"frame {q} of {band}: start moved"
+            assert local_ends[local] + band.pad_lo == ends[q], f"frame {q} of {band}: end moved"
 
 
 def test_decode_matches_upstream(*, decoder):

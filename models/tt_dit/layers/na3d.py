@@ -29,9 +29,20 @@ import torch
 
 import ttnn
 
+from ..utils.tensor import from_torch
+
 # Cap on one tile group's [Nq, Nk] score block. Bounds both the additive mask allocation and
 # the score materialization; the tile search shrinks axes until the product fits.
 DEFAULT_SCORE_BUDGET = 2**22
+
+# Cap on the elements gathered for one attention call's K and V together. Peak device memory is
+# what this bounds, and it is separate from the score budget above, which bounds a *tile's*
+# window: a group can hold tens of thousands of tiles, and running them as one call is what
+# scales with resolution. 2**29 elements is 1 GB in bfloat16 for K and V combined.
+#
+# The bound is per chip, so a sharded plan (see :class:`NA3DShard`) splits a group's tiles
+# before this applies and needs proportionally fewer chunks for the same grid.
+DEFAULT_CHUNK_BUDGET = 2**29
 
 
 def window_bounds(length: int, kernel: int) -> tuple[list[int], list[int]]:
@@ -236,20 +247,130 @@ def _flat_indices(dims: tuple[int, int, int], block: tuple[slice, slice, slice])
     return grid[block[0], block[1], block[2]].reshape(-1)
 
 
+@dataclass(frozen=True)
+class NA3DShard:
+    """How a plan splits its query work across a 2D mesh.
+
+    Two independent splits, both on the query side: a group's tiles across one mesh axis, and
+    the query rows *within* a tile across the other. Keys and values stay replicated, so every
+    tile can reach the whole of its window without a neighbour's help and there is no halo
+    exchange. The trade is that the q/k/v tables stay full size on every chip: what shrinks is
+    the arithmetic and the per-call gather, not the resident volume.
+
+    Sharding here is a property of the *data* alone. Every chip walks the same groups in the
+    same order and issues the same ops; only the contents of the index tensors and the masks
+    differ. That is what makes this safe on a mesh that dispatches one program to every chip —
+    a split that gave one chip more tile groups than another would not be.
+    """
+
+    tile_axis: int
+    tile_factor: int
+    row_axis: int
+    row_factor: int
+
+    @classmethod
+    def for_mesh(cls, mesh_device) -> NA3DShard | None:
+        """The default split for ``mesh_device``, or ``None`` if it has nothing to split.
+
+        Tiles take the longer mesh axis because that is the axis with something to divide: a
+        group holds thousands of tiles against a few hundred query rows per tile, and the
+        shipped stage-5 geometry gives 1624 tiles, an exact multiple of 8.
+        """
+        shape = list(mesh_device.shape)
+        if len(shape) != 2 or math.prod(shape) == 1:
+            return None
+        tile_axis = 0 if shape[0] >= shape[1] else 1
+        row_axis = 1 - tile_axis
+        return cls(tile_axis=tile_axis, tile_factor=shape[tile_axis], row_axis=row_axis, row_factor=shape[row_axis])
+
+
+def _pad_by_duplication(x: torch.Tensor, *, dim: int, multiple: int) -> torch.Tensor:
+    """Extend ``dim`` to a multiple of ``multiple`` by repeating its last entry.
+
+    Duplication rather than a sentinel value, because it makes the padding *correct* instead of
+    merely tolerable: a duplicated tile recomputes a tile that already exists and a duplicated
+    query row recomputes a row that already exists, so both emit the values they would have
+    emitted anyway. Nothing downstream has to know which rows came from padding, and a mistake
+    in the padding arithmetic costs redundant work rather than wrong pixels.
+    """
+    extent = x.shape[dim]
+    remainder = extent % multiple
+    if remainder == 0:
+        return x
+    repeats = [1] * x.dim()
+    repeats[dim] = multiple - remainder
+    return torch.cat([x, x.narrow(dim, extent - 1, 1).repeat(repeats)], dim=dim)
+
+
+@dataclass(frozen=True)
+class NA3DGroup:
+    """One tile group's uploaded gather indices and mask, with the extents one chip sees.
+
+    ``local_tiles`` and ``local_queries`` are per chip; a replicated plan has them equal to the
+    group's own (padded) counts. The factors are per group rather than per plan because a group
+    too small to split keeps a factor of 1 while its neighbours are split — still uniform across
+    chips, which is all the mesh requires.
+    """
+
+    query_indices: ttnn.Tensor
+    key_indices: ttnn.Tensor
+    mask: ttnn.Tensor
+    local_tiles: int
+    local_queries: int
+    n_keys: int
+    tile_factor: int
+    row_factor: int
+
+
+def _emitted_order(
+    padded_rows: list[tuple[torch.Tensor, int, int]],
+    shard: NA3DShard | None,
+) -> list[torch.Tensor]:
+    """Volume row index per output row, in the order the mesh gathers produce them.
+
+    Every group's local result is concatenated into one stack per chip and that stack is gathered
+    once per mesh axis, rather than gathering each group separately: a group-at-a-time gather
+    needs two CCL programs per group, and at ~50 groups per geometry compiling them costs more
+    than the attention itself. The price is that the output is no longer in group order — an
+    all-gather lays down each chip's entire contribution before the next chip's, so the order is
+    chip-major with groups nested inside — and that is what this reproduces.
+
+    Getting it wrong is not a subtle numerical drift; the volume comes back permuted. The mesh
+    parity test is the check.
+    """
+    tile_range = shard.tile_factor if shard is not None else 1
+    row_range = shard.row_factor if shard is not None else 1
+
+    emitted = []
+    for row_chip in range(row_range):
+        for tile_chip in range(tile_range):
+            for rows, tile_factor, row_factor in padded_rows:
+                local_tiles = rows.shape[0] // tile_factor
+                local_queries = rows.shape[1] // row_factor
+                # A group left unsplit on an axis sits on every chip along it, so the modulo
+                # collapses to offset 0 and its rows are emitted once per chip.
+                tile_start = (tile_chip % tile_factor) * local_tiles
+                row_start = (row_chip % row_factor) * local_queries
+                block = rows[tile_start : tile_start + local_tiles, row_start : row_start + local_queries]
+                emitted.append(block.reshape(-1))
+    return emitted
+
+
 @dataclass
 class NA3DDevicePlan:
     """Uploaded index tensors and masks for one ``(dims, kernel)`` on one mesh.
 
     Built once and cached: the index arithmetic is shape-dependent but weight-independent, so
-    every block sharing a grid shape and kernel reuses this.
+    every block sharing a grid shape and kernel reuses this. When ``shard`` is set the indices
+    are distributed and ``ccl_manager`` is the one that reassembles each group's output, so a
+    plan carries everything its executor needs to know about the mesh.
     """
 
     plan: NA3DPlan
-    query_indices: tuple[ttnn.Tensor, ...]
-    key_indices: tuple[ttnn.Tensor, ...]
-    masks: tuple[ttnn.Tensor, ...]
-    tiles_per_group: tuple[int, ...]
+    groups: tuple[NA3DGroup, ...]
     restore_indices: ttnn.Tensor
+    shard: NA3DShard | None = None
+    ccl_manager: object | None = None
 
 
 def build_device_plan(
@@ -257,62 +378,94 @@ def build_device_plan(
     *,
     mesh_device,
     dtype: ttnn.DataType = ttnn.bfloat16,
+    ccl_manager=None,
+    shard: NA3DShard | None = None,
 ) -> NA3DDevicePlan:
-    """Upload a plan's gather indices and additive masks.
+    """Upload a plan's gather indices and additive masks, optionally split across the mesh.
 
     Queries are gathered rather than sliced because a real grid has tens of thousands of
     tiles: as slices that is one op each, as a gather it is one op per *group*. The tiles of
     a group partition into the batch dimension, so a group becomes a single batched attention
     call sharing one mask.
+
+    Sharding needs a ``ccl_manager`` to gather each group's output back, so without one the
+    plan stays replicated however capable the mesh is — that keeps the single-chip parity tests
+    on exactly the path they have always taken. Pass ``shard`` to override the default split.
     """
-    query_indices, key_indices, masks, tiles_per_group = [], [], [], []
-    plan_order = []
+    if ccl_manager is None:
+        shard = None
+    elif shard is None:
+        shard = NA3DShard.for_mesh(mesh_device)
 
+    padded_rows: list[tuple[torch.Tensor, int, int]] = []
+    groups = []
     for group in plan.groups:
-        q_rows = torch.cat([_flat_indices(plan.dims, block) for block in group.query_slices])
-        k_rows = torch.cat([_flat_indices(plan.dims, block) for block in group.key_slices])
-        plan_order.append(q_rows)
-        tiles_per_group.append(len(group.query_slices))
-
-        query_indices.append(
-            ttnn.from_torch(
-                q_rows.to(torch.int32).reshape(1, -1),
-                device=mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-        )
-        key_indices.append(
-            ttnn.from_torch(
-                k_rows.to(torch.int32).reshape(1, -1),
-                device=mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            )
-        )
+        # (tiles, per_tile): ttnn.embedding maps a (batch, seq) index to (batch, seq, width),
+        # which is the shape the attention call wants anyway, and a chunk of tiles is then a
+        # slice of the *leading* dim. Reshaping these on device instead would change the
+        # innermost dim, which is a data-movement kernel whose circular buffers overflow L1 at
+        # a realistic key count.
+        q_rows = torch.stack([_flat_indices(plan.dims, block) for block in group.query_slices])
+        k_rows = torch.stack([_flat_indices(plan.dims, block) for block in group.key_slices])
         # bfloat16's most-negative value stands in for -inf: exp() of it underflows to zero,
         # which is what the masked softmax needs, and it survives the dtype round trip.
         mask = group_mask(group, dtype=torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32)
-        masks.append(ttnn.from_torch(mask, device=mesh_device, dtype=dtype, layout=ttnn.TILE_LAYOUT))
 
-    # Query tiles partition the volume, so concatenating groups visits every voxel exactly
-    # once — just in plan order. argsort maps that back to volume order in one final gather.
-    order = torch.cat(plan_order)
-    assert order.numel() == math.prod(plan.dims), f"plan covers {order.numel()} of {math.prod(plan.dims)} voxels"
-    restore = torch.argsort(order)
+        tile_factor = shard.tile_factor if shard is not None else 1
+        # A group with fewer query rows than the mesh axis is wide cannot be split along them.
+        row_factor = shard.row_factor if shard is not None and group.n_queries >= shard.row_factor else 1
+
+        q_rows = _pad_by_duplication(q_rows, dim=0, multiple=tile_factor)
+        k_rows = _pad_by_duplication(k_rows, dim=0, multiple=tile_factor)
+        q_rows = _pad_by_duplication(q_rows, dim=1, multiple=row_factor)
+        mask = _pad_by_duplication(mask, dim=2, multiple=row_factor)
+        padded_rows.append((q_rows, tile_factor, row_factor))
+
+        tile_mesh_axis = shard.tile_axis if shard is not None and tile_factor > 1 else None
+        row_mesh_axis = shard.row_axis if shard is not None and row_factor > 1 else None
+        upload = {"device": mesh_device, "dtype": ttnn.uint32, "layout": ttnn.ROW_MAJOR_LAYOUT}
+        groups.append(
+            NA3DGroup(
+                query_indices=from_torch(q_rows.to(torch.int32), mesh_axes=[tile_mesh_axis, row_mesh_axis], **upload),
+                key_indices=from_torch(k_rows.to(torch.int32), mesh_axes=[tile_mesh_axis, None], **upload),
+                mask=from_torch(
+                    mask,
+                    device=mesh_device,
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_axes=[None, None, row_mesh_axis, None],
+                ),
+                local_tiles=q_rows.shape[0] // tile_factor,
+                local_queries=q_rows.shape[1] // row_factor,
+                n_keys=group.n_keys,
+                tile_factor=tile_factor,
+                row_factor=row_factor,
+            )
+        )
+
+    # Query tiles partition the volume, so the groups together visit every voxel at least once
+    # — and more than once wherever padding duplicated a tile or a row. Inverting that mapping
+    # puts the volume back together in one final gather; duplicates are free to collide because
+    # they carry identical rows.
+    order = torch.cat(_emitted_order(padded_rows, shard))
+    volume = math.prod(plan.dims)
+    covered = torch.zeros(volume, dtype=torch.bool)
+    covered[order] = True
+    assert covered.all(), f"plan covers {int(covered.sum())} of {volume} voxels"
+    restore = torch.empty(volume, dtype=torch.int64)
+    restore[order] = torch.arange(order.numel())
 
     return NA3DDevicePlan(
         plan=plan,
-        query_indices=tuple(query_indices),
-        key_indices=tuple(key_indices),
-        masks=tuple(masks),
-        tiles_per_group=tuple(tiles_per_group),
+        groups=tuple(groups),
         restore_indices=ttnn.from_torch(
             restore.to(torch.int32).reshape(1, -1),
             device=mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         ),
+        shard=shard,
+        ccl_manager=ccl_manager,
     )
 
 
@@ -325,20 +478,43 @@ def cached_device_plan(
     *,
     mesh_device,
     dtype: ttnn.DataType = ttnn.bfloat16,
+    ccl_manager=None,
 ) -> NA3DDevicePlan:
     """Device plan for one geometry, built once per process.
 
-    A plan depends only on the grid, the kernel and the dtype — never on weights — but it
-    uploads index tables and masks, so rebuilding it per block (every block of a stack shares
-    a geometry) would dominate a decode. Keyed on the device id as well, since the uploaded
-    tensors belong to one mesh.
+    A plan depends only on the grid, the kernel, the dtype and how it is split — never on
+    weights — but it uploads index tables and masks, so rebuilding it per block (every block of
+    a stack shares a geometry) would dominate a decode. Keyed on the device and the CCL manager
+    as well, since the uploaded tensors belong to one mesh and the split depends on the manager.
     """
-    key = (tuple(dims), tuple(kernel_size), dtype, id(mesh_device))
+    key = (tuple(dims), tuple(kernel_size), dtype, id(mesh_device), id(ccl_manager))
     plan = _PLAN_CACHE.get(key)
     if plan is None:
-        plan = build_device_plan(plan_na3d(tuple(dims), tuple(kernel_size)), mesh_device=mesh_device, dtype=dtype)
+        plan = build_device_plan(
+            plan_na3d(tuple(dims), tuple(kernel_size)),
+            mesh_device=mesh_device,
+            dtype=dtype,
+            ccl_manager=ccl_manager,
+        )
         _PLAN_CACHE[key] = plan
     return plan
+
+
+def _gather_stack(local: ttnn.Tensor, device_plan: NA3DDevicePlan) -> ttnn.Tensor:
+    """Gather every chip's ``(rows, width)`` contribution into the full stack on every chip.
+
+    Both gathers are along dim 0, one per mesh axis, and they run in the order
+    :func:`_emitted_order` assumes: the tile axis first, then the row axis.
+    """
+    shard = device_plan.shard
+    if shard is None:
+        return local
+
+    for mesh_axis in (shard.tile_axis, shard.row_axis):
+        gathered = device_plan.ccl_manager.all_gather(local, dim=0, mesh_axis=mesh_axis, use_hyperparams=False)
+        ttnn.deallocate(local)
+        local = gathered
+    return local
 
 
 def neighborhood_attention_3d(
@@ -349,6 +525,8 @@ def neighborhood_attention_3d(
     kernel_size: tuple[int, int, int],
     scale: float | None = None,
     device_plan: NA3DDevicePlan | None = None,
+    chunk_budget: int = DEFAULT_CHUNK_BUDGET,
+    ccl_manager=None,
 ) -> ttnn.Tensor:
     """3D neighborhood attention on device.
 
@@ -359,6 +537,15 @@ def neighborhood_attention_3d(
     Either input layout is accepted. Callers building q/k/v with matmuls arrive in TILE,
     callers coming from a gather arrive in ROW_MAJOR, and the gathers below need ROW_MAJOR;
     normalizing here keeps that off every caller.
+
+    ``chunk_budget`` caps the elements gathered per attention call, bounding peak memory
+    independently of grid size. It changes no arithmetic: a group's tiles are independent, so
+    splitting the batch is exact.
+
+    When ``device_plan`` is sharded (see :class:`NA3DShard`) each chip evaluates a slice of every
+    group and the results are gathered back here, so the return value is the same full volume on
+    every chip either way. ``ccl_manager`` is only consulted when this builds its own plan; a
+    plan passed in carries the manager it was built with.
     """
     batch, t, h, w, heads, head_dim = tuple(q.shape)
     assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
@@ -370,7 +557,12 @@ def neighborhood_attention_3d(
         q.dtype == ttnn.bfloat16
     ), f"NA3D gathers rows with ttnn.embedding, which requires a bfloat16 table; got {q.dtype}"
     if device_plan is None:
-        device_plan = cached_device_plan((t, h, w), kernel_size, mesh_device=q.device(), dtype=q.dtype)
+        device_plan = cached_device_plan(
+            (t, h, w), kernel_size, mesh_device=q.device(), dtype=q.dtype, ccl_manager=ccl_manager
+        )
+    assert (
+        device_plan.shard is None or device_plan.ccl_manager is not None
+    ), "a sharded plan needs the CCL manager it was built with to reassemble each group"
     if scale is None:
         scale = head_dim**-0.5
     if scale != 1.0:
@@ -384,39 +576,77 @@ def neighborhood_attention_3d(
     tables = [ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (t * h * w, width)) for x in (q, k, v)]
 
     outputs = []
-    for group, q_index, k_index, mask, n_tiles in zip(
-        device_plan.plan.groups,
-        device_plan.query_indices,
-        device_plan.key_indices,
-        device_plan.masks,
-        device_plan.tiles_per_group,
-    ):
-        gathered = []
-        for table, index, count in (
-            (tables[0], q_index, group.n_queries),
-            (tables[1], k_index, group.n_keys),
-            (tables[2], k_index, group.n_keys),
-        ):
-            rows = ttnn.embedding(index, table, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=q.dtype)
-            rows = ttnn.reshape(rows, (n_tiles, count, heads, head_dim))
-            # (tiles, seq, heads, dim) -> (tiles, heads, seq, dim): SDPA wants heads ahead of seq.
-            rows = ttnn.permute(rows, (0, 2, 1, 3))
-            gathered.append(ttnn.to_layout(rows, ttnn.TILE_LAYOUT))
+    for group in device_plan.groups:
+        # A group's tiles are independent, so they can run in slices of the batch. Run whole, a
+        # group's gathered K and V scale with the entire grid: 9 GB at 1920x1088 against 31.8 GB
+        # of DRAM, which cannot coexist with the rest of a block. Chunking bounds peak memory by
+        # a budget rather than by resolution. Grids small enough come out as one chunk, so the
+        # shapes under test exercise this same path.
+        n_tiles = group.local_tiles
+        per_tile = group.n_keys * width  # elements gathered per tile, for each of K and V
+        tiles_per_chunk = max(1, min(n_tiles, chunk_budget // max(1, 2 * per_tile)))
 
-        attended = ttnn.transformer.scaled_dot_product_attention(
-            gathered[0], gathered[1], gathered[2], attn_mask=mask, is_causal=False, scale=1.0
-        )
-        for tensor in gathered:
-            ttnn.deallocate(tensor)
+        chunks = []
+        for start in range(0, n_tiles, tiles_per_chunk):
+            tiles = min(tiles_per_chunk, n_tiles - start)
+            # A chunk slices the leading dim, which is contiguous. When the chunk is the whole
+            # group the slice is skipped: it would copy the plan's index tensor for nothing.
+            if tiles == n_tiles:
+                chunk_indices = (group.query_indices, group.key_indices)
+            else:
+                chunk_indices = tuple(
+                    ttnn.slice(rows, [start, 0], [start + tiles, count])
+                    for rows, count in (
+                        (group.query_indices, group.local_queries),
+                        (group.key_indices, group.n_keys),
+                    )
+                )
 
-        attended = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
-        attended = ttnn.permute(attended, (0, 2, 1, 3))
-        outputs.append(ttnn.reshape(attended, (n_tiles * group.n_queries, width)))
+            gathered = []
+            for table, index, count in (
+                (tables[0], chunk_indices[0], group.local_queries),
+                (tables[1], chunk_indices[1], group.n_keys),
+                (tables[2], chunk_indices[1], group.n_keys),
+            ):
+                # (tiles, count) index -> (tiles, count, width), then split width into heads.
+                # Splitting the innermost dim is a pure stride change in ROW_MAJOR.
+                rows = ttnn.embedding(index, table, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=q.dtype)
+                rows = ttnn.reshape(rows, (tiles, count, heads, head_dim))
+                # (tiles, seq, heads, dim) -> (tiles, heads, seq, dim): SDPA wants heads ahead of seq.
+                rows = ttnn.permute(rows, (0, 2, 1, 3))
+                gathered.append(ttnn.to_layout(rows, ttnn.TILE_LAYOUT))
+            # Never deallocated: on the single-chunk path these *are* the cached plan's tensors,
+            # and freeing them would break every later block sharing that geometry.
+            del chunk_indices
 
-    stacked = ttnn.concat(outputs, dim=0) if len(outputs) > 1 else outputs[0]
+            # The mask is [1, 1, Nq, Nk] and broadcasts over the tile batch, so a chunk uses the
+            # group's mask unchanged however many tiles it holds.
+            attended = ttnn.transformer.scaled_dot_product_attention(
+                gathered[0], gathered[1], gathered[2], attn_mask=group.mask, is_causal=False, scale=1.0
+            )
+            for tensor in gathered:
+                ttnn.deallocate(tensor)
+
+            attended = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
+            attended = ttnn.permute(attended, (0, 2, 1, 3))
+            chunks.append(ttnn.reshape(attended, (tiles, group.local_queries, width)))
+
+        # Chunks are joined here rather than gathered individually: the chunking is a local memory
+        # decision and must not reach the fabric, or the reassembled order would depend on it.
+        local = chunks[0] if len(chunks) == 1 else ttnn.concat(chunks, dim=0)
+        for tensor in chunks:
+            if tensor is not local:
+                ttnn.deallocate(tensor)
+        outputs.append(ttnn.reshape(local, (group.local_tiles * group.local_queries, width)))
+
+    # One stack per chip, then one gather per mesh axis for the whole attention call. Gathering
+    # per group instead needs two CCL programs per group, and compiling ~100 of those costs more
+    # than the attention they parallelize.
+    local_stack = ttnn.concat(outputs, dim=0) if len(outputs) > 1 else outputs[0]
     for tensor in outputs:
-        if tensor is not stacked:
+        if tensor is not local_stack:
             ttnn.deallocate(tensor)
+    stacked = _gather_stack(local_stack, device_plan)
 
     restored = ttnn.embedding(device_plan.restore_indices, stacked, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=q.dtype)
     ttnn.deallocate(stacked)
