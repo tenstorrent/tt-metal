@@ -11,65 +11,8 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
-
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 using tt::data_movement::common::tt_memmove;
-
-// Alignment-aware fill: writes 4 bytes at a time for the aligned middle,
-// and uses element-sized writes for unaligned start/end to avoid rv32 unaligned faults.
-// Supports 1-byte (FP8), 2-byte (BF16), and 4-byte (FP32) element sizes.
-// For val_size < 4, the value is replicated to fill a uint32_t for efficient aligned writes.
-template <uint32_t val_size>
-FORCE_INLINE void fill_with_val(uint32_t start_addr, uint32_t n_bytes, uint32_t val) {
-    static_assert(
-        val_size == sizeof(uint8_t) || val_size == sizeof(uint16_t) || val_size == sizeof(uint32_t),
-        "Unsupported val_size");
-    using IntType = std::conditional_t<
-        (val_size == sizeof(uint8_t)),
-        uint8_t,
-        std::conditional_t<(val_size == sizeof(uint16_t)), uint16_t, uint32_t>>;
-
-    const uint32_t end_addr = start_addr + n_bytes;
-    const uint32_t start_addr_4B = (start_addr + 0x3) & 0xFFFFFFFC;
-    const uint32_t end_addr_4B = end_addr & 0xFFFFFFFC;
-
-    // Prepare the 4-byte value for aligned writes
-    uint32_t val_4B = val;
-    if constexpr (val_size == sizeof(uint8_t)) {
-        // For 1-byte elements, replicate the byte 4 times
-        uint8_t byte_val = static_cast<uint8_t>(val);
-        val_4B =
-            (uint32_t(byte_val) << 24) | (uint32_t(byte_val) << 16) | (uint32_t(byte_val) << 8) | uint32_t(byte_val);
-    } else if constexpr (val_size == sizeof(uint16_t)) {
-        // For 2-byte elements, replicate the value 2 times
-        uint16_t short_val = static_cast<uint16_t>(val);
-        val_4B = (uint32_t(short_val) << 16) | uint32_t(short_val);
-    }
-
-    // Write 4 bytes at a time for the aligned region
-    {
-        auto* start_ptr_4B = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(start_addr_4B);
-        auto* end_ptr_4B = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(end_addr_4B);
-        for (auto* ptr = start_ptr_4B; ptr < end_ptr_4B; ++ptr) {
-            *ptr = val_4B;
-        }
-    }
-
-    // For data-types smaller than 4 bytes, handle unaligned start/end
-    if constexpr (val_size < sizeof(uint32_t)) {
-        auto* start_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr);
-        auto* end_ptr = reinterpret_cast<volatile tt_l1_ptr IntType*>(end_addr);
-        auto* start_ptr_4B = reinterpret_cast<volatile tt_l1_ptr IntType*>(start_addr_4B);
-        auto* end_ptr_4B = reinterpret_cast<volatile tt_l1_ptr IntType*>(end_addr_4B);
-        const IntType val_ = static_cast<IntType>(val);
-
-        for (auto* ptr = start_ptr; ptr < start_ptr_4B; ++ptr) {
-            *ptr = val_;
-        }
-        for (auto* ptr = end_ptr_4B; ptr < end_ptr; ++ptr) {
-            *ptr = val_;
-        }
-    }
-}
 
 void kernel_main() {
     constexpr uint32_t dfb_id_in0 = 0;
@@ -126,7 +69,8 @@ void kernel_main() {
                 uint32_t this_block_size = unpadded_X_size - prev_size;
                 if (this_block_size < width_size) {
                     uint32_t to_pad = width_size - this_block_size;
-                    fill_with_val<element_size>(l1_write_addr + this_block_size, to_pad, pad_value);
+                    dataflow_kernel_lib::fill_l1_range<element_size>(
+                        l1_write_addr + this_block_size, to_pad, pad_value);
                 }
             } else {
                 // If there is a mis-alignment, we first load the data to a middle L1 cb, then copy to the final cb
@@ -150,7 +94,7 @@ void kernel_main() {
                 uint32_t this_block_size = unpadded_X_size - prev_size;
                 if (this_block_size < width_size) {
                     uint32_t to_pad = width_size - this_block_size;
-                    fill_with_val<element_size>(
+                    dataflow_kernel_lib::fill_l1_range<element_size>(
                         temp_addr + ((src_noc_addr + (uint64_t)start_column_id) & dram_align_offset) + this_block_size,
                         to_pad,
                         pad_value);
@@ -166,10 +110,9 @@ void kernel_main() {
             l1_write_addr += width_size;
         }
 
-        for (uint32_t pad_row = 0; pad_row < padding_rows; pad_row++) {
-            fill_with_val<element_size>(l1_write_addr, width_size, pad_value);
-            l1_write_addr += width_size;
-        }
+        const uint32_t row_pad_bytes = padding_rows * width_size;
+        dataflow_kernel_lib::fill_l1_range<element_size>(l1_write_addr, row_pad_bytes, pad_value);
+        l1_write_addr += row_pad_bytes;
 
         dfb_in0.push_back(single_block_size * has_rows);
     };
