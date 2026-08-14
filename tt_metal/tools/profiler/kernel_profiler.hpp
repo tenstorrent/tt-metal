@@ -304,6 +304,7 @@ __attribute__((noinline)) void do_quick_push(uint32_t riscID, uint32_t send_size
 
     profiler_noc_async_write_posted(
         reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex].data), dram_bank_dst_noc_addr, send_size);
+    xw
 }
 
 __attribute__((noinline)) void finish_profiler() {

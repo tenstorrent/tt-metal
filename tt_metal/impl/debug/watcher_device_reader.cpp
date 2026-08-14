@@ -909,6 +909,8 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
         code = 'W';
     } else if (state == dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
         code = 'S';
+    } else if (state == dev_msgs::RUN_MSG_REPLAY_TRACE) {
+        code = 'T';
     }
     if (code == 'U') {
         LogRunningKernels();
