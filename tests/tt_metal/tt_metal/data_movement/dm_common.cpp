@@ -4,7 +4,6 @@
 
 #include "dm_common.hpp"
 #include "hal_types.hpp"
-#include "llrt/hal_types.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <tuple>
 #include "impl/context/metal_context.hpp"

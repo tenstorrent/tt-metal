@@ -23,7 +23,6 @@
 #include "device_fixture.hpp"
 #include <distributed.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include "llrt/hal_types.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>

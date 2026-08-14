@@ -30,7 +30,6 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "hal_types.hpp"
-#include <llrt/hal_types.hpp>
 #include "fabric/fabric_host_utils.hpp"
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"

@@ -27,7 +27,6 @@
 #include "impl/program/program_impl.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
-#include "llrt/hal_types.hpp"
 
 namespace tt::tt_metal {
 

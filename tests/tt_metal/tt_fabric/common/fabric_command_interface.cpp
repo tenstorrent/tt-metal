@@ -9,7 +9,6 @@
 #include <llrt/tt_cluster.hpp>
 #include <thread>
 #include <chrono>
-#include <llrt/hal_types.hpp>
 
 namespace tt::tt_fabric {
 
