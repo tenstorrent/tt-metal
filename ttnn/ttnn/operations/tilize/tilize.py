@@ -187,8 +187,11 @@ SUPPORTED = {
     "rank": [0, 2, 3, 4, 5],
     "orientation": ["none", ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
     "tile_height": [32, 16, 8, 4, 2, 1],
-    "in_layout": [ttnn.ROW_MAJOR_LAYOUT],
-    "in_tile_height": ["none"],
+    # Refinement 5: the RETILE path — an already-TILE input re-tiled to a
+    # DIFFERENT tile height. "none" is the ROW_MAJOR sentinel (a ROW_MAJOR tensor
+    # has no tile geometry); a TILE input always carries one.
+    "in_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
+    "in_tile_height": ["none", 32, 16, 8, 4, 2, 1],
     "pad_mode": ["none", "auto", "explicit"],
     "pad_value": ["none", "zero", "positive", "negative"],
     "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned", "hw_non_aligned"],
@@ -367,6 +370,17 @@ def _canonicalize(
                     f"tilize: output_padded_shape {target} must be >= the input shape {in_shape} in every dim "
                     f"(dim {i}: {got} < {want})"
                 )
+
+    if input_tensor.layout == ttnn.TILE_LAYOUT and pad_mode != "none":
+        # RETILE x padding is mutually exclusive as a matter of the FORMAT, not of
+        # kernel effort: a TILE tensor's last two dims are tile multiples by
+        # construction, so it has no pad region to fill. The golden suite's INVALID
+        # already prunes these cells; this is the belt-and-braces refusal a direct
+        # caller gets.
+        raise ValueError(
+            f"tilize: a TILE-layout input is tile-aligned by construction and cannot be padded "
+            f"(pad_mode={pad_mode!r}); drop pad_value=/output_padded_shape= to re-tile it"
+        )
 
     if pad_mode == "none":
         # Padding is NEVER implicit. The message must mention "pad".

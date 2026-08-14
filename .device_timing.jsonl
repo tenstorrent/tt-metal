@@ -229,3 +229,9 @@
 {"source":"run_safe_pytest","pid":369574,"started_at_ms":1786724644140,"wait_ms":2,"run_ms":16581,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_tile_geometry.py","exit_code":1}
 {"source":"run_safe_pytest","pid":370394,"started_at_ms":1786724679014,"wait_ms":1,"run_ms":9663,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_tile_geometry.py","exit_code":0}
 {"source":"run_safe_pytest","pid":371396,"started_at_ms":1786724711911,"wait_ms":2,"run_ms":9790,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_tile_geometry.py","exit_code":0}
+{"source":"tt-probe","pid":374112,"started_at_ms":1786725148710,"wait_ms":214,"run_ms":21644,"test_path":"tilize","exit_code":0}
+{"source":"tt-probe","pid":375063,"started_at_ms":1786725191606,"wait_ms":182,"run_ms":39021,"test_path":"tilize","exit_code":0}
+{"source":"run_safe_pytest","pid":377756,"started_at_ms":1786725284968,"wait_ms":2,"run_ms":32840,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_tile_geometry.py","exit_code":1}
+{"source":"run_safe_pytest","pid":378753,"started_at_ms":1786725321663,"wait_ms":2,"run_ms":12481,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_tile_geometry.py","exit_code":1}
+{"source":"run_safe_pytest","pid":379392,"started_at_ms":1786725358730,"wait_ms":2,"run_ms":15674,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_tile_geometry.py","exit_code":0}
+{"source":"run_safe_pytest","pid":380094,"started_at_ms":1786725378663,"wait_ms":2,"run_ms":26305,"test_path":"tests/ttnn/unit_tests/operations/tilize/","exit_code":0}

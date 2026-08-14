@@ -47,15 +47,34 @@
 //              W chunk INNERMOST (that order is the shard's own linear tile
 //              order, which is what lets an aliased output CB chunk its width).
 
+//   R_RETILE  — the input is ALREADY TILE layout, at a DIFFERENT tile height
+//               (Refinement 5). The reader walks FACES instead of sticks: it
+//               stages whole source tile pages into an L1 scratch CB (a page is
+//               always page-aligned, which is what keeps this addressable on
+//               Blackhole, where DRAM alignment is 64 B) and then moves face rows
+//               out of them into cb_input_sticks as ordinary row-major sticks.
+//               From there the pipeline is unchanged: compute tilizes those
+//               sticks into the REQUESTED tile height, which is what makes the
+//               retile a reader-only change.
+//
+//               A tiled source cannot back the input CB directly (that CB holds
+//               row-major sticks, by the tilize helper's contract), so a retile
+//               always reads its source through the accessor — including a local
+//               shard. That is not the "tolerated, not implemented" accessor read
+//               the sharded refinements forbid: the bytes have to be permuted, so
+//               there is nothing to consume in place.
+
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
-// fill_l1_with_val: the alignment-aware, sub-word-replicating L1 fill. Shared
-// with the writer (which stamps the same pad region in the OUTPUT element format
-// after the cast), so the fill primitive has ONE source.
+// fill_l1_with_val: the alignment-aware, sub-word-replicating L1 fill (shared with
+// the writer, which stamps the same pad region in the OUTPUT element format after
+// the cast). copy_l1_words: the retile path's local face-row move. One source for
+// both L1 primitives.
 #include "ttnn/ttnn/operations/tilize/kernels/tilize_fill.hpp"
 
 namespace {
 
+using tilize_kernels::copy_l1_words;
 using tilize_kernels::fill_l1_with_val;
 
 // Read `n_bytes` of ONE row-major source row, starting `byte_off` bytes into it,
@@ -119,6 +138,9 @@ FORCE_INLINE void issue_tile_row(
 
 void kernel_main() {
     constexpr uint32_t cb_input_sticks = 0;
+    // R_RETILE only: L1 scratch holding the staged SOURCE tile pages. Reader-owned
+    // (never pushed or popped — it has no consumer), sized to one block by the host.
+    constexpr uint32_t cb_retile_stage = 1;
     constexpr uint32_t TILE_W = 32;  // a tile is always 32 wide (hardware fact, not a knob)
 
     constexpr uint32_t regime = get_compile_time_arg_val(0);
@@ -154,7 +176,14 @@ void kernel_main() {
     // the input CB's pad positions, which the tilize permutes into output positions
     // the writer overwrites before the tile leaves L1. Host gate: `out_fill`.
     constexpr uint32_t skip_pad_fill = get_compile_time_arg_val(18);
-    constexpr auto src_args = TensorAccessorArgs<19>();
+    // --- Refinement 5: the RETILE path (regime R_RETILE) ---------------------
+    // in_tile_h is the SOURCE tile's height (the output's is `tile_h` above);
+    // `wt` is the tile-column count, which the retile reader needs because its
+    // source pages are TILES, indexed `tile_row * wt + tile_col` — the plain
+    // reader's pages are sticks and never need it. Both are 0/unused elsewhere.
+    constexpr uint32_t in_tile_h = get_compile_time_arg_val(19);
+    constexpr uint32_t wt = get_compile_time_arg_val(20);
+    constexpr auto src_args = TensorAccessorArgs<21>();
 
     // Every byte quantity below derives from the WT_CHUNK knob — one source.
     constexpr uint32_t row_bytes = wt_chunk * TILE_W * elem_bytes;
@@ -166,6 +195,7 @@ void kernel_main() {
     const uint32_t tile_row0 = get_arg_val<uint32_t>(4);     // W_REGION: region origin
     const uint32_t col_off_base = get_arg_val<uint32_t>(5);  // W_REGION: byte offset in a stick
     const uint32_t read_vc = get_arg_val<uint32_t>(6);       // B10: this core's read-request VC
+    const uint32_t tile_col0 = get_arg_val<uint32_t>(7);     // W_REGION origin, in TILE columns (R_RETILE)
 
     if (num_blocks == 0) {
         return;
@@ -317,6 +347,83 @@ void kernel_main() {
                 block += run;
                 remaining -= run;
             }
+        }
+    } else if constexpr (regime == 2 /* R_RETILE */) {
+        // ── R_RETILE ─────────────────────────────────────────────────────
+        // Stage whole SOURCE tile pages, then move face rows into the CB as
+        // ordinary row-major sticks. Everything below the stage is a local L1
+        // permutation, so no NoC alignment constraint reaches the face geometry.
+        constexpr uint32_t FACE_W = 16;
+        // A tile's face height is 16 on a full tile and the tile height itself on
+        // a tiny one (tile.cpp TILE_FACE_HW_CHOICES) — the same rule the writer's
+        // pad stamp uses.
+        // `if constexpr` in a NON-template function still requires the discarded
+        // branch to be well formed, and `in_tile_h` is 0 off the retile path — so
+        // every constant here is written against a guarded height rather than the
+        // raw arg (a bare `/ in_tile_h` is a compile error on every other cell).
+        constexpr uint32_t src_tile_h = in_tile_h ? in_tile_h : 1;
+        constexpr uint32_t src_face_h = src_tile_h < FACE_W ? src_tile_h : FACE_W;
+        constexpr uint32_t faces_per_row = TILE_W / FACE_W;  // 2 (a tile is 32 wide)
+        constexpr uint32_t src_tile_bytes = src_tile_h * TILE_W * elem_bytes;
+        constexpr uint32_t face_row_bytes = FACE_W * elem_bytes;
+        // Source tile-rows one OUTPUT tile-row spans. Both heights are powers of
+        // two <= 32, so one divides the other and this is exact.
+        constexpr uint32_t src_rows_per_block = (tile_h + src_tile_h - 1) / src_tile_h;
+
+        const uint32_t stage_base = get_write_ptr(cb_retile_stage);
+        // Consecutive blocks of a core share a W chunk and march up the tile-rows,
+        // so when the OUTPUT tile is shorter than the source one (tile_h <
+        // in_tile_h) several blocks read the same staged pages. Caching the last
+        // staged (tile-row, tile-column) is what stops a 32 -> 1 retile fetching
+        // each source page 32 times.
+        uint32_t staged_row = 0xFFFFFFFFu, staged_col = 0xFFFFFFFFu;
+
+        for (uint32_t i = 0; i < num_blocks; ++i) {
+            uint32_t row, col;  // OUTPUT tile-row, first source tile-column
+            if constexpr (work_mode == 1 /* W_REGION */) {
+                const uint32_t r = i / n_chunks;
+                row = tile_row0 + r;
+                col = tile_col0 + (i - r * n_chunks) * wt_chunk;
+            } else {
+                const uint32_t block = start_block + i;
+                row = block % nt_h;
+                col = (block / nt_h) * wt_chunk;
+            }
+            const uint32_t src_row0 = (row * tile_h) / src_tile_h;
+
+            if (src_row0 != staged_row || col != staged_col) {
+                uint32_t addr = stage_base;
+                for (uint32_t t = 0; t < src_rows_per_block; ++t) {
+                    for (uint32_t k = 0; k < wt_chunk; ++k) {
+                        // A whole tile PAGE, so the transfer is page-aligned on
+                        // every arch (master.md B5 as a side effect).
+                        noc_async_read(accessor.get_noc_addr((src_row0 + t) * wt + col + k), addr, src_tile_bytes);
+                        addr += src_tile_bytes;
+                    }
+                }
+                noc_async_read_barrier();  // one barrier per staged block (B7)
+                staged_row = src_row0;
+                staged_col = col;
+            }
+
+            cb_reserve_back(cb_input_sticks, wt_chunk);
+            uint32_t l1_addr = get_write_ptr(cb_input_sticks);
+            for (uint32_t r = 0; r < tile_h; ++r) {
+                const uint32_t src_row = (row * tile_h + r) / src_tile_h - src_row0;  // staged tile index
+                const uint32_t rr = (row * tile_h + r) % src_tile_h;                  // row inside it
+                const uint32_t face_row = rr / src_face_h;
+                const uint32_t row_in_face = rr % src_face_h;
+                for (uint32_t k = 0; k < wt_chunk; ++k) {
+                    const uint32_t tile_addr = stage_base + (src_row * wt_chunk + k) * src_tile_bytes;
+                    for (uint32_t fc = 0; fc < faces_per_row; ++fc) {
+                        copy_l1_words<face_row_bytes>(
+                            tile_addr + ((face_row * faces_per_row + fc) * src_face_h + row_in_face) * face_row_bytes,
+                            l1_addr + (k * TILE_W + fc * FACE_W) * elem_bytes);
+                    }
+                }
+                l1_addr += row_bytes;
+            }
+            cb_push_back(cb_input_sticks, wt_chunk);
         }
     } else {
         // ── R_PAD ────────────────────────────────────────────────────────

@@ -28,6 +28,7 @@ import ttnn
 
 from ttnn.operations._op_contract import ExcludedCell
 from ttnn.operations.tilize import EXCLUSIONS, SUPPORTED, tilize
+from ttnn.operations.tilize.tilize import validate
 from ttnn.operations.tilize import tilize_program_descriptor as pd
 
 
@@ -222,6 +223,143 @@ def test_block_float_output_is_refused_only_at_tile_height_16(device, expect_err
 
 def test_supported_lists_every_tile_height():
     assert SUPPORTED["tile_height"] == [32] + TINY_HEIGHTS
+
+
+# --- retile: a TILE input re-tiled to another height ------------------------
+#
+# The golden suite SKIPS these cells on Wormhole (the reference op's retile was
+# Blackhole-only), so this file is the only place the path is exercised on this
+# box. It is arch-independent by construction: the reader stages whole source tile
+# pages and permutes them in L1, and the compute kernel is the ordinary tilize.
+
+
+def _retile(torch_input, dtype, in_tile_h, out_tile_h, *, device, memory_config=None, out_dtype=None):
+    memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile([in_tile_h, 32]),
+        device=device,
+        memory_config=memory_config,
+    )
+    tt_output = tilize(
+        tt_input,
+        memory_config=memory_config,
+        dtype=out_dtype if out_dtype is not None else dtype,
+        tile=ttnn.Tile([out_tile_h, 32]),
+    )
+    return tt_output, ttnn.to_torch(tt_output)
+
+
+@pytest.mark.parametrize(
+    "in_tile_h,out_tile_h",
+    [(32, 8), (1, 32), (32, 16), (16, 32), (8, 4), (2, 16), (32, 32)],
+    ids=lambda v: str(v),
+)
+def test_retile_identity_is_exact(in_tile_h, out_tile_h, device):
+    """Shrink, grow and the degenerate 1x32 source, all bit-exact.
+
+    A retile is still a pure permutation, so the oracle is identity — the same one
+    the ROW_MAJOR path uses. `32 -> 32` is the no-op direction and must not be a
+    special case in the kernel.
+    """
+    torch_input = _make_input(ttnn.bfloat16, [1, 1, 128, 256])
+    _, got = _retile(torch_input, ttnn.bfloat16, in_tile_h, out_tile_h, device=device)
+    assert torch.equal(got, torch_input)
+
+
+@pytest.mark.parametrize("dtype", _EXACT_DTYPES)
+def test_retile_identity_is_exact_for_every_element_width(dtype, device):
+    """The face-row move is a word copy over `FACE_W * elem_bytes`, so every
+    element width (1/2/4 B) has to land — a uint8 face row is 16 B, which is
+    BELOW the 32 B (WH) / 64 B (BH) DRAM read alignment and is exactly why the
+    reader stages whole pages instead of reading face rows out of DRAM."""
+    torch_input = _make_input(dtype, [1, 1, 128, 256])
+    _, got = _retile(torch_input, dtype, 32, 8, device=device)
+    if dtype in (ttnn.uint8, ttnn.uint16, ttnn.uint32, ttnn.int32):
+        got, torch_input = got.to(torch.int64), torch_input.to(torch.int64)
+    assert torch.equal(got, torch_input)
+
+
+def test_retile_on_a_sharded_pair(device):
+    """The golden sharded-retile scenario: BLOCK-sharded 32 -> 16 with the shard
+    spec held constant. The OUTPUT still packs straight into its resident shard;
+    the INPUT cannot alias (the input CB holds row-major sticks, and a tiled shard
+    is not that), which is a structural disqualification, not a missed zero-copy.
+    """
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    torch_input = _make_input(ttnn.bfloat16, [1, 1, 256, 256])
+    _, got = _retile(torch_input, ttnn.bfloat16, 32, 16, device=device, memory_config=memory_config)
+    assert torch.equal(got, torch_input)
+
+
+def test_retile_stages_whole_source_pages(device):
+    """The mechanism pin, not just the values.
+
+    A face row is 16 elements — 32 B at bf16 and 16 B at uint8 — while DRAM read
+    alignment is 32 B on Wormhole and 64 B on Blackhole. So the reader may NOT
+    address face rows in DRAM directly: it stages whole tile PAGES (always
+    page-aligned) into a scratch CB and permutes locally. The observable is the
+    third CB and its size, which must come from `stage_tile_bytes()` — one source
+    shared with the L1 ceiling.
+    """
+    torch_input = _make_input(ttnn.bfloat16, [1, 1, 128, 256])
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile([32, 32]),
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    plan = validate(tt_input, tile=ttnn.Tile([8, 32]))
+    output = ttnn.allocate_tensor_on_device(
+        ttnn.TensorSpec(
+            ttnn.Shape(plan.target),
+            ttnn.bfloat16,
+            ttnn.TILE_LAYOUT,
+            buffer_type=ttnn.BufferType.DRAM,
+            tile=ttnn.Tile([8, 32]),
+        ),
+        tt_input.device(),
+    )
+    descriptor = pd.create_program_descriptor(tt_input, output, plan)
+
+    stage = [cb for cb in descriptor.cbs if cb.format_descriptors[0].buffer_index == pd.CB_RETILE_STAGE]
+    assert len(stage) == 1, "the retile path must add exactly one scratch CB"
+    # One output tile-row of 8 rows lives inside ONE 32-row source tile-row.
+    assert pd.stage_tile_bytes(8, 32, 32, 2) == 32 * 32 * 2
+    # ... and a GROW retile spans several source tile-rows.
+    assert pd.stage_tile_bytes(32, 8, 32, 2) == 4 * 8 * 32 * 2
+    assert stage[0].total_size % pd.stage_tile_bytes(8, 32, 32, 2) == 0
+
+
+def test_retile_plus_padding_is_refused(device, expect_error):
+    """A TILE input is tile-aligned by construction, so retile x padding is
+    mutually exclusive as a matter of the FORMAT. `feature_spec.INVALID` prunes
+    those cells; this is the direct-caller refusal."""
+    torch_input = _make_input(ttnn.bfloat16, [1, 1, 128, 256])
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile([32, 32]),
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with expect_error(ValueError, "(?i)pad"):
+        tilize(tt_input, pad_value=0.0, tile=ttnn.Tile([8, 32]))
+
+
+def test_supported_lists_the_retile_axes():
+    assert SUPPORTED["in_layout"] == [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT]
+    assert SUPPORTED["in_tile_height"] == ["none"] + [32] + TINY_HEIGHTS
 
 
 # --- the blocking model still derives from the tile height -------------------

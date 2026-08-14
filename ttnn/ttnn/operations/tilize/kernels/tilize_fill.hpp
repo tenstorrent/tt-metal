@@ -74,6 +74,27 @@ FORCE_INLINE void fill_l1_with_val(uint32_t start_addr, uint32_t n_bytes, uint32
     }
 }
 
+// Copy `n_bytes` (a multiple of 4) from one L1 address to another with 32-bit
+// stores — the RETILE path's face-row move (Refinement 5).
+//
+// Why a CPU copy rather than a NoC transfer: a face row is FACE_W elements
+// (32 B at bf16, 16 B at uint8), and DRAM read alignment is 32 B on Wormhole and
+// **64 B on Blackhole** (`noc_parameters.h` LOG_BASE_2_OF_DRAM_ALIGNMENT 5 / 6),
+// so pulling face rows straight out of a tiled source in DRAM is not addressable
+// on the very arch the retile cells run on. The reader therefore stages WHOLE
+// tile pages (always page-aligned) and moves face rows locally, where the only
+// requirement is the 4-byte store alignment this loop keeps.
+template <uint32_t n_bytes>
+FORCE_INLINE void copy_l1_words(uint32_t src_addr, uint32_t dst_addr) {
+    static_assert(n_bytes % 4 == 0, "L1 word copy needs a 4-byte multiple");
+    auto* src = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src_addr);
+    auto* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_addr);
+#pragma GCC unroll 8
+    for (uint32_t i = 0; i < n_bytes / 4; ++i) {
+        dst[i] = src[i];
+    }
+}
+
 // Re-stamp the pad region of ONE **tiled** output tile at `tile_addr` with `word`
 // (packed in the OUTPUT element format).
 //

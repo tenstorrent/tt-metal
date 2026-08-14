@@ -100,11 +100,20 @@ MIN_PIPELINE_READ_BYTES = 1024
 
 # --- CB indices (semantic names; the numeric slot is just a buffer index) ---
 CB_INPUT_STICKS = 0  # reader -> compute  (row-major sticks, tile-sized pages)
+CB_RETILE_STAGE = 1  # reader -> reader   (R_RETILE: staged SOURCE tile pages)
 CB_OUTPUT_TILES = 16  # compute -> writer (tiled pages)
 
 # --- reader regime selector (op_design.md §5.1) -----------------------------
 R_ALIGNED = 0
 R_PAD = 1
+# R_RETILE (Refinement 5): the source is ALREADY tiled, at a different tile
+# height. The reader stages whole source tile pages in L1 and moves face rows out
+# of them as row-major sticks; compute then tilizes to the requested height, so
+# the retile is a reader-only change. Whole-page staging is not an optimization:
+# a face row is 16 elements (32 B at bf16, 16 B at uint8) and DRAM read alignment
+# is 32 B on Wormhole but **64 B on Blackhole**, so face rows are not directly
+# addressable in DRAM on the arch that runs these cells.
+R_RETILE = 2
 
 # --- placement regime selector, per side (op_design.md §5.2) ----------------
 # P_LOCAL_SHARD: the CB is ALIASED on the resident L1 shard
@@ -269,15 +278,30 @@ def cb_bytes(cb_depth, wt_chunk, in_tile_bytes, out_tile_bytes):
     return cb_pages(cb_depth, wt_chunk) * (in_tile_bytes + out_tile_bytes)
 
 
-def wt_cap(cb_depth, in_tile_bytes, out_tile_bytes):
+def stage_tile_bytes(tile_h, in_tile_h, tile_w, elem_bytes):
+    """L1 the R_RETILE scratch holds per tile-column of chunk width (Refinement 5).
+
+    One output tile-row spans ``ceil(tile_h / in_tile_h)`` SOURCE tile-rows (both
+    heights are powers of two <= 32, so one divides the other and the ceiling is
+    exact), and the reader stages a whole source tile page for each. 0 off the
+    retile path — THE single source for the scratch size, shared by the CB
+    descriptor and the L1 ceiling below so they cannot drift.
+    """
+    if not in_tile_h:
+        return 0
+    return _div_up(tile_h, in_tile_h) * in_tile_h * tile_w * elem_bytes
+
+
+def wt_cap(cb_depth, in_tile_bytes, out_tile_bytes, stage_bytes=0):
     """L1 ceiling on the W block factor — THE single source for that cap.
 
     ``in_tile_bytes`` / ``out_tile_bytes`` are the *streaming* page sizes: pass 0
     for a side whose CB is aliased on a resident shard, since that side costs no
-    extra L1 (it IS the tensor). When neither side streams, only the library's
-    fast-tilize width bound remains.
+    extra L1 (it IS the tensor). ``stage_bytes`` is the R_RETILE scratch, which is
+    depth-1 (it is reader-private scratch, not a pipelined CB). When nothing
+    streams, only the library's fast-tilize width bound remains.
     """
-    per_chunk_tile = cb_bytes(cb_depth, 1, in_tile_bytes, out_tile_bytes)
+    per_chunk_tile = cb_bytes(cb_depth, 1, in_tile_bytes, out_tile_bytes) + stage_bytes
     if per_chunk_tile == 0:
         return FAST_TILIZE_MAX_W
     return max(1, min(FAST_TILIZE_MAX_W, CB_L1_BUDGET // per_chunk_tile))
@@ -305,7 +329,7 @@ def read_bytes_per_stick(wt_chunk, in_tile_bytes, tile_h):
     return wt_chunk * in_tile_bytes // tile_h
 
 
-def derive_blocking(nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, cb_depth, tile_h, pipeline=True):
+def derive_blocking(nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, cb_depth, tile_h, pipeline=True, stage_bytes=0):
     """The three block knobs — single source of truth (op_design.md §1.4).
 
     Returns ``(wt_chunk, n_chunks, num_blocks)``.
@@ -325,7 +349,7 @@ def derive_blocking(nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, cb_depth
     # via wt_cap() so the ceiling can never drift from the CB sizing below (it
     # carries the NT_BLK factor too, which a hand-written formula here would have
     # dropped) and the sharded path shares the same cap.
-    cap = wt_cap(cb_depth, in_tile_bytes, out_tile_bytes)
+    cap = wt_cap(cb_depth, in_tile_bytes, out_tile_bytes, stage_bytes)
 
     n_want = max(1, _div_up(num_cores, nt_h))  # grid-fill floor
     if pipeline:
@@ -545,10 +569,26 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     nt_h = _prod(target[:-2]) * _div_up(target[-2], tile_h)  # total tile-rows
     wt = _div_up(target[-1], tile_w)  # total tile-columns
 
+    # --- Refinement 5: the RETILE path ------------------------------------
+    # A TILE-layout input is re-tiled to `tile_h`. `in_tile_h` is the SOURCE tile's
+    # height (0 off this path — the sentinel every retile-only derivation keys on),
+    # and `stage_per_chunk_tile` is the L1 the reader's page staging costs per
+    # tile-column of chunk width; both have ONE source and feed the CB descriptor
+    # and the L1 ceiling alike.
+    retile = input_tensor.layout == ttnn.TILE_LAYOUT
+    in_tile_h = int(input_tensor.tile.tile_shape[0]) if retile else 0
+    stage_per_chunk_tile = stage_tile_bytes(tile_h, in_tile_h, tile_w, elem_in)
+
     # How the reader addresses a ROW_MAJOR source page (single source; §5.2).
     # `src_row_pages > 1` is the cross-spec gather: the source shard is narrower
     # than a tensor row, so a row is several pages and a span has to be split.
-    src_page_bytes, src_row_pages = src_page_geometry(input_tensor, plan.read_padded, elem_in)
+    if retile:
+        # A TILE source's page IS a tile, so the ROW_MAJOR stick geometry does not
+        # describe it (and its "row" split would be meaningless). The retile reader
+        # does its own page math off `in_tile_h` / `wt`.
+        src_page_bytes, src_row_pages = in_tile_h * tile_w * elem_in, 1
+    else:
+        src_page_bytes, src_row_pages = src_page_geometry(input_tensor, plan.read_padded, elem_in)
 
     # ========== 2. KNOBS + WORK DISTRIBUTION ==============================
     cb_depth = 2 if (plan.use_double_buffer and LEVERS["double_buffer"]) else 1
@@ -574,9 +614,13 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # still packs straight into a resident destination shard instead of writing it
     # over the NoC.
     shard_eligible = plan.use_multicore and bool(LEVERS["multicore"]) and bool(LEVERS["zero_copy"])
+    # A RETILE source is disqualified from aliasing for a structural reason, not a
+    # heuristic one: the input CB holds ROW-MAJOR sticks (the tilize helper's
+    # contract) and a tiled shard is not that. Its bytes must be permuted, so there
+    # is nothing to consume in place and the accessor read is the implementation.
     in_shard = (
         shard_side_plan(input_tensor, plan.read_padded, tile_h, tile_w)
-        if (shard_eligible and not plan.has_pad_region)
+        if (shard_eligible and not plan.has_pad_region and not retile)
         else None
     )
     out_shard = shard_side_plan(output_tensor, target, tile_h, tile_w) if shard_eligible else None
@@ -608,19 +652,28 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             # which is the full shard width and nothing else.
             wt_chunk, n_chunks = shard["shard_wt"], 1
         else:
-            wt_chunk, n_chunks = derive_shard_blocking(shard["shard_wt"], wt_cap(cb_depth, stream_in, stream_out))
+            wt_chunk, n_chunks = derive_shard_blocking(
+                shard["shard_wt"], wt_cap(cb_depth, stream_in, stream_out, stage_per_chunk_tile)
+            )
         # Read-transfer gate (MIN_STREAM_READ_BYTES): an aliased DESTINATION pins
         # the reader's per-row transfer to the shard's own width, and below the
         # measured knee the generic full-grid split beats packing in place. Only
         # the read side can trip it — the writer always moves whole tile pages.
         if in_placement == P_ACCESSOR and LEVERS["xfer_gate"]:
-            read_bytes = min(wt_chunk * tile_w * elem_in, src_page_bytes)
+            # What ONE source transfer moves. A retile reads whole source TILE
+            # pages (that is what makes it addressable at all), so its transfer is
+            # the page — the per-STICK size the gate was measured on describes the
+            # row-major reader only.
+            read_bytes = src_page_bytes if retile else min(wt_chunk * tile_w * elem_in, src_page_bytes)
             if read_bytes < MIN_STREAM_READ_BYTES:
                 in_placement, out_placement, shard, work_mode = P_ACCESSOR, P_ACCESSOR, None, W_BLOCKS
     if shard is not None:
-        while cb_depth > 1 and cb_bytes(cb_depth, wt_chunk, stream_in, stream_out) > CB_L1_BUDGET:
+        while (
+            cb_depth > 1
+            and cb_bytes(cb_depth, wt_chunk, stream_in, stream_out) + wt_chunk * stage_per_chunk_tile > CB_L1_BUDGET
+        ):
             cb_depth -= 1
-        if cb_bytes(1, wt_chunk, stream_in, stream_out) > CB_L1_BUDGET:
+        if cb_bytes(1, wt_chunk, stream_in, stream_out) + wt_chunk * stage_per_chunk_tile > CB_L1_BUDGET:
             # The one shape zero-copy cannot buy: the shard pins a block width
             # whose streaming partner CB will not fit. Take the accessor path on
             # both sides so WT_CHUNK is free to shrink again.
@@ -638,6 +691,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
                 cb_depth,
                 tile_h,
                 pipeline=bool(LEVERS["pipeline"]),
+                stage_bytes=stage_per_chunk_tile,
             )
         else:
             # w_split OFF — the pure height split (op_design.md §1.3 candidate 2).
@@ -645,7 +699,11 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
 
         # never OOM: fall back to depth-1 rather than exceed the L1 budget
         # (same cb_bytes() source as derive_blocking's ceiling and the CBs below)
-        while cb_depth > 1 and cb_bytes(cb_depth, wt_chunk, in_tile_bytes, out_tile_bytes) > CB_L1_BUDGET:
+        while (
+            cb_depth > 1
+            and cb_bytes(cb_depth, wt_chunk, in_tile_bytes, out_tile_bytes) + wt_chunk * stage_per_chunk_tile
+            > CB_L1_BUDGET
+        ):
             cb_depth -= 1
 
         (
@@ -729,6 +787,28 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             ],
         )
 
+    # R_RETILE scratch: reader-private L1 for the staged SOURCE tile pages. It is
+    # ONE page of `wt_chunk * stage_per_chunk_tile` bytes (depth-1 — there is no
+    # producer/consumer handshake on it; the reader both writes and reads it), and
+    # like every other buffer here it is a function of the block knobs only, never
+    # of WT or NT_H. Off the retile path it is not created at all.
+    cbs = [cb_input_sticks_descriptor, cb_output_tiles_descriptor]
+    if retile:
+        cbs.append(
+            ttnn.CBDescriptor(
+                total_size=wt_chunk * stage_per_chunk_tile,
+                core_ranges=all_cores,
+                format_descriptors=[
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=CB_RETILE_STAGE,
+                        data_format=input_tensor.dtype,
+                        page_size=wt_chunk * stage_per_chunk_tile,
+                        tile=ttnn.TileDescriptor(in_tile_h, tile_w),
+                    )
+                ],
+            )
+        )
+
     # ========== 4. KERNELS =================================================
     # The gather (src_page_geometry, §1) cannot be expressed by the library
     # reader — its contract walks consecutive page ids as consecutive sticks — so
@@ -751,7 +831,12 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             f"{NOC_ALIGN_BYTES}-byte-aligned page; this source shard's row is "
             f"{src_page_bytes} B ({src_row_pages} pages per tensor row)"
         )
-    regime = R_PAD if (plan.has_pad_region or paged_src or not LEVERS["regime_select"]) else R_ALIGNED
+    if retile:
+        # The retile reader is not a fill regime at all — its source is tiled, so
+        # neither the library stick reader nor the R_PAD row loop can address it.
+        regime = R_RETILE
+    else:
+        regime = R_PAD if (plan.has_pad_region or paged_src or not LEVERS["regime_select"]) else R_ALIGNED
 
     # The rank->=2 promoted view (plan.read_shape): a rank-0 scalar reads as a
     # 1x1 source, so h_in / w_in_bytes / the image count stay well defined.
@@ -826,6 +911,10 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # word is the exact one. Measured on the worst-case padded widening shape:
         # the fill is most of the R_PAD reader's cost.
         out_fill,
+        # Refinement 5 (R_RETILE only): the SOURCE tile height, and the tile-column
+        # count the source page id `tile_row * wt + tile_col` needs.
+        in_tile_h,
+        wt,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -889,6 +978,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             tile_row0,
             tile_col0 * tile_w * elem_in,  # the region's byte offset within a stick
             shard_index % NUM_READ_VCS,  # B10: this core's read-request VC
+            tile_col0,  # W_REGION origin in TILE columns (R_RETILE pages are tiles)
         ]
         writer_rt_args[core.x][core.y] = [
             dst_addr,
@@ -957,5 +1047,5 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     return ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],
         semaphores=[],
-        cbs=[cb_input_sticks_descriptor, cb_output_tiles_descriptor],
+        cbs=cbs,
     )
