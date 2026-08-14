@@ -1,4 +1,4 @@
-DERIVED FROM: current mcast_pipe API v11, census.txt, kernel_annotations/*, migration_audit/*, hazards_catalog.md, and changelog.md
+DERIVED FROM: current mcast_pipe API v11, migration/ledger.json, kernel_annotations/*, migration_audit/*, design/hazards_catalog.md, and changelog.md
 
 # Step ★ — API Feasibility (`mcast_pipe`)
 
@@ -75,7 +75,7 @@ but raw `MCAST_INCL_SRC` still requires self-delivery. Rectangle membership,
 fan-out, acknowledgement population, and sender self-delivery therefore remain
 separate protocol properties.
 
-Intent gave a vague sketch. With the annotated census in hand, this is where the concrete API
+Intent gave a vague sketch. With the annotated inventory in hand, this is where the concrete API
 takes shape and gets judged: **can a 1–2 helper `Pipe` be built over the `clean`+`refactor` set
 without becoming a config-blob?** (Outliers tagged `defer/raw` are out of scope and do NOT count
 against feasibility.)
@@ -185,8 +185,8 @@ control-only Counter unit case, and `apply-dm-helper` completed the unit in `733
 
 ## Round-10 re-entry addendum (2026-06-20) — split the recipient count (D2) + rect-derived fan-out (D1 half)
 
-> DERIVED FROM: `migration/report.md` D2 (+ D1 fan-out half) · `migration/ledger.json` design-gap flags ·
-> `changelog.md` Rounds 2 and 10 · device-grounded census of all 10 migrated `SenderPipe` call sites (this round) · current
+> DERIVED FROM: `migration/ledger.json` design-gap flags ·
+> `changelog.md` Rounds 2 and 10 · device-grounded inventory of all 10 migrated `SenderPipe` call sites (this round) · current
 > API = v7. Re-entry at **Step D** (leftmost — the claim changes *what a count means* and splits one
 > param into two; it disputes no measurement). Authoritative API record = `changelog.md` (Round 10).
 
@@ -417,7 +417,7 @@ rewrite → `MCAST_PIPE_API_VERSION` bump (Step G). Step E is a re-confirm no-op
 
 ## First concrete API draft (promoted from the Step-0 sketch)
 
-Grounded in the two prior-art shapes the census found (`deepseek_b1_ops::Mcast` — CT-templated
+Grounded in the two prior-art shapes the inventory found (`deepseek_b1_ops::Mcast` — CT-templated
 two-sided object with role dispatch; sdpa `ChainLink`). Rebuilt on the **object API** substrate.
 
 ```cpp
@@ -464,7 +464,7 @@ Source polymorphism (R4): `src_l1`/`dst_l1` are plain L1 addresses, so a CB writ
 
 ## Per-pattern coverage map (the ★ gate)
 
-| Pattern (census) | Covered? | How |
+| Pattern (inventory) | Covered? | How |
 |---|---|---|
 | **P1/C1 canonical** (matmul in0/in1, conv weights, ln_post) | YES as drafted | `send()`/`receive()`, Flag, EXCLUDE or INCLUDE |
 | **C2 bounded-counter + pre-handshake, multi-rect** (gn, welford) | YES w/ revision | `McastDestSet` (R1) + `PRE_HANDSHAKE=true`; counter is a bounded form of `Staging::Counter` |
@@ -527,8 +527,8 @@ The API draft fixes everything *except* the style-fork **defaults** it dispatche
 
 # Step ★ — Round-7 addendum: TOPOLOGY SURVEY + CAPABILITY MATRIX (feedback-2.txt)
 
-> DERIVED FROM: the full `census.txt` + `kernel_annotations/*` (topology lens) · `primitive_contracts.md`
-> A5 vs A5′ (set_multicast vs relay_multicast) · `hazards_catalog.md` H12/INV12 · current API = v6.
+> DERIVED FROM: the full `migration/ledger.json` + `kernel_annotations/*` (topology lens) · `design/primitive_contracts.md`
+> A5 vs A5′ (set_multicast vs relay_multicast) · `design/hazards_catalog.md` H12/INV12 · current API = v6.
 >
 > **Why this addendum exists.** Earlier rounds resolved the *style* forks (F1/F2/F3/F4) but never
 > enumerated the **topologies** the abstraction must support, so the CHAIN cross-id-relay gap was
@@ -545,7 +545,7 @@ The API draft fixes everything *except* the style-fork **defaults** it dispatche
 | T2 | **CHAIN** — store-and-forward, each link **receives AND forwards** | A5′ `relay_multicast`: write-once `valid_sem` (src) → next link's `receiver_sem` (dst), **src≠dst** | **Yes** | **GAP** | chain_link.hpp (ref), reader_interleaved (refactor), exp_ring_joint_reader (refactor) |
 | T3 | **RING / all-gather** — chain + co-located per-link ring sync | T2's relay **plus** a `wait_min` ring barrier + mux-writer fabric path | Yes | **GAP** (chain half) **+ OOS** (ring sync — cleanly separable, composed externally) | exp_ring_joint_reader (ring `wait_min` L271/L430) |
 | T4 | **FABRIC mcast** — cross-chip broadcast | fabric/CCL data path (not local NoC rectangle mcast) | n/a | **OUT OF SCOPE** (different family — intent exclusion) | all_reduce worker_writer (sem rectangle is local but coupled to fabric) |
-| T5 | **Multi-producer fan-in** — N senders → 1 receiver | N independent A1/A5 streams into one cell | n/a | **OUT OF SCOPE** (INV9 precondition — VC-FIFO order is per-sender only) | none in census; documented precondition |
+| T5 | **Multi-producer fan-in** — N senders → 1 receiver | N independent A1/A5 streams into one cell | n/a | **OUT OF SCOPE** (INV9 precondition — VC-FIFO order is per-sender only) | none in inventory; documented precondition |
 
 **The single root cause of T2/T3 being a GAP (not T1):** in T1 the sender is *not* a receiver, so its
 doorbell cell is free scratch — A5 (same-id `set_multicast`) is correct and simpler. In T2/T3 every
@@ -569,7 +569,7 @@ capability, `OOS`=out of scope.
 | **T5 fan-in** | OOS | OOS | OOS | OOS |
 
 **Note on T1 F1 fence dialects.** Three fence dialects appear in STAR kernels (flush, write-barrier,
-atomic-barrier — `hazards_catalog.md` F1 amendment). The Pipe bakes **flush + always-linked** (Round 1
+atomic-barrier — `design/hazards_catalog.md` F1 amendment). The Pipe bakes **flush + always-linked** (Round 1
 −27%, Round 4 P5). The one observed BARRIER+unlinked STAR dialect (sdpa_decode `read_k`) was found to
 have **no genuine consumer** — it converges to linked-flush and would gain the −36% win (changelog
 Round 4 P5). So within T1 these are not separate *supported paths* but a single baked path the

@@ -24,8 +24,8 @@ Read these in order:
 
 ## Current state
 
-The 2026-08-14 reconciliation found 91 existing census paths with an exact
-census/ledger match:
+The 2026-08-14 reconciliation found 91 existing call-site paths. The former
+text inventory matched the ledger exactly and has now been folded into it:
 
 | State | Kernels | Host bindings |
 |---|---:|---:|
@@ -55,24 +55,25 @@ approved and no run mode has been selected.
 Current human views:
 
 - [`migration/ledger.md`](migration/ledger.md) — concise ledger explanation.
-- [`migration/tiers.md`](migration/tiers.md) — prepared future work order.
-- [`migration/report.md`](migration/report.md) — latest reconciliation and intake
-  result, not a completed v11 rollout report.
-- [`migration/reconcile_2026-08-14.md`](migration/reconcile_2026-08-14.md) — exact
-  reconciliation evidence.
+
+Generated tier and rollout reports are intentionally absent while migration is
+paused. `apply-dm-helper` must regenerate them from the current ledger and test
+map after its intake and planning gates.
 
 ## Supporting evidence
 
 - [`api_feedback.md`](api_feedback.md) — helper-contract review queue.
 - [`migration_guardrails.md`](migration_guardrails.md) — durable rules distilled
   from completed migration feedback.
-- `census.txt` and `primitive_contracts.md` — recognition inventory used by
-  reconciliation.
+- [`migration/ledger.json`](migration/ledger.json) — both the durable call-site
+  inventory and mutable rollout state. `design/primitive_contracts.md` supplies
+  the recognition family used by reconciliation.
 - `migration_audit/`, `kernel_annotations/`, and `migration/log/` — detailed
   classification, implementation, validation, and JIT evidence.
-- `intent.md`, `hazards_catalog.md`, `api_feasibility.md`, `style_bakeoff.md`, and
-  `proposed_helpers.md` — design inputs and historical rationale; consult when a
-  current task points to them.
+- [`design/`](design/) — still-valid contracts, hazards, feasibility analysis,
+  and bake-off evidence; consult when changing the API or investigating a gap.
+- [`proposed_helpers.md`](proposed_helpers.md) — the active helper proposal and
+  migration classifications.
 - [`archive/`](archive/) — completed plans and superseded reports retained for
   provenance, not as instructions for the next agent.
 

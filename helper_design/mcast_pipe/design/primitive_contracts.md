@@ -93,7 +93,7 @@ one of these.
 
 ### A5′. `Semaphore::relay_multicast<opts, dst_core_type>(noc, dst_sem, x0, y0, x1, y1, num_dests, linked=false)`
 `noc_semaphore.h:192-211` → raw `noc_semaphore_set_multicast` / `_loopback_src` with a
-**different src/dst sem id pair**. (Added Round 7 — feedback-2.txt; absent from the original census.)
+**different src/dst sem id pair**. (Added Round 7 — feedback-2.txt; absent from the original inventory.)
 - **Does:** like A5, broadcasts the **local sem cell's current 4-byte value** to the rectangle —
   but writes it into a **DIFFERENT destination semaphore** (`dst_sem`'s L1 offset) on each receiver.
   Source offset (this `Semaphore`) ≠ destination offset (`dst_sem`). Returns after **enqueued**.
@@ -151,7 +151,7 @@ one of these.
 - `MulticastEndpoint{}` is stateless; the rect + dest address travel in
   `dst_args_mcast_type {noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr}`.
 - `dst_addr_mcast` calls `::get_noc_multicast_addr(x0,y0,x1,y1,addr,noc)` — the same encoding the
-  open-coded census tell uses. **This is how the `Pipe` carries "ANY rectangle + ANY dst addr".**
+  open-coded inventory tell uses. **This is how the `Pipe` carries "ANY rectangle + ANY dst addr".**
 - Source side: `src` is a local-L1 object whose `src_args.addr` is "ANY source L1 address".
 
 ### A11. Enums (`noc.h:43-49`)

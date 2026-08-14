@@ -1,4 +1,4 @@
-DERIVED FROM: current mcast_pipe API v11, api_feasibility.md, hazards_catalog.md, changelog.md, and the persisted on-device bake-off results below
+DERIVED FROM: current mcast_pipe API v11, design/api_feasibility.md, design/hazards_catalog.md, changelog.md, and the persisted on-device bake-off results below
 
 # Step E — Style Bake-off (`mcast_pipe`)
 
@@ -208,7 +208,7 @@ bit-exact across every cell with no hang.
   ⇒ F1's atomic-barrier value is **forced on the counter path** (confirms the Step-D ternary-F1 amendment).
 - **F3 same-core sender+receiver (R6) hangs** (dispatch/program-construction exception) — confirms
   the rotating-sender/role-flip hybrid is out of scope for one Pipe object (Step ★). INCLUDE_SRC
-  loopback itself is proven in production (census C1/C2), not indicted.
+  loopback itself is proven in production (inventory C1/C2), not indicted.
 - **F4 linked passes all coverage** — no deadlock in any cell.
 
 | Fork | variant A | variant B | coverage |
@@ -253,7 +253,7 @@ INCLUDE_SRC folds the self-write into the broadcast tree for free, so the gap gr
 - **F2 — flag DOMINANT on perf (default flag; counter stays a use-case knob).** flag 5505 ns vs counter
   7719 ns = **−29%**, and counter carries extra complexity (atomic barrier, ACK accounting). flag is the
   baked-in default. Counter is **not** a perf dual-path; it is exposed as `STAGING::Counter` ONLY for ops
-  whose protocol genuinely needs a monotone, reset-free counter (e.g. layernorm phase-2 streaming, census C3).
+  whose protocol genuinely needs a monotone, reset-free counter (e.g. layernorm phase-2 streaming, inventory C3).
 - **F4 — linked-pair DOMINANT (user-decided + confirmed).** linked 3585 ns = fastest, **−36% vs unlinked
   flush**, full coverage. Matches the user directive "linked where possible." Bake linked-pair+flush as the
   default; fall back to unlinked+barrier-between only where the call site forbids linking (predicate =

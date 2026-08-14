@@ -137,7 +137,7 @@ fork space — POSTED-mcast, TXN_ID-barrier, and custom-VC forks **do not exist*
 
 # AMENDMENTS (Step D consolidation — applied centrally from 6 subagent reports)
 
-The census proved the forks are **richer than the paper catalog assumed**. None of F1/F2/F3 is
+The inventory proved the forks are **richer than the paper catalog assumed**. None of F1/F2/F3 is
 speculative — every variant is observed in production. Two new hazards surfaced.
 
 ## Amended forks (ternary, not binary)
@@ -281,7 +281,7 @@ speculative — every variant is observed in production. Two new hazards surface
   for that operation or provide explicit helper self-delivery semantics.
 
 ## New non-fork structural requirements the API must absorb (not style choices)
-These are **generality requirements** surfaced by the census — they go to Step ★ (API feasibility),
+These are **generality requirements** surfaced by the inventory — they go to Step ★ (API feasibility),
 not the bake-off:
 - **R1 multi-rectangle dest** — send to a *list* of 1–3 rectangles, each with its own McastMode, one
   trailing fence (gn, move, argmax, deepseek).

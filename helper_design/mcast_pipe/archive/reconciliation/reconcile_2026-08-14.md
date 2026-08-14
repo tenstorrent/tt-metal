@@ -4,7 +4,7 @@
 
 - Branch: `sjovic/mcast-migration` at `9686814ea22`.
 - Rollout baseline: `origin/llk_helper_library` at `4a1d6a97ca9` (confirmed ancestor).
-- Paper-state comparison point: `fae7eb9ed6f`, the last commit that updated both the census and ledger.
+- Paper-state comparison point: `fae7eb9ed6f`, the last commit that updated both the former text inventory and ledger.
 - User approved the itemized reconciliation diff before artifact mutation.
 - This pass was static: no source migration, build, device test, or helper API-version change was performed.
 
@@ -20,13 +20,14 @@ migrated-at-v10 and 10 pending. No migration status was advanced.
 |---|---:|---|
 | unchanged | 88 | Paths exist; migrated rows still use `mcast_pipe`; no post-snapshot source edit |
 | added | 0 | No recognition-family path was added after the paper-state snapshot |
-| removed | 0 | All 91 census and ledger paths exist |
+| removed | 0 | All 91 recorded call-site paths exist |
 | renamed | 0 | No source path was added or renamed |
 | clobbered | 0 | Every migrated kernel still references the helper |
 | rebase-touched | 3 | Helper use remains intact; verify-only evidence is required |
 
-`census.txt` contains 91 unique paths and exactly matches the 91 unique kernel paths in
-`migration/ledger.json`.
+At reconciliation time, the former text inventory contained 91 unique paths and
+exactly matched the 91 unique kernel paths in `migration/ledger.json`. The ledger
+is now the sole inventory.
 
 ## `needs_recheck`
 
@@ -40,7 +41,7 @@ Their ledger status remains `migrated`; only the advisory `needs_recheck` flag w
 
 ## Resolved deferrals retagged to pending
 
-Two existing census entries had stale design-gap classifications even though their source now uses the helper:
+Two existing inventory entries had stale design-gap classifications even though their source now uses the helper:
 
 - `reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp` — the API-v11 host model now
   represents the ordered rotating sender set independently of receiver geometry;
@@ -56,10 +57,10 @@ typed Flag control values. Their obsolete API-007 prerequisite flags were replac
 
 ## Recall sweep
 
-The recognition family from `primitive_contracts.md` was compared at `fae7eb9ed6f` and current HEAD.
+The recognition family from `design/primitive_contracts.md` was compared at `fae7eb9ed6f` and current HEAD.
 It gained zero product-source paths and lost one raw-pattern hit: the block-sharded Matmul kernel stopped
 using the open-coded primitive after adopting `mcast_pipe`. No code file was added or renamed in the
-comparison range. The four source-integrated pending kernels were already in the census, so no new
+comparison range. The four source-integrated pending kernels were already in the inventory, so no new
 annotation file was required.
 
 ## Paper state at the reconciliation checkpoint

@@ -1,15 +1,16 @@
 # `mcast_pipe` migration ledger — reconciled 2026-08-14
 
 Machine source of truth: `ledger.json`. Test dispatch is in `test_map.json`; per-unit evidence is in
-`log/`; the latest static audit is `reconcile_2026-08-14.md`.
+`log/`; the latest static audit is archived at
+`../archive/reconciliation/reconcile_2026-08-14.md`.
 
 - Branch: `sjovic/mcast-migration` at `9686814ea22` during reconciliation.
 - Baseline: `origin/llk_helper_library` at `4a1d6a97ca9`.
 - Ledger API: v10.
 - Materialized helper API: v11.
 
-The version mismatch is intentional at this checkpoint. `reconcile-dm-helper` aligned census and
-ledger classifications but does not perform the Tier-0 device validation or API-version write-back
+The version mismatch is intentional at this checkpoint. `reconcile-dm-helper` aligned the ledger
+inventory with the source tree but does not perform Tier-0 device validation or API-version write-back
 owned by `apply-dm-helper`.
 
 ## Current paper state
@@ -21,9 +22,9 @@ owned by `apply-dm-helper`.
 | deferred | 70 | 0 |
 | quarantined | 0 | 0 |
 
-All 91 kernel paths exist and the census and ledger path sets match exactly. No migrated kernel was
-removed, renamed, or clobbered. Three migrated kernels were edited after the last ledger write-back
-and carry `needs_recheck`.
+All 91 inventoried kernel paths exist. Before the separate text inventory was removed, its path set
+matched these entries exactly. No migrated kernel was removed, renamed, or clobbered. Three migrated
+kernels were edited after the last ledger write-back and carry `needs_recheck`.
 
 ## Migrated units awaiting API-v11 re-entry
 

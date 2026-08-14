@@ -61,5 +61,5 @@ targets, 1 is the existing abstraction (reference), 1 is marginal/defer.
    simultaneously receiver AND sender, and its mutable doorbell (`receive()` → INVALID) can't hold the
    VALID source at forward time (see hazards H12 / INV12). This is the **root blocker** for migrating
    the whole chain family (reader_interleaved REFACTOR, exp_ring_joint_reader REFACTOR) — it is
-   tracked as **CHAIN = GAP** in the Step ★ topology matrix (`api_feasibility.md`). Chain family stays
+   tracked as **CHAIN = GAP** in the Step ★ topology matrix (`design/api_feasibility.md`). Chain family stays
    **deferred** until the Pipe grows a relay capability.

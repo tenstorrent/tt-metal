@@ -1,8 +1,8 @@
-DERIVED FROM: migration_audit/{matmul,conv,normalization,transformer_sdpa,data_movement_reduction,ccl_deepseek_examples}.md and current census.txt
+DERIVED FROM: migration_audit/{matmul,conv,normalization,transformer_sdpa,data_movement_reduction,ccl_deepseek_examples}.md and current migration/ledger.json
 
 # Migration Audit — rolled-up summary (`mcast_pipe`)
 
-Consolidated from 6 per-group audits. The census is the whole-codebase intra-chip mcast+handshake
+Consolidated from 6 per-group audits. The inventory is the whole-codebase intra-chip mcast+handshake
 block inventory; this is the **pre-migration blocker view**.
 
 ## Counts (block-containing kernels; excludes naming false-positives & no-mcast incidental)
@@ -62,7 +62,7 @@ block inventory; this is the **pre-migration blocker view**.
 - Re-audited the three churned sort protocol halves; no sort-directory recall miss.
 - Tags and aggregate counts stay unchanged (`refactor`), but the old `DEFER-DESIGN-GAP` rationale no
   longer holds for coordinator/reader at API v9.
-- Writer is a helper-neutral `done`-counter companion; its census/ledger disposition must be resolved
+- Writer is a helper-neutral `done`-counter companion; its ledger disposition must be resolved
   as part of the atomic sort plan.
 - Downstream outcome: Step D mapped sort to the existing v9 API, Step G added the focused
   control-only Counter unit case, and apply completed without an API bump.
@@ -73,7 +73,7 @@ block inventory; this is the **pre-migration blocker view**.
 - Coordinator and reader migrated at API v9 in `7337302b564`; writer remains helper-neutral after
   coupled runtime-ABI cleanup.
 - Host build, exact fresh-cache `--dev` path, Ht=2 deadlock pair, and full 7-case long-tensor
-  inventory all passed. Census and ledger now record the completed two-kernel migration.
+  inventory all passed. The ledger records the completed two-kernel migration.
 
 ## Width-sharded Conv apply/reconcile outcome (2026-08-03)
 

@@ -1,4 +1,4 @@
-DERIVED FROM: current data_movement/sort + reduction kernels, mcast_pipe API v9, hazards_catalog.md, and archive/reconciliation/reconcile_2026-08-03.md
+DERIVED FROM: current data_movement/sort + reduction kernels, mcast_pipe API v9, design/hazards_catalog.md, and archive/reconciliation/reconcile_2026-08-03.md
 
 # Migration audit — data_movement + reduction
 
@@ -65,5 +65,5 @@ Verdict legend: **clean** = drops onto Pipe with no caller-side residue; **refac
   all three JIT artifacts; `test_sort_multi_row_multi_core_no_deadlock` passed both `Ht=2`
   descending values; the complete `test_sort_long_tensor` inventory passed 7/7.
 - **Recall sweep:** the whole sort kernel directory contains no additional multicast emitter; only the
-  coordinator calls `set_multicast`. Reader and writer remain in the census solely as tightly-paired
-  protocol halves. No new spelling or census path was found.
+  coordinator calls `set_multicast`. Reader and writer remain in the inventory solely as tightly-paired
+  protocol halves. No new spelling or inventory path was found.

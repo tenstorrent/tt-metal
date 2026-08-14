@@ -1,4 +1,4 @@
-DERIVED FROM: current mcast_pipe API v11, api_feasibility.md, style_bakeoff.md, census.txt, migration_audit/*, and changelog.md
+DERIVED FROM: current mcast_pipe API v11, design/api_feasibility.md, design/style_bakeoff.md, migration/ledger.json, migration_audit/*, and changelog.md
 
 # Step F — Helper Proposal: `Pipe` (`mcast_pipe`)
 
@@ -83,14 +83,14 @@ DERIVED FROM: current mcast_pipe API v11, api_feasibility.md, style_bakeoff.md, 
 > it cannot hold the VALID broadcast source at forward time (hazard **H12 / INV12**). relay buys **no
 > perf** for the star — it is a topology-forced capability, not a style choice. The chain family
 > (chain_link.hpp reference, reader_interleaved, exp_ring_joint_reader) is **DEFERRED**; the explicit
-> per-cell verdict is the **topology matrix in `api_feasibility.md` (Step ★ Round-7 addendum)** — T1
+> per-cell verdict is the **topology matrix in `design/api_feasibility.md` (Step ★ Round-7 addendum)** — T1
 > STAR=SUPPORTED, T2 CHAIN=GAP, T3 RING=GAP+OOS, T4 FABRIC / T5 fan-in=OOS. Closing T2 is a future
 > capability round (likely a third `RelayPipe`/forwarding-link face, or a relay mode on `SenderPipe`),
 > scoped when the chain family is actually scheduled. **No API change / no version bump this round.**
 
 The deliverable. One fat, two-sided helper — `Pipe` — that wraps the NoC-multicast +
 semaphore-handshake block, built on the object API (`Noc` / `Semaphore<>` / `MulticastEndpoint`),
-with all style choices **decided by the on-device bake-off** (`style_bakeoff.md`), not by argument.
+with all style choices **decided by the on-device bake-off** (`design/style_bakeoff.md`), not by argument.
 
 ---
 
@@ -101,7 +101,7 @@ with all style choices **decided by the on-device bake-off** (`style_bakeoff.md`
 enum class Staging {
     Flag,     // level flag (VALID/INVALID, exact wait + reset). DEFAULT — fastest (bake-off F2).
     Counter,  // monotone counter (inc_multicast + wait_min, no reset). For streaming/multi-round
-              // protocols that genuinely need it (e.g. layernorm phase-2, census C3).
+              // protocols that genuinely need it (e.g. layernorm phase-2, inventory pattern C3).
 };
 
 template <
@@ -138,7 +138,7 @@ public:
 > **Symmetric verbs; no sub-methods, no `receive_value`/`receive_drain`.**
 > - Earlier drafts exposed `await_consumers` / `mcast_data` / `raise_flag` / `fence` — dropped: the
 >   latter three are thin wrappers re-exposing the baked-in decisions (INV4 ordering, F1 fence, H11
->   reset), and **no census kernel interleaves work between them**. `await_consumers` is unnecessary
+>   reset), and **no inventory kernel interleaves work between them**. `await_consumers` is unnecessary
 >   because the consumer-drain wait only needs to precede the **mcast** (the sole writer of the
 >   receivers' destination), not the caller's fill — the fill touches the sender's *own* source,
 >   protected by the prior send's flush (a separate hazard, H1). So `PRE_HANDSHAKE` doing the wait at
@@ -159,13 +159,13 @@ public:
 
 ## Baked-in style choices (single path, each cites the bake-off)
 
-| Choice | Decision | Evidence (`style_bakeoff.md`) |
+| Choice | Decision | Evidence (`design/style_bakeoff.md`) |
 |---|---|---|
 | **F1 fence** | `async_writes_flushed()` (SENT), NOT barrier | flush 5576 ns vs barrier 7616 ns = **−27%**, full coverage. Receiver's flag-wait + same-VC FIFO (INV4) already proves arrival; barrier is pure overhead. |
 | **F2 staging default** | level **flag** | flag 5505 ns vs counter 7719 ns = **−29%**; counter also needs an atomic barrier + ACK accounting. Counter exposed only as the `Staging::Counter` use-case knob. |
 | **flag reset ownership** | receiver clears **before** signalling ready (clear-before-next) | H11 — avoids first-iteration cross-op stale-VALID; the Pipe pins it so callers can't get it wrong. |
 | **data→flag ordering** | issue data, then flag, same `Noc`/VC-4 | INV4 — the property that lets the flag prove arrival (so flush suffices). |
-| **Flag source freshness** | Flag path **re-asserts local cell = VALID per send** (before `set_multicast`) | H12/M12b (Round 9) — DOMINANT coverage: required for the rotating-role STAR (receiver turn clobbers the shared cell INVALID), redundant no-op store for the pure STAR. On-device A/B in `style_bakeoff.md` §Round-9 (ctor-once → HANG; per-send set → PASS). NOT gated. Counter path untouched (monotone). Reverses Round-6 D1. |
+| **Flag source freshness** | Flag path **re-asserts local cell = VALID per send** (before `set_multicast`) | H12/M12b (Round 9) — DOMINANT coverage: required for the rotating-role STAR (receiver turn clobbers the shared cell INVALID), redundant no-op store for the pure STAR. On-device A/B in `design/style_bakeoff.md` §Round-9 (ctor-once → HANG; per-send set → PASS). NOT gated. Counter path untouched (monotone). Reverses Round-6 D1. |
 
 ## Internal dual-paths (style dispatch on a constexpr predicate — NOT caller knobs; within the ~2 cap)
 
@@ -190,7 +190,7 @@ if constexpr (can_link) { /* linked pair + flush */ } else { /* unlinked + barri
   draining; a write flush **hangs** — bake-off F2). The Pipe wires this automatically with the knob.
 
 ## Use-case knobs (the only caller-facing choices)
-- `Staging` (default `Flag`) — `Counter` only for monotone/streaming protocols (census C3).
+- `Staging` (default `Flag`) — `Counter` only for monotone/streaming protocols (inventory pattern C3).
 - `PRE_HANDSHAKE` (default `true`) — `false` when each receiver `reserve`s a fresh CB slot per iter.
 - `McastDestSet` — the rectangle(s) + per-rect `McastMode`.
 
@@ -212,7 +212,7 @@ if constexpr (can_link) { /* linked pair + flush */ } else { /* unlinked + barri
 
 ---
 
-## Migration list (from `census.txt` / `migration_audit/_SUMMARY.md`)
+## Migration list (from `migration/ledger.json` / `migration_audit/_SUMMARY.md`)
 
 **Clean (the spine — migrate first, proves the API):** matmul in0/in1 sender+receiver, conv weights
 sender+receiver, ln_post_allgather sender+receiver, topk receiver, sampling, kv_cache, rms_sender,
@@ -247,7 +247,7 @@ llama worker_receiver, gn_v2 receiver. `(EXCLUDE or INCLUDE, Flag, flush, pre_ha
 ## Hand-off
 Sign-off on this file **is Gate 1 of `build-helper`**. The bake-off kernels at
 `tests/ttnn/unit_tests/kernel_lib/kernels/bakeoff_mcast_{sender,receiver}.cpp` + harness
-`test_mcast_pipe.py` carry over as the **raw baseline**; `style_bakeoff.md` carries the coverage/perf
+`test_mcast_pipe.py` carry over as the **raw baseline**; `design/style_bakeoff.md` carries the coverage/perf
 evidence. Provisional (micro-bench) items to confirm against a real op in build-helper: the F1/F2/F4
 perf gaps (all cleared ≥10%, but in-context cost may be hidden behind other work — collapse F4 to
 safe-global only if the in-context gap falls below threshold). The F3 tri-path and all coverage/hang

@@ -21,8 +21,8 @@ NOT the legacy free functions:
   - `set(v)`, `wait(v)`, `wait_min(v)`, `up(...)`, `inc_multicast(...)`,
     `set_multicast<McastMode>(noc, x0,y0,x1,y1, num_dests)`
 
-### Recognition family (what the Step D census must SPOT in existing kernels, however spelled)
-The census recognizes the block by ANY of these spellings (legacy free functions included —
+### Recognition family (what the Step D inventory must SPOT in existing kernels, however spelled)
+The inventory recognizes the block by ANY of these spellings (legacy free functions included —
 they are the recognition net, never the implementation):
 - `noc_async_write_multicast` (+ `_loopback_src`, `_one_packet`)
 - `noc_semaphore_set_multicast` (+ `_loopback_src`)
@@ -62,10 +62,10 @@ The catalog (Step B) is the authority on which become true forks; this is the ex
 ## Bookkeeping (not design decisions)
 - **Track:** dataflow. Correctness = bit-exact landed data + no hang. Perf = NoC ns (tracy /
   `DeviceZoneScoped`). Footprint = L1 bytes (sem slots, CB depth).
-- **Standalone run.** This run does not seed, censuses, or argue from any prior helper-design
-  work. Contracts (Step A), hazards (Step B), and the census (Step D) are built fresh from
-  source.
-- **Known instances** (Step D census recall-check — the census MUST contain at least these):
+- **Standalone run.** This run does not reuse or argue from prior helper-design
+  work. Contracts (Step A), hazards (Step B), and the inventory (Step D) are
+  built fresh from source.
+- **Known instances** (Step D inventory recall-check — the inventory MUST contain at least these):
   - `ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp` — role: reader (sender)
   - `…/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp` — role: reader (**hybrid: sender+receiver+loopback in one file — the generality stress test**)
   - `…/reader_bmm_tile_layout_in1_sender_writer_padding.cpp` — role: hybrid

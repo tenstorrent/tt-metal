@@ -6,7 +6,7 @@ and consult an archived file only when a live artifact links to it.
 
 - `plans/` — completed or superseded dated execution plans.
 - `reports/` — prior generated rollout reports and tier views.
-- `reconciliation/` — reconciliation reports superseded by
-  `../migration/reconcile_2026-08-14.md`.
+- `reconciliation/` — dated static audits explaining how ledger entries were
+  reconciled with changing source trees.
 - `migration_feedback.md` — implemented MIG-001 through MIG-004; their durable
   rules now live in `../migration_guardrails.md`.

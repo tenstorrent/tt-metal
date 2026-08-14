@@ -5,6 +5,11 @@
   "current_api_version_at_bootstrap": 4,
   "bootstrapped": "2026-06-19",
   "source_of_truth_note": "Current v10 status carries 17 migrated kernels and 14 host bindings on the self-describing six-word CT wire. Sharded LayerNorm pre-allgather was migrated and verified on 2026-08-06 in production migration commit 4acd98259b6 after separate builder-split prerequisite 4ef7e9a57a6; its build, exact fresh-cache node, complete mapped inventories, and helper suites passed. TopK final readiness remains anchored by production migration commit b5c99d43fd5. The earlier fully end-to-end migrations remain anchored by Conv2d single-sender rectangle commit 991b5b6b6386a90726d15007002fe1f5a77d8487, fixed-line commit 51dfb1f1ed61045ed10dc679269960b6d2ccac9e, width-sharded activation commit fe866a1d0c4c32b78aae8a76e875c0da109f51c8, matmul in1 commit aeeb28ff007807c71b1f60842cca85e5c41efa7f, GroupNorm v2 commit bc24a55bf80a8ab2a4d702be2a91b827c1dcbeb0, and sort single-row control commit 7337302b564. Historical v8/v9 commits and results remain in dated logs.",
+  "inventory_contract": "Single source of truth: entries[].kernel/op_family/role/tag/inventory_note are the durable call-site inventory; status/version/commit/validation/flags are mutable rollout state. The former census.txt contained the same 91 paths when it was merged here on 2026-08-14. Where the former text had stale role, tag, status, or note wording, the ledger's newer audited value was retained instead of copying both versions.",
+  "inventory_method": "Recall-converged block inventory grouped by op_family. Discovery covered raw and object API spellings plus full op-family directory sweeps; pure receiver halves with only Semaphore::set/up/wait remain intentional entries even when they contain no multicast token.",
+  "inventory_group_notes": {
+    "quasar (experimental metal 2.0 port)": "Deferred as a group during the 2026-06-27 reconcile because the port was actively churning. Entries duplicate production matmul/conv/move patterns and add no hazard coverage; several _metal2 forks carried live #47797 hang-debug scaffolding, including one unresolved activation-multicast deadlock. Per-entry tags record the intrinsic target after the port stabilizes and debug code is removed."
+  },
   "host_bindings": [
     {
       "id": "weights-mcast:conv2d-sharded:single-sender-rect",
@@ -614,7 +619,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
-      "census_note": "Source integrated with API-v11 typed Flag control values; apply verification and ledger write-back remain pending.",
+      "inventory_note": "Source integrated with API-v11 typed Flag control values; apply verification and ledger write-back remain pending.",
       "flags": [
         "source-integrated",
         "apply-verification-pending"
@@ -633,7 +638,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
-      "census_note": "Source integrated with API-v11 typed Flag control values; apply verification and ledger write-back remain pending.",
+      "inventory_note": "Source integrated with API-v11 typed Flag control values; apply verification and ledger write-back remain pending.",
       "flags": [
         "source-integrated",
         "apply-verification-pending"
@@ -664,7 +669,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "census_note": "V10 current after self-describing wire migration; explicit active receiver acknowledgement count handles rectangles containing inactive cores. | RECHECK RESOLVED 2026-08-03: matmul mcast 1d/2d factory churn re-verified on device; MM-IN1-ALL reproduced the 302/188/490 baseline exactly. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) confirmed before the run.",
+      "inventory_note": "V10 current after self-describing wire migration; explicit active receiver acknowledgement count handles rectangles containing inactive cores. | RECHECK RESOLVED 2026-08-03: matmul mcast 1d/2d factory churn re-verified on device; MM-IN1-ALL reproduced the 302/188/490 baseline exactly. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) confirmed before the run.",
       "flags": [
         "needs_recheck"
       ],
@@ -696,7 +701,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "census_note": "V10 current after self-describing wire migration; all in1 and optional bias multicast semaphore operations are pipe-owned. | RECHECK RESOLVED 2026-08-03: matmul mcast 1d/2d factory churn re-verified on device; MM-IN1-ALL reproduced the 302/188/490 baseline exactly. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) confirmed before the run.",
+      "inventory_note": "V10 current after self-describing wire migration; all in1 and optional bias multicast semaphore operations are pipe-owned. | RECHECK RESOLVED 2026-08-03: matmul mcast 1d/2d factory churn re-verified on device; MM-IN1-ALL reproduced the 302/188/490 baseline exactly. Static wire check (sender CT McastArgs<10,2> idx 10-14, sender RT idx 2-5, receiver CT idx 4-8, receiver RT idx 0-3, MCAST_ARGS set on both factories) confirmed before the run.",
       "flags": [
         "needs_recheck"
       ],
@@ -716,7 +721,7 @@
       ],
       "coverage_confidence": "med",
       "last_verified": "2026-06-20",
-      "census_note": "P2 worker-type-dispatched (3 runtime core types) | DEFER-DESIGN-GAP: split mcast-dest count vs consumer-ack count. type1 mcasts (num_cores-1)=grid-1 but waits num_dests=banks; type2 mcasts num_cores=grid (INCLUDE) but waits num_dests-1=banks-1. Single NUM_ACTIVE_RECEIVER_CORES cannot serve both contradictory constraints. Needs helper change (out of scope).",
+      "inventory_note": "P2 worker-type-dispatched (3 runtime core types) | DEFER-DESIGN-GAP: split mcast-dest count vs consumer-ack count. type1 mcasts (num_cores-1)=grid-1 but waits num_dests=banks; type2 mcasts num_cores=grid (INCLUDE) but waits num_dests-1=banks-1. Single NUM_ACTIVE_RECEIVER_CORES cannot serve both contradictory constraints. Needs helper change (out of scope).",
       "flags": [
         "tier:2b",
         "design-gap"
@@ -735,7 +740,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
-      "census_note": "Source integrated with API-v11 independent rotating senders and restored receiver geometry; apply verification and ledger write-back remain pending.",
+      "inventory_note": "Source integrated with API-v11 independent rotating senders and restored receiver geometry; apply verification and ledger write-back remain pending.",
       "flags": [
         "source-integrated",
         "apply-verification-pending"
@@ -754,7 +759,7 @@
       ],
       "coverage_confidence": "med",
       "last_verified": "2026-06-20",
-      "census_note": "P3 rotating-role; per-iter barrier (F1 disagreement); runtime sem ids | DEFER-DESIGN-GAP: sem ids are RUNTIME args (Semaphore<>(get_arg_val(i++)) at lines 54-55), but v7 SenderPipe/ReceiverPipe take DATA_READY_SEM_ID/CONSUMER_READY_SEM_ID as compile-time template params. Runtime sem id inexpressible. Needs helper change (out of scope).",
+      "inventory_note": "P3 rotating-role; per-iter barrier (F1 disagreement); runtime sem ids | DEFER-DESIGN-GAP: sem ids are RUNTIME args (Semaphore<>(get_arg_val(i++)) at lines 54-55), but v7 SenderPipe/ReceiverPipe take DATA_READY_SEM_ID/CONSUMER_READY_SEM_ID as compile-time template params. Runtime sem id inexpressible. Needs helper change (out of scope).",
       "flags": [
         "tier:2b",
         "design-gap"
@@ -771,7 +776,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "P4 flag-only collective barrier, no data half",
+      "inventory_note": "P4 flag-only collective barrier, no data half",
       "flags": []
     },
     {
@@ -785,7 +790,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "P5 ring unicast, no multicast",
+      "inventory_note": "P5 ring unicast, no multicast",
       "flags": []
     },
     {
@@ -801,7 +806,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "didactic P1 (raw API) | DEFER-COVERAGE: NO pytest - metal_example_matmul_multicore_reuse_mcast binary only",
+      "inventory_note": "didactic P1 (raw API) | DEFER-COVERAGE: NO pytest - metal_example_matmul_multicore_reuse_mcast binary only",
       "flags": [
         "coverage-gap"
       ]
@@ -819,7 +824,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "didactic, 2 independent Pipes | DEFER-COVERAGE: NO pytest - binary only",
+      "inventory_note": "didactic, 2 independent Pipes | DEFER-COVERAGE: NO pytest - binary only",
       "flags": [
         "coverage-gap"
       ]
@@ -837,7 +842,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "didactic, 2 independent Pipes | DEFER-COVERAGE: NO pytest - binary only",
+      "inventory_note": "didactic, 2 independent Pipes | DEFER-COVERAGE: NO pytest - binary only",
       "flags": [
         "coverage-gap"
       ]
@@ -861,7 +866,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "census_note": "Fully end-to-end at v10. Host Mcast2D owns the full-rectangle geometry and CT/RT wire while num_active remains total_active_num_cores-1; McastArgs decodes the sender face. Weights and optional-bias handshakes are pipe-owned.",
+      "inventory_note": "Fully end-to-end at v10. Host Mcast2D owns the full-rectangle geometry and CT/RT wire while num_active remains total_active_num_cores-1; McastArgs decodes the sender face. Weights and optional-bias handshakes are pipe-owned.",
       "flags": [
         "tier:1",
         "fully-end-to-end"
@@ -887,7 +892,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "census_note": "Fully end-to-end at v10. Host Mcast2D emits the receiver sender-coordinate RT block and McastArgs decodes the receiver face; weights and bias receive handshakes are pipe-owned.",
+      "inventory_note": "Fully end-to-end at v10. Host Mcast2D emits the receiver sender-coordinate RT block and McastArgs decodes the receiver face; weights and bias receive handshakes are pipe-owned.",
       "flags": [
         "tier:1",
         "fully-end-to-end"
@@ -913,7 +918,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "census_note": "Fully end-to-end at v10. Host Mcast1D owns PerRow/PerColumn fixed-line geometry and the CT/RT wire over the dense zero-anchored output grid; McastArgs decodes the sender face. Weights and bias send handshakes are pipe-owned; remaining semaphores coordinate the separate split-reader CB.",
+      "inventory_note": "Fully end-to-end at v10. Host Mcast1D owns PerRow/PerColumn fixed-line geometry and the CT/RT wire over the dense zero-anchored output grid; McastArgs decodes the sender face. Weights and bias send handshakes are pipe-owned; remaining semaphores coordinate the separate split-reader CB.",
       "flags": [
         "tier:2",
         "fully-end-to-end"
@@ -939,7 +944,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "census_note": "Fully end-to-end at v10. Host Mcast1D emits each receiver's fixed sender coordinate for both PerRow and PerColumn topologies, and McastArgs decodes the receiver face. Weights and bias receive handshakes are pipe-owned; remaining semaphores coordinate the separate split-reader CB.",
+      "inventory_note": "Fully end-to-end at v10. Host Mcast1D emits each receiver's fixed sender coordinate for both PerRow and PerColumn topologies, and McastArgs decodes the receiver face. Weights and bias receive handshakes are pipe-owned; remaining semaphores coordinate the separate split-reader CB.",
       "flags": [
         "tier:2",
         "fully-end-to-end"
@@ -964,7 +969,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "census_note": "Fully end-to-end at v10. Host Mcast2D emits one rotating full-rectangle wire with adopted factory semaphores and the divergent active ACK count. Kernel McastArgs owns both sender and receiver faces; the current SenderPipe ACK-fences real loopback completion before resetting its local Flag cell.",
+      "inventory_note": "Fully end-to-end at v10. Host Mcast2D emits one rotating full-rectangle wire with adopted factory semaphores and the divergent active ACK count. Kernel McastArgs owns both sender and receiver faces; the current SenderPipe ACK-fences real loopback completion before resetting its local Flag cell.",
       "flags": [
         "tier:6",
         "atomic-unit:conv2d-activation-width-sharded",
@@ -989,7 +994,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-06-20",
-      "census_note": "Source integrated with API-v11 streaming send_from_cb and helper-owned rotating line topology; apply verification, host-binding mapping, and ledger write-back remain pending.",
+      "inventory_note": "Source integrated with API-v11 streaming send_from_cb and helper-owned rotating line topology; apply verification, host-binding mapping, and ledger write-back remain pending.",
       "flags": [
         "source-integrated",
         "apply-verification-pending",
@@ -1009,7 +1014,7 @@
       ],
       "coverage_confidence": "med",
       "last_verified": "2026-06-20",
-      "census_note": "3 modes; ack-only/no-consume receive; unicast forwarding chain OUT of scope | DEFER-DESIGN-GAP: Mcast-mode McastSender emitter uses mcast_num_dests as a RUNTIME arg (get_arg_val, line 93) for both mcast dest count and ack wait, but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param. Runtime recipient count inexpressible. Receiver/Passive halves are ReceiverPipe-expressible but not worth splitting the protocol. Needs helper change (out of scope).",
+      "inventory_note": "3 modes; ack-only/no-consume receive; unicast forwarding chain OUT of scope | DEFER-DESIGN-GAP: Mcast-mode McastSender emitter uses mcast_num_dests as a RUNTIME arg (get_arg_val, line 93) for both mcast dest count and ack wait, but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param. Runtime recipient count inexpressible. Receiver/Passive halves are ReceiverPipe-expressible but not worth splitting the protocol. Needs helper change (out of scope).",
       "flags": [
         "tier:2b",
         "design-gap"
@@ -1030,7 +1035,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-07-30",
-      "census_note": "V9 PORT BLOCKED: baseline MCAST_INCL_SRC loops back to an out-of-rectangle sender on the non-mcast-1D host path, while SenderPipe infers loopback only from rectangle membership. The raw host count can also differ from McastRect::area() on ragged grids. Expanding the rectangle is an operation change and exposes pre-existing multi-sender/one-core-stats behavior. Target-baseline sender preserved.",
+      "inventory_note": "V9 PORT BLOCKED: baseline MCAST_INCL_SRC loops back to an out-of-rectangle sender on the non-mcast-1D host path, while SenderPipe infers loopback only from rectangle membership. The raw host count can also differ from McastRect::area() on ragged grids. Expanding the rectangle is an operation change and exposes pre-existing multi-sender/one-core-stats behavior. Target-baseline sender preserved.",
       "flags": [
         "v9-port-blocked",
         "design-gap",
@@ -1051,7 +1056,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-07-30",
-      "census_note": "V9 PORT BLOCKED as the receiver half of the post-allgather protocol pair. Migration conventions prohibit leaving a half-raw, half-helper channel. Target-baseline receiver preserved.",
+      "inventory_note": "V9 PORT BLOCKED as the receiver half of the post-allgather protocol pair. Migration conventions prohibit leaving a half-raw, half-helper channel. Target-baseline receiver preserved.",
       "flags": [
         "v9-port-blocked",
         "paired-rollback",
@@ -1075,7 +1080,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "census_note": "V10 current. The raw acknowledgement gate remains before remote L1 reads; all data/flag multicasts use no-handshake SenderPipes. Mapped inventories validate the host-generated rectangle partition.",
+      "inventory_note": "V10 current. The raw acknowledgement gate remains before remote L1 reads; all data/flag multicasts use no-handshake SenderPipes. Mapped inventories validate the host-generated rectangle partition.",
       "flags": [
         "tier:2a"
       ],
@@ -1096,7 +1101,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "census_note": "V10 current; every readiness-counter and data-ready-flag operation is pipe-owned.",
+      "inventory_note": "V10 current; every readiness-counter and data-ready-flag operation is pipe-owned.",
       "flags": [],
       "migration_unit": "groupnorm-sharded-v2-mcast-host"
     },
@@ -1116,7 +1121,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "census_note": "Fully end-to-end v10 migration: handshaked Flag signal-only sender uses whole-grid Mcast2D or per-line Mcast1D; gather reads and final write barrier remain operation-owned.",
+      "inventory_note": "Fully end-to-end v10 migration: handshaked Flag signal-only sender uses whole-grid Mcast2D or per-line Mcast1D; gather reads and final write barrier remain operation-owned.",
       "flags": [
         "acked-signal-only",
         "fully-end-to-end",
@@ -1139,7 +1144,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "census_note": "Fully end-to-end v10 migration: handshaked Flag signal-only receiver uses receive_signal; two-stage line coordinators use the sender face. Gather reads, second-stage semaphore, and final atomic barrier remain operation-owned.",
+      "inventory_note": "Fully end-to-end v10 migration: handshaked Flag signal-only receiver uses receive_signal; two-stage line coordinators use the sender face. Gather reads, second-stage semaphore, and final atomic barrier remain operation-owned.",
       "flags": [
         "acked-signal-only",
         "fully-end-to-end",
@@ -1159,7 +1164,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "C2 multi-rect | DEFER-COVERAGE: sweep-only",
+      "inventory_note": "C2 multi-rect | DEFER-COVERAGE: sweep-only",
       "flags": [
         "coverage-gap"
       ]
@@ -1181,7 +1186,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "census_note": "V10 current. The raw acknowledgement gate remains before remote L1 reads; the persistent no-handshake middle SenderPipe owns data/flag send. Optional rectangles partition num_mcast_cores-1.",
+      "inventory_note": "V10 current. The raw acknowledgement gate remains before remote L1 reads; the persistent no-handshake middle SenderPipe owns data/flag send. Optional rectangles partition num_mcast_cores-1.",
       "flags": [
         "tier:2a"
       ],
@@ -1200,7 +1205,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "C2 | DEFER-COVERAGE: sweep-only",
+      "inventory_note": "C2 | DEFER-COVERAGE: sweep-only",
       "flags": [
         "coverage-gap"
       ]
@@ -1220,7 +1225,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "census_note": "V10 current; every readiness-counter and data-ready-flag operation is pipe-owned.",
+      "inventory_note": "V10 current; every readiness-counter and data-ready-flag operation is pipe-owned.",
       "flags": [],
       "migration_unit": "groupnorm-sharded-v2-mcast-host"
     },
@@ -1237,7 +1242,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
-      "census_note": "V9 PORT BLOCKED: protocol needs acknowledged signal-only plus one-gate/multi-block streaming on reused semaphore state; target-baseline implementation preserved.",
+      "inventory_note": "V9 PORT BLOCKED: protocol needs acknowledged signal-only plus one-gate/multi-block streaming on reused semaphore state; target-baseline implementation preserved.",
       "flags": [
         "design-gap",
         "v9-port-blocked",
@@ -1259,7 +1264,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-07-29",
-      "census_note": "V9 PORT BLOCKED: shared flag/counter two-phase protocol cannot be represented by one fixed-mode pipe; target-baseline implementation preserved.",
+      "inventory_note": "V9 PORT BLOCKED: shared flag/counter two-phase protocol cannot be represented by one fixed-mode pipe; target-baseline implementation preserved.",
       "flags": [
         "design-gap",
         "v9-port-blocked",
@@ -1281,7 +1286,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "C4 double-flag-per-exchange | DEFER-COVERAGE: sweep-only (interleaved GN routes nowhere from unit tests)",
+      "inventory_note": "C4 double-flag-per-exchange | DEFER-COVERAGE: sweep-only (interleaved GN routes nowhere from unit tests)",
       "flags": [
         "coverage-gap"
       ]
@@ -1299,7 +1304,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "C4 | DEFER-COVERAGE: sweep-only",
+      "inventory_note": "C4 | DEFER-COVERAGE: sweep-only",
       "flags": [
         "coverage-gap"
       ]
@@ -1315,7 +1320,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "ChainLink abstraction (existing two-sided helper); flush + linked=true companion",
+      "inventory_note": "ChainLink abstraction (existing two-sided helper); flush + linked=true companion",
       "flags": []
     },
     {
@@ -1331,7 +1336,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-06-20",
-      "census_note": "DEFERRED: CHAIN/relay topology (helper design gap). Forward path uses cross-id relay_multicast(valid_sem -> receiver_sem, src!=dst); each link is simultaneously receiver+sender. STAR SenderPipe asserts src==dst, structurally cannot relay. = chain_link.hpp reference pattern, T2 CHAIN=GAP.",
+      "inventory_note": "DEFERRED: CHAIN/relay topology (helper design gap). Forward path uses cross-id relay_multicast(valid_sem -> receiver_sem, src!=dst); each link is simultaneously receiver+sender. STAR SenderPipe asserts src==dst, structurally cannot relay. = chain_link.hpp reference pattern, T2 CHAIN=GAP.",
       "flags": [
         "tier:2c",
         "design-gap"
@@ -1350,7 +1355,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "open-coded chain-link + ring sync (ring part oos) | DEFER-COVERAGE: >=4 devices (test_exp_ring_joint_sdpa.py)",
+      "inventory_note": "open-coded chain-link + ring sync (ring part oos) | DEFER-COVERAGE: >=4 devices (test_exp_ring_joint_sdpa.py)",
       "flags": [
         "coverage-gap"
       ]
@@ -1368,7 +1373,7 @@
       ],
       "coverage_confidence": "med",
       "last_verified": "2026-06-20",
-      "census_note": "DEFERRED: runtime recipient count + runtime role. read_k STAR is otherwise expressible (vertical-col mcast, sem set_multicast src==dst, no pre-handshake), BUT num_dests is a pure runtime arg (helper NUM_ACTIVE_RECEIVER_CORES is compile-time only) and do_mcast selects sender-vs-receiver per-core at runtime under one binary (helper Sender/ReceiverPipe are distinct compile-time-chosen types). Two design gaps.",
+      "inventory_note": "DEFERRED: runtime recipient count + runtime role. read_k STAR is otherwise expressible (vertical-col mcast, sem set_multicast src==dst, no pre-handshake), BUT num_dests is a pure runtime arg (helper NUM_ACTIVE_RECEIVER_CORES is compile-time only) and do_mcast selects sender-vs-receiver per-core at runtime under one binary (helper Sender/ReceiverPipe are distinct compile-time-chosen types). Two design gaps.",
       "flags": [
         "tier:2c",
         "design-gap"
@@ -1385,7 +1390,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "fabric cross-chip data; only degenerate sem-rect-mcast local",
+      "inventory_note": "fabric cross-chip data; only degenerate sem-rect-mcast local",
       "flags": []
     },
     {
@@ -1406,7 +1411,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "census_note": "Fully end-to-end v10 migration: sender-side no-handshake Counter readiness uses an adopted, host-zeroed semaphore; the arrival counter remains operation-owned.",
+      "inventory_note": "Fully end-to-end v10 migration: sender-side no-handshake Counter readiness uses an adopted, host-zeroed semaphore; the arrival counter remains operation-owned.",
       "flags": [
         "race-free-no-handshake-init",
         "fully-end-to-end",
@@ -1431,7 +1436,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-06",
-      "census_note": "Fully end-to-end v10 migration: receiver-side no-handshake Counter readiness is helper-owned; value/index unicast and the arrival counter remain operation-owned.",
+      "inventory_note": "Fully end-to-end v10 migration: receiver-side no-handshake Counter readiness is helper-owned; value/index unicast and the arrival counter remain operation-owned.",
       "flags": [
         "race-free-no-handshake-init",
         "fully-end-to-end",
@@ -1451,7 +1456,7 @@
       ],
       "coverage_confidence": "med",
       "last_verified": "2026-06-20",
-      "census_note": "richest fork coverage; 2-rect, INCLUDE+EXCLUDE in one send; FLAG-ONLY (no data mcast) | DEFER-DESIGN-GAP: FLAG-ONLY broadcast of arbitrary monotone value start_sem.set(k+1)+set_multicast with worker wait(k+1) exact \u2014 no set_multicast(value) verb (Flag=fixed VALID, Counter=inc+1/wait_min). Plus 2-rect INCLUDE+EXCLUDE in one send and simultaneous monotone start / reset done counters. Needs helper change (out of scope).",
+      "inventory_note": "richest fork coverage; 2-rect, INCLUDE+EXCLUDE in one send; FLAG-ONLY (no data mcast) | DEFER-DESIGN-GAP: FLAG-ONLY broadcast of arbitrary monotone value start_sem.set(k+1)+set_multicast with worker wait(k+1) exact \u2014 no set_multicast(value) verb (Flag=fixed VALID, Counter=inc+1/wait_min). Plus 2-rect INCLUDE+EXCLUDE in one send and simultaneous monotone start / reset done counters. Needs helper change (out of scope).",
       "flags": [
         "tier:2b",
         "design-gap"
@@ -1475,7 +1480,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "census_note": "MIGRATED API v10: handshaked row-start Counter SenderPipe and separate no-handshake sub-stage Counter SenderPipe. Helper owns readiness; writer-done remains an independent operation counter.",
+      "inventory_note": "MIGRATED API v10: handshaked row-start Counter SenderPipe and separate no-handshake sub-stage Counter SenderPipe. Helper owns readiness; writer-done remains an independent operation counter.",
       "flags": [
         "tier:5",
         "atomic-unit:sort-single-row-control",
@@ -1500,7 +1505,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-05",
-      "census_note": "MIGRATED API v10: handshaked row-start Counter ReceiverPipe acknowledges readiness before waiting; a separate no-handshake Counter ReceiverPipe handles sub-stage events. The raw reader-ready semaphore is gone.",
+      "inventory_note": "MIGRATED API v10: handshaked row-start Counter ReceiverPipe acknowledges readiness before waiting; a separate no-handshake Counter ReceiverPipe handles sub-stage events. The raw reader-ready semaphore is gone.",
       "flags": [
         "tier:5",
         "atomic-unit:sort-single-row-control",
@@ -1522,7 +1527,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-08-03",
-      "census_note": "Helper-neutral companion in the migrated sort-single-row-control atomic unit: retains the explicit writer-done Semaphore::up return leg and received coupled dead-runtime-argument cleanup, but is not a Pipe caller and remains deferred as a standalone helper candidate.",
+      "inventory_note": "Helper-neutral companion in the migrated sort-single-row-control atomic unit: retains the explicit writer-done Semaphore::up return leg and received coupled dead-runtime-argument cleanup, but is not a Pipe caller and remains deferred as a standalone helper candidate.",
       "flags": [
         "tier:5",
         "helper-neutral",
@@ -1542,7 +1547,7 @@
       ],
       "coverage_confidence": "med",
       "last_verified": "2026-06-20",
-      "census_note": "single-shot go-flag mcast; legacy API | DEFER-DESIGN-GAP: (1) RUNTIME role selection: is_controller=get_arg_val(8) picks sender-vs-receiver per-core under one binary; v7 SenderPipe/ReceiverPipe are distinct compile-time types. (2) MULTI-RECT 2-3 rects with RUNTIME per-rect counts (range_{0,1,2}_size, do_third_multicast all get_arg_val); v7 takes single McastRect + compile-time NUM_ACTIVE_RECEIVER_CORES. (3) dual-use L1 word (control_value RUNTIME): receivers inc as counter, controller waits then broadcasts same cell as go-flag. (4) runtime sem id. Multiple known design gaps. Needs helper change (out of scope).",
+      "inventory_note": "single-shot go-flag mcast; legacy API | DEFER-DESIGN-GAP: (1) RUNTIME role selection: is_controller=get_arg_val(8) picks sender-vs-receiver per-core under one binary; v7 SenderPipe/ReceiverPipe are distinct compile-time types. (2) MULTI-RECT 2-3 rects with RUNTIME per-rect counts (range_{0,1,2}_size, do_third_multicast all get_arg_val); v7 takes single McastRect + compile-time NUM_ACTIVE_RECEIVER_CORES. (3) dual-use L1 word (control_value RUNTIME): receivers inc as counter, controller waits then broadcasts same cell as go-flag. (4) runtime sem id. Multiple known design gaps. Needs helper change (out of scope).",
       "flags": [
         "design-gap",
         "tier:3"
@@ -1561,7 +1566,7 @@
       ],
       "coverage_confidence": "med",
       "last_verified": "2026-06-20",
-      "census_note": "RM twin of above | DEFER-DESIGN-GAP: structurally identical to move_interleaved_with_overlap (RM data path only diff). Same gaps: runtime role selection (is_controller), multi-rect 2-3 rects with runtime per-rect counts, dual-use control_value word, runtime sem id. Needs helper change (out of scope).",
+      "inventory_note": "RM twin of above | DEFER-DESIGN-GAP: structurally identical to move_interleaved_with_overlap (RM data path only diff). Same gaps: runtime role selection (is_controller), multi-rect 2-3 rects with runtime per-rect counts, dual-use control_value word, runtime sem id. Needs helper change (out of scope).",
       "flags": [
         "design-gap",
         "tier:3"
@@ -1578,7 +1583,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "didactic single-shot sender (raw API); cleanest reference",
+      "inventory_note": "didactic single-shot sender (raw API); cleanest reference",
       "flags": []
     },
     {
@@ -1592,7 +1597,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "EXISTING two-sided Pipe (deepseek_b1_ops::Mcast); init/op/teardown; strongest API-shape evidence",
+      "inventory_note": "EXISTING two-sided Pipe (deepseek_b1_ops::Mcast); init/op/teardown; strongest API-shape evidence",
       "flags": []
     },
     {
@@ -1606,7 +1611,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "preprogram-state primitive layer",
+      "inventory_note": "preprogram-state primitive layer",
       "flags": []
     },
     {
@@ -1622,7 +1627,7 @@
       ],
       "coverage_confidence": "med",
       "last_verified": "2026-06-20",
-      "census_note": "DEFER-DESIGN-GAP: num_mcast_dests is a RUNTIME arg (ReaderArgs/WriterArgs structs, lines 141/178; used at 348/356/363 etc.), but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param -> runtime recipient/ack count inexpressible (same gap as gn_v2/welford/conv3d). Plus the K-chunk mcast is only one of two per-chunk-loop branches alternating with a preprogram-state TRID-pipelined sharded read (noc_async_read_one_packet_with_state, ncrisc_brisc_sync double-buffer), gated by BRISC_MCAST_LOOPS; receiver pre-handshake uses unicast_atomic_inc_with_state (preprogram-state). Needs helper change (out of scope).",
+      "inventory_note": "DEFER-DESIGN-GAP: num_mcast_dests is a RUNTIME arg (ReaderArgs/WriterArgs structs, lines 141/178; used at 348/356/363 etc.), but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param -> runtime recipient/ack count inexpressible (same gap as gn_v2/welford/conv3d). Plus the K-chunk mcast is only one of two per-chunk-loop branches alternating with a preprogram-state TRID-pipelined sharded read (noc_async_read_one_packet_with_state, ncrisc_brisc_sync double-buffer), gated by BRISC_MCAST_LOOPS; receiver pre-handshake uses unicast_atomic_inc_with_state (preprogram-state). Needs helper change (out of scope).",
       "flags": [
         "tier:2d",
         "design-gap"
@@ -1641,7 +1646,7 @@
       ],
       "coverage_confidence": "med",
       "last_verified": "2026-06-20",
-      "census_note": "DEFER-DESIGN-GAP: preprogram-state mcast (noc_async_write_multicast_preprogram_all_state / multicast_write_with_state / _issue_txn set-state+issue-txn split, shared-cmd-buf branch). v7 SenderPipe.send() issues a single async_write_multicast per call with no set-state path; migrating would drop the preprogram-state perf optimization that is the whole point of these unified_kernels. proposed_helpers.md explicitly defers this (no mcast set-state in object API; future). Out of scope.",
+      "inventory_note": "DEFER-DESIGN-GAP: preprogram-state mcast (noc_async_write_multicast_preprogram_all_state / multicast_write_with_state / _issue_txn set-state+issue-txn split, shared-cmd-buf branch). v7 SenderPipe.send() issues a single async_write_multicast per call with no set-state path; migrating would drop the preprogram-state perf optimization that is the whole point of these unified_kernels. proposed_helpers.md explicitly defers this (no mcast set-state in object API; future). Out of scope.",
       "flags": [
         "tier:2d",
         "design-gap"
@@ -1660,7 +1665,7 @@
       ],
       "coverage_confidence": "high",
       "last_verified": "2026-06-20",
-      "census_note": "DEFER-COVERAGE: loop-barrier mcast only driven by requires_grid_size(101) tests; this WH n150 has 64 cores. Was stale-v4 Pipe<> (9f47f2dbcad); RESTORED to raw working code (compile-clean). Remigrate+verify on a >=101-core machine.",
+      "inventory_note": "DEFER-COVERAGE: loop-barrier mcast only driven by requires_grid_size(101) tests; this WH n150 has 64 cores. Was stale-v4 Pipe<> (9f47f2dbcad); RESTORED to raw working code (compile-clean). Remigrate+verify on a >=101-core machine.",
       "flags": [
         "coverage-gap"
       ]
@@ -1678,7 +1683,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "data + COUNTER inc_multicast | DEFER-COVERAGE: min mesh 2x2 - multi-device",
+      "inventory_note": "data + COUNTER inc_multicast | DEFER-COVERAGE: min mesh 2x2 - multi-device",
       "flags": [
         "coverage-gap"
       ]
@@ -1696,7 +1701,7 @@
       ],
       "coverage_confidence": "med",
       "last_verified": "2026-06-20",
-      "census_note": "one_packet mcast collector->7 cores (num_dests=7 is compile-time, expressible) | DEFER-COVERAGE: test_moe_mm unconditionally pytest.skip()s on wormhole_b0 AND blackhole (issue #44858: stable nightly moe_mm failures). This is a single WH b0 chip, so the test cannot exercise dm1.cpp here -> no runnable validation. (Migration also non-trivial: the collector group-mask mcast at lines 367-373 shares partial_semaphore with the sender->collector reduce-inc phases and multiple manual resets; a SenderPipe ctor set(VALID) would corrupt that multiplexed counter. But the binding blocker is coverage.)",
+      "inventory_note": "one_packet mcast collector->7 cores (num_dests=7 is compile-time, expressible) | DEFER-COVERAGE: test_moe_mm unconditionally pytest.skip()s on wormhole_b0 AND blackhole (issue #44858: stable nightly moe_mm failures). This is a single WH b0 chip, so the test cannot exercise dm1.cpp here -> no runnable validation. (Migration also non-trivial: the collector group-mask mcast at lines 367-373 shares partial_semaphore with the sender->collector reduce-inc phases and multiple manual resets; a SenderPipe ctor set(VALID) would corrupt that multiplexed counter. But the binding blocker is coverage.)",
       "flags": [
         "tier:2d",
         "coverage-gap"
@@ -1715,7 +1720,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "INCLUDE_SRC loopback + barrier | DEFER-COVERAGE: mesh (rms_test.py) - multi-device",
+      "inventory_note": "INCLUDE_SRC loopback + barrier | DEFER-COVERAGE: mesh (rms_test.py) - multi-device",
       "flags": [
         "coverage-gap"
       ]
@@ -1733,7 +1738,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "INCLUDE_SRC loopback | DEFER-COVERAGE: mesh - multi-device",
+      "inventory_note": "INCLUDE_SRC loopback | DEFER-COVERAGE: mesh - multi-device",
       "flags": [
         "coverage-gap"
       ]
@@ -1751,7 +1756,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "INCLUDE_SRC partner | DEFER-COVERAGE: ring_size>1 - multi-device",
+      "inventory_note": "INCLUDE_SRC partner | DEFER-COVERAGE: ring_size>1 - multi-device",
       "flags": [
         "coverage-gap"
       ]
@@ -1769,7 +1774,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "value-carrying flag (token counts in sem word) | DEFER-COVERAGE: 4x8 mesh - multi-device",
+      "inventory_note": "value-carrying flag (token counts in sem word) | DEFER-COVERAGE: 4x8 mesh - multi-device",
       "flags": [
         "coverage-gap"
       ]
@@ -1787,7 +1792,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "value-carrying flag | DEFER-COVERAGE: 4x8 mesh - multi-device",
+      "inventory_note": "value-carrying flag | DEFER-COVERAGE: 4x8 mesh - multi-device",
       "flags": [
         "coverage-gap"
       ]
@@ -1805,7 +1810,7 @@
       ],
       "coverage_confidence": "med",
       "last_verified": "2026-06-20",
-      "census_note": "DEFER-DESIGN-GAP: co-compiled with tilize_writer (same value-carrying-flag family). Its own data broadcasts (per-expert counts, total_chunks) target MULTIPLE distinct rectangles (tilize / matmul / all-worker bounding boxes) with RUNTIME num_dests (tilize_bounding_box_num_cores-1, matmul_bounding_box_num_cores, all_worker_cores_bounding_box_num_cores-1, lines 795-857). v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is compile-time + single rect per Pipe; runtime multi-rect counts inexpressible (same gap as gn_v2). Companion to the writer's value-carrying flag. Needs helper change (out of scope). [coverage note: WH single-card test also requires grid>=7x10 (70 cores); a 64-core n150 8x8 grid would pytest.skip.]",
+      "inventory_note": "DEFER-DESIGN-GAP: co-compiled with tilize_writer (same value-carrying-flag family). Its own data broadcasts (per-expert counts, total_chunks) target MULTIPLE distinct rectangles (tilize / matmul / all-worker bounding boxes) with RUNTIME num_dests (tilize_bounding_box_num_cores-1, matmul_bounding_box_num_cores, all_worker_cores_bounding_box_num_cores-1, lines 795-857). v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is compile-time + single rect per Pipe; runtime multi-rect counts inexpressible (same gap as gn_v2). Companion to the writer's value-carrying flag. Needs helper change (out of scope). [coverage note: WH single-card test also requires grid>=7x10 (70 cores); a 64-core n150 8x8 grid would pytest.skip.]",
       "flags": [
         "tier:2d",
         "design-gap"
@@ -1824,7 +1829,7 @@
       ],
       "coverage_confidence": "med",
       "last_verified": "2026-06-20",
-      "census_note": "DEFER-DESIGN-GAP: VALUE-CARRYING FLAG. matmul_chunk_ready_semaphore broadcasts a MONOTONE running value via noc_semaphore_set(addr,set_value)+set_multicast (set_value=1 then set_value++ per chunk, lines 408/694-702); receivers noc_semaphore_wait(addr,value). matmul_chunk_available broadcasts an ACCUMULATED runtime value (wait_value += num_matmul_cores then set_multicast, lines 513-524). Neither maps to v7 Flag (fixed VALID/INVALID) nor Counter (inc+1/wait_min). Plus multiple distinct mcast rects with RUNTIME num_dests (num_matmul_cores etc.). Two design gaps (arbitrary-value set_multicast + runtime count). Needs helper change (out of scope).",
+      "inventory_note": "DEFER-DESIGN-GAP: VALUE-CARRYING FLAG. matmul_chunk_ready_semaphore broadcasts a MONOTONE running value via noc_semaphore_set(addr,set_value)+set_multicast (set_value=1 then set_value++ per chunk, lines 408/694-702); receivers noc_semaphore_wait(addr,value). matmul_chunk_available broadcasts an ACCUMULATED runtime value (wait_value += num_matmul_cores then set_multicast, lines 513-524). Neither maps to v7 Flag (fixed VALID/INVALID) nor Counter (inc+1/wait_min). Plus multiple distinct mcast rects with RUNTIME num_dests (num_matmul_cores etc.). Two design gaps (arbitrary-value set_multicast + runtime count). Needs helper change (out of scope).",
       "flags": [
         "tier:2d",
         "design-gap"
@@ -1843,7 +1848,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "flag-only sync | DEFER-COVERAGE: galaxy (test_selective_combine_6U.py) - multi-device",
+      "inventory_note": "flag-only sync | DEFER-COVERAGE: galaxy (test_selective_combine_6U.py) - multi-device",
       "flags": [
         "coverage-gap"
       ]
@@ -1861,7 +1866,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "flag-only sync | DEFER-COVERAGE: galaxy - multi-device",
+      "inventory_note": "flag-only sync | DEFER-COVERAGE: galaxy - multi-device",
       "flags": [
         "coverage-gap"
       ]
@@ -1879,7 +1884,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "flag-only | DEFER-COVERAGE: TG/mesh - multi-device",
+      "inventory_note": "flag-only | DEFER-COVERAGE: TG/mesh - multi-device",
       "flags": [
         "coverage-gap"
       ]
@@ -1897,7 +1902,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "INCLUDE_SRC loopback (intra-chip leg); fabric leg oos | DEFER-COVERAGE: bh_1d_mesh - multi-device",
+      "inventory_note": "INCLUDE_SRC loopback (intra-chip leg); fabric leg oos | DEFER-COVERAGE: bh_1d_mesh - multi-device",
       "flags": [
         "coverage-gap"
       ]
@@ -1915,7 +1920,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "multi-mcast sender: in0/in1/gate/up data write_multicast + flag set_multicast + wait (deepseek_prefill family) | DEFER-COVERAGE: deepseek_prefill multi-device",
+      "inventory_note": "multi-mcast sender: in0/in1/gate/up data write_multicast + flag set_multicast + wait (deepseek_prefill family) | DEFER-COVERAGE: deepseek_prefill multi-device",
       "flags": [
         "coverage-gap"
       ]
@@ -1933,7 +1938,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "Current-tree replacement for persistent_h2d_receiver.cpp. Metadata write_multicast plus worker counter inc_multicast; GlobalSemaphore L1 addresses cannot be bound by SenderPipe. DEFER-COVERAGE: no identified single-chip test for the persistent host_io path.",
+      "inventory_note": "Current-tree replacement for persistent_h2d_receiver.cpp. Metadata write_multicast plus worker counter inc_multicast; GlobalSemaphore L1 addresses cannot be bound by SenderPipe. DEFER-COVERAGE: no identified single-chip test for the persistent host_io path.",
       "flags": [
         "coverage-gap",
         "global-semaphore-address"
@@ -1950,7 +1955,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "flag-only collective barrier; ring/CCL twin of matmul reader_bmm_tile_layout_in1_ring_all_gather (P4 defer)",
+      "inventory_note": "flag-only collective barrier; ring/CCL twin of matmul reader_bmm_tile_layout_in1_ring_all_gather (P4 defer)",
       "flags": []
     },
     {
@@ -1966,7 +1971,7 @@
       ],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "Current-tree replacement for persistent_d2h_sender.cpp. Intra-chip inc_multicast-to-workers plus atomic barrier; transfer_done_sem_addr is a GlobalSemaphore L1 address that SenderPipe cannot bind. Socket writer leg is out of scope. DEFER-COVERAGE: no identified single-chip persistent-host-I/O validation.",
+      "inventory_note": "Current-tree replacement for persistent_d2h_sender.cpp. Intra-chip inc_multicast-to-workers plus atomic barrier; transfer_done_sem_addr is a GlobalSemaphore L1 address that SenderPipe cannot bind. Socket writer leg is out of scope. DEFER-COVERAGE: no identified single-chip persistent-host-I/O validation.",
       "flags": [
         "coverage-gap",
         "global-semaphore-address"
@@ -1984,7 +1989,7 @@
       "validation_set": [],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "intra-chip data write_multicast (F1 barrier) + inc_multicast data_ready (F2-counter) to worker grid; fabric cross-chip data leg oos | DEFER-COVERAGE: D2DStream test (test_d2d_stream_service_multiprocess.py) requires Galaxy 2-process multi-mesh; unverifiable on single device",
+      "inventory_note": "intra-chip data write_multicast (F1 barrier) + inc_multicast data_ready (F2-counter) to worker grid; fabric cross-chip data leg oos | DEFER-COVERAGE: D2DStream test (test_d2d_stream_service_multiprocess.py) requires Galaxy 2-process multi-mesh; unverifiable on single device",
       "flags": [
         "coverage-gap"
       ],
@@ -2001,7 +2006,7 @@
       "validation_set": [],
       "coverage_confidence": "none",
       "last_verified": null,
-      "census_note": "one intra-chip inc_multicast(consumed_sem) to sender worker grid (F2-counter, master-only); fabric bulk + lane-to-lane shared-L1 counters oos | DEFER-COVERAGE: D2DStream test (test_d2d_stream_service_multiprocess.py) requires Galaxy 2-process multi-mesh; unverifiable on single device",
+      "inventory_note": "one intra-chip inc_multicast(consumed_sem) to sender worker grid (F2-counter, master-only); fabric bulk + lane-to-lane shared-L1 counters oos | DEFER-COVERAGE: D2DStream test (test_d2d_stream_service_multiprocess.py) requires Galaxy 2-process multi-mesh; unverifiable on single device",
       "flags": [
         "coverage-gap"
       ],
@@ -2018,7 +2023,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "per-direction rotating chain-link STAR: relay_multicast of write-once valid_sem cross-id into recv_sem (INV12), linked=true data + unlinked relay (F4); GAP=CHAIN the helper cannot express yet",
+      "inventory_note": "per-direction rotating chain-link STAR: relay_multicast of write-once valid_sem cross-id into recv_sem (INV12), linked=true data + unlinked relay (F4); GAP=CHAIN the helper cannot express yet",
       "flags": [
         "design-gap"
       ],
@@ -2035,7 +2040,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "didactic example (raw API, ttnn/examples): pre-handshake counter wait+reset, data mcast, local=VALID + set_multicast flag (F2-flag), flush+barrier; previously-missed (existed pre-rebase)",
+      "inventory_note": "didactic example (raw API, ttnn/examples): pre-handshake counter wait+reset, data mcast, local=VALID + set_multicast flag (F2-flag), flush+barrier; previously-missed (existed pre-rebase)",
       "flags": [],
       "added_by_reconcile": "2026-06-27"
     },
@@ -2050,7 +2055,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "P2 3-runtime-core-types; object API; dup of production in0_sender_dram_sharded",
+      "inventory_note": "P2 3-runtime-core-types; object API; dup of production in0_sender_dram_sharded",
       "flags": [
         "quasar-metal2-port"
       ],
@@ -2067,7 +2072,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "canonical P1 sender twin; legacy-binding sibling of _metal2 (coexist)",
+      "inventory_note": "canonical P1 sender twin; legacy-binding sibling of _metal2 (coexist)",
       "flags": [
         "quasar-metal2-port"
       ],
@@ -2084,7 +2089,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "metal2 fork of P1 sender; body identical, host-binding only; live DPRINT debug",
+      "inventory_note": "metal2 fork of P1 sender; body identical, host-binding only; live DPRINT debug",
       "flags": [
         "quasar-metal2-port"
       ],
@@ -2101,7 +2106,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "P3 rotating-role STAR (H12); dup of production",
+      "inventory_note": "P3 rotating-role STAR (H12); dup of production",
       "flags": [
         "quasar-metal2-port"
       ],
@@ -2118,7 +2123,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "metal2 fork of P3; [DEBUG #47797] hang-localization scaffolding",
+      "inventory_note": "metal2 fork of P3; [DEBUG #47797] hang-localization scaffolding",
       "flags": [
         "quasar-metal2-port",
         "hang:#47797"
@@ -2136,7 +2141,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "P4 flag-only collective barrier, no data half; dup of production defer",
+      "inventory_note": "P4 flag-only collective barrier, no data half; dup of production defer",
       "flags": [
         "quasar-metal2-port"
       ],
@@ -2153,7 +2158,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "two P1 sender blocks (in1+bias); dup of production clean",
+      "inventory_note": "two P1 sender blocks (in1+bias); dup of production clean",
       "flags": [
         "quasar-metal2-port"
       ],
@@ -2170,7 +2175,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "metal2 fork; body identical",
+      "inventory_note": "metal2 fork; body identical",
       "flags": [
         "quasar-metal2-port"
       ],
@@ -2187,7 +2192,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "INCLUDE_SRC loopback + F2-MIXED + barrier; dup of production refactor",
+      "inventory_note": "INCLUDE_SRC loopback + F2-MIXED + barrier; dup of production refactor",
       "flags": [
         "quasar-metal2-port"
       ],
@@ -2204,7 +2209,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "metal2 fork; same F2-MIXED blocker",
+      "inventory_note": "metal2 fork; same F2-MIXED blocker",
       "flags": [
         "quasar-metal2-port"
       ],
@@ -2221,7 +2226,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "all-3-F3 + chunked send (R4); dup of production refactor",
+      "inventory_note": "all-3-F3 + chunked send (R4); dup of production refactor",
       "flags": [
         "quasar-metal2-port"
       ],
@@ -2238,7 +2243,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "metal2 fork w/ UNRESOLVED #47797 act-mcast deadlock on the exact handshake + live debug",
+      "inventory_note": "metal2 fork w/ UNRESOLVED #47797 act-mcast deadlock on the exact handshake + live debug",
       "flags": [
         "quasar-metal2-port",
         "hang:#47797"
@@ -2256,7 +2261,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "canonical weights sender twin",
+      "inventory_note": "canonical weights sender twin",
       "flags": [
         "quasar-metal2-port"
       ],
@@ -2273,7 +2278,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "metal2 fork; live conv2d layer3-hang DPRINT",
+      "inventory_note": "metal2 fork; live conv2d layer3-hang DPRINT",
       "flags": [
         "quasar-metal2-port",
         "hang:#47797"
@@ -2291,7 +2296,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "canonical weights sender twin",
+      "inventory_note": "canonical weights sender twin",
       "flags": [
         "quasar-metal2-port"
       ],
@@ -2308,7 +2313,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "metal2 fork; watcher ring-buffer deadlock markers",
+      "inventory_note": "metal2 fork; watcher ring-buffer deadlock markers",
       "flags": [
         "quasar-metal2-port",
         "hang:#47797"
@@ -2326,7 +2331,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "multi-rect flag-only go-mcast + R-to-S counter; dup of production refactor",
+      "inventory_note": "multi-rect flag-only go-mcast + R-to-S counter; dup of production refactor",
       "flags": [
         "quasar-metal2-port"
       ],
@@ -2343,7 +2348,7 @@
       "validation_set": [],
       "coverage_confidence": "unknown",
       "last_verified": null,
-      "census_note": "RM/stick twin of above",
+      "inventory_note": "RM/stick twin of above",
       "flags": [
         "quasar-metal2-port"
       ],
@@ -2374,7 +2379,7 @@
           "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/reader_dispatch.cpp",
           "prior_status": "deferred",
           "prior_tag": "refactor",
-          "reason": "deleted upstream by af00262e51d (#48694); rename ruled out \u2014 successors carry no intra-chip mcast (unicast fan-out + fabric mcast only). Its census note was already stale at the old base. F2-counter coverage retained by reader_combine.cpp + 5 others."
+          "reason": "deleted upstream by af00262e51d (#48694); rename ruled out \u2014 successors carry no intra-chip mcast (unicast fan-out + fabric mcast only). Its inventory note was already stale at the old base. F2-counter coverage retained by reader_combine.cpp + 5 others."
         }
       ],
       "needs_recheck": [
@@ -2433,7 +2438,7 @@
     },
     {
       "date": "2026-08-14",
-      "report": "migration/reconcile_2026-08-14.md",
+      "report": "archive/reconciliation/reconcile_2026-08-14.md",
       "base_from": "fae7eb9ed6f (last census/ledger write-back)",
       "base_to": "9686814ea22 (current branch HEAD)",
       "api_version": "ledger 10; helper header 11; Tier-0 apply follow-up required",
