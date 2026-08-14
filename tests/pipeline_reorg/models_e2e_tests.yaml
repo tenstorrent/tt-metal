@@ -1045,7 +1045,7 @@
   model_family: Motif
   skus:
     wh_llmbox_perf:
-      timeout: 42
+      timeout: 50
       tier: 2
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
