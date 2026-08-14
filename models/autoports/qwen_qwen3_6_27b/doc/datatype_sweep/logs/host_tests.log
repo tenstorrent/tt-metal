@@ -1,0 +1,90 @@
+2026-08-14 11:56:25.889 | DEBUG    | ttnn:<module>:79 - Initial ttnn.CONFIG:
+Config{cache_path=/home/mvasiljevic/.cache/ttnn,model_cache_path=/home/mvasiljevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.12.13, pytest-9.0.3, pluggy-1.6.0 -- /home/mvasiljevic/tt-metal/python_env/bin/python3
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/mvasiljevic/tt-metal
+configfile: pytest.ini
+plugins: github-actions-annotate-failures-0.3.0, anyio-4.14.2, dash-2.15.0, split-0.11.0, timeout-2.4.0, benchmark-5.2.3, cov-7.0.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 10 items
+
+models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_precision_config_is_strict_and_resolves_runtime_policy PASSED
+models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_precision_config_rejects_ignored_sampling_assumption PASSED
+models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_context_contract_matches_public_prefill_limit PASSED
+models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_public_split_sampling_boundary_is_explicit PASSED
+models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_prefill_request_state_cleanup_clears_decoder_aliases PASSED
+models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_trace_release_deallocates_only_owned_persistent_inputs PASSED
+models/autoports/qwen_qwen3_6_27b/tests/test_functional_decoder.py::test_real_config_and_layer_kind_contract PASSED
+models/autoports/qwen_qwen3_6_27b/tests/test_functional_decoder.py::test_context_contract_matches_hf_advertisement PASSED
+models/autoports/qwen_qwen3_6_27b/tests/test_functional_decoder.py::test_canonical_checkpoint_prefix_is_first PASSED
+models/autoports/qwen_qwen3_6_27b/tests/test_functional_decoder.py::test_decode_runtime_has_no_host_fallback_or_placeholder PASSED
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+==================================== PASSES ====================================
+- generated xml file: /home/mvasiljevic/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+0.22s setup    models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_context_contract_matches_public_prefill_limit
+0.22s setup    models/autoports/qwen_qwen3_6_27b/tests/test_functional_decoder.py::test_context_contract_matches_hf_advertisement
+0.22s setup    models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_trace_release_deallocates_only_owned_persistent_inputs
+0.22s setup    models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_precision_config_is_strict_and_resolves_runtime_policy
+0.21s setup    models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_precision_config_rejects_ignored_sampling_assumption
+0.21s setup    models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_prefill_request_state_cleanup_clears_decoder_aliases
+0.21s setup    models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_public_split_sampling_boundary_is_explicit
+0.21s setup    models/autoports/qwen_qwen3_6_27b/tests/test_functional_decoder.py::test_canonical_checkpoint_prefix_is_first
+0.21s setup    models/autoports/qwen_qwen3_6_27b/tests/test_functional_decoder.py::test_real_config_and_layer_kind_contract
+0.21s setup    models/autoports/qwen_qwen3_6_27b/tests/test_functional_decoder.py::test_decode_runtime_has_no_host_fallback_or_placeholder
+
+(20 durations < 0.005s hidden.  Use -vv to show these durations.)
+=========================== short test summary info ============================
+PASSED models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_precision_config_is_strict_and_resolves_runtime_policy
+PASSED models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_precision_config_rejects_ignored_sampling_assumption
+PASSED models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_context_contract_matches_public_prefill_limit
+PASSED models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_public_split_sampling_boundary_is_explicit
+PASSED models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_prefill_request_state_cleanup_clears_decoder_aliases
+PASSED models/autoports/qwen_qwen3_6_27b/tests/test_full_model_public_contract.py::test_trace_release_deallocates_only_owned_persistent_inputs
+PASSED models/autoports/qwen_qwen3_6_27b/tests/test_functional_decoder.py::test_real_config_and_layer_kind_contract
+PASSED models/autoports/qwen_qwen3_6_27b/tests/test_functional_decoder.py::test_context_contract_matches_hf_advertisement
+PASSED models/autoports/qwen_qwen3_6_27b/tests/test_functional_decoder.py::test_canonical_checkpoint_prefix_is_first
+PASSED models/autoports/qwen_qwen3_6_27b/tests/test_functional_decoder.py::test_decode_runtime_has_no_host_fallback_or_placeholder
+======================== 10 passed, 2 warnings in 3.09s ========================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+nanobind: leaked 2 instances!
+ - leaked instance 0x70986633a088 of type "ttnn._ttnn.tensor.MemoryConfig"
+ - leaked instance 0x7098668056f8 of type "ttnn._ttnn.tensor.CoreRangeSet"
+nanobind: leaked 21 types!
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCast1DProgramConfig"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulInputs"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"
+ - leaked type "BufferType"
+ - leaked type "UnaryOpType"
+ - leaked type "Layout"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseOptimizedProgramFactory"
+ - leaked type "Arch"
+ - leaked type "ttnn._ttnn.operations.matmul.MatmulParams"
+ - leaked type "ttnn._ttnn.tensor.CoreRangeSet"
+ - ... skipped remainder
+nanobind: leaked 247 functions!
+ - leaked function "create_descriptor"
+ - leaked function "to"
+ - leaked function ""
+ - leaked function "create_matmul_attributes"
+ - leaked function "to_json"
+ - leaked function "clear_program_cache"
+ - leaked function "update_tensor_topology"
+ - leaked function ""
+ - leaked function "create_submesh"
+ - leaked function ""
+ - ... skipped remainder
+nanobind: this is likely caused by a reference counting issue in the binding code.
+See https://nanobind.readthedocs.io/en/latest/refleaks.html

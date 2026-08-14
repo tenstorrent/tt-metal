@@ -190,22 +190,22 @@
     "batch_1_supported_context": 262144,
     "batch_1_decode_cache_context": 262144,
     "batch_1_supported_single_pass_prefill": 262144,
-    "decoder_resident_bytes_per_device": 10599141888,
+    "decoder_resident_bytes_per_device": 8971227648,
     "token_embedding_bytes_per_device": 2542796800,
     "final_norm_bytes_per_device": 10240,
     "vocab_sharded_lm_head_bytes_per_device": 318504960,
-    "full_model_weight_bytes_per_device": 13460453888,
+    "full_model_weight_bytes_per_device": 11832539648,
     "batch_1_kv_bytes_per_device_at_context_262144": 2281701376,
     "batch_32_kv_bytes_per_device_per_context_token": 278528,
     "batch_32_linear_state_bytes_per_device": 572522496,
     "decoder_trace_activation_reserve_bytes_per_device": 1969152,
-    "capacity_accounting_note": "Terminal allocations are recomputed from the real 248320x5120 BF16 replicated embedding, 5120-element BF16 norm, and TP4-sharded BFP8 LM head. The LM head is split device-locally into 30976/31104 columns; the second DRAM-bank shard pads to 31232, so physical local width is 62208. Fresh isolated physical probes reserve the same 64-layer selected-policy residency plus terminal tensors, linear state, measured workspace, and all 16 TP-local paged K/V pairs.",
-    "batch_32_largest_feasible_context": 72192,
-    "batch_32_smallest_failed_context": 72256,
+    "capacity_accounting_note": "Datatype-sweep recomputation uses the selected all-BFP4 projection policy: the prior 2,264,924,160-byte/device BF16 full-attention projection category scales by the exact BFP4 tile payload ratio 576/2048 to 637,009,920 bytes/device. Terminal allocations remain the real replicated BF16 embedding/norm and TP4-sharded BFP8 LM head. Fresh isolated probes reserve 11,832,539,648 bytes/device selected weights, linear state, measured workspace, and all 16 TP-local BFP8 paged K/V pairs.",
+    "batch_32_largest_feasible_context": 78016,
+    "batch_32_smallest_failed_context": 78080,
     "batch_32_context_status": "physically_bracketed_with_full_model_terminal_residency",
     "capacity_artifacts": {
-      "batch_1": "doc/full_model/artifacts/capacity/capacity_b1.json",
-      "batch_32": "doc/full_model/artifacts/capacity/capacity_b32.json",
+      "batch_1": "doc/datatype_sweep/artifacts/capacity_bfp8_selected_b1/capacity_b1.json",
+      "batch_32": "doc/datatype_sweep/artifacts/capacity_bfp8_selected/capacity_b32.json",
       "batch_1_trace_snapshot": "doc/full_model/artifacts/capacity_trace/capacity_b1_trace.json"
     },
     "full_stack_streaming_prefill": {
@@ -231,8 +231,8 @@
     "supported_context": 262144,
     "capability_reduction": false,
     "batch_1_supported_context": 262144,
-    "batch_32_largest_feasible_context": 72192,
-    "batch_32_smallest_failed_context": 72256,
+    "batch_32_largest_feasible_context": 78016,
+    "batch_32_smallest_failed_context": 78080,
     "non_aligned_generator_sequences_tested": [63, 65, 161, 261],
     "split_sampling": {
       "default": true,
@@ -250,8 +250,25 @@
       "kv_and_linear_state",
       "active_fixed_slots"
     ],
-    "performance_artifact": "doc/optimized_full_model/artifacts/final_default_split_no_readback_b1_s128_g128.json",
+    "performance_artifact": "doc/datatype_sweep/artifacts/selected_token_out_b1_s128_g128.json",
     "runtime_fallback_audit": "doc/optimized_full_model/artifacts/runtime_fallback_audit.json"
+  },
+  "datatype_sweep": {
+    "status": "selected_precision_physically_recomputed",
+    "selected_config": "doc/datatype_sweep/selected_precision_config.json",
+    "kv_cache_dtype": "BFP8_B",
+    "linear_recurrent_state_dtype": "BFP8_B",
+    "activation_residual_dtype": "BF16",
+    "capability_reduction": false,
+    "batch_1_supported_context": 262144,
+    "batch_32_largest_feasible_context": 78016,
+    "batch_32_smallest_failed_context": 78080,
+    "non_aligned_prompt_lengths_revalidated": [63, 65, 161, 261],
+    "capacity_artifacts": {
+      "batch_1": "doc/datatype_sweep/artifacts/capacity_bfp8_selected_b1/capacity_b1.json",
+      "batch_32": "doc/datatype_sweep/artifacts/capacity_bfp8_selected/capacity_b32.json"
+    },
+    "non_aligned_artifact": "doc/datatype_sweep/artifacts/selected_non_aligned_mixed_slots.json"
   },
   "layer_kinds": {
     "linear_attention": {

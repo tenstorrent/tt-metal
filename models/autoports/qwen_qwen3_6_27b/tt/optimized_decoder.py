@@ -36,6 +36,7 @@ class OptimizationPolicy:
     cache_dtype: object
     attention_fidelity: object
     mlp_fidelity: object
+    activation_residual_dtype: object = ttnn.bfloat16
     qkv_fidelity: object | None = None
     o_fidelity: object | None = None
     packed_qkv: bool = True
@@ -718,9 +719,7 @@ class OptimizedDecoder(FunctionalDecoder):
                 rows=rows, width=hidden, cores=80, shard_width=64
             )
         else:
-            self.decode_residual_memory_config = _l1_width_memory_config(
-                rows=rows, width=hidden, cores=storage_cores
-            )
+            self.decode_residual_memory_config = _l1_width_memory_config(rows=rows, width=hidden, cores=storage_cores)
         if advisor_norm_enabled:
             self.decode_norm_memory_config = _advisor_norm_memory_config()
             self.decode_norm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -731,9 +730,7 @@ class OptimizedDecoder(FunctionalDecoder):
                 inplace=False,
             )
         else:
-            self.decode_norm_memory_config = _l1_width_memory_config(
-                rows=rows, width=hidden, cores=storage_cores
-            )
+            self.decode_norm_memory_config = _l1_width_memory_config(rows=rows, width=hidden, cores=storage_cores)
             self.decode_norm_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
                 compute_with_storage_grid_size=(storage_cores, 1),
                 subblock_w=4,
@@ -1660,14 +1657,22 @@ class OptimizedDecoder(FunctionalDecoder):
         return outputs[0] if len(outputs) == 1 else ttnn.concat(outputs, dim=2)
 
     def prefill_forward(
-        self, *, hidden_states, page_table, current_positions, sequence_mask=None, conv_state_selectors=None,
+        self,
+        *,
+        hidden_states,
+        page_table,
+        current_positions,
+        sequence_mask=None,
+        conv_state_selectors=None,
         cache_page_table=None,
     ):
         # Mixed-length serving metadata is consumed by the stateful linear
         # mixer.  Keep it out of the established TP projection signatures.
         self._sequence_masks = sequence_mask if isinstance(sequence_mask, (list, tuple)) else None
         self._conv_state_selector_chunks = (
-            conv_state_selectors if conv_state_selectors and isinstance(conv_state_selectors[0], (list, tuple)) else None
+            conv_state_selectors
+            if conv_state_selectors and isinstance(conv_state_selectors[0], (list, tuple))
+            else None
         )
         self._sequence_mask = sequence_mask if self._sequence_masks is None else None
         self._conv_state_selectors = conv_state_selectors if self._conv_state_selector_chunks is None else None

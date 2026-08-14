@@ -129,6 +129,8 @@ class MultichipDecoder(OptimizedDecoder):
         page_size: int = 64,
         candidate: str = "default",
         policy_override=None,
+        ccl_token_mixer_dtype=ttnn.bfloat16,
+        ccl_mlp_dtype=ttnn.bfloat16,
         **_kwargs,
     ):
         _validate_contract(hf_config, layer_idx, mesh_device, batch, max_context, page_size)
@@ -318,6 +320,8 @@ class MultichipDecoder(OptimizedDecoder):
         decoder._configure_multichip_compute()
         decoder._row_collective_mode = "all_reduce"
         decoder._multichip_candidate = multichip_candidate
+        decoder.ccl_token_mixer_dtype = ccl_token_mixer_dtype
+        decoder.ccl_mlp_dtype = ccl_mlp_dtype
         decoder._ccl_buffers = {}
         if multichip_candidate == "multichip_preallocated_ccl":
             # Full-attention O reaches its CCL before the B1 logical view;
@@ -466,7 +470,7 @@ class MultichipDecoder(OptimizedDecoder):
         in0_block_w=1,
     ):
         kwargs = dict(
-            dtype=ttnn.bfloat16,
+            dtype=self.policy.activation_residual_dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=compute_kernel_config or self.mlp_compute_kernel_config,
         )
@@ -496,7 +500,10 @@ class MultichipDecoder(OptimizedDecoder):
             output = ttnn.silu(output)
         if not row:
             return output
-        ccl_bfp8 = self._multichip_candidate == "multichip_bfp8_ccl_all"
+        role = "mlp" if weight_name == "mlp_down_decode" else "token_mixer"
+        configured_ccl_dtype = self.ccl_mlp_dtype if role == "mlp" else self.ccl_token_mixer_dtype
+        ccl_bfp8 = configured_ccl_dtype == ttnn.bfloat8_b
+        ccl_bfp8 |= self._multichip_candidate == "multichip_bfp8_ccl_all"
         ccl_bfp8 |= self._multichip_candidate == "multichip_bfp8_ccl_attention" and weight_name in {
             "o_proj_decode",
             "linear_out_decode",
@@ -505,7 +512,6 @@ class MultichipDecoder(OptimizedDecoder):
         if ccl_bfp8:
             output = ttnn.typecast(output, ttnn.bfloat8_b)
         if self._multichip_candidate == "multichip_preallocated_ccl" and decode:
-            role = "mlp" if weight_name == "mlp_down_decode" else "token_mixer"
             buffers = self._ccl_buffers[role]
             scattered = ttnn.reduce_scatter(
                 output,
@@ -529,11 +535,11 @@ class MultichipDecoder(OptimizedDecoder):
             output = self._reduce_scatter(output)
         else:
             output = self._all_reduce(output)
-        return ttnn.typecast(output, ttnn.bfloat16) if ccl_bfp8 else output
+        return ttnn.typecast(output, self.policy.activation_residual_dtype) if ccl_bfp8 else output
 
     def _distributed_rms_norm_decode(self, hidden_states, weight_name):
         """Normalize a semantic hidden-width mesh shard without replicating it."""
-        stats = ttnn.rms_norm_pre_all_gather(hidden_states, dtype=ttnn.bfloat16)
+        stats = ttnn.rms_norm_pre_all_gather(hidden_states, dtype=self.policy.activation_residual_dtype)
         gathered_stats = ttnn.all_gather(
             stats,
             dim=3,
@@ -596,7 +602,15 @@ class MultichipDecoder(OptimizedDecoder):
             )
             gate, up = ttnn.split(packed, (4352, 4352), dim=-1)
             product = ttnn.multiply(ttnn.silu(gate), up)
-            return self._tp_linear(product, "mlp_down_decode", k=4352, n=5120, decode=True, row=True, in0_block_w=17)
+            return self._tp_linear(
+                product,
+                "mlp_down_decode",
+                k=4352,
+                n=5120,
+                decode=True,
+                row=True,
+                in0_block_w=self.policy.mlp_down_in0_block_w,
+            )
         gate = self._tp_linear(
             hidden_states,
             "mlp_gate_decode",
@@ -608,7 +622,13 @@ class MultichipDecoder(OptimizedDecoder):
         )
         up = self._tp_linear(hidden_states, "mlp_up_decode", k=5120, n=4352, decode=True, in0_block_w=4)
         return self._tp_linear(
-            ttnn.multiply(gate, up), "mlp_down_decode", k=4352, n=5120, decode=True, row=True, in0_block_w=17
+            ttnn.multiply(gate, up),
+            "mlp_down_decode",
+            k=4352,
+            n=5120,
+            decode=True,
+            row=True,
+            in0_block_w=self.policy.mlp_down_in0_block_w,
         )
 
     def _mlp_prefill(self, hidden_states):
@@ -884,6 +904,11 @@ class MultichipDecoder(OptimizedDecoder):
             in0_block_w=4,
         )
         qkv, gate = ttnn.split(packed, (2048, 1536), dim=-1)
+        # The head-splitting device op currently accepts only BF16/FP32. Keep
+        # reduced-precision residual and projection boundaries, but adapt this
+        # exact op contract locally instead of rejecting BFP8 activations.
+        if qkv.dtype not in (ttnn.bfloat16, ttnn.float32):
+            qkv = ttnn.typecast(qkv, ttnn.bfloat16)
         qkv = ttnn.to_memory_config(qkv, ttnn.L1_MEMORY_CONFIG)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads_decode(
             qkv, num_heads=6, num_kv_heads=1, memory_config=self.decode_attention_memory_config
