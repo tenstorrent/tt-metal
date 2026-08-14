@@ -56,8 +56,8 @@ public:
     static void mesh_device_destroyed(const distributed::MeshDeviceImpl* mesh_device) noexcept;
     static void mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_device) noexcept;
 
-    static void mesh_buffer_created(const distributed::MeshBuffer* mesh_buffer) noexcept;
-    static void mesh_buffer_destroyed(const distributed::MeshBuffer* mesh_buffer) noexcept;
+    static void mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer) noexcept;
+    static void mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buffer) noexcept;
 
     static void mesh_workload_created(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;
     static void mesh_workload_destroyed(const distributed::MeshWorkloadImpl* mesh_workload) noexcept;

@@ -295,7 +295,7 @@ void Inspector::mesh_device_initialized(const distributed::MeshDeviceImpl* mesh_
     }
 }
 
-void Inspector::mesh_buffer_created(const distributed::MeshBuffer* mesh_buffer) noexcept {
+void Inspector::mesh_buffer_allocated(const distributed::MeshBuffer* mesh_buffer) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -305,19 +305,17 @@ void Inspector::mesh_buffer_created(const distributed::MeshBuffer* mesh_buffer) 
         return;
     }
     try {
-        // A move-assigned buffer is already present, and there is no value to refresh, so the insert
-        // is simply a no-op in that case.
         std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
         data->mesh_buffers_data.insert(mesh_buffer);
         if (data->mesh_buffer_logging_enabled) {
-            data->logger.log_mesh_buffer_created(mesh_buffer);
+            data->logger.log_mesh_buffer_allocated(mesh_buffer);
         }
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh buffer created: {}", e.what());
+        TT_INSPECTOR_LOG("Failed to log mesh buffer allocated: {}", e.what());
     }
 }
 
-void Inspector::mesh_buffer_destroyed(const distributed::MeshBuffer* mesh_buffer) noexcept {
+void Inspector::mesh_buffer_deallocated(const distributed::MeshBuffer* mesh_buffer) noexcept {
     if (!is_enabled()) {
         return;
     }
@@ -329,10 +327,10 @@ void Inspector::mesh_buffer_destroyed(const distributed::MeshBuffer* mesh_buffer
         std::lock_guard<std::mutex> lock(data->mesh_buffers_mutex);
         data->mesh_buffers_data.erase(mesh_buffer);
         if (data->mesh_buffer_logging_enabled) {
-            data->logger.log_mesh_buffer_destroyed(mesh_buffer);
+            data->logger.log_mesh_buffer_deallocated(mesh_buffer);
         }
     } catch (const std::exception& e) {
-        TT_INSPECTOR_LOG("Failed to log mesh buffer destroyed: {}", e.what());
+        TT_INSPECTOR_LOG("Failed to log mesh buffer deallocated: {}", e.what());
     }
 }
 

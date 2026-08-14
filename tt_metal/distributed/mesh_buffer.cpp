@@ -102,7 +102,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         auto mesh_buffer =
             std::shared_ptr<MeshBuffer>(new MeshBuffer(mesh_buffer_config, device_local_config, 0, 0, mesh_device));
         mesh_buffer->initialize_device_buffers();
-        Inspector::mesh_buffer_created(mesh_buffer.get());
+        Inspector::mesh_buffer_allocated(mesh_buffer.get());
         return mesh_buffer;
     }
 
@@ -168,7 +168,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
         mesh_buffer->initialize_device_buffers();
     }
 
-    Inspector::mesh_buffer_created(mesh_buffer.get());
+    Inspector::mesh_buffer_allocated(mesh_buffer.get());
     return mesh_buffer;
 }
 
@@ -232,10 +232,7 @@ bool MeshBuffer::is_allocated() const {
     return true;
 }
 
-MeshBuffer::~MeshBuffer() {
-    Inspector::mesh_buffer_destroyed(this);
-    deallocate();
-}
+MeshBuffer::~MeshBuffer() { deallocate(); }
 
 MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     config_(other.config_),
@@ -245,10 +242,11 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     device_local_size_(other.device_local_size_),
     buffers_(std::move(other.buffers_)),
     state_(std::move(other.state_)) {
+    Inspector::mesh_buffer_deallocated(&other);
     other.state_ = DeallocatedState{};
     other.address_ = 0;
     other.device_local_size_ = 0;
-    Inspector::mesh_buffer_created(this);
+    Inspector::mesh_buffer_allocated(this);
 }
 
 MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
@@ -262,15 +260,22 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         buffers_ = std::move(other.buffers_);
         state_ = std::move(other.state_);
 
+        Inspector::mesh_buffer_deallocated(&other);
         other.state_ = DeallocatedState{};
         other.address_ = 0;
         other.device_local_size_ = 0;
-        Inspector::mesh_buffer_created(this);
+        Inspector::mesh_buffer_allocated(this);
     }
     return *this;
 }
 
 void MeshBuffer::deallocate() {
+    // Guard against double reporting to Inspector if deallocate() was called explicitly and then again in the
+    // destructor.
+    if (!std::holds_alternative<DeallocatedState>(state_)) {
+        Inspector::mesh_buffer_deallocated(this);
+    }
+
     auto mesh_device = mesh_device_.lock();
     if (mesh_device) {
         // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:
