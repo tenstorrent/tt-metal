@@ -738,11 +738,12 @@ section is the credit half of the ledger and is the material for the comparison 
 | after fusing RoPE into one op (O4d) | 271.9 | 15.212 | 0.9903 |
 | run 2 — Q+K rotated in one call (O4f) | 269.5 | 14.909 | 0.9903 |
 | run 2 — decode-native Q/K/V layout (O4g) | 261.9 | 13.975 | 0.9903 |
-| run 2 — head creation fed the projection's shard (O4h) | 254.5 | **13.277** | 0.9903 |
+| run 2 — head creation fed the projection's shard (O4h) | 254.5 | 13.277 | 0.9903 |
+| run 2 — DRAM-sharded LM head weight (O4i) | — | **13.228** | 0.9904 |
 | tool's own roofline target | 338.541 | — | gate 0.95 |
 | **hand-port, for reference** | — | **15.907** | — |
 
-**13.277 against 15.907 — the tool is 16.5% AHEAD of 74 human experiments**, autonomously, with
+**13.228 against 15.907 — the tool is 16.8% AHEAD of 74 human experiments**, autonomously, with
 PCC bit-identical across its last four wins (0.990347151783074, unchanged to every decimal). Every
 one of those four was a layout or dispatch result. None spent accuracy.
 
@@ -1162,6 +1163,30 @@ the op does with the shape it is handed.
 op in the decode step, ask (a) does its parallel path key off layout or batch, and does decode
 satisfy that? and (b) is its input a padded tile row? The tool found three instances in one model;
 there is no reason to think a hand-written port has zero.
+
+### O4i — a real bandwidth finding, on a trade the hand-port should NOT take
+
+Diminishing returns begin here: **−0.4%** (13.277 → 13.228). The diagnosis is still good —
+
+> *The LM head was the worst matmul in the model: 226 MB of bfloat4_b weight at **256 GB/s**, half
+> the board's DRAM bandwidth, where the layer projections manage **340–360**. The reason is
+> placement, not size — an interleaved buffer round-robins its pages across all eight banks, so each
+> of the 128 cores gathers its column slice from every bank at once.*
+
+Width-sharding the weight in DRAM makes each core's slice contiguous in **one** bank, which is what
+`MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig` reads. Genuinely useful knowledge: an
+interleaved DRAM weight can cost ~30% of achievable bandwidth purely through bank placement.
+
+**But the cost is a second copy of the weight — 226 MB — because the DRAM-sharded kernel requires an
+in0 height of exactly one tile, so prefill (logits at every prompt position) must keep the
+interleaved copy.** The tool judges that against 32 GB of board DRAM and takes it.
+
+**Do not transfer this one.** The hand-port runs three blocks co-resident on the same board and
+treats headroom as a real budget; spending 226 MB for 0.05 ms/token is the wrong side of that trade,
+and Block 1's LM head is not even on the hand-port's critical path (Block 2 consumes the hidden
+state, per §6.8's semantic head). Recorded as a **bandwidth lesson worth keeping and a change worth
+declining** — the placement insight generalises to any large interleaved weight; the duplication
+does not.
 
 ### O5 — the ladder's escalation is real, and it gives up in the right place
 
