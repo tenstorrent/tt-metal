@@ -261,23 +261,63 @@ No execute-varying own field is known. If one appears, mark it and exempt it her
 
 ## 6. Lifecycle ordering (the sequencing contract)
 
-Per EXU, `ρᵢ`/`σ` walk a state machine. This is the legacy `fsm_check` (impl.h, `#if 0`), the
-spec for ordering, currently off in code (C5). States:
-`INITIAL, CONFIGURED, INITIALIZED[Op], EXECUTED[Op], UNINITIALIZED[Op], RECONFIGURED`.
+Per EXU, the API calls drive a state machine — the `fsm_check` in the Sanitizer (impl.h,
+currently `#if 0`, C5). This section writes it out in full: it is the authoritative,
+complete transition set. **Any transition not listed below as `ok` or `WARN` is an `ERROR`.**
 
-```
-INITIAL           → CONFIGURED                                   (mandatory first; else ERROR)
-CONFIGURED        → INITIALIZED[*]                               (ok)
-                  → RECONFIGURED                                 (WARN: perf)
-INITIALIZED[Op]   → EXECUTED[Op]                                 (ok)
-                  → INITIALIZED[*] | UNINITIALIZED[Op]           (WARN: perf)
-                  → RECONFIGURED                                 (ok iff ¬expect_uninit(Op))
-EXECUTED[Op]      → EXECUTED[Op]                                 (ok)
-                  → UNINITIALIZED[Op]                            (ok iff expect_uninit(Op))
-                  → INITIALIZED[*] | RECONFIGURED                (ok iff ¬expect_uninit(Op))
-UNINITIALIZED[Op] → INITIALIZED[*] | RECONFIGURED               (ok)
-RECONFIGURED      → INITIALIZED[*] | RECONFIGURED               (ok)
-```
+**States** and the call that enters each:
+
+| state | entered by | meaning |
+|-------|-----------|---------|
+| `INITIAL` | — | before any call |
+| `CONFIGURED` | `configure` (hw config) | operand state set |
+| `INITIALIZED[Op]` | `init⟨Op⟩` | operation `Op` set up |
+| `EXECUTED[Op]` | `execute⟨Op⟩` | `Op` has run at least once |
+| `UNINITIALIZED[Op]` | `uninit⟨Op⟩` | `Op` torn down |
+| `RECONFIGURED` | `reconfigure` | operand state changed |
+
+Conventions: `[Op]` = the *same* operation as the current state; `[Any]` = any operation (the
+op may change on this edge). `expect_uninit(Op)` (defined below) = whether `Op` requires an
+uninit. A `—` in the `expect_uninit` column means the rule holds either way.
+
+**Complete transition table** (unlisted `to` from a given state ⇒ `ERROR`):
+
+| from | to | expect_uninit | verdict |
+|------|----|:-------------:|---------|
+| `INITIAL` | `CONFIGURED` | — | ok |
+| `INITIAL` | anything else | — | **ERROR** — first call must be `configure` |
+| `CONFIGURED` | `INITIALIZED[Any]` | — | ok |
+| `CONFIGURED` | `RECONFIGURED` | — | WARN — reconfigure right after configure is wasted |
+| `INITIALIZED[Op]` | `EXECUTED[Op]` | — | ok — the intended path |
+| `INITIALIZED[Op]` | `INITIALIZED[Any]` | — | WARN — redundant re-init |
+| `INITIALIZED[Op]` | `UNINITIALIZED[Op]` | — | WARN — init then teardown, no execute |
+| `INITIALIZED[Op]` | `RECONFIGURED` | No | WARN — deprecated |
+| `INITIALIZED[Op]` | `RECONFIGURED` | Yes | **ERROR** — `Op` needs its uninit first |
+| `EXECUTED[Op]` | `EXECUTED[Op]` | — | ok — run again |
+| `EXECUTED[Op]` | `UNINITIALIZED[Op]` | Yes | ok |
+| `EXECUTED[Op]` | `INITIALIZED[Any]` | No | ok |
+| `EXECUTED[Op]` | `RECONFIGURED` | No | ok |
+| `EXECUTED[Op]` | `UNINITIALIZED[Op]` | No | **ERROR** — `Op` has no uninit |
+| `EXECUTED[Op]` | `INITIALIZED[Any]` \| `RECONFIGURED` | Yes | **ERROR** — must uninit `Op` first |
+| `UNINITIALIZED[Op]` | `INITIALIZED[Any]` | — | ok |
+| `UNINITIALIZED[Op]` | `RECONFIGURED` | — | ok |
+| `RECONFIGURED` | `INITIALIZED[Any]` | — | ok |
+| `RECONFIGURED` | `RECONFIGURED` | — | ok |
+
+**Invariants that fall out of the table:**
+
+- `EXECUTED` is reachable **only** from `INITIALIZED` or `EXECUTED`. So you must `init` before
+  the first `execute`, and after a `reconfigure` or an `uninit` you must re-`init` before the
+  next `execute` — `RECONFIGURED` and `UNINITIALIZED` never step straight to `EXECUTED`.
+- `[Op]` matching: `execute` and `uninit` must name the operation currently live; only `init`
+  may switch operation (`[Any]`). (The FSM matches op *type* only — operand identity is not
+  tracked; see §14.)
+- Accepting states (a kernel may legally end here): `EXECUTED[Op]`, and `UNINITIALIZED[Op]` for
+  ops with `expect_uninit`. Ending in `INITIALIZED`/`RECONFIGURED` (setup with no following
+  execute) is wasted work — a WARN, not an ERROR.
+
+(§14's fuzzer generator uses the permissive union of this table — accept if valid under either
+`expect_uninit` regime — since it decorates skeletons before the op's `expect_uninit` is known.)
 
 `expect_uninit(Op)` is a per-operation, per-architecture attribute. It is not derivable from
 `Hoistable`. Operations that need uninit include at least tilize, untilize, reduce, and maybe
