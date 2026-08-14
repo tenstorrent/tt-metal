@@ -41,7 +41,9 @@ from models.common.readiness_check.contract import (
     Generator,
 )
 from models.common.readiness_check.mesh_device import (
+    add_build_generator_args,
     add_mesh_device_args,
+    build_generator_kwargs,
     close_readiness_mesh_device,
     open_readiness_mesh_device,
 )
@@ -226,6 +228,7 @@ def _main() -> None:
         default=DEFAULT_MAX_NEW_TOKENS,
         help=f"Decode-step budget per side; both stop early on EOS (default {DEFAULT_MAX_NEW_TOKENS}).",
     )
+    add_build_generator_args(parser)
     args = parser.parse_args()
 
     output_dir = args.output_dir or (args.model_dir / "readiness_autoregressive")
@@ -239,6 +242,7 @@ def _main() -> None:
             mesh_device=mesh_device,
             output_dir=output_dir.resolve(),
             max_new_tokens=args.max_new_tokens,
+            build_kwargs=build_generator_kwargs(args),
         )
     finally:
         close_readiness_mesh_device(mesh_device, args.fabric_config)

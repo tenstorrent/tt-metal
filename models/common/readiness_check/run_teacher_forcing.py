@@ -41,7 +41,9 @@ from models.common.readiness_check.contract import (
     Generator,
 )
 from models.common.readiness_check.mesh_device import (
+    add_build_generator_args,
     add_mesh_device_args,
+    build_generator_kwargs,
     close_readiness_mesh_device,
     open_readiness_mesh_device,
 )
@@ -276,6 +278,7 @@ def _main() -> None:
     parser.add_argument("--model-dir", type=Path, required=True, help="Path to the model directory.")
     parser.add_argument("--reference", type=Path, required=True, help="Path to the .refpt reference file.")
     add_mesh_device_args(parser)
+    add_build_generator_args(parser)
     args = parser.parse_args()
 
     mesh_device = open_readiness_mesh_device(args.mesh_device, args.fabric_config)
@@ -284,6 +287,7 @@ def _main() -> None:
             model_dir=args.model_dir.resolve(),
             reference_path=args.reference.resolve(),
             mesh_device=mesh_device,
+            build_kwargs=build_generator_kwargs(args),
         )
     finally:
         close_readiness_mesh_device(mesh_device, args.fabric_config)

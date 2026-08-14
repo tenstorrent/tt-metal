@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import argparse
-from typing import Any
+from pathlib import Path
+from typing import Any, Dict
 
 #: Label → (mesh rows, mesh cols). N300 (2 chips) is openable as N150 by
 #: requesting (1, 1) — the device manager picks one of the two chips. T3K
@@ -40,6 +41,35 @@ def add_mesh_device_args(parser: argparse.ArgumentParser) -> None:
             "meshes. Omit for single-chip (N150) or when the model does not need fabric."
         ),
     )
+
+
+def add_build_generator_args(parser: argparse.ArgumentParser) -> None:
+    """Register optional pass-through knobs for the model's build_generator."""
+    parser.add_argument(
+        "--tensor-cache",
+        type=Path,
+        default=None,
+        help=(
+            "Persistent TTNN tensor-cache root, forwarded to build_generator as "
+            "tensor_cache_path. Reuses converted device weights instead of rereading "
+            "and reconverting the full checkpoint, which dominates startup for large "
+            "models. Only forwarded when given, since it is a per-model knob and not "
+            "every autoport accepts it."
+        ),
+    )
+
+
+def build_generator_kwargs(args: argparse.Namespace) -> Dict[str, Any]:
+    """Collect the optional build_generator pass-through kwargs that were set.
+
+    Absent flags are omitted entirely rather than passed as None, so a model whose
+    build_generator does not accept a knob is unaffected unless it is requested.
+    """
+    kwargs: Dict[str, Any] = {}
+    tensor_cache = getattr(args, "tensor_cache", None)
+    if tensor_cache is not None:
+        kwargs["tensor_cache_path"] = Path(tensor_cache).resolve()
+    return kwargs
 
 
 def open_readiness_mesh_device(mesh_device_label: str, fabric_config: str | None = None) -> Any:
