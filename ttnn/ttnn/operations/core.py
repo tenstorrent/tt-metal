@@ -244,6 +244,10 @@ def _golden_function(input_tensor, dtype=None, *, spec=None, **_):
     if target_dtype is None:
         return input_tensor
 
+    # Host float-to-uint16 conversion truncates and clamps, unlike PyTorch's direct unsigned cast.
+    if isinstance(input_tensor, torch.Tensor) and input_tensor.is_floating_point() and target_dtype == ttnn.uint16:
+        return torch.clamp(input_tensor.to(torch.int32), min=0, max=65535).to(torch.uint16)
+
     # Mirror explicit TT dtype conversion so the golden matches values stored by from_torch.
     torch_dtype = {
         ttnn.uint8: torch.uint8,

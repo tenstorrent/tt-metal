@@ -8,6 +8,22 @@ from typing import Union
 import ttnn
 
 
+def _to_torch_dtype(dtype):
+    import torch
+
+    return {
+        ttnn.uint8: torch.uint8,
+        ttnn.uint16: torch.uint16,
+        ttnn.uint32: torch.uint32,
+        ttnn.int8: torch.int8,
+        ttnn.int32: torch.int32,
+        ttnn.float32: torch.float32,
+        ttnn.bfloat16: torch.bfloat16,
+        ttnn.bfloat8_b: torch.float32,
+        ttnn.bfloat4_b: torch.float32,
+    }[dtype]
+
+
 def _golden_function(input_tensor: ttnn.Tensor, **_):
     import torch
 
@@ -26,10 +42,12 @@ def _golden_function(input_tensor: ttnn.Tensor, **_):
 ttnn.attach_golden_function(ttnn.ones_like, golden_function=_golden_function)
 
 
-def _golden_function(input_tensor: ttnn.Tensor, *, fill_value: float, **_):
+def _golden_function(input_tensor: ttnn.Tensor, fill_value: float, dtype=None, *_, **__):
     import torch
 
-    return torch.full_like(input_tensor, fill_value)
+    # Honor the output dtype override instead of always inheriting the input tensor dtype.
+    torch_dtype = _to_torch_dtype(dtype) if dtype is not None else None
+    return torch.full_like(input_tensor, fill_value, dtype=torch_dtype)
 
 
 ttnn.attach_golden_function(ttnn.full_like, golden_function=_golden_function)
@@ -66,19 +84,18 @@ def _golden_function_full(input_shape: ttnn.Shape, fill_value: float, **_):
 ttnn.attach_golden_function(ttnn.full, golden_function=_golden_function_full)
 
 
-def _golden_function(input_shape: ttnn.Shape, **_):
+# empty returns uninitialized storage, so comparison mode has no meaningful value golden.
+ttnn.attach_golden_function(ttnn.empty, golden_function=None)
+
+
+def _golden_function(*args, dtype=ttnn.bfloat16, **kwargs):
     import torch
 
-    return torch.empty(input_shape)
-
-
-ttnn.attach_golden_function(ttnn.empty, golden_function=_golden_function)
-
-
-def _golden_function(start: int, end: int, step: int, **_):
-    import torch
-
-    return torch.arange(start, end, step)
+    kwargs.pop("device", None)
+    kwargs.pop("memory_config", None)
+    kwargs.pop("layout", None)
+    # Forward all supported range overloads, then cast to the requested TTNN dtype.
+    return torch.arange(*args, **kwargs).to(_to_torch_dtype(dtype))
 
 
 ttnn.attach_golden_function(ttnn.arange, golden_function=_golden_function)
