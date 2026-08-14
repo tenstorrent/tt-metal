@@ -11,9 +11,15 @@
 # Deliberately no -x: a found race turns that case red, but the suite must
 # finish so report.md lists every failing variant.
 #
+# The 1800 min timeouts below are a fiction and cannot be the fix for a shard
+# that runs long: in run 31714492632 three of these four shards were killed at
+# ~10h08m elapsed with "the self-hosted runner lost communication with the
+# server", nowhere near 30h, so the job timeout never fired. Raising it is also
+# not available — 4 x 1800 already pins llk.ttnop.wh_n150_civ2 at its 7200
+# budget, which verify_time_budget.py sums across shards. Fitting under that
+# ~10h ceiling needs more shards and/or a coarser TTNOP_DELAYS; still to size.
+#
 # UNKNOWN (ask infra / manager):
-#   - Per-job timeout below is copied from e2e (1800 min). Raise if the run
-#     hits the job timeout.
 #   - owner_id below is the LLK CI default (Nemanja). Change if ttnop should
 #     page someone else.
 

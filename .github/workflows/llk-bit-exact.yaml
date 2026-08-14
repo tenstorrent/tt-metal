@@ -16,8 +16,11 @@ name: "LLK bit-exact"
 # replace this with a dedicated llk-ttnop.yaml. Do NOT merge this override
 # as-is or you will replace nightly bit-exact with ttnop.
 #
+# The per-shard timeout is not the lever it looks like: run 31714492632 lost
+# three shards at ~10h08m to the runner going away, never reaching the 1800 min
+# job timeout. See tests/pipeline_reorg/llk_ttnop_tests.yaml.
+#
 # UNKNOWN (ask tomorrow):
-#   - 1800 min/shard timeout enough?
 #   - Does dispatching 4 SKU jobs reserve machines, or need an infra ticket?
 # =============================================================================
 

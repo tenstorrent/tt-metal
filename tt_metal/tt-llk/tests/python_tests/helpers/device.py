@@ -5,6 +5,7 @@ import datetime
 import os
 import time
 from enum import Enum, IntEnum
+from functools import lru_cache
 from pathlib import Path
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
@@ -111,6 +112,59 @@ def get_all_cores(trisc_only: bool = False):
 # Constant - list of all valid cores on the chip
 ALL_CORES = get_all_cores()
 TRISC_CORES = get_all_cores(trisc_only=True)
+
+
+@lru_cache(maxsize=None)
+def get_functional_tensix_locations(device_id: int = 0) -> tuple:
+    """Logical coordinates of every Tensix this card actually has, in a stable order.
+
+    "functional_workers" is the post-harvesting list, so this is what is really on
+    the part rather than what the architecture nominally provides. Logical
+    coordinates are already dense over that set and print as "x,y", which is the
+    form TENSIX_LOCATION carries and OnChipCoordinate.create parses back.
+
+    Empty if the card cannot be reached, so a caller that does not need one (the
+    compile phase, a host with no card) is not stopped by asking.
+    """
+    try:
+        device = check_context().devices[device_id]
+        locations = [
+            coordinate.to_str("logical")
+            for coordinate in device.get_block_locations("functional_workers")
+        ]
+    except Exception as err:
+        logger.warning(f"Could not enumerate Tensix cores: {type(err).__name__}: {err}")
+        return ()
+    # Every worker derives its own core from this list independently, so the order
+    # has to come out identical in each process; get_block_locations promises none.
+    return tuple(
+        sorted(locations, key=lambda loc: tuple(int(v) for v in loc.split(",")))
+    )
+
+
+def tensix_location_for_worker(worker_index: int, device_id: int = 0) -> str:
+    """The Tensix an xdist worker owns.
+
+    Two workers sharing a core would silently corrupt each other's results, so
+    running wider than the card is fatal rather than wrapped.
+    """
+    locations = get_functional_tensix_locations(device_id)
+    if not locations:
+        # Falling back keeps a card-less host working; it is only wrong on a part
+        # whose harvesting makes the nominal 8-wide grid untrue, which is exactly
+        # what we could not check here.
+        row, col = divmod(worker_index, 8)
+        return f"{row},{col}"
+    if worker_index >= len(locations):
+        # Also reachable without over-subscribing: xdist numbers a replacement for
+        # a crashed worker above every existing one, so a run that keeps losing
+        # cores climbs into this eventually.
+        raise RuntimeError(
+            f"worker {worker_index} has no Tensix to run on: the card has "
+            f"{len(locations)} functional core(s). Lower --device-jobs, or stop "
+            f"replacing wedged workers, so the total stays under that."
+        )
+    return locations[worker_index]
 
 
 def get_register_store(location="0,0", device_id=0, neo_id=0):

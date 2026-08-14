@@ -22,19 +22,11 @@ build_scanner() {
     make --silent -C "$HERE" scan
 }
 
-# Run pytest over a node-id file in-process, so a huge suite never hits ARG_MAX.
-run_nodeids() {
+# Run pytest over a node-id file (so a huge suite never hits ARG_MAX), under a
+# watchdog that resets the card when every worker stops answering and resumes on
+# what is left. See supervise.py.
+supervise_nodeids() {
     local ids_file="$1"
     shift
-    python3 - "$ids_file" "$@" <<'PY'
-import sys
-
-import pytest
-
-ids = [line.rstrip("\n") for line in open(sys.argv[1]) if line.strip()]
-if not ids:
-    print("ttnop: nothing collected")
-    sys.exit(0)
-sys.exit(pytest.main([*ids, *sys.argv[2:], "-p", "ttnop_plugin", "-p", "no:randomly", "-q"]))
-PY
+    python3 "$HERE/supervise.py" "$ids_file" "$@"
 }

@@ -144,7 +144,11 @@ def print_faces(operand1, tile_shape=None):
 
 
 def run_shell_command(
-    command: str, cwd: str | None = None, stdin_data: str | bytes = None, text=True
+    command: str,
+    cwd: str | None = None,
+    stdin_data: str | bytes = None,
+    text=True,
+    timeout: float | None = None,
 ):
     result = subprocess.run(
         command,
@@ -154,6 +158,7 @@ def run_shell_command(
         input=stdin_data,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
+        timeout=timeout,
     )
 
     if result.returncode != 0:

@@ -52,7 +52,21 @@ if [[ ${#TESTS[@]} -eq 0 && -z "$NODEIDS" ]]; then
     exit 4
 fi
 
+# Resolve while we are still in the caller's directory: sweep.py resolves
+# TTNOP_REPORT_DIR against the pytest process's cwd, which the cd below makes
+# $PYTHON_TESTS, so a relative --report-dir would land a level up from where
+# the caller (and CI's artifact glob) expects it.
+mkdir -p "$REPORT_DIR"
+REPORT_DIR="$(cd "$REPORT_DIR" && pwd)"
 export TTNOP_REPORT_DIR="$REPORT_DIR"
+
+# Where workers publish progress and the supervisor keeps its resume list. Wiped
+# per invocation: a stale done-log would silently skip the whole sweep.
+STATE_DIR="${TTNOP_STATE_DIR:-$REPORT_DIR/.state}"
+rm -rf "$STATE_DIR"
+mkdir -p "$STATE_DIR"
+export TTNOP_STATE_DIR="$STATE_DIR"
+
 build_scanner
 cd "$PYTHON_TESTS"
 
@@ -63,6 +77,20 @@ FILTER_ARGS=()
 [[ -n "$MARKERS" ]] && FILTER_ARGS+=(-m "$MARKERS")
 XDIST_ARGS=()
 [[ "$DEVICE_JOBS" -gt 1 ]] && XDIST_ARGS=(-n "$DEVICE_JOBS")
+# Per-test reporting is priced per case, and a sweep is tens of thousands of them:
+# in run 31714492632 the compile phase alone streamed ~82k lines in six minutes,
+# all of it "SKIPPED (compiling)". pytest-sugar prints two full lines per test
+# under xdist where the default reporter prints one character; classic style drops
+# the progress counter that is redrawn after every one of them; and log_cli (on by
+# default in pytest.ini) replays every loguru record the harness emits. None of it
+# survives as something a human reads afterwards. Progress comes from supervise.py
+# instead, which counts the done-log every few minutes.
+#
+# run_ttsim_regression.sh warns against these overrides, but that applies to its
+# --forked run, where they emptied pytest-forked's child output out of the junit
+# <system-out> it reports from. The sweep is xdist-only and its findings come from
+# report.append() in-process, so nothing here reads back through capture.
+QUIET_ARGS=(-p no:sugar -o console_output_style=classic -o log_cli=false)
 
 echo ">> delays=${TTNOP_DELAYS:-1-100} threads=${TTNOP_THREADS:-unpack,math}" \
      "sites=${TTNOP_SITE_MODE:-sync} filler=${TTNOP_FILLER:-auto}"
@@ -77,14 +105,17 @@ if [[ -z "$NODEIDS" ]]; then
     echo ">> [1/3] compiling"
     started=$SECONDS
     flock "$BUILD_LOCK" \
-        python3 -m pytest --compile-producer -n "$JOBS" -q "${FILTER_ARGS[@]}" "${TESTS[@]}"
+        python3 -m pytest --compile-producer -n "$JOBS" -q \
+            "${QUIET_ARGS[@]}" "${FILTER_ARGS[@]}" "${TESTS[@]}"
     compile_s=$((SECONDS - started))
 
     echo ">> [2/3] collecting"
     NODEIDS="$(mktemp /tmp/ttnop-nodeids-XXXXXX)"
     trap '[[ -n "${COLLECT_TO:-}" ]] || rm -f "$NODEIDS"' EXIT
+    # Quiet here is about the grep as much as the volume: it keeps stdout to bare
+    # node ids, so nothing decorated can sneak past the '::' filter into the list.
     python3 -m pytest --collect-only -q --compile-consumer \
-        "${SPLIT_ARGS[@]}" "${FILTER_ARGS[@]}" "${TESTS[@]}" \
+        "${QUIET_ARGS[@]}" "${SPLIT_ARGS[@]}" "${FILTER_ARGS[@]}" "${TESTS[@]}" \
         | grep '::' > "$NODEIDS" || true
     echo ">> $(grep -c . "$NODEIDS") case(s)"
 fi
@@ -101,8 +132,11 @@ flock 9
 echo ">> [3/3] sweeping"
 started=$SECONDS
 # A found race turns the case red, so a non-zero exit is a result, not a crash:
-# report the timing either way and pass the code on.
+# report the timing either way and pass the code on. The supervisor rides out a
+# wedged card by resetting and resuming, and reports that separately by exiting
+# 75, so a caller can tell "found races" from "the card stopped answering".
 status=0
-run_nodeids "$NODEIDS" --compile-consumer "${XDIST_ARGS[@]}" || status=$?
+supervise_nodeids "$NODEIDS" --compile-consumer \
+    "${QUIET_ARGS[@]}" "${XDIST_ARGS[@]}" || status=$?
 echo ">> timing: compile=${compile_s}s sweep=$((SECONDS - started))s total=${SECONDS}s"
 exit "$status"

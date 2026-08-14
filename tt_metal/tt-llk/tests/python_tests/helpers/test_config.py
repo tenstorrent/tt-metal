@@ -560,11 +560,20 @@ class TestConfig:
     ):
         TestConfig.WORKER_ID = worker_id
 
-        if worker_id != "master":
+        if worker_id == "master":
+            TestConfig.TENSIX_LOCATION = "0,0"
+        elif compile_producer:
+            # Builds ELFs on the CPU and never reads the device, so it is not worth
+            # opening a context per worker to answer a question it does not ask.
             row, col = divmod(int(worker_id[2:]), 8)
             TestConfig.TENSIX_LOCATION = f"{row},{col}"
         else:
-            TestConfig.TENSIX_LOCATION = "0,0"
+            # Ask the card rather than assuming an 8-wide grid: the nominal shape is
+            # not what a harvested part has, and the arithmetic silently produced
+            # coordinates for cores that need not exist.
+            TestConfig.TENSIX_LOCATION = device_module.tensix_location_for_worker(
+                int(worker_id[2:])
+            )
 
         if compile_consumer and compile_producer:
             raise RuntimeError(

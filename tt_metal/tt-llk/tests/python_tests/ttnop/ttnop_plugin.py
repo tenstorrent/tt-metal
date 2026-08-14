@@ -19,6 +19,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+import heartbeat
 import pytest
 import report
 import scanner
@@ -37,6 +38,16 @@ from ttexalens.tt_exalens_lib import read_word_from_device, write_words_to_devic
 # explicitly or they would escape the per-variant handler and fail the whole item.
 _SKIPPED = (pytest.skip.Exception, pytest.xfail.Exception)
 _FAILED = pytest.fail.Exception
+
+_writer = None
+
+
+def _hb() -> heartbeat.Writer:
+    """One progress writer per process; a no-op unless a supervisor is watching."""
+    global _writer
+    if _writer is None:
+        _writer = heartbeat.Writer()
+    return _writer
 
 
 @contextmanager
@@ -141,7 +152,40 @@ class Perturber:
 
     # -- the runtime the sweep loop drives ---------------------------------
 
+    def beat(self, variant=None) -> None:
+        """Say what we are about to attempt, before we attempt it.
+
+        Published ahead of the call because the call is what may never return:
+        afterwards is too late to name the variant that wedged the card, and
+        naming it is the whole finding.
+        """
+        writer = _hb()
+        if not writer.enabled:
+            return
+        case = self._item.nodeid if self._item is not None else ""
+        if variant is None:
+            writer.beat(case)
+            return
+        scan = self.scans.get(variant.thread)
+        writer.beat(
+            case,
+            {
+                "thread": variant.thread,
+                "site_index": variant.site.index,
+                "addr": variant.site.addr,
+                "op": variant.site.op,
+                "filler": variant.filler,
+                "filler_word": variant.filler_word,
+                "delay": variant.delay,
+                "label": variant.label(),
+                # Kept so the supervisor can still resolve the inline chain: it
+                # renders the finding after the run it belonged to is dead.
+                "elf": getattr(scan, "elf", "") if scan is not None else "",
+            },
+        )
+
     def run(self, variant):
+        self.beat(variant)
         # The ELF is already in L1 and the cores are idle, so arming is a couple of
         # word writes. Leaving the image alone is what keeps a 100-delay sweep cheap:
         # a reload per variant would cost three ELFs to buy the same one instruction.
@@ -290,6 +334,9 @@ def pytest_runtest_call(item):
     perturber = _get()
     perturber.baseline = _Baseline()
     unwatch = perturber.watch_baseline()
+    # The clean pass touches the device too, so it needs covering before the
+    # first variant beat does.
+    _hb().beat(item.nodeid)
     try:
         outcome = yield
     finally:
@@ -297,8 +344,12 @@ def pytest_runtest_call(item):
 
     # A test that was already red tells us nothing about timing.
     if outcome.excinfo is not None or not perturber.baseline.worth_sweeping():
+        _hb().mark_done(item.nodeid)
         return
     failures = perturber.sweep(item)
+    # Deliberately after sweep() rather than in a finally: a case that died with
+    # the device must stay on the resume list, not be recorded as covered.
+    _hb().mark_done(item.nodeid)
     if failures:
         # Hang the finding on the case itself so a sweep reads like an ordinary
         # pytest run: the case goes red and names the variant that broke it.
@@ -312,7 +363,39 @@ def pytest_runtest_call(item):
         )
 
 
+# The argument has to be named `report` for pytest to bind it, which shadows the
+# report module for the body of this hook; nothing here needs that module.
+def pytest_runtest_logreport(report):
+    # The junit file is assembled from these lines rather than from pytest's own
+    # --junit-xml, which lands only at session end; the supervisor kills the session
+    # when a core wedges, so that file would be missing on exactly the runs worth
+    # reading. Setup and teardown are only worth a line when they went wrong.
+    if not (
+        report.when == "call"
+        or report.outcome == "failed"
+        or (report.when == "setup" and report.outcome == "skipped")
+    ):
+        return
+    _hb().record_result(
+        report.nodeid,
+        report.outcome,
+        getattr(report, "duration", 0.0),
+        str(report.longrepr or ""),
+    )
+
+
+def pytest_runtest_logfinish(nodeid, location):
+    # Once per item, whichever way it ended, and after teardown has let go of the
+    # device. From here until the next case starts the worker owns nothing, so the
+    # supervisor must not read the gap as a stall — at the tail of a sweep that
+    # gap is however long the slowest worker still has left to run.
+    _hb().idle()
+
+
 def pytest_sessionfinish(session, exitstatus):
+    # Drop out of the live set first: a worker that ran out of work is not a
+    # worker that stopped answering, and the supervisor must not confuse them.
+    _hb().finish()
     # Workers each swept part of the suite into the shared JSONL; the master renders it.
     if hasattr(session.config, "workerinput"):
         return
