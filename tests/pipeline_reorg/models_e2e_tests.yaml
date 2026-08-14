@@ -1181,7 +1181,7 @@
   model_family: Wan
   skus:
     bh_sc4:
-      timeout: 40
+      timeout: 80
       tier: 1
       release_ready: true
   owner_id: U0ATR08RCQ0 # James Lee
