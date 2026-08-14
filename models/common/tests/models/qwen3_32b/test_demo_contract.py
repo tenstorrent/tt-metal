@@ -92,7 +92,24 @@ def test_cross_cardinality_experiment_is_one_canonical_exact_token_node():
     assert "assert_cross_cardinality_consistency" not in source
     assert "ma.disable_batched_prefill = False" in source
     assert "ma.disable_batched_prefill = True" in source
-    assert "for request_id, prompt, seed in zip" in source
+    control_cases = next(
+        node.value
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "control_cases" for target in node.targets)
+    )
+    assert isinstance(control_cases, ast.ListComp)
+    assert ast.unparse(control_cases.elt).startswith(
+        "prepare_requests(sequential_executor, [prompt], [seed], batched_candidate=False)"
+    )
+    assert len(control_cases.generators) == 1
+    generator = control_cases.generators[0]
+    assert isinstance(generator.target, ast.Tuple)
+    assert tuple(element.id for element in generator.target.elts if isinstance(element, ast.Name)) == (
+        "prompt",
+        "seed",
+    )
+    assert ast.unparse(generator.iter) == "zip(prompts, _CROSS_CARDINALITY_SEEDS, strict=True)"
     assert "first 2/4 requests in one Q128 batch" in source
     assert ast.literal_eval(
         next(
