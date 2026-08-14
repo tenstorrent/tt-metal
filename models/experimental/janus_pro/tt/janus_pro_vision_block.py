@@ -15,8 +15,8 @@ import ttnn
 
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.janus_pro.tt.janus_pro_image_transformer import TtJanusProImageTransformer
+from models.experimental.janus_pro.tt.janus_pro_layernorm import TtJanusProLayerNorm
 from models.experimental.janus_pro.tt.janus_pro_vision_embedding import TtJanusProVisionEmbeddings
-from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
 
 
 class TtJanusProVisionModel(LightweightModule):
@@ -62,11 +62,12 @@ class TtJanusProVisionModel(LightweightModule):
             layers=self.layers,
         )
 
-        self.ln_post = TtLayerNorm(
+        self.ln_post = TtJanusProLayerNorm(
             device=mesh_device,
             dim=self.width,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}ln_post.",
+            configuration=configuration,
             weight_cache_path=configuration.weight_cache_path(dtype),
             weight_dtype=dtype,
             eps=configuration.norm_eps,
@@ -83,7 +84,10 @@ class TtJanusProVisionModel(LightweightModule):
         # SigLIP vision uses full bidirectional attention; there is no attention mask
         # (an all-zeros additive mask would be a no-op), so SDPA runs without one.
         x = self.encoder(x, mask=None)
-        return self.ln_post(x)
+        # Sharded out, like every other norm in the tower: the residual arrives block-sharded and
+        # the aligner's projection reads that layout, so asking for interleaved would only add an
+        # unshard.
+        return self.ln_post(x, out_sharded=True)
 
     def forward_device(self, patches: ttnn.Tensor) -> ttnn.Tensor:
         """Same as :meth:`forward` from patches already on device; traceable end to end."""
