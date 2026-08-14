@@ -427,6 +427,23 @@ def run(input_queue, output_queue, config: SweepsConfig):
                     output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None, None])
                     continue
 
+                # Probe the freshly opened device ONCE, before any vector is attributed to it.
+                # The canary was previously reactive -- it ran only after a vector failed -- so a
+                # device that cannot execute kernels was discovered only after it had already
+                # manufactured failures. Run 31771328869 is the case: on 5 of 32 chips the
+                # eltwise_binary_no_bcast image in L1 did not match the ELF that 27 other chips
+                # loaded, the compute never produced tiles, and the first add of the job hung the
+                # whole mesh. ttnn.add IS that kernel, so the probe exercises exactly the path that
+                # was broken, for ~1 ms once per open on a healthy device.
+                if cur_device is not None:
+                    healthy, detail = device_canary(cur_device)
+                    if not healthy:
+                        logger.error(f"Device canary FAILED right after opening for {module_name}: {detail}")
+                        cur_device = None
+                        cur_module = None  # a later vector should reopen rather than reuse this device
+                        output_queue.put([False, f"device unusable at open: {detail}", None, None, None, detail])
+                        continue
+
             test_vector = deserialize_vector_structured(test_vector)
             try:
                 if config.measure_perf_with_cache:
