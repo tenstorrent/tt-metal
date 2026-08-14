@@ -1545,7 +1545,14 @@ static std::map<std::string, std::string> build_kernel_defines(
                 EMULE_NUM_CBS,
                 MetalContext::instance().hal().get_arch_num_circular_buffers());
             const auto& dfb_cfg = dfb_impl->config;
-            tile_sizes[slot] = dfb_cfg.entry_size;
+            // Derived like the CB pass above, not from entry_size: that is the NOC-facing entry
+            // stride, which typecast deliberately aligns, and it belongs to the sync state only.
+            // Invalid format is skipped for the same reason set_dfb_data_fmt_and_tile skips it.
+            if (dfb_cfg.data_format == tt::DataFormat::Invalid) {
+                continue;
+            }
+            tile_sizes[slot] = dfb_cfg.tile.has_value() ? dfb_cfg.tile->get_tile_size(dfb_cfg.data_format)
+                                                        : Tile().get_tile_size(dfb_cfg.data_format);
             cb_formats[slot] = static_cast<uint8_t>(dfb_cfg.data_format);
             if (dfb_cfg.tile.has_value()) {
                 tile_r_dim[slot] = dfb_cfg.tile->get_height();
