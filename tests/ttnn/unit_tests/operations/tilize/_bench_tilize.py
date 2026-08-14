@@ -430,3 +430,57 @@ def test_bench_padded_into_local_shard(device, zero_copy):
         levers=dict(zero_copy=zero_copy),
         label=f"padded_into_local_shard/zero_copy={zero_copy}",
     )
+
+
+# --- Refinement 3: the DM levers on the interleaved aligned path -------------
+# Ceiling re-target (measured on this box with the `dram_saturation` example, a
+# pure DRAM->DRAM copy of the SAME tensor with no compute kernel at all):
+#   (a) 2048x2048 bf16  87,710 ns @64 cores (191.3 GB/s) / 86,943 @32 (193.0)
+#   (b) 32x16384  bf16  12,078 ns @64 cores (173.6 GB/s) / 11,550 @32 (181.6)
+#   (c) 8192x1024 bf16 174,772 ns @64 cores (192.0 GB/s)
+# An interleaved DRAM->DRAM stream saturates at ~192 GB/s on this box, NOT at the
+# 288 GB/s datasheet peak — that is the number the achieved ratio is measured
+# against from here on.
+
+
+@pytest.mark.parametrize("regime", list(SHAPES))
+@pytest.mark.parametrize("dtype_name", list(_DTYPES))
+def test_bench_lever_pipeline_off(device, regime, dtype_name):
+    """Refinement 3 / master.md C16+B8 enabler: OFF = the Phase-0 blocking rule,
+    which lands ONE block per core on a grid-filling shape so read / compute /
+    write cannot overlap."""
+    _measure(
+        device,
+        SHAPES[regime],
+        _DTYPES[dtype_name],
+        levers=dict(pipeline=0),
+        label=f"pipeline=0/{regime}/{dtype_name}",
+    )
+
+
+@pytest.mark.parametrize("blocks_per_core", [1, 2, 4, 8, 16], ids=lambda v: f"bpc{v}")
+@pytest.mark.parametrize("dtype_name", list(_DTYPES))
+def test_bench_sweep_pipeline_blocks(device, blocks_per_core, dtype_name, monkeypatch):
+    """Sweep PIPELINE_BLOCKS_PER_CORE on the grid-filling square — the one regime
+    the knob moves. More blocks = deeper overlap but a smaller read transfer."""
+    monkeypatch.setattr(pd, "PIPELINE_BLOCKS_PER_CORE", blocks_per_core)
+    _measure(
+        device,
+        SHAPES["a_square"],
+        _DTYPES[dtype_name],
+        label=f"sweep_bpc={blocks_per_core}/a_square/{dtype_name}",
+    )
+
+
+@pytest.mark.parametrize("min_read", [128, 256, 512, 1024], ids=lambda v: f"min{v}")
+def test_bench_sweep_pipeline_min_read(device, min_read, monkeypatch):
+    """Sweep MIN_PIPELINE_READ_BYTES on the wide/short shape — the regime the
+    transfer-size cap is protecting (its 512 B read is already at the floor, so
+    lowering the cap is the only way to give it a second block per core)."""
+    monkeypatch.setattr(pd, "MIN_PIPELINE_READ_BYTES", min_read)
+    _measure(
+        device,
+        SHAPES["b_wide_short"],
+        ttnn.bfloat16,
+        label=f"sweep_min_read={min_read}/b_wide_short/bf16",
+    )

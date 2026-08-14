@@ -74,7 +74,7 @@ def test_grid_fill_on_wide_short_shape(device):
 
     nt_h, wt = 1, 16384 // 32
     in_tile_bytes = out_tile_bytes = 32 * 32 * 2  # bf16
-    wt_chunk, n_chunks, num_blocks = derive_blocking(nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, 2)
+    wt_chunk, n_chunks, num_blocks = derive_blocking(nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, 2, 32)
 
     assert num_blocks >= num_cores, f"only {num_blocks} blocks for {num_cores} cores — the grid collapses"
     assert wt_chunk * n_chunks == wt, "WT_CHUNK must divide WT exactly (one compute kernel, no cliff width)"
@@ -88,7 +88,7 @@ def test_tall_shape_keeps_the_pure_height_split(device):
 
     nt_h, wt = 2048 // 32 * 32, 2048 // 32  # [1,1,65536,2048]-ish: NT_H >> cores
     in_tile_bytes = out_tile_bytes = 32 * 32 * 2
-    wt_chunk, n_chunks, _ = derive_blocking(nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, 2)
+    wt_chunk, n_chunks, _ = derive_blocking(nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, 2, 32)
 
     assert n_chunks == 1 and wt_chunk == wt
 
@@ -102,7 +102,7 @@ def test_cb_footprint_is_bounded_in_w(device):
     in_tile_bytes = out_tile_bytes = 32 * 32 * 4  # fp32 — the fatter page
 
     for w in (64, 2048, 16384, 65536):
-        wt_chunk, _, _ = derive_blocking(1, w // 32, in_tile_bytes, out_tile_bytes, num_cores, 2)
+        wt_chunk, _, _ = derive_blocking(1, w // 32, in_tile_bytes, out_tile_bytes, num_cores, 2, 32)
         # cb_bytes() is the ONE source for the footprint — asserting against a
         # hand-rewritten formula here would let the two drift apart.
         l1 = cb_bytes(2, wt_chunk, in_tile_bytes, out_tile_bytes)

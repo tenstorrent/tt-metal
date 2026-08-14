@@ -64,6 +64,22 @@ NT_BLK = 1
 # 0.94x-3.85x, i.e. parity at worst).
 MIN_STREAM_READ_BYTES = 256
 
+# --- pipeline depth: how many BLOCKS a core should get (Refinement 3) --------
+# A core that owns exactly ONE block cannot overlap anything: it reads the whole
+# block, tilizes it, then writes it, strictly serialized — which is why Phase 0
+# measured the depth-2 CB (master.md C16) as a no-payoff lever on the
+# grid-filling square. There was no second block to work on. Splitting W finer
+# hands each core several blocks so read(i+1) / compute(i) / write(i-1) run
+# concurrently and the tilize LLK disappears into the DM shadow.
+#
+# The cost is a SMALLER per-row read transfer (master.md B5), so the split is
+# capped: never chunk W so finely that a source-row transfer drops below
+# MIN_PIPELINE_READ_BYTES. Both are named knobs with one source here; the grid
+# fill floor and the L1 ceiling still dominate them (this only ever ADDS chunks
+# to a shape that would otherwise land one block per core).
+PIPELINE_BLOCKS_PER_CORE = 4
+MIN_PIPELINE_READ_BYTES = 1024
+
 # --- CB indices (semantic names; the numeric slot is just a buffer index) ---
 CB_INPUT_STICKS = 0  # reader -> compute  (row-major sticks, tile-sized pages)
 CB_OUTPUT_TILES = 16  # compute -> writer (tiled pages)
@@ -118,6 +134,14 @@ W_REGION = 1
 #   xfer_gate     0 -> alias the destination shard even when the read transfer it
 #                      pins is below MIN_STREAM_READ_BYTES (the pre-Refinement-2
 #                      behaviour: prefer local placement unconditionally).
+#   pipeline      0 -> Phase-0 blocking: chunk W only as far as the grid-fill
+#                      floor, so a grid-filling shape lands ONE block per core
+#                      and read/compute/write cannot overlap (Refinement 3;
+#                      this is what made master.md C16 read as a no-payoff).
+#   read_trid     0 -> one plain read barrier per block (no double-issue), i.e.
+#                      the NoC drains between blocks (master.md B8 off arm).
+#   read_vc       0 -> every reader issues on the default read VC
+#                      (master.md B10 off arm).
 #   zero_copy     0 -> never alias a CB on a resident L1 shard: take the
 #                     TensorAccessor path on both sides and the generic block
 #                     split over the whole grid, i.e. re-read/re-write the local
@@ -135,6 +159,9 @@ LEVERS = {
     "double_buffer": 1,
     "zero_copy": 1,
     "xfer_gate": 1,
+    "pipeline": 1,
+    "read_trid": 1,
+    "read_vc": 1,
 }
 
 # --- classification ablation (perf-only; op_design.md §9.1) ------------------
@@ -201,17 +228,31 @@ def derive_shard_blocking(shard_wt, cap):
     return shard_wt // n_chunks, n_chunks
 
 
-def derive_blocking(nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, cb_depth):
+def read_bytes_per_stick(wt_chunk, in_tile_bytes, tile_h):
+    """Bytes ONE source-row transfer moves for a ``WT_CHUNK``-wide block.
+
+    THE single source for the transfer-size side of every blocking decision
+    (master.md B5 / B0): the reader issues one transfer of this many bytes per
+    source stick, so it is what a finer W split actually costs.
+    """
+    return wt_chunk * in_tile_bytes // tile_h
+
+
+def derive_blocking(nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, cb_depth, tile_h, pipeline=True):
     """The three block knobs — single source of truth (op_design.md §1.4).
 
     Returns ``(wt_chunk, n_chunks, num_blocks)``.
 
     * ``WT_CHUNK`` is the COARSEST chunk that fits: the whole tile-row width
-      unless the L1 ceiling or the grid-fill floor forces it smaller.
+      unless the L1 ceiling, the grid-fill floor or the pipeline floor forces it
+      smaller.
     * ``n_chunks`` divides ``WT`` exactly, so every block has the same width and
       there is exactly one compute kernel (no cliff-width variant).
-    * ``NT_H >= NUM_CORES`` implies ``n_chunks == 1``, i.e. the wide-shape
-      machinery is inert on tall shapes (byte-identical to a pure height split).
+    * ``NT_H >= NUM_CORES * PIPELINE_BLOCKS_PER_CORE`` implies ``n_chunks == 1``,
+      i.e. the wide-shape machinery is inert on tall shapes (byte-identical to a
+      pure height split, which already gives every core several blocks).
+    * ``pipeline`` is the Refinement-3 knob (lever ``pipeline``); False reproduces
+      the Phase-0 "one block per core is enough" rule exactly.
     """
     # Bytes both CBs hold per tile-column of chunk width — read from cb_bytes()
     # via wt_cap() so the ceiling can never drift from the CB sizing below (it
@@ -220,6 +261,12 @@ def derive_blocking(nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, cb_depth
     cap = wt_cap(cb_depth, in_tile_bytes, out_tile_bytes)
 
     n_want = max(1, _div_up(num_cores, nt_h))  # grid-fill floor
+    if pipeline:
+        # Pipeline floor: enough blocks per core for read/compute/write to
+        # overlap — but never at the price of a read transfer below the B5 floor.
+        n_pipeline = _div_up(num_cores * PIPELINE_BLOCKS_PER_CORE, nt_h)
+        n_transfer_cap = max(1, read_bytes_per_stick(wt, in_tile_bytes, tile_h) // MIN_PIPELINE_READ_BYTES)
+        n_want = max(n_want, min(n_pipeline, n_transfer_cap))
     n_want = max(n_want, _div_up(wt, cap))  # L1 ceiling
     n_want = min(n_want, wt)  # can never split W finer than one tile-column
 
@@ -479,7 +526,14 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         work_mode = W_BLOCKS
         if LEVERS["w_split"]:
             wt_chunk, n_chunks, num_blocks_total = derive_blocking(
-                nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores_available, cb_depth
+                nt_h,
+                wt,
+                in_tile_bytes,
+                out_tile_bytes,
+                num_cores_available,
+                cb_depth,
+                tile_h,
+                pipeline=bool(LEVERS["pipeline"]),
             )
         else:
             # w_split OFF — the pure height split (op_design.md §1.3 candidate 2).

@@ -129,7 +129,7 @@ def test_b11_every_transaction_is_dram_aligned(device, dtype, w):
     elem = 2 if dtype == ttnn.bfloat16 else 4
     grid = device.compute_with_storage_grid_size()
     in_tile_bytes = out_tile_bytes = 32 * 32 * elem
-    wt_chunk, _, _ = pd.derive_blocking(1, w // 32, in_tile_bytes, out_tile_bytes, grid.x * grid.y, 2)
+    wt_chunk, _, _ = pd.derive_blocking(1, w // 32, in_tile_bytes, out_tile_bytes, grid.x * grid.y, 2, 32)
 
     row_bytes = wt_chunk * 32 * elem
     assert row_bytes % ttnn.get_dram_alignment() == 0
@@ -163,6 +163,6 @@ def test_a4_no_cliff_core_width(device, w, nt_h):
     grid = device.compute_with_storage_grid_size()
     tile_bytes = 32 * 32 * 2
     wt = w // 32
-    wt_chunk, n_chunks, num_blocks = pd.derive_blocking(nt_h, wt, tile_bytes, tile_bytes, grid.x * grid.y, 2)
+    wt_chunk, n_chunks, num_blocks = pd.derive_blocking(nt_h, wt, tile_bytes, tile_bytes, grid.x * grid.y, 2, 32)
     assert wt_chunk * n_chunks == wt
     assert num_blocks == nt_h * n_chunks

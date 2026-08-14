@@ -99,3 +99,18 @@
 {"source":"run_safe_pytest","pid":260099,"started_at_ms":1786717514522,"wait_ms":1,"run_ms":9696,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
 {"source":"run_safe_pytest","pid":260607,"started_at_ms":1786717555624,"wait_ms":2,"run_ms":11224,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
 {"source":"run_safe_pytest","pid":261811,"started_at_ms":1786717716456,"wait_ms":2,"run_ms":14217,"test_path":"tests/ttnn/unit_tests/operations/tilize/","exit_code":0}
+{"event": "phase", "phase": "refinement_2", "state": "end", "at_ms": 1786717889677}
+{"event": "phase", "phase": "refinement_2_build", "state": "start", "at_ms": 1786717890107}
+{"event": "phase", "phase": "refinement_2_build", "state": "end", "at_ms": 1786717894171}
+{"event": "phase", "phase": "refinement_2_golden", "state": "start", "at_ms": 1786717894171}
+{"source":"eval_test_runner","pid":264782,"started_at_ms":1786717894174,"wait_ms":2789,"run_ms":55544,"test_path":"eval/golden_tests/tilize/","exit_code":0,"precompile_mode":"farm","precompile_reason":"ok"}
+{"event": "phase", "phase": "refinement_2_golden", "state": "end", "at_ms": 1786717952509}
+{"source":"run_safe_pytest","pid":267573,"started_at_ms":1786717958147,"wait_ms":2,"run_ms":13921,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize.py","exit_code":0}
+{"event": "phase", "phase": "refinement_3", "state": "start", "at_ms": 1786717972082}
+{"source":"run_safe_pytest","pid":269242,"started_at_ms":1786718167867,"wait_ms":2,"run_ms":10755,"test_path":"tests/ttnn/unit_tests/operations/examples/test_dram_saturation.py::test_dram_saturation_device_perf","exit_code":0}
+{"source":"run_safe_pytest","pid":269749,"started_at_ms":1786718203214,"wait_ms":2,"run_ms":9644,"test_path":"tests/ttnn/unit_tests/operations/examples/test_dram_saturation.py::test_dram_saturation_device_perf","exit_code":0}
+{"source":"run_safe_pytest","pid":270270,"started_at_ms":1786718225039,"wait_ms":2,"run_ms":9843,"test_path":"tests/ttnn/unit_tests/operations/examples/test_dram_saturation.py::test_dram_saturation_device_perf","exit_code":0}
+{"source":"run_safe_pytest","pid":270664,"started_at_ms":1786718252925,"wait_ms":2,"run_ms":10478,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":271747,"started_at_ms":1786718407933,"wait_ms":2,"run_ms":12168,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":272461,"started_at_ms":1786718469561,"wait_ms":2,"run_ms":11550,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":273022,"started_at_ms":1786718496258,"wait_ms":2,"run_ms":16479,"test_path":"tests/ttnn/unit_tests/operations/tilize/","exit_code":0}
