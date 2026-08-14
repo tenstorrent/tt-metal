@@ -29,12 +29,15 @@ from pathlib import Path
 
 import ttnn
 
+from ttnn.operations._op_contract import SupportRefusal
+
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
 
 # --- fixed hardware / library facts (not knobs) ----------------------------
 DEFAULT_TILE_WIDTH = 32  # a tile is always 32 wide
 NUM_CIRCULAR_BUFFERS = 32
+NOC_ALIGN_BYTES = 32  # transfer granularity a split gather has to keep
 
 # --- blocking-model constants (single source; every knob derives from these)-
 CB_L1_BUDGET = 1_048_576  # bytes of L1 reserved for the two streaming CBs
@@ -213,15 +216,22 @@ def shard_side_plan(tensor, padded_shape, tile_h, tile_w):
     cannot back a zero-copy CB (op_design.md §5.2 ``side_regime``).
 
     Returns ``{"cores", "shard_ht", "shard_wt", "regions"}`` where ``regions[i]``
-    is shard *i*'s ``(tile_row0, tile_col0)`` in the folded (tile-row, tile-col)
-    grid and ``cores[i]`` is the core that holds it. Both legacy 2-D and ND
-    specs go through the SAME derivation: a legacy ShardSpec is exactly an ND
+    is shard *i*'s ``(tile_row0, tile_col0, tile_rows)`` in the folded (tile-row,
+    tile-col) grid and ``cores[i]`` is the core that holds it. Both legacy 2-D and
+    ND specs go through the SAME derivation: a legacy ShardSpec is exactly an ND
     spec whose shard shape has rank 2 over the folded 2-D view of the tensor,
     which ``memory_config.nd_shard_spec`` already reports.
 
-    None (→ the accessor path) whenever the shard is not a whole number of tiles,
-    does not divide the tensor evenly, or does not fold to a CONTIGUOUS band of
-    tile-rows. Those are the uneven / padded shard grids a later refinement owns.
+    The grid may be UNEVEN along the split ROW dim (Refinement 2): the last shard
+    then carries fewer tile-rows, which is why a region records its own
+    ``tile_rows`` and the per-core block count is derived from it rather than from
+    a single uniform shard height. ``shard_ht`` stays the ALLOCATED shard height —
+    that is what the aliased CB's ring spans.
+
+    None (→ the accessor path) whenever a shard is not a whole number of tile-rows,
+    the W dim does not divide exactly (``WT_CHUNK`` is one compile-time value for
+    every core, so shards may not differ in width), the shard does not fold to a
+    CONTIGUOUS band of tile-rows, or a core would hold more than one shard.
     """
     memory_config = tensor.memory_config()
     if not memory_config.is_sharded():
@@ -243,12 +253,16 @@ def shard_side_plan(tensor, padded_shape, tile_h, tile_w):
     else:
         return None
 
-    # whole tiles, and an even split on every dim
-    if shard[-2] % tile_h or shard[-1] % tile_w:
+    # Whole tile-rows, a tile-multiple width, and an exact split in W.
+    if any(s <= 0 for s in shard):
         return None
-    if any(s <= 0 or r % s for r, s in zip(ref, shard)):
+    if shard[-1] % tile_w or ref[-1] % shard[-1]:
         return None
-    chunks = [r // s for r, s in zip(ref, shard)]
+    rows_per_shard = _prod(shard[:-1])
+    if rows_per_shard % tile_h:
+        return None
+    # The ROW dims may split UNEVENLY (the last shard is short); W may not.
+    chunks = [_div_up(r, s) for r, s in zip(ref, shard)]
 
     # A shard's folded row range must be contiguous: once a leading dim is split,
     # every inner ROW dim has to be whole (the W dim may always split).
@@ -265,23 +279,55 @@ def shard_side_plan(tensor, padded_shape, tile_h, tile_w):
             idx.append(rem % c)
             rem //= c
         idx.reverse()
-        rows = 0
+        rows, extent = 0, 1
         for d in range(len(ref) - 1):  # every ROW dim (0 .. N-2)
             rows += idx[d] * shard[d] * _prod(ref[d + 1 : len(ref) - 1])
-        if rows % tile_h:
+            # What this shard actually covers in dim d — short on the last chunk
+            # of an unevenly split dim, the whole dim otherwise (the contiguity
+            # rule above allows at most one split row dim, so the product is one
+            # contiguous band of folded rows).
+            extent *= min(shard[d], ref[d] - idx[d] * shard[d])
+        if rows % tile_h or extent % tile_h:
             return None
-        regions.append((rows // tile_h, (idx[-1] * shard[-1]) // tile_w))
+        regions.append((rows // tile_h, (idx[-1] * shard[-1]) // tile_w, extent // tile_h))
 
     cores = list(ttnn.get_optimal_worker_cores_for_sharded_tensor(tensor))  # shard order
-    if len(cores) != n_shards:
-        return None
+    if len(cores) != n_shards or len({(c.x, c.y) for c in cores}) != n_shards:
+        return None  # a core holding two shards needs two region assignments
 
     return {
         "cores": cores,
-        "shard_ht": _prod(shard[:-1]) // tile_h,
+        "shard_ht": rows_per_shard // tile_h,  # ALLOCATED height (the CB ring)
         "shard_wt": shard[-1] // tile_w,
         "regions": regions,
     }
+
+
+def src_page_geometry(tensor, padded_shape, elem_bytes):
+    """``(page_bytes, pages_per_row)`` for a ROW_MAJOR source read through a
+    ``TensorAccessor`` — THE single source for the reader's page arithmetic
+    (op_design.md §5.2, the cross-spec L1 gather).
+
+    A ROW_MAJOR page is one row (stick) when the tensor is interleaved **or** its
+    shard spans the whole row: ``pages_per_row == 1`` and the page id IS the
+    folded row index (the Phase-0 identity). A shard NARROWER than the row
+    (WIDTH / BLOCK sharded, or an ND shard split on the last dim) makes a page one
+    SHARD row, so a row is ``ceil(W / shard_W)`` pages and a span of bytes inside
+    one row may cross page boundaries — which is what ``read_row_span()`` in the
+    reader splits. Derived from the shard SPEC (authoritative) rather than from the
+    buffer's aligned page size, which can round a page up and mis-count the row.
+    """
+    row_elems = int(padded_shape[-1])
+    memory_config = tensor.memory_config()
+    if not memory_config.is_sharded():
+        return row_elems * elem_bytes, 1
+    nd_spec = getattr(memory_config, "nd_shard_spec", None)
+    if nd_spec is None:
+        return row_elems * elem_bytes, 1
+    shard_w = int(nd_spec.shard_shape[-1])
+    if shard_w <= 0 or shard_w >= row_elems:
+        return row_elems * elem_bytes, 1
+    return shard_w * elem_bytes, _div_up(row_elems, shard_w)
 
 
 def _same_placement(a, b):
@@ -344,14 +390,22 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
 
     # ---- 2a. placement regime, per side (op_design.md §5.2) ---------------
     # A resident L1 shard IS the per-core block: it pins the cores, the per-core
-    # tile-row range and the W extent. Padding materializes the fill INTO the
-    # input CB, so a padded call can never alias the input tensor; single-core is
-    # refused for a sharded call by validate() (a shard is inherently multi-core)
-    # and the A0 off-arm forces one core, so both fall back to the accessor path.
-    shard_eligible = (
-        plan.use_multicore and bool(LEVERS["multicore"]) and bool(LEVERS["zero_copy"]) and not plan.has_pad_region
+    # tile-row range and the W extent. Single-core is refused for a sharded call by
+    # validate() (a shard is inherently multi-core) and the A0 off-arm forces one
+    # core, so both fall back to the accessor path.
+    #
+    # Eligibility is PER SIDE, because the one thing padding rules out is aliasing
+    # the INPUT: the fill is materialized into the input CB, and that CB is the
+    # source tensor itself on the zero-copy path. The OUTPUT side is untouched by
+    # the fill — compute packs whole (already padded) tiles — so a padded call
+    # still packs straight into a resident destination shard instead of writing it
+    # over the NoC.
+    shard_eligible = plan.use_multicore and bool(LEVERS["multicore"]) and bool(LEVERS["zero_copy"])
+    in_shard = (
+        shard_side_plan(input_tensor, plan.in_padded, tile_h, tile_w)
+        if (shard_eligible and not plan.has_pad_region)
+        else None
     )
-    in_shard = shard_side_plan(input_tensor, plan.in_padded, tile_h, tile_w) if shard_eligible else None
     out_shard = shard_side_plan(output_tensor, target, tile_h, tile_w) if shard_eligible else None
 
     if in_shard is not None and out_shard is not None and _same_placement(in_shard, out_shard):
@@ -422,8 +476,10 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # launch only where the data is). Each owns its own shard's tile region.
         cores = shard["cores"]
         all_cores = ttnn.CoreRangeSet({ttnn.CoreRange(core, core) for core in cores})
-        blocks_per_core_shard = shard["shard_ht"] * n_chunks
-        num_blocks_total = blocks_per_core_shard * len(cores)
+        # Per shard, not per grid: an unevenly split grid gives its last shard
+        # fewer tile-rows, so the block count comes from that region's own extent.
+        blocks_per_shard = [ht * n_chunks for (_, _, ht) in shard["regions"]]
+        num_blocks_total = sum(blocks_per_shard)
 
     # ========== 3. CIRCULAR BUFFERS =======================================
     # A streaming CB is CB_DEPTH * NT_BLK * WT_CHUNK pages — a function of the
@@ -485,7 +541,30 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         )
 
     # ========== 4. KERNELS =================================================
-    regime = R_PAD if (plan.has_pad_region or not LEVERS["regime_select"]) else R_ALIGNED
+    # Source page geometry for the accessor path. `src_row_pages > 1` is the
+    # cross-spec gather (the source shard is narrower than a row), which the
+    # library reader cannot express — its contract walks consecutive page ids as
+    # consecutive sticks — so those calls take the general per-row loop, where an
+    # aligned source simply fills nothing (valid_bytes == row_bytes).
+    src_page_bytes, src_row_pages = src_page_geometry(input_tensor, plan.in_padded, elem_in)
+    if in_placement == P_LOCAL_SHARD:
+        src_page_bytes, src_row_pages = in_tile_bytes, 1  # no accessor read at all
+    paged_src = src_row_pages > 1
+    if paged_src and src_page_bytes % NOC_ALIGN_BYTES:
+        # A row is gathered as one transfer per page slice, so every split has to
+        # land on a NoC-alignable boundary: the slice lengths are
+        # `page_bytes - (multiple of 32)`, which stays 32B-aligned only when the
+        # page itself is. Every TILE-width-aligned shard satisfies this for every
+        # supported dtype (32 elements is 32 B at 1 byte/elem and 64 B at 2), so
+        # this only fires for a source shard whose width is not a multiple of 32
+        # BYTES — a geometry a TILE tensor cannot even hold. Refuse it rather than
+        # return a silently shifted gather.
+        raise SupportRefusal(
+            f"tilize: cross-core gather of a ROW_MAJOR shard needs a "
+            f"{NOC_ALIGN_BYTES}-byte-aligned page; this source shard's row is "
+            f"{src_page_bytes} B ({src_row_pages} pages per tensor row)"
+        )
+    regime = R_PAD if (plan.has_pad_region or paged_src or not LEVERS["regime_select"]) else R_ALIGNED
 
     in_shape = list(plan.in_shape)
     h_in = in_shape[-2]
@@ -509,6 +588,8 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         w_in_bytes,
         elem_in,
         ABLATE["dm"],
+        src_page_bytes,
+        src_row_pages,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
@@ -544,8 +625,8 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     start_block = 0
     for shard_index, core in enumerate(cores):
         if work_mode == W_REGION:
-            blocks_this_core = blocks_per_core_shard
-            tile_row0, tile_col0 = shard["regions"][shard_index]
+            blocks_this_core = blocks_per_shard[shard_index]
+            tile_row0, tile_col0, _ = shard["regions"][shard_index]
         else:
             if core_group_1.contains(core):
                 blocks_this_core = blocks_per_core_1

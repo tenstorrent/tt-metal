@@ -12,6 +12,11 @@
 //
 //   R_ALIGNED — the hot path. Delegates verbatim to the library helper
 //               dataflow_kernel_lib::read_sticks_for_tilize<TILE granularity>.
+//               Requires ONE PAGE PER STICK (the helper walks consecutive page
+//               ids as consecutive rows), so the host selects the general R_PAD
+//               loop instead when the source shard is narrower than a row
+//               (src_row_pages > 1 — the cross-spec L1 gather). With an aligned
+//               source that loop fills nothing: valid_bytes == row_bytes.
 //
 //   R_PAD     — HELPER SUBSTITUTION, justified: the library helper cannot fill.
 //               Its contract (tilize_helpers_dataflow.hpp:50-52) states that for
@@ -93,6 +98,40 @@ FORCE_INLINE void fill_l1_with_val(uint32_t start_addr, uint32_t n_bytes, uint32
     }
 }
 
+// Read `n_bytes` of ONE row-major source row, starting `byte_off` bytes into it,
+// into L1 at `l1_addr` — the single source for source addressing on the accessor
+// path (op_design.md §5.2, the cross-spec L1 gather).
+//
+// A ROW_MAJOR page is one row (stick) when the tensor is interleaved OR its shard
+// spans the whole row: then `row_pages == 1`, the page id IS the row index and
+// this is ONE transfer, byte-identical to Phase 0. A shard NARROWER than the row
+// (WIDTH / BLOCK sharded, read from another core's L1) makes a page one SHARD
+// row, so a row is `row_pages` pages of `page_bytes` and a span may cross page
+// boundaries — issued as one transfer per page slice. Both cases keep the
+// caller's one-barrier-per-block policy (master.md B7); nothing is barriered here.
+template <uint32_t page_bytes, uint32_t row_pages, typename Accessor>
+FORCE_INLINE void read_row_span(
+    const Accessor& accessor, uint32_t row, uint32_t byte_off, uint32_t n_bytes, uint32_t l1_addr) {
+    if constexpr (row_pages == 1) {
+        noc_async_read(accessor.get_noc_addr(row, byte_off), l1_addr, n_bytes);
+    } else {
+        uint32_t page_in_row = byte_off / page_bytes;
+        uint32_t page = row * row_pages + page_in_row;
+        uint32_t off = byte_off - page_in_row * page_bytes;
+        while (n_bytes > 0) {
+            uint32_t n = page_bytes - off;
+            if (n > n_bytes) {
+                n = n_bytes;
+            }
+            noc_async_read(accessor.get_noc_addr(page, off), l1_addr, n);
+            l1_addr += n;
+            n_bytes -= n;
+            ++page;
+            off = 0;
+        }
+    }
+}
+
 }  // namespace
 
 void kernel_main() {
@@ -114,7 +153,13 @@ void kernel_main() {
     // Classification ablation (op_design.md §9.1): drop the NoC payload, keep
     // every CB reserve/push and the loop trip counts. Always 0 in production.
     constexpr uint32_t ablate_dm = get_compile_time_arg_val(12);
-    constexpr auto src_args = TensorAccessorArgs<13>();
+    // Source page geometry (op_design.md §5.2). src_row_pages == 1 means one page
+    // IS one stick (interleaved, or a shard as wide as the row) — the Phase-0
+    // identity `page id == row index`. > 1 is the cross-spec gather: the source
+    // shard is NARROWER than a row, so a row is src_row_pages pages.
+    constexpr uint32_t src_page_bytes = get_compile_time_arg_val(13);
+    constexpr uint32_t src_row_pages = get_compile_time_arg_val(14);
+    constexpr auto src_args = TensorAccessorArgs<15>();
 
     // Every byte quantity below derives from the WT_CHUNK knob — one source.
     constexpr uint32_t row_bytes = wt_chunk * TILE_W * elem_bytes;
@@ -241,7 +286,8 @@ void kernel_main() {
                 // H tail and whole pad tiles: no source row at all.
                 const uint32_t n_read = (img < n_img_in && src_row < h_in) ? valid_bytes : 0;
                 if (n_read > 0) {
-                    noc_async_read(accessor.get_noc_addr(img * h_in + src_row, col_off), l1_addr, n_read);
+                    read_row_span<src_page_bytes, src_row_pages>(
+                        accessor, img * h_in + src_row, col_off, n_read, l1_addr);
                 }
                 if (n_read < row_bytes) {
                     fill_l1_with_val<elem_bytes>(l1_addr + n_read, row_bytes - n_read, pad_word);

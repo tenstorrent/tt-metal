@@ -209,16 +209,10 @@ EXCLUSIONS = [
 # the per-core work, so there is no single-core realization of a sharded call.
 for _api in ("legacy_2d", "nd"):
     EXCLUSIONS.append({"use_multicore": False, "shard_api": _api})
-# Padding on top of a sharded placement is the NEXT refinement. The fill is
-# materialized into the input CB, which the zero-copy path aliases on the input
-# tensor itself, and a padded shard grid is uneven by construction (the last
-# shard is partly pad) — both need work beyond this refinement's placement
-# change. Keyed on shard_api so it fires for either sharding API and for a
-# crossover in either direction.
-for _api in ("legacy_2d", "nd"):
-    for _mode in ("auto", "explicit"):
-        EXCLUSIONS.append({"pad_mode": _mode, "shard_api": _api})
-del _api, _mode
+del _api
+# Refinement 2 lifted `pad_mode in {auto, explicit}` x sharded: eligibility for the
+# zero-copy CB is now decided PER SIDE, so a padded call streams its (filled) input
+# CB while still packing straight into a resident destination shard.
 
 
 # ---------------------------------------------------------------------------
