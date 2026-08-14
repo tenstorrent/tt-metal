@@ -368,3 +368,94 @@
   *plan* (`in_depth > 1`, and a block to prefetch) before the values, plus the two negative pins —
   short blocks and the whole decode regime must decline the rung. `test_rms_norm_perf.py` gained the
   same two knob selectors so the R3-vs-R4 A/B is reproducible at the Phase 0 config.
+
+## Refinement 5 — Speed up the sharded perf geometries
+
+- **Date**: 2026-08-14
+- **What was done**: three levers on the sharded profile, all of them **reused, not rebuilt** —
+  a reordering of work the reader already did, and two knobs on chains that already existed. No
+  new CB, no new kernel file, no second program-descriptor branch. New: one bool in the reader,
+  two compute CT args, two descriptor knobs.
+
+  0. **A harness first, because none of these cells had ever been timed.**
+     `test_rms_norm_perf_sharded.py` reproduces the five pinned geometries exactly as
+     `helpers.run_rms_norm` builds them (`eval.sharding.shard_config` off `extras.shard_shape` +
+     `extras.core_grid`) at the group's exact config. Baseline vs `achievable_ns`:
+     4655/4110, 5535/4617, 6634/5267, 7229/5481, 75727/25640.
+  1. **The gamma DRAM read is overlapped with the combine.** *This is the whole decode win.*
+     An ablation (`gamma=None`) costed gamma at **1.2-2.0 us of a 4.7-7.2 us wall** — implausible
+     for ~500 B of payload, and the reason is ordering, not bytes: once x and out are resident L1,
+     gamma is the *only* DRAM tensor, and `load_gamma_once` ran (with its barrier) BEFORE the
+     resident-shard publish, while compute waited on `cb_gamma_tiles` at boot. So a full DRAM round
+     trip stood in front of `Sum(x^2)` and the entire cross-core combine, for an operand not touched
+     until `apply_gamma_block`. Now: the reader publishes x first, issues the gamma read, and defers
+     its `noc_async_read_barrier` + push into the block loop (where, on the interleaved path, the
+     same barrier already flushes block 0's x read); compute waits gamma at the apply site. Costs
+     nothing anywhere and helps the interleaved decode too.
+  2. **DEST-window batching** (`DEST_BLOCK_TILES` x `DEST_BLOCK_MIN_ROW_TILES`). The streaming
+     eltwise passes walked one tile per `tile_regs` acquire/commit/wait/release — a hard MATH<->PACK
+     barrier per tile. Batching them into DEST windows (`IterationShape::block_size`) lets the packer
+     drain tile i while math runs tile i+1: BLOCK-shard prefill **74417 -> 72063 (-3.2%)**. It is
+     **gated to cores owning >= 2 tile-rows** because the single-tile-row decode regime measured
+     **+1-3%** (one group, so the extra pipeline fill/drain never amortizes) — that regime stays
+     byte-identical to Refinement 4.
+  3. **Gamma fusion** (`GAMMA_FUSE_MIN_ROW_TILES`), **landed, measured, and parked OFF at a
+     byte-identical default.** `scale_block` and `apply_gamma_block` in ONE DEST window via
+     `DestReuseBinary`, with gamma expanded from its row-0 vector form to full tiles once by a
+     `UnaryBcast<Row>` in-place pass (DEST-reuse has no intra-tile broadcast). Halves the L1
+     crossings and removes a `sync_pack_to_unpack` per block — and is a **measured loss**
+     (74417 -> 78635, +5.7%): `mul_reuse_dest_tiles` copies DEST back into srcA between two dependent
+     ops on the math thread, whereas the unfused pair is two independent DEST windows that pipeline
+     against the packer. On this op the math thread binds and the L1 crossings do not. The lever is
+     correct (the whole sharded suite is green with it on) so it is kept as a live knob at 0.
+- **Accuracy achieved**: unchanged — no lever touches arithmetic (one moves a barrier, one moves the
+  DEST window boundary, one is off). PCC > 0.9995 on all five geometries against the perf group's
+  soft gate; the whole unit directory is green at its Refinement-2 tolerances.
+- **Performance** (Blackhole p150b, the group's exact config + pinned geometry, device kernel ns):
+
+  | geometry | R4 base | shipped | | `achievable_ns` | ratio |
+  |---|---|---|---|---|---|
+  | `(1,1,32,1024)` WIDTH `[32,128]`/(8,1) | 4655 | **3833** | **-17.7 %** | 4110 | **0.93x** |
+  | `(1,1,32,2304)` WIDTH `[32,256]`/(9,1) | 5535 | **4507** | **-18.6 %** | 4617 | **0.98x** |
+  | `(1,1,32,5120)` WIDTH `[32,160]`/(8,4) | 6634 | **5725** | **-13.7 %** | 5267 | 1.09x |
+  | `(1,1,32,7168)` WIDTH `[32,256]`/(7,4) | 7229 | **5732** | **-20.7 %** | 5481 | 1.05x |
+  | `(1,1,8192,1024)` BLOCK `[1024,128]`/(8,8) | 75727 | **72041** | **-4.9 %** | 25640 | 2.81x |
+
+  Two of the five are now **inside** their reference and two are within 5-9 %. No interleaved
+  regression — every prior perf row improved or held: decode (R3/R4 -> now) 5594/6536/8509/9487 ->
+  **5299/6230/8223/9371**, prefill 88316/187575/405003/558273 ->
+  **85704/187039/401015/563222** (the last is +0.9 %, inside run-to-run noise on a shape whose
+  program is unchanged).
+- **What actually binds now, and how I know**: for the four WIDTH decode geometries, the **fixed
+  boot + dispatch floor** (the interleaved 1-tile floor case measures 3055 ns) plus the cross-core
+  combine. The gather-payload ablation puts the incast at ~1.3 us of the 32-core case. For the BLOCK
+  prefill the split is: gather incast **12.4 us (17 %)**, the gamma pass ~6.5 us, and the rest is the
+  serial per-block schedule on the row-group ROOT, which does its own 128 tile-ops *plus* a 64-tile
+  reduce per block while seven contributors wait on it. A block-factor sweep confirms the schedule
+  reading: coarser is better on a resident shard (block_rows 4 / 8 / 16 -> 76188 / 72041 / 70039),
+  the exact opposite of Refinement 4's interleaved prefill, because there is no serial DRAM read to
+  lengthen — only per-block fixed costs to amortize.
+- **Issues encountered**: three, all caught as regressions or hangs and all resolved rather than
+  accepted. (1) DEST batching with a group **wider than S** hangs: the grid walk groups row-wise, so
+  the row's tail group is short and its per-tile output lifecycle under-pushes — the writer sits in
+  `cb_wait_front(cb_output_tiles)` while all three TRISCs have already exited. Fixed by clamping the
+  group to the largest **divisor** of S. (2) A grouped walk needs a **PerBlockSize** output
+  lifecycle, not PerTile (kernel_lib's own `block_size` example pairs them that way); with PerTile it
+  under-pushes the same way. (3) The gamma fusion regression above. Also confirmed **pre-existing,
+  not a regression**: `13x777x1023` WIDTH_SHARDED fails a CB-vs-L1-buffer clash — reproduced
+  identically at the Refinement 4 commit.
+- **Left on the table (a finding, not a task)**: the BLOCK-shard prefill is still 2.8x its reference
+  and the two levers that would close it are both topology/L1 changes, not knobs. (a) The **root is
+  the critical path**: a two-level tree combine (Refinement 3's deferred lever) would cut both its
+  serial incast and its per-block 64-tile reduce; the gather ablation bounds the NoC half at 17 %,
+  and the reduce half is on top of that. (b) **block_rows wants to be 16** (-2.8 % measured), which
+  needs a wider `l1_working_budget` on the sharded path — deliberately not taken, because one sharded
+  resilience cell already clashes CBs against L1 buffers at the *current* conservative budget, and
+  trading a 2.8 % win on one geometry for clash risk across the sharded corpus is the wrong bet.
+- **Tests added**: `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_perf_sharded.py` — the
+  sharded harness at the five pinned geometries, with file-based selectors for `DM_CHUNK_TILES`,
+  `GAMMA_FUSE_MIN_ROW_TILES`, `DEST_BLOCK_TILES`, the L1 budget (the sharded lever on `block_rows`),
+  math fidelity, and a `gamma=None` ablation; the measured before/after table, both ablations and the
+  block-factor sweep are recorded in its docstring. Also
+  `tests/ttnn/unit_tests/operations/rms_norm/probes/read_perf_csv.py` (prints device kernel ns from
+  the newest profiler CSV).

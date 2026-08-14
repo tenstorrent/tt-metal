@@ -35,14 +35,52 @@ Knob / ablation switches are FILES, not env vars: under `--profile` the measured
 run lives in a `python -m tracy` child and an ad-hoc env var does not reach it.
 
     echo 32   > /tmp/rms_norm_dm_chunk       # DM_CHUNK_TILES
-    echo 0    > /tmp/rms_norm_gamma_fuse      # GAMMA_FUSE_MIN_ROW_TILES (0 disables the fusion)
-    echo 1    > /tmp/rms_norm_dest_block      # DEST_BLOCK_TILES (1 = one DEST window per tile)
+    echo 0    > /tmp/rms_norm_gamma_fuse     # GAMMA_FUSE_MIN_ROW_TILES (0 disables the fusion)
+    echo 1    > /tmp/rms_norm_dest_block     # DEST_BLOCK_TILES (1 = one DEST window per tile)
+    echo 1.4  > /tmp/rms_norm_l1_mb          # L1 budget => block_rows on the sharded path
+    echo LoFi > /tmp/rms_norm_fidelity       # fidelity probe (uninformative at bf16: LoFi == HiFi2)
     echo no_gamma > /tmp/rms_norm_ablate     # gamma=None: costs out the gamma DRAM read + apply
 
 The patch target is `create_program_descriptor.__globals__`, NOT the module
 object obtained by importing the descriptor file (the package is reachable under
 two names, so `monkeypatch.setattr(pd, KNOB, v)` patches a second import that
 nobody runs).
+
+Measured, Blackhole p150b, TARGET CONFIG + pinned geometry, device kernel ns
+(one fresh run per point; the two shipped columns are two independent runs, which
+is also the noise estimate):
+
+    geometry                     R4 base   +gamma overlap   shipped   achievable
+    (1,1,32,1024)   WIDTH  8c       4655             3819      3833         4110
+    (1,1,32,2304)   WIDTH  9c       5535             4513      4507         4617
+    (1,1,32,5120)   WIDTH 32c       6634             5690      5725         5267
+    (1,1,32,7168)   WIDTH 28c       7229             5716      5732         5481
+    (1,1,8192,1024) BLOCK 64c      75727            74417     72041        25640
+
+ABLATIONS (payload stubbed, sync scaffolding kept) on the R4 baseline:
+
+    gamma=None                    3499  3796  5325  5232  69001
+      => gamma cost 1.2-2.0 us of a 4.7-7.2 us decode wall.  It is the ONLY DRAM
+         tensor once x/out are resident, and its read sat in FRONT of the input
+         publish, so no core could start Sum(x^2) until it landed.  That is the
+         shipped lever: publish x first, defer gamma's barrier, wait it at the
+         apply site.
+    gather payload removed        3784  4530  4407  5561  62050
+      => the cross-core gather INCAST is ~1.3 us of the 32-core decode case and
+         12.4 us (17%) of the BLOCK prefill.  Not addressed here; see the
+         Refinement 5 outcome note.
+
+BLOCK-factor sweep on the BLOCK prefill (via the L1 budget, which is what selects
+block_rows on the sharded path -- the shard pins slice_hidden_tiles):
+
+    block_rows      4        8 (shipped)      16
+                76188          72041       70039
+Coarser is better here and the direction is the OPPOSITE of the interleaved
+prefill (Refinement 4), where a coarser block lengthened the fully-serial DRAM
+read.  A resident shard has no such read, so only the per-block fixed costs (one
+combine round trip + init/reconfig per block) remain.  block_rows=16 is NOT
+shipped: reaching it needs a wider l1_working_budget, and one sharded resilience
+cell already fails a CB-vs-L1-buffer clash at the current conservative budget.
 """
 
 from __future__ import annotations
@@ -84,6 +122,10 @@ DM_CHUNK = _read("/tmp/rms_norm_dm_chunk", int)
 TREE_MIN = _read("/tmp/rms_norm_tree_min", int)
 GAMMA_FUSE = _read("/tmp/rms_norm_gamma_fuse", int)  # GAMMA_FUSE_MIN_ROW_TILES (0 = off)
 DEST_BLOCK = _read("/tmp/rms_norm_dest_block", int)  # DEST_BLOCK_TILES
+# L1_SIZE_PER_CORE_FALLBACK in MB.  On the SHARDED path this is the lever on
+# `block_rows`: the shard pins slice_hidden_tiles, so the budget is what selects
+# the largest divisor of shard_rows that fits.
+L1_MB = _read("/tmp/rms_norm_l1_mb", float)
 ABLATE = _read("/tmp/rms_norm_ablate", str, "none")
 # Fidelity probe: a zero-code compute-cost classifier.  If the wall does not move
 # between LoFi and HiFi4 the shape is not compute-bound.
@@ -106,6 +148,8 @@ def knobs(monkeypatch):
         monkeypatch.setitem(PLAN_GLOBALS, "GAMMA_FUSE_MIN_ROW_TILES", GAMMA_FUSE)
     if DEST_BLOCK is not None:
         monkeypatch.setitem(PLAN_GLOBALS, "DEST_BLOCK_TILES", DEST_BLOCK)
+    if L1_MB is not None:
+        monkeypatch.setitem(PLAN_GLOBALS, "L1_SIZE_PER_CORE_FALLBACK", int(L1_MB * 1024 * 1024))
     return (DM_CHUNK, TREE_MIN, GAMMA_FUSE, DEST_BLOCK, ABLATE)
 
 

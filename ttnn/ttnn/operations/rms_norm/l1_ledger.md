@@ -48,6 +48,8 @@ verified on device:
 | **The in-place pack index is measured from `cb_input_tiles`' BASE, not from its read window** (`pack_base = (block · B·S) % IN_WAIT_TILES`). | A pack lands at `get_write_ptr(cb) + index·page`, and only `cb_reserve_back`/`cb_push_back` move a *consumer's* write pointer — compute never pushes this CB, so its write pointer sits at the CB base for the kernel's life while `cb_pop_front` walks the read pointer forward. With capacity == one block the read pointer wraps to base every block and `pack_base` is 0 (the interleaved path is byte-identical). With the CB bound to a whole shard **and** the L1 solve forced `B < shard_rows`, every block after the first would otherwise rewrite block 0's pages and silently drop its own `1/rms` factor. | none — a runtime index, no capacity |
 | **`cb_gamma_tiles` carries `S + gamma_scratch` pages on the ROW_MAJOR-sharded path.** | A ROW_MAJOR shard's width granule is the L1 alignment (8 elements at bf16), not the tile, so a width/block shard's gamma slice can start mid-DRAM-burst — and a misaligned DRAM read returns the wrong bytes with no error. The reader instead takes one DRAM-aligned burst covering the whole slice into the scratch pages and hand-places the 32 row-0 lanes each tile actually uses. | **+`ceil((64 + S·32·gamma_elem) / gamma_tile)` pages**, ROW_MAJOR-sharded with gamma only |
 
+| **Refinement 5 — no CB added, resized, merged or deleted.** Its three levers are an ORDERING change in the reader (gamma's read is issued after the resident-shard publish and its barrier deferred into the block loop) and two compute-side knobs: `DEST_BLOCK_TILES` (tiles per DEST window on the streaming eltwise passes) and `GAMMA_FUSE_MIN_ROW_TILES` (parked at 0). | Neither knob is a buffer: DEST-window batching consumes DEST registers, not L1, and the chain clamps it to `DEST_AUTO_LIMIT`. The gamma fusion, if ever enabled, expands `cb_gamma_tiles` **in place** (row-0 vector -> full tiles), so it too adds no page. | **none.** The footprint expression and the data-movement budget below are unchanged. |
+
 Additionally the reader pays a **one-time** NoC zero-fill of the regions the
 per-block reads never touch — the tail tiles of a ragged hidden slice
 (`cb_input_tiles`) and the W-gap inside every `cb_rm_stage_in` stick. It is
@@ -134,6 +136,21 @@ evaluated against the wrong core. `fits()` above is evaluated with `is_root=True
 conservative choice.
 
 ---
+
+### Block-factor note (Refinement 5, measured on the sharded path)
+
+`block_rows` on a resident shard is selected by the L1 budget alone (the shard
+pins `slice_hidden_tiles`, so the ladder just takes the largest divisor of
+`shard_rows` that fits). Measured on the pinned BLOCK-shard prefill geometry
+`(1,1,8192,1024)` `[1024,128]`/(8,8): block_rows 4 / 8 (shipped) / 16 costs
+76188 / 72041 / 70039 ns. **Coarser is better here, the opposite of the
+interleaved prefill** (Refinement 4, where coarsening cost +3.7-5.7 % because it
+lengthened the fully-serial DRAM read before compute could start) — a resident
+shard has no such read, so only the per-block fixed costs remain (one gather +
+mcast round trip, one init/reconfig set, one pipeline fill/drain per block).
+`block_rows = 16` is NOT shipped: it needs a wider `l1_working_budget` on the
+sharded path, and one sharded resilience cell (`13x777x1023` WIDTH) already fails
+a CB-vs-L1-buffer clash at the current conservative 928 KB.
 
 ## Data-movement budget
 

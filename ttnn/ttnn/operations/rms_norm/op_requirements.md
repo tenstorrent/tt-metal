@@ -270,7 +270,7 @@ shrank its term to 0.04 % of DRAM bytes).
 
 ---
 
-### [ ] Refinement 5 — Speed up the sharded perf geometries
+### [x] Refinement 5 — Speed up the sharded perf geometries
 
 **Type**: perf
 
@@ -293,3 +293,44 @@ combine handshake" as the primary lever family here.
 clock-scaled `achievable_ns`, no regression on the interleaved decode/prefill results from Refinements 3–4,
 the golden suite is green, and the config-spanning guard set (now including one sharded representative per
 scheme) shows no regression.
+
+**Outcome**: **all five sharded geometries improved** (Blackhole p150b, the group's exact config and
+pinned shard spec, device kernel ns): `(1,1,32,1024)` W 4655 → **3833** (−17.7 %), `(1,1,32,2304)` W
+5535 → **4507** (−18.6 %), `(1,1,32,5120)` W 6634 → **5725** (−13.7 %), `(1,1,32,7168)` W 7229 →
+**5732** (−20.7 %), `(1,1,8192,1024)` BLOCK 75727 → **72041** (−4.9 %). Two are now **inside** their
+`achievable_ns` (0.93× / 0.98×) and two within 5–9 % (1.05× / 1.09×). No interleaved regression: the
+decode rows all improved again (5299/6230/8223/9371 vs Refinement 4's 5594/6536/8509/9487) and prefill
+held (85704/187039/401015/563222). Unit directory 341 passed / 36 skipped; golden `perf` 13/13 and
+`pad_poison` 24/24; a 172-cell sharded resilience slice 168 passed / 3 skipped / 1 failed, that one
+failure being a CB-vs-L1 clash reproduced **identically at the Refinement 4 commit** (pre-existing).
+
+*The verifier's premise was right about the family and wrong about the member.* It named "shrink the
+boot/dispatch critical path and the combine handshake". The decisive lever was neither: it was that
+**gamma is the only DRAM tensor once x and out are resident, and its read was ordered in front of
+everything else**. Ablating `gamma=None` costed it at 1.2–2.0 µs of a 4.7–7.2 µs wall — impossible for
+~500 B of payload, and indeed it was ordering: `load_gamma_once` barriered before the resident-shard
+publish, and compute waited `cb_gamma_tiles` at boot, so a full DRAM round trip stood in front of
+`Sum(x^2)` and the whole combine for an operand not read until `apply_gamma_block`. Publishing x first,
+deferring the barrier into the block loop and waiting gamma at the apply site is the entire decode win.
+
+*The other two levers, and one of them is a measured loss kept as a knob.* **DEST-window batching**
+(the streaming eltwise passes ran one tile per `tile_regs` round trip, a hard MATH↔PACK barrier) is
+−3.2 % on the BLOCK prefill and **+1–3 % on the single-tile-row decode regime**, so it ships gated on
+row-tiles per core and leaves that regime byte-identical. **Gamma fusion** (scale + gamma in one DEST
+window via `DestReuseBinary` over a `UnaryBcast`-expanded full gamma tile) halves the L1 crossings and
+is a **loss** (+5.7 %): `mul_reuse_dest_tiles` serializes a DEST→srcA copy between two dependent ops on
+the math thread, while the unfused pair is two windows that pipeline against the packer. It is correct
+and green, so it is parked at a byte-identical default (`GAMMA_FUSE_MIN_ROW_TILES = 0`) as a live knob.
+
+*What I would do next, and why I did not.* The BLOCK-shard prefill is still 2.8× its reference and the
+**row-group root is the critical path**: it does its own 128 tile-ops *plus* a 64-tile combine reduce
+per block while seven contributors block on it, and a payload ablation puts the gather incast alone at
+12.4 µs (17 %). The fix is Refinement 3's deferred **two-level tree combine** (cutting both the serial
+incast and the root's reduce width) — a genuine topology change to a combine shared by the interleaved
+path and all three sharded schemes, which was not a defensible risk with the budget left after banking
+a regression-free 14–21 % on four of the five geometries. Second, measured but deliberately **not**
+shipped: `block_rows = 16` is worth another −2.8 % on that geometry (4/8/16 → 76188/72041/70039 — on a
+resident shard coarser is better, the exact opposite of Refinement 4's interleaved prefill, because
+there is no serial DRAM read to lengthen), but reaching it requires widening `l1_working_budget` on the
+sharded path and one sharded resilience cell already fails a CB-vs-L1-buffer clash at the *current*
+conservative budget.
