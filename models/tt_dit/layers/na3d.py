@@ -546,4 +546,6 @@ def neighborhood_attention_3d(
 
     restored = ttnn.embedding(device_plan.restore_indices, stacked, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=q.dtype)
     ttnn.deallocate(stacked)
-    return ttnn.reshape(restored, (batch, t, h, w, width))
+    # The output is the queries answered, which is narrower than the input volume whenever
+    # the plan is a shard reading halo rows it does not write back.
+    return ttnn.reshape(restored, (batch, *device_plan.plan.output_dims, width))
