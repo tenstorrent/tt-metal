@@ -162,10 +162,17 @@ class TtAttention:
         # the "largest even split" default picks: the same k-reduction-shape
         # effect measured on down_proj applies here. Per call at bf8_b:
         # default 0.0528 / 32c 0.0379 / 16c 0.0251 / 8c 0.0314 / 4c 0.0535 ms.
-        self.kv_plan = build_plan(device, int(self.wk.shape[-2]), int(self.wk.shape[-1]), max_cores=16)
+        self.kv_plan = build_plan(device, int(self.wk.shape[-2]), int(self.wk.shape[-1]), max_cores=48)
         self.o_plan = build_plan(device, int(self.wo.shape[-2]), int(self.wo.shape[-1]))
         self.q_plan = build_plan(device, int(self.wq.shape[-2]), int(self.wq.shape[-1]))
-        self.qkv_plan = build_plan(device, int(self.wqkv.shape[-2]), int(self.wqkv.shape[-1]), max_cores=32)
+        # 48 cores for the fused QKV, re-swept after the projections were fused:
+        # 16 -> 17.47 / 32 -> 15.98 / 48 -> 13.61 / 96 -> 35.71 ms in the profiled
+        # slice. The cap is not a workaround, it is the tuned value -- 32 was
+        # right for the shape this plan had before Q/K/V became one 3072->6144
+        # read, and the wider N moved the optimum. The cliff at 96 is the
+        # k-reduction pathology down_proj documents: in0_block_w falls to 1, so
+        # each core walks 96 sequential single-tile k-blocks for 2 output tiles.
+        self.qkv_plan = build_plan(device, int(self.wqkv.shape[-2]), int(self.wqkv.shape[-1]), max_cores=48)
         #: Cleared the first time the fused rotation refuses this model's
         #: operands, so the explicit chain takes over for the rest of the run
         #: instead of raising inside a captured trace.
