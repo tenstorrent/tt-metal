@@ -109,7 +109,7 @@ The repository holds one Quasar op tree. There are no separate program directori
 
 # LLK Delivery - Folder Structure
 
-**Feature(s) this release:** LLK INT8 support; PDL-related LLK features; Quant / dequant kernels  
+**Feature(s) this release:** LLK INT8 support; PDL-related LLK features; Quant / dequant kernels
 **Source:** [tenstorrent/tt-metal - tt_metal/tt-llk](https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/tt-llk)
 
 ## Level 1 - Common (used by Wormhole, Blackhole, Quasar, and any new designs)
