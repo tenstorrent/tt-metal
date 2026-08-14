@@ -57,11 +57,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            // The SCALAR math MOP clears SrcAB only on the final outer-loop iteration,
-            // so mock unpack must produce one SrcA/SrcB handshake per tile.
-            const std::uint32_t dvalids_per_tile    = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : num_faces;
-            const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT * dvalids_per_tile;
-            _perf_unpack_loop_set_valid<true /*set_a*/, true /*set_b*/>(src_handshake_iters);
+            const std::uint32_t srcb_dvalids_per_tile = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : num_faces;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
+                {
+                    // Real broadcast unpack emits SrcA once, then SrcB once
+                    // per broadcast face. Combining these handshakes blocks
+                    // the second SrcB face while SrcA remains valid.
+                    _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(1);
+                    _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(srcb_dvalids_per_tile);
+                }
+            }
         }
         else // UNPACK_ISOLATE, L1_CONGESTION, L1_TO_L1
         {
@@ -94,10 +101,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t TILE_CNT    = params.TILE_CNT;
     const std::uint32_t num_faces   = params.num_faces;
 #endif
-    // set_last_outer_loop_instr clears SrcAB once on the final face, not once per
-    // face. SCALAR unpack likewise produces one SrcA/SrcB dvalid pair per tile.
-    const std::uint32_t dvalids_per_tile    = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 1u : num_faces;
-    const std::uint32_t src_handshake_iters = LOOP_FACTOR * TILE_CNT * dvalids_per_tile;
     {
         ZONE_SCOPED("INIT")
         // End-to-end and math-isolate runs require FPU destination ownership.
@@ -134,10 +137,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            // Do exactly the handshakes produced by real unpack. An additional
-            // synthetic SET/CLEAR pair races the final unpack and leaves an
-            // unmatched clear token, causing the ~2048-cycle stall.
-            _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(src_handshake_iters);
+            const std::uint32_t srcb_only_clears = (BROADCAST_TYPE == BroadcastType::SCALAR) ? 0u : num_faces - 1u;
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
+            {
+                for (std::uint32_t tile = 0; tile < TILE_CNT; tile++)
+                {
+                    // ROW/COL math clears SrcB after each non-final face,
+                    // then clears SrcA and the final SrcB together.
+                    _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(srcb_only_clears);
+                    _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(1);
+                }
+            }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {

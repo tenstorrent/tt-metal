@@ -91,12 +91,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+                // Match real unpack's per-block ordering. Batching all SrcA
+                // blocks before SrcB deadlocks once the test spans multiple
+                // DEST blocks because math consumes SrcA then SrcB per block.
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
                     if constexpr (!unpack_to_dest)
                     {
-                        // ELWADD is used for Mov2D operation when Dest is in 32bit mode, so we need to set both SrcA and SrcB valid
-                        _perf_unpack_loop_set_valid<true /*set_a*/, is_fp32_dest_acc_en ? true : false /*set_b*/>(tiles_in_block);
+                        _perf_unpack_loop_set_valid<true /*set_a*/, false /*set_b*/>(tiles_in_block);
                     }
                     _perf_unpack_loop_set_valid<false /*set_a*/, true /*set_b*/>(tiles_in_block);
                 }
@@ -231,15 +233,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
-            // Real unpack emits SrcA and dummy SrcB as two ordered batches.
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
+                // Real unpack emits SrcA then dummy SrcB for each block.
+                // Clearing all SrcA blocks first waits on data that unpack
+                // cannot produce until the preceding SrcB block is consumed.
                 for (std::uint32_t block = 0; block < num_blocks; block++)
                 {
                     if constexpr (!unpack_to_dest)
                     {
-                        // ELWADD is used for Mov2D operation when Dest is in 32bit mode, so we need to clear both SrcA and SrcB valid
-                        _perf_math_loop_clear_valid<true /*clear_a*/, is_fp32_dest_acc_en ? true : false /*clear_b*/>(tiles_in_block);
+                        _perf_math_loop_clear_valid<true /*clear_a*/, false /*clear_b*/>(tiles_in_block);
                     }
                     _perf_math_loop_clear_valid<false /*clear_a*/, true /*clear_b*/>(tiles_in_block);
                 }
