@@ -15,12 +15,89 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 #include <algorithm>
+#include <unordered_set>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 
 namespace ttnn::operations::ccl {
+
+namespace {
+
+bool are_opposite_directions(tt::tt_fabric::eth_chan_directions lhs, tt::tt_fabric::eth_chan_directions rhs) {
+    using direction = tt::tt_fabric::eth_chan_directions;
+    return (lhs == direction::EAST && rhs == direction::WEST) || (lhs == direction::WEST && rhs == direction::EAST) ||
+           (lhs == direction::NORTH && rhs == direction::SOUTH) || (lhs == direction::SOUTH && rhs == direction::NORTH);
+}
+
+bool fabric2d_ring_uses_non_neighbor_directions(
+    const Tensor& input_tensor, uint32_t axis, uint32_t axis_num_devices, tt::tt_fabric::Topology axis_topology) {
+    auto* mesh_device = input_tensor.device();
+    const auto& tensor_topology = input_tensor.tensor_topology();
+    const auto& device_coords = tensor_topology.mesh_coords();
+    for (const auto& src_coord : device_coords) {
+        const auto src_node = mesh_device->get_fabric_node_id(src_coord);
+        std::unordered_set<tt::tt_fabric::eth_chan_directions> neighbor_directions;
+        for (const int32_t offset : {-1, 1}) {
+            const auto neighbor_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+                input_tensor, src_coord, offset, axis_topology, axis);
+            if (!neighbor_coord.has_value()) {
+                continue;
+            }
+            const auto direction = tt::tt_fabric::get_eth_forwarding_direction(
+                src_node, mesh_device->get_fabric_node_id(neighbor_coord.value()));
+            TT_FATAL(
+                direction.has_value() && static_cast<uint32_t>(direction.value()) <
+                                             static_cast<uint32_t>(tt::tt_fabric::eth_chan_directions::Z),
+                "AllGather expected a cardinal Fabric2D direction from {} to logical axis neighbor {}",
+                src_node,
+                mesh_device->get_fabric_node_id(neighbor_coord.value()));
+            neighbor_directions.insert(direction.value());
+        }
+
+        // A straight physical ring leaves every device through opposite directions on one axis.
+        // When a logical ring folds around a physical corner (for example, 4x1 on a 2x2 mesh), its
+        // two neighbors are reached through perpendicular directions. Every peer can still share one
+        // of those first-hop directions, so the peer check below alone cannot identify this fold.
+        if (axis_num_devices > 2) {
+            if (neighbor_directions.size() != 2) {
+                return true;
+            }
+            auto direction_it = neighbor_directions.begin();
+            const auto first_direction = *direction_it++;
+            if (!are_opposite_directions(first_direction, *direction_it)) {
+                return true;
+            }
+        }
+
+        for (const auto& peer_coord : device_coords) {
+            if (peer_coord == src_coord) {
+                continue;
+            }
+            // The all-gather factories define axis groups in physical mesh-coordinate space,
+            // independent of the tensor mapper's (possibly rank-1) distribution coordinates.
+            if (peer_coord[1 - axis] != src_coord[1 - axis]) {
+                continue;
+            }
+
+            const auto direction =
+                tt::tt_fabric::get_eth_forwarding_direction(src_node, mesh_device->get_fabric_node_id(peer_coord));
+            TT_FATAL(
+                direction.has_value() && static_cast<uint32_t>(direction.value()) <
+                                             static_cast<uint32_t>(tt::tt_fabric::eth_chan_directions::Z),
+                "AllGather expected a cardinal Fabric2D direction from {} to logical axis peer {}",
+                src_node,
+                mesh_device->get_fabric_node_id(peer_coord));
+            if (!neighbor_directions.contains(direction.value())) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+}  // namespace
 
 void AllGatherDeviceOperation::validate_on_program_cache_miss(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
@@ -241,6 +318,17 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         // Decide between multicast or unicast algorithm
         const auto& input_tensor = tensor_args.input_tensor;
         const uint32_t axis = args.get_1d_axis();
+        // An effectively-1D ring under Fabric2D can be embedded in a non-rectangular physical
+        // subgraph (for example, an 8x1 ring on a 2x4 LoudBox). The multicast factory opens only the
+        // logical forward/backward neighbor directions, so it cannot reach a group peer whose hybrid
+        // route starts in another physical direction. Use explicit routed unicasts only in that case;
+        // physically straight rings retain the architecture-specific multicast/unicast heuristics.
+        if (tt::tt_fabric::is_2d_fabric_config(args.fabric_config) &&
+            tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis]) &&
+            fabric2d_ring_uses_non_neighbor_directions(
+                input_tensor, axis, args.axis_num_devices[axis], args.axis_topology[axis])) {
+            return program_factory_t{AllGatherUnicastFactory{}};
+        }
         switch (input_tensor.device()->arch()) {
             case tt::ARCH::WORMHOLE_B0: {
                 const uint64_t num_pages = input_tensor.buffer()->num_pages();       // per-device shard
