@@ -85,6 +85,10 @@ jobs:
     concurrency:
       group: ttsim-lib-${{ github.run_id }}-${{ matrix.lib }}
       cancel-in-progress: false
+      queue: max
+    permissions:
+      actions: read # the existence check reads this run's artifact list
+      contents: read
     steps:
       - name: Checkout fetch-ttsim action and pinned ttsim version
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -115,7 +119,7 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        ARCH_NAME: ${{ contains(matrix.test-group.sku, 'blackhole') && 'blackhole' || 'wormhole_b0' }}
+        ARCH_NAME: ${{ contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
         LOGURU_LEVEL: INFO
       volumes:
         - ${{ github.workspace }}/docker-job:/work

@@ -258,10 +258,6 @@ skus:
     runs_on:
       - tt-ubuntu-2204-large-stable
     ttsim_lib: libttsim_bh_x4.so
-  sim_bh_loudbox:
-    runs_on:
-      - tt-ubuntu-2204-large-stable
-    ttsim_lib: libttsim_bh_x8.so
   sim_bh_galaxy:
     runs_on:
       - tt-ubuntu-2204-large-stable

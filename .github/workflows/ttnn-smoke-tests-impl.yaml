@@ -128,6 +128,10 @@ jobs:
     concurrency:
       group: ttsim-lib-${{ github.run_id }}-${{ matrix.lib }}
       cancel-in-progress: false
+      queue: max
+    permissions:
+      actions: read # the existence check reads this run's artifact list
+      contents: read
     steps:
       - name: Checkout fetch-ttsim action and pinned ttsim version
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

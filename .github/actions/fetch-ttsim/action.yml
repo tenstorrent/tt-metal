@@ -25,7 +25,7 @@ description: |
 
 inputs:
   lib:
-    description: A single libttsim_*.so asset name, as emitted per entry by prepare_test_matrix.py's sim-libs output. 
+    description: A single libttsim_*.so asset name, as emitted per entry by prepare_test_matrix.py's sim-libs output.
     required: true
   version-file:
     description: File holding the tenstorrent/ttsim release tag to download.
