@@ -1,8 +1,8 @@
 {
   "op": "tilize",
   "topology": {
-    "phase": 3,
-    "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+    "phase": 4,
+    "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4).",
     "plan_paths": [
       "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
       "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -12,15 +12,21 @@
       "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
       "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
       "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
-      "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+      "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+      "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)"
     ],
     "dtypes": [
       "bfloat16",
       "float32",
-      "bfloat8_b(out)"
+      "bfloat8_b(out)",
+      "uint32",
+      "uint16",
+      "int32",
+      "uint8 (Refinement 4; carries fp32 DEST - see F25)"
     ],
     "kernels": [
       "tilize_compute.cpp",
+      "tilize_fill.hpp",
       "tilize_reader.cpp",
       "tilize_writer.cpp"
     ]
@@ -60,8 +66,8 @@
         "off_ns": 95146.0,
         "shape": "[1,1,2048,2048] bf16",
         "topology": {
-          "phase": 3,
-          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "phase": 4,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4).",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -71,15 +77,21 @@
             "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
             "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
             "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
-            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+            "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
-            "bfloat8_b(out)"
+            "bfloat8_b(out)",
+            "uint32",
+            "uint16",
+            "int32",
+            "uint8 (Refinement 4; carries fp32 DEST - see F25)"
           ],
           "kernels": [
             "tilize_compute.cpp",
+            "tilize_fill.hpp",
             "tilize_reader.cpp",
             "tilize_writer.cpp"
           ]
@@ -136,8 +148,8 @@
       "reason": "One reader <-> one bank cannot be expressed for an INTERLEAVED ROW_MAJOR source, for any bank count. An interleaved page lives in bank `page_id % num_banks`; tilize's work unit is a tile-row = TILE_H CONSECUTIVE source sticks = TILE_H consecutive page ids, whose residues mod any num_banks > 1 are distinct. So every reader that produces even one tile touches min(TILE_H, num_banks) banks, and no work assignment fixes that without abandoning the tile. The ~92%-of-peak recipe in Saturating_DRAM_bandwidth.md needs a bank's worth of data RESIDENT per core \u2014 that is lever C15 (prefer sharded), already applied in Refinements 1-2. The Phase-0 predicted 35% was ALSO refuted on the target itself: the 288 GB/s datasheet peak is unreachable here. A pure DRAM->DRAM copy of the same tensors (examples/dram_saturation, no compute kernel at all) measures 87,710 ns @64 cores on [1,1,2048,2048] bf16, 12,078 ns on [1,1,32,16384], 174,772 ns on [1,1,8192,1024] \u2014 i.e. ~192 GB/s, and tilize now runs at or below those numbers.",
       "measured": {
         "topology": {
-          "phase": 3,
-          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "phase": 4,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4).",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -147,15 +159,21 @@
             "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
             "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
             "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
-            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+            "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
-            "bfloat8_b(out)"
+            "bfloat8_b(out)",
+            "uint32",
+            "uint16",
+            "int32",
+            "uint8 (Refinement 4; carries fp32 DEST - see F25)"
           ],
           "kernels": [
             "tilize_compute.cpp",
+            "tilize_fill.hpp",
             "tilize_reader.cpp",
             "tilize_writer.cpp"
           ]
@@ -170,8 +188,8 @@
       "phase": 0,
       "measured": {
         "topology": {
-          "phase": 3,
-          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "phase": 4,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4).",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -181,15 +199,21 @@
             "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
             "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
             "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
-            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+            "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
-            "bfloat8_b(out)"
+            "bfloat8_b(out)",
+            "uint32",
+            "uint16",
+            "int32",
+            "uint8 (Refinement 4; carries fp32 DEST - see F25)"
           ],
           "kernels": [
             "tilize_compute.cpp",
+            "tilize_fill.hpp",
             "tilize_reader.cpp",
             "tilize_writer.cpp"
           ]
@@ -341,8 +365,8 @@
           }
         },
         "topology": {
-          "phase": 3,
-          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "phase": 4,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4).",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -352,15 +376,21 @@
             "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
             "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
             "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
-            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+            "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
-            "bfloat8_b(out)"
+            "bfloat8_b(out)",
+            "uint32",
+            "uint16",
+            "int32",
+            "uint8 (Refinement 4; carries fp32 DEST - see F25)"
           ],
           "kernels": [
             "tilize_compute.cpp",
+            "tilize_fill.hpp",
             "tilize_reader.cpp",
             "tilize_writer.cpp"
           ]
@@ -409,8 +439,8 @@
           }
         },
         "topology": {
-          "phase": 3,
-          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "phase": 4,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4).",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -420,15 +450,21 @@
             "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
             "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
             "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
-            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+            "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
-            "bfloat8_b(out)"
+            "bfloat8_b(out)",
+            "uint32",
+            "uint16",
+            "int32",
+            "uint8 (Refinement 4; carries fp32 DEST - see F25)"
           ],
           "kernels": [
             "tilize_compute.cpp",
+            "tilize_fill.hpp",
             "tilize_reader.cpp",
             "tilize_writer.cpp"
           ]
@@ -443,8 +479,8 @@
       "phase": 0,
       "measured": {
         "topology": {
-          "phase": 3,
-          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "phase": 4,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4).",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -454,15 +490,21 @@
             "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
             "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
             "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
-            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+            "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
-            "bfloat8_b(out)"
+            "bfloat8_b(out)",
+            "uint32",
+            "uint16",
+            "int32",
+            "uint8 (Refinement 4; carries fp32 DEST - see F25)"
           ],
           "kernels": [
             "tilize_compute.cpp",
+            "tilize_fill.hpp",
             "tilize_reader.cpp",
             "tilize_writer.cpp"
           ]
@@ -476,8 +518,8 @@
       "phase": 0,
       "measured": {
         "topology": {
-          "phase": 3,
-          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "phase": 4,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4).",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -487,15 +529,21 @@
             "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
             "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
             "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
-            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+            "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
-            "bfloat8_b(out)"
+            "bfloat8_b(out)",
+            "uint32",
+            "uint16",
+            "int32",
+            "uint8 (Refinement 4; carries fp32 DEST - see F25)"
           ],
           "kernels": [
             "tilize_compute.cpp",
+            "tilize_fill.hpp",
             "tilize_reader.cpp",
             "tilize_writer.cpp"
           ]
@@ -607,8 +655,8 @@
           "note": "same shape at 1 block/core"
         },
         "topology": {
-          "phase": 3,
-          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "phase": 4,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4).",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -618,15 +666,21 @@
             "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
             "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
             "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
-            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+            "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
-            "bfloat8_b(out)"
+            "bfloat8_b(out)",
+            "uint32",
+            "uint16",
+            "int32",
+            "uint8 (Refinement 4; carries fp32 DEST - see F25)"
           ],
           "kernels": [
             "tilize_compute.cpp",
+            "tilize_fill.hpp",
             "tilize_reader.cpp",
             "tilize_writer.cpp"
           ]
@@ -641,8 +695,8 @@
       "phase": 0,
       "measured": {
         "topology": {
-          "phase": 3,
-          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "phase": 4,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4).",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -652,15 +706,21 @@
             "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
             "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
             "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
-            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+            "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
-            "bfloat8_b(out)"
+            "bfloat8_b(out)",
+            "uint32",
+            "uint16",
+            "int32",
+            "uint8 (Refinement 4; carries fp32 DEST - see F25)"
           ],
           "kernels": [
             "tilize_compute.cpp",
+            "tilize_fill.hpp",
             "tilize_reader.cpp",
             "tilize_writer.cpp"
           ]
@@ -690,8 +750,8 @@
         "off_ns": 92225.0,
         "shape": "[1,1,2048,2048] bf16",
         "topology": {
-          "phase": 3,
-          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "phase": 4,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4).",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -701,15 +761,21 @@
             "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
             "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
             "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
-            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+            "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
-            "bfloat8_b(out)"
+            "bfloat8_b(out)",
+            "uint32",
+            "uint16",
+            "int32",
+            "uint8 (Refinement 4; carries fp32 DEST - see F25)"
           ],
           "kernels": [
             "tilize_compute.cpp",
+            "tilize_fill.hpp",
             "tilize_reader.cpp",
             "tilize_writer.cpp"
           ]
@@ -739,8 +805,8 @@
       "phase": 0,
       "measured": {
         "topology": {
-          "phase": 3,
-          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "phase": 4,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4).",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -750,15 +816,21 @@
             "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
             "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
             "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
-            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+            "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
-            "bfloat8_b(out)"
+            "bfloat8_b(out)",
+            "uint32",
+            "uint16",
+            "int32",
+            "uint8 (Refinement 4; carries fp32 DEST - see F25)"
           ],
           "kernels": [
             "tilize_compute.cpp",
+            "tilize_fill.hpp",
             "tilize_reader.cpp",
             "tilize_writer.cpp"
           ]
@@ -766,35 +838,91 @@
       }
     },
     "F24": {
-      "status": "missed",
-      "regime": "float32 -> bfloat8_b and bfloat16 -> bfloat8_b casts (the only bf8b-emitting cells). bfp8_pack_precise is left at its CHEAP default (False), which is the optimal setting, so nothing expensive is inherited \u2014 but the arm was not measured this phase.",
-      "reason": "bfloat8_b IS in SUPPORTED[output_dtype], so the lever is applicable and cannot be closed structurally. No bf8b bench arm exists yet.",
-      "phase": 0
+      "status": "measured-no-payoff",
+      "knob": "pack_fast",
+      "reason": "bfp8_pack_precise ships at its CHEAP setting (False = the fast, truncating block-float packer) and the expensive arm was measured for the first time this phase. Both directions are inside the noise band on this op: fast 65,253 / precise 64,981 ns on the grid-filling square (-0.4%) and fast 2,930 / precise 3,008 ns on the smallest regime (+2.7%, the B0 per-core-overhead check). That is the DM bound talking - tilize is 88-95% data movement, so an extra pack pass hides in the DRAM shadow and the knob cannot pay either way. The decision is therefore made on ACCURACY, and the fast packer already clears the gate from both inputs: measured PCC 0.99997 (bf16 -> bf8b) and 1.00000 (fp32 -> bf8b) against the pad oracle, vs a 0.99 threshold - so there is no margin to buy. Note this refutes the skill's own anchor for tilize (`~1.4x slower at identical cores`): that ratio is a pack-bound measurement, and this op is not.",
+      "measured": {
+        "on_ns": 65253.0,
+        "off_ns": 64981.0,
+        "shape": "[1,1,2048,2048] bf16 -> bfloat8_b (and [1,1,32,64] for the B0 smallest-regime check: 2,930 vs 3,008)",
+        "note": "on = fast packer (shipped), off = bfp8_pack_precise. Arms: test_bench_lever_pack_fast.",
+        "topology": {
+          "phase": 4,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4).",
+          "plan_paths": [
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+            "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)"
+          ],
+          "dtypes": [
+            "bfloat16",
+            "float32",
+            "bfloat8_b(out)",
+            "uint32",
+            "uint16",
+            "int32",
+            "uint8 (Refinement 4; carries fp32 DEST - see F25)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_fill.hpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
+          ]
+        }
+      },
+      "phase": 4
     },
     "F25": {
       "status": "applied",
       "knob": "fp32_dest",
-      "reason": "fp32_dest_acc_en (+ UnpackToDestFp32 on the input CB) is enabled ONLY when the datums really are 32-bit on both sides (fp32 -> fp32), which is exactly F25's rule. It is what makes that transition bit-exact rather than tf32-truncated; every other dtype pair leaves DEST cheap.",
+      "reason": "fp32_dest_acc_en (+ UnpackToDestFp32 on the input CB) is enabled ONLY when the datums really are 32-bit on both sides (fp32 -> fp32), which is exactly F25's rule. It is what makes that transition bit-exact rather than tf32-truncated; every other dtype pair leaves DEST cheap. | Refinement 4 adds a SECOND, non-negotiable arm: a 1-byte datum (uint8). The tilize LLK's 8-bit path (ckernel_defs.h IS_8BIT_FORMAT) is only validated with DEST accumulation on, and with a 16-bit DEST the packed tile comes out ALL ZEROS (measured: probes/probe_021.py, 8159/8192 elements wrong). So on that dtype fp32 DEST is a CORRECTNESS requirement, not a precision preference, and it has no keepable off arm - it is pinned structurally instead by test_uint8_requires_fp32_dest. The gate is on the DTYPE, not on element_size(): bfloat8_b also reports 1 byte per element and must NOT take the 8-bit path.",
       "measured": {
         "on_ns": 191169.0,
         "off_ns": 192594.0,
         "shape": "[1,1,2048,2048] fp32",
         "topology": {
-          "phase": 0,
-          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "phase": 4,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4).",
           "plan_paths": [
-            "R_ALIGNED/P_ACCESSOR",
-            "R_PAD/P_ACCESSOR"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+            "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
-            "bfloat8_b(out)"
+            "bfloat8_b(out)",
+            "uint32",
+            "uint16",
+            "int32",
+            "uint8 (Refinement 4; carries fp32 DEST - see F25)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_fill.hpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
           ]
         },
         "note": "the exactness costs 0.7% here and <=3% on the other regimes (wide-short 27737 vs 26903, multiblock 363494 vs 359438) \u2014 i.e. the knob is nearly free where it is needed, and off everywhere else."
       },
-      "phase": 0
+      "phase": 0,
+      "assert_test": "tests/ttnn/unit_tests/operations/tilize/test_tilize_numeric_surface.py::test_uint8_requires_fp32_dest"
     },
     "F26": {
       "status": "structurally-impossible",
@@ -803,8 +931,8 @@
       "phase": 0,
       "measured": {
         "topology": {
-          "phase": 3,
-          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "phase": 4,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4).",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -814,15 +942,21 @@
             "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
             "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
             "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
-            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+            "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
-            "bfloat8_b(out)"
+            "bfloat8_b(out)",
+            "uint32",
+            "uint16",
+            "int32",
+            "uint8 (Refinement 4; carries fp32 DEST - see F25)"
           ],
           "kernels": [
             "tilize_compute.cpp",
+            "tilize_fill.hpp",
             "tilize_reader.cpp",
             "tilize_writer.cpp"
           ]
@@ -836,8 +970,8 @@
       "phase": 0,
       "measured": {
         "topology": {
-          "phase": 3,
-          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
+          "phase": 4,
+          "blocks_per_core": "interleaved (Refinement 3 pipeline knob: >= PIPELINE_BLOCKS_PER_CORE blocks per core whenever the read transfer stays >= MIN_PIPELINE_READ_BYTES): a_square=4, b_wide_short=1 (its 512 B read is already at the transfer floor), c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD - an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8. Refinement 4 changes NO block factor: the dtype family is a per-element WIDTH change, so derive_blocking()'s L1 cap moves with in_tile_bytes exactly as it already did for bf16 vs fp32 (uint8 a_square=4, widening_pad [1,1,1024,2048]->[1,1,2048,2048]=4).",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
@@ -847,15 +981,21 @@
             "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
             "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
             "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)",
-            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS + custom reader loop (Refinement 3: B6/B8/B10 knobs; the library-helper arm is still compiled when all three are off)",
+            "R_PAD/P_ACCESSOR/W_BLOCKS + writer OUTPUT-format pad stamp (Refinement 4: `out_fill`, the padded WIDENING cast whose fill the input format cannot hold; the reader's own fill is compiled out on this path)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
-            "bfloat8_b(out)"
+            "bfloat8_b(out)",
+            "uint32",
+            "uint16",
+            "int32",
+            "uint8 (Refinement 4; carries fp32 DEST - see F25)"
           ],
           "kernels": [
             "tilize_compute.cpp",
+            "tilize_fill.hpp",
             "tilize_reader.cpp",
             "tilize_writer.cpp"
           ]
@@ -871,6 +1011,9 @@
     "phase2_stale_closure_reread": "The 10 staleness signals at Refinement 2 are the topology block gaining three plan paths (padded-into-local-shard, the paged cross-spec gather, and that gather on the full grid). Re-read, and all still hold: A1 (row_wise) \u2014 still not called on a shard-pinned plan, and the GATED gather does call split_work_to_cores again but over the same round-robin DRAM/L1 page map where it measured as noise; A4 (no cliff width) \u2014 derive_shard_blocking still divides the shard width exactly, and Refinement 2's uneven grids split ROWS, not W, so the short last shard is a cliff in H that the per-shard block count absorbs (no second kernel width); B11 (32 B transactions) \u2014 now stronger, since every page slice of the gather is a 32 B multiple by construction and the one geometry that would break it is refused (test_unaddressable_shard_row_is_refused); B12 (no mcast/semaphores) \u2014 still zero, now asserted per-descriptor in test_reshard_placement_and_source_page_geometry; C16 (double_buffer) and D20 (regime_select) \u2014 unchanged on the interleaved rows they were measured on, though both now have a new consumer (the gather streams through the input CB and forces R_PAD), so they are the two rows most worth re-measuring in a perf phase; C17 / F23 / F26 / F27 \u2014 the format, precision-knob and arithmetic facts they rest on did not move.",
     "phase3_pipeline_lever": "NEW non-catalog lever `pipeline` (PIPELINE_BLOCKS_PER_CORE / MIN_PIPELINE_READ_BYTES): the block derivation now targets several blocks per core instead of stopping at the grid-fill floor, capped so a read transfer never drops below the B5 floor. Both constants are SWEPT, not chosen: blocks/core 1/2/4/8/16 -> 94,398 / 85,846 / 85,122 / 88,444 / 87,298 ns on [1,1,2048,2048] bf16 (4 wins, and fp32 agrees within 0.25%); MIN_PIPELINE_READ_BYTES 128/256/512/1024 -> 15,076 / 14,092 / 13,964 / 13,150 ns on [1,1,32,16384] bf16 (monotonic, so the cap correctly refuses to split that shape finer). Whole-refinement A/B (n=7 medians): [1,1,2048,2048] bf16 92,608 -> 86,235 (-6.9%), fp32 195,738 -> 181,230 (-7.4%). Both arms in _bench_tilize.py (`pipeline`, plus `pre_r3` = every Refinement-3 lever off at once).",
     "phase3_ceiling_retarget": "The DRAM-floor target the queue quoted (288 GB/s -> 58.3 us on [1,1,2048,2048]) is a datasheet number this box cannot reach for an interleaved DRAM->DRAM stream. Measured practical ceiling with examples/dram_saturation (pure copy, NO compute kernel): 87,710 ns @64c / 86,943 @32c on 2048x2048 bf16 (191-193 GB/s), 12,078 @64c / 11,550 @32c on 32x16384, 174,772 @64c on 8192x1024. tilize now measures 86,235 / 13,606 / 171,695 ns \u2014 i.e. 1.01x, 0.89x and 1.02x of a pure copy of the same bytes. Use these, not 288 GB/s, as the target.",
-    "phase3_split_dm_ablation": "New ABLATE keys dm_read / dm_write attribute the wall to each NoC half. bf16: (a) full 86,594 | no_reads 59,482 | no_writes 43,930; (b) 12,721 | 9,364 | 8,155; (c) 169,518 | 122,680 | 93,055. The WRITE half is the larger one everywhere, which is why B8's writer twin was built rather than shipping a reader-only lever."
+    "phase3_split_dm_ablation": "New ABLATE keys dm_read / dm_write attribute the wall to each NoC half. bf16: (a) full 86,594 | no_reads 59,482 | no_writes 43,930; (b) 12,721 | 9,364 | 8,155; (c) 169,518 | 122,680 | 93,055. The WRITE half is the larger one everywhere, which is why B8's writer twin was built rather than shipping a reader-only lever.",
+    "phase4_stale_closure_reread": "Refinement 4 moves the topology in three ways (a new element WIDTH family down to 1 byte, rank 0, and the writer's optional OUTPUT-format pad stamp in a new shared header), so all 13 negative closures were re-read before their topology stamps were refreshed. All still hold, and one needed real re-checking rather than a glance: B11 (alignment) is the only row a NARROWER element could break, because the aligned read chunk is WT_CHUNK*32*elem - at 1 byte/elem the smallest possible chunk is one tile column = 32 B, exactly the DRAM alignment, so it still cannot go under. test_b11_every_transaction_is_dram_aligned is now parametrized over all three widths (1/2/4 B) to keep that pinned. The rest are untouched by an element width: A1/B10 are placement and VC, A3's page->bank residue argument is dtype-free, A4's exact-divisor W split is unchanged, B12 (nothing is read twice) and C17 (RM-in/TILE-out cannot alias) are properties of the permutation itself, C16/D20 were measured on the interleaved path this phase did not touch, F23 (no caller-supplied precision knob) still holds - tilize still exposes no ComputeKernelConfig - and F26/F27 (lossless unpack, math fidelity) are untouched: uint8 gets fp32 DEST but still Fp32Mode::Fast, and the op still does no arithmetic.",
+    "R4_out_fill": "Refinement 4 added the `out_fill` knob (LEVERS, default 1) with both arms in _bench_tilize.py (test_bench_lever_out_fill). It is a CORRECTNESS mechanism, not a perf lever - it is what makes a padded WIDENING cast exact, so its off arm has no correct output on the cells it governs - but it is benched because it is the most expensive thing this refinement adds. Worst-case geometry ([1,1,1024,2048] -> [1,1,2048,2048] bf16 -> fp32, half the output tiles are WHOLE pad tiles): 386,033 ns with the stamp vs 187,130 without, i.e. 2.06x. The stamp is 2 M fp32 rv32 volatile L1 word stores at ~10 cycles each; two things were measured on it. (1) Filling the LARGEST contiguous runs the tiled face geometry allows (face-first instead of row-first) is FLAT - the cost is the store COUNT, not loop overhead. (2) Skipping the reader's now-redundant input-format fill on this path (identical fill region, and the writer's word is the exact one) is worth 28.6%: 540,314 -> 386,033 ns. Remaining idea, NOT built: stamp one tile then replicate it with local L1->L1 noc_async_write, which would trade ~1024 stores per whole-pad tile for one 4 KB NoC transfer. It needs a scratch buffer and puts the writer's NoC on a path that currently has none, and the cells that reach the stamp at all are narrow (a bf16 -> fp32 pad whose fill is not bf16-representable - 10.2 yes, 0.0 / 3.5 / -18.0 / -32.5 all exact and therefore stamp-free).",
+    "R4_gate_is_the_lever": "The `out_fill` gate (needs_output_format_fill: quantize the fill through the input format, then through the output format, and compare against quantizing straight to the output format) is what keeps the 2.06x off every other cell. It is pinned by test_out_fill_gate_fires_only_when_the_round_trip_loses_the_fill over 9 dtype/fill combinations, plus test_out_fill_is_off_on_the_unpadded_hot_path, so the unpadded and same-format paths stay byte-identical to Refinement 3's kernels."
   }
 }

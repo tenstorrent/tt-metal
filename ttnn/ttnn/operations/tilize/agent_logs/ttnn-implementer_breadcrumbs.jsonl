@@ -25,3 +25,5 @@
 {"event":"test_run","status":"pass","test":"probes/probe_022.py","detail":"uint8 exact identity, multicore True+False; host TILE round-trip sane","ts":"2026-08-14T15:33:45+00:00"}
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/tilize/","detail":"181 passed - no regression from the dtype family, rank 0, out_fill stamp or EXCLUSIONS removal","ts":"2026-08-14T15:41:27+00:00"}
 {"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/tilize/test_tilize_numeric_surface.py","detail":"65 passed - integer family exact, rank 0, bf8b padded PCC, widening-cast pad exact, out_fill gate pinned","ts":"2026-08-14T15:47:29+00:00"}
+{"event":"test_run","status":"pass","test":"unit dir + golden + regression","detail":"unit 255 passed; golden 324 passed / 24 xfail (all tile_height!=32, Refinement 5) / 0 failed / 0 xpass; regression 26 passed 1 skipped","ts":"2026-08-14T15:56:13+00:00"}
+{"event":"test_run","status":"pass","test":"final: unit 255, golden 324/24xfail/0fail, verify_levers phase 4 clean, --dev green","ts":"2026-08-14T16:02:41+00:00"}

@@ -661,13 +661,9 @@ def test_bench_dtype_family(device, regime, dtype_name):
 _OUT_FILL_SHAPE = ([1, 1, 1024, 2048], [1, 1, 2048, 2048])
 
 
-@pytest.mark.parametrize("out_fill", [1, 0], ids=["on", "off"])
-def test_bench_lever_out_fill(device, out_fill):
-    """Refinement 4: the writer's OUTPUT-format pad stamp. OFF is the
-    pre-Refinement-4 behaviour (input-format fill only), which on a WIDENING cast
-    with an input-inexact fill is numerically wrong — so this arm prices the
-    correctness fix, it is not a choice. Worst-case geometry: half the output tiles
-    are whole pad tiles."""
+def _measure_widening_pad(device, levers, label):
+    """The worst-case geometry for the OUTPUT-format pad stamp: half the output
+    tile-rows are WHOLE pad tiles, so every element of them is stored individually."""
     shape, target = _OUT_FILL_SHAPE
     _measure(
         device,
@@ -675,23 +671,76 @@ def test_bench_lever_out_fill(device, out_fill):
         ttnn.bfloat16,
         out_dtype=ttnn.float32,
         pad=dict(output_padded_shape=target, pad_value=10.2),
-        levers=dict(out_fill=out_fill),
-        label=f"out_fill={out_fill}/widening_pad",
+        levers=levers,
+        label=label,
     )
 
 
+# The two arms spell their knob value as a LITERAL rather than sharing one
+# parametrized body: `eval/verify_levers.py` scans the bench for
+# `levers=dict(<knob>=<int>)` to prove the counterfactual is re-runnable, and a
+# forwarded parameter is invisible to it.
+def test_bench_lever_out_fill_on(device):
+    """Refinement 4: the writer's OUTPUT-format pad stamp, shipped state."""
+    _measure_widening_pad(device, dict(out_fill=1), "out_fill=1/widening_pad")
+
+
+def test_bench_lever_out_fill_off(device):
+    """OFF is the pre-Refinement-4 behaviour (the reader's input-format fill only),
+    which on a WIDENING cast with an input-inexact fill is numerically WRONG — so
+    this arm prices a correctness fix, it is not a choice of setting."""
+    _measure_widening_pad(device, dict(out_fill=0), "out_fill=0/widening_pad")
+
+
 @pytest.mark.parametrize("regime", ["a_square", "d_smallest"])
-@pytest.mark.parametrize("pack_fast", [1, 0], ids=["on", "off"])
-def test_bench_lever_pack_fast(device, regime, pack_fast):
-    """master.md F24 (`bfp8_pack_precise`). ON (shipped) = the FAST block-float
-    packer; OFF = the precise packer, which rounds instead of truncating and costs
-    an extra pack pass. bfloat8_b is the only output format the knob touches, so
-    the arm has to request it explicitly."""
+def test_bench_lever_pack_fast_on(device, regime):
+    """master.md F24 (`bfp8_pack_precise`), shipped state: the FAST (truncating)
+    block-float packer. bfloat8_b is the only output format the knob touches, so the
+    arm requests it explicitly. `d_smallest` is the B0 per-core-overhead check."""
     _measure(
         device,
         SHAPES[regime],
         ttnn.bfloat16,
         out_dtype=ttnn.bfloat8_b,
-        levers=dict(pack_fast=pack_fast),
-        label=f"pack_fast={pack_fast}/{regime}",
+        levers=dict(pack_fast=1),
+        label=f"pack_fast=1/{regime}",
+    )
+
+
+@pytest.mark.parametrize("regime", ["a_square", "d_smallest"])
+def test_bench_lever_pack_fast_off(device, regime):
+    """F24 OFF: `bfp8_pack_precise=True`, the precise packer — it rounds instead of
+    truncating and costs an extra pack pass."""
+    _measure(
+        device,
+        SHAPES[regime],
+        ttnn.bfloat16,
+        out_dtype=ttnn.bfloat8_b,
+        levers=dict(pack_fast=0),
+        label=f"pack_fast=0/{regime}",
+    )
+
+
+@pytest.mark.parametrize(
+    "ablate, name",
+    [({}, "full"), ({"compute": 1}, "no_compute"), ({"dm": 1}, "no_dm"), ({"compute": 1, "dm": 1}, "sync_only")],
+    ids=["full", "no_compute", "no_dm", "sync_only"],
+)
+def test_bench_widening_pad_ablation(device, ablate, name):
+    """Classify the ONE path Refinement 4 adds. Every other path keeps Phase 0's
+    DM-bound verdict (an element width does not change what binds), but the
+    OUTPUT-format pad stamp is neither compute nor NoC: it is rv32 volatile L1
+    stores on the WRITER, so both payload ablations must leave it standing.
+
+    Measured: full 385,227 -> no_compute 393,690 -> no_dm 355,588 -> ALL payloads
+    stubbed at once 360,882 ns. 94% of the wall survives with nothing but the CB
+    handshake and the stamp left, so this path is STAMP-bound."""
+    _measure(
+        device,
+        _OUT_FILL_SHAPE[0],
+        ttnn.bfloat16,
+        out_dtype=ttnn.float32,
+        pad=dict(output_padded_shape=_OUT_FILL_SHAPE[1], pad_value=10.2),
+        ablate=ablate,
+        label=f"ablate:{name}/widening_pad",
     )

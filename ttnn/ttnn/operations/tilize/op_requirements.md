@@ -233,7 +233,7 @@ a core-count knob is a work-distribution change beyond this heading's scope.
 
 ---
 
-### [ ] Refinement 4 — Integer dtype family, rank 0, and the two padding EXCLUSIONS
+### [x] Refinement 4 — Integer dtype family, rank 0, and the two padding EXCLUSIONS
 
 **Goal**: three bundled numeric-surface items.
 (1) `dtype`/`output_dtype += [uint32, uint8]` (plus `uint16` / `int32`, which
@@ -264,6 +264,37 @@ integers, so compare **exactly** and do not lean on PCC.
 `uint16` / `int32` cases pass); the rank-0 scalar cell's data region is the single input value with every
 other position the fill; `EXCLUSIONS` is empty and the 30 cells it was gating pass; no regression on any
 prior bench.
+
+**Outcome**: done. Golden `test_golden.py` 190 → **324 passed**, 158 → 24 xfail, 0 failed, 0 xpass drift;
+`test_regression.py` 15 → **26 passed** (0 failed); unit dir 181 → 255. **Every remaining golden xfail is
+`tile_height != 32`**, i.e. the whole residue is Refinement 5 and no dtype / rank / padding cell is refused.
+`verify_levers --phase 4`: 0 blocking, 0 stale.
+Three of the four integer dtypes needed **only the axis list** — tilize is a byte permutation and every byte
+quantity already derived from `element_size()`. `uint8` needed one host flag: the tilize LLK's 8-bit path
+(`IS_8BIT_FORMAT`) is only validated with DEST accumulation on, and with a 16-bit DEST the tile packs
+**all zeros** (not merely strided, as the queue predicted) — found by reading the LLK fork, fixed by gating
+`fp32_dest_acc_en` on the DTYPE (`bfloat8_b` also reports 1 byte/elem and must not take that path). rank 0
+needed no kernel change: `_expand_rank()` promotes the shape once on the host and the kernels never see a
+degenerate rank. Of the two EXCLUSIONS, **`bfloat8_b` × padded was a false negative** — nothing had to be
+built, the packer builds the shared exponent over pad and data alike (measured PCC 0.99997 / 1.00000 vs a
+0.99 gate); the widening-cast one was real and is fixed by the writer's second, OUTPUT-format fill word,
+gated by `needs_output_format_fill()` so the stamp fires *only* when the input-format round trip loses the
+fill (10.2 yes; 0.0 / 3.5 / −18.0 / −32.5 are bf16-exact and stay stamp-free, as do no-cast, narrowing and
+block-float outputs). Every other cell's kernel is byte-identical to Refinement 3's.
+**Perf.** No regression: all 12 cumulative bench rows inside the ±3% band (medians of 4 fresh-cache runs).
+F24 (`bfp8_pack_precise`) closed with both arms — fast 65,080 vs precise 65,124 ns on the square and 2,858 vs
+3,086 on the smallest regime, i.e. **neither direction pays on a DM-bound op**, which refutes
+`/numeric-formats-metal`'s ~1.4× anchor (that is a pack-bound number). The one new path costs **2.06×**
+(386,033 vs 187,130 ns) on a worst-case padded widening shape where half the output tiles are whole pad
+tiles; 28.6% of it was recovered by compiling out the reader's now-redundant input-format fill
+(540,314 → 386,033), while making the stamp fill larger contiguous runs measured **flat** — the cost is the
+store count (~2 M rv32 volatile L1 word stores), not loop overhead. Ablating **every payload at once** on
+that shape leaves 360,882 of 385,227 ns standing, so it is **stamp-bound**, not DM- or compute-bound.
+**What I would try next and did not**: stamp one tile and replicate it with a local L1→L1
+`noc_async_write`, trading ~1024 stores per whole-pad tile for one 4 KB NoC transfer — the ablation says
+that is where the time is. Not built because it needs a scratch buffer and puts NoC traffic on a writer path
+that currently has none, and the cells that reach the stamp at all are narrow (a bf16 → fp32 pad whose fill
+is not bf16-representable). Recorded in `lever_ledger.json` (`notes.R4_out_fill`), not filed as work.
 
 ---
 

@@ -889,3 +889,198 @@ W = 64…65536, and the B8 two-slot CB precondition. `_bench_tilize.py` +9 arms:
 / `read_vc` / `read_one_packet` / library-reader OFF arms, the split-DM halves,
 the overlap-mechanism matrix, and `pre_r3`. Whole tilize unit directory:
 **181 passed**, green in plain and `--dev` mode.
+
+---
+
+## Refinement 4 — Integer dtype family, rank 0, and the two padding EXCLUSIONS
+
+- **Date**: 2026-08-14
+- **Status**: complete. Golden `test_golden.py` **190 → 324 passed**, 158 → **24 xfail**,
+  0 failed, 0 xpass drift. `test_regression.py` **15 → 26 passed** (1 skipped, was 12 failed).
+  Whole tilize unit directory **181 → 255 passed**. `verify_levers --phase 4`: **0 blocking,
+  0 stale**. Every one of the 24 remaining golden xfails is `tile_height != 32` — i.e. the
+  entire residue is Refinement 5's tiny-tile/retile scope, and no dtype, rank or padding
+  cell is left refused.
+
+### What was done
+
+Three bundled numeric-surface items, all on the SHARED data path — no new kernel, no
+second program-descriptor branch.
+
+**(1) The integer dtype family.** `SUPPORTED["dtype"] += [uint32, uint16, int32, uint8]`
+and the same four on `output_dtype`. Three of the four needed **nothing but the axis
+list**: tilize is a byte permutation, every byte quantity in the descriptor already
+derives from `element_size()`, `_pack_pad_word` already had arms for all four widths, and
+`fill_l1_with_val<elem_bytes>` already handled `elem_bytes == 1`. `uint32` / `uint16` /
+`int32` were exact on the first probe, single- and multi-core.
+
+`uint8` was **not** free, and its failure signature was worse than the queue predicted:
+not a *strided* tile but an **all-zero** one (8159/8192 elements wrong). Root cause is one
+host-side flag, found by reading the LLK rather than by bisecting the kernel — the tilize
+8-bit path (`ckernel_defs.h IS_8BIT_FORMAT`, forked in unpack **and** math **and** pack) is
+only ever exercised with DEST accumulation on (`tt-llk .../test_unpack_tilize.py::
+test_unpack_tilize_int8` runs `DestAccumulation.Yes`), and the pre-nuke C++ tilize set the
+same `fp32_llk_acc` predicate for its own 8-bit dtype. So `fp32_dest_acc_en` is now
+enabled for a 1-byte datum as well as for fp32→fp32, gated on the **dtype** rather than on
+`element_size()` — `bfloat8_b` also reports one byte per element and must not take the
+8-bit path (`EIGHT_BIT_DTYPES` vs `BLOCK_FLOAT_DTYPES`, both pinned).
+
+**(2) rank 0.** A scalar has no tile dims of its own; the pad target synthesizes them.
+Rather than special-case the kernels, the promotion lives in ONE place on the host:
+`_expand_rank()` left-expands the input shape to the target's rank, and the plan carries
+`read_shape` / `read_padded` as the geometry view every kernel-facing derivation reads
+(`h_in`, `w_in_bytes`, the image count, `src_page_geometry`, `shard_side_plan`). The
+kernels never see a degenerate rank and were not touched. `pad_mode="auto"` now
+synthesizes `[32, 32]` for rank 0 instead of raising, and the entry point skips the
+logical-shape restore below rank 2 — a logical and a padded shape must share a rank, so a
+scalar's padded view *is* its shape (which is exactly why the golden oracle skips its own
+logical check there).
+
+**(3) Both EXCLUSIONS deleted** — one was never real, one is now fixed.
+
+*`bfloat8_b` output × padded* was a **false negative**. Nothing had to be built: the fill
+is materialized into the input CB in a plain float format, and the packer builds the
+block-float shared exponent over pad and data alike, so a pad position is an ordinary
+datum by the time it reaches the pack stage. Measured PCC against the pad oracle
+**0.99997** (bf16 in) and **1.00000** (fp32 in) versus the suite's 0.99 threshold. The
+Phase-0 reasoning ("the shared exponent is defined over the 16×16 face structure") was
+correct about the format and wrong about the consequence — worth recording, because it is
+the second disqualifier this op has lost to a measurement.
+
+*`bfloat16 → float32` × non-zero pad* was real, and is fixed by the mechanism the queue
+named: **a second fill word in the OUTPUT format, applied after the cast.** The reader's
+fill stays in the **input** element format (a hard contract — packing it in `output_dtype`
+is garbage the moment a cast is requested), so the writer now re-stamps the pad region of
+each finished tile with `pad_word_out` before the bytes leave L1 (`kernels/tilize_fill.hpp`
+`fill_tile_pad`, shared with the reader so the fill primitive has one source). Exact on
+every geometry: W tail, H tail, whole pad tiles, single- and multi-core, and rank 0.
+
+The gate is the load-bearing part. `needs_output_format_fill()` quantizes the fill through
+the input format and then the output format, and compares against quantizing straight to
+the output format — so the stamp fires **only** when the round trip actually loses the
+value. bf16→fp32 with 10.2 fires; with 0.0 / 3.5 / −18.0 / −32.5 (all bf16-representable)
+it does not; a no-cast, a narrowing cast (the packer's own truncation already lands the
+right value) and a block-float output never do. Every other cell's kernel is therefore
+byte-identical to Refinement 3's, pinned by
+`test_out_fill_gate_fires_only_when_the_round_trip_loses_the_fill` (9 combinations) and
+`test_out_fill_is_off_on_the_unpadded_hot_path`.
+
+### Accuracy achieved
+
+Exact (`comp_equal`, not PCC — tilize does no arithmetic, and `uint8`'s historical failure
+is shape-correct/value-wrong, which a PCC threshold would pass):
+
+| family | shapes | result |
+|---|---|---|
+| uint32 / uint16 / int32 / uint8, unpadded | `[1,1,32,64]`, `[1,1,64,128]`, `[2,32,64]`, `[1,1,2048,64]` × single/multi-core | exact |
+| uint32 / uint16 / int32 / uint8, padded | `[1,1,50,50] → [1,1,128,128]` (W tail + H tail + whole pad tiles) | exact |
+| rank 0 scalar, bf16 / fp32 / uint32 / uint8 | `[] → [32,32]`, explicit and auto | exact |
+| bf16 → fp32 padded, fills 10.2 / −18.3 / 3.5 | `[1,1,50,50] → [1,1,128,128]` × single/multi-core | exact (was ATOL 0.0125) |
+| bf16 / fp32 → bfloat8_b padded | `[1,1,50,50] → [1,1,64,64]`, fills 0.0 / 10.2 / −18.0 | PCC 0.99997 / 1.00000 (gate 0.99) |
+
+### Golden test progress
+
+`test_golden.py` **324 / 348 runnable** (592 INVALID skipped, 24 xfail = every
+`tile_height != 32` cell, 0 failed, 0 xpass drift). `test_regression.py` **26 passed,
+1 skipped, 0 failed** — the 10 `uint16` / `int32` failures the queue called out are gone,
+along with the 2 sharded ones Refinement 1–2 had already fixed.
+`test_golden_main_tests.py` 32 passed / 1 failed / 16 skipped; the single failure is the
+**pre-existing** Refinement-1 `EXCLUSIONS` row (`use_multicore=False × sharded` — a shard
+is inherently multi-core), untouched by and out of scope for this refinement.
+
+### Perf gate
+
+**Bound classification.** Every pre-existing path keeps Phase 0's **DM-bound** verdict: an
+element width is not a topology change, and no block factor moved (`derive_blocking()`'s L1
+cap tracks `in_tile_bytes` exactly as it already did for bf16 vs fp32). The ONE path this
+refinement adds was ablated on its own, with **every payload stubbed simultaneously** —
+the only run that licenses a whole-path verdict:
+
+| widening-pad `[1,1,1024,2048] → [1,1,2048,2048]` bf16→fp32 | ns |
+|---|---|
+| full | 385,227 |
+| no compute | 393,690 (noise) |
+| no data movement | 355,588 (−7.7%) |
+| **all payloads stubbed at once** | **360,882 (−6.3%)** |
+
+94% of that wall survives with nothing but the CB handshake and the stamp, so the padded
+widening path is **stamp-bound** — rv32 volatile L1 stores on BRISC, neither compute nor
+NoC. That is the correct classification to carry forward and it is what makes the
+"replicate a stamped tile over the NoC" idea below the right next lever rather than a guess.
+
+**Cost of the new capability, and 28.6% of it recovered.** The stamp on that worst-case
+geometry (half the output tiles are *whole* pad tiles) costs **2.06×**: 386,033 ns with vs
+187,130 without (`test_bench_lever_out_fill_{on,off}`). Two things were measured on the way
+there. (a) Filling the largest contiguous runs the tiled face geometry allows (face-first
+instead of row-first: a whole pad tile is one run, a whole pad face is one run) is **flat**
+— the cost is the store *count*, ~2 M fp32 word stores at ~10 cycles each, not loop
+overhead. The face-first form is kept anyway: strictly fewer instructions, and it is what
+made (b) expressible. (b) When the writer stamps every pad position, the **reader's**
+input-format fill over the same region is dead work — the two fill sets are provably
+identical (same `h_in` / `w_in` / image geometry, same block index map) and the writer's
+word is the exact one. Compiling it out is worth **28.6%: 540,314 → 386,033 ns**.
+
+**F24 closed with a number, and it refutes the skill's anchor for this op.**
+`bfp8_pack_precise` was the last `missed` row. Both arms now measured
+(`test_bench_lever_pack_fast_{on,off}`): fast 65,080 / precise 65,124 ns on the
+grid-filling square, and fast 2,858 / precise 3,086 on the smallest regime (the mandatory
+B0 check). Neither direction pays — this op is 88–95% data movement, so the extra pack pass
+hides in the DRAM shadow. `/numeric-formats-metal` cites ~1.4× for precise on a bf16→bfp8_b
+tilize; that is a **pack-bound** measurement and does not describe a DM-bound one. The
+decision is therefore made on accuracy alone, and the fast packer already clears the gate
+by four nines, so there is no margin to buy. Shipped fast, recorded `measured-no-payoff`.
+
+**Non-regression across the cumulative bench set** (medians of 4 fresh-cache runs; the
+±3% band is Phase 0's measured spread):
+
+| shape | prior recorded | now | Δ |
+|---|---|---|---|
+| (a) `[1,1,2048,2048]` bf16 | 86,235 (R3) | 86,619 | +0.4% |
+| (a) `[1,1,2048,2048]` fp32 | 181,230 (R3) | 181,925 | +0.4% |
+| (b) `[1,1,32,16384]` bf16 | 13,131–13,478 (R3) | 13,346 | in band |
+| (b) `[1,1,32,16384]` fp32 | 27,737 (P0 F25) | 26,876 | −3.1% |
+| (c) `[1,1,8192,1024]` bf16 | 170,508 (P0) | 172,072 | +0.9% |
+| (c) `[1,1,8192,1024]` fp32 | 363,494 (P0 F25) | 357,000 | −1.8% |
+| (d) `[1,1,32,64]` bf16 / fp32 | 2,889 / 3,112 (P0) | 2,882 / 3,114 | flat |
+| (e) shard same-spec `[1,1,512,64]`×4 | 1,402 (R1) | 1,407 | flat |
+| (e) shard same-spec `[1,1,2048,256]`×8 | 4,901 (R1) | 4,878 | −0.5% |
+| crossover `[1,1,2048,256]` | 4,242 (R2) | 4,253 | flat |
+| reshard cross-spec `[1,1,1024,256]` | 18,487 (R2) | 18,053 | −2.3% |
+| padded → local shard `[1,1,2040,256]` | 1.35× vs `zero_copy=0` (R2) | 22,365 vs 30,201 = 1.35× | flat |
+
+Nothing outside the noise band. New rows added to the cumulative set for later phases:
+uint32 `[1,1,2048,2048]` 183,165 / `[1,1,32,64]` 3,155; uint8 `[1,1,2048,2048]` 44,810 /
+`[1,1,32,64]` 2,827; the widening-pad stamp pair; the `pack_fast` pair.
+
+### Issues encountered
+
+1. **A header-only kernel edit measured "flat" and I nearly believed it.** Two successive
+   `out_fill` measurements agreed to 0.03%, which looked like a stale JIT binary. Rather
+   than reason about it, I poisoned `fill_tile_pad` (`word += 1`) and re-ran: 4 targeted
+   failures, 2 passes (the 2 being `pad_value=3.5`, which is bf16-exact and therefore never
+   reaches the stamp). So the JIT's per-object `.dephash` **does** track included headers,
+   and the flat result was the truth — the cost really is the store count. Worth the two
+   minutes: without the check I would have "optimized" against a phantom cache and drawn
+   the wrong conclusion about where the time goes.
+2. **`output_tensor.element_size()` raises for `bfloat8_b`** ("datum for bfp2, bfp4, bfp8
+   is invalid"), which the new writer arg tripped immediately. It is only meaningful on the
+   stamp path — which `needs_output_format_fill` already excludes block floats from — so it
+   is queried only there.
+3. **`verify_levers` cannot see a forwarded knob.** Its bench scan matches
+   `levers=dict(<knob>=<int literal>)`, so `levers=dict(pack_fast=pack_fast)` read as "no
+   re-runnable arm" even though the arm existed. The two new lever pairs now spell their
+   value as a literal in separate on/off tests, with a comment saying why.
+4. The single `test_golden_main_tests.py` failure is the pre-existing
+   `use_multicore=False × sharded` EXCLUSION from Refinement 1, not a Refinement-4
+   regression.
+
+### Tests added
+
+`tests/ttnn/unit_tests/operations/tilize/test_tilize_numeric_surface.py` — **65 cases**:
+integer identity exact over 4 dtypes × 4 shapes × single/multi-core, integer padded
+identity, the `uint8` fp32-DEST pin (named by `lever_ledger.json`), rank-0 explicit and
+auto, `EXCLUSIONS` emptiness, padded `bfloat8_b` by PCC, the widening-cast pad exactness,
+and the two `out_fill`-gate pins. `test_tilize_levers.py`'s B11 alignment pin is now
+parametrized over all three element widths (1/2/4 B) — the only closure a narrower datum
+could have broken. `_bench_tilize.py` +11 arms: the integer-dtype baselines, the
+`out_fill` and `pack_fast` on/off pairs, and the widening-pad 4-way ablation.
