@@ -5072,3 +5072,40 @@ offset at the 17:26 capture against 649.7 s measured (7% high, because the card 
 activity changes both duty cycles).
 
 Card healthy after the reset: a `driscz` ResNet rep gives 0.0016321 s, 0 stalls, 0 dropped, 0 ts regressions.
+
+### A HOST REBOOT does not fix it either — chip reset AND warm host reboot both survived
+
+`tt-smi -r` left the duty ratio unchanged; a **host reboot** is the stronger event (it re-runs PCIe enumeration
+and CMFW init, neither of which a chip reset touches), so it was worth testing separately. Same 3-probe protocol,
+run ~20 s after the container came back (host uptime 0 min):
+
+| bh-05 | worker advance | DRAM advance | **duty ratio** |
+|---|---|---|---|
+| baseline | +1.82 s / 32 s | +19.75 s / 32 s | 0.090 |
+| after `tt-smi -r` | +1.81 / +1.82 s | +19.73 / +19.74 s | 0.092 / 0.092 |
+| **after HOST REBOOT** | **+1.84 / +1.91 s** | **+19.77 / +19.84 s** | **0.093 / 0.096** |
+| bh-26, reference | +19.60 s / 34 s | +19.60 s / 34 s | 1.0000 |
+
+**Unchanged across four independent measurements spanning a chip reset and a warm host reboot.** The card WAS
+re-zeroed by the reboot (probe B read worker 23.6 s / DRAM 48.4 s, both small), so the counters restarted and the
+ratio still came back at 0.09. The offset regrew at ~0.54 s/s as before (+24.8 → +42.7 → +60.6 s).
+
+**Only a COLD power cycle remains untried**, and per §N+29/`drisc_pcie_hang_two_states` a warm reboot is
+explicitly NOT equivalent to one for this card. So the honest status is: **not fixable by anything in-band**, and
+a cold power cycle is the one lever left. Either way this is a card/CMFW matter and the profiler is immune.
+
+**CAVEAT on what "duty ratio 0.09" means.** It is measured under a FIXED, idle-dominated protocol (three short
+probe processes with 30 s of idle between them), and it is not a universal constant of the card: during host boot
+the worker counter clearly ran much closer to full rate (at probe B it had banked 23.6 s, far more than 0.057 of
+the elapsed wall). The Tensix clock runs at 1350.0 MHz *while Tensix is active* and is ~stopped while it is not,
+so the ratio reflects the activity mix. It is a valid DISCRIMINATOR only because bh-26 was measured under the
+identical protocol and returned 1.0000 — quote it with its protocol, never as a bare property.
+
+Card healthy after the reboot: `driscz` ResNet rep **0.0016125 s**, 0 stalls, 0 dropped, 0 ts regressions.
+
+**Reboot recovery gotcha (cost a `rc=127`):** `/home` is NOT persistent across a host reboot on this box, so
+`/home/mmemarian/.local/share/uv/python/` vanished and `python_env/bin/python` dangled. The venv's
+`site-packages` survive (they live under `/localdev`), so the repair is a one-line repoint to the system
+interpreter of the same minor version: `ln -sfn /usr/bin/python3.10 python_env/bin/python` (3.10.12, same `cp310`
+ABI — `import ttnn` then works). The C++ `--clkprobe` path needs no venv at all, which is why the clock
+measurement above was unaffected.
