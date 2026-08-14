@@ -131,6 +131,8 @@ runs:
         MAX_RECOVERY_ATTEMPTS: ${{ inputs.max-recovery-attempts }}
         CABLING_DESCRIPTOR_PATH: ${{ inputs.cabling-descriptor-path }}
         DEPLOYMENT_DESCRIPTOR_PATH: ${{ inputs.deployment-descriptor-path }}
+        # Validation binary comes from the cmake tarball, not the wheel.
+        LD_LIBRARY_PATH: /home/user/tt-metal/build/lib
       run: |
         set -euo pipefail
         if ! command -v ttop-recovery >/dev/null 2>&1; then
@@ -154,8 +156,10 @@ runs:
       shell: bash
       working-directory: /tmp
       run: |
+        # Do not inherit a caller LD_LIBRARY_PATH overlay of the cmake tarball.
+        export LD_LIBRARY_PATH=
         mpirun --pernode --tag-output bash -lc '
-          python3 -c "import ttnn; print(\"ttnn import: OK\")"
+          python3 -c "import ttnn; print(\"ttnn import: OK\", ttnn.__file__)"
           python3 -c "import ttnn.device; print(\"ttnn.device import: OK\")"
         '
 
