@@ -678,6 +678,42 @@ void FiberScheduler::spawn(std::function<void()> entry, std::unique_ptr<ThreadCo
     p_->all_.push_back(std::move(f));   // home + ready-queue placement happens in run_until_idle
 }
 
+// Conservative stack scan naming the blaze op a parked fiber sits in.
+// Walks the fiber's saved stack for words that dladdr resolves to a symbol, and
+// returns the first demangled blaze::...::Op<...> frame. Env-gated
+// (EMULE_PARK_STACKS=1) and best-effort: a false positive is a stale return address,
+// never a crash (every deref is bounds-checked against the fiber's own mapping).
+static std::string emule_park_op_name(const Fiber* f) {
+    if (!f || !f->map_base || f->map_bytes == 0) {
+        return {};
+    }
+    auto sp = static_cast<uintptr_t>(f->ctx.uc_mcontext.gregs[REG_RSP]);
+    auto lo = reinterpret_cast<uintptr_t>(f->map_base);
+    auto hi = lo + f->map_bytes;
+    if (sp < lo || sp >= hi) {
+        return {};
+    }
+    for (uintptr_t p = sp; p + sizeof(void*) <= hi; p += sizeof(void*)) {
+        void* word = *reinterpret_cast<void* const*>(p);
+        if (!word) {
+            continue;
+        }
+        Dl_info info{};
+        if (!dladdr(word, &info) || !info.dli_sname) {
+            continue;
+        }
+        int status = 0;
+        char* dem = abi::__cxa_demangle(info.dli_sname, nullptr, nullptr, &status);
+        std::string name = (status == 0 && dem) ? dem : info.dli_sname;
+        std::free(dem);
+        if (name.find("blaze::") != std::string::npos && name.find("::Op<") != std::string::npos) {
+            auto cut = name.find(">::");
+            return cut == std::string::npos ? name : name.substr(0, cut + 1);
+        }
+    }
+    return {};
+}
+
 uint64_t FiberScheduler::begin_spawn_generation() {
     std::lock_guard<std::mutex> g(p_->mu_);
     return ++p_->spawn_gen_;
@@ -727,42 +763,6 @@ void FiberScheduler::abandon_host_wait(const std::string& why) {
         p_->stall_reason_ = why;
     }
     teardown_and_throw();
-}
-
-// Conservative stack scan naming the blaze op a parked fiber sits in.
-// Walks the fiber's saved stack for words that dladdr resolves to a symbol, and
-// returns the first demangled blaze::...::Op<...> frame. Env-gated
-// (EMULE_PARK_STACKS=1) and best-effort: a false positive is a stale return address,
-// never a crash (every deref is bounds-checked against the fiber's own mapping).
-static std::string emule_park_op_name(const Fiber* f) {
-    if (!f || !f->map_base || f->map_bytes == 0) {
-        return {};
-    }
-    auto sp = static_cast<uintptr_t>(f->ctx.uc_mcontext.gregs[REG_RSP]);
-    auto lo = reinterpret_cast<uintptr_t>(f->map_base);
-    auto hi = lo + f->map_bytes;
-    if (sp < lo || sp >= hi) {
-        return {};
-    }
-    for (uintptr_t p = sp; p + sizeof(void*) <= hi; p += sizeof(void*)) {
-        void* word = *reinterpret_cast<void* const*>(p);
-        if (!word) {
-            continue;
-        }
-        Dl_info info{};
-        if (!dladdr(word, &info) || !info.dli_sname) {
-            continue;
-        }
-        int status = 0;
-        char* dem = abi::__cxa_demangle(info.dli_sname, nullptr, nullptr, &status);
-        std::string name = (status == 0 && dem) ? dem : info.dli_sname;
-        std::free(dem);
-        if (name.find("blaze::") != std::string::npos && name.find("::Op<") != std::string::npos) {
-            auto cut = name.find(">::");
-            return cut == std::string::npos ? name : name.substr(0, cut + 1);
-        }
-    }
-    return {};
 }
 
 std::string FiberSchedulerImpl::dump_parked() {
