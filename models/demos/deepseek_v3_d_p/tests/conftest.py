@@ -193,6 +193,33 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
 ]
 
 
+def pytest_addoption(parser):
+    parser.addoption(
+        "--iters",
+        action="store",
+        type=int,
+        default=1,
+        help="Measured iterations for the perf tests that take num_iters from the CLI instead of "
+        "parametrizing it (e.g. test_glm_prefill_transformer_chunked_no_pcc). Any positive integer.",
+    )
+
+
+@pytest.fixture
+def num_iters(request) -> int:
+    """Iteration count for perf tests, from ``--iters`` (default 1).
+
+    A test that still parametrizes ``num_iters`` overrides this fixture (pytest resolves the
+    callspec param first), so the fixture only feeds tests that dropped their parametrize —
+    which is what lets them run an ARBITRARY iteration count instead of the fixed
+    [1, 2, 10, 20, 25] sweep. Since --iters is one value per session, the affected tests
+    collect as a single node id with no iters segment.
+    """
+    n = request.config.getoption("--iters")
+    if n < 1:
+        raise pytest.UsageError(f"--iters must be >= 1, got {n}")
+    return n
+
+
 def pytest_configure(config):
     """Register custom markers."""
     config.addinivalue_line(

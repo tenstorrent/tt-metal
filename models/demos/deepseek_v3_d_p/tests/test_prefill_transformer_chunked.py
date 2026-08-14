@@ -1933,9 +1933,11 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 # the empty-cache case (preload0) needs no golden trace, preload_isl > 0 requires it. Uses the GLM fabric payload + on-device fp32 gate + L1_SMALL
 # routing semaphores, exactly like test_glm_prefill_transformer_chunked. glm_5_2 additionally exercises the
 # DSA cross-layer indexer reuse per chunk. Requires the GLM TTNN weight cache (set the variant's cache env).
-@pytest.mark.parametrize(
-    "num_iters", [1, 2, 10, 20, 25], ids=["iters1", "two_iters", "ten_iters", "iters20", "iters25"]
-)
+#
+# num_iters is NOT parametrized here — it comes from the `--iters N` CLI option (conftest fixture,
+# default 1), so any iteration count works instead of a fixed [1, 2, 10, 20, 25] sweep. Consequence:
+# the node ids carry NO iters segment (…-chunks_eleven] not …-chunks_eleven-ten_iters]), and --iters
+# applies to the whole session — pass one value per invocation.
 @pytest.mark.parametrize(
     "n_chunks",
     [1, 2, 5, 10, 11, 20],
@@ -1977,10 +1979,10 @@ def test_ds_prefill_transformer_chunked_no_pcc(
 )
 @pytest.mark.parametrize("variant", ["glm_5_1", "glm_5_2"], indirect=True, ids=["glm51", "glm52"])
 @pytest.mark.skipif(not is_blackhole(), reason="GLM DSA ops (indexer / sparse SDPA) are Blackhole-only")
-@pytest.mark.skipif(
-    not is_high_power(),
-    reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
-)
+# @pytest.mark.skipif(
+#     not is_high_power(),
+#     reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
+# )
 @pytest.mark.timeout(0)
 def test_glm_prefill_transformer_chunked_no_pcc(
     variant,
