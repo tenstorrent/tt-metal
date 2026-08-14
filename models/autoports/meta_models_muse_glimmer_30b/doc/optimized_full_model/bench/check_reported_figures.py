@@ -47,7 +47,7 @@ resolved: list[tuple[str, str]] = []
 #: sections this file never opened were wrong.  ``SOURCES`` below is the other half --
 #: adding an unchecked section that needs a new artifact now fails on a missing source
 #: rather than sliding past on an unchanged count.
-ADVERTISED_CHECKS = 887
+ADVERTISED_CHECKS = 918
 #: Of that total, how many are real assertions (``close``/``same``) as opposed to README
 #: bindings (``bind``/``perf``), which assert nothing on their own.  Round 4 asked for the
 #: split to be stated next to the number rather than folded into it.
@@ -633,10 +633,46 @@ def main() -> int:
             "test_the_live_trace_count_round_trips_over_both_trace_kinds",
             "test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried",
             "test_a_cache_rebound_out_of_band_still_invalidates_the_traces",
+            "test_a_sampling_trace_that_fails_to_release_keeps_its_logits",
         )
         if f"`{name}" in readme
     ]
-    same("the README's new-case table lists every new test", len(new_cases), 9)
+    same("the README's new-case table lists every new test", len(new_cases), 10)
+    # The Implementation table must name every code path this stage changed, derived from the
+    # diff rather than from memory: round 10 found it listing three of six.
+    changed = subprocess.run(
+        [
+            "git",
+            "diff",
+            "--name-only",
+            "93adb25b7a8..HEAD",
+            "--",
+            "models",
+            ":!models/autoports/meta_models_muse_glimmer_30b/doc",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(ROOT.parents[2]),
+    ).stdout.split()
+    # Off the diff where there is a git repo (the tree itself); off the recorded list where
+    # there is not (the mutation harness's scratch copy), so the check means the same thing in
+    # both and cannot be dodged by running it somewhere without git.
+    KNOWN_CODE = [
+        "models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py",
+        "models/autoports/meta_models_muse_glimmer_30b/tt/generator.py",
+        "models/autoports/meta_models_muse_glimmer_30b/tt/model.py",
+        "models/autoports/meta_models_muse_glimmer_30b/tt/multichip_decoder.py",
+        "models/autoports/meta_models_muse_glimmer_30b/tt/optimized_decoder.py",
+        "models/common/sampling/generator.py",
+    ]
+    changed_code = sorted(p for p in changed if p.endswith(".py")) or KNOWN_CODE
+    same("the recorded set of changed code files is the diff's", changed_code, KNOWN_CODE)
+    same(
+        "the Implementation table names every code file this stage changed",
+        [p for p in changed_code if pathlib.Path(p).name not in readme],
+        [],
+    )
+    same("...and that is six files", len(changed_code), 6)
     same(
         "...and the inherited/new split adds up to the suite",
         f"(46 inherited + {suite_cases - 46} new)" in readme,
@@ -2324,6 +2360,167 @@ def main() -> int:
         ("the roofline unit", "ms/token", accounting, "the reconciliation table"),
     ):
         same(f"{where_name} states {name}", needle in normalised_units(where), True)
+    # ------------------------------------------------ round 10: cell-bound, not doc-bound
+    #
+    # Round 10 ran 25 fresh mutations and 13 survived, every one of them a figure that either
+    # occurs twice (so the document-wide search finds the *other* copy) or was never resolved
+    # at all.  Two were load-bearing: the @256 layer-stack floor the goal's 10-15 % gate is
+    # computed against, and the softcap before/after pair that is change 1's whole
+    # justification.  Each is bound to its own cell or section below.
+    floor_table = readme[readme.index("| | ms/layer @2048 | ms/layer @256 | delta |") :].split("\n\n")[0]
+    floor_rows = {row[0]: row for row in table_rows(floor_table) if len(row) == 4}
+    for label, at2048, at256 in (
+        ("sliding x39", floor["sliding_ms_per_layer"], rows["sliding"]),
+        ("full x13", floor["full_ms_per_layer"], rows["full"]),
+        ("**layer-stack floor**", floor["total_ms"], floor256),
+    ):
+        row = floor_rows[label]
+        digits = 4 if "x" in label else 3
+        same(f"the floor table's {label!r} @2048 cell", f"{at2048:.{digits}f}" in row[1], True)
+        same(f"...and its @256 cell", f"{at256:.{digits}f}" in row[2], True)
+        same(
+            f"...and the delta it states",
+            f"{(at256 - at2048) / at2048 * 100:.1f} %".replace("-", "−") in row[3].replace("-", "−"),
+            True,
+        )
+    softcap_rows = {
+        row[0]: row
+        for row in table_rows(readme[readme.index("| `tanh` (`UnaryDeviceOperation`)") :].split("\n\n")[0])
+        if len(row) == 3
+    }
+
+    def cell_us(cell: str) -> float:
+        return float(cell.replace("*", "").split()[0])
+
+    pair_before = cell_us(softcap_rows["`tanh` (`UnaryDeviceOperation`)"][1]) + cell_us(
+        softcap_rows["`* T` (`BinaryNgDeviceOperation`)"][1]
+    )
+    pair_after = cell_us(softcap_rows["`tanh` (`UnaryDeviceOperation`)"][2]) + cell_us(
+        softcap_rows["`* T` (`BinaryNgDeviceOperation`)"][2]
+    )
+    same(
+        "the softcap pair total is the sum of its own rows, in its own cells",
+        [cell_us(softcap_rows["pair total"][1]), cell_us(softcap_rows["pair total"][2])],
+        [round(pair_before, 2), round(pair_after, 2)],
+    )
+    same(
+        "...and each of those rows is the CSV row it cites",
+        [
+            round(device_time(prev, "4283"), 2),
+            round(device_time(prev, "4370"), 2),
+            round(device_time(sliding, "3140"), 2),
+            round(device_time(sliding, "3196"), 2),
+        ],
+        [
+            cell_us(softcap_rows["`tanh` (`UnaryDeviceOperation`)"][1]),
+            cell_us(softcap_rows["`* T` (`BinaryNgDeviceOperation`)"][1]),
+            cell_us(softcap_rows["`tanh` (`UnaryDeviceOperation`)"][2]),
+            cell_us(softcap_rows["`* T` (`BinaryNgDeviceOperation`)"][2]),
+        ],
+    )
+    l1_rows = {
+        row[0]: row
+        for row in table_rows(
+            readme[readme.index("| | peak L1 allocated per bank | free at that peak |") :].split("\n\n")[0]
+        )
+        if len(row) == 3
+    }
+    same(
+        "the L1 table's before/after peaks differ by the delta the probe measured",
+        int(l1_rows["**softcap in L1 (shipped)**"][1].replace("*", "").replace(",", "").split()[0])
+        - int(l1_rows["softcap in DRAM (before)"][1].replace("*", "").replace(",", "").split()[0]),
+        l1["l1_peak_delta_per_bank_bytes"],
+    )
+    same(
+        "...and its free-at-peak column is what the probe reports",
+        int(l1_rows["**softcap in L1 (shipped)**"][2].replace("*", "").replace(",", "").split()[0]),
+        l1["l1_free_per_bank_at_peak_with_change"],
+    )
+    # The opening claim, the roofline denominators, and the qualitative character counts:
+    # figures no check resolved before round 10.
+    opening = readme[: readme.index("## Result")]
+    same(
+        "the opening states the token-out improvement the table measures",
+        f"**{abs(delta):.1f} % faster token-out decode**" in opening
+        or f"**{abs(delta):.2f} % faster token-out decode**" in opening,
+        True,
+    )
+    same(
+        "...and the TTFT improvement the opt-in arm measures",
+        f"**{abs(improvement):.0f} % faster TTFT**" in opening,
+        True,
+    )
+    roofline_section = accounting
+    same(
+        "the roofline states the layer-weight bytes the build reports",
+        f"{cap['per_device_layer_weight_bytes']:,} of layer weights" in roofline_section,
+        True,
+    )
+    same(
+        "...and the bandwidth it divides by",
+        f"**{bw:.0f} GB/s per device**" in roofline_section,
+        True,
+    )
+    qualitative_chars = "/".join(str(row["new_len"]) for row in diff)
+    same(
+        "the qualitative claim states the character counts its artifact holds",
+        f"the same {qualitative_chars} characters" in readme,
+        True,
+    )
+    # The quoted watcher verdict block, which the README prints verbatim and nothing compared.
+    quoted_watcher = readme[readme.index("```\nwatcher/watcher.log.gz:") :].split("```")[1].strip()
+    # The log prints an absolute path; the README quotes it repo-relative, which is the only
+    # difference allowed.
+    same(
+        "the quoted watcher verdict is the committed one",
+        quoted_watcher,
+        re.sub(r"^\S*/(?=watcher/)", "", text(D / "logs/check_watcher.log").strip()),
+    )
+    # The prefill-trace probe's retained DRAM, stated in three places, bound to the artifact.
+    same(
+        "the traced-prefill retained DRAM is stated as the probe measured it",
+        readme.count(f"{trace_probe['capture_retained_dram_bytes'] / 1e6:.1f} MB"),
+        3,
+    )
+    # The shared sampler's retry must actually retain what it cannot release: round 10 showed a
+    # retry that drops its orphans and returns 0 passed a presence-only check.
+    same(
+        "the shared sampler's retry keeps what it could not release",
+        "still_held.append(slot)" in sampler_src and "self._orphaned_traces = still_held" in sampler_src,
+        True,
+    )
+    same(
+        "...and this port defers its own frees while the sampler holds one",
+        "def _free_or_defer" in generator_src and "self._deferred_frees" in generator_src,
+        True,
+    )
+    # The per-call invalidation cost, measured rather than asserted (round 10's third finding).
+    inval = load(D / "invalidation_cost_probe.json")
+    same("the probe measured the shipped layer count", inval["layers"], 52)
+    same("...and the address reads a signature makes", inval["address_reads_per_signature"], 104)
+    close(
+        "the README states the measured per-call cost with a trace live",
+        inval["trace_captured_cache_unmoved"]["median_us"],
+        float(re.search(r"\*\*([0-9.]+) µs\*\* per call\n?with a trace live", readme).group(1)),
+        tol=1e-3,
+    )
+    close(
+        "...and its share of the token-out step",
+        inval["share_of_token_out_step_percent"],
+        float(re.search(r"with a trace live and the cache unmoved — \*\*([0-9.]+) %\*\*", readme).group(1)),
+        tol=2e-2,
+    )
+    same(
+        "...and that the no-trace path short-circuits before the signature",
+        "if not self._prefill_traces and self._trace_id is None:\n            return" in generator_src,
+        True,
+    )
+    same(
+        "the step the probe compares against is the reported one",
+        inval["step_ms_compared_against"],
+        round(after["token_out_decode_ms_per_token"]["min"], 3),
+    )
+
     # The checklist table, which claims *goal compliance* and which nothing read before round 9:
     # a fabricated row there could assert work this stage is forbidden to do or never did.
     checklist = section("## `$optimize` / `$multichip` checklist, with where the evidence is", "## How to reproduce")

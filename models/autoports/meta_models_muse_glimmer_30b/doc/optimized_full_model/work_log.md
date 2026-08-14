@@ -307,8 +307,8 @@ Each is one device job, one at a time, per `$tt-device-usage`.
 | accuracy + sampling + fallback | `evidence_accuracy.json` | top-5 1.000, top-100 1.000 |
 | fp32 control + misses | `evidence_fp32_gate.json`, `evidence_misses.json` | all four gates pass |
 | greedy sampler benchmark | `sampler_ab.json` | split still wins, 15x |
-| 57-case suite, forward | `test_results.xml` | 57 passed |
-| 57-case suite, reverse | `logs/full_test_run_reverse.log` | 57 passed |
+| 58-case suite, forward | `test_results.xml` | 58 passed |
+| 58-case suite, reverse | `logs/full_test_run_reverse.log` | 58 passed |
 | qualitative, TT + compare | `qualitative/` | byte-identical to stage 6 |
 | degeneracy gate | `logs/check_degenerate_output.log` | no degenerate output |
 | watcher, shipped-default 10 cases | `watcher/`, `logs/run_watcher.log` | `WATCHER_CLEAN`, 0 tripped asserts |
@@ -763,10 +763,10 @@ to the new cache and the stale entry could never be invalidated again.
 | the round-6 conclusion sat in this log with no supersession marker | marked, with a pointer to the round-7 restatement and to limitation 6 |
 | §8 disagreed with the README on two figures from the same partition | corrected to the README's (**179.07 µs** of a 431.48 µs layer; the projections at **52.27–77.12 %**) |
 
-The suite is **57** cases (46 inherited + 11 new), forward and reverse.
+The suite is **58** cases (46 inherited + 12 new), forward and reverse.
 
 And the thing four rounds of this have implied: the mutation testing is **committed**
-(`bench/mutate_figure_gate.py`, `logs/mutate_figure_gate.log`). Thirty-two mutations, each one a
+(`bench/mutate_figure_gate.py`, `logs/mutate_figure_gate.log`). Forty-six mutations, each one a
 defeat a review demonstrated, each applied alone to a scratch copy of the model directory,
 each required to make the gate fail. Four of them survived the first attempt at this round's
 fixes — the work log's token-out row, its two-trace residual, the accounting section's device
@@ -805,6 +805,38 @@ the healthy path returns 0 and behaves exactly as before.
 | the mutation log proved nothing: placeholder text passed, and a neutered mutation left it still passing | every logged line now carries a digest of the mutation's full content and the gate requires the log's digest set to equal the table's, so the log cannot outlive an edit to what it claims to have tested; the bootstrap writes its placeholder into the **scratch copy** only, so nothing in the tree can produce a passing log without a run |
 | the work log's evidence table was bound in 6 rows of 20 | the remaining numeric rows are bound to their artifacts |
 
+### Round 10 — `more-work-needed`
+
+The P1 was round 9's fix, one branch over. Round 9 brought the sampling trace inside the
+fail-closed policy; round 10 found the **asymmetric** partial failure it does not cover. The
+sampling trace is captured over `_trace_logits` — that tensor *is* the sampler's slot `input` —
+so if the sampler's release fails while the decode release succeeds, `_release_decode_trace`
+walks on to `ttnn.deallocate(self._trace_logits)` and hands a live trace's captured buffer back
+to the allocator. Python-reference retention cannot prevent that; the other owner is the code
+doing the freeing. The round-9 test could not see it because it makes `ttnn.release_trace`
+raise for *every* id, so the decode release fails too and the logits end up in this
+generator's own orphan list.
+
+The frees are now gated on the other owner: `_free_or_defer` holds anything the sampler might
+still be reading in `_deferred_frees`, and `_retry_orphaned_traces` releases them only once
+`orphaned_trace_count` reaches zero. The new test injects a failure for the sampler's id
+**only** and asserts `is_allocated()` rather than Python identity.
+
+| finding | what was done |
+| --- | --- |
+| **P1** a live sampling trace's captured input was freed on the decode release's success path | `_free_or_defer` + `_deferred_frees`, flushed by the retry when the sampler is clear; `test_a_sampling_trace_that_fails_to_release_keeps_its_logits` injects the asymmetric failure and checks allocation |
+| **P2** 13 of 25 fresh mutations defeated the gate — all duplicated-literal evasion or never-resolved figures | every one is bound to its own cell or section now (the opening claims, the softcap pair and its CSV rows, the roofline bytes and bandwidth, both @256 floor rows and the floor total, the L1 peak columns, the quoted watcher verdict block, the qualitative character counts, the retained DRAM, and the shared sampler's retry semantics), and all 13 are in the harness — **46 mutations, all caught** |
+| **P2** round 9 added unmeasured per-call host work to `decode_forward` | measured (`invalidation_cost_probe.py`): **7.57 µs** per call with a trace live, **0.033 %** of the token-out step, and **0.06 µs** with nothing captured, because the signature is now built only when something is live. The README states all three |
+| the Artifacts table named 3 of the 6 code files this stage changed | all six listed, and the gate derives the set from `git diff 93adb25b7a8..HEAD` |
+| this log claimed "four implementation/test files … two readiness directories" | corrected against the diff: five files here, one shared, the contract, one readiness file |
+| the release paths did not count their own drains | `counters["synchronizations"]` incremented at both |
+
+Left alone, with the reason: `models/experimental/llama32_1b_quasar/sampling/generator.py` is a
+vendored copy of the shared sampler and still has the pre-round-9 `reset_trace`. It is a real
+instance of the same defect, it is outside this stage's model and outside its goal contract,
+and fixing it would put an unrelated experimental model in this stage's commits. Recorded here
+so it is a decision rather than an oversight.
+
 ## 11. Commits
 
 Local checkpoints on `agentic-research/hous/muse-glimmer-30b`, on top of the full-model
@@ -821,12 +853,17 @@ stage's `93adb25b7a8`. Never pushed.
 | `c675d8dc2d3` | round-7 review fixes: the derived process count, the conclusion restated to what the arms support, a parse-and-bind cross-section gate, the recoverable trace-release failure path, and the documented prefill-trace eligibility |
 | `6cc255a19d1` | round-8 review fixes: the regenerated context contract and prefill-trace evidence arm, the fail-closed trace-release path and its injected-failure test, the exhausted `perf_summary.json` and re-pointed work log, cell-level and section-scoped gate binding, and the corrected multiplicity paragraph |
 | `20f77bb0fcd` | the negative control for the fail-closed release: the test's failure against round 7's code, committed and bound by the gate |
-| *(this commit)* | round-9 review fixes: the sampling trace brought inside the fail-closed policy (in `models/common/sampling/generator.py`), the bookkeeping-before-drain ordering and `try/finally` sequencing, unconditional invalidation on every entry point, atomic `set_kv_cache`, two new acceptance cases, and a figure gate that checks structure, units, cross-section consistency and its own mutation log's provenance |
+| `9abea54b55b` | round-9 review fixes: the sampling trace brought inside the fail-closed policy (in `models/common/sampling/generator.py`), the bookkeeping-before-drain ordering and `try/finally` sequencing, unconditional invalidation on every entry point, atomic `set_kv_cache`, two new acceptance cases, and a figure gate that checks structure, units, cross-section consistency and its own mutation log's provenance |
+| *(this commit)* | round-10 review fixes: deferred frees so a live sampling trace's captured input is never handed back, the measured per-call invalidation cost, cell-level bindings for the thirteen figures round 10 falsified, and the corrected file inventory |
 
-Nothing unrelated is in any of them: `git status` is clean at each, and the
-only files touched outside `doc/optimized_full_model/` are the four implementation/test
-files, the contract, and the two readiness output directories the autoregressive stage
-rewrites.
+Nothing unrelated is in any of them: `git status` is clean at each. Outside
+`doc/optimized_full_model/`, `git diff --name-only 93adb25b7a8..HEAD` is exactly eight paths:
+five implementation/test files in this port (`tt/model.py`, `tt/generator.py`,
+`tt/multichip_decoder.py`, `tt/optimized_decoder.py`, `tests/test_full_model.py`), the one
+**shared** file round 9 had to fix (`models/common/sampling/generator.py`), the contract, and
+`readiness_autoregressive_chat/autoregressive_meta.json`. Round 10 of the stage review caught
+this paragraph claiming four files and two readiness directories; it is derived from the diff
+now, and the Artifacts table in the README lists all six code paths.
 
 The repo's pre-commit hooks reformatted three bench scripts and the test file on the
 first attempt; the reformatted state is what is committed, and the eight affected tests

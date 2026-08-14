@@ -3,7 +3,7 @@
 An optimization pass over the [full model](../full_model/README.md), in place, on the
 same four Blackhole dies. Same public contract, same 131072-token capability, the same
 canonical split-sampling token-out path, the same carried-forward decoder precision /
-KV-cache / CCL / residual policy — and **2.1 % faster token-out decode** from three
+KV-cache / CCL / residual policy — and **2.3 % faster token-out decode** from three
 layout changes that move no arithmetic at all, plus **22 % faster TTFT** from an
 opt-in traced prefill that is bit-identical to the eager path.
 
@@ -61,7 +61,7 @@ the attribution and why the trace is opt-in are in
 | decoder | `tt/optimized_decoder.py` (`_OptimizedMLP.decode_forward`) |
 | device | 4 x Blackhole, `ClusterType::P300_X2`, `ttnn.MeshShape(1, 4)`, `FABRIC_1D_RING`, `ttnn.Topology.Ring`, 2 links |
 | context | **131072**, unreduced — [`../context_contract.json`](../context_contract.json) |
-| tests | `tests/test_full_model.py`, **57** cases (46 inherited + 11 new), forward and reverse order |
+| tests | `tests/test_full_model.py`, **58** cases (46 inherited + 12 new), forward and reverse order |
 | watcher | `WATCHER_CLEAN` on the shipped default (10 device cases) and on each opt-in prefill-trace case separately; 0 fatal messages, 0 tripped asserts — [`logs/check_watcher.log`](logs/check_watcher.log) |
 
 ## What ships
@@ -675,6 +675,20 @@ correct — which is the property `test_reset_zeroes_the_cache_without_dropping_
 `teardown()` and the rebind path now go through the same `_release_decode_trace()`, because
 two copies of a trace lifecycle drifting apart is what produced the round-4 finding.
 
+**What the comparison costs, measured.** It runs on every public entry point — including
+`decode_forward`, which a serving caller drives per token — so round 10 of the stage review was
+right that "the compare is cheap" was an assertion about the *compare* and not about
+`_kv_cache_signature`, which reads `2 x 52 = 104` buffer addresses across the pybind
+boundary. Measured on the 52-layer build
+([`invalidation_cost_probe.json`](invalidation_cost_probe.json),
+[`logs/invalidation_cost_probe.log`](logs/invalidation_cost_probe.log)): **7.57 µs** per call
+with a trace live and the cache unmoved — **0.033 %** of the 23.298 ms token-out step —
+and **0.06 µs** with nothing captured, because the guard added in the same round returns
+before building the signature when `_prefill_traces` is empty and `_trace_id` is `None`. The
+signature itself is 7.19 µs of the 7.57. `generate()`'s own decode loop calls
+`_decode_step_traced` directly, so it pays this once per `generate()`, not per token; the
+reported token-out figure is unaffected either way.
+
 **A release that fails, fails closed.** `ttnn.release_trace` can raise, and what happens then
 took three review rounds to get right: round 6 freed the buffers a possibly-live trace still
 held and dropped its only handle; round 7 fixed that by retaining everything *in place*,
@@ -1033,7 +1047,7 @@ What follows for the shipped code:
   is watched **together in its own process** (0 of 1), so the trace-lifecycle code this stage
   ships is still under watcher, which is what `$optimize` asks for with async CCLs in play;
 * the shipped default never captures a prefill trace, so **none of this is on its path** —
-  which is why the gated ten and the 57-case suite are unaffected either way;
+  which is why the gated ten and the 58-case suite are unaffected either way;
 * the operational note for a serving stage is now specific rather than the withdrawn
   "reset between builds": **with `prefill_trace=True`, expect a watcher-enabled process that
   also runs a substantial other workload to abort at teardown.** Reset afterwards, never read
@@ -1119,7 +1133,7 @@ quotes in the force-argmax section is a different pool and a different moment �
 what a `TT_CCL`'s 36 extra *global semaphores* would have to fit into, at the decoder's
 tightest in-layer point, not what the terminal path has after 52 layers have freed their
 intermediates. The two are not in conflict, and the empirical co-residency evidence is
-that the traced step runs clean: 57 tests, the batch-32 mixed-length case, and a
+that the traced step runs clean: 58 tests, the batch-32 mixed-length case, and a
 watcher-clean run over all three changes.
 
 Batch: batch 1 at 131072 is the primary target and is tested; batch 4 and batch 32 at
@@ -1142,8 +1156,8 @@ in the public path.
 
 | run | result |
 | --- | --- |
-| `pytest tests/test_full_model.py` | **57 passed** — [`logs/full_test_run.log`](logs/full_test_run.log), [`test_results.xml`](test_results.xml) |
-| the same 57 in reverse order, one process | **57 passed** — [`logs/full_test_run_reverse.log`](logs/full_test_run_reverse.log) |
+| `pytest tests/test_full_model.py` | **58 passed** — [`logs/full_test_run.log`](logs/full_test_run.log), [`test_results.xml`](test_results.xml) |
+| the same 58 in reverse order, one process | **58 passed** — [`logs/full_test_run_reverse.log`](logs/full_test_run_reverse.log) |
 | watcher, gated subset (10 shipped-default cases) | **10 passed**, `WATCHER_CLEAN` — [`logs/watcher_pytest.log`](logs/watcher_pytest.log), [`watcher/`](watcher), [`logs/check_watcher.log`](logs/check_watcher.log) |
 | watcher, each opt-in prefill-trace case alone | **1 passed** each, `WATCHER_CLEAN` |
 | watcher, both opt-in cases together in one process | **2 passed**, `WATCHER_CLEAN` — [`logs/watcher_pytest_prefill_trace_pair.log`](logs/watcher_pytest_prefill_trace_pair.log) |
@@ -1155,7 +1169,7 @@ in the public path.
 | `test_the_live_trace_count_round_trips_over_both_trace_kinds` | the model's live-trace count balances across capture and release of both trace kinds, and clamps rather than going negative |
 | the layer-stack floor at the benchmark's own context | sliding 0.4390, full 0.4077 ms/layer → **22.421 ms** — [`logs/layer_ab_after_ctx256.log`](logs/layer_ab_after_ctx256.log) |
 
-Eleven cases are new (three of them parametrizations of one test) and each pins one shipped change:
+Twelve cases are new (three of them parametrizations of one test) and each pins one shipped change:
 
 | test | pins |
 | --- | --- |
@@ -1166,6 +1180,7 @@ Eleven cases are new (three of them parametrizations of one test) and each pins 
 | `test_prefill_trace_survives_rebinding_the_same_external_cache` | the serving path: the **same** external cache every request keeps its trace; a cache bound to **different** buffers releases it, recaptures against the new ones and still answers correctly |
 | `test_decode_follows_the_cache_it_is_rebound_to_after_the_trace_is_captured` | the **decode** trace bakes the same cache addresses, so a rebind to different buffers must release and recapture it. Against the pre-fix code it fails, and that failure is committed as a negative control ([`logs/decode_rebind_prefix_negative_control.log`](logs/decode_rebind_prefix_negative_control.log): `AssertionError: a moved cache must release the decode trace`, with the shipped source restored afterwards. It is a **partial** revert — the signature is still recorded, only the comparison and the release are removed — because a full revert to `5e6022db622` fails on a missing attribute instead of on the behaviour). Two of its assertions do different jobs: that one catches the missing release, and the last one — the **traced** decode off the rebound cache must agree with the **eager** decode off the same cache — catches a release that recaptured against the wrong buffers. The committed control trips the first, because that is the one the pre-fix code violates |
 | `test_the_live_trace_count_round_trips_over_both_trace_kinds` | the model's live-trace count balances across capture and release of both kinds, and the clamp is exercised directly rather than asserted about |
+| `test_a_sampling_trace_that_fails_to_release_keeps_its_logits` | the **asymmetric** partial failure: the sampler's release fails while the decode one succeeds. The sampling trace is captured over `_trace_logits`, so that tensor then has two owners; the release path used to free it on its own success path, handing a live trace's captured buffer back to the allocator. This injects a failure for the sampler's id only and asserts allocation, not Python identity: the logits stay allocated and deferred while `orphaned_trace_count` is non-zero, and are freed only once the retry lands |
 | `test_a_cache_rebound_out_of_band_still_invalidates_the_traces` | `model.set_kv_cache()` is public, so the invalidation cannot depend on the caller handing the cache back: this rebinds out of band, calls in with `kv_cache=None`, and requires the decode trace to have been released and recaptured against the buffers bound now. It also pins that a rejected cache binds **no** layer at all — the validation used to interleave with the assignment, so a mismatch at layer *i* left `0..i-1` rebound and raised past the invalidation |
 | `test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried` | a raising `ttnn.release_trace` fails **closed**, for both trace kinds: the handle leaves the lookup paths so nothing can replay it against a rebound cache, nothing is deallocated and the live-trace count stays raised, the next decode answers from the cache it is bound to now, and the retry releases both and brings the count back down. The failure is injected (`ttnn.release_trace` monkeypatched to raise) because no input makes it raise on healthy hardware; what is under test is the generator's control flow around it. Against **round 7's** code — the retain-in-place form this replaced — it fails, and that failure is committed as a negative control ([`logs/trace_release_failclosed_negative_control.log`](logs/trace_release_failclosed_negative_control.log): `AssertionError: the failed decode release must still clear the replayed slot`, with the shipped source restored afterwards and the test re-run green on it). Like round 4's control it is a **partial** revert — `_orphaned_traces` stays, only the two retention branches go back to keeping the handle where `decode_forward` and `_prefill_traced` find it — because a full revert to `c675d8dc2d3` would fail on a missing attribute instead of on the behaviour |
 
@@ -1501,7 +1516,10 @@ Implementation:
 | --- | --- |
 | [`../../tt/model.py`](../../tt/model.py) | `LM_HEAD_SOFTCAP_IN_L1`, `EMBED_DECODE_GATHER_SHARDED`, `_LMHead.forward`, `_all_gather_async(memory_config=)`, `_embed(memory_config=)`, `embed_decode` |
 | [`../../tt/optimized_decoder.py`](../../tt/optimized_decoder.py) | `DECODE_SWIGLU_MUL_CORES`, `_OptimizedMLP.decode_forward` |
-| [`../../tests/test_full_model.py`](../../tests/test_full_model.py) | nine new contract tests (eleven cases with parametrization) |
+| [`../../tt/generator.py`](../../tt/generator.py) | `GeneratorConfig.prefill_trace` / `prefill_trace_max_entries`, `_prefill_traced`, `_capture_prefill_trace`, `_kv_cache_signature`, `_invalidate_traces_if_cache_moved`, `_release_prefill_traces`, `_release_decode_trace`, `_retry_orphaned_traces`, `_free_or_defer`, `capability_report` |
+| [`../../tt/multichip_decoder.py`](../../tt/multichip_decoder.py) | `close_multichip_mesh` also drops the model's CCL semaphore cache (round 5) |
+| [`../../../../common/sampling/generator.py`](../../../../common/sampling/generator.py) | **shared**: `reset_trace` fails closed and returns its failure count, `retry_orphaned_traces`, `orphaned_trace_count` (round 9). Additive — the healthy path returns 0 and behaves as before, and the other callers (`models/tt_transformers`, `models/demos/deepseek_v3`) ignore the return value |
+| [`../../tests/test_full_model.py`](../../tests/test_full_model.py) | ten new contract tests (twelve cases with parametrization) |
 
 Evidence:
 
@@ -1522,14 +1540,14 @@ Evidence:
 | `prefill_trace_release_probe.py` arms | `logs/watcher_probe_*.log`: capture / release / recapture / clone-cache, each watcher-clean |
 | `decode_ab.json` | the `mlpN` arms; their `error` field keeps only the last traceback line, so the exact `TT_FATAL` is in `logs/decode_ab.log` |
 | `perf_summary.json` | roofline / device / end-to-end reconciliation |
-| `test_results.xml` | the 57-case suite |
+| `test_results.xml` | the 58-case suite |
 | `tracy/` | reduced-variant profiles: prefill 128, decode sliding, decode full, sampling |
 | `qualitative/` | the shared suite, the HF control, the comparison, and the diff against the full-model stage |
 | `watcher*/` (18 directories) | one `watcher.log.gz` per watcher arm — the shipped-default set, each opt-in case, the pair, the repeats and each limitation-6 arm — the verdicts are re-derived from these (each run's `generated/inspector` and kernel-name dumps are 6 MB of build metadata and are not kept). **`watcher/` holds the most recent shipped-default run.** `logs/check_watcher_12case_tripped.log` names that same path because the 12-case arm wrote there before the gated set was re-run over it; that arm's verdict therefore rests on its console log (`logs/watcher_pytest_12case_tripped.log`), which is where the tripped assert is recorded and what limitation 6 cites. The truncation the verdict describes is why the artifact could not be kept |
 | `logs/decode_rebind_prefix_negative_control.log`, `logs/trace_release_failclosed_negative_control.log` | the two committed negative controls: each new trace-lifecycle test failing against the code it replaced, on the assertion that separates them |
 | `logs/` | every console log named above |
 | `bench/check_reported_figures.py` | resolves the figures in this document against the artifacts above, and asserts its advertised check count, its assertion/binding split and the artifacts it opened; `FIGURES_OK` |
-| `bench/mutate_figure_gate.py` | mutation-tests that gate: 32 mutations, each one a defeat a stage review demonstrated (a stale contract figure, a swapped before/after column, a fabricated arm row, an id moved between audit groups, a prose-only tally, a falsified Bonferroni value, …), each applied alone to a scratch copy and each required to make the gate fail — [`logs/mutate_figure_gate.log`](logs/mutate_figure_gate.log) |
+| `bench/mutate_figure_gate.py` | mutation-tests that gate: 46 mutations, each one a defeat a stage review demonstrated (a stale contract figure, a swapped before/after column, a fabricated arm row, an id moved between audit groups, a prose-only tally, a falsified Bonferroni value, …), each applied alone to a scratch copy and each required to make the gate fail — [`logs/mutate_figure_gate.log`](logs/mutate_figure_gate.log) |
 
 ## Stage review
 

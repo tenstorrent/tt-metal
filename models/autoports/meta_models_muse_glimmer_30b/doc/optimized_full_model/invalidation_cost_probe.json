@@ -1,0 +1,26 @@
+{
+  "reps": 200,
+  "layers": 52,
+  "address_reads_per_signature": 104,
+  "no_trace_captured": {
+    "min_us": 0.0500003807246685,
+    "median_us": 0.0600120984017849,
+    "mean_us": 0.07823429768905044,
+    "reps": 200
+  },
+  "trace_captured_cache_unmoved": {
+    "min_us": 7.444003131240606,
+    "median_us": 7.573980838060379,
+    "mean_us": 8.26431583845988,
+    "reps": 200
+  },
+  "signature_only": {
+    "min_us": 7.104012183845043,
+    "median_us": 7.194001227617264,
+    "mean_us": 7.244266162160784,
+    "reps": 200
+  },
+  "share_of_token_out_step_percent": 0.03250914601279243,
+  "step_ms_compared_against": 23.298,
+  "note": "generate()'s own decode loop calls _decode_step_traced directly and pays this once per generate(), not per token; decode_forward is the per-token serving API and pays it per call."
+}

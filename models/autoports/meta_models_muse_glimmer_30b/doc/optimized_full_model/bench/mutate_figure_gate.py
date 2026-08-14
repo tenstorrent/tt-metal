@@ -154,8 +154,8 @@ MUTATIONS = [
     (
         "suite size",
         "doc/optimized_full_model/README.md",
-        "**57** cases (46 inherited + 11 new)",
         "**58** cases (46 inherited + 12 new)",
+        "**59** cases (46 inherited + 13 new)",
     ),
     (
         "eligibility bound",
@@ -192,6 +192,92 @@ MUTATIONS = [
         "doc/optimized_full_model/README.md",
         "| prefill (`run_prefill_check`) | fp32 control | 0.990 | **1.000** | **1.000** |",
         "| prefill (`run_prefill_check`) | fp32 control | 0.990 | **1.000** | **0.980** |",
+    ),
+    # Round 10's set: thirteen survived the round-9 gate, every one a figure that occurs twice
+    # (so the document-wide search found the other copy) or was never resolved at all.
+    (
+        "the opening token-out claim",
+        "doc/optimized_full_model/README.md",
+        "**2.3 % faster token-out decode**",
+        "**5.1 % faster token-out decode**",
+    ),
+    (
+        "the opening TTFT claim",
+        "doc/optimized_full_model/README.md",
+        "plus **22 % faster TTFT** from an",
+        "plus **42 % faster TTFT** from an",
+    ),
+    (
+        "the softcap pair total",
+        "doc/optimized_full_model/README.md",
+        "| pair total | 36.85 µs | **23.79 µs** |",
+        "| pair total | 46.85 µs | **13.79 µs** |",
+    ),
+    (
+        "a softcap row against its CSV",
+        "doc/optimized_full_model/README.md",
+        "| `tanh` (`UnaryDeviceOperation`) | **17.71 µs** | **11.64 µs** |",
+        "| `tanh` (`UnaryDeviceOperation`) | **27.71 µs** | **11.64 µs** |",
+    ),
+    (
+        "the roofline layer-weight bytes",
+        "doc/optimized_full_model/README.md",
+        "4,327,784,448 of layer weights",
+        "5,327,784,448 of layer weights",
+    ),
+    (
+        "the assumed DRAM bandwidth",
+        "doc/optimized_full_model/README.md",
+        "**512 GB/s per device**",
+        "**812 GB/s per device**",
+    ),
+    (
+        "the @256 layer-stack floor row",
+        "doc/optimized_full_model/README.md",
+        "| sliding x39 | 0.4473 | **0.4390** | −1.9 % |",
+        "| sliding x39 | 0.4473 | **0.3390** | −21.9 % |",
+    ),
+    (
+        "the layer-stack floor total at 256",
+        "doc/optimized_full_model/README.md",
+        "| **layer-stack floor** | 22.858 | **22.421** | −1.9 % |",
+        "| **layer-stack floor** | 22.858 | **21.421** | −6.3 % |",
+    ),
+    (
+        "the L1 peak column",
+        "doc/optimized_full_model/README.md",
+        "| **softcap in L1 (shipped)** | **217,088 B** | **1,238,144 B** |",
+        "| **softcap in L1 (shipped)** | **117,088 B** | **1,238,144 B** |",
+    ),
+    (
+        "the quoted watcher verdict block",
+        "doc/optimized_full_model/README.md",
+        "watcher/watcher.log.gz: 6991 lines",
+        "watcher/watcher.log.gz: 991 lines",
+    ),
+    (
+        "the qualitative character counts",
+        "doc/optimized_full_model/README.md",
+        "the same 406/716/638/609/556/682 characters",
+        "the same 406/716/638/609/556/482 characters",
+    ),
+    (
+        "the traced-prefill retained DRAM",
+        "doc/optimized_full_model/README.md",
+        "| DRAM retained per device, 128 rows | 3.3 MB |",
+        "| DRAM retained per device, 128 rows | 0.3 MB |",
+    ),
+    (
+        "the shared sampler's retry discarding its orphans",
+        "models/common/sampling/generator.py",
+        "        self._orphaned_traces = still_held\n        return len(still_held)",
+        "        self._orphaned_traces = []\n        return 0",
+    ),
+    (
+        "the measured invalidation cost",
+        "doc/optimized_full_model/README.md",
+        "with a trace live and the cache unmoved",
+        "with a trace live and the cache moved",
     ),
     (
         "the fail-closed negative control's discriminating assertion",
@@ -286,7 +372,8 @@ def main() -> int:
     for mutation in MUTATIONS:
         name, rel, old, new = mutation
         reset()
-        path = WORK / rel
+        # Paths outside the autoport are relative to the scratch root, not to the model dir.
+        path = (SCRATCH / rel) if rel.startswith("models/") else (WORK / rel)
         text = path.read_text()
         if text.count(old) != 1:
             say(f"SKIP  {name}: anchor found {text.count(old)} times  [{digest(mutation)}]")

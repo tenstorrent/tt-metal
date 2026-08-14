@@ -1210,6 +1210,94 @@ def test_a_trace_that_fails_to_release_is_never_replayed_and_is_retried(mesh):
         clear_generator_cache()
 
 
+def test_a_sampling_trace_that_fails_to_release_keeps_its_logits(mesh):
+    """The *asymmetric* partial failure: the sampler's release fails, the decode one succeeds.
+
+    Round 10 of the stage review found this branch open after round 9 closed the symmetric one.
+    The sampling trace is captured over ``_trace_logits`` -- that tensor is the slot's ``input``
+    -- so the sampler retaining an unreleased trace means those logits are live device state
+    with two owners.  ``_release_decode_trace`` went on to ``ttnn.deallocate`` them on its own
+    success path, handing a live trace's captured buffer back to the allocator; Python
+    references cannot prevent that, because the other owner is the code doing the freeing.
+
+    The previous test cannot see it: it makes ``ttnn.release_trace`` raise for *every* id, so
+    the decode release fails too and the logits end up retained by this generator's own orphan
+    path.  This one fails the sampler's id only, which is what makes the ownership question
+    real, and it checks allocation rather than Python identity.
+    """
+    clear_generator_cache()
+    generator = build_generator(MODEL_DIR, mesh, max_seq_len=REDUCED_MAX_SEQ, layer_indices=REDUCED_LAYERS, reuse=False)
+    model = generator.model
+    prompt = _prompt(64, seed=41)
+    own = model.kv_cache
+    moved = None
+    real_release = ttnn.release_trace
+    try:
+        generator.prefill_forward(torch.tensor([prompt]), kv_cache=own, prompt_lens=[len(prompt)])
+        generator.decode_forward(
+            tokens=torch.tensor([[prompt[-1]]], dtype=torch.long),
+            start_pos=torch.tensor([len(prompt)], dtype=torch.int32),
+            kv_cache=own,
+            sample_on_device=True,
+        )
+        assert generator._sampling_captured and generator._trace_id is not None
+        logits = generator._trace_logits
+        sampling_ids = {slot["id"] for slot in generator.sampling._trace_states.values() if slot["id"] is not None}
+        assert len(sampling_ids) == 1
+        assert generator.sampling._trace_states and all(
+            slot["input"] is logits for slot in generator.sampling._trace_states.values()
+        ), "the sampling trace is captured over the decode trace's logits, which is the whole hazard"
+
+        def refuse_only_sampling(device, trace_id, *a, **k):
+            if trace_id in sampling_ids:
+                raise RuntimeError("injected: release_trace refused for the sampling trace")
+            return real_release(device, trace_id, *a, **k)
+
+        moved = [
+            [ttnn.clone(k, memory_config=k.memory_config()), ttnn.clone(v, memory_config=v.memory_config())]
+            for k, v in own
+        ]
+        generator.reset()
+        model.set_kv_cache(moved)
+        model.reset_kv_cache()
+        model.set_kv_cache(own)
+
+        ttnn.release_trace = refuse_only_sampling
+        generator.prefill_forward(torch.tensor([prompt]), kv_cache=moved, prompt_lens=[len(prompt)])
+
+        # The decode trace released; the sampling trace did not.
+        assert generator._trace_id is None and generator._orphaned_traces == []
+        assert generator.sampling.orphaned_trace_count == 1
+        # ...so the logits it was captured over must still be allocated, held for it.
+        assert logits.is_allocated(), "a live sampling trace's captured input must not be freed"
+        assert generator._deferred_frees and any(t is logits for t in generator._deferred_frees)
+        assert all(
+            slot["input"].is_allocated() and slot["output"][0].is_allocated()
+            for slot in generator.sampling._orphaned_traces
+        )
+
+        # Once the sampler's release lands, the deferred free happens.
+        ttnn.release_trace = real_release
+        assert generator._retry_orphaned_traces() == 0
+        assert generator.sampling.orphaned_trace_count == 0
+        assert generator._deferred_frees == []
+        assert not logits.is_allocated(), "and only then are they freed"
+    finally:
+        ttnn.release_trace = real_release
+        generator._release_prefill_traces()
+        generator._release_decode_trace()
+        generator._retry_orphaned_traces()
+        model.set_kv_cache(own)
+        if moved is not None:
+            for pair in moved:
+                for tensor in pair:
+                    if tensor.is_allocated():
+                        ttnn.deallocate(tensor)
+        generator.teardown()
+        generator.model.deallocate()
+        clear_generator_cache()
+
+
 def test_a_cache_rebound_out_of_band_still_invalidates_the_traces(mesh, expect_error):
     """``model.set_kv_cache()`` is public, so the invalidation cannot depend on the caller
     handing the cache back to the generator.
