@@ -2551,7 +2551,7 @@ def _dr():
     return _m
 
 
-def _reclaim_device(devices: str, error_text: str = "") -> str:
+def _reclaim_device(devices: str, error_text: str = "", after_kill: bool = False) -> str:
     """UNIVERSAL device reclaim used at EVERY recovery point: kill every process holding
     /dev/tenstorrent (except this process + its ancestors, so the supervisor/self is never killed),
     then tt-smi -r the chips. A wedge is cleared no matter WHO holds the device -- a stray child, a
@@ -2576,11 +2576,28 @@ def _reclaim_device(devices: str, error_text: str = "") -> str:
         _status["last"] = _reset_devices(target)
         return True
 
+    # A KILLED PROCESS HELD EVERY DEVICE, NOT THE ONE IT WAS ASKED TO USE. `devices` is what the run
+    # was CONFIGURED with; a ttnn process maps all enumerated chips regardless -- a single probe was
+    # observed holding /dev/tenstorrent/0,1,2,3 on a --devices 0 run. So SIGKILL can leave any of them
+    # half-initialised, and scoping the reset to the configured board resets the wrong one.
+    #
+    # Measured 2026-08-14: run 10's full-pipeline measurement was killed at its budget, the reclaim
+    # issued `tt-smi -r 0,1` (the --devices 0 board), the health check passed for THAT board and the
+    # ladder never escalated to `all`. Device 2 stayed wedged -- "tenstorrent!2: Failed to set initial
+    # power state: -22", repeating -- and the next run died at Step 1 because `tt-smi -s` blocked on
+    # it. By then `tt-smi -r` hung too, so only a host reboot cleared it.
+    #
+    # After a kill the scope is UNKNOWN, and an unverifiable target must widen rather than narrow
+    # (expand_spec's own rule): a reset covering too much is recoverable, one covering too little
+    # leaves a chip nobody touches.
     ok = _dr_mod.recover(
         "reclaim",
         _issue,
         error_text=error_text,
-        config_target=devices,
+        # NOT named `killed`: that local already holds reap_device_holders()'s list, and a
+        # parameter by the same name is overwritten before it is read -- silently, because the
+        # list is empty after a SIGKILL and an empty string is falsy.
+        config_target="all" if after_kill else devices,
     )
     return "reclaimed device (killed holders %s) + %s%s" % (
         killed or "none",
@@ -2857,7 +2874,7 @@ def _run_device_proc(
             proc.communicate(timeout=30)
         except Exception:  # noqa: BLE001
             pass
-        tail = _reclaim_device(devices, error_text=out) if reset_on_timeout else "process group killed"
+        tail = _reclaim_device(devices, error_text=out, after_kill=True) if reset_on_timeout else "process group killed"
         _lim = int(getattr(_te, "timeout", None) or timeout_s)
         _why = "no-progress stall" if _lim < timeout_s else "hard limit"
         print(
