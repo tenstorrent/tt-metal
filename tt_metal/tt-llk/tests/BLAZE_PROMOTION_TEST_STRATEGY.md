@@ -1,7 +1,7 @@
 # tt-llk blaze promotions — OPEN work
 
 > **What this is.** The remaining tt-llk test work for the blaze->tt-metal `experimental/`
-> promotions (#52709, #52713, #52727). Completed work has been moved out to
+> promotions (#52709, #52713, #52727). **5 open items remain.** Completed work has been moved out to
 > **`BLAZE_PROMOTION_TESTS_DONE.md`** — check there before starting anything, since three
 > of the plans below were already corrected by what those tests measured on silicon.
 >
@@ -27,7 +27,10 @@
 | 3 | plain `custom_mm` matmul — new file | #52727 | ~2 d | **§8.** Also settles the `ct ∈ {7,9,11}` doc question |
 | 4 | `top32_rm` — new file, two modes | #52713 | ~3-4 d | **§6.** Largest single effort; also the only coverage for the 7 newly-promoted SFPU wrappers |
 | 5 | `eltwise_mul_scalar` HiFi init fix | #52709 | ? | **§9. Attempted and reverted — read §9 before retrying.** Hangs the device as first written |
-| 6 | sampling `recip_init` polluter test | #52745 | ~1 h | **§10.** Optional hardening |
+
+> The sampling `recip_init` polluter test (formerly item 6) is **done** — moved to the DONE
+> document. It found that the hazard is a ~1e-3 precision loss hidden by the suite's 2%
+> reciprocal tolerance, not the garbage the PR wording implies.
 
 Plus one item that is not a test task:
 
@@ -364,31 +367,7 @@ which call site) rather than to keep guessing from the LLK layer.
 
 ---
 
-## 10. OPEN #6 — sampling `recip_init` polluter test (#52745, optional)
-
-#52745 itself needs no new test — `test_sfpu_sampling.py` already covers every entry
-point and passes (51 passed, 93 skipped). This is hardening on top.
-
-**Optional hardening (~1 hour, worth it).** The PR's stated motivation for `sampling_recip_init` is a
-*cross-op* hazard: the `legacy_compat=false` reciprocal reads `vConstFloatPrgm0` for its Newton-Raphson
-constant, and only `sfpu_reciprocal_init` writes the `2.0f` it expects — so a kernel that ran e.g.
-`exp_tile_init` earlier computes silently wrong. The existing test always calls `sampling_recip_init`
-immediately before the op, so it proves the init *works* but never proves it is *necessary*. Add a
-`POLLUTER_INIT` template parameter to `sfpu_sampling_test.cpp` that runs `_init_exponential_` (or any
-`vConstFloatPrgm0` writer) before the recip sequence, and cross it with a `SKIP_RECIP_INIT` switch:
-
-| polluter | recip_init | expectation |
-|----------|-----------|-------------|
-| no | yes | pass (today's case) |
-| yes | yes | pass — this is the case the PR exists for |
-| yes | no | **must fail** — pins that the init is load-bearing |
-
-This is the same "prove the restore is necessary" shape as the existing
-`test_unpack_bcastA_B_uninit_restore.py`, so the pattern is already established in the repo.
-
----
-
-## 11. Shared infrastructure the remaining items need
+## 10. Shared infrastructure the remaining items need
 
 **The compute-API layer is not directly testable from tt-llk — replicate its sequence instead.**
 `-I../../hw/inc` *is* on the tt-llk compile line (`helpers/test_config.py:530`), so
@@ -424,7 +403,7 @@ New helper plumbing needed:
 
 ---
 
-## 12. Open questions for the PR authors
+## 11. Open questions for the PR authors
 
 1. ~~**#52713** — is `llk_api/experimental/llk_sfpu/llk_math_deepseek_top32_rm.h` intentionally
    promoted?~~ **Answered** while building the branch: yes. The PR body is simply stale — commit
