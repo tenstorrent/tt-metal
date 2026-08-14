@@ -143,7 +143,7 @@ def test_pipeline_distilled(
     # Under dynamic_load reuse the same prompt — a second encode would reload the encoder and
     # clobber captured DiT traces.
     steady_state_prompt = prompt if dynamic_load else os.environ.get("PROMPT_STEADY_STATE", STEADY_STATE_LTX_PROMPT)
-    replay_prompt = prompt if dynamic_load else STEADY_STATE_REPLAY_LTX_PROMPT
+    replay_prompt = prompt if dynamic_load else os.environ.get("PROMPT_REPLAY", STEADY_STATE_REPLAY_LTX_PROMPT)
 
     def run(*, prompt, number, seed):
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")

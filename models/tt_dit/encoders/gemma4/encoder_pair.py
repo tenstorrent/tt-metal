@@ -273,7 +273,8 @@ class Gemma4TokenizerEncoderPair:
         a zero-arg callable, resolved once and only on a cache miss."""
         ckpt = _memoize(connector_state)
         connector_name = self._cache_name(self.transformer_checkpoint or "ltx-connectors")
-        # The projection consumes the embedding output plus every decoder layer.
+        # 49 states: the embedding output, L0..L46, and the post-norm tail — not L47's raw
+        # output. See the selection in _encode_device.
         num_aggregated = self.config.num_hidden_layers + 1
 
         if self.feature_extractor is None:
@@ -348,9 +349,16 @@ class Gemma4TokenizerEncoderPair:
             prompt.strip(), padding=False, truncation=True, max_length=self._sequence_length, return_tensors="pt"
         )
         ids = encoded.input_ids[0].tolist()
-        if not ids or ids[0] != bos_id:
+        # LTX25_BOS=0 drops the prepend, to A/B whether 2.5 was conditioned on BOS-less ids: the
+        # packed post-processor injects no special tokens, so upstream's tokenizer call is a no-op
+        # here where Gemma-3's adds BOS itself. Every parity test builds its reference from these
+        # same ids, so none of them can see this choice.
+        if os.environ.get("LTX25_BOS", "1") != "0" and (not ids or ids[0] != bos_id):
             ids = [bos_id, *ids][: self._sequence_length]
 
+        # Padding side comes from the packed tokenizer_config ("left" for 2.5, where the 2.3
+        # Gemma-3 path gets HF's "right" default). A/B'd at 1920x1088: the two produce the same
+        # video, as RoPE makes the position offset a no-op and build_indices packs either way.
         padded = self.tokenizer.pad(
             {"input_ids": [ids]},
             padding="max_length",

@@ -35,9 +35,11 @@ import ttnn
 from models.tt_dit.encoders.gemma4.model_gemma import Gemma4Config, Gemma4Encoder
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils.test import line_params_req_exact_devices
 
 REFERENCE = os.environ.get("GEMMA4_REFERENCE", "/tmp/g4ref/gemma4_reference.safetensors")
 REFERENCE_REAL = os.environ.get("GEMMA4_REFERENCE_REAL", "/tmp/g4ref/gemma4_reference_real.safetensors")
+REFERENCE_FULL = os.environ.get("GEMMA4_REFERENCE_FULL", "/tmp/g4ref/gemma4_reference_full.safetensors")
 CHECKPOINT = os.environ.get(
     "GEMMA4_CHECKPOINT",
     os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.5/text_encoders/gemma4-12b-with-proj-ltx-2.5-bf16.safetensors"),
@@ -159,4 +161,51 @@ def test_gemma4_encoder_matches_huggingface_on_shipped_weights(*, mesh_device):
         num_layers=2,
         hidden_size=config.hidden_size,
         seq_len=input_ids.shape[-1],
+    )
+
+
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=["mesh_device"])
+@pytest.mark.parametrize(
+    "device_params",
+    [{**line_params_req_exact_devices, "l1_small_size": 8192}],
+    indirect=["device_params"],
+)
+def test_gemma4_full_stack_matches_huggingface(*, mesh_device):
+    """All 48 shipped layers on a real padded+masked prompt — the pipeline's actual input.
+
+    The two tests above stop at 2 layers and pass no mask, so neither can see error that only
+    shows up compounded across the stack, which is where weak prompt adherence would come from.
+    Generate the reference with ``gen_gemma4_reference.py --full``.
+    """
+    reference = _load(REFERENCE_FULL)
+    text_config = _checkpoint_text_config()
+    config = Gemma4Config.from_hf_text_config(dict(text_config))
+    assert config.num_hidden_layers == 48
+
+    logger.info(f"reading {CHECKPOINT}")
+    with safe_open(CHECKPOINT, "pt") as handle:
+        state_dict = {key: handle.get_tensor(key) for key in handle.keys() if key.startswith("model.")}
+
+    input_ids = reference["input_ids"]
+    attention_mask = reference["attention_mask"]
+    seq_len = input_ids.shape[-1]
+
+    parallel_config = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
+    )
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    encoder = Gemma4Encoder(config, mesh_device, ccl_manager, parallel_config, max_seq_len=seq_len)
+    encoder.load_torch_state_dict(state_dict)
+    del state_dict
+
+    tt_ids = ttnn.from_torch(input_ids, device=mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_mask = encoder.build_attn_mask(attention_mask, seq_len)
+    hidden_states = encoder(tt_ids, tt_attn_mask=tt_mask)
+
+    _assert_tracks_bf16_floor(
+        hidden_states,
+        reference,
+        num_layers=config.num_hidden_layers,
+        hidden_size=config.hidden_size,
+        seq_len=seq_len,
     )

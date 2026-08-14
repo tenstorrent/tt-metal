@@ -15,6 +15,7 @@ import hashlib
 import math
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import torch
 from huggingface_hub import hf_hub_download
@@ -824,6 +825,9 @@ class LTXPipeline:
         latent_spatial = latent.reshape(B, latent_frames, latent_h, latent_w, self.in_channels)
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
+        if dump_dir := os.environ.get("LTX_DUMP_LATENT"):
+            self._dump_decode_input(latent_spatial, dump_dir)
+
         with Watchdog("vae decode"):
             video = self.vae_decoder(latent_spatial, output_type=output_type)
         if output_type == "yuv":
@@ -831,6 +835,21 @@ class LTXPipeline:
         if output_type != "float":
             return video.numpy()
         return video
+
+    def _dump_decode_input(self, latent_spatial: torch.Tensor, dump_dir: str) -> None:
+        """Save the BCTHW latent handed to the VAE decoder, for host-side decoder work.
+
+        Written in normalized latent space, which is what both decoders expect: the conv
+        decoder denormalizes in ``decode_device`` and DiffVAE in ``forward_stages_1_to_3``.
+        Numbered per call so a two-stage run yields stage 1 and stage 2 separately.
+        """
+        path = Path(dump_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        index = getattr(self, "_latent_dump_index", 0)
+        self._latent_dump_index = index + 1
+        out = path / f"latent_{index}_{'x'.join(str(d) for d in latent_spatial.shape)}.pt"
+        torch.save(latent_spatial.to(torch.float32).cpu(), out)
+        logger.info(f"dumped decode-input latent to {out}")
 
     def _vae_per_channel_stats(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Delegate: cached ``(mean-of-means, std-of-means)`` from the VAE adapter."""

@@ -13,6 +13,11 @@ are on different torch versions::
 Default mode is a narrow randomly-initialised stack, which isolates the arithmetic. ``--real``
 takes two layers of trained weights at full width instead: one sliding and one global, since
 those are the two layer shapes that exist.
+
+``--full`` is the whole shipped 48-layer stack on a real tokenized prompt, left-padded to 1024
+with its attention mask — the exact input the pipeline builds. Two layers cannot show error that
+only appears compounded over 48, and the other modes pass no mask at all, so this is the mode
+that speaks to prompt adherence. Needs ~72 GB of RAM (fp32 + bf16 copies of 12B).
 """
 
 import argparse
@@ -85,6 +90,51 @@ def real_config():
     return Gemma4TextConfig(**text_config)
 
 
+def full_config():
+    """The shipped config as-is — all 48 layers."""
+    text_config = dict(checkpoint_text_config())
+    text_config.update(attn_implementation="eager", dtype="float32")
+    return Gemma4TextConfig(**text_config)
+
+
+def load_full_weights(model):
+    with safe_open(CHECKPOINT, "pt") as handle:
+        state = {
+            key[len("model.") :]: handle.get_tensor(key).float() for key in handle.keys() if key.startswith("model.")
+        }
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    assert not unexpected, f"unexpected keys: {unexpected}"
+    assert all("v_proj" in k for k in missing), f"missing keys: {missing}"
+    return model
+
+
+def full_inputs(prompt: str, seq_len: int):
+    """Mirror ``Gemma4TokenizerEncoderPair.tokenize``: manual BOS, then left-pad to seq_len."""
+    import json as _json
+
+    from tokenizers import Tokenizer
+    from transformers import PreTrainedTokenizerFast
+
+    with safe_open(CHECKPOINT, "pt") as handle:
+        tok_json = bytes(handle.get_tensor("tokenizer_json").numpy().tobytes())
+        tok_cfg = _json.loads(bytes(handle.get_tensor("hf_asset__tokenizer_config.json").numpy().tobytes()))
+    # transformers 5 reads model_max_length from the config itself, so passing it again collides.
+    tok_cfg.pop("added_tokens_decoder", None)
+    tok_cfg.pop("model_max_length", None)
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer.from_buffer(tok_json), model_max_length=seq_len, **tok_cfg
+    )
+
+    ids = tokenizer(prompt.strip(), padding=False, truncation=True, max_length=seq_len).input_ids
+    if not ids or ids[0] != tokenizer.bos_token_id:
+        ids = [tokenizer.bos_token_id, *ids][:seq_len]
+    padded = tokenizer.pad(
+        {"input_ids": [ids]}, padding="max_length", max_length=seq_len, return_tensors="pt", return_attention_mask=True
+    )
+    print(f"prompt tokens: {len(ids)} of {seq_len} (padding_side={tokenizer.padding_side})")
+    return padded.input_ids, padded.attention_mask
+
+
 def load_real_weights(model):
     """Map the two chosen checkpoint layers onto the two-layer stack."""
     remap = {"embed_tokens.weight": "model.embed_tokens.weight", "norm.weight": "model.norm.weight"}
@@ -107,16 +157,22 @@ def load_real_weights(model):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--real", action="store_true", help="use trained weights at full width")
+    parser.add_argument("--full", action="store_true", help="all 48 shipped layers on a real prompt")
+    parser.add_argument("--prompt-file", default=None, help="prompt for --full (default: a short T2V prompt)")
+    parser.add_argument("--seq-len", type=int, default=1024, help="padded length for --full")
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
-    out = args.out or (f"/tmp/g4ref/gemma4_reference{'_real' if args.real else ''}.safetensors")
+    suffix = "_full" if args.full else ("_real" if args.real else "")
+    out = args.out or f"/tmp/g4ref/gemma4_reference{suffix}.safetensors"
 
     torch.manual_seed(0)
-    config = real_config() if args.real else narrow_config()
+    config = full_config() if args.full else (real_config() if args.real else narrow_config())
     model = Gemma4TextModel(config).to(torch.float32).eval()
 
-    if args.real:
+    if args.full:
+        load_full_weights(model)
+    elif args.real:
         load_real_weights(model)
     else:
         # Distinct per-layer scalars so a dropped or misplaced multiply cannot pass.
@@ -129,16 +185,31 @@ def main():
             f"layer {idx}: {attn.layer_type:18} head_dim={attn.head_dim:4} v_proj={'None' if attn.v_proj is None else 'yes'}"
         )
 
-    input_ids = torch.randint(0, config.vocab_size, (1, SEQ_LEN))
+    attention_mask = None
+    if args.full:
+        prompt = (
+            open(args.prompt_file).read()
+            if args.prompt_file
+            else "A young woman with shoulder-length wavy brown hair sits on a wooden stool, cradling an acoustic guitar."
+        )
+        input_ids, attention_mask = full_inputs(prompt, args.seq_len)
+    else:
+        input_ids = torch.randint(0, config.vocab_size, (1, SEQ_LEN))
+
+    kwargs = {"output_hidden_states": True, "use_cache": False}
+    if attention_mask is not None:
+        kwargs["attention_mask"] = attention_mask
 
     with torch.no_grad():
-        fp32 = model(input_ids=input_ids, output_hidden_states=True, use_cache=False)
+        fp32 = model(input_ids=input_ids, **kwargs)
         # The same forward in bf16 gives the device test a floor to measure against: bf16
         # error compounds with depth, so an fp32-only target is unreachable and says nothing
         # about whether the port is correct.
-        bf16 = model.to(torch.bfloat16)(input_ids=input_ids, output_hidden_states=True, use_cache=False)
+        bf16 = model.to(torch.bfloat16)(input_ids=input_ids, **kwargs)
 
     tensors = {"input_ids": input_ids.to(torch.int64)}
+    if attention_mask is not None:
+        tensors["attention_mask"] = attention_mask.to(torch.int64)
     # hidden_states[i] for i < N is the *input* to layer i, and the last entry is already
     # the post-norm output — the final layer's pre-norm activation is never exposed.
     for i, (a, b) in enumerate(zip(fp32.hidden_states, bf16.hidden_states)):

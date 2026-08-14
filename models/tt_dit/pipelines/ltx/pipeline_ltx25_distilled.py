@@ -21,6 +21,7 @@ from loguru import logger
 
 import ttnn
 
+from ...encoders.gemma3.encoder_pair import GemmaTokenizerEncoderPair
 from ...encoders.gemma4.encoder_pair import Gemma4TokenizerEncoderPair
 from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerCheckpoint
@@ -40,6 +41,17 @@ from ...utils.ltx import (
 )
 from .pipeline_ltx import TransformerState
 from .pipeline_ltx_distilled import LTXDistilledPipeline
+
+
+def _default_gemma3_path() -> str:
+    """Local Gemma-3 snapshot for the LTX25_TEXT_STACK=gemma3 A/B, same lookup as the 2.3 tests."""
+    import glob
+
+    cands = glob.glob(
+        os.path.expanduser("~/.cache/huggingface/hub/models--google--gemma-3-12b-it-qat-q4_0-unquantized/snapshots/*/")
+    )
+    assert cands, "no local Gemma-3 snapshot; set LTX25_GEMMA3_PATH"
+    return cands[0].rstrip("/")
 
 
 class LTX25DistilledPipeline(LTXDistilledPipeline):
@@ -84,6 +96,27 @@ class LTX25DistilledPipeline(LTXDistilledPipeline):
         )
 
     def _make_gemma_encoder_pair(self, gemma_path: str | None):
+        # A/B lever for the prompt-adherence investigation: LTX25_TEXT_STACK=gemma3 runs the whole
+        # 2.3 text stack — Gemma-3 plus the 2.3 monolith's projection and connectors — under an
+        # otherwise untouched 2.5 pipeline, leaving the text path as the only variable. Both 2.5
+        # text stages are numerically faithful to the checkpoint (see LTX2_5_PORT.md), so this is
+        # comparing two correct implementations, not a correct one against a broken one.
+        if os.environ.get("LTX25_TEXT_STACK") == "gemma3":
+            gemma3_path = os.environ.get("LTX25_GEMMA3_PATH") or _default_gemma3_path()
+            gemma3_ckpt = os.environ.get("LTX25_GEMMA3_CHECKPOINT") or os.path.expanduser(
+                "~/.cache/ltx-checkpoints/ltx-2.3-22b-distilled-1.1.safetensors"
+            )
+            logger.warning(f"LTX25_TEXT_STACK=gemma3: text path from {gemma3_path} + {gemma3_ckpt}")
+            return GemmaTokenizerEncoderPair(
+                gemma3_path,
+                mesh_device=self.mesh_device,
+                ccl_manager=self.vae_ccl_manager,
+                parallel_config=self.encoder_parallel_config,
+                checkpoint_name=gemma3_ckpt,
+                mode=self.mode,
+                dynamic_load=self.dynamic_load,
+            )
+
         assert gemma_path is not None, "LTX-2.5 requires the packed Gemma-4 text-encoder path"
         assert self.checkpoint_name is not None, "LTX-2.5 requires the distilled transformer path"
         return Gemma4TokenizerEncoderPair(

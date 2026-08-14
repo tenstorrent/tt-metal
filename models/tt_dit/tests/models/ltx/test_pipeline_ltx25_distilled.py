@@ -80,13 +80,16 @@ def test_pipeline_ltx25_distilled(
         num_frames=num_frames,
         height=height,
         width=width,
+        # LTX25_ANCESTRAL=0 falls back to the 2.3 deterministic Euler in stage 1, to A/B the
+        # ancestral sampler (the other 2.5-only change on the T2V path) against prompt adherence.
+        use_ancestral_sampler=os.environ.get("LTX25_ANCESTRAL", "1") not in ("0", "false", "False"),
     )
 
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
     # Same 3-pass traced structure as 2.3 distilled (#52968): gen #0 captures denoise/VAE/audio,
     # gen #1 captures encode (gate opens after gen #0), gen #2 is pure replay + measured Encoder.
     steady_state_prompt = prompt if dynamic_load else os.environ.get("PROMPT_STEADY_STATE", STEADY_STATE_LTX_PROMPT)
-    replay_prompt = prompt if dynamic_load else STEADY_STATE_REPLAY_LTX_PROMPT
+    replay_prompt = prompt if dynamic_load else os.environ.get("PROMPT_REPLAY", STEADY_STATE_REPLAY_LTX_PROMPT)
 
     def run(*, prompt, number, seed):
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx25_av_fast_{width}x{height}_{number}.mp4")

@@ -735,10 +735,14 @@ class LTXDistilledPipeline(LTXPipeline):
         # out of the reported total and out of the traced path it belongs in. dynamic_load keeps the
         # cache: there the encoder is coresident-excluded from the DiT, so re-encoding every request
         # would reload it and evict the captured model state.
-        cached = self.dynamic_load and os.path.exists(self._device_embed_cache_path([prompt]))
+        # LTX_FORCE_EMBED_CACHE is a diagnostic: the cache key is the prompt text alone, so writing
+        # it from one version and reading it in another swaps prompt embeddings across versions and
+        # separates a text-path regression from a DiT one. Never for perf runs — it hides the encoder.
+        use_embed_cache = self.dynamic_load or os.environ.get("LTX_FORCE_EMBED_CACHE", "0") != "0"
+        cached = use_embed_cache and os.path.exists(self._device_embed_cache_path([prompt]))
         if not cached:
             self.gemma_encoder_pair.ensure_loaded()
-        enc = self.encode_prompts([prompt], use_cache=self.dynamic_load)
+        enc = self.encode_prompts([prompt], use_cache=use_embed_cache)
         v_embeds, a_embeds = enc[0][0].float(), enc[0][1].float()
         t_encode = time.time() - t0
         timings.append(("Encoder (cache)" if cached else "Encoder", t_encode))
