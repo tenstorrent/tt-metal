@@ -9,10 +9,68 @@ and to decide whether the feature is worth re-landing.
 | Reverted by | PR #53076, commit `3940590cfdc` (6 files, `+35/-110`) |
 | Broken by | PR #52730, commit `c080ab0cfc94` |
 | Prior fix attempt | PR #53053 (Pavle Josipović) — did not clear the failures |
-| As of | 2026-08-13 |
+| **Root cause** | **Found 2026-08-14 on QB2 — single-packet inputs cannot be halved (§0)** |
+| As of | 2026-08-14 |
 
 Each claim below is tagged **[VERIFIED]** (measured or observed directly), **[HYPOTHESIS]**
 (reasoning, untested), or **[UNRESOLVED]** (unknown, must be checked).
+
+---
+
+## 0. UPDATE 2026-08-14 — root cause found and fixed on QB2 [VERIFIED]
+
+Debugged directly on `bh_quietbox_2` (4x Blackhole p150b, ring 4). **The root cause is not a ring-4
+geometry problem.** It is a shape-driven defect in the packet-halving arithmetic:
+
+```cpp
+// ring_attention_all_gather_{reader,writer}.cpp
+const uint32_t first_half_pages = (num_packets / 2) * packet_size_in_pages;
+```
+
+When an input's per-batch-head range is a **single packet**, `first_half_pages == 0` and the two
+split predicates degenerate to *"direction 0 relays nothing, direction 1 relays everything"* — while
+slice counting, semaphore signaling, and the consumer wait all continue as if a real two-way split
+had happened. The fix is one symmetric guard per kernel:
+
+```cpp
+const bool split_this_input = is_split_forwarded_slice && (first_half_pages > 0);
+```
+
+### Evidence (all measured on QB2, `test_..._indexed_kv_cache_accuracy`)
+
+| Configuration | PCC chunk 0 (fp32) | Result |
+|---|---|---|
+| Feature restored as merged (`c080ab0cfc94`) | 0.97944098 | FAIL — reproduces §3 exactly |
+| Halving disabled; counting + consumer wait still on | 0.99984010 | PASS |
+| Halving on, single-packet inputs exempt (**the fix**) | 0.99984010 | PASS |
+| Same fix, `kimi_k3-all-qk` + `kimi50k-all-qk` | — | PASS, no hang |
+
+The third row is the load-bearing one: this workload has two inputs, one `npkt=1` and one `npkt=2`.
+The fix leaves the `npkt=2` input genuinely split across both links, so **split forwarding stays
+active at ring 4**. This is a real fix, not the ring-size gate in disguise.
+
+### What this corrects in the rest of this document
+
+- **§7's ring-4 degenerate-case hypothesis is DISPROVED.** Ring 4 is not special. The `+1` relay
+  accounting, the twice-arriving diametric shard, and `split_shard_id` were each confirmed correct
+  at ring 4 by on-device `DPRINT`. Note also that §7 conflated the variable with the relay count:
+  the Ring relay predicate is `slices_received < (writes_expected + 1)`, so direction 1 at ring 4
+  performs **one** relay pre-split and two post-split, not zero and one.
+- **§8 is CLOSED, not a defect.** `ntf=2, ntb=1, split_en=1` uniform across all four chips in both
+  reader and writer. Both factories apply the identical double-swap, so the signaler and the AG
+  kernels agree *by construction*. Nothing here needed fixing.
+- **The bug is shape-driven, not topology-driven.** Ring 4 only made it *visible*: with
+  `writes_expected == 1`, every relay is the split relay, so one unsplittable input corrupts every
+  transfer. At ring 8 most relays are ordinary and the defect is diluted — **it is therefore latent
+  on the galaxy today**, on the exact path carrying the LTX win. See §14.
+- **A `ring_size > 4` gate is the WRONG fix.** It was validated here (both bugs clear) before the
+  real cause was found, but it masks a live ring-8 defect and forfeits the optimization at ring 4
+  for no reason. Do not ship it.
+
+Two intermediate hypotheses were also disproved by evidence and are recorded so nobody re-runs them:
+the consumer *does* apply the split second-half wait on the correct semaphore
+(`fused_op_receiver.hpp:53-56`, arithmetic checks out at ring 4 and ring 8), and the two directions
+signal **distinct** semaphores (`ccl_op_fusion.cpp:73`, indexed by direction).
 
 ---
 
@@ -181,7 +239,12 @@ so it is active at both ring 4 and ring 8.
 
 ---
 
-## 7. Leading hypothesis: ring 4 is a degenerate case [HYPOTHESIS]
+## 7. ~~Leading hypothesis: ring 4 is a degenerate case~~ [DISPROVED — see §0]
+
+> **Superseded 2026-08-14.** Every claim in this section was checked on device and the mechanism it
+> proposes does not occur. Kept for the record; do not act on it. The arithmetic below is still a
+> correct description of the ring counts — it is the *conclusion* drawn from them that is wrong.
+
 
 Ring counts come from `get_forward_backward_configuration`
 (`ttnn/cpp/ttnn/operations/ccl/ccl_common.cpp`):
@@ -224,7 +287,12 @@ PCC error, and the surplus semaphore increment strands a later `wait_min` as a h
 
 ---
 
-## 8. Open question — resolve before trusting any of the above [UNRESOLVED]
+## 8. ~~Open question — resolve before trusting any of the above~~ [RESOLVED — not a defect, see §0]
+
+> **Closed 2026-08-14.** Confirmed by on-device `DPRINT`: `ntf=2, ntb=1, split_en=1` uniform on all
+> four chips, reader and writer agreeing. The mapping is correct by construction. The direction-
+> inversion warning below is accurate and still worth reading, but nothing here is broken.
+
 
 `split_second_half_wait` and `split_shard_id` are both derived from the signaler's
 `backward_writes_expected`, set via `RingSDPAFusedOpSignaler::init_all_gather()` at
@@ -351,17 +419,72 @@ attempt in #38256. It has a track record of being hard to get right.
   exit and the run looks dead.
 - **Beware the test-id trap.** `-k "4x8sp1tp0nl2_ring_is_fsdp0"` also matches the i2v variant, whose
   id is a superstring and which collects first. Verify with `--collect-only` and count every match.
+- **`CI=true` changes which tests exist.** `_generate_chunked_test_configs`
+  (`test_ring_joint_sdpa.py:4897`) branches on `os.environ.get("CI") == "true"`: under CI each model
+  collapses to a single `-all-qk` test sweeping every (q,k) combo in one device session, while
+  locally it expands into separate per-(q,k) tests. **The `kimi_k3-all-qk-chunk2560` and
+  `kimi50k-all-qk-chunk2560` ids that hang in the nightly do not exist without `CI=true`** — running
+  the hang repro locally without it silently tests a different execution pattern and passes.
 
 ---
 
-## 13. If you re-land it
+## 13. Remaining work on QB2
 
-1. Establish where the performance win actually is, at what ring size and shape. The LTX ring-8
-   measurement does not justify the feature.
-2. Resolve the open question in §8 — the signaler's `backward_writes_expected` mapping.
-3. Replace the coarse `backward_writes_expected + 1` threshold with per-chunk event counting,
-   following the AGMM aggregator.
-4. Fix both latent defects in §9, or delete the dead `RingSDPAOpIndexer(rt_args_idx)` constructor
+The root cause is fixed (§0) and the two real failures from §3 pass. What the fix has *not*
+exercised:
+
+1. **The sliding-window path.** `get_next_ring_id_and_consume_one_signal()` still lacks the split
+   second-half wait its sibling has (§9, defect 2). The failing tests used
+   `get_next_ring_id_and_sync()`, so this path is untested against split forwarding. Find or add a
+   test that reaches `ring_joint_reader.cpp:670` with split forwarding enabled.
+2. **The `indexer_score` op** — the third consumer of the same runtime-arg block. Run its tests with
+   split forwarding on. See also the stale constant in §9.
+3. **Full nightly, clean.** `CI=true pytest tests/nightly/blackhole/sdpa/ -svv`. Note `CI=true` is
+   mandatory to collect the `-all-qk` ids (see §12).
+
+## 14. Remaining work on a galaxy — this is the blocking handoff
+
+None of this can be obtained on QB2.
+
+1. **Confirm the defect is live at ring 8.** §0 argues the single-packet case is latent on the
+   galaxy, diluted rather than absent. Find or construct a ring-8 workload whose relayed input is
+   one packet wide. **If it reproduces, this is a correctness fix for the galaxy, not just a QB2
+   unbreak** — which changes the priority of landing it.
+2. **Regression-check ring 8.** Re-run the ring-joint SDPA accuracy and determinism suites where
+   split forwarding already worked, to confirm the guard changes nothing there.
+3. **Re-measure LTX distilled end-to-end.** The fix relays single-packet inputs whole, so slightly
+   less traffic is balanced than in the merged version. The §1 A/B must be repeated to confirm the
+   0.05s survives. Use the §1 methodology (same machine, same seed, gen #2 traced pure replay).
+4. **Close the coverage gap.** Add a galaxy SKU to `tests/nightly/blackhole/sdpa/`, or a ring-4 case
+   to a galaxy-visible suite. This gap is what let the regression reach `main`.
+
+## 15. Still worth doing before a re-land
+
+1. Fix both latent defects in §9, or delete the dead `RingSDPAOpIndexer(rt_args_idx)` constructor
    outright.
-5. Add a galaxy SKU to the `tests/nightly/blackhole/sdpa/` suite, or a ring-4 case to a
-   galaxy-visible suite. The coverage gap is what let this land.
+2. `ring_indexer_score_dsa_program_factory.cpp:57` hardcodes `fused_rt_width = 6`, but
+   `push_ring_sdpa_fused_op_rt_args` now emits **9**. Currently benign — host and kernel both append
+   and consume sequentially, so they shift together — but the `static_assert` at `:71` advertises
+   that it catches exactly this drift and structurally cannot, since it only checks the derived
+   constants against each other. Either derive the width from the pusher or drop the false comfort.
+3. Consider the §10 recommendation (per-event counting, following #52513's AGMM aggregator) on its
+   own merits. It was not the cause here — the consumer wait is correct (§0) — but it would have
+   made this class of producer/consumer disagreement unrepresentable.
+
+## 16. Environment and iteration notes (QB2)
+
+- **`ttnn` is built but not installed.** `uv pip install -e . --no-deps` into the active venv; also
+  needs `graphviz`. Do **not** put the repo root on `PYTHONPATH` — it shadows the installed package
+  and surfaces as a misleading `No module named 'ttnn.device'` from `conftest.py`.
+- **Builds are fast.** A host-file change (touching `ring_joint_sdpa_program_factory.cpp`) rebuilt
+  10 targets in **37 seconds** on this box. An earlier claim of ~3.5 h in this workflow was an
+  artifact of inferring elapsed time from file mtimes across a dropped connection — it does not
+  reproduce. `build_metal.sh` defaults to `Enable ccache: OFF`; `-c` enables it.
+- **Kernel-only changes need no rebuild at all** — the two AG kernels, `fused_op_receiver.hpp`, and
+  `fused_op_indexer.hpp` are JIT-compiled per run. A full bisect iteration is ~6 s.
+- **Never edit kernel sources while a test run is in flight.** They are JIT-compiled per test, so
+  edits are picked up mid-run and silently invalidate everything after that point.
+- **`DPRINT` is printf-style here**, not stream-style: `DPRINT("x={}\n", v)`. `DPRINT << ...` fails
+  with a `static_assert` ("Old style DPRINT is deprecated"), and the error surfaces as a *kernel
+  compile* failure inside the pytest log, not a build failure. Include `api/debug/dprint.h`; enable
+  with `TT_METAL_DPRINT_CORES=all TT_METAL_DPRINT_CHIPS=all TT_METAL_DPRINT_RISCVS=BR,NC`.
