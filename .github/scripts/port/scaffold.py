@@ -177,6 +177,19 @@ def write_stubs(op_dir: Path, op: str) -> list[Path]:
     return written
 
 
+def already_listed(text: str, entry: str) -> bool:
+    """Whether a CMake list already carries `entry` -- as its own entry, not inside another one.
+
+    `entry in text` was the obvious test, and it is wrong for exactly one shape of op name. The day
+    `untilize` merged, scaffolding `tilize` found `tilize/codegen/kernels/*.cpp` already present,
+    because it is a substring of `untilize/codegen/kernels/*.cpp`. It added nothing, then failed its
+    own verification, which looks at the start of a line and was right to. Every op whose name is a
+    suffix of an already-ported op has this problem: `tilize`/`untilize`, and `pad` against anything
+    ending in `pad`.
+    """
+    return any(line.strip() == entry for line in text.splitlines())
+
+
 def register_sources(category_dir: Path, op: str) -> list[str]:
     """Add the three codegen `.cpp` files to the category `sources.cmake`.
 
@@ -186,7 +199,7 @@ def register_sources(category_dir: Path, op: str) -> list[str]:
     path = category_dir / "sources.cmake"
     text = path.read_text()
     entries = [f"{op}/codegen/{op}_codegen_{c}.cpp" for c in COMPONENTS]
-    added = [e for e in entries if e not in text]
+    added = [e for e in entries if not already_listed(text, e)]
     if not added:
         return []
 
@@ -237,7 +250,7 @@ def register_kernel_globs(category_dir: Path, op: str, kernels_dir: Path) -> lis
     text = path.read_text()
     suffixes = sorted({f.suffix for f in kernels_dir.iterdir() if f.is_file() and f.suffix})
     globs = [f"{op}/codegen/kernels/*{s}" for s in suffixes] or [f"{op}/codegen/kernels/*.cpp"]
-    added = [g for g in globs if g not in text]
+    added = [g for g in globs if not already_listed(text, g)]
     if not added:
         return []
 
@@ -437,7 +450,7 @@ def verify(op_dir: Path, op: str, kernels: list[Path]) -> list[str]:
     cmake_text = (category_dir / "CMakeLists.txt").read_text()
     for c in COMPONENTS:
         entry = f"{op}/codegen/{op}_codegen_{c}.cpp"
-        if entry not in sources_text:
+        if not already_listed(sources_text, entry):
             errors.append(f"sources.cmake missing: {entry}")
     # Where the globs landed, not just whether the string is present anywhere. The weaker check
     # passed with `errors: []` on a tree whose CMake configure could not succeed, because a glob

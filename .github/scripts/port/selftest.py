@@ -310,6 +310,47 @@ for op, expect_beside in (("untilize", True), ("permute", False)):
         check(f"[{op}] verify rejects a glob outside the call",
               any("outside file(GLOB_RECURSE" in e for e in errors), str(errors))
 
+# An op whose name is a suffix of an already-ported one. `untilize` merged on 2026-08-14 and the very
+# next run, scaffolding `tilize`, added no globs at all and failed its own verification: the substring
+# test saw `tilize/codegen/kernels/*.cpp` inside `untilize/codegen/kernels/*.cpp` and concluded it was
+# already registered. The fixture above could not catch it because it has no codegen globs in it.
+MERGED_CMAKE = CMAKE.replace(
+    "    untilize/device/kernels/*.cpp\n",
+    "    untilize/device/kernels/*.cpp\n    untilize/codegen/kernels/*.cpp\n    untilize/codegen/kernels/*.h\n",
+)
+
+with tempfile.TemporaryDirectory() as tmp:
+    category = Path(tmp)
+    (category / "CMakeLists.txt").write_text(MERGED_CMAKE)
+    (category / "sources.cmake").write_text(
+        "    untilize/codegen/untilize_codegen_supported.cpp\n    tilize/tilize.cpp\n"
+    )
+    kernels = category / "tilize" / "codegen" / "kernels"
+    kernels.mkdir(parents=True)
+    (kernels / "k.cpp").write_text("")
+    (kernels / "k.h").write_text("")
+
+    added = scaffold.register_kernel_globs(category, "tilize", kernels)
+    check(
+        "tilize gets its own globs even though untilize already has some",
+        added == ["tilize/codegen/kernels/*.cpp", "tilize/codegen/kernels/*.h"],
+        f"added {added}: a substring test reads untilize's globs as tilize's",
+    )
+    out = (category / "CMakeLists.txt").read_text()
+    check(
+        "and they land beside tilize's own native glob, not untilize's",
+        out.splitlines()[
+            next(i for i, ln in enumerate(out.splitlines())
+                 if ln.strip() == "tilize/codegen/kernels/*.cpp") - 1
+        ].strip() == "tilize/device/kernels/*.cpp",
+    )
+    added_sources = scaffold.register_sources(category, "tilize")
+    check(
+        "and its sources are registered for the same reason",
+        len(added_sources) == len(scaffold.COMPONENTS),
+        f"added {added_sources}",
+    )
+
 # ====== 7. strata labels agree across the JSON boundary, and are readable
 import strata  # noqa: E402
 
