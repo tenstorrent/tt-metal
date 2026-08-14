@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
@@ -259,10 +260,39 @@ int drisc_bank_override() {
 // device DRAM ring) and 2 movers (TWO DRAM rings each -> the existing D2H socket) -- instead of 2 drainers
 // each doing the whole job. Unset or 0 is today's path, bit for bit: every role-split compile arg is then 0
 // and the kernel's `if constexpr` discards all of it.
+// Shared truthiness for the perf-debug knobs. Tests the WHOLE value, not just the first character: the old
+// `*s != '0'` idiom made `=false`, `=off` and `=no` all evaluate to ENABLED (any word not starting with '0'),
+// while `=01` and `=0x1` evaluated to DISABLED. That is backwards for knobs whose purpose is keeping an
+// instrument out of a production run, so falsy words are honoured and numbers decide by value.
+bool env_flag(const char* name) {
+    const char* s = std::getenv(name);
+    if (s == nullptr || *s == '\0') {
+        return false;
+    }
+    std::string v(s);
+    for (char& c : v) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    if (v == "false" || v == "off" || v == "no" || v == "n" || v == "disable" || v == "disabled") {
+        return false;
+    }
+    char* end = nullptr;
+    const long n = std::strtol(v.c_str(), &end, 0);
+    if (end != nullptr && *end == '\0') {
+        return n != 0;  // "0"/"00"/"0x0" off; "01" on
+    }
+    return true;
+}
+
+// DEFAULT ON. The 6-DRISC split is the production shape -- it moved the knee from delay 60 to 15 (§N+40) --
+// and the 2-drainer fallback is well past its own knee at the delays we care about: measured 22,761 producer
+// stalls across 120 of 120 cores at delay 15 with the split off against 0 with it on. Both are lossless, so
+// the old default cost workload perturbation rather than correctness. Set a falsy value to force the
+// 2-drainer path; that is a bisect tool, not a production choice.
 bool role_split() {
     static const bool v = [] {
         const char* s = std::getenv("TT_METAL_PERF_DEBUG_ROLE_SPLIT");
-        return s != nullptr && *s != '\0' && *s != '0';
+        return (s == nullptr || *s == '\0') ? true : env_flag("TT_METAL_PERF_DEBUG_ROLE_SPLIT");
     }();
     return v;
 }
@@ -368,8 +398,19 @@ constexpr uint32_t kHsHead = 0, kHsTail = 16, kHsProbeF = 32, kHsProbeM = 48, kH
 // sweeps. Every sweep inside an active window is now instrumented instead.
 bool drisc_zones() {
     static const bool v = [] {
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_DRISC_ZONES");
-        return s != nullptr && *s != '\0' && *s != '0';
+        // NOC_FOOTPRINT IMPLIES ZONES. The per-sweep NoC series rides the self-zone marker stream, so
+        // footprint-without-zones yields the out[] totals and the log block but NO plots -- a silently
+        // half-working configuration. Asking for the footprint therefore turns self-profiling on too.
+        // An explicit falsy DRISC_ZONES still wins, so the combination remains expressible.
+        const char* z = std::getenv("TT_METAL_PERF_DEBUG_DRISC_ZONES");
+        if ((z == nullptr || *z == '\0') && env_flag("TT_METAL_PERF_DEBUG_NOC_FOOTPRINT")) {
+            log_info(
+                tt::LogMetal,
+                "[perf-debug profiler] NOC_FOOTPRINT implies DRISC_ZONES (the per-sweep NoC series rides the "
+                "self-zone stream) -- enabling DRISC self-profiling");
+            return true;
+        }
+        return env_flag("TT_METAL_PERF_DEBUG_DRISC_ZONES");
     }();
     return v;
 }
@@ -394,10 +435,7 @@ uint32_t drisc_zone_hold_cycles() {
 // hardware's own tally. Off by default: the per-sweep sample is not free on a drainer that is >99% idle, and
 // N+41 measured that a mere +4% on idle-sweep cost crosses the knee at SD delay 15.
 uint32_t noc_footprint() {
-    static const uint32_t v = [] {
-        const char* s = std::getenv("TT_METAL_PERF_DEBUG_NOC_FOOTPRINT");
-        return (s != nullptr && *s != '\0' && *s != '0') ? 1u : 0u;
-    }();
+    static const uint32_t v = [] { return env_flag("TT_METAL_PERF_DEBUG_NOC_FOOTPRINT") ? 1u : 0u; }();
     return v;
 }
 
@@ -1113,7 +1151,38 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
     // drainer's core in ONE launch (see its comment) and because a mover's compile args reference its
     // filler's L1, so the fillers must be set up first. The default path takes the `else` and is unchanged.
     const uint32_t nbanks = static_cast<uint32_t>(soc.get_num_dram_views());
-    const bool rsplit = role_split() && !tensix_drain;
+    // DEGRADE, don't fail, when the part cannot host the full roster. The 6-DRISC split needs kNFillers filler
+    // banks plus kNSockets host-facing banks, and the fillers' RINGS need banks too; a harvested or smaller
+    // part may not have them. Nothing downstream checked this -- the roster was fixed before
+    // pick_unused_dram_logical_core() was ever called, so a short part would have indexed past the end of
+    // kSafeBanks / the filler-bank list rather than reporting anything.
+    //
+    // Ladder: 6 (4 fillers + 2 movers) -> 2 full-role drainers -> 1. Each step is a configuration already
+    // measured to work, just with a worse knee (§N+34: 1 drainer knee 100, 2 -> 20; §N+40: the split -> 15).
+    // Losslessness never depends on the count: fewer drainers means producers stall sooner, not that markers
+    // are dropped.
+    const uint32_t need_split = kNFillers + kNSockets;
+    bool rsplit = role_split() && !tensix_drain;
+    if (rsplit && nbanks < need_split) {
+        log_warning(
+            tt::LogMetal,
+            "[perf-debug profiler] role split needs {} DRAM views (4 fillers + 2 movers) but this part has {} "
+            "-- falling back to {} full-role drainer(s). Capture stays LOSSLESS; the knee moves in (§N+34).",
+            need_split,
+            nbanks,
+            std::min<uint32_t>(kNSockets, nbanks));
+        rsplit = false;
+    }
+    // Second rung: even the 2-drainer path needs 2 host-facing banks. With one, run a single drainer over the
+    // whole grid -- the original shape, knee ~100 (§N+34) but still complete.
+    const uint32_t n_full = std::min<uint32_t>(kNSockets, nbanks == 0 ? 1u : nbanks);
+    if (!rsplit && n_full < kNSockets) {
+        log_warning(
+            tt::LogMetal,
+            "[perf-debug profiler] only {} DRAM view(s) available: running {} drainer(s) over the whole grid.",
+            nbanks,
+            n_full);
+    }
     std::vector<uint32_t> banks;     // DRAM bank hosting DRISC d itself
     std::vector<uint32_t> ringbank;  // DRAM bank holding the ring DRISC d reads/writes (0 when unused)
     if (rsplit) {
@@ -1153,9 +1222,9 @@ bool PerfDebugProfiler::boot_device(const std::shared_ptr<distributed::MeshDevic
             ringbank.push_back(rb[ctx.peer_of[d][0]]);
         }
     } else {
-        ctx.n_drisc = kNSockets;
+        ctx.n_drisc = n_full;
         const int bank_ov_pre = drisc_bank_override();
-        for (uint32_t d = 0; d < kNSockets; d++) {
+        for (uint32_t d = 0; d < n_full; d++) {
             ctx.role[d] = kRoleFull;
             ctx.sock_of[d] = d;
             banks.push_back(
