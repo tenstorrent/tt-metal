@@ -25,7 +25,6 @@
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
 #include "api/compute/reduce.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
 #include "api/compute/softmax.h"
 
@@ -268,13 +267,19 @@ void kernel_main() {
     // =====================================================================
 
     // Step 1: Find max per row
-    compute_kernel_lib::reduce<
-        PoolType::MAX,
-        ReduceDim::REDUCE_ROW,
-        cb_softmax_tmp_id,
-        cb_bcast_scaler_id,
-        cb_reduce_scalar_id,
-        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(compute_kernel_lib::ReduceInputBlockShape::single());
+    cb_softmax_tmp.wait_front(1);
+    cb_reduce_scalar.reserve_back(1);
+
+    tile_regs_acquire();
+    reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_softmax_tmp_id, cb_bcast_scaler_id, cb_reduce_scalar_id);
+    reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_softmax_tmp_id, cb_bcast_scaler_id, 0, 0, 0);
+    reduce_uninit(cb_reduce_scalar_id);
+    tile_regs_commit();
+
+    tile_regs_wait();
+    pack_tile(0, cb_reduce_scalar_id);
+    tile_regs_release();
+    cb_reduce_scalar.push_back(1);
 
     // Step 2: Subtract max + Exp (fused)
     cb_reduce_scalar.wait_front(1);
@@ -296,20 +301,22 @@ void kernel_main() {
     cb_reduce_scalar.pop_front(1);
 
     // Step 3: Reduce SUM per row + reciprocal
-    compute_kernel_lib::reduce<
-        PoolType::SUM,
-        ReduceDim::REDUCE_ROW,
-        cb_softmax_tmp_id,
-        cb_bcast_scaler_id,
-        cb_reduce_scalar_id,
-        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-        compute_kernel_lib::ReduceInputBlockShape::single(),
-        compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-        compute_kernel_lib::NoAccumulation{},
-        [](uint32_t dst_idx) {
-            recip_tile_init();
-            recip_tile(dst_idx);
-        });
+    cb_softmax_tmp.wait_front(1);
+    cb_reduce_scalar.reserve_back(1);
+
+    tile_regs_acquire();
+    reconfig_data_format(cb_bcast_scaler_id, cb_softmax_tmp_id);
+    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_softmax_tmp_id, cb_bcast_scaler_id, cb_reduce_scalar_id);
+    reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_softmax_tmp_id, cb_bcast_scaler_id, 0, 0, 0);
+    reduce_uninit(cb_reduce_scalar_id);
+    recip_tile_init();
+    recip_tile(0);
+    tile_regs_commit();
+
+    tile_regs_wait();
+    pack_tile(0, cb_reduce_scalar_id);
+    tile_regs_release();
+    cb_reduce_scalar.push_back(1);
 
     // Step 4: Multiply by 1/sum + copy indices (fused, one DST cycle)
     cb_softmax_tmp.wait_front(1);
