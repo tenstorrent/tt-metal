@@ -86,9 +86,16 @@ def _descriptor(device, shape, in_mem_config, out_mem_config, dtype=ttnn.bfloat1
 
 
 def _placements(descriptor):
-    """(input, output) placement the KERNELS were compiled with."""
-    reader, writer = descriptor.kernels[0], descriptor.kernels[1]
-    return reader.compile_time_args[1], writer.compile_time_args[0]
+    """(input, output) placement the KERNELS were compiled with.
+
+    On Perf 2's SPLIT READER path `kernels[1]` is a second READER rather than the
+    writer (BRISC has no write duty when the destination is resident, so it reads
+    instead), and the destination is P_LOCAL_SHARD by that path's own predicate.
+    """
+    reader, second, compute = descriptor.kernels[0], descriptor.kernels[1], descriptor.kernels[2]
+    split = compute.compile_time_args[4]
+    out_placement = pd.P_LOCAL_SHARD if split else second.compile_time_args[0]
+    return reader.compile_time_args[1], out_placement
 
 
 _HEIGHT_4 = dict(grid=_crs(((0, 0), (3, 0))), shard_shape=(128, 64), orientation=_ROW, scheme=_HEIGHT)
@@ -201,9 +208,9 @@ def test_chunked_aliased_output_is_correct(device, monkeypatch):
     # instead of pinning one era of it: the output side is ALIASED here (0 bytes)
     # and the input side carries Perf 2's issue-ahead slack group on a DRAM
     # source, both of which `cb_bytes()` already knows.
-    monkeypatch.setattr(
-        pd, "CB_L1_BUDGET", 4 * pd.cb_bytes(2, 1, 32 * 32 * 2, 0, pd.IN_CB_EXTRA_DEPTH)
-    )  # cap = 4 tiles
+    # This plan (DRAM source -> resident HEIGHT shard) takes the split reader, so
+    # the streaming input side is TWO CBs and carries no issue-ahead slack.
+    monkeypatch.setattr(pd, "CB_L1_BUDGET", 4 * pd.cb_bytes(2, 1, 2 * 32 * 32 * 2, 0))  # cap = 4 tiles
 
     shape = [1, 1, 64, 512]
     out_cfg = _legacy(grid, (32, 512), _ROW, _HEIGHT)
@@ -448,8 +455,13 @@ def test_reshard_placement_and_source_page_geometry(device, shape, in_cfg, out_c
     descriptor = _descriptor(device, shape, in_cfg, out_cfg)
     assert _placements(descriptor) == expected
     assert descriptor.kernels[0].compile_time_args[_CT_SRC_ROW_PAGES] == src_row_pages
-    # No DRAM staging and no cross-core combine: two CBs, no semaphores.
-    assert len(descriptor.cbs) == 2 and len(descriptor.semaphores) == 0
+    # No DRAM staging and no cross-core combine: no semaphores, and the CBs are
+    # exactly the pipeline's own — two, plus Perf 2's SECOND INPUT CB on a plan
+    # that takes the split reader (the two DM RISCs each publish their own half;
+    # one CB with two issuers is not expressible, since cb_push_back moves a
+    # single shared write pointer).
+    split = descriptor.kernels[2].compile_time_args[4]
+    assert len(descriptor.cbs) == (3 if split else 2) and len(descriptor.semaphores) == 0
 
 
 def test_interleaved_hot_path_keeps_the_stick_identity(device):

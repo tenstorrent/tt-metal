@@ -110,6 +110,13 @@ void kernel_main() {
     // output-SHAPED tile in the INPUT dtype in cb_input_sticks and this kernel
     // owns the conversion ALONE — a datacopy, not a tilize.
     constexpr uint32_t retile_direct = get_compile_time_arg_val(3);
+    // Perf 2 SPLIT READER: both DM RISCs read, each into its own input CB, so this
+    // kernel consumes them ALTERNATELY (block i comes from CB A when i is even).
+    // The writer kernel is not launched on that path, so this kernel also takes
+    // over draining the aliased OUTPUT CB — that CB is the resident shard, and it
+    // must keep exactly one consumer.
+    constexpr uint32_t split_reader = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_input_sticks_b = 3;
 
     const uint32_t num_blocks = get_arg_val<uint32_t>(0);
 
@@ -120,6 +127,64 @@ void kernel_main() {
     }
 
     using namespace compute_kernel_lib::tilize_config;
+
+    if constexpr (split_reader) {
+        // The alternation costs NOTHING: a control arm (one reader, one CB, but
+        // this same per-block back-to-back form) measured 14,768 / 14,727 ns
+        // against the batched baseline's 14,780 / 14,908 on the crossover and
+        // 18,281 / 18,142 against 18,406 / 18,613 on the reshard — flat within 1%.
+        // That is the result that closed Perf 1's open question about whether the
+        // CB alternation would eat the split's win.
+        //
+        // No raw LLK here: the library helper's documented InitOnly / Neither /
+        // UninitOnly lifecycle expresses back-to-back single-block calls natively.
+        MaybeDeviceZoneScope("compute_tilize");
+        constexpr auto k_reconfig = needs_cast ? ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure
+                                               : ReconfigureRegisterDatatypeMode::NoReconfigure;
+        compute_kernel_lib::tilize<
+            wt_chunk,
+            cb_input_sticks,
+            cb_output_tiles,
+            InitUninitMode::InitOnly,
+            WaitMode::WaitBlock,
+            k_reconfig,
+            Fp32Mode::Fast>(0);
+        for (uint32_t b = 0; b < num_blocks; ++b) {
+            if (b & 1) {
+                compute_kernel_lib::tilize<
+                    wt_chunk,
+                    cb_input_sticks_b,
+                    cb_output_tiles,
+                    InitUninitMode::Neither,
+                    WaitMode::WaitBlock,
+                    k_reconfig,
+                    Fp32Mode::Fast>(1);
+            } else {
+                compute_kernel_lib::tilize<
+                    wt_chunk,
+                    cb_input_sticks,
+                    cb_output_tiles,
+                    InitUninitMode::Neither,
+                    WaitMode::WaitBlock,
+                    k_reconfig,
+                    Fp32Mode::Fast>(1);
+            }
+            // The drain the writer would have done. Measured cost: nothing on the
+            // DRAM flavor (9,857 without vs 9,919 with) and ~6% on the L1 flavor —
+            // paid to keep the aliased CB's single-consumer contract.
+            cb_wait_front(cb_output_tiles, wt_chunk);
+            cb_pop_front(cb_output_tiles, wt_chunk);
+        }
+        compute_kernel_lib::tilize<
+            wt_chunk,
+            cb_input_sticks,
+            cb_output_tiles,
+            InitUninitMode::UninitOnly,
+            WaitMode::WaitBlock,
+            k_reconfig,
+            Fp32Mode::Fast>(0);
+        return;
+    }
 
     if constexpr (retile_direct) {
         if constexpr (!needs_cast) {

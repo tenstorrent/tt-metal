@@ -181,7 +181,7 @@ FORCE_INLINE void issue_tile_row(
 }  // namespace
 
 void kernel_main() {
-    constexpr uint32_t cb_input_sticks = 0;
+    constexpr uint32_t cb_input_sticks_a = 0;
     // R_RETILE only: L1 scratch holding the staged SOURCE tile pages. Reader-owned
     // (never pushed or popped — it has no consumer), sized to one block by the host.
     constexpr uint32_t cb_retile_stage = 1;
@@ -257,7 +257,26 @@ void kernel_main() {
     // Perf 2 (cross-core L1 gather): the block's width IS one source shard row,
     // so a whole block is ONE contiguous transfer instead of tile_h per-row ones.
     constexpr uint32_t gather_coalesce = get_compile_time_arg_val(28);
-    constexpr auto src_args = TensorAccessorArgs<29>();
+    // Perf 2 SPLIT READER: `split_mode` 0 none / 1 dedicated dual-NoC / 2 shared
+    // NOC_0 with per-RISC transaction ids; `phase` is which half this RISC owns.
+    // Both DM kernels are THIS source file with only `phase` differing, so the two
+    // halves cannot drift apart.
+    constexpr uint32_t split_mode = get_compile_time_arg_val(29);
+    constexpr uint32_t phase = get_compile_time_arg_val(30);
+    // Each half owns every other block and publishes its OWN CB — one CB with two
+    // issuers is not expressible (cb_push_back moves a single shared write
+    // pointer, so ordering two producers needs a per-block semaphore handshake
+    // that would re-serialize the very issue the split parallelizes).
+    constexpr uint32_t cb_input_sticks_b = 3;
+    constexpr uint32_t block_stride = split_mode ? 2 : 1;
+    // On the shared-NOC_0 flavor each reader tags its own reads and barriers on
+    // that id alone (per-id hardware state, so it is RISC-agnostic). 0 = the
+    // ordinary any-transaction barrier.
+    constexpr uint32_t split_trid = (split_mode == 2) ? (phase + 1) : 0;
+    constexpr auto src_args = TensorAccessorArgs<31>();
+    // This RISC's input CB: phase 0 (NCRISC) publishes the first, phase 1 (BRISC,
+    // split path only) the second.
+    constexpr uint32_t cb_input_sticks = phase ? cb_input_sticks_b : cb_input_sticks_a;
 
     constexpr uint32_t cb_output_tiles = 16;
     // Which CB this kernel publishes. On the direct path with no cast the reader
@@ -314,7 +333,7 @@ void kernel_main() {
         // handshake, same barrier — no reads. Compute runs on whatever is in L1.
         // The published CB follows the production path (`reader_out_cb`), or the
         // ablation would deadlock the pipeline it is supposed to leave intact.
-        for (uint32_t i = 0; i < num_blocks; ++i) {
+        for (uint32_t i = phase; i < num_blocks; i += block_stride) {
             cb_reserve_back(reader_out_cb, wt_chunk);
             volatile uint32_t touch = get_write_ptr(reader_out_cb);
             (void)touch;
@@ -361,6 +380,10 @@ void kernel_main() {
         constexpr uint32_t coal = read_coalesce > tile_h ? tile_h : (read_coalesce ? read_coalesce : 1);
         constexpr bool one_packet = read_one_packet && (coal * row_bytes <= NOC_MAX_BURST_SIZE);
         constexpr uint32_t n_trid = read_ahead + 1;
+        // The split's per-RISC transaction id, or the issue-ahead window's
+        // rotating pair — never both (the host turns issue-ahead off on the split
+        // path, which is the configuration the 1.50-1.65x was measured in).
+        constexpr bool tag_trid = (read_ahead > 0) || (split_trid != 0);
         const uint32_t vc = read_vc_enable ? read_vc : NOC_UNICAST_WRITE_VC;
         // B13: every transfer on this path is the same length, so when it fits
         // one packet the LENGTH goes into the state too and B13 composes with B6.
@@ -376,7 +399,7 @@ void kernel_main() {
 
         BlockIndex<precomp_index != 0, nt_h> idx;
         idx.init(start_block, block_row0, block_wc0);
-        for (uint32_t i = 0; i < num_blocks; ++i) {
+        for (uint32_t i = phase; i < num_blocks; i += block_stride) {
             // block -> (first source stick, byte offset in the stick), per work
             // assignment. UNCHANGED from the loops this replaces.
             uint32_t row, col_off;
@@ -404,8 +427,8 @@ void kernel_main() {
                 // when the NoC is saturated, so a large number here is not by
                 // itself proof of RISC-bound issue work.)
                 MaybeDeviceZoneScope("reader_issue");
-                if constexpr (read_ahead > 0) {
-                    noc_async_read_set_trid(trid_issue);
+                if constexpr (tag_trid) {
+                    noc_async_read_set_trid(split_trid ? split_trid : trid_issue);
                 }
                 issue_tile_row<row_bytes, tile_h, coal, one_packet, read_state != 0>(
                     accessor, issue_rows, row * tile_h, col_off, slot_base + slot * slot_bytes, vc);
@@ -420,7 +443,12 @@ void kernel_main() {
                 {
                     // Time the fabric still owed us once issue finished.
                     MaybeDeviceZoneScope("reader_barrier");
-                    if constexpr (read_ahead > 0) {
+                    if constexpr (split_trid != 0) {
+                        // Barrier on THIS RISC's own reads only — the partner
+                        // reader shares NOC_0 and its transfers must not be waited
+                        // on here (nor it on ours).
+                        noc_async_read_barrier_with_trid(split_trid);
+                    } else if constexpr (read_ahead > 0) {
                         noc_async_read_barrier_with_trid(trid_wait);
                         trid_wait = (trid_wait == n_trid) ? 1 : trid_wait + 1;
                     } else {
@@ -437,7 +465,9 @@ void kernel_main() {
         while (pending > 0) {
             {
                 MaybeDeviceZoneScope("reader_barrier");
-                if constexpr (read_ahead > 0) {
+                if constexpr (split_trid != 0) {
+                    noc_async_read_barrier_with_trid(split_trid);
+                } else if constexpr (read_ahead > 0) {
                     noc_async_read_barrier_with_trid(trid_wait);
                     trid_wait = (trid_wait == n_trid) ? 1 : trid_wait + 1;
                 } else {
@@ -447,7 +477,7 @@ void kernel_main() {
             cb_push_back(cb_input_sticks, wt_chunk);
             --pending;
         }
-        if constexpr (read_ahead > 0) {
+        if constexpr (tag_trid) {
             // Leave the command buffer's packet tag at 0 for the next kernel
             // (the same hygiene the writer's trid twin observes).
             noc_async_read_set_trid(0);
@@ -659,7 +689,10 @@ void kernel_main() {
         // ── R_PAD ────────────────────────────────────────────────────────
         BlockIndex<precomp_index != 0, nt_h> idx;
         idx.init(start_block, block_row0, block_wc0);
-        for (uint32_t i = 0; i < num_blocks; ++i) {
+        if constexpr (split_trid != 0) {
+            noc_async_read_set_trid(split_trid);
+        }
+        for (uint32_t i = phase; i < num_blocks; i += block_stride) {
             // block -> (tile-row, byte offset), per work assignment
             uint32_t row, col_off;
             if constexpr (work_mode == 1 /* W_REGION */) {
@@ -745,9 +778,16 @@ void kernel_main() {
 
             {
                 MaybeDeviceZoneScope("reader_barrier");
-                noc_async_read_barrier();
+                if constexpr (split_trid != 0) {
+                    noc_async_read_barrier_with_trid(split_trid);
+                } else {
+                    noc_async_read_barrier();
+                }
             }
             cb_push_back(cb_input_sticks, wt_chunk);
+        }
+        if constexpr (split_trid != 0) {
+            noc_async_read_set_trid(0);
         }
     }
 }

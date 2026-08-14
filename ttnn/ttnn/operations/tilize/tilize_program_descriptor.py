@@ -106,6 +106,7 @@ MIN_PIPELINE_READ_BYTES = 1024
 CB_INPUT_STICKS = 0  # reader -> compute  (row-major sticks, tile-sized pages)
 CB_RETILE_STAGE = 1  # reader -> reader   (R_RETILE: staged SOURCE tile pages)
 CB_PAD_SCRATCH = 2  # writer -> writer   (out_fill: ONE pre-stamped whole-pad tile)
+CB_INPUT_STICKS_B = 3  # reader#2 -> compute (Perf 2 split reader: the second half)
 CB_OUTPUT_TILES = 16  # compute -> writer (tiled pages)
 
 # --- reader regime selector (op_design.md §5.1) -----------------------------
@@ -239,6 +240,10 @@ LEVERS = {
     # Perf 2: move a whole block of the cross-core L1 gather in ONE transfer when
     # the block width is one source shard row. 0 = the per-row gather.
     "gather_coalesce": 1,
+    # Perf 2: on a destination-LOCAL plan the writer issues no NoC traffic, so
+    # BRISC is idle. 1 = both DM RISCs read, each owning every other block into
+    # its own input CB. 0 = the single reader.
+    "split_reader": 1,
     # master.md B10 ships PARKED at its byte-identical default (every reader on
     # the default request VC). Measured over 5-sample medians on Wormhole B0 it
     # is neutral on the grid-filling square (86,136 vs 85,720 ns) and a 2.6% LOSS
@@ -772,11 +777,67 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     )
     in_extra = IN_CB_EXTRA_DEPTH if wants_read_ahead else 0
 
+    # Derived here (ahead of the blocking) because the split reader below needs
+    # it: a plan whose WRITER still has to stamp the pad region cannot give that
+    # RISC away to reading.
+    out_fill = int(
+        plan.has_pad_region
+        # The stamp addresses whole faces: 16 rows on a full tile, tile_h rows on a
+        # tiny one (Refinement 5). Every legal tile height satisfies one or the other.
+        and (tile_h % FACE_HEIGHT == 0 or FACE_HEIGHT % tile_h == 0)
+        and bool(LEVERS["out_fill"])
+        and needs_output_format_fill(plan.pad_value, input_tensor.dtype, output_tensor.dtype)
+    )
+
+    # Perf 2 — SPLIT READER. On a destination-local plan the writer issues no NoC
+    # traffic at all (the output CB is the resident shard), so BRISC sits ~90%
+    # idle while NCRISC is the whole wall. Letting both DM RISCs read, each owning
+    # every other block into its OWN input CB, buys the second issuer.
+    #
+    # Measured end-to-end, with the real library tilize in the loop:
+    #   crossover [1,1,2048,256] DRAM->H x8   14,875 -> 9,919 ns  1.50x
+    #   crossover_tall [1,1,8192,256]         55,182 -> 33,543    1.65x
+    #   reshard [1,1,1024,256] W x2 -> H x8   18,109 -> 10,814    1.67x
+    #   reshard fp32                          33,919 -> 19,119    1.77x
+    # The mechanism is issue capacity, not fabric: the plans that win sit at
+    # 50-76 GB/s achieved read bandwidth and the split lifts them to 103-125 GB/s
+    # -- the same ceiling the plans that are ALREADY at 125-152 GB/s sit at, which
+    # is why those measure flat rather than better.
+    #
+    # The flavor is picked by the SOURCE BUFFER TYPE, not by the read regime: the
+    # two DM RISCs are NOT interchangeable issuers at DRAM volume (the same read
+    # work on BRISC/NOC_1 is 2.2x slower, which Metal itself encodes as
+    # preferred_noc_for_dram_read() == NOC_0), so a DRAM source puts BOTH readers
+    # on NOC_0 under DM_DYNAMIC_NOC and separates their barriers with per-RISC
+    # transaction ids; a source in another core's L1 is faster with a dedicated
+    # NoC each.
+    SPLIT_NONE, SPLIT_DUAL_NOC, SPLIT_SHARED_NOC0 = 0, 1, 2
+    wants_split = bool(
+        LEVERS["split_reader"]
+        and out_placement == P_LOCAL_SHARD  # destination-local: BRISC has no write duty
+        and in_placement == P_ACCESSOR  # ... and there IS a read to split
+        and not out_fill  # the writer must still stamp the pad region
+        and not retile  # untested; the retile reader is L1-permute bound
+    )
+    split_flavor = (SPLIT_SHARED_NOC0 if src_in_dram else SPLIT_DUAL_NOC) if wants_split else SPLIT_NONE
+    # The second input CB is real L1 and must enter the budget with the first, or
+    # a wide shard throws at program creation (measured: [1,1,2048,2048] -> H x8,
+    # "static circular buffers clash with L1 buffers").
+    in_cbs = 2 if wants_split else 1
+    # The issue-ahead slack group would be dead L1 on the split path: the split
+    # carries its own per-RISC transaction ids and was measured without a window,
+    # so the host turns issue-ahead off there and the group is not allocated.
+    in_extra = IN_CB_EXTRA_DEPTH if (wants_read_ahead and not wants_split) else 0
+
     # An aliased CB costs no extra L1 (it IS the tensor), so only the STREAMING
     # sides enter the L1 budget — that is what keeps a wide-W sharded crossover
     # bounded in W.
     def _streaming_bytes(in_p, out_p):
-        return (0 if in_p == P_LOCAL_SHARD else in_tile_bytes), (0 if out_p == P_LOCAL_SHARD else out_tile_bytes)
+        # Perf 2: the split reader gives the input side `in_cbs` streaming CBs.
+        return (
+            0 if in_p == P_LOCAL_SHARD else in_cbs * in_tile_bytes,
+            0 if out_p == P_LOCAL_SHARD else out_tile_bytes,
+        )
 
     if shard is not None:
         work_mode = W_REGION
@@ -951,6 +1012,22 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         blocks_per_shard = [ht * n_chunks for (_, _, ht) in shard["regions"]]
         num_blocks_total = sum(blocks_per_shard)
 
+    # Perf 2: the split reader's last two clauses, both of which need the settled
+    # blocking. `wants_split` above only established that the PLAN has an idle
+    # BRISC and a read worth splitting.
+    split_reader = SPLIT_NONE
+    if wants_split and shard is not None and in_placement == P_ACCESSOR and out_placement == P_LOCAL_SHARD:
+        # A core with one block has nothing to split (measured flat, and it would
+        # leave one of the two readers idle).
+        if min(blocks_per_shard) >= 2:
+            split_reader = split_flavor
+        # The DRAM flavor is issue-bound only while the per-stick transfer is
+        # small. Measured ladder at 512 B/stick 1.50-1.65x, at 1024 B flat (1.07x),
+        # at 2048 B a 0.86x REGRESSION, and at 4096 B the second CB does not fit
+        # L1 at all. So the gate is a measured boundary, not a guess.
+        if split_reader == SPLIT_SHARED_NOC0 and read_bytes_per_stick(wt_chunk, in_tile_bytes, tile_h) > 1024:
+            split_reader = SPLIT_NONE
+
     # The issue-ahead slack is allocated only where the schedule is actually
     # taken. `halve_cores` is not known until the split above is settled, so the
     # blocking was derived with the slack included (conservative — it can only
@@ -976,14 +1053,6 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # re-stamps the pad region of each finished tile with a second word packed in
     # the OUTPUT format (see kernels/tilize_fill.hpp). Gated on the round-trip
     # actually losing the value, so every other cell is byte-identical to before.
-    out_fill = int(
-        plan.has_pad_region
-        # The stamp addresses whole faces: 16 rows on a full tile, tile_h rows on a
-        # tiny one (Refinement 5). Every legal tile height satisfies one or the other.
-        and (tile_h % FACE_HEIGHT == 0 or FACE_HEIGHT % tile_h == 0)
-        and bool(LEVERS["out_fill"])
-        and needs_output_format_fill(plan.pad_value, input_tensor.dtype, output_tensor.dtype)
-    )
     pad_word_out = _pack_pad_word(plan.pad_value, output_tensor.dtype) if out_fill else 0
     # Perf 1: does the padded TARGET contain at least one WHOLE pad tile — a tile
     # every element of which is pad? Those, and only those, are the ones the writer
@@ -1048,6 +1117,28 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             ],
         )
 
+    # Perf 2: the split reader's SECOND input CB — same page size, same tile, same
+    # dtype, same depth. Two separate CBs, never one CB with two issuers:
+    # cb_push_back moves a single shared write pointer, so ordering two producers
+    # into block order needs a per-block semaphore handshake, which would
+    # re-serialize exactly the issue the split is parallelizing.
+    cb_input_sticks_b_descriptor = (
+        ttnn.CBDescriptor(
+            total_size=pages_per_in_cb * in_tile_bytes,
+            core_ranges=all_cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=CB_INPUT_STICKS_B,
+                    data_format=input_tensor.dtype,
+                    page_size=in_tile_bytes,
+                    tile=tile_descriptor,
+                )
+            ],
+        )
+        if split_reader
+        else None
+    )
+
     if out_placement == P_LOCAL_SHARD:
         cb_output_tiles_descriptor = _aliased_cb(CB_OUTPUT_TILES, output_tensor, out_tile_bytes, output_tensor.dtype)
     else:
@@ -1070,6 +1161,8 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # like every other buffer here it is a function of the block knobs only, never
     # of WT or NT_H. Off the retile path it is not created at all.
     cbs = [cb_input_sticks_descriptor, cb_output_tiles_descriptor]
+    if cb_input_sticks_b_descriptor is not None:
+        cbs.append(cb_input_sticks_b_descriptor)
     # Perf 1 — the OUTPUT-format pad stamp's pre-stamped tile. ONE page of one
     # output tile, writer-private (it has no producer/consumer handshake: the
     # writer both fills it and sources from it), created ONLY when the geometry can
@@ -1231,7 +1324,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # other cell swept is a win or flat, including the ones with tiny transfers
     # (tile_h=8 0.99x, uint8 1.00x — both inside the noise band, so they keep the
     # schedule rather than being fenced off it).
-    read_ahead = int(aligned_read and wants_read_ahead and cb_depth + in_extra >= 3 and not halve_cores)
+    read_ahead = int(
+        aligned_read and wants_read_ahead and cb_depth + in_extra >= 3 and not halve_cores and not split_reader
+    )
     # TRANSACTION MERGE. `coal` consecutive source sticks become ONE transfer,
     # legal exactly when they are one contiguous address range and the block takes
     # the whole stick: a SHARDED source (an interleaved page walk round-robins the
@@ -1358,8 +1453,20 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # Perf 2: the cross-core gather moves a WHOLE BLOCK in one transfer when
         # the block width is exactly one source shard row.
         gather_coalesce,
+        # Perf 2 SPLIT READER: the flavor (0 none / 1 dedicated dual-NoC / 2
+        # shared NOC_0 + per-RISC trid) and this RISC's phase. Phase 0 is NCRISC
+        # and publishes CB_INPUT_STICKS; phase 1 is BRISC and publishes
+        # CB_INPUT_STICKS_B. Each owns every other block, so the block subset is a
+        # compile-time stride and NO runtime arg changes.
+        split_reader,
+        0,  # phase — reader #2 below is the same kernel with this set to 1
     ]
+    phase_arg_index = len(reader_ct_args) - 1
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    # Reader #2 differs from reader #1 in exactly ONE compile-time value, which is
+    # what keeps the two halves from drifting: same source file, same args.
+    reader_b_ct_args = list(reader_ct_args)
+    reader_b_ct_args[phase_arg_index] = 1
 
     # -- writer (BRISC / NOC1) --
     writer_ct_args = [
@@ -1395,7 +1502,10 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # Perf 2: on the retile-direct path the READER already produced the output
     # tile layout, so compute either has nothing to do at all (no cast) or owns
     # the conversion ALONE as a datacopy pass (cast) — never a tilize.
-    compute_ct_args = [wt_chunk, 1 if needs_cast else 0, ABLATE["compute"], int(retile_direct)]
+    # Perf 2: on the split path compute alternates between the two input CBs and
+    # takes over the OUTPUT CB's drain (the writer kernel is not launched, so the
+    # aliased CB would otherwise have no consumer).
+    compute_ct_args = [wt_chunk, 1 if needs_cast else 0, ABLATE["compute"], int(retile_direct), split_reader]
 
     reader_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
@@ -1457,13 +1567,55 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         runtime_args=reader_rt_args,
         config=ttnn.ReaderConfigDescriptor() if LEVERS["noc_split"] else ttnn.WriterConfigDescriptor(),
     )
-    writer_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
-        core_ranges=all_cores,
-        compile_time_args=writer_ct_args,
-        runtime_args=writer_rt_args,
-        config=ttnn.WriterConfigDescriptor() if LEVERS["noc_split"] else ttnn.ReaderConfigDescriptor(),
-    )
+    if split_reader:
+        # Perf 2: BRISC is the SECOND READER. It gets the reader source, the reader
+        # runtime args and reader #2's compile-time args; tilize_writer.cpp is not
+        # launched at all on this path, and compute drains the aliased output CB
+        # in its place so that CB still has exactly one consumer.
+        #
+        # SHARED_NOC0: both RISCs issue on NOC_0 (the two DM RISCs are not
+        # interchangeable at DRAM volume — the same read work on BRISC/NOC_1 is
+        # 2.2x slower, which Metal encodes as preferred_noc_for_dram_read()) under
+        # DM_DYNAMIC_NOC, which is REQUIRED on BOTH: the dynamic read barrier sums
+        # the two RISCs' issue counters, so a dedicated-mode partner would not
+        # publish into the shared counter. Each reader then barriers on its own
+        # transaction id, which is per-id hardware state and RISC-agnostic.
+        if split_reader == SPLIT_SHARED_NOC0:
+            _t = ttnn._ttnn.types
+            reader_kernel = ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "tilize_reader.cpp"),
+                core_ranges=all_cores,
+                compile_time_args=reader_ct_args,
+                runtime_args=reader_rt_args,
+                config=ttnn.DataMovementConfigDescriptor(
+                    _t.DataMovementProcessor.RISCV_1, _t.NOC.RISCV_0_default, ttnn.NOC_MODE.DM_DYNAMIC_NOC
+                ),
+            )
+            writer_kernel = ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "tilize_reader.cpp"),
+                core_ranges=all_cores,
+                compile_time_args=reader_b_ct_args,
+                runtime_args=reader_rt_args,
+                config=ttnn.DataMovementConfigDescriptor(
+                    _t.DataMovementProcessor.RISCV_0, _t.NOC.RISCV_0_default, ttnn.NOC_MODE.DM_DYNAMIC_NOC
+                ),
+            )
+        else:
+            writer_kernel = ttnn.KernelDescriptor(
+                kernel_source=str(KERNEL_DIR / "tilize_reader.cpp"),
+                core_ranges=all_cores,
+                compile_time_args=reader_b_ct_args,
+                runtime_args=reader_rt_args,
+                config=ttnn.WriterConfigDescriptor(),
+            )
+    else:
+        writer_kernel = ttnn.KernelDescriptor(
+            kernel_source=str(KERNEL_DIR / "tilize_writer.cpp"),
+            core_ranges=all_cores,
+            compile_time_args=writer_ct_args,
+            runtime_args=writer_rt_args,
+            config=ttnn.WriterConfigDescriptor() if LEVERS["noc_split"] else ttnn.ReaderConfigDescriptor(),
+        )
 
     # fp32 -> fp32 must be BIT-EXACT: keep Dest in fp32 and stop the unpacker
     # downgrading fp32 to tf32 on its way to Dest. Only legal when the fast
@@ -1492,6 +1644,12 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     if lossless_fp32:
         unpack_modes = [ttnn.UnpackToDestMode.Default] * NUM_CIRCULAR_BUFFERS
         unpack_modes[CB_INPUT_STICKS] = ttnn.UnpackToDestMode.UnpackToDestFp32
+        if split_reader:
+            # The split's second input CB is the SAME operand read by the same
+            # unpacker — it must carry the same mode, or the two halves of one
+            # tensor unpack differently (measured: the fp32 padded sharded cells
+            # hang the device with this line missing).
+            unpack_modes[CB_INPUT_STICKS_B] = ttnn.UnpackToDestMode.UnpackToDestFp32
         compute_config.unpack_to_dest_mode = unpack_modes
 
     compute_kernel = ttnn.KernelDescriptor(
