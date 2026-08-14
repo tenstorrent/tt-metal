@@ -89,6 +89,31 @@ def _kv_write_memory_config(n_kv_heads: int, head_dim: int):
         return None
 
 
+def _kv_second_core_memory_config(n_kv_heads: int, head_dim: int):
+    """That same single-core operand shard, on a DIFFERENT core.
+
+    `paged_fused_update_cache` writes K and V in ONE launch by running them on
+    DISJOINT cores, and refuses operands that share one ("input_tensor1 and
+    input_tensor2 must not overlap"). Head creation is batch-parallel, so at
+    batch 1 it puts every one of its outputs on core (0,0) -- K and V included.
+    Moving just one of them one core over is what makes the fused write legal,
+    and a single 2 KB shard move is far cheaper than the launch it saves.
+    """
+    rows = max(_TILE, ((int(n_kv_heads) + _TILE - 1) // _TILE) * _TILE)
+    try:
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))}),
+                (rows, int(head_dim)),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+    except Exception:  # noqa: BLE001 - fall back to two separate cache writes
+        return None
+
+
 class TtAttention:
     def __init__(self, device, weights, dims, scaling):
         self.device = device
@@ -96,6 +121,11 @@ class TtAttention:
         self.n_heads, self.n_kv_heads, self.head_dim = dims
         self.scaling = scaling
         self.kv_write_memory_config = _kv_write_memory_config(self.n_kv_heads, self.head_dim)
+        self.kv_second_core_memory_config = _kv_second_core_memory_config(self.n_kv_heads, self.head_dim)
+        #: Cleared if the one-launch K+V cache write refuses these operands.
+        self._fused_cache_write = self.kv_second_core_memory_config is not None and hasattr(
+            ttnn.experimental, "paged_fused_update_cache"
+        )
         # K and V share a shape, so one plan serves both. 16 cores, not the 32
         # the "largest even split" default picks: the same k-reduction-shape
         # effect measured on down_proj applies here. Per call at bf8_b:
@@ -421,16 +451,7 @@ class TtAttention:
         query, key, value = self._create_heads(hidden_states)
         query = self._apply_rope(query, cos, sin)
         key = self._apply_rope(key, cos, sin)
-        # Two writes, not `paged_fused_update_cache`. That op parallelises K and
-        # V across DISJOINT cores and rejects operands that share one
-        # ("input_tensor1 and input_tensor2 must not overlap"); at batch 1 the
-        # head-creation op puts K and V on the same single core, so there is no
-        # second core for it to use. The saving here was never that one op --
-        # it is that K and V arrive ALREADY in the sharded layout the cache
-        # write takes, so neither needs the permute + reshard the generic path
-        # pays to get there.
-        ttnn.experimental.paged_update_cache(k_cache, key, update_idxs_tensor=cache_pos_tensor)
-        ttnn.experimental.paged_update_cache(v_cache, value, update_idxs_tensor=cache_pos_tensor)
+        self._write_kv(k_cache, key, v_cache, value, cache_pos_tensor)
         attn = ttnn.transformer.scaled_dot_product_attention_decode(
             query, k_cache, v_cache, scale=self.scaling, cur_pos_tensor=cache_pos_tensor
         )
@@ -440,6 +461,33 @@ class TtAttention:
             attn, (1, 1, self.n_heads * self.head_dim), memory_config=self.o_plan.input_memory_config
         )
         return self.o_plan.run_presharded(merged, self.wo, self.compute_kernel_config)
+
+    def _write_kv(self, k_cache, key, v_cache, value, cache_pos_tensor):
+        """Write this token's K and V into the resident caches.
+
+        K and V arrive from head creation ALREADY in the sharded layout the
+        cache write takes, so neither needs the permute + reshard the generic
+        path pays to get there. What they do NOT arrive as is disjoint: batch 1
+        puts both on core (0,0), and the one-launch fused write refuses
+        overlapping operands. Moving V one core over buys the fused write --
+        two launches of ~8 us each, writing 2 KB, become one plus a 2 KB shard
+        move, and at 26 layers those launches are what the write costs, not the
+        bytes.
+        """
+        if self._fused_cache_write:
+            try:
+                ttnn.experimental.paged_fused_update_cache(
+                    k_cache,
+                    key,
+                    v_cache,
+                    ttnn.to_memory_config(value, self.kv_second_core_memory_config),
+                    update_idxs_tensor=cache_pos_tensor,
+                )
+                return
+            except Exception:  # noqa: BLE001 - refused: two separate writes
+                self._fused_cache_write = False
+        ttnn.experimental.paged_update_cache(k_cache, key, update_idxs_tensor=cache_pos_tensor)
+        ttnn.experimental.paged_update_cache(v_cache, value, update_idxs_tensor=cache_pos_tensor)
 
     def _create_heads(self, hidden_states):
         """The fused projection, split into decode-layout Q/K/V.
