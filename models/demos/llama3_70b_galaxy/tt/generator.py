@@ -1321,6 +1321,12 @@ class Generator(WarmupForwardMixin):
             reset_reasons.append("reset_batch")
 
         kv_cache = kv_cache[0]
+        # vLLM sends slot_remap whenever a request's decode row stops matching the
+        # slot its per-slot state sits in, and then records the batch as remapped
+        # either way. Every piece of that state must move on the same step or its map
+        # is wrong from there on, so this cannot wait for a device-sampled step.
+        if slot_remap is not None:
+            self._apply_state_slot_remap(slot_remap)
         active_seed_slots = None
         if start_pos is not None:
             active_seed_slots = [
@@ -1361,7 +1367,6 @@ class Generator(WarmupForwardMixin):
                 reset_batch=reset_batch,
                 prompt_tokens=prompt_tokens,
                 output_tokens=output_tokens,
-                slot_remap=slot_remap,
                 enable_trace=enable_trace,
             )
 
@@ -1547,6 +1552,21 @@ class Generator(WarmupForwardMixin):
 
         return trace_tok_rm
 
+    def _apply_state_slot_remap(self, slot_remap):
+        """Move every piece of per-slot decode state to the layout ``slot_remap``
+        describes: slot ``i`` takes the state at ``slot_remap[i]``.
+
+        The seed RNG is the only such state here, and it is host state read on
+        device-sampled steps. The remap still has to land on the step vLLM sent it,
+        host-sampled steps included: skipping one leaves the RNG a permutation behind
+        for every step after, and no later remap describes the move that was missed.
+        """
+        sampling_module = getattr(self.model, "sampling", None)
+        if sampling_module is None:
+            return
+        seed_manager = sampling_module.seed_manager
+        seed_manager.apply_slot_remap(slot_remap[0 : seed_manager.max_batch_size])
+
     def sample_decode_on_device(
         self,
         tt_logits,
@@ -1556,7 +1576,6 @@ class Generator(WarmupForwardMixin):
         reset_batch=False,
         prompt_tokens: torch.Tensor | None = None,
         output_tokens: torch.Tensor | None = None,
-        slot_remap=None,
         enable_trace=False,
     ):
         tt_out_tok = self.trace_inputs_decode[True][0] if enable_trace and self.trace_inputs_decode[True] else None
@@ -1569,11 +1588,6 @@ class Generator(WarmupForwardMixin):
                 idx for idx, pos in enumerate(torch.as_tensor(start_pos).reshape(-1).tolist()) if int(pos) >= 0
             ]
 
-        # Apply slot remap from condense before advancing seeds.
-        if slot_remap is not None:
-            sm_bs = seed_manager.max_batch_size
-            rank_remap = slot_remap[0:sm_bs]
-            seed_manager.apply_slot_remap(rank_remap)
         if reset_inputs and sampling_params is not None:
             # If we have new inputs, we need to set up the sampling module again
             sampling_params = format_sampling_params(sampling_params, self.model_args.max_batch_size)
