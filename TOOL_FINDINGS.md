@@ -1810,6 +1810,95 @@ judgement rather than a property of the ladder.
 
 ---
 
+## ★★ THE THREE-BLOCK EXPERIMENT — packaging Voxtral-TTS as one HF model
+
+The Block-1-only run was criticised, correctly, for testing the model as a text LM when the
+deployment drives it with audio. So the whole pipeline was packaged as a single
+`trust_remote_code` HuggingFace model and handed to the tool. **It works**: 4.00 B parameters,
+three blocks, bit-exact to the reference (`torch.equal`, maxdiff 0.0 on all three), self-contained,
+text ids -> 24 kHz audio in one `forward`.
+
+### S4 — six packaging defects, all in `transformers`, all hit in one afternoon (OURS/upstream)
+
+Not tool defects, but every one is a barrier between a real research model and this tool, and the
+tool's adoption depends on people clearing them:
+
+| # | what | how it fails |
+|---|---|---|
+| 1 | `save_pretrained` drops `auto_map` unless `register_for_auto_class()` was called | later load says *"Transformers does not recognize this architecture"* — blames the architecture, not the missing key |
+| 2 | `trust_remote_code` does not support **subpackages** | `from .reference import x` is resolved as a file `reference.py`; all custom code must be flat |
+| 3 | its import scanner only matches `from .module import name` | the `from . import module` form is **invisible**, so those files are never copied and fail at runtime |
+| 4 | only `.py` files are copied to the module cache | any asset resolved from `__file__` (voice presets, `params.json`, vocab) breaks, because `__file__` is now the cache |
+| 5 | `ModelOutput` subclasses need `@dataclass` | fires on the **return** path, after the entire forward has already run |
+| 6 | `nn.ParameterDict` forbids `.` in keys | every real checkpoint uses dotted names |
+
+### F15 — `plan` and `compat` disagree about what the model IS
+
+Same model, same directory, two stages of the same tool, run minutes apart:
+
+```
+plan   :  Category: TTS  (pipeline_tag=None, library=transformers)
+          Category guidance (TTS): Text-to-speech. Closest template: models/demos/qwen3_tts/
+          CONFIDENCE: LOW
+
+compat :  Architecture: unknown / non-LLM (fingerprint: unknown)
+          Overall verdict: ARCHITECTURE NOT RECOGNIZED (non-LLM) — no confident block plan
+          Summary: 0 ready / 0 partial / 0 missing
+```
+
+`plan` identified it as TTS **from the config alone** (`pipeline_tag=None`, so not from Hub
+metadata) and even named a TTS template it could copy. `compat` then declared the architecture
+unrecognised and emitted an **empty** block table. A user reading these in order gets a green light
+and then a wall, with no explanation of which stage to believe.
+
+**Credit where due:** `plan`'s `CONFIDENCE: LOW` here is *correct* and is an improvement on the
+Block-1 run, which printed `CONFIDENCE: HIGH` while admitting it had omitted the KV term (O3).
+
+### F16 — the block table degrades to EMPTY, which reads identically to "nothing needed"
+
+Block 1 alone produced `11 ready / 0 partial / 0 missing`. The three-block model produces
+`0 ready / 0 partial / 0 missing` — not "these blocks are missing", but **no analysis at all**,
+printed in the same format. Combined with **F2** (the READY verdict can never fire because the
+predicate is `lambda _: []`), the summary line is now unable to express either success or failure
+for a custom architecture: 0/0/0 is what you get whether everything is supported or nothing was
+examined.
+
+**Suggested fix:** distinguish *not analysed* from *analysed, nothing missing*. A third state, or
+simply refusing to print the summary line when the analyser bailed.
+
+### F17 — machine-readable structure is declared and never read
+
+The config states the model's shape in fields designed to be read:
+
+```json
+"task": "text-to-speech",
+"block_stacks": ["backbone", "flow", "codec"],
+"decode_input": "audio_code_embedding"
+```
+
+`plan` used `task`. **Nothing used `block_stacks`.** `compat`'s advice is
+*"inspect subfolders (dit/, vae/, text_encoder/, ...) and bring up per-component"* — the Stable
+Diffusion **folder** convention. This model's three stacks are `nn.Module` attributes, not
+subfolders, and are named in the config. The tool has multi-stack support (its own commits
+`emit-e2e: a multi-stack model must expose one depth knob per stack` and `G6 refuses a model whose
+block stacks the profiler cannot see`), but discovery is folder-shaped only.
+
+**Suggested fix, and it is small:** when the config declares stacks, walk those attributes. A model
+that says what it is should not have to also be laid out in a particular directory shape.
+
+### What still works on an unrecognised architecture — worth keeping
+
+`compat` did not simply bail. It read the real config and produced genuine kernel-level findings:
+
+- `ttnn.topk (sampling)` — `vocab_size=131072` needs a power of two **< 65536** for the multi-core
+  path, else single-core, with the throughput consequence stated
+- per-TP divisibility, correctly deriving that `TP=32` fails on `num_key_value_heads=8` while
+  TP=1/2/4/8 are fine, and correctly framing it as *"rules out that mesh shape, not the model"*
+
+So the kernel-constraint half degrades gracefully where the architecture half does not.
+
+---
+
 ## Corrections to this document
 
 - **`beat_baseline: false` on 24/24 kernel records is BY DESIGN, not a defect.** I flagged it as a
