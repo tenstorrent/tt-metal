@@ -82,8 +82,10 @@ nothing for all four.
 
 ## 3. OPEN #1 — `mul_reduce_scalar_chunked_tile` (ATTEMPTED AND REVERTED)
 
-> **Status: a working driver exists in history but was reverted — it produced a wrong
-> answer that was not diagnosed.** Do not start from scratch; start from what is below.
+> **Status: attempted twice, both reverted. The driver code is NOT in git history** — it was
+> deleted before committing, so it must be rewritten. Everything learned is below, and the
+> bug is now localised: it is inside a **single batch's reduce**, not in the cross-batch
+> accumulation.
 
 ### What was built
 
@@ -128,53 +130,62 @@ simple double-count or a missing clear would show as an integer ratio.
   all**, byte for byte, so the accumulator was not the cause.
 - *A stale build.* Verified the corrected source was what compiled.
 
-**Most likely cause — identified after the revert, and it supersedes the three suspects
-below: the driver has no per-batch unpack/math synchronisation.**
+**Both hypotheses tried on silicon. Both disproved. Do not retry either.**
 
-The non-chunked op has exactly **one** phase transition (multiply everything, then
-`switch_to_reduce`, then reduce), so the SrcA/SrcB dvalid handshake alone keeps UNPACK and
-MATH ordered. The chunked form has **one transition per batch**, and nothing in the driver
-stops the unpack thread running ahead: as soon as it finishes batch 0's
-`switch_to_reduce` it re-inits and issues batch 1's `_llk_unpack_AB_` calls, which set
-dvalid and overwrite SrcA/SrcB while MATH is still mid-reduce on batch 0. MATH then
-column-reduces partially-clobbered source data.
+*Attempt 1 — the accumulator fill.* The compute API's `fill_tile` is `_calculate_fill_` at
+`VectorMode::RC`, 8 iterations (whole tile), whereas the `RC_custom` / 2-iteration form used
+to stage the reduce scaler covers only a small region. The first draft used the wrong one.
+Real bug, worth knowing for any future driver — and it changed the output **byte for byte
+not at all**.
 
-That fits the symptom in a way none of the suspects below do: the result is inflated
-(extra/duplicated accumulation) by a **non-integer, tile-count-dependent factor**, which is
-what a race produces — a deterministic logic error would give a clean ratio.
+*Attempt 2 — a missing per-batch UNPACK/MATH barrier.* The reasoning still looks sound in
+principle: the non-chunked op has one phase transition so the dvalid handshake suffices,
+while the chunked form has one per batch and nothing stops UNPACK running ahead into
+SrcA/SrcB. Production gets that ordering free from CB flow control (`cb_wait_front` /
+`cb_pop_front`), which the tt-llk harness has no equivalent of. Implemented as a
+`semaphore::UNPACK_TO_DEST` post/consume pair (that semaphore is initialised by
+`helpers/include/boot.h` and unused in this test, since bf16 goes through SrcA). Again
+**byte-identical output**. There is no race, or at least not one this barrier closes.
 
-The reason production does not hit this is that the real compute kernel gets the ordering
-for free from circular-buffer flow control (`cb_wait_front` / `cb_pop_front` around each
-chunk). The tt-llk harness has no CBs, so the driver must supply the barrier itself. The
-harness does initialise the tensix semaphores for this — `helpers/include/boot.h` sets up
-`UNPACK_TO_DEST`, `MATH_DONE`, `PACK_DONE` and `PACK_UNPACK` — and several existing
-multi-phase drivers already sync by hand; `sources/sdpa_reinits_test.cpp` and
-`sources/matmul_unpack_tilize_test.cpp` are the closest models.
+### Where the bug actually is
 
-**Concrete fix to try first:** make the unpack thread wait on a math-side semaphore post at
-the end of each batch's reduce, so batch *n+1*'s unpacks cannot begin until batch *n*'s
-reduce has consumed SrcA/SrcB. If that turns the numbers correct, the earlier suspect list
-is moot. The `dst_capacity = 2, num_tiles = 3` bisect below is still the right first
-measurement, because with `batch_size = 1` the race window is at its widest.
+Three source changes producing identical results looked like a stale build, so the check
+that should have come first was finally run: **pack `DEST[0]` instead of
+`DEST[ACCUMULATOR]`**. The number moved (42496.0 -> 37120.0 for `num_tiles=3,
+dst_capacity=2`). That settles three things at once:
 
-**Older suspects, kept only in case the sync fix does not resolve it:**
+- the build is **not** stale — source edits do reach the binary;
+- `_llk_pack_`'s tile index **is** honoured under the reduce mask;
+- therefore both fixes above genuinely had no effect, rather than not being compiled.
 
-1. **Packing `DEST[ACCUMULATOR]` under the reduce mask.** The working non-chunked driver
-   packs `DEST[0]`; this one packs the reserved slot with
-   `_llk_pack_reduce_mask_config_<REDUCE_SCALAR>` active. If the mask interacts with
-   `set_dst_write_addr(tile_index)` such that a non-zero tile index is not honoured, the
-   packed datum is not the accumulator at all. **Cheapest decisive check:** pack `DEST[0]`
-   instead and see whether the number moves. If it does not, the pack path is the problem.
-2. **The SFPU add's DEST addressing.** `VectorMode::RC` walks four faces advancing the
-   dst-write counter; whether `dst_index_out == dst_index_in0 == ACCUMULATOR` aliases
-   correctly across that walk is unverified. Try a single-face `VectorMode` and 8 iterations.
-3. **Per-batch state restore.** The driver re-inits the multiply and the unpack for
-   `batch > 0`, matching the API's own `if (batch > 0)` guard, but the reduce phase may
-   consume more state than those two inits restore.
+And it relocates the fault. `DEST[0]` holds a **single batch's** reduced scalar, and for
+`num_tiles=3, dst_capacity=2` (`batch_size=1`, so the last batch is one tile) it should be
+about `sum(one tile)` ~= 512. It reads 37120 — roughly **72x** too large. So the per-batch
+reduce is already wrong before any cross-batch accumulation happens. The chunking
+arithmetic, the accumulator and the barrier are all downstream of a broken single-batch
+reduce.
 
-A useful bisect before any of that: run with `dst_capacity = 2` and `num_tiles = 3`
-(`batch_size = 1`, three single-tile batches) and compare against three separate
-non-chunked runs. That isolates the cross-batch accumulation from the reduce itself.
+**The one structural difference from the working non-chunked driver** is that
+`_llk_math_mul_reduce_scalar_init_` (and the unpack-side `_llk_unpack_AB_init_` +
+`switch_to_reduce`) are invoked **once per batch** rather than once per kernel. The prime
+suspect is therefore that this reduce family is not re-enterable — that a second
+`_llk_math_mul_reduce_scalar_init_` accumulates addrmod / counter state rather than
+re-establishing it. That would be a real finding about the promoted LLKs if confirmed, and
+is exactly the kind of thing the compute API's chunked loop depends on working.
+
+**Next experiments, cheapest first:**
+
+1. Pack every batch's `DEST[0]` to its own result tile instead of one final scalar. That
+   shows whether batch 0 is already wrong (reduce family not re-enterable at all, or the
+   driver's single-batch sequence is simply wrong) or only batches >= 1 are (state not
+   restored between reduces). This single measurement splits the remaining space in half.
+2. If batch 0 alone is correct, bisect what `_llk_math_mul_reduce_scalar_init_` leaves
+   behind: try a full `_llk_math_hw_configure_` + `_llk_math_pack_sync_init_` before each
+   batch, and narrow from there.
+3. If batch 0 is already wrong, drop the chunking entirely and reproduce the non-chunked
+   driver's exact sequence for one batch of `batch_size` tiles — that must match
+   `test_mul_reduce_scalar.py`, and any divergence is a driver bug to fix before
+   re-adding batches.
 
 ### Original plan
 
