@@ -65,12 +65,17 @@ def make_training_batch(
     rng: np.random.Generator,
     cfg_drop_prob: float = 0.1,
     null_class: int | None = None,
+    hflip: bool = False,
 ):
     """Returns (tokens, t_feats, labels_onehot, target) as numpy arrays ready
     for Tensor.from_numpy: [B,1,T,in], [B,1,1,dim], [B,1,1,null_class+1] fp32
     one-hot, [B,1,T,in]. One-hot (not ids): the model embeds labels via
     one-hot @ W because ttnn embedding_backward can't take a single id."""
     b = images.shape[0]
+    if hflip:
+        flip = rng.random(b) < 0.5
+        images = images.copy()
+        images[flip] = images[flip][..., ::-1]
     t = rng.integers(0, schedule.timesteps, size=b)
     noise = rng.standard_normal(images.shape).astype(np.float32)
     noisy = schedule.add_noise(images, noise, t)

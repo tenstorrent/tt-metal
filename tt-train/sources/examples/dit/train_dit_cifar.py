@@ -231,6 +231,7 @@ def main():
         beta_end=dc.get("beta_end", 2e-2),
     )
     cfg_drop_prob = dc.get("cfg_drop_prob", 0.1)
+    hflip = bool(tc.get("hflip_augment", False))
 
     opt = ttml.optimizers.create_optimizer(tc["optimizer"], model.parameters())
     ctx = ttml.autograd.AutoContext.get_instance()
@@ -289,7 +290,7 @@ def main():
 
         tokens, t_feats, onehot, target = make_training_batch(
             images[idx], labels[idx], schedule, patch, model.dim, batch_rng,
-            cfg_drop_prob=cfg_drop_prob, null_class=num_classes,
+            cfg_drop_prob=cfg_drop_prob, null_class=num_classes, hflip=hflip,
         )
 
         import ttnn
