@@ -21,10 +21,9 @@ namespace tt::tt_metal {
     class MetalContext;
 
     namespace distributed {
-    class MeshBuffer;
     class MeshDeviceImpl;
     class MeshWorkloadImpl;
-    }
+    }  // namespace distributed
 }
 
 namespace tt::tt_metal::inspector {
