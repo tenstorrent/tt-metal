@@ -196,15 +196,12 @@ void kernel_main() {
     // them as multiple pages to that one chip in a single sparse multicast. A direction whose pages
     // exceed the cap spills into additional slots.
     constexpr uint32_t MCAST_NUM_DIRS = 4;
-    constexpr uint32_t MCAST_MAX_DESTS = 4;  // == NOC_SPARSE_MCAST_WRITE_MAX_DESTS and the 4-dest slot layout
     // A token can route all its top-k picks through a single direction, so each per-direction bucket
     // must hold top-k entries. top-k is not a direct arg here, but meta_scratch_slots was sized as
     // read_batch_size * top-k on the host.
     constexpr uint32_t MCAST_BUCKET_CAP = meta_scratch_slots / read_batch_size;
-    // Only the fields the metadata contract actually defines are bucketed: the destination page and hop
-    // distance (routing) plus the top-k slot (metadata field 2). The routed expert and routing weight are
-    // deliberately absent — they are not metadata fields, and staging them here previously led the sender
-    // to write them into meta[3]/meta[4], past the end of a metadata_len == 3 slot.
+    // The buckets mirror GroupedRouteInfo's per-destination arrays one-for-one; see that struct for
+    // why nothing beyond page/distance/k belongs in a group.
     uint32_t bk_count[MCAST_NUM_DIRS];
     uint32_t bk_dist[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
     uint32_t bk_page[MCAST_NUM_DIRS][MCAST_BUCKET_CAP];
@@ -212,6 +209,11 @@ void kernel_main() {
     for (uint32_t d = 0; d < MCAST_NUM_DIRS; d++) {
         bk_count[d] = 0;
     }
+    // The grouped record is built in the same route_info scratch the legacy path uses; the host sized
+    // that CB from sizeof(GroupedRouteInfo) on this path.
+    volatile tt_l1_ptr GroupedRouteInfo* grouped_route_info =
+        reinterpret_cast<volatile tt_l1_ptr GroupedRouteInfo*>(route_info_scratch_addr);
+
     uint32_t cur_token_valid = 0;  // 0 until the first cross-device entry of a token is bucketed
     uint32_t cur_token_t = 0;      // token row (into the current batch's untilize CB)
     uint32_t cur_token_idx = 0;    // global token index (shared metadata field for the group)
@@ -235,9 +237,9 @@ void kernel_main() {
         auto emit_slot = [&](uint32_t dir, uint32_t gcount, uint16_t hop_mask) {
             space_avail_sem.wait_min(produced_count + 1);
             uint32_t slot = produced_count % writer_cb_size;
-            route_info_scratch[0] = dir;
-            route_info_scratch[1] = gcount;
-            route_info_scratch[2] = cur_token_idx;
+            grouped_route_info->direction = dir;
+            grouped_route_info->num_dests = gcount;
+            grouped_route_info->token_idx = cur_token_idx;
             DPRINT_DISPATCH(
                 "[W c={}] GROUP dir={} num_dests={} hop_mask={} slot={}\n",
                 (uint32_t)core_id,
@@ -322,13 +324,9 @@ void kernel_main() {
                 uint32_t gcount = (n - a < MCAST_MAX_DESTS) ? (n - a) : MCAST_MAX_DESTS;
                 uint16_t hop_mask = 0;
                 for (uint32_t r = 0; r < gcount; r++) {
-                    // Grouped route_info (15 u32): [0]=direction, [1]=num_dests, [2]=token_idx,
-                    // [3..6]=page[4], [7..10]=dist[4], [11..14]=k[4]. Must stay in sync with
-                    // grouped_route_info_u32 in dispatch_program_factory.cpp and the decode in
-                    // writer_sender_dispatch.cpp.
-                    route_info_scratch[3 + r] = bk_page[dir][a + r];
-                    route_info_scratch[7 + r] = bk_dist[dir][a + r];
-                    route_info_scratch[11 + r] = bk_k[dir][a + r];
+                    grouped_route_info->page_idx[r] = bk_page[dir][a + r];
+                    grouped_route_info->distance[r] = bk_dist[dir][a + r];
+                    grouped_route_info->k[r] = bk_k[dir][a + r];
                     hop_mask |= static_cast<uint16_t>(1u << (bk_dist[dir][a + r] - 1));
                 }
                 a += gcount;
@@ -424,8 +422,8 @@ void kernel_main() {
                         aligned_output_page_size,
                         {.offset_bytes = token_t * aligned_output_page_size},
                         {.page_id = page_idx});
-                    // Per-token metadata layout (3 × int32): [src chip, global token idx, top-k slot].  Built into the next ring slot, then
-                    // written to the same DRAM page index as the payload.
+                    // Per-token metadata layout (3 × int32): [src chip, global token idx, top-k slot].  Built into the
+                    // next ring slot, then written to the same DRAM page index as the payload.
                     uint32_t meta_addr =
                         metadata_scratch_addr + (local_count % meta_scratch_slots) * aligned_metadata_page_size;
                     volatile tt_l1_ptr int32_t* meta = reinterpret_cast<volatile tt_l1_ptr int32_t*>(meta_addr);
