@@ -818,7 +818,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->blackhole_dram_programmable_cores_override = is_env_enabled(value);
             break;
 
-        case EnvVarID::TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH: break;
         // ========================================
         // PROFILING & PERFORMANCE
         // ========================================
