@@ -1071,12 +1071,17 @@ class MultichipDecoder(OptimizedDecoder):
         ccl_ag_barrier: bool = True,
         prefill_fractured_norm: bool = DEFAULT_PREFILL_FRACTURED_NORM,
         prefill_fractured_norm_min_rows: int = PREFILL_FRACTURED_NORM_MIN_ROWS,
+        rope_cache: dict[str, ttnn.Tensor] | None = None,
         **kwargs,
     ) -> "MultichipDecoder":
         """Same contract as ``OptimizedDecoder.from_state_dict`` on a mesh.
 
         The state dict is the *whole* layer's; this method does the fracturing,
         so a caller does not have to know the mesh plan.
+
+        ``rope_cache`` lets a *stack* own the four RoPE tables instead of one per
+        layer; ``None`` keeps the single-layer behaviour of building its own.  See
+        :func:`build_rope_cache`.
         """
         if kwargs:
             raise TypeError(f"Unexpected MultichipDecoder.from_state_dict kwargs: {sorted(kwargs)}")
@@ -1236,15 +1241,26 @@ class MultichipDecoder(OptimizedDecoder):
 
         cos_cache = sin_cache = cos_cache_tile = sin_cache_tile = None
         if config.uses_rope:
-            cos, sin = _rope_cos_sin(max_seq_len, plan.head_dim, config.rope_theta)
-            cos_cache = to_mesh(cos.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            sin_cache = to_mesh(sin.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            cos_cache_tile = to_mesh(
-                cos.to(torch.bfloat16).reshape(1, 1, max_seq_len, plan.head_dim), dtype=ttnn.bfloat16
-            )
-            sin_cache_tile = to_mesh(
-                sin.to(torch.bfloat16).reshape(1, 1, max_seq_len, plan.head_dim), dtype=ttnn.bfloat16
-            )
+            if rope_cache is not None:
+                # A 52-layer stack has 39 sliding layers with the same theta, and the
+                # four tables are 134 MB per layer at full context; building them per
+                # layer would spend 5.2 GB of device DRAM on 39 copies of one tensor.
+                # The stack owns them instead and hands the same four in every time --
+                # see :func:`build_rope_cache`, which is what checks they match.
+                cos_cache = rope_cache["cos"]
+                sin_cache = rope_cache["sin"]
+                cos_cache_tile = rope_cache["cos_tile"]
+                sin_cache_tile = rope_cache["sin_tile"]
+            else:
+                cos, sin = _rope_cos_sin(max_seq_len, plan.head_dim, config.rope_theta)
+                cos_cache = to_mesh(cos.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+                sin_cache = to_mesh(sin.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+                cos_cache_tile = to_mesh(
+                    cos.to(torch.bfloat16).reshape(1, 1, max_seq_len, plan.head_dim), dtype=ttnn.bfloat16
+                )
+                sin_cache_tile = to_mesh(
+                    sin.to(torch.bfloat16).reshape(1, 1, max_seq_len, plan.head_dim), dtype=ttnn.bfloat16
+                )
 
         return cls(
             plan=plan,
