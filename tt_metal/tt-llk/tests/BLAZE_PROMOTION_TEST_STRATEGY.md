@@ -128,7 +128,36 @@ simple double-count or a missing clear would show as an integer ratio.
   all**, byte for byte, so the accumulator was not the cause.
 - *A stale build.* Verified the corrected source was what compiled.
 
-**Remaining suspects, in the order worth trying:**
+**Most likely cause — identified after the revert, and it supersedes the three suspects
+below: the driver has no per-batch unpack/math synchronisation.**
+
+The non-chunked op has exactly **one** phase transition (multiply everything, then
+`switch_to_reduce`, then reduce), so the SrcA/SrcB dvalid handshake alone keeps UNPACK and
+MATH ordered. The chunked form has **one transition per batch**, and nothing in the driver
+stops the unpack thread running ahead: as soon as it finishes batch 0's
+`switch_to_reduce` it re-inits and issues batch 1's `_llk_unpack_AB_` calls, which set
+dvalid and overwrite SrcA/SrcB while MATH is still mid-reduce on batch 0. MATH then
+column-reduces partially-clobbered source data.
+
+That fits the symptom in a way none of the suspects below do: the result is inflated
+(extra/duplicated accumulation) by a **non-integer, tile-count-dependent factor**, which is
+what a race produces — a deterministic logic error would give a clean ratio.
+
+The reason production does not hit this is that the real compute kernel gets the ordering
+for free from circular-buffer flow control (`cb_wait_front` / `cb_pop_front` around each
+chunk). The tt-llk harness has no CBs, so the driver must supply the barrier itself. The
+harness does initialise the tensix semaphores for this — `helpers/include/boot.h` sets up
+`UNPACK_TO_DEST`, `MATH_DONE`, `PACK_DONE` and `PACK_UNPACK` — and several existing
+multi-phase drivers already sync by hand; `sources/sdpa_reinits_test.cpp` and
+`sources/matmul_unpack_tilize_test.cpp` are the closest models.
+
+**Concrete fix to try first:** make the unpack thread wait on a math-side semaphore post at
+the end of each batch's reduce, so batch *n+1*'s unpacks cannot begin until batch *n*'s
+reduce has consumed SrcA/SrcB. If that turns the numbers correct, the earlier suspect list
+is moot. The `dst_capacity = 2, num_tiles = 3` bisect below is still the right first
+measurement, because with `batch_size = 1` the race window is at its widest.
+
+**Older suspects, kept only in case the sync fix does not resolve it:**
 
 1. **Packing `DEST[ACCUMULATOR]` under the reduce mask.** The working non-chunked driver
    packs `DEST[0]`; this one packs the reserved slot with
