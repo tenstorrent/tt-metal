@@ -38,15 +38,7 @@ void AttnResWeightedReduceNCDeviceOperation::validate_on_program_cache_miss(
     operations::check_tensor(input, "AttnResWeightedReduceNC", "input", {DataType::BFLOAT16});
     operations::check_tensor(weight, "AttnResWeightedReduceNC", "weight", {DataType::BFLOAT16, DataType::FLOAT32});
 
-    TT_FATAL(
-        input.storage_type() == StorageType::DEVICE && weight.storage_type() == StorageType::DEVICE,
-        "AttnResWeightedReduceNC requires both operands on device, got input {} and weight {}",
-        input.storage_type(),
-        weight.storage_type());
     TT_FATAL(input.device() == weight.device(), "AttnResWeightedReduceNC requires input and weight on the same device");
-    TT_FATAL(
-        input.layout() == Layout::TILE && weight.layout() == Layout::TILE,
-        "AttnResWeightedReduceNC requires TILE layout for both operands");
     TT_FATAL(
         !input.memory_config().is_sharded() && !weight.memory_config().is_sharded() &&
             !args.output_mem_config.is_sharded(),
@@ -94,11 +86,6 @@ void AttnResWeightedReduceNCDeviceOperation::validate_on_program_cache_miss(
         input_shape[0] == 1,
         "AttnResWeightedReduceNC takes an unbatched input, got dim 0 of {}; the batch comes from the weight",
         input_shape[0]);
-    TT_FATAL(
-        input_shape[-1] % TILE_WIDTH == 0 && input_shape[-2] % TILE_HEIGHT == 0,
-        "AttnResWeightedReduceNC requires tile-aligned inner dims, got {} x {}",
-        input_shape[-2],
-        input_shape[-1]);
 }
 
 tt::tt_metal::TensorSpec AttnResWeightedReduceNCDeviceOperation::compute_output_specs(

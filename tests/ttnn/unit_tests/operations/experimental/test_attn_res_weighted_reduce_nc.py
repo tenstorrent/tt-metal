@@ -235,6 +235,10 @@ def test_attn_res_weighted_reduce_nc_matches_composed(device):
         ("input_batch", "takes an unbatched input"),
         ("rank", "requires rank-4 operands"),
         ("input_dtype", "input only supports specific data types"),
+        ("weight_dtype", "weight only supports specific data types"),
+        ("host_weight", "Device Operations expect device tensors as inputs"),
+        ("row_major", "input only supports TILE layout"),
+        ("sharded", "supports interleaved operands only"),
     ),
 )
 def test_attn_res_weighted_reduce_nc_rejects(bad, message, device, expect_error):
@@ -270,6 +274,27 @@ def test_attn_res_weighted_reduce_nc_rejects(bad, message, device, expect_error)
         # The weight takes fp32; the input does not, and that asymmetry is
         # deliberate rather than an oversight.
         tt_input = _place(torch.randn(shape, dtype=torch.float32), device, ttnn.float32)
+    elif bad == "weight_dtype":
+        # bfloat16 and float32 are the two the CBs are sized for; a block float
+        # weight would be read as neither.
+        tt_weight = _place(torch.randn([1, 9, 128, 1], dtype=torch.float32), device, ttnn.bfloat8_b)
+    elif bad == "host_weight":
+        # Caught by the device-operation framework ahead of this op's own
+        # validation, so the message pinned here is that one, not ours.
+        tt_weight = ttnn.from_torch(torch.randn([1, 9, 128, 1], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT)
+    elif bad == "row_major":
+        tt_input = ttnn.from_torch(
+            torch.randn(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
+    elif bad == "sharded":
+        # The reader addresses both operands as interleaved pages; a sharded one
+        # would be read at the wrong addresses rather than rejected.
+        tt_input = ttnn.to_memory_config(
+            tt_input,
+            ttnn.create_sharded_memory_config(
+                shape, core_grid=ttnn.CoreGrid(y=3, x=3), strategy=ttnn.ShardStrategy.HEIGHT
+            ),
+        )
 
     with expect_error(RuntimeError, message):
         ttnn.experimental.attn_res_weighted_reduce_nc(tt_input, tt_weight, dim=dim)
