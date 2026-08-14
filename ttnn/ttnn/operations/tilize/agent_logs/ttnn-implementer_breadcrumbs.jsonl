@@ -1,0 +1,1 @@
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/tilize/test_tilize.py","mode":"dev+prod","result":"52 passed both modes","note":"Phase 0: aligned + pad + cast + ranks + multicore + double-buffer knob","ts":"2026-08-14T12:23:52+00:00"}
