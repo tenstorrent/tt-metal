@@ -2105,6 +2105,118 @@ it is not.
 
 *(Recorded verbatim in `autoup_full2.log` lines 175-193.)*
 
+### ⚠ F20 REVISED — the pipeline ignored the meta-plan and was RIGHT
+
+The framing above is too strong, and the run that finally completed refutes it. The meta-plan
+called `voxtral_flow_matching` and `voxtral_codec_decoder` *"architecturally out of scope for this
+backend"* and recommended capping their retry budget and escalating to a human. The loop ignored
+that and **ported both**:
+
+```
+23:03  ✓ GRADUATED  voxtral_codec_decoder   5/7
+29:57  ✓ GRADUATED  voxtral_flow_matching   6/7
+Graduated (ON_DEVICE): 7/7 (100%) actually graduated (native stub, PCC-verified)
+```
+
+Verified as real TTNN, not a torch shim that would pass a PCC gate trivially: `voxtral_codec_decoder.py`
+is 363 lines with 11 `ttnn.linear`, 6 `ttnn.slice`, 5 `ttnn.reshape/multiply/add`, 4
+`ttnn.permute/concat`, 2 `ttnn.matmul/embedding` and `ttnn.transformer`, **no `except`/fallback
+path**, and `from_torch` only for weight upload.
+
+**So the corrected recommendation is narrower and better:** the meta-plan's architectural pessimism
+should inform **budgets and ordering** — try the hard components last, cap their share of the
+iteration budget, warn the user what is at risk — but it must **not veto attempts**. It was wrong
+about both hard components, and a veto would have cost the run's most valuable result.
+
+What survives from F20 unchanged: its *factual* observations were all correct (the category-default
+backend match, `leaves=1` discovery blindness, the logit-only PCC harness being wrong for a codec
+and a vocoder), and none of those is wired to anything. **Route the facts into control flow; leave
+the predictions advisory.**
+
+---
+
+## ★★★ THE OVERNIGHT RESULT — full three-block port, 7/7, 34 minutes
+
+The experiment the whole detour was for.
+
+```
+Component classification: 0 REUSE, 0 ADAPT, 4 NEW (total 4)
+
+00:00  ✓ layers_0_input_layernorm    1/7
+01:34  ✓ layers_0_mlp                2/7
+06:16  ✓ layers_0_self_attn          3/7
+09:33  ✓ module                      4/7
+23:03  ✓ voxtral_codec_decoder       5/7
+29:57  ✓ voxtral_flow_matching       6/7
+33:48  ✓ voxtral_tts_backbone        7/7
+
+Graduated (ON_DEVICE): 7/7 (100%) actually graduated (native stub, PCC-verified)
+RUN ENDED: bring-up complete — gate can_stop
+```
+
+**2,553 lines of generated TTNN** across 11 stubs in `models/demos/voxtral_tts_full/`, from a model
+the tool had never seen, with `0 REUSE / 0 ADAPT` — nothing was copied; all of it was written.
+
+### The qualification that must travel with that number
+
+**Only 3 of 7 components were gated on REAL inputs.**
+
+```
+[capture] selected AutoModelForCausalLM (VoxtralTtsForConditionalGeneration) resolving 4/7
+[capture] layers_0_input_layernorm: submodule not resolved; skipping.
+[capture] layers_0_mlp:             submodule not resolved; skipping.
+[capture] layers_0_self_attn:       submodule not resolved; skipping.
+[preflight] captured 3/7 components; per-component PCC tests will use real inputs
+```
+
+`voxtral_tts_backbone`, `voxtral_codec_decoder` and `voxtral_flow_matching` got captured IO. The
+three decomposed sub-components did not, and graduated against synthetic inputs — the §6.54 trap
+(29.5% code flips on synthetic against 3.9% on real), which the tool's own documentation warns about.
+
+### F23 — the capture drivers guess, and the config already says they should not
+
+The clearest evidence yet for the representative-inputs recommendation, all from one run:
+
+```
+[capture] running drivers with pixel_values shape (1, 3, 224, 224) on 4 hook(s)
+[capture] driver `model(pixel_values=...)`: ValueError: give input_ids or inputs_embeds
+```
+
+It drove a **text-to-speech** model with a **224x224 image tensor**, against a config declaring
+`task: "text-to-speech"` and `modality_in: "text"` (F17 again, third instance).
+
+```
+[capture] driver `model(input_ids=..., attention_mask=...) [10 tokens]`:
+  AssertionError: prompt has 0 audio placeholders but the preset has 169 rows.
+[capture] auto-onboard: closed-loop iteration exhausted after 3 attempts:
+  runtime ok but fired 0/3 target(s)
+```
+
+The generic driver feeds a 10-token prompt; this model needs one with 169 voice-specific audio
+placeholders. The assertion message names the exact command that generates one
+(`dump_prompt_ids.py --text '...' --voice <name>`) and **the tool has no way to act on a
+remediation printed by the model it is porting**. Three LLM-drafted attempts, none valid.
+
+**One fixture file would have given all seven components real inputs.** The tool already insists on
+real activations over random ones — its own docs explain why — and then has no channel through
+which a user can supply them.
+
+**Suggested fix (restated, now with evidence):** `--calibration-inputs <path>`. A tensor fixture or
+a callable. It is the smallest change on this list with the largest effect on correctness, because
+every downstream PCC number inherits the quality of these inputs.
+
+### Honest scope of this result
+
+- **This is the tool plus five of my patches** — F1, F2, F5 (earlier), F18/F19 routing, F21
+  `trust_remote_code`. Stock, it refuses this model at `compat` and again at the demo loader.
+- The graduation gate is **per-component PCC against captured reference IO**. It is not end-to-end
+  audio, and the tool has no WER, no MOS and no exact-match check on discrete codes (O9).
+- `emit-e2e` — the independent grader — had not yet reported when this was written.
+
+---
+
+## Corrections to this document
+
 ---
 
 ## F21 — `trust_remote_code` is a ONE-MODEL allowlist, and the two halves of the pipeline disagree
