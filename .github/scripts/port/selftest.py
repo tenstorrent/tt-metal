@@ -89,8 +89,12 @@ sweep.parameters = {"nightly": nightly, "broaden_suite": broaden}
 sweep.invalidate_vector = lambda v: (False, None)
 sys.modules["fake_sweep"] = sweep
 
+import random as _random  # noqa: E402
+
 import ledger  # noqa: E402
 import scaffold  # noqa: E402
+
+_ledger_src = (Path(__file__).resolve().parent / "ledger.py").read_text()
 
 MANIFEST = {
     "op": "untilize",
@@ -122,6 +126,51 @@ check("expansion is deterministic", [c["case_id"] for c in repeat] == ids)
 check(
     "same cases in same order",
     [(c["shape"], c["dtype"], c["suite"]) for c in repeat] == [(c["shape"], c["dtype"], c["suite"]) for c in cases],
+)
+
+# The two checks above pass on a grid of literal shapes no matter what, which is why they missed this:
+# the real suites build their shapes with `gen_shapes(..., num_samples)`, drawing each one with
+# `random.randint` while `parameters` is being evaluated. The *count* is stable and the shapes are not,
+# and `case_id` is the position in the grid -- so the prototype pass set and the correctness band, two
+# processes neither of which is handed a ledger, would agree on every identifier and disagree about
+# which tensor it names. This sweep redraws on every access, the way an import does.
+
+
+class _Sampled(types.ModuleType):
+    def __getattr__(self, name):
+        if name == "invalidate_vector":
+            return lambda v: (False, None)
+        if name != "parameters":
+            raise AttributeError(name)
+        return {
+            "nightly": {
+                "input_shape": [[1, 1, 32 * _random.randint(1, 8), 32] for _ in range(4)],
+                "input_a_dtype": [ttnn.bfloat16],
+                "input_a_layout": [ttnn.TILE_LAYOUT],
+                "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
+            }
+        }
+
+
+sys.modules["sampled_sweep"] = _Sampled("sampled_sweep")
+_sampled_manifest = dict(MANIFEST, sweep_module="sampled_sweep", sweep_suite=["nightly"])
+_first = [c["shape"] for c in ledger.build_ledger(_sampled_manifest)]
+_second = [c["shape"] for c in ledger.build_ledger(_sampled_manifest)]
+check(
+    "a randomly sampled grid expands the same way twice",
+    _first == _second,
+    f"{_first} then {_second}: case_id would name a different shape in each",
+)
+check(
+    "and the sampling is seeded before the sweep module is imported",
+    "_seed_shape_sampling" in _ledger_src.split("module = importlib.import_module")[0],
+    "the draw happens while `parameters` is evaluated, so seeding after the import is too late",
+)
+_other_op = [c["shape"] for c in ledger.build_ledger(dict(_sampled_manifest, op="tilize"))]
+check(
+    "but two ops do not draw the same shapes",
+    _other_op != _first,
+    "a seed shared across ops would make every op's ledger a copy of the first one's",
 )
 
 # =========================================================== 2. port_scope

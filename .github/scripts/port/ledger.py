@@ -28,6 +28,7 @@ import argparse
 import importlib
 import itertools
 import json
+import random
 import sys
 from pathlib import Path
 from typing import Any
@@ -123,6 +124,33 @@ def _signature(case: dict) -> str:
     )
 
 
+def _seed_shape_sampling(op: str) -> None:
+    """Make the grid the same grid every time it is expanded.
+
+    Upstream sweep suites build their shape lists with
+    `gen_shapes(start, end, interval, num_samples)`, which draws each shape with `random.randint` and
+    no seed, at module import time. The count is stable -- the try budget is ten times the sample
+    count -- but the shapes are not, and `case_id` is the point's *position* in the grid. So two
+    expansions agree on every identifier and disagree about what the identifiers mean.
+
+    That is not a theoretical hazard, it is the load-bearing assumption of three things:
+
+    - The prototype pass set and the correctness band are separate `measure.py` processes in the same
+      job, neither handed a ledger. Unseeded, `codegen_tilize[57]` in the pass set excuses a port
+      failure on `codegen_tilize[57]` from a different draw -- a confident, wrong attribution, in the
+      one place whose comment promises the only safe way to be wrong is too harsh.
+    - The no-progress chain stop compares this attempt's failing count against the last one's, which
+      would be two counts over two different case sets.
+    - `measure.prototype_key`'s `ledger_sig` hashes the case ids, so it cannot notice any of this.
+
+    Seeded per op rather than globally so two ops do not draw the same shapes, and derived from the
+    name rather than a stored constant so a manifest needs nothing added to it. `random.seed` before
+    the import is what matters: the sampling happens while `parameters` is being evaluated, so
+    seeding after it is seeding after the draw.
+    """
+    random.seed(f"port-harness/{op}")
+
+
 def build_ledger(manifest: dict, *, suite: str | None = None) -> list[dict]:
     """Expand the sweep grid and classify every point.
 
@@ -138,6 +166,7 @@ def build_ledger(manifest: dict, *, suite: str | None = None) -> list[dict]:
     module_name = manifest["sweep_module"]
     requested = suite or manifest.get("sweep_suite")
     suites = [requested] if isinstance(requested, str) else list(requested)
+    _seed_shape_sampling(manifest["op"])
     module = importlib.import_module(module_name)
 
     invalidate = getattr(module, "invalidate_vector", None)
