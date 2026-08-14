@@ -10,7 +10,6 @@ on:
         default: all
         options:
           - all
-          - motif
           - qwenimage
           - qwen3_vl
       platform:
@@ -47,7 +46,7 @@ on:
   workflow_call:
     inputs:
       model:
-        description: "Select model to test (all, motif, etc.)"
+        description: "Select model to test (all, qwenimage, etc.)"
         required: false
         type: string
         default: "all"

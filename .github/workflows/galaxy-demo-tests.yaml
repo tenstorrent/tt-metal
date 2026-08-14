@@ -10,7 +10,6 @@ on:
         type: choice
         options:
           - all
-          - motif
           - wan22
           - deepseek_v3
           - qwenimage
