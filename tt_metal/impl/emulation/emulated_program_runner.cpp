@@ -289,14 +289,10 @@ extern "C" void __emule_fiber_note_publish(unsigned pages) {
 // Resolve a NOC address (encoded 64-bit) to a host pointer.
 // Real firmware encoding: y in bits [47:42], x in bits [41:36], addr in bits [35:0]
 //
-// The L1_SLOT_MASK is applied ONLY for WORKER cores. Two reasons:
-//  1. Worker L1 fields are 0-based in-slot offsets (from `get_write_ptr()` etc.),
-//     always < 2 MB, so the mask is an idempotent guard on the local field.
-//  2. DRAM banks are GB-scale (2 GB on Wormhole views, 4 GB on Blackhole)
-//     and the kernel-side per-bank addrgen helper produces an `addr` field
-//     that is the true in-bank offset (already includes
-//     `bank_to_dram_offset[bank_index]`). Masking to 2 MB silently aliases
-//     any DRAM access >= 2 MB to an offset within the first 2 MB of the bank.
+// The decoded offset is bounded by the target core's own size, not masked into range: a
+// worker L1 field is a 0-based in-slot offset while a DRAM bank is GB-scale (2 GB on
+// Wormhole views, 4 GB on Blackhole), so no single mask fits both, and an offset that fits
+// neither belongs to no core.
 // Helper: get SWEmuleChip* from MetalContext cluster for a given device_id. (Relocated up from
 // later in this file — needed here for the PCIe branch below, and by the fabric teleport hooks
 // further down.)
