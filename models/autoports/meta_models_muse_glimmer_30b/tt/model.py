@@ -955,7 +955,28 @@ class MuseGlimmerModel(LightweightModule):
     # -------------------------------------------------------------- teardown
 
     def deallocate(self) -> None:
-        """Free every device tensor this model owns, weights included."""
+        """Free the device tensors this model owns and drop its layers.
+
+        Freeing the KV cache while a trace still holds its buffer addresses is a
+        use-after-free, and on this fabric it reports as an ERISC assert rather than as a
+        wrong number -- which is what this stage's watcher run caught in a test
+        (``doc/optimized_full_model/logs/watcher_bisect_rebind.log``).  This function cannot
+        release the traces itself: the generator owns them and the model does not know its
+        generator.  So it *checks*, and says so loudly, because round 5 of the stage review
+        was right that the shipped class silently permitted the exact ordering the stage
+        had already been burned by.  Callers release first --
+        ``MuseGlimmerGenerator.teardown()`` then ``model.deallocate()``.
+
+        "Weights included" was not true and is not claimed: the per-layer weights go when
+        ``self.layers`` is dropped and Python frees the wrappers.  What is explicit here is
+        the KV cache and the sliding tails.
+        """
+        if self.live_traces_over_kv_cache:
+            logger.warning(
+                "MuseGlimmerModel.deallocate(): a trace is still registered over this model's KV "
+                "cache. Call the generator's teardown() first; freeing the cache under a live trace "
+                "is a use-after-free that reports as a fabric ERISC assert."
+            )
         for layer in self.layers:
             for tensor in (layer.k_cache, layer.v_cache):
                 if tensor is not None:
@@ -1002,6 +1023,21 @@ class MuseGlimmerModel(LightweightModule):
             "readbacks": 0,
             "device_position_advances": 0,
         }
+
+    #: How many traces are currently captured over this model's KV cache.  The generator
+    #: owns the traces and the model owns the cache, so neither can enforce the ordering
+    #: alone; this is the one bit of shared state that lets :meth:`deallocate` refuse to be
+    #: silent about a use-after-free.  Maintained by
+    #: ``MuseGlimmerGenerator._capture_*``/``_release_*``.
+    @property
+    def live_traces_over_kv_cache(self) -> int:
+        return int(getattr(self, "_live_traces_over_kv_cache", 0))
+
+    def note_trace_captured(self) -> None:
+        self._live_traces_over_kv_cache = self.live_traces_over_kv_cache + 1
+
+    def note_trace_released(self) -> None:
+        self._live_traces_over_kv_cache = max(0, self.live_traces_over_kv_cache - 1)
 
     def reset_kv_cache(self) -> None:
         """Zero the paged cache in place, without freeing it (``Generator.reset``).

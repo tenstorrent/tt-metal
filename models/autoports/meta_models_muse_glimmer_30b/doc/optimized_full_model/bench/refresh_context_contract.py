@@ -53,6 +53,15 @@ def main() -> int:
         budget = contract.get("byte_budget_at_full_context")
         if isinstance(budget, dict) and "measured_from" in budget:
             budget["measured_from"] = f"{stage_dir}/evidence_accuracy.json (capability_report over the built model)"
+        # Round 5 found the same defect in the sibling fields: ``tested.commands`` still
+        # named the previous stage's harness for all five commands, and
+        # ``tested.prefill_misses.note`` its miss file, while every value under ``tested``
+        # is this stage's.  A reader following those commands runs the wrong script.  Fixed
+        # by substitution on the whole subtree so a future field cannot be missed the way
+        # these two were, and the gate now asserts no ``doc/full_model/`` survives here.
+        tested = contract.get("tested")
+        if tested is not None:
+            contract["tested"] = json.loads(json.dumps(tested).replace("doc/full_model/", f"{stage_dir}/"))
         # The two persistent/peak allocations this stage adds, from their own measured
         # artifacts rather than from prose.  ``$optimize`` requires the contract to move
         # when trace buffers or activation memory move, and both of these do.

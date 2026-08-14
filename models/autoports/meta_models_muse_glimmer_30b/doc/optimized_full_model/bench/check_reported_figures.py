@@ -42,7 +42,7 @@ resolved: list[tuple[str, str]] = []
 #: sections this file never opened were wrong.  ``SOURCES`` below is the other half --
 #: adding an unchecked section that needs a new artifact now fails on a missing source
 #: rather than sliding past on an unchanged count.
-ADVERTISED_CHECKS = 526
+ADVERTISED_CHECKS = 583
 #: Of that total, how many are real assertions (``close``/``same``) as opposed to README
 #: bindings (``bind``/``perf``), which assert nothing on their own.  Round 4 asked for the
 #: split to be stated next to the number rather than folded into it.
@@ -827,6 +827,42 @@ def main() -> int:
         "TEMPORARY: pre-fix behaviour" in generator_src,
         False,
     )
+    # The trace-ownership inventory: assert the code matches what the README's table says,
+    # so a fourth capture site or a rebindable input added later contradicts the document.
+    same(
+        "this port captures two of the three traces itself",
+        generator_src.count("ttnn.begin_trace_capture"),
+        2,  # decode + prefill here; the sampling trace captures in models/common/sampling
+    )
+    same(
+        "teardown and the rebind path share one decode-release function",
+        generator_src.count("self._release_decode_trace()"),
+        2,
+    )
+    same(
+        "reset() does not invalidate traces",
+        "Traces survive on purpose" in generator_src,
+        True,
+    )
+    # Round 5: the model owns the cache and the generator owns the traces, so neither can
+    # enforce the release-before-free ordering alone.  The shared counter is what lets
+    # ``deallocate()`` refuse to be silent about it; assert it is wired at all four sites.
+    model_src = text(ROOT / "tt/model.py")
+    same("the model exposes a live-trace count", "def live_traces_over_kv_cache" in model_src, True)
+    same("...and deallocate() checks it", "if self.live_traces_over_kv_cache:" in model_src, True)
+    same("...and no longer claims to free weights", 'weights included."""' in model_src, False)
+    same("the generator notes both captures", generator_src.count("note_trace_captured()"), 2)
+    same("...and both releases", generator_src.count("note_trace_released()"), 2)
+    same(
+        "close_multichip_mesh drops the model's semaphore cache too",
+        "_MODEL_CCL_SEMAPHORES.pop(id(mesh), None)" in text(ROOT / "tt/multichip_decoder.py"),
+        True,
+    )
+    same(
+        "the module-scoped generator fixture releases before the mesh closes",
+        "built.teardown()" in text(ROOT / "tests/test_full_model.py"),
+        True,
+    )
     tests_src = text(ROOT / "tests/test_full_model.py")
     same(
         "the decode-rebind test compares the traced decode against the eager one",
@@ -843,6 +879,40 @@ def main() -> int:
     same(
         "the contract's byte-budget provenance names this stage",
         contract_perf["byte_budget_at_full_context"]["measured_from"].startswith("doc/optimized_full_model/"),
+        True,
+    )
+    # Round 5: the sibling fields under ``tested`` still named the previous stage's harness.
+    # Assert the *current* stage's fields are free of it, field-by-field rather than by one
+    # string that a new field could slip past.  The per-stage historical entries
+    # (``full_model``, ``optimized_decoder``, ...) legitimately keep their own paths.
+    HISTORICAL = {
+        "optimized_multichip_decoder",
+        "full_model",
+        "optimized_decoder",
+        "fused_decoder",
+        "multichip_decoder",
+    }
+    stale = sorted(
+        key for key, value in contract_perf.items() if key not in HISTORICAL and "doc/full_model/" in json.dumps(value)
+    )
+    same("no current-stage contract field points at the previous stage", stale, [])
+    same(
+        "the contract's tested commands name this stage's harness",
+        all(
+            "doc/optimized_full_model/" in command
+            for command in contract_perf["tested"]["commands"]
+            if command.startswith("python doc/")
+        ),
+        True,
+    )
+    same(
+        "...and so does the miss-detail note",
+        "doc/optimized_full_model/" in contract_perf["tested"]["prefill_misses"]["note"],
+        True,
+    )
+    same(
+        "the historical per-stage entries keep their own paths",
+        "doc/full_model/" in json.dumps(contract_perf["full_model"]),
         True,
     )
     same("the gated watcher run passed 10 cases", "10 passed" in text(D / "logs/watcher_pytest.log"), True)
@@ -885,7 +955,20 @@ def main() -> int:
             1,
         ),
     }
+    POSTFIX = {
+        "twelve with both opt-in cases": (
+            [f"logs/watcher_pytest_postfix_optin{i}.log" for i in (1, 2, 3)],
+            12,
+            3,
+        ),
+        "twelve with two other sampling cases": (
+            [f"logs/watcher_pytest_postfix_ctrl{i}.log" for i in (1, 2, 3)],
+            12,
+            1,
+        ),
+    }
     tallies = {}
+    post = {}
     for label, (logs, cases, want_trips) in ARMS.items():
         trips = 0
         for log in logs:
@@ -899,6 +982,23 @@ def main() -> int:
             trips += "subordinate_erisc detected invalid NOC command buffer state" in body
         same(f"{label}: {trips} of {len(logs)} tripped", trips, want_trips)
         tallies[label] = (trips, len(logs))
+    # The same two arms re-measured against round 5's fixed teardown.  The claim that the fix
+    # moved neither is what licenses pooling, so it is asserted rather than asserted-about.
+    for label, (logs, cases, want_trips) in POSTFIX.items():
+        trips = 0
+        for log in logs:
+            body = text(D / log)
+            same(
+                f"post-fix {label}: {log} ran {cases} cases",
+                len(set(re.findall(r"test_full_model\.py::([\w\[\]]+)", body))),
+                cases,
+            )
+            same(f"post-fix {label}: {log} had no failure", "FAILED" in body, False)
+            trips += "subordinate_erisc detected invalid NOC command buffer state" in body
+        same(f"post-fix {label}: {trips} of {len(logs)} tripped", trips, want_trips)
+        post[label] = (trips, len(logs))
+    for label in POSTFIX:
+        same(f"the teardown fix did not move the {label!r} arm", tallies[label][0], post[label][0])
     same(
         "the trips land on more than one acteth core",
         len(
@@ -945,6 +1045,83 @@ def main() -> int:
         round(fisher(optin[0], optin[1] - optin[0], control[0], control[1] - control[0]), 3),
         0.400,
         tol=1e-3,
+    )
+    # Round 5: the pooled contrast alone is circular, so the two arm-wise contrasts and the
+    # minimum attainable p of the 3-vs-3 table are computed and bound too.
+    close(
+        "the smallest p the 3-vs-3 table can attain",
+        round(fisher(optin[1], 0, 0, control[1]), 3),
+        0.100,
+        tol=1e-3,
+    )
+    # The combined (pre + post) contrasts the README now leads with.
+    c_optin = tuple(
+        a + b for a, b in zip(tallies["twelve with both opt-in cases"], post["twelve with both opt-in cases"])
+    )
+    c_ctrl = tuple(
+        a + b
+        for a, b in zip(tallies["twelve with two other sampling cases"], post["twelve with two other sampling cases"])
+    )
+    same("combined opt-in arm", c_optin, (6, 6))
+    same("combined length-control arm", c_ctrl, (2, 6))
+    close(
+        "combined opt-in-vs-ten Fisher p",
+        round(fisher(c_optin[0], c_optin[1] - c_optin[0], ten[0], ten[1] - ten[0]), 4),
+        0.0022,
+        tol=1e-3,
+    )
+    close(
+        "combined control-vs-ten Fisher p",
+        round(fisher(c_ctrl[0], c_ctrl[1] - c_ctrl[0], ten[0], ten[1] - ten[0]), 3),
+        0.455,
+        tol=1e-3,
+    )
+    close(
+        "combined opt-in-vs-control Fisher p",
+        round(fisher(c_optin[0], c_optin[1] - c_optin[0], c_ctrl[0], c_ctrl[1] - c_ctrl[0]), 3),
+        0.061,
+        tol=1e-3,
+    )
+    close(
+        "combined twelve-vs-ten Fisher p",
+        round(fisher(c_optin[0] + c_ctrl[0], 12 - c_optin[0] - c_ctrl[0], ten[0], ten[1] - ten[0]), 3),
+        0.029,
+        tol=1e-3,
+    )
+    same(
+        "the README leads with the contrast that separates, not the pooled one",
+        readme.count("p = 0.0022") >= 1 and readme.count("p = 0.455") >= 1,
+        True,
+    )
+    same("the README reports 22 watcher processes", "Twenty-two watcher processes" in readme, True)
+
+    # The context-256 floor, which is what makes the closure comparison able to fail.
+    ab256 = text(D / "logs/layer_ab_after_ctx256.log")
+    rows = {}
+    for line in ab256.splitlines():
+        if line.startswith("AB ") and "tp4 " in line:
+            kind = "sliding" if "kind=sliding" in line else "full"
+            rows[kind] = float(re.search(r"traced_decode@256=\s*([0-9.]+)", line).group(1))
+    close("floor sliding ms/layer at context 256", rows["sliding"], 0.4390, tol=1e-4)
+    close("floor full ms/layer at context 256", rows["full"], 0.4077, tol=1e-4)
+    floor256 = 39 * rows["sliding"] + 13 * rows["full"]
+    close("layer-stack floor at context 256", round(floor256, 3), 22.421, tol=1e-4)
+    close(
+        "logits-only over the same-context floor %",
+        round((after["traced_decode_logits_only_ms_per_token"]["min"] - floor256) / floor256 * 100, 2),
+        1.05,
+        tol=2e-2,
+    )
+    close(
+        "token-out over the same-context floor %",
+        round((after["token_out_decode_ms_per_token"]["min"] - floor256) / floor256 * 100, 2),
+        3.99,
+        tol=2e-2,
+    )
+    same(
+        "the tighter floor is below the context-2048 one, so the gate can fail",
+        floor256 < floor["total_ms"],
+        True,
     )
     same("the ten-case repeat control is clean", "WATCHER_CLEAN" in text(D / "logs/check_watcher_default10.log"), True)
     # The tripped run's own artifact is unusable, and that is the point: the abort lands
@@ -1022,8 +1199,22 @@ def main() -> int:
     # (h) the source files this gate must actually **open** -- tested against ``opened``,
     # which the readers record, not against ``is_file()``.  A new unchecked section that
     # needs a new artifact then fails here rather than sliding past on an unchanged count.
-    text(D / "logs/watcher_pytest_12case_tripped_run3.log")
-    text(D / "logs/check_watcher_console_12case_control2.log")
+    # Round 5: a bare ``text()`` call satisfies the coverage set while asserting nothing,
+    # which is the same emptiness this mechanism replaced.  Every covered path is asserted
+    # on instead -- these two were the ones reachable only by a side-effecting read.
+    same(
+        "the control arm that tripped says so on the console",
+        "WATCHER_CONSOLE_TRIPPED_ASSERT" in text(D / "logs/check_watcher_console_12case_control2.log"),
+        True,
+    )
+    same(
+        "...and the two that did not, do not",
+        [
+            "WATCHER_CONSOLE_NO_TRIPPED_ASSERT" in text(D / f"logs/check_watcher_console_12case_control{tag}.log")
+            for tag in ("", "3")
+        ],
+        [True, True],
+    )
     for source in (
         "tracy/prefill_128_perf_report.csv",
         "tracy/decode_sliding_perf_report.csv",

@@ -597,6 +597,7 @@ class MuseGlimmerGenerator(Generator):
         }
         self._prefill_traces[padded_len] = entry
         self._prefill_trace_cache_sig = self._kv_cache_signature()
+        self.model.note_trace_captured()
         logger.info(
             f"MuseGlimmerGenerator: captured a prefill trace for padded_len={padded_len} "
             f"({len(self._prefill_traces)}/{self.gen_config.prefill_trace_max_entries} buckets)"
@@ -697,18 +698,23 @@ class MuseGlimmerGenerator(Generator):
         """
         ttnn.synchronize_device(self.mesh_device)
         self.counters["synchronizations"] += 1
-        if self._sampling_captured:
-            try:
-                self.sampling.reset_trace()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(f"failed to release the sampling trace: {exc}")
-            self._sampling_captured = False
+        # Unconditional: ``reset_trace()`` iterates its own slot table and skips empty
+        # slots, so it is a no-op when nothing was captured, and calling it on the strength
+        # of *our* flag would trust a flag to describe someone else's state.  The old
+        # ``teardown()`` called it unconditionally for that reason and this keeps the
+        # property.
+        try:
+            self.sampling.reset_trace()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"failed to release the sampling trace: {exc}")
+        self._sampling_captured = False
         if self._trace_id is not None:
             try:
                 ttnn.release_trace(self.mesh_device, self._trace_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(f"failed to release the decode trace: {exc}")
             self._trace_id = None
+            self.model.note_trace_released()
         ttnn.synchronize_device(self.mesh_device)
         if self._trace_logits is not None:
             try:
@@ -754,6 +760,7 @@ class MuseGlimmerGenerator(Generator):
                     ttnn.deallocate(entry[key])
                 except Exception:  # noqa: BLE001
                     pass
+            self.model.note_trace_released()
         self._prefill_traces.clear()
         self._prefill_trace_cache_sig = ()
 
@@ -901,6 +908,7 @@ class MuseGlimmerGenerator(Generator):
         self._trace_id = trace_id
         self._trace_logits = logits
         self._decode_trace_cache_sig = self._kv_cache_signature()
+        model.note_trace_captured()
         logger.info("MuseGlimmerGenerator: captured decode trace (positions advance on device)")
 
     def _capture_sampling_trace(self, logits: ttnn.Tensor) -> None:
@@ -1169,17 +1177,25 @@ class MuseGlimmerGenerator(Generator):
         self._staged_positions = torch.zeros(DECODE_ROWS, dtype=torch.int64)
 
     def teardown(self) -> None:
+        """Release every trace.  One release path, shared with the cache-rebind one.
+
+        This used to inline its own copy of the decode/sampling release, and round 5 of the
+        stage review enumerated the four ways that copy had drifted from
+        :meth:`_release_decode_trace`: it never deallocated ``_trace_logits`` (3.24 MB per
+        device, left to Python GC of the dead generator), never cleared
+        ``_sampling_captured``, released the decode trace *before* the sampling trace
+        captured over its logits rather than after, and -- on the shipped default, where
+        there are no prefill traces to release -- reached ``ttnn.release_trace`` on a graph
+        full of fabric collectives with **no drain anywhere in the path**, which is exactly
+        the hygiene both release functions document as mandatory.
+
+        So there is one release path now, and it is the deterministic one.  The drain is
+        unconditional here because the shipped default is the case that had none.
+        """
+        ttnn.synchronize_device(self.mesh_device)
+        self.counters["synchronizations"] += 1
         self._release_prefill_traces()
-        if self._trace_id is not None:
-            try:
-                ttnn.release_trace(self.mesh_device, self._trace_id)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(f"failed to release the decode trace: {exc}")
-            self._trace_id = None
-        try:
-            self.sampling.reset_trace()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"failed to release the sampling trace: {exc}")
+        self._release_decode_trace()
 
     # ------------------------------------------------------------- reporting
 

@@ -582,16 +582,59 @@ argument had no length control; only the fourth version has both.
 
 | finding | what was done |
 | --- | --- |
-| **P1** the **decode** trace bakes the same KV-cache buffer addresses as a prefill trace and was never invalidated on a rebind | real, and the worse of the two: the prefill trace is opt-in and off by default while the decode trace runs on every token. `ttnn_decode_forward` calls `paged_update_cache(layer.k_cache, layer.v_cache, ...)`, so a caller that rebound to different buffers after capture got a decode reading and writing the buffers it no longer owned — wrong tokens, no error, and a log line about releasing the *prefill* traces that read as if the rebind had been handled. `_invalidate_prefill_traces_if_cache_moved` is now `_invalidate_traces_if_cache_moved`, each trace carries its own cache signature, and `_release_decode_trace()` drops the decode trace and the sampling trace captured over its logits. New test `test_decode_follows_the_cache_it_is_rebound_to_after_the_trace_is_captured` prefills prompt A, decodes (capturing), rebinds to a different cache holding prompt B, and asserts the **traced** decode agrees with the **eager** decode off B — which is the assertion that fails without the fix |
+| **P1** the **decode** trace bakes the same KV-cache buffer addresses as a prefill trace and was never invalidated on a rebind | real, and the worse of the two: the prefill trace is opt-in and off by default while the decode trace runs on every token. `ttnn_decode_forward` calls `paged_update_cache(layer.k_cache, layer.v_cache, ...)`, so a caller that rebound to different buffers after capture got a decode reading and writing the buffers it no longer owned — wrong tokens, no error, and a log line about releasing the *prefill* traces that read as if the rebind had been handled. `_invalidate_prefill_traces_if_cache_moved` is now `_invalidate_traces_if_cache_moved`, each trace carries its own cache signature, and `_release_decode_trace()` drops the decode trace and the sampling trace captured over its logits. New test `test_decode_follows_the_cache_it_is_rebound_to_after_the_trace_is_captured` prefills prompt A, decodes (capturing), rebinds to a different cache holding prompt B, and asserts the **traced** decode agrees with the **eager** decode off B. *Round 5 corrected the claim made for it*: the committed negative control fails on the **release** assertion, not the traced-vs-eager one, so the release check is the demonstrated discriminator and the value check is a corroborating consistency check against a failure mode nothing here exhibits (a release that happened but recaptured against the wrong buffers). The control is also a *partial* revert rather than `5e6022db622` — signature recorded, comparison and release removed — because a full revert fails on a missing attribute instead of on the behaviour |
 | **P2** the fabric-ERISC attribution was confounded with process length | the control was run three times; see above. Limitation 6, the watcher section, `run_watcher.sh`'s header and the serving advice are all rewritten around it |
 | **P2** `doc/context_contract.json` carried this stage's numbers under `doc/full_model/...` provenance | the parent builder hardcodes both strings, so this stage's wrapper now re-points them from `EVIDENCE` after the parent runs, and the contract is regenerated. Same defect class as rounds 2 and 3 found in `perf_summary.json` and `evidence_perf_before.json` |
 | **P2** the `$optimize` checklist row said the two traces account for the step to **38 µs** | no artifact yields 38; it is **27** (26.8 µs). Corrected, and the gate now binds the residual rather than only asserting a band |
 | the gate's "asserts the set of artifacts it opens" was `is_file()` | the three readers now record every path they open and the coverage assertion tests *that* set. Two entries were caught immediately: `work_log.md` was being read past the recorder, and `watcher_probe_rebuild/watcher.log.gz` was listed but never opened — it is now read and checked for detach lines |
-| `ADVERTISED_CHECKS` counted bindings as checks | the split is stated: **526 checks (492 assertions, 34 README bindings)**, and both numbers are asserted |
+| `ADVERTISED_CHECKS` counted bindings as checks | the split is stated, and both numbers are asserted (**583 checks = 549 assertions + 34 README bindings** as of round 5) |
 | the audit table called id 3119 a residual add | it is the attention-gate multiply; 3124 and 3191 are the residual adds. No value moves |
 | the README read as if the profile pinned the SwiGLU grid | `Cores` reads 110 for every elementwise row, including the 52-core softcap pair. Footnoted, with what does pin it |
 | `device_position_advances: 0` read as a contradiction | explained where it is incremented and why replays cannot bump it |
 | the reproduce block's `WATCHER_TAG=_12case` matched no committed log | tags aligned to the committed names, and the ten-case repeats and the length-control arm added to the block |
+
+One thing was tightened without being asked: `teardown()` had its own inline copy of the decode/sampling release, so after the P1 fix there were two decode-trace lifecycles to keep in step — which is the shape of the bug round 4 had just found. Both callers now go through `_release_decode_trace()`. The README also gained a full inventory of what each of the three captured graphs bakes in and who owns it, which is the check that answers "is there another one of these?": the KV cache is the only caller-owned device state any trace holds, so one signature per trace over its buffer addresses covers the hazard class rather than one instance of it.
+
+### Round 5 — `more-work-needed`
+
+The round-4 fix had left a second copy of the trace lifecycle behind, and the review found
+it plus three presentation defects. It also made the sharpest methodological point of the
+five rounds, on limitation 6.
+
+| finding | what was done |
+| --- | --- |
+| **P1** `teardown()` never adopted `_release_decode_trace()`, and diverged from it four ways: no `_trace_logits` deallocate (3.24 MB/device left to GC), no `_sampling_captured` clear, decode released *before* the sampling trace captured over its logits, and — on the shipped default, where there are no prefill traces — `release_trace` reached with **no drain at all**. Worse, the module-scoped test fixture had no finalizer, so its decode and sampling traces were live when the mesh closed | one release path with an unconditional drain; a fixture finalizer; `close_multichip_mesh` now also drops `tt.model._MODEL_CCL_SEMAPHORES` (same `id()`-reuse hazard `_kv_cache_signature` rejects by name); `MuseGlimmerModel.deallocate()` warns instead of silently freeing a cache under a live trace, via a counter the generator maintains at all four capture/release sites. And the point that mattered: **limitation 6's statistic had been measured in the pre-fix configuration**, so both twelve-case arms were re-measured against the fixed one — see below |
+| **P2** the negative control does not support the claim made for it: it fails on the *release* assertion, not the traced-vs-eager one, and it was produced against a partial revert (signature recorded, comparison removed) rather than `5e6022db622` | the test docstring and this log now say what the README already said. The release check is the demonstrated discriminator; the value check is a corroborating check against a failure mode nothing here exhibits. The control is labelled a partial revert, with the reason (a full revert fails on a missing attribute, not on behaviour) |
+| **P2** the contract provenance fix was partial in the same way round 4 flagged: `tested.commands` still named the previous stage's harness for all five commands, and `tested.prefill_misses.note` its miss file | re-pointed by substitution over the whole `tested` subtree, so a *future* field cannot be missed the way these two were; the gate asserts no current-stage field contains `doc/full_model/` while the historical per-stage entries keep theirs |
+| **P2** the statistics: quoting only the pooled 12-vs-10 contrast is circular, since three of its four trips are the opt-in arm's | all three pairwise contrasts are now in the README with the pooled one, and the gate computes each: pooled **p = 0.061**, opt-in-vs-ten **p = 0.018**, control-vs-ten **p = 0.375**, opt-in-vs-control **p = 0.400 against a minimum attainable 0.100**. The paragraph now says plainly that the strongest contrast supports the hypothesis the stage withdrew, that the composition-matched arm shows no length signal, that three post-hoc contrasts carry no multiplicity correction, and that **length and composition cannot be separated by this design** |
+| **P2** the gate's new coverage set was satisfiable by a bare `text()` call, and the file contained one | both bare reads replaced by content assertions; every covered path is now asserted on |
+| "fifteen processes" against a breakdown totalling eleven | corrected to eleven, with the two bracketing runs named as such |
+| the two-trace residual reads 26 µs from the printed figures and 27 in the prose | both stated, with the unrounded 26.8 and where it comes from |
+| the `Cores` footnote covered only elementwise rows | extended: the column reads 12 for every DRAM-sharded matmul row too, where the geometry is `cores=52`. The `SLOW` paragraph no longer claims those rows expose core count |
+| a gate check labelled "three trace capture sites" asserted 2 | relabelled to what it asserts: this port captures two of the three itself |
+
+### Round 5's own finding: the attribution was measured in a configuration that no longer exists
+
+The review's best point was not that `teardown()` was wrong — it was that limitation 6's
+eleven-process statistic had been gathered *with* that wrong teardown, and with a test
+fixture that closed the mesh over live traces. Both are exactly the shape of fault the
+assert reports (a device buffer freed while a trace holds its address), and neither had ever
+been tested. So the arms were re-run against the fixed tree, and the tree was frozen first:
+mid-experiment edits during round 5 had made runs 1 and 2–3 incomparable, that set was
+discarded, and the whole thing was re-run on one unchanging checkout.
+
+**Neither arm moved**: 3/3 to 3/3 and 1/3 to 1/3, Fisher p = 1.000 on both. So the in-model
+mechanisms were real defects worth fixing on their own terms, and they are not this fault —
+which is what turns "below the model" from an assumption into a tested conclusion.
+
+The re-run also doubled each arm to six, and *that* changed the answer. Combined, the opt-in
+arm is **6/6** and the length-matched control **2/6** against **0/5** at ten cases:
+opt-in-vs-ten **p = 0.0022**, control-vs-ten **p = 0.455**, opt-in-vs-control **p = 0.061**.
+Composition separates; length does not. Which means round 4's retraction of the round-3
+statement was itself an artifact of three runs per arm, and the fifth statement of this
+limitation is close to the second. That is the lesson of the whole sequence and it is
+recorded as such in the README: each version fell to the first control left out of it, and
+two of the five fell to nothing more than insufficient n.
 
 ## 11. Commits
 
@@ -603,7 +646,8 @@ stage's `93adb25b7a8`. Never pushed.
 | `ee3c378a830` | `tt/model.py`, `tt/generator.py`, `tt/optimized_decoder.py`, `tests/test_full_model.py` — the three decode-path layout changes, the opt-in traced prefill, and the seven new acceptance cases |
 | `3d03b5ca595` | `doc/optimized_full_model/` in full, the regenerated `doc/context_contract.json`, and the regenerated `readiness_autoregressive_{chat,raw}/` outputs |
 | `5e6022db622` | round-3 review fixes: the audit-table partition, the corrected prefill-128 and host-dispatch figures, the retracted retirement flag, the `--arm rebuild` probe and the gate's coverage extension |
-| *(this commit)* | round-4 review fixes: the decode-trace cache invalidation and its test, the fabric-ERISC length control, the context-contract provenance, and the gate's opened-artifact coverage |
+| `c28f91010d0` | round-4 review fixes: the decode-trace cache invalidation and its test, the fabric-ERISC length control, the context-contract provenance, and the gate's opened-artifact coverage |
+| *(this commit)* | round-5 review fixes: one trace-release path with a drain, the fixture finalizer, the model's live-trace guard and semaphore-cache cleanup, the re-measured limitation-6 arms, all three Fisher contrasts, and the contract's `tested` provenance |
 
 Nothing unrelated is in any of them: `git status` is clean at each, and the
 only files touched outside `doc/optimized_full_model/` are the four implementation/test

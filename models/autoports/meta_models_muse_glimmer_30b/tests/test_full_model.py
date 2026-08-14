@@ -63,14 +63,25 @@ def mesh():
 
 @pytest.fixture(scope="module")
 def generator(mesh) -> MuseGlimmerGenerator:
-    """Reduced generator, shared by the module: one build, many contracts."""
-    return build_generator(
+    """Reduced generator, shared by the module: one build, many contracts.
+
+    The finalizer is not tidiness.  Without it this generator's decode and sampling traces
+    -- and its four persistent decode inputs -- are still allocated when ``mesh`` closes the
+    device, i.e. ``close_mesh_device`` runs with live traces over fabric collectives. Round
+    5 of the stage review named that as an in-model candidate for the teardown-time fabric
+    ERISC assert in README limitation 6, which had been attributed to "below the model"
+    without this configuration ever having been tested. ``teardown()`` drains and releases
+    deterministically, so the mesh now closes with nothing live.
+    """
+    built = build_generator(
         MODEL_DIR,
         mesh,
         max_seq_len=REDUCED_MAX_SEQ,
         max_batch_size=1,
         layer_indices=REDUCED_LAYERS,
     )
+    yield built
+    built.teardown()
 
 
 @pytest.fixture
@@ -1009,10 +1020,14 @@ def test_decode_follows_the_cache_it_is_rebound_to_after_the_trace_is_captured(m
     longer owned -- wrong tokens, no error, and a log line about the *prefill* traces that
     read as if the rebind had been handled.
 
-    The discriminating check is the last assertion: the traced decode off the rebound cache
-    must agree with the **eager** decode off the same cache, and the two prompts are chosen
-    so that a decode against the stale buffers disagrees.  Without the fix the traced step
-    answers from the first prompt's cache and the assertion fails.
+    Two assertions do different jobs.  ``_trace_id is None`` after the rebind catches the
+    missing *release*, and that is the one the pre-fix code violates -- the committed negative
+    control (``logs/decode_rebind_prefix_negative_control.log``) fails there, not later.  The
+    last assertion, traced-vs-eager off the rebound cache, catches a different failure: a
+    release that happened but recaptured against the wrong buffers.  Nothing in this stage
+    exhibits that, so it is a corroborating consistency check rather than a demonstrated
+    discriminator, and round 5 of the stage review was right that the earlier wording here
+    claimed otherwise.
     """
     clear_generator_cache()
     generator = build_generator(MODEL_DIR, mesh, max_seq_len=REDUCED_MAX_SEQ, layer_indices=REDUCED_LAYERS, reuse=False)

@@ -122,11 +122,11 @@
   },
   "tested": {
     "commands": [
-      "python doc/full_model/bench/evidence.py --stages capacity,prefill,teacher,sampling,shapes,fallback",
-      "python doc/full_model/bench/evidence.py --stages autoregress",
-      "python doc/full_model/bench/evidence.py --stages perf",
-      "python doc/full_model/bench/qualitative.py --arm hf",
-      "python doc/full_model/bench/qualitative.py --arm tt",
+      "python doc/optimized_full_model/bench/evidence.py --stages capacity,prefill,teacher,sampling,shapes,fallback",
+      "python doc/optimized_full_model/bench/evidence.py --stages autoregress",
+      "python doc/optimized_full_model/bench/evidence.py --stages perf",
+      "python doc/optimized_full_model/bench/qualitative.py --arm hf",
+      "python doc/optimized_full_model/bench/qualitative.py --arm tt",
       "pytest models/autoports/meta_models_muse_glimmer_30b/tests/test_full_model.py"
     ],
     "prompt_shapes": {
@@ -174,7 +174,7 @@
       "outside_top_k_positions": 0,
       "k": 100,
       "gen_len": 100,
-      "note": "per-position detail in doc/full_model/evidence_misses_*.json"
+      "note": "per-position detail in doc/optimized_full_model/evidence_misses_*.json"
     },
     "split_sampling": {
       "deterministic_across_calls": true,

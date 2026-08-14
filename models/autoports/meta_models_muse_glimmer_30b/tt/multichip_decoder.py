@@ -740,8 +740,21 @@ _CCL_SEMAPHORES: dict[int, dict] = {}
 
 
 def close_multichip_mesh(mesh: ttnn.MeshDevice, *, fabric_config: ttnn.FabricConfig | None = FABRIC_CONFIG) -> None:
-    """Close a mesh opened by :func:`open_multichip_mesh` and drop the fabric."""
+    """Close a mesh opened by :func:`open_multichip_mesh` and drop the fabric.
+
+    Both ``id(mesh)``-keyed semaphore caches are dropped, not just this module's.  Round 5
+    of the stage review pointed out that the model's own cache
+    (``tt.model._MODEL_CCL_SEMAPHORES``, for the terminal all-gathers) was never cleared,
+    which leaves 4 global semaphores per closed mesh alive **and** exposes the ``id()``-reuse
+    hazard that :meth:`MuseGlimmerGenerator._kv_cache_signature` explicitly rejects for
+    exactly this reason: a freed ``MeshDevice`` wrapper's id can be handed to the next one,
+    and the next mesh would then find and reuse semaphores belonging to a dead device.
+    """
     _CCL_SEMAPHORES.pop(id(mesh), None)
+    # Imported here rather than at module scope: ``tt.model`` imports this module.
+    from models.autoports.meta_models_muse_glimmer_30b.tt.model import _MODEL_CCL_SEMAPHORES
+
+    _MODEL_CCL_SEMAPHORES.pop(id(mesh), None)
     ttnn.close_mesh_device(mesh)
     if fabric_config is not None:
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
