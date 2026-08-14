@@ -53,24 +53,27 @@ WD_AHEAD = 1
 #: Experimental full-size-M-slot W_down schedule.  For an 11x8 grid, the eight reduce rows each own one
 #: complete M tile-row after the reduce-scatter.  Gather those row fragments horizontally and run
 #: eight M=1, K=HID_T matmuls instead of eleven M=8, K=HN_PAD accumulating matmuls.
-WD_MROW_ROUNDS = True
+#: Mirrors the C++ knob of the same name. weight_memory_configs() derives the caller's ND-shard
+#: widths from this module, so any knob that moves hn_pad or wd_ec_max must be read here too --
+#: otherwise the placement no longer matches the geometry the kernels were compiled with.
+WD_MROW_ROUNDS = os.environ.get("MOE_WD_MROW", "1") not in ("0", "false", "False")
 
 #: Large-M phase-2 schedule: pair the eight token rows into two independent four-row multicast
 #: groups. Each group partitions output emb across 44 cores, halving h fan-out. The extra resident
 #: W_down width is paid once per dispatch, so only dispatches with this many complete M blocks use
 #: it; the kernel also requires m_t to be an exact M_BLOCK multiple so no tail changes ownership.
-WD_MGROUPS = False
+WD_MGROUPS = os.environ.get("MOE_WD_MGROUPS", "0") not in ("0", "false", "False")
 WD_MGROUP_MIN_BLOCKS = 4
 
 #: Cross-M-block weight residency: every weight read is a pure function of this core's
 #: kstart/hstart/jstart with no M-block index, so b > 0 re-reads bytes already in the CB slot.
 #: gate/up -9.36 %, W_down a further -2.04 %.
 W_RESIDENT = True
-WD_RESIDENT = True
+WD_RESIDENT = os.environ.get("MOE_WD_RESIDENT", "1") not in ("0", "false", "False")
 
 #: Hidden-axis chunks the gate/up weight stream is published and consumed in, so the matmul on
 #: chunk c overlaps the DRAM read of c+1. Clamped below to a divisor of HN_PAD.
-GU_CHUNKS = 3
+GU_CHUNKS = int(os.environ.get("MOE_GU_CHUNKS", "3"))
 
 #: Hold the writer's W_up stream until this core's reader has staged x, so the 3.67 MB activation
 #: stream is not queued behind 16.5 MB of weights.
