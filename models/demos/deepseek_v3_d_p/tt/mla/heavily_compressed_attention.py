@@ -46,9 +46,6 @@ class _TtHCABase(LightweightModule):
         return hidden, seq_len_actual
 
     def _to_tt_linear_weight(self, weight: torch.Tensor, tp_shard_dim: int | None = None):
-        # tp_shard_dim indexes the transposed 4D weight [1, 1, in, out]: 2 = contraction (in), 3 = output.
-        # Handed over at its source dtype: from_torch quantizes straight to weights_dtype, and a bf16
-        # stop on the way to bfloat8_b would pre-round away what the block exponent could still keep.
         torch_weight = weight.detach().transpose(-2, -1).contiguous().unsqueeze(0).unsqueeze(0)
         return self._from_torch(
             torch_weight, mesh_mapper=self._mesh_mapper(tp_dim=tp_shard_dim), dtype=self.weights_dtype
@@ -83,10 +80,6 @@ class _TtHCABase(LightweightModule):
         if dims == [None, None]:
             return ttnn.ReplicateTensorToMesh(self.device)
         return ttnn.ShardTensor2dMesh(self.device, mesh_shape=tuple(self.device.shape), dims=dims)
-
-    def _f32(self, x: torch.Tensor, mesh_mapper=None):
-        """The mask comparisons run in float32: bf16 is only exact on integers to 256."""
-        return self._from_torch(x, mesh_mapper=mesh_mapper, dtype=ttnn.float32)
 
     def _scalar_buffer(self, dtype, shape=(1, 1, 1, 1), layout=ttnn.TILE_LAYOUT):
         """A one-element device tensor, allocated once and then overwritten by ``_push_scalar``. Values
@@ -239,9 +232,15 @@ class TtHCACompressor(_TtHCABase):
         rate = self.compress_rate
         return {
             "seq": seq_global,
-            "thr": self._f32(((torch.arange(seq_global) + 1) // rate).float().view(1, 1, seq_global, 1), sp_mapper),
-            "ic": self._f32(torch.arange(seq_global).float().view(1, 1, seq_global, 1), sp_mapper),
-            "w": self._f32(torch.arange(width).float().view(1, 1, 1, width)),
+            "thr": self._from_torch(
+                ((torch.arange(seq_global) + 1) // rate).float().view(1, 1, seq_global, 1),
+                sp_mapper,
+                dtype=ttnn.float32,
+            ),
+            "ic": self._from_torch(
+                torch.arange(seq_global).float().view(1, 1, seq_global, 1), sp_mapper, dtype=ttnn.float32
+            ),
+            "w": self._from_torch(torch.arange(width).float().view(1, 1, 1, width), dtype=ttnn.float32),
             "ec": self._scalar_buffer(ttnn.float32),
             "rl": self._scalar_buffer(ttnn.float32),
         }
@@ -495,26 +494,35 @@ class TtHCA(_TtHCABase):
         chunk's carry is real. In ``allowed = (j >= 0) & (j <= i) & (i - j < sw)`` the global offset
         kv_actual cancels out of the last two conditions, so the first chunk differs in nothing else.
 
-        Everything is built from four small index vectors, so no large host tensor is ever created."""
+        Everything is built from four small index vectors, so no large host tensor is ever created. They
+        are float32 and not bfloat16 because the comparisons are on whole numbers past 256, where
+        bfloat16 stops being exact."""
         carry, sw = self.sliding_window, self.sliding_window
         raw = carry + seq_global
         sk_pad = -(-(raw + cap) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
         sp_mapper = self._mesh_mapper(sp_dim=2)
 
-        ic = self._f32(torch.arange(seq_global).float().view(1, 1, seq_global, 1), sp_mapper)
-        ic_lo = self._f32((torch.arange(seq_global) - sw).float().view(1, 1, seq_global, 1), sp_mapper)
-        jc = self._f32((torch.arange(raw) - carry).float().view(1, 1, 1, raw))
+        ic = self._from_torch(torch.arange(seq_global).float().view(1, 1, seq_global, 1), sp_mapper, dtype=ttnn.float32)
+        ic_lo = self._from_torch(
+            (torch.arange(seq_global) - sw).float().view(1, 1, seq_global, 1), sp_mapper, dtype=ttnn.float32
+        )
+        jc = self._from_torch((torch.arange(raw) - carry).float().view(1, 1, 1, raw), dtype=ttnn.float32)
 
         # j <= i  and  i - j < sw, both with kv_actual cancelled
         sliding = ttnn.typecast(ttnn.log(ttnn.multiply(ttnn.le(jc, ic), ttnn.gt(jc, ic_lo))), self.dtype)
 
         zero_seq = ttnn.multiply(ic, 0.0)
-        blank = ttnn.typecast(ttnn.add(zero_seq, self._f32(torch.zeros(1, 1, 1, cap))), self.dtype)
+        blank = ttnn.typecast(
+            ttnn.add(zero_seq, self._from_torch(torch.zeros(1, 1, 1, cap), dtype=ttnn.float32)), self.dtype
+        )
         parts = [sliding, blank]
         pad_w = sk_pad - raw - cap
         if pad_w:
             parts.append(
-                ttnn.typecast(ttnn.log(ttnn.add(zero_seq, self._f32(torch.zeros(1, 1, 1, pad_w)))), self.dtype)
+                ttnn.typecast(
+                    ttnn.log(ttnn.add(zero_seq, self._from_torch(torch.zeros(1, 1, 1, pad_w), dtype=ttnn.float32))),
+                    self.dtype,
+                )
             )
         self._mask = ttnn.concat(parts, dim=3)
         self._mask_col = raw
@@ -527,7 +535,10 @@ class TtHCA(_TtHCABase):
         # second full mask instead cost 1.1 ms on device for the same information.
         self._carry_cols = {
             False: ttnn.slice(sliding, [0, 0, 0, 0], [1, 1, sliding.shape[2], carry]),
-            True: ttnn.typecast(ttnn.log(ttnn.multiply(zero_seq, self._f32(torch.zeros(1, 1, 1, carry)))), self.dtype),
+            True: ttnn.typecast(
+                ttnn.log(ttnn.multiply(zero_seq, self._from_torch(torch.zeros(1, 1, 1, carry), dtype=ttnn.float32))),
+                self.dtype,
+            ),
         }
 
     def alloc_state(self, max_seq_len: int, batch: int = 1, chunk_tokens: int | None = None) -> TtHCAState:
