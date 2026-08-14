@@ -522,7 +522,7 @@ def _fullpipe_e2e_inner(repo_root: Path, mcp_env: dict, devices: str, label: str
     # describes the whole model; budgeting it from the capped profile's history killed it at 1686 s
     # (6 x a 281 s capped baseline) when it needed 1734 s. `fullpipe` has its own history and its own
     # cold start, expressed in baseline-profile units like every other op.
-    _fp_op = timed_op_for(env, "profile")
+    _fp_op = "fullpipe"
     rc, out = _run_device_proc(
         [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
         repo_root / PERF_DIR,
@@ -2749,7 +2749,16 @@ def _wait_for_thermal_headroom_before_device_work(label: str = "") -> None:
 
 
 def timed_op_for(env, fallback: str = "profile") -> str:
-    """Which timing bucket a device run belongs to, decided by the run itself.
+    """DEPRECATED -- kept only so an external caller does not break. Do not route by this.
+
+    "Uncapped" is NOT the same question as "which operation". The coverage probe removes the cap on
+    purpose (set_depth(env, 0)) to see every layer, and it is CHEAP -- one forward at OSL=1, 80-135 s.
+    Routing on the cap therefore filed those probes in the same bucket as the full-pipeline
+    measurement: [135.3, 80.1, 453.9], p95 135.3, budget 3 x 135 = 406 s for a run that needs ~1700 s.
+    That is worse than the capped bucket it replaced, which at least gave 1686 s.
+
+    An operation is named by what it IS, at the one call site that performs it.
+
 
     THE BUCKET WAS A TYPED STRING AND THE RUNS WERE NOT THE SAME SIZE. Every device subprocess filed
     its duration under `observe_op="profile"`, so a 25 s capped probe and a 2144 s uncapped
@@ -2899,11 +2908,7 @@ def _run_device_proc(
         # So it records in `finally`, on the timeout path as much as the success path, exactly as
         # _fullpipe_e2e already does for "pcc". A hard-limit kill at 900 s becomes 900 s of observed
         # cost, and the next budget is 6x that instead of a constant.
-        # THE BUCKET IS DECIDED BY THE RUN, NOT BY THE CALLER'S STRING. A caller naming "profile" for
-        # an uncapped full-model measurement filed a 2144 s run beside 25 s probes; timed_op_for reads
-        # the cap out of the environment actually launched and routes it to its own history.
         if observe_op and observe_root is not None:
-            observe_op = timed_op_for(env, observe_op)
             try:
                 record_observed(observe_root, observe_op, time.monotonic() - _obs_t0)
             except Exception:  # noqa: BLE001

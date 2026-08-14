@@ -36,36 +36,30 @@ def _run():
     return mod
 
 
-def test_a_capped_run_is_timed_as_a_profile():
-    run = _run()
-    assert run.timed_op_for({"TT_PERF_LAYERS": "2"}) == "profile"
+def test_the_coverage_probe_is_not_mistaken_for_the_full_model_run():
+    """UNCAPPED IS NOT THE SAME QUESTION AS WHICH OPERATION -- the first version of this fix got that
+    wrong and made the budget smaller.
 
+    The coverage probe removes the cap ON PURPOSE (set_depth(env, 0)) so it can see every layer, and
+    it is cheap: one forward at OSL=1, measured at 80-135 s. Routing on "is the cap absent" therefore
+    filed those probes beside the full-pipeline measurement:
 
-def test_an_uncapped_run_gets_its_own_bucket():
-    """ALL LAYERS is expressed by ABSENCE -- never by a sentinel, because "0" arrives truthy."""
-    run = _run()
-    assert run.timed_op_for({}) == "fullpipe"
-    assert run.timed_op_for({"TT_PERF_OSL_TOKENS": "1"}) == "fullpipe"
+        fullpipe: [135.3, 80.1, 453.9]     p95 135.3  ->  budget 3 x 135 = 406 s
 
-
-def test_a_non_numeric_cap_is_not_a_cap():
-    """The dict-into-TT_PERF_LAYERS defect wrote "{'stack3': 2}", which every model reads as no cap."""
-    run = _run()
-    assert run.timed_op_for({"TT_PERF_LAYERS": "{'stack3': 2, 'stack2': 2}"}) == "fullpipe"
-    assert run.timed_op_for({"TT_PERF_LAYERS": ""}) == "fullpipe"
-
-
-def test_the_callers_label_cannot_override_the_run():
-    """The bug was a typed string. A caller naming "profile" for an uncapped run must not win."""
-    run = _run()
-    assert run.timed_op_for({}, "profile") == "fullpipe"
+    for a run that needs ~1700 s -- worse than the 1686 s it inherited from the capped bucket before.
+    An operation is named by what it IS, at the one call site that performs it.
+    """
+    src = (_PA / "cc_optimize" / "run.py").read_text()
+    i = src.index("def _run_device_proc(")
+    body = src[i : src.index("\ndef ", i + 1)]
+    assert "timed_op_for(env, observe_op)" not in body, "the runner still routes by the environment"
 
 
 def test_the_full_model_measurement_budgets_from_its_own_bucket():
     src = (_PA / "cc_optimize" / "run.py").read_text()
     i = src.index('f"full-pipeline ({label})"')
     window = src[max(0, i - 900) : i + 400]
-    assert "_fp_op = timed_op_for(env" in window, "the full-model run still takes a hardcoded op"
+    assert '_fp_op = "fullpipe"' in window, "the full-model run does not name its own operation"
     assert "adaptive_timer(repo_root, _fp_op" in window, "its budget is not drawn from its own bucket"
     assert 'observe_op="profile"' not in window, "it still files its duration under the capped bucket"
 
@@ -76,9 +70,3 @@ def test_the_new_bucket_has_a_cold_start():
     run = _run()
     assert run._OP_IN_BASE_UNITS.get("fullpipe", 0) >= 7.0, run._OP_IN_BASE_UNITS
     assert "fullpipe" in run._OP_MULT
-
-
-def test_the_runner_routes_by_environment_not_by_argument():
-    src = (_PA / "cc_optimize" / "run.py").read_text()
-    i = src.index("if observe_op and observe_root is not None:")
-    assert "observe_op = timed_op_for(env, observe_op)" in src[i : i + 300], "the runner trusts the caller's label"
