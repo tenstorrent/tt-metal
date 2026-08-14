@@ -8,7 +8,7 @@
   "cache_slots": 1,
   "layers": "all",
   "build_kwargs": {},
-  "build_seconds": 157.3,
+  "build_seconds": 156.0,
   "capacity": {
     "hf_model": "meta-models/Muse-Glimmer-30B",
     "supported_context": 131072,
@@ -145,38 +145,38 @@
       "batch": 1
     },
     "ttft_ms": {
-      "min": 65.9392730158288,
-      "mean": 67.84978699094306,
+      "min": 64.64119398151524,
+      "mean": 66.2597419868689,
       "rounds": [
-        67.96674698125571,
-        69.64334097574465,
-        65.9392730158288
+        65.75341799180023,
+        68.38461398729123,
+        64.64119398151524
       ]
     },
     "token_out_decode_ms_per_token": {
-      "min": 23.814855480298956,
-      "mean": 23.82961509444047,
+      "min": 23.825498007688907,
+      "mean": 23.85471622826864,
       "rounds": [
-        23.850108330700856,
-        23.814855480298956,
-        23.82388147232159
+        23.858526047167008,
+        23.880124629950004,
+        23.825498007688907
       ]
     },
-    "token_out_decode_tok_s_u": 41.99059703835947,
+    "token_out_decode_tok_s_u": 41.97184040716725,
     "traced_decode_logits_only_ms_per_token": {
-      "min": 23.163635750279354,
-      "mean": 23.16475182275705,
+      "min": 23.16347775013128,
+      "mean": 23.16432762503003,
       "replays_per_round": 32,
       "rounds": [
-        23.163635750279354,
-        23.16512043671537,
-        23.165499281276425
+        23.16347775013128,
+        23.1649534061944,
+        23.164551718764415
       ]
     },
-    "traced_decode_logits_only_tok_s_u": 43.171115742827205,
+    "traced_decode_logits_only_tok_s_u": 43.171410216858845,
     "sampling_trace_ms_per_token": {
-      "min": 0.6323479374259477,
-      "mean": 0.6324992709778599
+      "min": 0.6321464688880951,
+      "mean": 0.6323355834562486
     },
     "layer_stack_lower_bound_ms_per_token": {
       "sliding_layers": 39,
@@ -185,7 +185,7 @@
       "full_ms_per_layer": 0.4238,
       "total_ms": 23.2388,
       "tok_s_u": 43.03148183210837,
-      "source": "doc/optimized_multichip_decoder/bench/layer_ab.py --candidates tp4,tp4b --decode-context 2048, on this stage's shipped default (doc/optimized_full_model/logs/layer_ab_after.log)"
+      "source": "the optimized multichip decoder stage's README, i.e. the *pre-stage* per-layer decode, hardcoded here as BASELINE_SLIDING/FULL_MS_PER_LAYER so the --baseline arm's floor is the floor its own layers have. Not re-measured by this run and not from layer_ab_after.log, which contains only the after-arms."
     },
     "baseline_arm": true,
     "prefill_trace_arm": false,

@@ -19,7 +19,7 @@
     "embedding_rows_read_bytes": 106496,
     "kv_cache_read_bytes_at_context_192": 2715648,
     "assumed_per_device_dram_bandwidth_bytes_per_s": 512000000000,
-    "bandwidth_source": "back-derived from tt-perf-report's own DRAM% on the LM-head row (280 GB/s = 54.6%) and the QKV row (371 GB/s = 72.4%)"
+    "bandwidth_source": "back-derived from tt-perf-report's own DRAM% on this stage's decode_sliding capture: the LM-head row id 3139 (279.38 GB/s = 54.5666%) and the wqkv row id 3039 (394.85 GB/s = 77.1192%). Both return 512.0 GB/s, which is the tool's assumed peak, not an independent measurement."
   },
   "roofline_fraction_of_e2e": 0.3787,
   "layer_stack_lower_bound_ms_per_token": 22.858,

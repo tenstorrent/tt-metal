@@ -322,10 +322,9 @@ class MuseGlimmerGenerator(Generator):
         #: KV-cache buffer addresses the prefill traces were captured over; see
         #: :meth:`_kv_cache_signature`.
         self._prefill_trace_cache_sig: tuple = ()
-        #: Set once a cache move has forced a release.  Prefill tracing then stays off for
-        #: the life of this generator; see
-        #: :meth:`_invalidate_prefill_traces_if_cache_moved`.
-        self._prefill_trace_retired = False
+        #: How many times a cache move has forced a release, for the log line and for the
+        #: stage's evidence; see :meth:`_invalidate_prefill_traces_if_cache_moved`.
+        self._prefill_trace_releases = 0
         self._device_inputs: dict[str, ttnn.Tensor] = {}
         self._prev_page_table: torch.Tensor | None = None
         self._needs_reseed = True
@@ -481,7 +480,6 @@ class MuseGlimmerGenerator(Generator):
         # ``prompt_len`` is never read: decode starts at ``cur_pos = prompt_len``.
         if (
             self.gen_config.prefill_trace
-            and not self._prefill_trace_retired
             and not return_all_logits
             and user_id == 0
             and prompt_len <= config.prefill_chunk_size
@@ -617,46 +615,61 @@ class MuseGlimmerGenerator(Generator):
         return tuple(sig)
 
     def _invalidate_prefill_traces_if_cache_moved(self) -> None:
-        """Release the prefill traces only when the bound cache buffers actually changed."""
+        """Release the prefill traces only when the bound cache buffers actually changed.
+
+        The comparison is the whole fix.  ``kv_cache is not None`` -- what this used to
+        test -- releases on *every* call, so a serving caller threading the same external
+        handles per request would recapture per request and pay ~83 ms/request more than
+        the eager path the flag is supposed to beat.  Comparing addresses releases only on
+        a genuine rebind, which is a once-per-adapter event.
+
+        An earlier revision also *retired* tracing permanently after the first release, as
+        a mitigation for the fabric ERISC assert in the stage README's limitation 6.  It
+        was never a mitigation for it.  That assert fires at **process teardown**, and
+        ``teardown()`` releases the prefill traces whether or not tracing was retired, so
+        retirement removed no exposure at all; what it did remove was the caller's flag —
+        one cache rebind and prefill fell back to the eager path for the life of the
+        generator, silently.  (The sequence retirement was aimed at, release-then-build-
+        another-model, is separately clean under watcher: see
+        ``prefill_trace_release_probe.py --arm rebuild`` and the two opt-in cases run
+        together in one process.)  So: release on a genuine move, and let the next
+        eligible prefill recapture.  That costs one 98 ms capture at the rebind and
+        nothing after it.
+        """
         if not self._prefill_traces:
             return
         if self._kv_cache_signature() == self._prefill_trace_cache_sig:
             return
-        # Release, and then stay off.  Recapturing here would work -- the tokens match --
-        # but releasing a prefill trace and then building and running *another* model on
-        # the same mesh in the same process trips a fabric ERISC watcher assert
-        # (``subordinate_erisc detected invalid NOC command buffer state ...
-        # fabric_erisc_router.cpp`` on acteth core 29-25).  The four isolated arms of
-        # ``doc/optimized_full_model/bench/prefill_trace_release_probe.py`` -- capture,
-        # release, recapture, clone-cache -- are each watcher-clean, so this is a
-        # cross-generator interaction rather than a defect in the release itself; see the
-        # stage README's limitation on it.  Retiring after the first release keeps the
-        # shipped opt-in path to *at most one* release per generator and never recaptures
-        # after one, which is the smallest exposure to it that still serves the caller the
-        # flag is for: a serving adapter binds its cache once and then reuses it.
+        self._prefill_trace_releases += 1
         logger.warning(
             "MuseGlimmerGenerator: the KV cache was rebound to different buffers; releasing the "
-            "prefill traces and retiring prefill tracing for this generator (prefill falls back to "
-            "the eager path). Bind the cache before the first prefill to keep it."
+            f"prefill traces (release {self._prefill_trace_releases}). The next eligible prefill "
+            "recaptures against the new buffers; bind the cache before the first prefill to avoid "
+            "paying for that."
         )
         self._release_prefill_traces()
-        self._prefill_trace_retired = True
 
     def _release_prefill_traces(self) -> None:
         """Drop every prefill trace.  Their KV-cache addresses are baked in, so this is
         mandatory whenever the cache is rebound to *different* buffers.
 
-        The synchronisation is not defensive tidiness.  A prefill trace contains fabric
-        collectives, and releasing it -- then freeing the buffers it referenced -- while
-        the fabric may still have work in flight trips a watcher assert on the ethernet
-        router: *"subordinate_erisc detected invalid NOC command buffer state before
-        starting the next kernel (write-capable NOC packet tags must be zero so implicit
-        transaction ID users start with transaction ID 0). Current kernel:
-        fabric_erisc_router.cpp"* on ``acteth core virtual(x=29,y=25)``.  That is what the
-        first watcher run of this path did
-        (``doc/optimized_full_model/logs/watcher_bisect_rebind.log``); draining first is
-        the fix, and it is verified by re-running the same watcher case.  It is outside
-        any steady-state loop -- releases happen at a cache rebind or at teardown.
+        A prefill trace contains fabric collectives, so the drains around the release are
+        ordinary async-CCL hygiene: nothing is deallocated while the fabric may still have
+        work in flight.  They are outside any steady-state loop -- releases happen at a
+        cache rebind or at teardown -- so they cost nothing per token.
+
+        What they are *not* is the fix for the one watcher trip this path ever produced
+        (``doc/optimized_full_model/logs/watcher_bisect_rebind.log``: *"subordinate_erisc
+        detected invalid NOC command buffer state ... fabric_erisc_router.cpp"* on
+        ``acteth core virtual(x=29,y=25)``).  Draining first was tried and did not move it.
+        The cause was in the test: it freed a *cloned* KV cache while a trace holding those
+        addresses was still alive.  Releasing the trace before freeing the cache fixed it
+        (``logs/watcher_bisect_rebind_fixed.log``), and the release path is watcher-clean
+        in the gated suite, in both opt-in cases run together in one process, and in
+        ``prefill_trace_release_probe.py --arm rebuild``.  A *separate* teardown-time trip
+        does survive when those opt-in cases share a process with the other ten gated
+        cases; it is README limitation 6, it happens after every test has passed, and it
+        is not this function's ordering.
         """
         if self._prefill_traces:
             ttnn.synchronize_device(self.mesh_device)

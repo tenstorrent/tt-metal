@@ -1007,7 +1007,8 @@ def test_prefill_trace_survives_rebinding_the_same_external_cache(mesh):
     request -- 98 ms of capture plus a 45 ms replay against a 60 ms eager prefill, i.e.
     the flag would make that caller ~83 ms/request slower.  This pins the identity
     comparison: same handles -> one capture and then replays; different handles -> the
-    traces go, because their baked addresses no longer point at the caller's cache.
+    traces go, because their baked addresses no longer point at the caller's cache, and
+    the next prefill recaptures against the new ones.
     """
     clear_generator_cache()
     generator = build_generator(
@@ -1037,11 +1038,10 @@ def test_prefill_trace_survives_rebinding_the_same_external_cache(mesh):
             assert torch.equal(again.argmax(dim=-1), first.argmax(dim=-1))
         assert generator._prefill_trace_cache_sig == signature
 
-        # A cache bound to *different* buffers must release them -- the baked addresses
-        # would otherwise write the old buffers and the caller would read zeros -- and
-        # then *retire* prefill tracing for this generator rather than recapturing, which
-        # is what keeps the shipped path to at most one release (see
-        # ``_invalidate_prefill_traces_if_cache_moved`` for the fabric-ERISC reason).
+        # A cache bound to *different* buffers must release the old traces -- the baked
+        # addresses would otherwise write the old buffers and the caller would read zeros
+        # -- and then recapture against the new ones, so the caller keeps the flag it
+        # asked for instead of being silently downgraded to eager prefill forever.
         moved = [
             [ttnn.clone(k, memory_config=k.memory_config()), ttnn.clone(v, memory_config=v.memory_config())]
             for k, v in own
@@ -1049,24 +1049,27 @@ def test_prefill_trace_survives_rebinding_the_same_external_cache(mesh):
         try:
             generator.reset()
             out = generator.prefill_forward(torch.tensor([prompt]), kv_cache=moved, prompt_lens=[len(prompt)])
-            assert generator._prefill_traces == {}, "a moved cache must release every prefill trace"
-            assert generator._prefill_trace_retired is True, "and must retire prefill tracing"
-            assert generator._prefill_trace_cache_sig == ()
-            # The request still succeeds, through the eager path, with the same prediction.
+            assert generator._prefill_trace_releases == 1, "a moved cache must release the prefill traces"
+            assert list(generator._prefill_traces) == [96], "and then recapture against the new buffers"
+            recaptured = {k: v["id"] for k, v in generator._prefill_traces.items()}
+            assert recaptured != {k: v["id"] for k, v in captured.items()}, "with new trace ids"
+            assert generator._prefill_trace_cache_sig not in ((), signature)
             assert torch.equal(out.argmax(dim=-1), first.argmax(dim=-1))
-            # ...and a later request does not recapture.
+            # ...and a later request on the same moved cache reuses the recapture rather
+            # than releasing again.
             generator.reset()
             generator.prefill_forward(torch.tensor([prompt]), kv_cache=moved, prompt_lens=[len(prompt)])
-            assert generator._prefill_traces == {}
+            assert {k: v["id"] for k, v in generator._prefill_traces.items()} == recaptured
+            assert generator._prefill_trace_releases == 1
         finally:
             # Order matters, and getting it wrong is what the watcher caught: the
             # recaptured trace holds the *moved* cache's buffer addresses, so freeing
             # those buffers while it still exists is a use-after-free.  It shows up as
             # ``subordinate_erisc detected invalid NOC command buffer state ...
             # fabric_erisc_router.cpp`` on acteth core 29-25, not as a wrong number
-            # (``doc/optimized_full_model/logs/watcher_bisect_rebind.log``; the four
-            # isolated arms of ``bench/prefill_trace_release_probe.py`` are clean, which
-            # is what localised it to this cleanup rather than to the release path).
+            # (``doc/optimized_full_model/logs/watcher_bisect_rebind.log``).  This is a
+            # live hazard in this test, not a historical note: the assertions above
+            # require a trace over ``moved`` to exist at this point.
             generator._release_prefill_traces()
             generator.model.set_kv_cache(own)
             for pair in moved:

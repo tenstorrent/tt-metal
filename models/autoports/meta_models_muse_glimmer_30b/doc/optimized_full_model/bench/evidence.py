@@ -103,9 +103,20 @@ def main() -> int:
             "total_ms": total,
             "tok_s_u": 1e3 / total,
             "source": (
-                "doc/optimized_multichip_decoder/bench/layer_ab.py --candidates tp4,tp4b "
-                "--decode-context 2048, on this stage's shipped default "
-                "(doc/optimized_full_model/logs/layer_ab_after.log)"
+                (
+                    "the optimized multichip decoder stage's README, i.e. the *pre-stage* "
+                    "per-layer decode, hardcoded here as BASELINE_SLIDING/FULL_MS_PER_LAYER "
+                    "so the --baseline arm's floor is the floor its own layers have. Not "
+                    "re-measured by this run and not from layer_ab_after.log, which contains "
+                    "only the after-arms."
+                )
+                if baseline
+                else (
+                    "doc/optimized_multichip_decoder/bench/layer_ab.py --candidates tp4,tp4b "
+                    "--decode-context 2048, on this stage's shipped default "
+                    "(doc/optimized_full_model/logs/layer_ab_after.log), hardcoded here as "
+                    "SLIDING/FULL_MS_PER_LAYER rather than re-measured by this run"
+                )
             ),
         }
         out["baseline_arm"] = baseline

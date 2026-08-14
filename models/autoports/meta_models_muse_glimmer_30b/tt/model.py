@@ -160,7 +160,7 @@ LM_HEAD_OUTPUT_DTYPE = ttnn.bfloat16
 #: shard set are pad.  That is safe for this pair specifically: ``tanh`` is bounded
 #: on every input including NaN-free garbage, the scalar multiply keeps it bounded,
 #: and ``sharded_to_interleaved`` reconstructs the logical width, so no padded lane
-#: can reach the sampler.  ``test_lm_head_softcap_layout_is_equivalent`` pins the
+#: can reach the sampler.  ``test_lm_head_softcap_runs_in_l1_and_matches_the_dram_form`` pins the
 #: equivalence on the device rather than on this argument.
 LM_HEAD_SOFTCAP_IN_L1 = True
 

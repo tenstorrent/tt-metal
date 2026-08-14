@@ -19,6 +19,22 @@ release into its three parts, each arm on a fresh process:
 ``release``        capture, then release the trace and free its buffers.
 ``recapture``      capture, release, capture again, replay again.
 ``clone_cache``    clone the 104 KV-cache tensors and free them, no trace release at all.
+``rebuild``        capture, tear the generator down (which releases the trace), then build a
+                   *second* generator on the same still-open mesh and prefill+decode with it.
+
+The first four arms are all negative controls: none of them builds a second model after a
+release, so a clean result from them bounds nothing.  ``rebuild`` was added as the
+positive-arm *candidate* -- it is the exact sequence this stage once blamed for the fabric
+ERISC assert ("release a prefill trace, then build and run another model on the same
+mesh"), which is also what running the two opt-in tests in one pytest process does through
+the module fixture.
+
+It comes back **clean** (``logs/watcher_probe_rebuild.log``, ``watcher_probe_rebuild/``:
+``WATCHER_CLEAN``, 4 attach / 4 detach), and so does the two-test pair.  That does not
+retract the assert -- it reproduces at teardown when those two tests share a process with
+the other ten gated cases -- but it does retract the *statement* of it: that sequence is
+not sufficient.  See README limitation 6.  This arm is kept because it is the cheapest way
+for a later stage to re-test the sequence directly.
 
 Run each arm under watcher, one at a time, resetting the devices in between::
 
@@ -51,7 +67,7 @@ from models.autoports.meta_models_muse_glimmer_30b.tt.multichip_decoder import (
 )
 
 OUT = ROOT / "doc/optimized_full_model"
-ARMS = ("capture", "release", "recapture", "clone_cache")
+ARMS = ("capture", "release", "recapture", "clone_cache", "rebuild")
 
 
 def say(*args) -> None:
@@ -67,16 +83,22 @@ def main() -> int:
     args = parser.parse_args()
 
     mesh = open_multichip_mesh(trace_region_size=DEFAULT_TRACE_REGION_SIZE)
-    generator = None
-    try:
+    built: list = []
+
+    def build(**kwargs):
         generator = build_generator(
             ROOT,
             mesh,
             max_seq_len=args.max_seq_len,
             layer_indices=[int(i) for i in args.layers.split(",")],
             reuse=False,
-            prefill_trace=True,
+            **kwargs,
         )
+        built.append(generator)
+        return generator
+
+    try:
+        generator = build(prefill_trace=True)
         torch.manual_seed(3)
         prompt = [int(t) for t in torch.randint(0, generator.model.config.vocab_size, (args.length,)).tolist()]
         own = generator.model.kv_cache
@@ -106,6 +128,32 @@ def main() -> int:
             say("PR_OK arm=capture")
             return 0
 
+        if args.arm == "rebuild":
+            # The named sequence, in one process on the still-open mesh: tear the first
+            # generator down (``teardown()`` calls ``_release_prefill_traces()``), then
+            # build a second model and actually run it.  This is what the module fixture
+            # does between the two opt-in tests.
+            generator.teardown()
+            built.remove(generator)
+            clear_generator_cache()
+            say("PR tore down the first generator (its prefill trace was released)")
+            second = build()
+            say("PR built a second generator on the same mesh")
+            second.prefill_forward(
+                tokens=torch.tensor([prompt], dtype=torch.long),
+                kv_cache=second.model.kv_cache,
+                prompt_lens=[len(prompt)],
+            )
+            token = second.decode_forward(
+                tokens=torch.tensor([[prompt[-1]]], dtype=torch.long),
+                start_pos=torch.tensor([len(prompt)], dtype=torch.int32),
+                kv_cache=second.model.kv_cache,
+                sample_on_device=True,
+            )
+            say(f"PR ran prefill+traced-decode on the second generator (token={int(token[0])})")
+            say("PR_OK arm=rebuild")
+            return 0
+
         generator._release_prefill_traces()
         say("PR released")
         if args.arm == "release":
@@ -118,7 +166,7 @@ def main() -> int:
         say("PR_OK arm=recapture")
         return 0
     finally:
-        if generator is not None:
+        for generator in built:
             generator.teardown()
         clear_generator_cache()
         close_multichip_mesh(mesh)

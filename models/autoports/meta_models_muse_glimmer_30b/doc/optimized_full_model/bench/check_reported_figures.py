@@ -36,7 +36,13 @@ checks = 0
 resolved: list[tuple[str, str]] = []
 #: The count this file advertises in the README and the work log.  Asserted, so the
 #: number cannot drift the way the previous one did.
-ADVERTISED_CHECKS = 328
+#:
+#: Round 3 of the stage review pointed out the obvious limit of this: the count freezes
+#: how many checks there are, not what they cover, and 328/328 passed while six figures in
+#: sections this file never opened were wrong.  ``SOURCES`` below is the other half --
+#: adding an unchecked section that needs a new artifact now fails on a missing source
+#: rather than sliding past on an unchanged count.
+ADVERTISED_CHECKS = 479
 
 
 def load(path: pathlib.Path):
@@ -78,6 +84,18 @@ def same(name: str, got, want, *, readme: str | None = None) -> None:
         failures.append(f"{name}: got {got!r}, README says {want!r}")
 
 
+def bind(name: str, literal: str) -> None:
+    """Register a literal for the README cross-check without a vacuous numeric compare.
+
+    ``same(x, True, True)`` reads like an assertion and is not one; the only thing those
+    calls ever carried was the ``readme=`` registration.  This says that plainly.
+    """
+    global checks
+    checks += 1
+    resolved.append((name, literal))
+    print(f"bind {name}: {literal}")
+
+
 def csv_rows(name: str) -> list[dict]:
     return list(csv.DictReader(open(D / "tracy" / name)))
 
@@ -103,7 +121,20 @@ def main() -> int:
     # the assertion that carries weight is the README cross-check registered with it:
     # "this number is in the document" is the property that was actually being violated.
     def perf(name: str, value: float, digits: int) -> None:
-        close(name, round(value, digits), round(value, digits), readme=f"{value:.{digits}f}")
+        """Register a run-varying artifact value as a README binding, and nothing else.
+
+        Round 3 of the stage review was right that the previous form --
+        ``close(name, round(v, d), round(v, d))`` -- was numerically self-fulfilling: got
+        always equalled want, so it asserted nothing about the artifact.  The *binding* is
+        the real content ("the document still prints the number this run produced"), so
+        this now registers only that, and the printed line says so instead of dressing it
+        up as a comparison.
+        """
+        global checks
+        checks += 1
+        literal = f"{value:.{digits}f}"
+        resolved.append((name, literal))
+        print(f"bind {name}: artifact says {literal}; the README cross-check below binds it")
 
     perf("before token-out ms", before["token_out_decode_ms_per_token"]["min"], 3)
     perf("after token-out ms", after["token_out_decode_ms_per_token"]["min"], 3)
@@ -169,7 +200,7 @@ def main() -> int:
     close("after tanh (width-sharded)", device_time(sliding, "3140"), 11.64, tol=1e-2)
     close("after softcap multiply (width-sharded)", device_time(sliding, "3196"), 12.15, tol=1e-2)
     close("after logits sharded_to_interleaved", device_time(sliding, "3197"), 10.80, tol=1e-2)
-    close("after LM-head matmul", device_time(sliding, "3139"), 603.8, tol=1e-2)
+    close("after LM-head matmul", device_time(sliding, "3139"), 603.798, tol=1e-4)
     close("after SwiGLU multiply (80 cores)", device_time(sliding, "3075"), 4.75, tol=1e-2)
     reshards = [float(r["Device Time"]) for r in sliding if "Reshard" in r["OP Code"]]
     close("three SwiGLU reshards plus the LM-head one", round(sum(reshards), 2), 8.39, tol=2e-2, readme="")
@@ -255,7 +286,7 @@ def main() -> int:
         ("before token-out", before["token_out_decode_ms_per_token"]["rounds"], "{:.3f}"),
     ):
         for value in entry:
-            same(f"README prints the {label} round {fmt.format(value)}", True, True, readme=fmt.format(value))
+            bind(f"README prints the {label} round {fmt.format(value)}", fmt.format(value))
 
     # ------------------------------------------------------ performance accounting
     ps = load(D / "perf_summary.json")
@@ -399,7 +430,7 @@ def main() -> int:
     close("traced prefill payback replays", trace["payback_replays"], 6.6, tol=2e-2)
     pt = load(D / "evidence_perf_prefill_trace.json")["performance"]
     for value in pt["ttft_ms"]["rounds"]:
-        same(f"README prints the prefill-trace round {value:.2f}", True, True, readme=f"{value:.2f}")
+        bind(f"README prints the prefill-trace round {value:.2f}", f"{value:.2f}")
     improvement = (pt["ttft_ms"]["min"] - after["ttft_ms"]["min"]) / after["ttft_ms"]["min"] * 100
     perf("prefill-trace TTFT improvement %", improvement, 1)
     same("the prefill trace improves TTFT by more than 15 %", improvement < -15.0, True)
@@ -459,12 +490,24 @@ def main() -> int:
             "tripped assert" not in text(D / f"logs/watcher_prefill_trace_{tag}.log"),
             True,
         )
-    for arm in ("capture", "release", "recapture", "clone_cache"):
+    for arm in ("capture", "release", "recapture", "clone_cache", "rebuild"):
         same(
             f"the {arm} release-probe arm is watcher-clean",
             "tripped assert" not in text(D / f"logs/watcher_probe_{arm}.log"),
             True,
         )
+    # ...and the rebuild arm, unlike the other four, has a re-derivable watcher log rather
+    # than a console-only verdict, which round 3 called out as a gap for the probe arms.
+    same(
+        "the rebuild arm's watcher log is a real run",
+        "WATCHER_CLEAN" in text(D / "logs/watcher_probe_rebuild.log"),
+        True,
+    )
+    same(
+        "the rebuild arm built a second generator",
+        "PR built a second generator" in text(D / "logs/watcher_probe_rebuild.log"),
+        True,
+    )
     same(
         "the pre-fix rebind run did trip, and is preserved",
         "tripped assert" in text(D / "logs/watcher_bisect_rebind.log"),
@@ -475,7 +518,12 @@ def main() -> int:
         "tripped assert" not in text(D / "logs/watcher_bisect_rebind_fixed.log"),
         True,
     )
-    same("three watcher verdicts re-derived", text(D / "logs/check_watcher.log").count("WATCHER_CLEAN"), 3)
+    for verdict_log in (
+        "logs/check_watcher.log",
+        "logs/check_watcher_default10.log",
+        "logs/check_watcher_prefill_trace_pair.log",
+    ):
+        same(f"{verdict_log} re-derives a clean verdict", text(D / verdict_log).count("WATCHER_CLEAN"), 1)
     same("53 cases passed forward", "53 passed" in text(D / "logs/full_test_run.log"), True, readme="53 passed")
     same("53 cases passed in reverse", "53 passed" in text(D / "logs/full_test_run_reverse.log"), True)
     same("tracy integrity check passed", "TRACY_INTEGRITY_OK" in text(D / "logs/run_tracy.log"), True)
@@ -506,6 +554,322 @@ def main() -> int:
         True,
     )
 
+    # --------------------------------------- round-3 coverage: the rows the gate missed
+    #
+    # Round 3 of the stage review found six wrong figures in sections this gate did not
+    # read at all, while it passed 328/328.  Freezing the check *count* never caught that,
+    # because the count is not the coverage.  Everything below binds a row the gate
+    # previously left unchecked, and ``SOURCES`` asserts the artifacts themselves are read.
+
+    # (a) the prefill-128 capture: the two slow norms and the window total.
+    prefill_rows = csv_rows("prefill_128_perf_report.csv")
+    prefill_by_id = {r["ID"]: r for r in prefill_rows}
+    norms = sorted(
+        (r for r in prefill_rows if r["OP Code"] == "LayerNormDeviceOperation"),
+        key=lambda r: -float(r["Device Time"]),
+    )
+    same("the two slowest prefill norms are the ids the README names", [r["ID"] for r in norms[:2]], ["3579", "3886"])
+    close("prefill terminal norm us", device_time(prefill_rows, "3886"), 133.868)
+    same("the prefill terminal norm runs on one core", prefill_by_id["3886"]["Cores"], "1")
+    close("prefill embedding norm us", device_time(prefill_rows, "3579"), 133.979)
+    same("the prefill embedding norm runs on four cores", prefill_by_id["3579"]["Cores"], "4")
+    close(
+        "prefill-128 window total us",
+        round(sum(float(r["Device Time"]) for r in prefill_rows), 1),
+        2606.3,
+    )
+
+    # (b) the host-dispatch table's residual row, computed rather than transcribed.
+    oc = load(D / "prefill_opcount.json")["prefill"]
+    listed = oc["rows"][:9]
+    residual_rows = oc["rows"][9:]
+    same("the README lists the top nine op kinds", len(listed), 9)
+    same("the residual row covers the other 12 op kinds", len(residual_rows), 12)
+    same("residual calls", sum(r["calls"] for r in residual_rows), 707)
+    close("residual ms", sum(r["ms"] for r in residual_rows), 7.86, tol=2e-3)
+    same("the table's call column sums to the stated total", oc["total_calls"], sum(r["calls"] for r in oc["rows"]))
+    close("prefill opcount total ms", oc["total_ms"], 58.56)
+    close("prefill opcount wall ms", oc["wall_issue_ms"], 62.75)
+    close("the unattributed Python between calls", oc["wall_issue_ms"] - oc["total_ms"], 4.19, tol=2e-3)
+
+    # (c) the operation-topology audit, as a partition of the sliding-layer CSV.
+    sliding = csv_rows("decode_sliding_perf_report.csv")
+    groups = {
+        "LM head": (["3139"], 603.798),
+        "MLP gate/up/down": (["3071", "3127", "3132"], 190.266),
+        "wqkv + attn_gate": (["3039", "3172"], 40.772),
+        "o_proj": (["3065"], 21.368),
+        "SwiGLU multiply": (["3075"], 4.747),
+        "softcap": (["3140", "3196"], 23.786),
+        "RMSNorm x8": (["3137", "3147", "3153", "3180", "3203", "3211", "3233", "3245"], 61.628),
+        "reduce-scatter + all-gather x2": (["3231", "3232", "3243", "3244"], 54.886),
+        "SdpaDecode": (["3168"], 15.136),
+        "embedding all-gather": (["3201"], 16.498),
+        "embeddings": (["3145", "3158", "3161"], 14.331),
+        "attention glue": (
+            ["3054", "3055", "3096", "3107", "3112", "3115", "3119", "3124", "3191", "3214", "3221"],
+            39.604,
+        ),
+        "layout conversions": (
+            [
+                "3073",
+                "3076",
+                "3095",
+                "3099",
+                "3100",
+                "3105",
+                "3108",
+                "3116",
+                "3118",
+                "3129",
+                "3193",
+                "3197",
+                "3207",
+                "3212",
+                "3224",
+            ],
+            33.886,
+        ),
+        "plus_one x2": (["3143", "3254"], 1.845),
+    }
+    used: list[str] = []
+    for label, (ids, want) in groups.items():
+        used += ids
+        close(f"audit row {label!r} us", round(sum(device_time(sliding, i) for i in ids), 3), want, tol=1e-4)
+    same("the audit table's ids are unique", len(used), len(set(used)))
+    same("the audit table's ids are every row of the CSV", sorted(used), sorted(r["ID"] for r in sliding))
+    close(
+        "audit column total = the window",
+        round(sum(want for _, want in groups.values()), 3),
+        round(sum(float(r["Device Time"]) for r in sliding), 3),
+        tol=1e-6,
+    )
+    close("sliding window total us", round(sum(float(r["Device Time"]) for r in sliding), 3), 1122.551, tol=1e-6)
+    six = ["3039", "3065", "3071", "3127", "3132", "3172"]
+    close(
+        "the six DRAM-sharded projections",
+        round(sum(device_time(sliding, i) for i in six), 2),
+        252.41,
+        tol=1e-4,
+    )
+    terminal = 691.07
+    layer = round(sum(float(r["Device Time"]) for r in sliding) - terminal, 2)
+    close("the sliding layer, window minus terminal", layer, 431.48, tol=1e-4)
+    close(
+        "the latency-bound remainder of the layer",
+        round(layer - sum(device_time(sliding, i) for i in six), 2),
+        179.07,
+        tol=1e-4,
+    )
+    close(
+        "latency-bound share of the layer %",
+        round((layer - sum(device_time(sliding, i) for i in six)) / layer * 100, 1),
+        41.5,
+        tol=1e-4,
+    )
+
+    # The two pre-change values the README quotes, from the file it now attributes them to.
+    prev_rows = list(csv.DictReader(open(PREV / "tracy/decode_perf_report.csv")))
+    close("pre-change SwiGLU multiply us", device_time(prev_rows, "4187"), 18.026, tol=1e-4)
+    close(
+        "pre-change softcap us",
+        round(device_time(prev_rows, "4283") + device_time(prev_rows, "4370"), 3),
+        36.853,
+        tol=1e-4,
+    )
+    close("pre-change embedding i2s us", device_time(prev_rows, "4289"), 1.992, tol=1e-4)
+    close(
+        "softcap device-time win",
+        round(
+            device_time(prev_rows, "4283")
+            + device_time(prev_rows, "4370")
+            - device_time(sliding, "3140")
+            - device_time(sliding, "3196"),
+            2,
+        ),
+        13.07,
+        tol=1e-3,
+    )
+    close(
+        "SwiGLU device-time win per layer",
+        round(
+            device_time(prev_rows, "4187")
+            - device_time(sliding, "3075")
+            - device_time(sliding, "3073")
+            - device_time(sliding, "3129")
+            - device_time(sliding, "3076"),
+            1,
+        ),
+        7.4,
+        tol=1e-3,
+    )
+    close(
+        "change 3's three reshards",
+        round(device_time(sliding, "3073") + device_time(sliding, "3129") + device_time(sliding, "3076"), 3),
+        5.907,
+        tol=1e-4,
+    )
+
+    # The DRAM peak the roofline back-derives, and the prose field that records it.
+    for op_id, want_pct in (("3139", 54.57), ("3039", 77.12)):
+        row = next(r for r in sliding if r["ID"] == op_id)
+        close(f"row {op_id} DRAM %", round(float(row["DRAM %"]), 2), want_pct, tol=1e-5)
+        close(f"row {op_id} back-derived peak GB/s", float(row["DRAM"]) / float(row["DRAM %"]) * 100, 512.0)
+    bandwidth_source = load(D / "perf_summary.json")["roofline_inputs"]["bandwidth_source"]
+    for token in ("3139", "279.38", "54.5666", "3039", "394.85", "77.1192"):
+        same(f"perf_summary bandwidth_source names {token}", token in bandwidth_source, True)
+
+    # (d) teacher forcing, per file, from the decode field rather than the e2e one.
+    def decode_rates(name: str) -> list[float]:
+        blob = load(D / name)
+        found: list[float] = []
+
+        def walk(node):
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key == "decode_t/s/u" and isinstance(value, (int, float)):
+                        found.append(round(float(value), 2))
+                    walk(value)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value)
+
+        walk(blob)
+        return sorted(set(found))
+
+    same("teacher-forcing rate in evidence_accuracy.json", decode_rates("evidence_accuracy.json"), [37.07])
+    same("teacher-forcing rates in evidence_fp32_gate.json", decode_rates("evidence_fp32_gate.json"), [37.28, 38.15])
+    for rate in (37.07, 37.28, 38.15):
+        bind(f"README states teacher-forcing {rate}", f"{rate:.2f}")
+
+    # (e) the retracted fabric-ERISC hazard: the two runs that had to be clean, and the
+    # absence of the retirement the retraction removed.
+    pair = text(D / "logs/watcher_pytest_prefill_trace_pair.log")
+    same("the two opt-in cases ran together in one process", "2 passed" in pair, True)
+    same("...and were watcher-clean", "WATCHER_CLEAN" in text(D / "logs/check_watcher_prefill_trace_pair.log"), True)
+    rebuild = text(D / "logs/watcher_probe_rebuild.log")
+    same("the rebuild arm ran the named sequence", "PR_OK arm=rebuild" in rebuild, True)
+    same("...and was watcher-clean", "WATCHER_CLEAN" in rebuild, True)
+    same("...having actually built a second generator", "PR built a second generator on the same mesh" in rebuild, True)
+    generator_src = (ROOT / "tt/generator.py").read_text()
+    same("the retirement flag is gone from the generator", "_prefill_trace_retired" in generator_src, False)
+    same("a cache move recaptures instead", "_prefill_trace_releases" in generator_src, True)
+    same("the gated watcher run passed 10 cases", "10 passed" in text(D / "logs/watcher_pytest.log"), True)
+    same(
+        "the gated watcher run tripped nothing on the console either",
+        "WATCHER_CONSOLE_NO_TRIPPED_ASSERT" in text(D / "logs/check_watcher_console.log"),
+        True,
+    )
+    # The positive control for limitation 6: all twelve pass, and *then* it trips.  Both runs.
+    trip1 = text(D / "logs/watcher_pytest_12case_tripped.log")
+    trip2 = text(D / "logs/watcher_pytest_12case_tripped_run2.log")
+    for tag, trip in (("run 1", trip1), ("run 2", trip2)):
+        same(
+            f"the 12-case {tag} ran all twelve cases",
+            len(set(re.findall(r"test_full_model\.py::([\w\[\]]+)", trip))),
+            12,
+        )
+        same(f"the 12-case {tag} passed all twelve", trip.count("PASSED"), 12)
+        same(
+            f"the 12-case {tag} then tripped the assert",
+            "subordinate_erisc detected invalid NOC command buffer state" in trip,
+            True,
+        )
+    same(
+        "the two 12-case runs trip on different links",
+        len(set(re.findall(r"Device (\d) acteth core", trip1 + trip2))),
+        2,
+    )
+    same("the ten-case control is clean", "WATCHER_CLEAN" in text(D / "logs/check_watcher_default10.log"), True)
+    # The tripped run's own artifact is unusable, and that is the point: the abort lands
+    # inside the watcher's dump, so the log has no detach lines and check_watcher rejects it.
+    same(
+        "the truncated 12-case log has no detach lines",
+        "device detach: 0 (min 1)" in text(D / "logs/check_watcher_12case_tripped.log"),
+        True,
+    )
+    same(
+        "...so it never reaches a clean verdict",
+        "WATCHER_CLEAN" in text(D / "logs/check_watcher_12case_tripped.log"),
+        False,
+    )
+    same(
+        "...and the truncation is why it also reports zero fatal messages",
+        "fatal watcher messages: 0" in text(D / "logs/check_watcher_12case_tripped.log"),
+        True,
+    )
+    gated_cases = (D / "bench/run_watcher.sh").read_text().split("CASES=(")[1].split("\n)")[0]
+    for case in (
+        "test_prefill_trace_is_opt_in_and_matches_the_eager_path",
+        "test_prefill_trace_survives_rebinding_the_same_external_cache",
+    ):
+        same(f"the gated set excludes {case}", f'"{case}"' in gated_cases, False)
+    same("the gated set is the ten default cases", gated_cases.count('"'), 20)
+
+    # (f) the work log, which the gate did not read at all.
+    work_log = (D / "work_log.md").read_text().replace("\u2212", "-").replace("\u2013", "-")
+    for literal in ("77.12", "69.35", "18.03", "36.85", "1.88"):
+        same(f"work log states {literal} and it resolves", literal in work_log, True)
+    same(
+        "the work log no longer quotes teacher-forcing rates no artifact has",
+        any(bad in work_log for bad in ("37.13", "37.16", "38.16")),
+        False,
+    )
+    same(
+        "the work log no longer describes evidence_perf.json as the crashed run's output",
+        "The perf/shapes numbers in `evidence_perf.json` are from" in work_log,
+        False,
+    )
+    same(
+        "evidence_perf.json's stages are the ones the README reproduces",
+        load(D / "evidence_perf.json")["stages"],
+        ["capacity", "perf", "shapes"],
+    )
+    same(
+        "the README's reproduce command matches those stages",
+        "--stages capacity,perf,shapes --shape-lengths" in readme,
+        True,
+    )
+
+    # (g) the baseline arm's floor provenance no longer claims a log it is not in.
+    before_floor = before["layer_stack_lower_bound_ms_per_token"]["source"]
+    same(
+        "the baseline floor does not *claim* layer_ab_after.log",
+        "not from layer_ab_after.log" in before_floor,
+        True,
+    )
+    same("the baseline floor says where it does come from", "pre-stage" in before_floor, True)
+    same("...and that this run did not measure it", "Not re-measured by this run" in before_floor, True)
+    # The *after* arm's string was never wrong -- ``layer_ab_after.log`` does hold the
+    # after-arm values, checked above -- so it is asserted as true rather than rewritten;
+    # only the baseline arm's claim was false.  ``bench/evidence.py`` now emits an
+    # arm-specific string, so a future re-run of either arm records which it is.
+    after_floor = after["layer_stack_lower_bound_ms_per_token"]["source"]
+    same("the after floor is attributed to layer_ab_after.log", "layer_ab_after.log" in after_floor, True)
+    same("...to the arm that log actually contains", "this stage's shipped default" in after_floor, True)
+    same(
+        "bench/evidence.py emits an arm-specific floor provenance",
+        "if baseline" in (D / "bench/evidence.py").read_text(),
+        True,
+    )
+
+    # (h) the source files this gate must actually open, so a new unchecked section is
+    # visible as a missing source rather than as an unchanged count.
+    for source in (
+        "tracy/prefill_128_perf_report.csv",
+        "tracy/decode_sliding_perf_report.csv",
+        "prefill_opcount.json",
+        "work_log.md",
+        "perf_summary.json",
+        "logs/watcher_pytest_prefill_trace_pair.log",
+        "logs/watcher_probe_rebuild.log",
+        "logs/watcher_pytest_12case_tripped.log",
+        "logs/watcher_pytest_12case_tripped_run2.log",
+        "logs/check_watcher_default10.log",
+        "watcher_probe_rebuild/watcher.log.gz",
+    ):
+        same(f"the gate reads {source}", (D / source).is_file(), True)
+
     # ------------------------------------------------- README cross-check
     #
     # Every literal resolved above, searched for in the README.  This is what turns
@@ -529,7 +893,18 @@ def main() -> int:
             candidates.add(literal.rstrip("0").rstrip(".") if "." in literal else literal)
             if value == int(value):
                 candidates.add(str(int(value)))
-        same(f"README states the resolved figure for {name}", any(c in normalised for c in candidates), True)
+            # A README may print the same value with a trailing zero (14.6 as "14.60").
+            decimals = len(literal.split(".")[1]) if "." in literal else 0
+            for extra in (1, 2):
+                candidates.add(f"{value:.{decimals + extra}f}")
+        # Digit-boundary match.  A plain substring search lets `1.0` match `21.05` and
+        # `128` match `1280`, which round 3 flagged as weak binding for exactly the
+        # generic values where binding matters most.
+        same(
+            f"README states the resolved figure for {name}",
+            any(re.search(rf"(?<![\d.,]){re.escape(c)}(?![\d])", normalised) for c in candidates),
+            True,
+        )
 
     same("README has a before/after table at the top", readme.index("## Result") < readme.index("## What ships"), True)
     same("no TODO left in the README", bool(re.search(r"\bTODO\b", readme)), False)

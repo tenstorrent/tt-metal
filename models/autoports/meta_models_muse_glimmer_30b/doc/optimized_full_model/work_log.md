@@ -259,7 +259,7 @@ the measured all-layer step is **22.657 ms**, 0.7 % better than predicted.
 
 | candidate | why not |
 | --- | --- |
-| pack `wqkv` + `attn_gate` (OPT-001: two projections consuming the same post-norm activation) | Both rows are the *best* DRAM utilisation in the layer — 73.7 % and 69.3 %, against 52.3–52.7 % for the MLP rows — so they are weight-bandwidth-bound and packing cannot reduce the bytes. And the two outputs need different downstream layouts (QKV is `sharded_to_interleaved` into `nlp_create_qkv_heads_decode`; the gate stays width-sharded until after SDPA), so a packed output needs an unshard, two slices and a reshard to split, which is ~4 µs against a ~3–5 µs saving. Recorded in the operation-topology audit with the DRAM% evidence rather than measured, because the byte argument is decisive: the packed matmul reads the same 16.3 MB. |
+| pack `wqkv` + `attn_gate` (OPT-001: two projections consuming the same post-norm activation) | Both rows are the *best* DRAM utilisation in the layer — **77.12 %** (`wqkv`, id 3039) and **69.35 %** (`attn_gate`, id 3172) in this stage's `tracy/decode_sliding_perf_report.csv`, against 52.27–52.65 % for the MLP rows — so they are weight-bandwidth-bound and packing cannot reduce the bytes. And the two outputs need different downstream layouts (QKV is `sharded_to_interleaved` into `nlp_create_qkv_heads_decode`; the gate stays width-sharded until after SDPA), so a packed output needs an unshard, two slices and a reshard to split, which is ~4 µs against a ~3–5 µs saving. Recorded in the operation-topology audit with the DRAM% evidence rather than measured, because the byte argument is decisive: the packed matmul reads the same 16.3 MB. |
 | wider RMSNorm grid, decode | The four decode norms must consume and produce the 16-core boundary spec, which is the inter-layer residual contract this stage is required to preserve. |
 | sharded prefill terminal/embedding norms | They run on 1 and 4 cores for ~134 µs each because `ttnn.rms_norm` on a DRAM-interleaved input parallelises over tile rows and both see a 32-row slice. 0.27 ms of a 65 ms TTFT; the fix changes prefill numerics on the accuracy gates' critical path, so it is priced and left as limitation 8 rather than taken for 0.4 % of a figure whose process spread is 8 %. |
 | `o_proj` OPT-011 narrower working shard | Kept declined, and **one of the decoder stage's three reasons no longer applies**: change 3 breaks the same single-grid invariant and adds three reshards, so "it costs a reshard and the invariant" is no longer a reason this stage can use. What survives is what decided it: the candidate won 0.11 % on `sliding`, was inside the noise on `full`, and cost 13 % of the multichip-vs-single-chip PCC headroom. Recorded as a candidate a decoder stage may revisit now that the invariant is already gone. |
@@ -318,7 +318,7 @@ Each is one device job, one at a time, per `$tt-device-usage`.
 | device reset after watcher | — | `RESET_DONE failures=0` |
 | Tracy, 4 windows | `tracy/` | `TRACY_INTEGRITY_OK` |
 | context contract | `../context_contract.json` | 131072, unreduced |
-| figure gate | `bench/check_reported_figures.py` | 328 checks, 0 failures |
+| figure gate | `bench/check_reported_figures.py` | `FIGURES_OK`, 0 failures |
 
 Every perf, accuracy, autoregressive, qualitative, watcher, Tracy and contract row above
 was re-run **after** the last code change — including the round-2 cache-identity and
@@ -338,10 +338,18 @@ prefill trace is released.
 run of `--stages capacity,perf,shapes,autoregress` therefore crashed *after* writing the
 perf and shapes results (`FileNotFoundError`, `logs/evidence_perf.log`). Copying the
 prompt file across and re-running `--stages autoregress` on its own produced
-`evidence_autoregress.json`. The perf/shapes numbers in `evidence_perf.json` are from
-the crashed run and are unaffected — the crash is after them and the summary is written
-in a `finally` — but the file's empty `autoregressive: {}` key was removed and replaced
-with a note rather than left to look like a result.
+`evidence_autoregress.json`.
+
+*Superseded by the round-2 re-run, and round 3 was right to catch that this paragraph no
+longer described the committed file.* When round 2 found the README/`perf_summary.json`
+figure contradictions, every evidence artifact was re-run from scratch, so the committed
+`evidence_perf.json` is **not** the crashed run's output: `logs/evidence_perf.log` is a
+clean `capacity → perf → shapes → summary` run with no traceback, and the file's `stages`
+key is `["capacity","perf","shapes"]`. The README's reproduce command was still the
+original `--stages capacity,perf,shapes,autoregress`, which does not reproduce that file;
+it now reads `--stages capacity,perf,shapes`, with `--stages autoregress` as its own line.
+The lesson stands and is why the directory is copied up front now — the paragraph is kept
+for it, not for the artifact description.
 
 **`run_watcher.sh` looked for the watcher log in the wrong place, twice.** `TT_METAL_LOGS_PATH` puts the log at `$LOGS/generated/watcher/watcher.log`, not `$LOGS/watcher.log`, so the script's own verdict step printed `missing watcher log` after nine passing tests (visible at the foot of `logs/run_watcher.log`). The path is fixed in the script and the verdict was re-derived from the committed log into `logs/check_watcher.log`: `fatal watcher messages: 0`, `WATCHER_CLEAN`. Caught by `bench/check_reported_figures.py`, which asserts the verdict string is *in a log*, not in prose — which is the whole point of having that gate.
 
@@ -378,7 +386,7 @@ account for the step to within 27 µs, and that 27 µs is the caller's token rea
 
 ## 9. The figure gate
 
-`bench/check_reported_figures.py` resolves **328** checks' worth of figures in `README.md` against the
+`bench/check_reported_figures.py` resolves its checks' worth of figures in `README.md` against the
 committed artifacts: the before/after perf rows and their percentage deltas, the
 layer-stack floor and the `layer_ab` log it comes from, every A/B arm and its PCC, the
 named `tt-perf-report` op ids in both this stage's and the previous stage's captures,
@@ -388,7 +396,12 @@ contract fields, the sampler arms, the host-dispatch tables, the qualitative dif
 watcher verdict, both test runs, the Tracy integrity check and the context contract.
 It also covers the traced-prefill and L1 measurements, the BFP8/loaded collective arms
 and the in-model drained-collective pass. It writes nothing and needs no hardware.
-`328 checks, 0 failures` / `FIGURES_OK`, and it asserts that count so it cannot drift.
+`FIGURES_OK` with zero failures, and it asserts its own check count so the count cannot
+drift. Round 3 was right that a frozen *count* is not coverage, so it now also asserts
+that it opens each artifact a newly-unchecked section would need — the prefill-128
+capture, `work_log.md`, `perf_summary.json` and the watcher logs among them — and the
+two families of check that asserted nothing (`close(v, v)` and `same(x, True, True)`)
+are now `bind(...)`, which registers a literal for the README cross-check and says so.
 
 Its own findings are recorded above rather than quietly fixed: the residual-add figure
 was 1.86 where the artifact says 1.884, the DRAM bandwidth rows were quoted from the
@@ -412,7 +425,7 @@ real defect:
 | --- | --- | --- |
 | **P1** the host-dispatch gap was declined on an *unmeasured* cost model, and TTFT did not improve | the stage named a prefill trace as the only mechanism and never captured one; the two inputs to the "does not pay back" argument were estimates | captured it (`bench/prefill_trace_probe.py`): **59.80 → 44.96 ms, bit-identical, 98.16 ms capture, 3.3 MB retained, coexists with the decode traces**, then **shipped it** as `GeneratorConfig.prefill_trace` with a bounded bucket cache and a contract test. TTFT **63.66 → 50.19 ms, −21.2 %** (§2.5) |
 | **P2** the host attribution had a 2x hole and a contradiction | the collective probe used a **BF16** payload in a hot loop and reproduced 60 µs against the model's 125–140; `perf_summary.json` said 12.1 ms where the README said 19.1 | re-measured at the model's **BFP8** payload, with a loaded queue, and with the device drained before each in-model collective: **117.05 µs loaded against 114.6 in-model drained** — the gap is the instruction stream, nothing is unattributed. `perf_summary.json` and the README now both say 20.93 ms, and the retracted "nothing moves it" is replaced by the measured **−14/−17 % from persistent buffers**, blocked on the decoder stage's correctness race (§2.4) |
-| **P2** the teacher-forcing "after" range dropped this stage's own lowest measurement | the README quoted 37.51–38.50 while `evidence_accuracy.json` said 37.19 | all three runs reported (37.13 / 37.16 / 38.16 on the re-run), the ranges noted as overlapping, and **the +1.3 % claim withdrawn** |
+| **P2** the teacher-forcing "after" range dropped this stage's own lowest measurement | the README quoted 37.51–38.50 while `evidence_accuracy.json` said 37.19 | all three runs reported, the ranges noted as overlapping, and **the +1.3 % claim withdrawn** |
 | **P2** "none of the three changes allocates anything" was false for L1 | `ttnn.tanh`/`ttnn.multiply` have no in-place form, so change 1 moves two 3.24 MB transients into width-sharded L1 | measured (`bench/l1_highwater_probe.py`): **+126,976 B/bank of peak L1**, 1.24 MB/bank still free there; the sentence corrected, the pool/moment confusion with the 7,296 B semaphore figure explained, and it is now limitation 7 |
 
 Its other concerns were all taken as well: the LM-head share was **26 % where it is
@@ -492,10 +505,79 @@ is recorded rather than quietly dropped: the synchronisation is kept because fre
 buffers a trace referenced without draining is wrong on its own terms, but it is not what
 this assert is about.
 
-### Round 3
+### Round 3 — `more-work-needed`
 
-Re-review after the above.
+Two P1s and six smaller findings. Both P1s were right, and the first one was right in a
+way that changed the stage's conclusion rather than just its prose.
+
+| finding | what it said | what was done |
+| --- | --- | --- |
+| **P1** the fabric-ERISC hazard had **no positive reproduction** | the four arms of `prefill_trace_release_probe.py` are all *negative* controls — none builds a second model after a release — so a clean result from them localises nothing, and three shipped decisions (the retirement flag, the watcher exclusion, limitation 6) rested on an unreproduced claim | the runs that could show it were made. **`--arm rebuild`** was added — release, then build and run a second generator on the same mesh — and is `WATCHER_CLEAN`; the **two opt-in cases together in one process** are `WATCHER_CLEAN`; the **ten default cases** are `WATCHER_CLEAN`; **all twelve in one process trip the assert at teardown, after all twelve pass**. So the hazard is real, its earlier *statement* was wrong, and the retirement flag was never a mitigation for it. See below |
+| **P1** figures in the sections the gate does not read do not reconcile | prefill-128 ids `3884`/`3581` and `134.65` exist in no artifact (they are `3886`/`3579`, `133.868`/`133.979`); window `2608.4` vs `2606.3`; residual op row `655`/`8.14` vs `707`/`7.86`; audit rows `41.8`/`255`/`55.5` vs `40.77`/`252.41`/`54.89`; two audit rows silently from the *previous* stage's CSV; teacher-forcing files swapped | every figure corrected against its artifact. The audit table is now a **partition**: an `ids` column, 14 groups, every one of the CSV's 55 rows used exactly once, and the column summing to the window's 1122.551 µs. Pre-change values are labelled as such with their own ids in the previous stage's capture. The gate now re-derives all of it, including the partition invariants |
+| P2 `perf_summary.json:bandwidth_source` still quoted the previous stage's QKV row | `371 GB/s = 72.4 %` | rewritten to this stage's rows (3139: 279.38 / 54.5666; 3039: 394.85 / 77.1192), and the gate now asserts the string names them |
+| P2 `evidence_perf_before.json`'s floor claimed a log it is not in | `layer_ab_after.log` contains only the after-arms | `bench/evidence.py` now emits an arm-specific provenance string, and the baseline arm was re-run to regenerate the artifact |
+| P2 work log §7 no longer described the committed `evidence_perf.json` | the round-2 re-run replaced the crashed run's output | paragraph corrected; the README's reproduce command now matches the file's `stages` |
+| P2 `LM_HEAD_SOFTCAP_IN_L1` cited a test name that does not exist | `test_lm_head_softcap_layout_is_equivalent` | corrected to the real name |
+| P2 the rebind test's `finally` release had become a no-op | retirement meant no trace existed by then, so the test no longer covered the ordering it documents | removing retirement makes it live again, and the test now asserts a trace over the moved cache exists at that point |
+| P2 work log §4 quoted DRAM % matching no capture (`73.7 %`) | — | corrected to 77.12 / 69.35 with the row ids, and the gate now reads `work_log.md` |
+
+**Hard-check gaps, also from round 3.** The gate passed 328/328 while every figure above
+was wrong, which is a fair description of a gate that is not measuring what it advertises.
+Three things changed. The 16 `perf(...)` calls were `close(name, round(v,d), round(v,d))`
+— got equals want by construction — and the 14 `same(..., True, True)` calls asserted
+nothing either; both are now `bind(...)`, which registers the literal for the README
+cross-check and *says* that is all it does. The README search was a plain substring match,
+so `1.0` matched `21.05`; it is now digit-bounded, which immediately exposed five bindings
+that had been passing on a coincidence. And `ADVERTISED_CHECKS` froze the count rather
+than the coverage, so the gate now also asserts that it opens the specific artifacts a new
+unchecked section would need — `prefill_128_perf_report.csv`, `work_log.md`,
+`perf_summary.json` and the two new watcher logs among them.
+
+### Round 3's own finding: the hazard is real, the claim about it was not
+
+The review asked for a positive control. Running one produced a result that contradicts
+both the old claim and the retraction that first replaced it, so all four configurations
+are recorded:
+
+| configuration | tests | verdict |
+| --- | --- | --- |
+| `--arm rebuild`: capture, teardown (releases), build a second generator, prefill + traced decode | `PR_OK` | `WATCHER_CLEAN`, complete log |
+| both opt-in cases, one process | 2 passed | `WATCHER_CLEAN`, complete log |
+| the ten default cases | 10 passed | `WATCHER_CLEAN`, complete log |
+| **the ten default cases + both opt-in cases, one process** | **12 passed** | **tripped assert at teardown** |
+
+Three conclusions, none of which the original bisect could have reached:
+
+* **"release a prefill trace, then build another model on the same mesh" is not the
+  trigger.** Two independent runs do exactly that and are clean. The trigger needs the
+  larger preceding workload too.
+* **The retirement flag never mitigated anything.** The trip is at process teardown, and
+  `teardown()` releases the prefill traces regardless of whether tracing was retired. It
+  cost a serving caller its flag after one cache rebind and bought no exposure back. It is
+  removed; a cache move now recaptures.
+* **The gated set stays at ten, for an artifact reason rather than a hiding reason.** The
+  abort lands inside the watcher's own dump, so the log is truncated with no detach lines
+  and `check_watcher.py` correctly rejects it as `WATCHER_LOG_NOT_A_REAL_RUN`. The opt-in
+  pair is watched in its own process instead, so the trace-lifecycle code is still under
+  watcher. That truncation also made `check_watcher.py` report `fatal watcher messages: 0`
+  for a run that tripped an assert, so `run_watcher.sh` now greps the console for the
+  assert directly and writes `check_watcher_console*.log`.
 
 ## 11. Commits
 
-Recorded after the review passes.
+Local checkpoints on `agentic-research/hous/muse-glimmer-30b`, on top of the full-model
+stage's `93adb25b7a8`. Never pushed.
+
+| SHA | what |
+| --- | --- |
+| `ee3c378a830` | `tt/model.py`, `tt/generator.py`, `tt/optimized_decoder.py`, `tests/test_full_model.py` — the three decode-path layout changes, the opt-in traced prefill, and the seven new acceptance cases |
+| `3d03b5ca595` | `doc/optimized_full_model/` in full, the regenerated `doc/context_contract.json`, and the regenerated `readiness_autoregressive_{chat,raw}/` outputs |
+
+Nothing unrelated is in either commit: `git status` is clean at `3d03b5ca595` and the
+only files touched outside `doc/optimized_full_model/` are the four implementation/test
+files, the contract, and the two readiness output directories the autoregressive stage
+rewrites.
+
+The repo's pre-commit hooks reformatted three bench scripts and the test file on the
+first attempt; the reformatted state is what is committed, and the eight affected tests
+were re-run afterwards (`logs/post_format_tests.log`).
