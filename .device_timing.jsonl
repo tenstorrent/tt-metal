@@ -46,3 +46,7 @@
 {"event": "phase", "phase": "refinement_1", "state": "start", "at_ms": 1786713138917}
 {"source":"tt-probe","pid":216626,"started_at_ms":1786713913050,"wait_ms":213,"run_ms":16161,"test_path":"tilize","exit_code":0}
 {"source":"tt-probe","pid":218775,"started_at_ms":1786714442260,"wait_ms":207,"run_ms":19291,"test_path":"tilize","exit_code":0}
+{"source":"tt-probe","pid":220449,"started_at_ms":1786714520766,"wait_ms":209,"run_ms":22085,"test_path":"tilize","exit_code":0}
+{"source":"run_safe_pytest","pid":221701,"started_at_ms":1786714697512,"wait_ms":2,"run_ms":10842,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_sharded.py","exit_code":1}
+{"source":"run_safe_pytest","pid":222118,"started_at_ms":1786714724588,"wait_ms":2,"run_ms":10045,"test_path":"tests/ttnn/unit_tests/operations/tilize/test_tilize_sharded.py","exit_code":0}
+{"source":"run_safe_pytest","pid":222441,"started_at_ms":1786714738851,"wait_ms":2,"run_ms":16011,"test_path":"tests/ttnn/unit_tests/operations/tilize/","exit_code":0}
