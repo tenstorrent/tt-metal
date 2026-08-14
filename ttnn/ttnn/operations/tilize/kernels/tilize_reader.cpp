@@ -143,7 +143,19 @@ FORCE_INLINE void read_row_span(
 // `stateful` (master.md B13): route the issue through the set_state/with_state
 // pair instead. The stateful API carries no VC parameter, so the host never
 // turns B13 and B10 on together (B10 ships parked anyway).
-template <uint32_t row_bytes, uint32_t tile_h, bool one_packet, bool stateful, uint32_t packet_bytes, typename Accessor>
+// `coal` (Perf 2): source sticks per NoC transfer. The aligned path's L1 stride
+// IS row_bytes, so when the host proves `coal` consecutive sticks are one
+// contiguous source range (an L1-sharded source whose page is a whole tensor
+// row), they are also contiguous in the destination and the whole run is ONE
+// transfer. coal == 1 is the per-stick issue, unchanged.
+template <
+    uint32_t row_bytes,
+    uint32_t tile_h,
+    uint32_t coal,
+    bool one_packet,
+    bool stateful,
+    uint32_t packet_bytes,
+    typename Accessor>
 FORCE_INLINE void issue_tile_row(
     const Accessor& accessor,
     StatefulRead<stateful, packet_bytes>& issue,
@@ -151,16 +163,18 @@ FORCE_INLINE void issue_tile_row(
     uint32_t byte_off,
     uint32_t l1_addr,
     uint32_t vc) {
-    for (uint32_t r = 0; r < tile_h; ++r) {
+    constexpr uint32_t step = coal > tile_h ? tile_h : coal;  // never leave the block
+    constexpr uint32_t xfer_bytes = step * row_bytes;
+    for (uint32_t r = 0; r < tile_h; r += step) {
         const uint64_t src = accessor.get_noc_addr(first_row + r, byte_off);
         if constexpr (stateful) {
-            issue.read(src, l1_addr, row_bytes);
+            issue.read(src, l1_addr, xfer_bytes);
         } else if constexpr (one_packet) {
-            noc_async_read_one_packet(src, l1_addr, row_bytes, noc_index, vc);
+            noc_async_read_one_packet(src, l1_addr, xfer_bytes, noc_index, vc);
         } else {
-            noc_async_read(src, l1_addr, row_bytes, noc_index, vc);
+            noc_async_read(src, l1_addr, xfer_bytes, noc_index, vc);
         }
-        l1_addr += row_bytes;  // aligned path: the L1 stride IS row_bytes
+        l1_addr += xfer_bytes;  // aligned path: the L1 stride IS row_bytes
     }
 }
 
@@ -197,29 +211,34 @@ void kernel_main() {
     // Refinement-3 levers on the interleaved aligned path (see the custom-loop
     // note below): B6 one-packet issue, B8 trid double-issue, B10 per-reader VC.
     constexpr uint32_t read_one_packet = get_compile_time_arg_val(15);
-    constexpr uint32_t read_trid = get_compile_time_arg_val(16);
-    constexpr uint32_t read_vc_enable = get_compile_time_arg_val(17);
+    // Perf 2: `read_ahead` is the issue-ahead window in blocks (0 or 1) and
+    // `read_coalesce` the source sticks merged into one transfer (1, or tile_h).
+    // Together they replaced B8's read-side `read_trid`, which was exactly this
+    // loop with ZERO CB slack — measured baseline-or-worse on every cell.
+    constexpr uint32_t read_ahead = get_compile_time_arg_val(16);
+    constexpr uint32_t read_coalesce = get_compile_time_arg_val(17);
+    constexpr uint32_t read_vc_enable = get_compile_time_arg_val(18);
     // Refinement 4: 1 = the WRITER re-stamps every pad position in the output
     // element format (the widening-cast path), which makes this reader's own
     // input-format fill dead work — the two fill regions are the same set, derived
     // from the same h_in / w_in / image geometry. Skipping it leaves stale bytes in
     // the input CB's pad positions, which the tilize permutes into output positions
     // the writer overwrites before the tile leaves L1. Host gate: `out_fill`.
-    constexpr uint32_t skip_pad_fill = get_compile_time_arg_val(18);
+    constexpr uint32_t skip_pad_fill = get_compile_time_arg_val(19);
     // --- Refinement 5: the RETILE path (regime R_RETILE) ---------------------
     // in_tile_h is the SOURCE tile's height (the output's is `tile_h` above);
     // `wt` is the tile-column count, which the retile reader needs because its
     // source pages are TILES, indexed `tile_row * wt + tile_col` — the plain
     // reader's pages are sticks and never need it. Both are 0/unused elsewhere.
-    constexpr uint32_t in_tile_h = get_compile_time_arg_val(19);
-    constexpr uint32_t wt = get_compile_time_arg_val(20);
+    constexpr uint32_t in_tile_h = get_compile_time_arg_val(20);
+    constexpr uint32_t wt = get_compile_time_arg_val(21);
     // --- Refinement 6 levers (master.md B13 / D21) ---------------------------
     // `read_state`: issue reads through set_state/with_state, caching the NoC
     // endpoint (see tilize_noc.hpp). `precomp_index`: take this core's
     // (tile-row, W chunk) origin from the host and step it, instead of paying a
     // div/mod per block. Both 0 => this kernel is byte-identical to Refinement 5.
-    constexpr uint32_t read_state = get_compile_time_arg_val(21);
-    constexpr uint32_t precomp_index = get_compile_time_arg_val(22);
+    constexpr uint32_t read_state = get_compile_time_arg_val(22);
+    constexpr uint32_t precomp_index = get_compile_time_arg_val(23);
     // --- Perf 2 (R_RETILE only): the retile-DIRECT reader --------------------
     // `retile_direct`: land the face permutation straight in the OUTPUT TILE
     // instead of routing it through a row-major intermediate. 0 only where the
@@ -228,10 +247,14 @@ void kernel_main() {
     // page (needs the run DRAM-alignable and >= the transaction floor).
     // `retile_cast`: a cast was requested, so the finished tile is left in the
     // INPUT dtype in cb_input_sticks for compute to convert.
-    constexpr uint32_t retile_direct = get_compile_time_arg_val(23);
-    constexpr uint32_t retile_direct_dram = get_compile_time_arg_val(24);
-    constexpr uint32_t retile_cast = get_compile_time_arg_val(25);
-    constexpr auto src_args = TensorAccessorArgs<26>();
+    constexpr uint32_t retile_direct = get_compile_time_arg_val(24);
+    constexpr uint32_t retile_direct_dram = get_compile_time_arg_val(25);
+    constexpr uint32_t retile_cast = get_compile_time_arg_val(26);
+    // Perf 2: block slots in the input CB (one group deeper than the output CB,
+    // for the issue-ahead window). get_write_ptr only advances on push_back, so
+    // the reader walks the ring itself while a read is outstanding.
+    constexpr uint32_t in_cb_slots = get_compile_time_arg_val(27);
+    constexpr auto src_args = TensorAccessorArgs<28>();
 
     constexpr uint32_t cb_output_tiles = 16;
     // Which CB this kernel publishes. On the direct path with no cast the reader
@@ -299,164 +322,132 @@ void kernel_main() {
     }
 
     if constexpr (regime == 0) {
-        // ── R_ALIGNED ────────────────────────────────────────────────────
-        if constexpr (work_mode == 1 /* W_REGION */) {
-            // The core's own shard region. With one W chunk per row (the common
-            // case — a shard whose width fits the CB budget) the whole region is
-            // ONE helper call over num_blocks*TILE_H contiguous sticks, so the
-            // batched read of the interleaved path is preserved.
-            if constexpr (n_chunks == 1) {
-                // OCCUPANCY, not payload: read_sticks_for_tilize owns the CB
-                // handshake AND the barrier internally, so this number folds
-                // reserve + issue + barrier together. It cannot be split
-                // without editing the helper — the cumulative ablation
-                // (ABLATE["dm_read"]) is what separates payload from wait here.
-                MaybeDeviceZoneScope("reader_helper");
-                dataflow_kernel_lib::
-                    read_sticks_for_tilize<cb_input_sticks, dataflow_kernel_lib::TilizeGranularity::TILE>(
-                        accessor,
-                        /*total_num_rows=*/num_blocks * tile_h,
-                        /*row_bytes=*/row_bytes,
-                        /*start_page=*/tile_row0 * tile_h,
-                        /*byte_offset_within_page=*/col_off_base);
+        // ── R_ALIGNED — ONE loop (Perf 2) ────────────────────────────────
+        // This single loop replaces the five R_ALIGNED paths the op used to
+        // carry: the W_REGION batched helper call, the W_REGION per-block helper
+        // call, the W_BLOCKS run-batched helper calls, B8's two-slot trid
+        // double-issue, and the plain custom loop. At `read_ahead == 0` and
+        // `read_coalesce == 1` it issues exactly what the helper issued (same
+        // accessor, same page order, same L1 stride, same one-group-per-push
+        // granularity) and MEASURED FLAT against it on all eight regimes swept —
+        // that control is what makes the unification honest rather than a
+        // strawman baseline.
+        //
+        // HELPER SUBSTITUTION — dataflow_kernel_lib::read_sticks_for_tilize.
+        // CLASS: capability. The helper owns its CB handshake AND its barrier
+        // internally (one plain noc_async_read per stick, one plain
+        // noc_async_read_barrier per block) and its contract exposes NO
+        // transaction id, NO in-flight window and NO multi-stick transfer, so
+        // neither thing this loop does is reachable through it at any argument.
+        //
+        // Two schedules, both host-derived, both measured:
+        //   * `read_ahead == 1` keeps ONE group of reads outstanding across the
+        //     block boundary over rotating trids, against ONE group of CB SLACK
+        //     (IN_CB_EXTRA_DEPTH). 1.19x crossover, 1.24x tall, 1.18x interleaved
+        //     W_BLOCKS, 1.18x uint8; flat at the DRAM floor, at one block per
+        //     core, and on the smallest 2-tile cell. The slack is the mechanism:
+        //     a window with cb_depth == ahead + 1 measured baseline-or-worse
+        //     (that is precisely what B8's read half was, which is why it is
+        //     gone), and ahead >= 2 regresses.
+        //   * `read_coalesce == tile_h` merges a whole block's sticks into ONE
+        //     transfer where the host proved them contiguous (an L1-sharded
+        //     source whose page is a whole tensor row): 1.12-1.18x, on exactly
+        //     the topology where issue-ahead loses.
+        constexpr uint32_t in_tile_bytes = get_tile_size(cb_input_sticks);
+        constexpr uint32_t slot_bytes = wt_chunk * in_tile_bytes;
+        constexpr uint32_t coal = read_coalesce > tile_h ? tile_h : (read_coalesce ? read_coalesce : 1);
+        constexpr bool one_packet = read_one_packet && (coal * row_bytes <= NOC_MAX_BURST_SIZE);
+        constexpr uint32_t n_trid = read_ahead + 1;
+        const uint32_t vc = read_vc_enable ? read_vc : NOC_UNICAST_WRITE_VC;
+        // B13: every transfer on this path is the same length, so when it fits
+        // one packet the LENGTH goes into the state too and B13 composes with B6.
+        StatefulRead<read_state != 0, (one_packet ? coal * row_bytes : 0)> issue_rows;
+
+        // The reader is this CB's only producer and starts on an empty CB, so the
+        // write pointer at entry IS the ring base and the slot walk is exact.
+        // Flow control still comes entirely from cb_reserve_back.
+        const uint32_t slot_base = get_write_ptr(cb_input_sticks);
+        uint32_t slot = 0;
+        uint32_t trid_issue = 1, trid_wait = 1;
+        uint32_t pending = 0;
+
+        BlockIndex<precomp_index != 0, nt_h> idx;
+        idx.init(start_block, block_row0, block_wc0);
+        for (uint32_t i = 0; i < num_blocks; ++i) {
+            // block -> (first source stick, byte offset in the stick), per work
+            // assignment. UNCHANGED from the loops this replaces.
+            uint32_t row, col_off;
+            if constexpr (work_mode == 1 /* W_REGION */) {
+                const uint32_t r = (n_chunks == 1) ? i : i / n_chunks;
+                row = tile_row0 + r;
+                col_off = col_off_base + ((n_chunks == 1) ? 0 : (i - r * n_chunks) * row_bytes);
             } else {
-                for (uint32_t i = 0; i < num_blocks; ++i) {
-                    const uint32_t r = i / n_chunks;
-                    const uint32_t c = i - r * n_chunks;
-                    MaybeDeviceZoneScope("reader_helper");
-                    dataflow_kernel_lib::
-                        read_sticks_for_tilize<cb_input_sticks, dataflow_kernel_lib::TilizeGranularity::TILE>(
-                            accessor,
-                            /*total_num_rows=*/tile_h,
-                            /*row_bytes=*/row_bytes,
-                            /*start_page=*/(tile_row0 + r) * tile_h,
-                            /*byte_offset_within_page=*/col_off_base + c * row_bytes);
-                }
+                idx.seek(i);
+                row = idx.row;
+                col_off = idx.wc * row_bytes;
+                idx.advance();
             }
-        } else if constexpr (read_one_packet || read_trid || read_vc_enable || read_state) {
-            // ── custom aligned loop (master.md B6 / B8 / B10) ─────────────
-            // HELPER SUBSTITUTION, justified and MEASURED. read_sticks_for_tilize
-            // issues a plain noc_async_read per row and one plain
-            // noc_async_read_barrier per block; its contract exposes NO
-            // transaction id (B8), NO request VC (B10) and NO one-packet
-            // selector (B6), so none of the three levers this refinement prices
-            // can be expressed through it. The helper stays the DEFAULT arm —
-            // with all three levers off this branch is compiled out entirely and
-            // the kernel takes the helper call below verbatim, so the OFF arm is
-            // literally the Phase-0 code and the substitution itself is what the
-            // bench measures.
-            constexpr uint32_t in_tile_bytes = get_tile_size(cb_input_sticks);
-            constexpr uint32_t slot_bytes = wt_chunk * in_tile_bytes;
-            constexpr bool one_packet = read_one_packet && (row_bytes <= NOC_MAX_BURST_SIZE);
-            const uint32_t vc = read_vc_enable ? read_vc : NOC_UNICAST_WRITE_VC;
-            // B13 on the aligned path: every transfer here is exactly row_bytes,
-            // so when it fits one packet the LENGTH goes into the state as well
-            // and the lever composes with B6 rather than replacing it.
-            StatefulRead<read_state != 0, (one_packet ? row_bytes : 0)> issue_rows;
 
-            if constexpr (read_trid) {
-                // B8 double-issue: block i's reads are issued BEFORE block i-1's
-                // barrier, so a request is always in flight across the block
-                // boundary instead of the NoC draining at every barrier.
-                //
-                // The host only sets this lever when the input CB is EXACTLY two
-                // blocks deep (CB_DEPTH == 2, NT_BLK == 1), so the write pointer
-                // alternates between two fixed slots and no wrap arithmetic is
-                // needed — cb_reserve_back still provides all the flow control.
-                const uint32_t slot_base = get_write_ptr(cb_input_sticks);
-                uint32_t slot = 0;
-                uint32_t trid_issue = 1, trid_wait = 1;
-                bool in_flight = false;
-                BlockIndex<precomp_index != 0, nt_h> idx;
-                idx.init(start_block, block_row0, block_wc0);
-                for (uint32_t i = 0; i < num_blocks; ++i) {
-                    idx.seek(i);
-                    const uint32_t wc = idx.wc;
-                    const uint32_t row = idx.row;
-                    idx.advance();
-
-                    {
-                        // Room for the still-unpushed in-flight block AND this one.
-                        MaybeDeviceZoneScope("reader_reserve");
-                        cb_reserve_back(cb_input_sticks, in_flight ? 2 * wt_chunk : wt_chunk);
-                    }
-                    {
-                        MaybeDeviceZoneScope("reader_issue");
-                        noc_async_read_set_trid(trid_issue);
-                        issue_tile_row<row_bytes, tile_h, one_packet, read_state != 0>(
-                            accessor, issue_rows, row * tile_h, wc * row_bytes, slot_base + slot * slot_bytes, vc);
-                    }
-                    slot ^= 1;
-                    trid_issue ^= 3;  // alternate 1 <-> 2
-
-                    if (in_flight) {
-                        {
-                            MaybeDeviceZoneScope("reader_barrier");
-                            noc_async_read_barrier_with_trid(trid_wait);
-                        }
-                        cb_push_back(cb_input_sticks, wt_chunk);
-                        trid_wait ^= 3;
-                    }
-                    in_flight = true;
+            {
+                // Room for every still-unpushed group AND the one about to be
+                // issued — the slack group is what makes that reservable.
+                MaybeDeviceZoneScope("reader_reserve");
+                cb_reserve_back(cb_input_sticks, (pending + 1) * wt_chunk);
+            }
+            {
+                // RISC-serial issue cost: address generation + command buffer
+                // writes, scaling with TRANSACTION COUNT. (Note it also absorbs
+                // fabric back-pressure — noc_async_read blocks inside this loop
+                // when the NoC is saturated, so a large number here is not by
+                // itself proof of RISC-bound issue work.)
+                MaybeDeviceZoneScope("reader_issue");
+                if constexpr (read_ahead > 0) {
+                    noc_async_read_set_trid(trid_issue);
                 }
-                noc_async_read_barrier_with_trid(trid_wait);  // drain the last block
-                cb_push_back(cb_input_sticks, wt_chunk);
-                // Leave the command buffer's packet tag at 0 for the next
-                // kernel (the writer's twin MUST do this — brisck.cc:91 asserts
-                // it on the write cmd bufs; the read cmd buf is not in that
-                // check, but the hygiene is the same).
-                noc_async_read_set_trid(0);
-            } else {
-                BlockIndex<precomp_index != 0, nt_h> idx;
-                idx.init(start_block, block_row0, block_wc0);
-                for (uint32_t i = 0; i < num_blocks; ++i) {
-                    idx.seek(i);
-                    const uint32_t wc = idx.wc;
-                    const uint32_t row = idx.row;
-                    idx.advance();
+                issue_tile_row<row_bytes, tile_h, coal, one_packet, read_state != 0>(
+                    accessor, issue_rows, row * tile_h, col_off, slot_base + slot * slot_bytes, vc);
+            }
+            slot = (slot + 1 == in_cb_slots) ? 0 : slot + 1;
+            if constexpr (read_ahead > 0) {
+                trid_issue = (trid_issue == n_trid) ? 1 : trid_issue + 1;
+            }
+            ++pending;
 
-                    {
-                        MaybeDeviceZoneScope("reader_reserve");
-                        cb_reserve_back(cb_input_sticks, wt_chunk);
-                    }
-                    {
-                        // RISC-serial issue cost: address generation + command
-                        // buffer writes, scaling with TRANSACTION COUNT.
-                        MaybeDeviceZoneScope("reader_issue");
-                        issue_tile_row<row_bytes, tile_h, one_packet, read_state != 0>(
-                            accessor, issue_rows, row * tile_h, wc * row_bytes, get_write_ptr(cb_input_sticks), vc);
-                    }
-                    {
-                        // Time the fabric still owed us once issue finished.
-                        MaybeDeviceZoneScope("reader_barrier");
+            if (pending > read_ahead) {
+                {
+                    // Time the fabric still owed us once issue finished.
+                    MaybeDeviceZoneScope("reader_barrier");
+                    if constexpr (read_ahead > 0) {
+                        noc_async_read_barrier_with_trid(trid_wait);
+                        trid_wait = (trid_wait == n_trid) ? 1 : trid_wait + 1;
+                    } else {
                         noc_async_read_barrier();
                     }
-                    cb_push_back(cb_input_sticks, wt_chunk);
+                }
+                cb_push_back(cb_input_sticks, wt_chunk);
+                --pending;
+            }
+        }
+        // Drain whatever the window still holds. A core with fewer blocks than
+        // the window never fills it, and this is what degenerates that case to
+        // the plain schedule instead of hanging.
+        while (pending > 0) {
+            {
+                MaybeDeviceZoneScope("reader_barrier");
+                if constexpr (read_ahead > 0) {
+                    noc_async_read_barrier_with_trid(trid_wait);
+                    trid_wait = (trid_wait == n_trid) ? 1 : trid_wait + 1;
+                } else {
+                    noc_async_read_barrier();
                 }
             }
-        } else {
-            // Blocks are W-chunk-major, so a run of consecutive blocks that shares
-            // one W chunk is one helper call over run*TILE_H contiguous sticks.
-            uint32_t block = start_block;
-            uint32_t remaining = num_blocks;
-            while (remaining > 0) {
-                const uint32_t wc = block / nt_h;
-                const uint32_t row = block % nt_h;
-                uint32_t run = nt_h - row;
-                if (run > remaining) {
-                    run = remaining;
-                }
-                MaybeDeviceZoneScope("reader_helper");  // occupancy — see the n_chunks==1 note above
-                dataflow_kernel_lib::
-                    read_sticks_for_tilize<cb_input_sticks, dataflow_kernel_lib::TilizeGranularity::TILE>(
-                        accessor,
-                        /*total_num_rows=*/run * tile_h,
-                        /*row_bytes=*/row_bytes,
-                        /*start_page=*/row * tile_h,
-                        /*byte_offset_within_page=*/wc * row_bytes);
-                block += run;
-                remaining -= run;
-            }
+            cb_push_back(cb_input_sticks, wt_chunk);
+            --pending;
+        }
+        if constexpr (read_ahead > 0) {
+            // Leave the command buffer's packet tag at 0 for the next kernel
+            // (the same hygiene the writer's trid twin observes).
+            noc_async_read_set_trid(0);
         }
     } else if constexpr (regime == 2 /* R_RETILE */) {
         // ── R_RETILE ─────────────────────────────────────────────────────

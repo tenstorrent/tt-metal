@@ -182,8 +182,15 @@ W_REGION = 1
 #                      the write NoC drains between blocks (master.md B8, WRITE
 #                      side — the reader lever's twin; the split-DM ablation put
 #                      the write half on the critical path).
-#   read_trid     0 -> one plain read barrier per block (no double-issue), i.e.
-#                      the NoC drains between blocks (master.md B8 off arm).
+#   read_ahead    0 -> the R_ALIGNED reader barriers each block's reads before
+#                      issuing the next (no read in flight across the block
+#                      boundary). 1 (shipped) keeps ONE group outstanding over
+#                      rotating transaction ids, against ONE group of CB slack
+#                      (Perf 2; subsumes master.md B8's read half).
+#   read_coalesce 0 -> one NoC transfer per source stick. 1 (shipped) merges a
+#                      whole block's sticks into ONE transfer wherever they are
+#                      provably contiguous (an L1-sharded source whose page is a
+#                      whole tensor row) — Perf 2.
 #   read_vc       0 -> every reader issues on the default read VC
 #                      (master.md B10 off arm).
 #   pack_fast     0 -> bfp8_pack_precise=True, i.e. the PRECISE block-float packer
@@ -224,8 +231,11 @@ LEVERS = {
     "zero_copy": 1,
     "xfer_gate": 1,
     "pipeline": 1,
-    "read_trid": 1,
     "write_trid": 1,
+    # Perf 2. `read_trid` (B8's read half) is GONE — the unified issue-ahead loop
+    # below subsumes it, and measured strictly better everywhere B8 was enabled.
+    "read_ahead": 1,
+    "read_coalesce": 1,
     # master.md B10 ships PARKED at its byte-identical default (every reader on
     # the default request VC). Measured over 5-sample medians on Wormhole B0 it
     # is neutral on the grid-filling square (86,136 vs 85,720 ns) and a 2.6% LOSS
@@ -334,9 +344,29 @@ def cb_pages(cb_depth, wt_chunk):
     return cb_depth * NT_BLK * wt_chunk
 
 
-def cb_bytes(cb_depth, wt_chunk, in_tile_bytes, out_tile_bytes):
+# Perf 2: the INPUT CB carries one extra group of SLACK behind the reader's one
+# outstanding read. The measured rule is slack, not depth and not window size:
+# every arm with `cb_depth == ahead + 1` (zero slack) landed on the baseline or
+# below it, and every arm with `cb_depth >= ahead + 2` won — while `ahead >= 2`
+# is flat at best and a regression on interleaved W_BLOCKS. So: ONE outstanding
+# group, ONE group of slack. The OUTPUT CB is untouched, which is what holds the
+# L1 cost to `wt_chunk * in_tile_bytes`.
+IN_CB_EXTRA_DEPTH = 1
+
+
+def cb_pages_in(cb_depth, wt_chunk, in_extra=0):
+    """Pages in the INPUT streaming CB — `cb_pages()` plus the issue-ahead slack.
+
+    ``in_extra`` is ``IN_CB_EXTRA_DEPTH`` on a plan that actually takes the
+    issue-ahead schedule and 0 everywhere else, so no path pays L1 (and no path
+    pays the ``wt_cap()`` consequence) for a window it does not use.
+    """
+    return cb_pages(cb_depth + in_extra, wt_chunk)
+
+
+def cb_bytes(cb_depth, wt_chunk, in_tile_bytes, out_tile_bytes, in_extra=0):
     """L1 bytes held by the two streaming CBs together, from ``cb_pages()``."""
-    return cb_pages(cb_depth, wt_chunk) * (in_tile_bytes + out_tile_bytes)
+    return cb_pages_in(cb_depth, wt_chunk, in_extra) * in_tile_bytes + cb_pages(cb_depth, wt_chunk) * out_tile_bytes
 
 
 def stage_tile_bytes(tile_h, in_tile_h, tile_w, elem_bytes):
@@ -353,7 +383,7 @@ def stage_tile_bytes(tile_h, in_tile_h, tile_w, elem_bytes):
     return _div_up(tile_h, in_tile_h) * in_tile_h * tile_w * elem_bytes
 
 
-def wt_cap(cb_depth, in_tile_bytes, out_tile_bytes, stage_bytes=0):
+def wt_cap(cb_depth, in_tile_bytes, out_tile_bytes, stage_bytes=0, in_extra=0):
     """L1 ceiling on the W block factor — THE single source for that cap.
 
     ``in_tile_bytes`` / ``out_tile_bytes`` are the *streaming* page sizes: pass 0
@@ -362,7 +392,7 @@ def wt_cap(cb_depth, in_tile_bytes, out_tile_bytes, stage_bytes=0):
     depth-1 (it is reader-private scratch, not a pipelined CB). When nothing
     streams, only the library's fast-tilize width bound remains.
     """
-    per_chunk_tile = cb_bytes(cb_depth, 1, in_tile_bytes, out_tile_bytes) + stage_bytes
+    per_chunk_tile = cb_bytes(cb_depth, 1, in_tile_bytes, out_tile_bytes, in_extra) + stage_bytes
     if per_chunk_tile == 0:
         return FAST_TILIZE_MAX_W
     return max(1, min(FAST_TILIZE_MAX_W, CB_L1_BUDGET // per_chunk_tile))
@@ -390,7 +420,9 @@ def read_bytes_per_stick(wt_chunk, in_tile_bytes, tile_h):
     return wt_chunk * in_tile_bytes // tile_h
 
 
-def derive_blocking(nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, cb_depth, tile_h, pipeline=True, stage_bytes=0):
+def derive_blocking(
+    nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, cb_depth, tile_h, pipeline=True, stage_bytes=0, in_extra=0
+):
     """The three block knobs — single source of truth (op_design.md §1.4).
 
     Returns ``(wt_chunk, n_chunks, num_blocks)``.
@@ -410,7 +442,7 @@ def derive_blocking(nt_h, wt, in_tile_bytes, out_tile_bytes, num_cores, cb_depth
     # via wt_cap() so the ceiling can never drift from the CB sizing below (it
     # carries the NT_BLK factor too, which a hand-written formula here would have
     # dropped) and the sharded path shares the same cap.
-    cap = wt_cap(cb_depth, in_tile_bytes, out_tile_bytes, stage_bytes)
+    cap = wt_cap(cb_depth, in_tile_bytes, out_tile_bytes, stage_bytes, in_extra)
 
     n_want = max(1, _div_up(num_cores, nt_h))  # grid-fill floor
     if pipeline:
@@ -698,6 +730,28 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         in_placement, out_placement, shard = P_ACCESSOR, P_ACCESSOR, None
 
     # ---- 2b. knobs + work distribution -----------------------------------
+    # Perf 2: will this plan take the reader's ISSUE-AHEAD schedule? Decided here,
+    # BEFORE the blocking, because the schedule needs one extra group of input-CB
+    # slack and that group is part of the L1 budget every block knob is derived
+    # against. A plan that will not take it passes in_extra = 0 and keeps exactly
+    # the blocking it had before this round.
+    #
+    # These are the R_ALIGNED conditions restated on values known this early (the
+    # regime itself is derived after the shard decision): no fill region, no
+    # retile, one page per stick. A DRAM source is never aliased on a local shard,
+    # so `in_placement == P_ACCESSOR` follows from `src_in_dram` rather than
+    # needing the placement decision.
+    src_in_dram = input_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
+    wants_read_ahead = bool(
+        LEVERS["read_ahead"]
+        and src_in_dram
+        and not retile
+        and not plan.has_pad_region
+        and src_row_pages == 1
+        and LEVERS["regime_select"]
+    )
+    in_extra = IN_CB_EXTRA_DEPTH if wants_read_ahead else 0
+
     # An aliased CB costs no extra L1 (it IS the tensor), so only the STREAMING
     # sides enter the L1 budget — that is what keeps a wide-W sharded crossover
     # bounded in W.
@@ -714,7 +768,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
             wt_chunk, n_chunks = shard["shard_wt"], 1
         else:
             wt_chunk, n_chunks = derive_shard_blocking(
-                shard["shard_wt"], wt_cap(cb_depth, stream_in, stream_out, stage_per_chunk_tile)
+                shard["shard_wt"], wt_cap(cb_depth, stream_in, stream_out, stage_per_chunk_tile, in_extra)
             )
         # Read-transfer gate (MIN_STREAM_READ_BYTES): an aliased DESTINATION pins
         # the reader's per-row transfer to the shard's own width, and below the
@@ -731,10 +785,11 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     if shard is not None:
         while (
             cb_depth > 1
-            and cb_bytes(cb_depth, wt_chunk, stream_in, stream_out) + wt_chunk * stage_per_chunk_tile > CB_L1_BUDGET
+            and cb_bytes(cb_depth, wt_chunk, stream_in, stream_out, in_extra) + wt_chunk * stage_per_chunk_tile
+            > CB_L1_BUDGET
         ):
             cb_depth -= 1
-        if cb_bytes(1, wt_chunk, stream_in, stream_out) + wt_chunk * stage_per_chunk_tile > CB_L1_BUDGET:
+        if cb_bytes(1, wt_chunk, stream_in, stream_out, in_extra) + wt_chunk * stage_per_chunk_tile > CB_L1_BUDGET:
             # The one shape zero-copy cannot buy: the shard pins a block width
             # whose streaming partner CB will not fit. Take the accessor path on
             # both sides so WT_CHUNK is free to shrink again.
@@ -753,6 +808,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
                 tile_h,
                 pipeline=bool(LEVERS["pipeline"]),
                 stage_bytes=stage_per_chunk_tile,
+                in_extra=in_extra,
             )
         else:
             # w_split OFF — the pure height split (op_design.md §1.3 candidate 2).
@@ -762,7 +818,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         # (same cb_bytes() source as derive_blocking's ceiling and the CBs below)
         while (
             cb_depth > 1
-            and cb_bytes(cb_depth, wt_chunk, in_tile_bytes, out_tile_bytes) + wt_chunk * stage_per_chunk_tile
+            and cb_bytes(cb_depth, wt_chunk, in_tile_bytes, out_tile_bytes, in_extra) + wt_chunk * stage_per_chunk_tile
             > CB_L1_BUDGET
         ):
             cb_depth -= 1
@@ -845,6 +901,14 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         blocks_per_shard = [ht * n_chunks for (_, _, ht) in shard["regions"]]
         num_blocks_total = sum(blocks_per_shard)
 
+    # The issue-ahead slack is allocated only where the schedule is actually
+    # taken. `halve_cores` is not known until the split above is settled, so the
+    # blocking was derived with the slack included (conservative — it can only
+    # make WT_CHUNK smaller, never wrong) and the group is dropped here, before
+    # the CB descriptors and the kernel's slot count are built from it.
+    if halve_cores:
+        in_extra = 0
+
     # ========== 3. CIRCULAR BUFFERS =======================================
 
     # The rank->=2 promoted view (plan.read_shape): a rank-0 scalar reads as a
@@ -893,6 +957,9 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # knobs only, never of WT / NT_H / any tensor dimension. cb_pages() is the
     # one place that formula lives. An aliased CB is the shard itself.
     pages_per_cb = cb_pages(cb_depth, wt_chunk)
+    # Perf 2: the input side carries one extra group so the reader can keep a read
+    # in flight across the block boundary and still have a free slot to issue into.
+    pages_per_in_cb = cb_pages_in(cb_depth, wt_chunk, in_extra)
     tile_descriptor = ttnn.TileDescriptor(tile_h, tile_w)
 
     def _aliased_cb(cb_index, tensor, page_bytes, dtype):
@@ -919,7 +986,7 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         cb_input_sticks_descriptor = _aliased_cb(CB_INPUT_STICKS, input_tensor, in_tile_bytes, input_tensor.dtype)
     else:
         cb_input_sticks_descriptor = ttnn.CBDescriptor(
-            total_size=pages_per_cb * in_tile_bytes,
+            total_size=pages_per_in_cb * in_tile_bytes,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
@@ -1066,20 +1133,74 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
     # compiles to the library-helper call verbatim (the Phase-0 hot path).
     # They apply only where that loop lives: the aligned W_BLOCKS accessor read.
     aligned_accessor_read = regime == R_ALIGNED and work_mode == W_BLOCKS and in_placement == P_ACCESSOR
-    # B8 needs the input CB to be EXACTLY two blocks deep, so the reader's two
-    # slot addresses are fixed and it can hold one block in flight while the
+    # B8's WRITE twin needs the output CB EXACTLY two blocks deep, so the writer's
+    # two slot addresses are fixed and it can hold one block in flight while the
     # next is issued. cb_pages() is the single source for that geometry.
     trid_ok = cb_pages(cb_depth, wt_chunk) == 2 * NT_BLK * wt_chunk and NT_BLK == 1
     read_one_packet = int(aligned_accessor_read and LEVERS["read_one_packet"])
-    # Perf 1: B8's read-side double-issue is a LOSS at exactly two blocks per core,
-    # and `halve_cores` above produces exactly that. The trid loop issues block i+1
-    # BEFORE barriering block i, so block i is published one whole issue loop late;
-    # at 4+ blocks that is a steady state, but at 2 it is pure added latency on the
-    # only handoff there is. Splitting the pair isolates it: read-half off gives
-    # 1.052x on [1,1,32,16384], write-half off gives 0.995x. So the read twin is
-    # dropped here and the WRITE twin below is kept.
-    read_trid = int(aligned_accessor_read and trid_ok and LEVERS["read_trid"] and not halve_cores)
     read_vc_enable = int(aligned_accessor_read and LEVERS["read_vc"])
+
+    # -- Perf 2: ONE R_ALIGNED reader loop (issue-ahead + stick coalescing) ---
+    # `read_trid` (master.md B8's read half) is GONE, subsumed here: it was gated
+    # on exactly "one outstanding group with ZERO slack", which a full sweep
+    # measured as baseline-or-worse on every cell, while the same loop with one
+    # group of SLACK (IN_CB_EXTRA_DEPTH) wins 1.18-1.24x. `ahead == 1` is best or
+    # tied everywhere measured and `ahead >= 2` regresses, so the window is 1 and
+    # is not a knob.
+    #
+    # This predicate deliberately drops the `work_mode == W_BLOCKS` clause the
+    # three Refinement-3 levers above keep: the unified loop covers W_REGION too,
+    # which is where the crossover's 90%-of-wall read lives. B6/B10/B13 were
+    # priced on W_BLOCKS only, so their gate stays narrow rather than being
+    # widened by association.
+    aligned_read = regime == R_ALIGNED and in_placement == P_ACCESSOR
+    # ISSUE-AHEAD. The source must be DRAM: on a source in ANOTHER core's L1 the
+    # transaction-id machinery is pure added RISC work with no fabric latency to
+    # hide behind, and it MEASURED 0.81-0.94x on three such cells (3 repeats
+    # each). That is the one carve-out, and the coalescing knob below is what
+    # wins on that topology instead. The slack term is mechanical: if the L1
+    # fallback dropped cb_depth to 1 there is no slack group, and a zero-slack
+    # window is a 0.73x regression at fp32.
+    # The one carve-out on the schedule itself, and it is the SAME mechanism Perf 1
+    # measured for B8's read half: where `halve_cores` fired, each core owns
+    # exactly TWO blocks, so issuing block i+1 before barriering block i publishes
+    # the first block a whole issue loop late with no steady state to amortize it
+    # against. Re-measured this round on [1,1,32,16384] over 3 paired reps:
+    # bf16 13,798 on vs 13,113 off (0.95x), fp32 26,737 vs 25,171 (0.94x). Every
+    # other cell swept is a win or flat, including the ones with tiny transfers
+    # (tile_h=8 0.99x, uint8 1.00x — both inside the noise band, so they keep the
+    # schedule rather than being fenced off it).
+    read_ahead = int(aligned_read and wants_read_ahead and cb_depth + in_extra >= 3 and not halve_cores)
+    # TRANSACTION MERGE. `coal` consecutive source sticks become ONE transfer,
+    # legal exactly when they are one contiguous address range and the block takes
+    # the whole stick: a SHARDED source (an interleaved page walk round-robins the
+    # banks, and the merged read measured NOT bit-exact), one page per tensor row,
+    # the block spanning the whole row, and a shard height that is a whole number
+    # of tile-rows so a block never straddles two shards. Measured 1.12-1.18x on
+    # exactly the cells issue-ahead loses on.
+    src_shard_rows = (
+        int(input_tensor.memory_config().shard_spec.shape[0])
+        if (input_tensor.memory_config().is_sharded() and input_tensor.memory_config().shard_spec is not None)
+        else 0
+    )
+    read_coalesce = (
+        tile_h
+        if (
+            aligned_read
+            and LEVERS["read_coalesce"]
+            and not src_in_dram
+            and src_shard_rows
+            and src_row_pages == 1
+            and n_chunks == 1
+            and wt_chunk * tile_w * elem_in == src_page_bytes
+            and src_shard_rows % tile_h == 0
+        )
+        else 1
+    )
+    # A coalesced transfer is tile_h times a row and blows past NOC_MAX_BURST_SIZE,
+    # so B6's one-packet form is mutually exclusive with it by construction.
+    if read_coalesce > 1:
+        read_one_packet = 0
     # B8's WRITE twin. Same two-slot CB precondition, and every write must be a
     # whole page (the page_write OFF arm splits them, and an ablated arm issues
     # none), so those two arms fall back to the plain barrier-per-block loop.
@@ -1148,7 +1269,10 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         src_page_bytes,
         src_row_pages,
         read_one_packet,
-        read_trid,
+        # Perf 2: the issue-ahead window (0/1) and the sticks-per-transfer merge
+        # factor. Together they replace B8's read-side `read_trid`.
+        read_ahead,
+        read_coalesce,
         read_vc_enable,
         # The reader's input-format fill is DEAD WORK when the writer re-stamps
         # every pad position (Refinement 4): identical regions, and the writer's
@@ -1171,6 +1295,10 @@ def create_program_descriptor(input_tensor, output_tensor, plan) -> ttnn.Program
         int(retile_direct),
         retile_direct_dram,
         int(retile and needs_cast),
+        # Perf 2: block slots in the (one-group-deeper) input CB — the reader
+        # walks them itself while a read is outstanding, since get_write_ptr only
+        # advances on push_back.
+        cb_pages_in(cb_depth, wt_chunk, in_extra) // wt_chunk,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 

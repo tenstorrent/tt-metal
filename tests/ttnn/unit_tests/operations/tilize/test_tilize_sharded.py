@@ -196,7 +196,14 @@ def test_chunked_aliased_output_is_correct(device, monkeypatch):
     """
     grid = _crs(((0, 0), (1, 0)))
     _skip_if_grid_too_small(device, grid)
-    monkeypatch.setattr(pd, "CB_L1_BUDGET", 4 * 2 * (32 * 32 * 2))  # cap = 4 tiles
+    # Squeeze the budget to exactly four tile-columns' worth. Derived from
+    # `cb_bytes()` rather than hand-multiplied, so it tracks the CB geometry
+    # instead of pinning one era of it: the output side is ALIASED here (0 bytes)
+    # and the input side carries Perf 2's issue-ahead slack group on a DRAM
+    # source, both of which `cb_bytes()` already knows.
+    monkeypatch.setattr(
+        pd, "CB_L1_BUDGET", 4 * pd.cb_bytes(2, 1, 32 * 32 * 2, 0, pd.IN_CB_EXTRA_DEPTH)
+    )  # cap = 4 tiles
 
     shape = [1, 1, 64, 512]
     out_cfg = _legacy(grid, (32, 512), _ROW, _HEIGHT)
