@@ -177,9 +177,9 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
         uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
         uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
         for (size_t i = 0; i < num_devices; i++) {
-            auto* device = devices_[i].get();
-            auto& program = new_programs[i];
-            ths.emplace_back([&] {
+            ths.emplace_back([&, i] {
+                auto* device = devices_[i].get();
+                auto& program = new_programs[i];
                 for (int j = 0; j < num_compiles; j++) {
                     auto mask = BuildEnvManager::get_instance(extract_context_id(device))
                                     .get_device_build_env(device->build_id())
