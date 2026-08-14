@@ -17,7 +17,9 @@ from models.demos.deepseek_v3_d_p.utils.perf_utils import (
 )
 
 _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_hca.py::test_hca_chunked_prefill_mesh"
-_CMD_8X4 = f"pytest {_TEST_PATH} -k 'chunk5120-full and 8x4'"  # two 5120-token chunks
+# The variant has to be named: the PCC test runs both flash and pro, and without it -k would select
+# both and the measured region would cover four chunks instead of two.
+_CMD_8X4 = f"pytest {_TEST_PATH} -k 'flash and chunk5120-full and 8x4'"  # two 5120-token chunks
 
 
 @pytest.mark.timeout(0)

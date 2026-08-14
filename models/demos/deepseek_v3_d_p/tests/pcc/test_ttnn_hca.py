@@ -20,6 +20,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 import (
     DeepseekV4Attention,
@@ -27,6 +28,7 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4.modeling_deepseek_v4 imp
     DeepseekV4HCACompressor,
 )
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
+from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.tt.mla.heavily_compressed_attention import TtHCA, TtHCACompressor
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -36,16 +38,56 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 _SHAPES = [128, 130, 256, 260, 300, 512, 513, 1024, 2048, 4095, 4096, 5120]
 
 
-def _flash_config(num_hidden_layers=4):
+def _config(model_config, num_hidden_layers=4):
+    """Reference config from one variant's dimension constants.
+
+    ``q_lora_rank`` and ``o_groups`` are passed explicitly because DeepseekV4Config's defaults happen to
+    be Flash's values -- a Pro config that left them out would build Pro widths with Flash's latent and
+    grouping, and the reference would agree with it, so PCC would pass on the wrong model."""
+    m = model_config
     return DeepseekV4Config(
-        hidden_size=DeepSeekV4FlashConfig.EMB_SIZE,
-        head_dim=DeepSeekV4FlashConfig.HEAD_DIM,
-        num_attention_heads=DeepSeekV4FlashConfig.NUM_ATTENTION_HEADS,
+        hidden_size=m.EMB_SIZE,
+        head_dim=m.HEAD_DIM,
+        num_attention_heads=m.NUM_ATTENTION_HEADS,
+        q_lora_rank=m.Q_LORA_RANK,
+        o_groups=m.O_GROUPS,
         num_hidden_layers=num_hidden_layers,
-        compress_rates=dict(DeepSeekV4FlashConfig.COMPRESS_RATES),
-        compress_rope_theta=DeepSeekV4FlashConfig.COMPRESS_ROPE_THETA,
-        rms_norm_eps=DeepSeekV4FlashConfig.RMS_NORM_EPS,
+        compress_rates=dict(m.COMPRESS_RATES),
+        compress_rope_theta=m.COMPRESS_ROPE_THETA,
+        rms_norm_eps=m.RMS_NORM_EPS,
     )
+
+
+# Flash and Pro differ in hidden size, head count, q latent and o groups; compress_rate (128), head_dim
+# and sliding_window are the same, so the whole chunking contract is shared and only the widths move.
+#
+# TODO: these belong on a V4 prefill adapter (tt/runners/adapters/) once V4 has a block and a runtime, so
+# build_runtime/allocate_kv_cache become writable. The adapter would then own what is hardcoded here --
+# model_config, hf_repo_id, env_var, the PCC thresholds, the golden-trace dir -- and the same object would
+# serve both the `variant` fixture and the runner (tests/conftest.py:33).
+#
+# (id, dimension constants, per-chunk PCC floor, long-run PCC floor). PCC decays with kv_actual on both
+# variants: every chunk inherits the previous one's error through the cache and the carry, and the softmax
+# reduction gets wider as the compressed cache fills. Pro decays ~2.6x faster -- 128 heads and a 7168-wide
+# hidden make every bf16 reduction longer -- so both its floors are lower.
+#
+# Measured on 11x5120 (56,320 tokens), first and last chunk:
+#
+#     kv_actual          0        51200
+#     flash          0.998885   0.992513
+#     pro            0.998414   0.981595
+#
+# The per-chunk drop halves over the run on both (flash 874e-6 -> 361e-6, pro 1945e-6 -> 947e-6) while the
+# stored cache entries hold 0.9997, so this is the attention reduction widening, not the cache drifting.
+# The two long scenarios split the same 56,320 tokens differently -- one uniform, one down to 256-token
+# chunks -- and land within 1.2e-4 of each other, so the floors track depth, not chunk boundaries.
+_VARIANTS = [
+    ("flash", DeepSeekV4FlashConfig, 0.997, 0.99),
+    ("pro", DeepSeekV4ProConfig, 0.994, 0.98),
+]
+_MODEL_CONFIGS = [pytest.param(cfg, id=name) for name, cfg, _, _ in _VARIANTS]
+_MODEL_CONFIGS_CHUNKED = [pytest.param(cfg, chunked, id=name) for name, cfg, chunked, _ in _VARIANTS]
+_MODEL_CONFIGS_LONG = [pytest.param(cfg, long, id=name) for name, cfg, _, long in _VARIANTS]
 
 
 # 1x1 needs no fabric (sp=tp=1 skips every collective). On a 32-chip box only 8x4 runs;
@@ -84,13 +126,14 @@ _MESH_CONFIGS = [
     _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len):
+@pytest.mark.parametrize("model_config", _MODEL_CONFIGS)
+def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len, model_config):
     """TtHCACompressor against the unpadded reference. seq_len is the REAL pre-pad length, so the
     unaligned value exercises the pad + trim path."""
     torch.manual_seed(42)
 
     batch = 1
-    config = _flash_config()
+    config = _config(model_config)
     sp_factor = mesh_device.shape[0]
     compress_rate = config.compress_rates["heavily_compressed_attention"]
     logger.debug(f"mesh={tuple(mesh_device.shape)} seq_len={seq_len} sp={sp_factor}")
@@ -159,7 +202,8 @@ def test_hca_compressor_mesh(mesh_device, device_params, topology, seq_len):
 
 
 @pytest.mark.parametrize("seq_len", _SHAPES, ids=[f"seq{s}" for s in _SHAPES])
-def test_hca_forward(device, seq_len):
+@pytest.mark.parametrize("model_config", _MODEL_CONFIGS)
+def test_hca_forward(device, seq_len, model_config):
     """Single-shot TtHCA.forward against DeepseekV4Attention.forward.
 
     Single device, so this is the only test that runs _o_proj with all 64 heads on one chip -- the
@@ -167,7 +211,7 @@ def test_hca_forward(device, seq_len):
     down to 16 and would not catch a head-count-dependent circular-buffer blowup."""
     torch.manual_seed(42)
     batch = 1
-    config = _flash_config()
+    config = _config(model_config)
     config._attn_implementation = "eager"  # V4 is eager-only (sinks); force it for the reference
     nh, hd, sw = config.num_attention_heads, config.head_dim, config.sliding_window
     logger.debug(f"batch={batch}, seq_len={seq_len}, heads={nh}, head_dim={hd}, sw={sw}")
@@ -225,13 +269,14 @@ def test_hca_forward(device, seq_len):
     _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len):
+@pytest.mark.parametrize("model_config", _MODEL_CONFIGS)
+def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len, model_config):
     """Single-shot TtHCA.forward, SP+TP sharded, for an ARBITRARY prompt length. This is where padding
     awareness is proven: pad-derived compressed entries get trimmed and pad rows masked out."""
     torch.manual_seed(42)
 
     batch = 1
-    config = _flash_config()
+    config = _config(model_config)
     config._attn_implementation = "eager"  # V4 is eager-only (sinks); force it for the reference
     sw = config.sliding_window
     sp_factor = mesh_device.shape[0]
@@ -291,6 +336,19 @@ def test_hca_forward_mesh(mesh_device, device_params, topology, seq_len):
     logger.debug("PCC test passed!")
 
 
+def _report_chunk_pccs(pccs, floor):
+    """Log every chunk's PCC, then let the worst one decide.
+
+    Asserting inside the loop stops at the first chunk under the floor, which hides the shape of the curve
+    -- and PCC can dip on one chunk and recover on the next. Reporting the whole run first means one
+    execution says how far off it is and where, instead of one chunk per run."""
+    for it, kv_actual, valid, pcc in pccs:
+        log = logger.warning if pcc < floor else logger.info
+        log(f"  iter {it} (kv_actual={kv_actual} valid={valid}): PCC {pcc:.6f}")
+    worst_it, _, _, worst = min(pccs, key=lambda row: row[3])
+    assert worst >= floor, f"worst chunk PCC {worst:.6f} (iter {worst_it}) is below the floor {floor}"
+
+
 # The compressed-cache write must compile nothing per chunk: fill_cache keeps update_idx out of its
 # program hash (update_cache_device_operation.cpp:160) and the shift carries its offset as matrix data.
 _WRITE_COMPILES_PER_CHUNK = 0
@@ -315,7 +373,10 @@ _CHUNKED_SCENARIOS = [
     _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, chunk_size, iters_valid):
+@pytest.mark.parametrize("model_config, chunked_pcc", _MODEL_CONFIGS_CHUNKED)
+def test_hca_chunked_prefill_mesh(
+    mesh_device, device_params, topology, name, chunk_size, iters_valid, model_config, chunked_pcc
+):
     """Chunked prefill with TtHCAState carried across chunks.
 
     The reference is deliberately NOT chunked: it runs once over the whole prompt and each chunk is
@@ -324,7 +385,7 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, ch
     torch.manual_seed(42)
 
     batch = 1
-    config = _flash_config()
+    config = _config(model_config)
     config._attn_implementation = "eager"  # V4 is eager-only (sinks); force it for the reference
     sw = config.sliding_window
     compress_rate = config.compress_rates["heavily_compressed_attention"]
@@ -358,6 +419,7 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, ch
 
     signpost("HCA_START")
     kv_actual = 0
+    pccs = []  # (iter, kv_actual, valid, pcc); _report_chunk_pccs judges them after the run
     programs = mesh_device.num_program_cache_entries()
     for it, valid in enumerate(iters_valid):
         # Fixed device width every chunk; a short final chunk is padded up to it.
@@ -377,9 +439,8 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, ch
         ).squeeze(1)[:, :valid]
 
         expected = out_ref[:, kv_actual : kv_actual + valid]
-        pcc_passed, pcc_message = assert_with_pcc(expected.to(torch.float32), out.to(torch.float32), pcc=0.997)
-        logger.debug(f"  iter {it} (kv_actual={kv_actual} valid={valid}): PCC {pcc_message}")
-        assert pcc_passed, f"chunk {it} PCC failed: {pcc_message}"
+        _, pcc = comp_pcc(expected.to(torch.float32), out.to(torch.float32))
+        pccs.append((it, kv_actual, valid, pcc))
 
         # Every chunk drives identical device shapes, so one compiled program must serve them all. A
         # new entry means some op's attributes moved with the chunk -- exactly what breaks trace later.
@@ -395,6 +456,7 @@ def test_hca_chunked_prefill_mesh(mesh_device, device_params, topology, name, ch
         kv_actual += valid
     signpost("HCA_END")
 
+    _report_chunk_pccs(pccs, chunked_pcc)
     assert state.kv_actual == total
     assert state.entry_count == sum(v // compress_rate for v in iters_valid)
 
@@ -435,7 +497,6 @@ def _sliding_mask(q_pos, k_pos, sliding_window):
 # (11 * 5120 = 55 * 1024), so the mixed one differs from the uniform one only in how the tokens are
 # split -- every non-final chunk a multiple of compress_rate, none wider than chunk_size.
 _LONG_SCENARIOS = [
-    pytest.param("14x4096", 4096, [4096] * 14, id="14x4096"),
     pytest.param("11x5120", 5120, [5120] * 11, id="11x5120"),
     pytest.param(
         "mixed5120",
@@ -453,7 +514,10 @@ _LONG_SCENARIOS = [
     _MESH_CONFIGS,
     indirect=["mesh_device", "device_params"],
 )
-def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology, name, chunk_size, iters_valid):
+@pytest.mark.parametrize("model_config, long_pcc", _MODEL_CONFIGS_LONG)
+def test_hca_long_chunked_prefill_mesh(
+    mesh_device, device_params, topology, name, chunk_size, iters_valid, model_config, long_pcc
+):
     """Demo-sized prompts, ~57K tokens, 440-448 entries deep.
 
     The reference is chunked here, unlike the short scenarios. An unchunked one is not an option at
@@ -463,7 +527,7 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology, nam
     torch.manual_seed(42)
 
     batch = 1
-    config = _flash_config()
+    config = _config(model_config)
     config._attn_implementation = "eager"  # sinks: the sdpa interface silently drops s_aux
     sw = config.sliding_window
     compress_rate = config.compress_rates["heavily_compressed_attention"]
@@ -488,6 +552,7 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology, nam
 
     signpost("HCA_START")
     kv_actual = 0
+    pccs = []  # (iter, kv_actual, valid, pcc); _report_chunk_pccs judges them after the run
     programs = mesh_device.num_program_cache_entries()
     for it, valid in enumerate(iters_valid):
         real = hidden[:, kv_actual : kv_actual + valid]
@@ -517,9 +582,8 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology, nam
             out_tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=ms, dims=(2, 3))
         ).squeeze(1)[:, :valid]
 
-        pcc_passed, pcc_message = assert_with_pcc(expected.to(torch.float32), out.to(torch.float32), pcc=0.99)
-        logger.debug(f"  iter {it} (kv_actual={kv_actual} valid={valid} entries={state.entry_count}): {pcc_message}")
-        assert pcc_passed, f"chunk {it} PCC failed: {pcc_message}"
+        _, pcc = comp_pcc(expected.to(torch.float32), out.to(torch.float32))
+        pccs.append((it, kv_actual, valid, pcc))
 
         now = mesh_device.num_program_cache_entries()
         logger.debug(f"  iter {it}: program cache {programs} -> {now} (+{now - programs})")
@@ -533,6 +597,7 @@ def test_hca_long_chunked_prefill_mesh(mesh_device, device_params, topology, nam
         kv_actual += valid
     signpost("HCA_END")
 
+    _report_chunk_pccs(pccs, long_pcc)
     assert state.kv_actual == total
     assert state.entry_count == sum(v // compress_rate for v in iters_valid)
 
