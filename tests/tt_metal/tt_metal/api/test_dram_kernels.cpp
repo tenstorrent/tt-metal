@@ -316,8 +316,8 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCWriteToDRAM) {
 
     // Kernel writes timing immediately after the data buffer in DRISC L1
     uint64_t timing_noc_addr = drisc_l1_noc_addr_ + static_cast<uint64_t>(bytes_per_iter);
-    uint32_t clk_hz =
-        MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->get_device_ids()[0]) * 1000000u;
+    const auto device_id = mesh_device_->get_device_ids()[0];
+    uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_id) * 1000000u;
     uint64_t max_cycles = 0;
 
     // Verify all DRISCs writes to DRAM and calculate
@@ -422,8 +422,8 @@ TEST_P(DramKernelDRISCBWFixture, DramKernelDRISCReadFromDRAM) {
 
     // Kernel writes timing immediately after the data buffer in DRISC L1.
     uint64_t timing_noc_addr = drisc_l1_noc_addr_ + static_cast<uint64_t>(bytes_per_iter);
-    uint32_t clk_hz =
-        MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->get_device_ids()[0]) * 1000000u;
+    const auto device_id = mesh_device_->get_device_ids()[0];
+    uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_id) * 1000000u;
     uint64_t max_cycles = 0;
 
     // Verify all reads into DRISC L1 over DMA from DRAM are correct
@@ -692,8 +692,8 @@ TEST_P(DramKernelDRISCGDDRBWSweepFixture, DRISCDMAUcastToTensix) {
     CoreCoord dram_virtual = mesh_device_->virtual_core_from_logical_core(logical_core, CoreType::DRAM);
     // Kernel writes timing immediately after the data buffer in DRISC L1.
     uint64_t timing_noc_addr = drisc_l1_noc_addr_ + static_cast<uint64_t>(bytes_per_iter);
-    uint32_t clk_hz =
-        MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->get_device_ids()[0]) * 1000000u;
+    const auto device_id = mesh_device_->get_device_ids()[0];
+    uint32_t clk_hz = MetalContext::instance().get_cluster().get_device_aiclk(device_id) * 1000000u;
     uint64_t cycles = read_timing_cycles(dram_virtual, timing_noc_addr);
 
     log_info(

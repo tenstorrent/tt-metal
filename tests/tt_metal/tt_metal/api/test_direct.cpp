@@ -197,15 +197,12 @@ struct ReaderWriterConfig {
 bool reader_writer(const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReaderWriterConfig& test_config) {
     const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
 
-    auto input_dram_buffer = distributed::MeshBuffer::create(
-        distributed::ReplicatedBufferConfig{.size = byte_size},
-        {.page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
-        mesh_device.get());
+    distributed::DeviceLocalBufferConfig local_config{
+        .page_size = byte_size, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = byte_size};
+    auto input_dram_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
     uint32_t input_dram_byte_address = input_dram_buffer->address();
-    auto output_dram_buffer = distributed::MeshBuffer::create(
-        distributed::ReplicatedBufferConfig{.size = byte_size},
-        {.page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
-        mesh_device.get());
+    auto output_dram_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
     uint32_t output_dram_byte_address = output_dram_buffer->address();
 
     std::vector<uint32_t> inputs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
@@ -345,15 +342,12 @@ static ReaderDatacopyWriterContext setup_reader_datacopy_writer_context(
     ReaderDatacopyWriterContext ctx;
     ctx.byte_size = test_config.num_tiles * test_config.tile_byte_size;
 
-    ctx.input_dram_buffer = distributed::MeshBuffer::create(
-        distributed::ReplicatedBufferConfig{.size = ctx.byte_size},
-        {.page_size = ctx.byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
-        mesh_device.get());
+    distributed::DeviceLocalBufferConfig local_config{
+        .page_size = ctx.byte_size, .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::ReplicatedBufferConfig buffer_config{.size = ctx.byte_size};
+    ctx.input_dram_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
     ctx.input_dram_byte_address = ctx.input_dram_buffer->address();
-    ctx.output_dram_buffer = distributed::MeshBuffer::create(
-        distributed::ReplicatedBufferConfig{.size = ctx.byte_size},
-        {.page_size = ctx.byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM},
-        mesh_device.get());
+    ctx.output_dram_buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
     ctx.output_dram_byte_address = ctx.output_dram_buffer->address();
 
     log_info(tt::LogTest, "Input DRAM byte address: {}", ctx.input_dram_byte_address);
