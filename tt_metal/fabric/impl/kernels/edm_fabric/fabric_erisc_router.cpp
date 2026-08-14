@@ -1401,8 +1401,21 @@ FORCE_INLINE
     }
 
     if constexpr (ENABLE_CHANNEL_TRIMMING_RESOURCE_USAGE_CAPTURE) {
-        channel_trimming_usage_recorder.merge_sender_channel_forwarded_to(
-            rx_channel_id, hop_cmd_to_sender_channel_mask(hop_cmd));
+        // hop_cmd_to_sender_channel_mask is VC0-numbered (bit = compact direction index + 1).
+        // Rebase to flat VC1 sender channel indices when this receiver forwards into the VC1
+        // downstream array: on crossover routers rx0 drives the VC1 array (same condition as the
+        // main loop's downstream array selection), and VC1-serviced rx1 drives it on VC1 rows.
+        // The recorded row stays rx_channel_id (the receiving VC) — consumers key on row nonzero-ness.
+#if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
+        constexpr uint8_t forwarded_vc = 1;
+#else
+        constexpr uint8_t forwarded_vc = rx_channel_id;
+#endif
+        uint16_t forward_mask = hop_cmd_to_sender_channel_mask(hop_cmd);
+        if constexpr (forwarded_vc != 0) {
+            forward_mask <<= (VC1_SENDER_CHANNEL_START - 1);
+        }
+        channel_trimming_usage_recorder.merge_sender_channel_forwarded_to(rx_channel_id, forward_mask);
     }
 }
 #endif
@@ -3037,11 +3050,13 @@ void kernel_main() {
         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,
         "For multi-txq mode, the only currently supported configuration is sender_txq_id=0 and receiver_txq_id=1");
     if constexpr (receiver_txq_id != sender_txq_id) {
-        constexpr bool is_erisc_that_sets_up_second_txq = is_receiver_channel_serviced[0];
-        if constexpr (is_erisc_that_sets_up_second_txq) {
+        // Role selection is structural (2-erisc split), not workload-driven: use the untrimmed role
+        // flags, not the trimming-aware per-channel serviced bits (whose channel 0 can now be
+        // legitimately trimmed while a sibling channel of the same role stays active).
+        if constexpr (risc_services_receiver_channels) {
             initialize_state_for_txq1_active_mode();
         }
-        if constexpr (is_sender_channel_serviced[0]) {
+        if constexpr (risc_services_sender_channels) {
             initialize_state_for_txq1_active_mode_sender_side();
         }
     }
@@ -3230,6 +3245,7 @@ void kernel_main() {
                  // must be initialized here. This is the only time the router touches it.
                  auto* const producer_cursor =
                      reinterpret_cast<volatile uint32_t*>(local_sender_channel_connection_buffer_index_ids[I]);
+#pragma GCC unroll 1
                  for (size_t w = 0; w < sizeof(tt::tt_fabric::SenderChannelProducerCursor) / sizeof(uint32_t); ++w) {
                      producer_cursor[w] = 0;
                  }
@@ -3501,10 +3517,10 @@ void kernel_main() {
     // initialize the local sender channel buffers
     local_sender_channels.init<channel_allocs>(channel_buffer_size, sizeof(PACKET_HEADER_TYPE));
 
-    // initialize the local sender channel worker interfaces
-    // Sender channel 0 is always for local worker in the new design
-    constexpr auto sender_channel = 0;
-    if constexpr (is_sender_channel_serviced[sender_channel]) {
+    // Interface construction is a structural sender-RISC obligation. Trimming can disable
+    // sender channel 0 while leaving static forwarding sender channels active, so channel 0
+    // cannot be used as a proxy for whether these interfaces must be initialized.
+    if constexpr (risc_services_sender_channels) {
         init_local_sender_channel_worker_interfaces(
             local_sender_connection_live_semaphore_addresses,
             local_sender_connection_info_addresses,
@@ -3645,30 +3661,33 @@ void kernel_main() {
 
     if constexpr (is_2d_fabric) {
         // Helper function to open downstream EDM connections, works for both VC0 and VC1
-        auto open_downstream_edm_connections =
-            [](auto& downstream_edm_noc_interfaces, uint32_t has_downstream_edm, int receiver_channel_idx) {
-                uint32_t edm_index = 0;
-                if (is_receiver_channel_serviced[receiver_channel_idx]) {
-                    while (has_downstream_edm) {
-                        if (has_downstream_edm & 0x1) {
-                            // open connections with available downstream edms
-                            downstream_edm_noc_interfaces[edm_index]
-                                .template open<
-                                    false,
-                                    use_posted_writes_for_connection_open,
-                                    tt::tt_fabric::worker_handshake_noc>();
-                        }
-                        edm_index++;
-                        has_downstream_edm >>= 1;
-                    }
+        auto open_downstream_edm_connections = [](auto& downstream_edm_noc_interfaces, uint32_t has_downstream_edm) {
+            uint32_t edm_index = 0;
+            while (has_downstream_edm) {
+                if (has_downstream_edm & 0x1) {
+                    // open connections with available downstream edms
+                    downstream_edm_noc_interfaces[edm_index]
+                        .template open<
+                            false,
+                            use_posted_writes_for_connection_open,
+                            tt::tt_fabric::worker_handshake_noc>();
                 }
-            };
+                edm_index++;
+                has_downstream_edm >>= 1;
+            }
+        };
 
-        open_downstream_edm_connections(
-            downstream_edm_noc_interfaces_vc0, has_downstream_edm_vc0_buffer_connection & 0xF, 0);
+        // Open gates are builder-resolved (trimming- and VC1-mode-aware): VC1 downstreams are
+        // consumed by receiver 0's crossover step on crossover routers, not by receiver 1.
+        if constexpr (open_downstream_vc0_connections) {
+            open_downstream_edm_connections(
+                downstream_edm_noc_interfaces_vc0, has_downstream_edm_vc0_buffer_connection & 0xF);
+        }
 #if defined(FABRIC_2D_VC1_ACTIVE)
-        open_downstream_edm_connections(
-            downstream_edm_noc_interfaces_vc1, has_downstream_edm_vc1_buffer_connection & 0xF, 1);
+        if constexpr (open_downstream_vc1_connections) {
+            open_downstream_edm_connections(
+                downstream_edm_noc_interfaces_vc1, has_downstream_edm_vc1_buffer_connection & 0xF);
+        }
 #endif
         if constexpr (udm_mode) {
             if (has_local_tensix_relay_connection) {
@@ -3696,7 +3715,7 @@ void kernel_main() {
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::VCS_OPENED);
 #endif
-    if constexpr (is_receiver_channel_serviced[0] and NUM_ACTIVE_ERISCS > 1) {
+    if constexpr (open_downstream_vc0_connections and NUM_ACTIVE_ERISCS > 1) {
         // Two erisc mode requires us to reorder the cmd buf programming/state setting
         // because we need to reshuffle some of our cmd_buf/noc assignments around for
         // just the fabric bringup phase. These calls are also located earlier for the
@@ -3717,7 +3736,7 @@ void kernel_main() {
         }
     }
 #if defined(FABRIC_2D_VC1_ACTIVE)
-    if constexpr (is_receiver_channel_serviced[1] and NUM_ACTIVE_ERISCS > 1) {
+    if constexpr (open_downstream_vc1_connections and NUM_ACTIVE_ERISCS > 1) {
         // Two erisc mode requires us to reorder the cmd buf programming/state setting
         // because we need to reshuffle some of our cmd_buf/noc assignments around for
         // just the fabric bringup phase. These calls are also located earlier for the
