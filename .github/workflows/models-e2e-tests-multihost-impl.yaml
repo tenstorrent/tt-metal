@@ -115,7 +115,7 @@ jobs:
             cp -f "$PIPELINE_DIR/launch.log" /home/user/tt-metal/generated/test_logs/launch.log
           fi
           if [ -d "$PIPELINE_DIR/ranklogs" ]; then
-            cp -a "$PIPELINE_DIR/ranklogs" /home/user/tt-metal/generated/test_logs/ranklogs
+            cp -r "$PIPELINE_DIR/ranklogs" /home/user/tt-metal/generated/test_logs/ranklogs
           fi
 
       - name: Upload launch + per-rank logs and automapper outputs
