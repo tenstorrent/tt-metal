@@ -1573,10 +1573,6 @@ CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(const IDevice* device, u
         num_subchannels);
 }
 
-CoreCoord MeshDeviceImpl::pick_unused_dram_logical_core(uint32_t bank_id) const {
-    return pick_unused_dram_logical_core(reference_device(), bank_id);
-}
-
 std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* device, uint32_t bank_id) const {
     TT_FATAL(device != nullptr, "Cannot enumerate DRAM sender cores for a null device");
     const auto& soc_desc = MetalContext::instance(context_id_).get_cluster().get_soc_desc(device->id());
@@ -1611,10 +1607,6 @@ std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(const IDevice* 
         "Could not resolve the NOC1 worker-endpoint subchannel for DRAM bank_id={} on device {}",
         bank_id,
         device->id());
-}
-
-std::vector<CoreCoord> MeshDeviceImpl::dram_sender_logical_cores(uint32_t bank_id) const {
-    return dram_sender_logical_cores(reference_device(), bank_id);
 }
 
 program_cache::detail::ProgramCache& MeshDeviceImpl::get_program_cache() { return *program_cache_; }

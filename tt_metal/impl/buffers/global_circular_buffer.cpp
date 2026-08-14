@@ -211,13 +211,20 @@ std::vector<uint32_t> recv_index_bases_per_sender(const std::vector<std::pair<Co
     return bases;
 }
 
-// A DRAM-sender GCB exposes the reference device's logical sender coordinates for API
+// The device whose logical DRAM coordinates a DRAM-sender GCB's public
+// sender_receiver_core_mapping() is expressed in: the mesh's reference device. Logical DRAM
+// sender coords are per-device (harvest masks differ), so this is the one place that fixes
+// which device the mapping names; every device-bound use goes through device_sender_for_role.
+IDevice* canonical_sender_device(distributed::MeshDevice* mesh_device) { return mesh_device->get_devices().at(0); }
+
+// A DRAM-sender GCB exposes the canonical device's logical sender coordinates for API
 // compatibility. `canonical_sender_role` recovers a canonical coordinate's stable role
-// (its index within the bank's ordered sender list). It depends only on the reference
+// (its index within the bank's ordered sender list). It depends only on the canonical
 // device, so callers resolve it once per sender rather than once per (sender, device).
 size_t canonical_sender_role(distributed::MeshDevice* mesh_device, const CoreCoord& canonical_sender) {
     const uint32_t bank_id = static_cast<uint32_t>(canonical_sender.x);
-    const std::vector<CoreCoord> canonical_senders = mesh_device->impl().dram_sender_logical_cores(bank_id);
+    const std::vector<CoreCoord> canonical_senders =
+        mesh_device->impl().dram_sender_logical_cores(canonical_sender_device(mesh_device), bank_id);
     const auto canonical_it = std::find(canonical_senders.begin(), canonical_senders.end(), canonical_sender);
     TT_FATAL(
         canonical_it != canonical_senders.end(),
@@ -606,6 +613,9 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
     distributed::MeshDevice* mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     bool dual_senders_per_bank) {
+    // The mapping is keyed by canonical-device logical coords; per-device sender placement is
+    // resolved from each entry's (bank, role) when the GCB is written to a device.
+    const IDevice* canonical_device = canonical_sender_device(mesh_device);
     std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
     mapping.reserve((dual_senders_per_bank ? 2 : 1) * bank_to_receivers.size());
     std::unordered_set<uint32_t> seen_banks;
@@ -620,7 +630,8 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
 
         if (!dual_senders_per_bank) {
             // Single sender per bank (the free non-endpoint subchannel).
-            mapping.emplace_back(mesh_device->impl().pick_unused_dram_logical_core(bank_id), receivers);
+            mapping.emplace_back(
+                mesh_device->impl().pick_unused_dram_logical_core(canonical_device, bank_id), receivers);
             continue;
         }
 
@@ -629,7 +640,8 @@ std::vector<std::pair<CoreCoord, CoreRangeSet>> build_dram_sender_mapping(
         // actually maps, we can map just the primary sender for such a bank and leave the
         // secondary parked — same as the single-sender path. Dual- and single-sender banks may
         // therefore coexist in one dual-mode GCB.
-        const std::vector<CoreCoord> sender_cores = mesh_device->impl().dram_sender_logical_cores(bank_id);
+        const std::vector<CoreCoord> sender_cores =
+            mesh_device->impl().dram_sender_logical_cores(canonical_device, bank_id);
         if (n == 1) {
             mapping.emplace_back(sender_cores.at(0), receivers);
             continue;
