@@ -140,7 +140,15 @@ class DecodeMatmulPlan:
         )
 
     def shard_input(self, x):
-        """Open the shard once, for a caller that will run several projections."""
+        """Open the shard once, for a caller that will run several projections.
+
+        A producer that already emitted exactly this shard is handed straight
+        back: `to_memory_config` does not treat that as a no-op, it dispatches a
+        copy, and the whole point of a producer targeting this layout is not to
+        pay for it.
+        """
+        if x.memory_config() == self.input_memory_config:
+            return x
         return ttnn.to_memory_config(x, self.input_memory_config)
 
     def run_presharded_raw(self, x_sharded, weight, compute_kernel_config=None):

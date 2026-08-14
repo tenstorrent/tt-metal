@@ -25,9 +25,18 @@ import ttnn
 from models.common.rmsnorm import RMSNorm
 
 TILE = 32
-#: Core count the tt_transformers sharded-norm helper is tuned around. The real
-#: count is the divisor of the tile-width nearest this that fits the grid.
-_NORM_CORE_TARGET = 32
+#: Core count the decode norm shards across. The real count is the divisor of
+#: the tile-width nearest this that fits the grid.
+#
+#: 48, matching the fused QKV projection's grid, so a norm that feeds it can
+#: hand its shard straight over instead of going out to DRAM and back. On the
+#: norm's own account 32 is very slightly better -- swept as the op's device
+#: time in the profiled slice: 8 -> 4.15 / 32 -> 3.72 / 96 -> 4.35 ms, an
+#: interior minimum -- but 48 sits on the flat part of that curve and buys two
+#: whole layout ops per layer, which the norm does not have to be optimal to
+#: win. Anything that re-tunes the QKV grid should re-tune this WITH it: the
+#: value is the match, not the number.
+_NORM_CORE_TARGET = 48
 
 
 def _decode_shard_plan(device, dim: int):
@@ -103,7 +112,16 @@ class TtRMSNorm:
             batch *= int(dim)
         return batch == 1
 
-    def __call__(self, x, *_args, **_ignored):
+    def __call__(self, x, *_args, out_sharded=False, **_ignored):
+        """The norm. `out_sharded` leaves the decode result IN its shard.
+
+        The sharded decode norm otherwise converts back to interleaved on the
+        way out, and its consumer converts straight back again -- two pure
+        layout launches per norm, for a tensor that never left L1's worth of
+        data. A caller whose next op reads exactly this shard (the projections
+        built on the same core grid) can ask to skip both. Prefill ignores the
+        flag: its result is many rows and it was never sharded to begin with.
+        """
         # Prefill has many rows, so the interleaved kernel already spreads over
         # the row axis. Decode has ONE row and would otherwise run on a single
         # core, so it goes through the width-sharded path instead.
@@ -113,7 +131,11 @@ class TtRMSNorm:
                 ttnn.to_memory_config(x, input_memcfg),
                 mode="decode",
                 in_sharded=True,
-                norm_config={"sharded_program_config": program_config},
+                out_sharded=bool(out_sharded),
+                norm_config={
+                    "sharded_program_config": program_config,
+                    "sharded_output_config": input_memcfg if out_sharded else None,
+                },
             )
         return self._impl(x, mode="prefill")
 

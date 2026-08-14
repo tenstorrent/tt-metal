@@ -64,7 +64,13 @@ class TtDecoderLayer:
         bit-for-bit what the per-component PCC test pinned.
         """
         attn_out = self.attn(
-            self.input_norm(hidden_states),
+            # `out_sharded`: at decode the norm and the fused QKV projection are
+            # built on the SAME core grid, so the norm's result is already the
+            # operand the projection wants. Handing it over in place skips the
+            # sharded->interleaved on the way out and the interleaved->sharded
+            # straight back in -- two launches per layer for a tensor that never
+            # needed to leave L1. Prefill ignores the flag.
+            self.input_norm(hidden_states, out_sharded=True),
             position_embeddings=position_embeddings,
             attention_mask=attention_mask,
             kv_cache=kv_cache,
