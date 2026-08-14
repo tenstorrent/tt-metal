@@ -18,6 +18,7 @@ from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
 
+from .attention.operations import assert_sharded_residual_unpadded
 from .moe.activation import swiglu
 from .residual import use_sharded_residual
 
@@ -88,8 +89,7 @@ class DenseMLP:
             gate = ttnn.linear(x, self.gate_proj, dtype=ttnn.bfloat16)
             up = ttnn.linear(x, self.up_proj, dtype=ttnn.bfloat16)
         with zone("swiglu", FINE):
-            # One device op by default (7 with M3_FUSED_SWIGLU=0); consumes gate and up.
-            act = swiglu(gate, up, self.swiglu_cfg)  # clamped swigluoai (M3)
+            act = swiglu(gate, up, self.swiglu_cfg)  # clamped swigluoai (M3); consumes gate and up
         with zone("down_proj", FINE):
             out = ttnn.linear(act, self.down_proj, dtype=ttnn.bfloat16)
         act.deallocate(True)
@@ -98,6 +98,9 @@ class DenseMLP:
         # the caller adds straight into its residual); replicated residual -> full all-reduce (RS + AG).
         if self.mesh_config.tp > 1:
             if self.scatter_output:
+                # Same guard attention's apply_reduce_scatter runs: a non-tile-aligned hidden/tp would
+                # land output-dim padding inside one TP column's residual slice after the scatter.
+                assert_sharded_residual_unpadded(self.mesh_config, self.hidden_size)
                 with zone("tp_reduce_scatter"):
                     scattered = self.mesh_config.reduce_scatter(
                         out, self.ccl_manager, dim=3, axis=self.mesh_config.tp_axis

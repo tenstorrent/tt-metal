@@ -19,11 +19,6 @@ swigluoai activation; only the shared-expert step of DeepSeek's TtMoe.forward is
 Reference: models/demos/deepseek_v3_d_p/tt/moe/tt_moe.py (TtMoe.__init__/forward).
 """
 
-import os
-
-import torch
-from loguru import logger
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
@@ -62,7 +57,6 @@ class TtMiniMaxMoE(LightweightModule):
         layer_idx: int = 0,
         route_scale: float = 1.0,
         reduce_scatter_fn=None,
-        check_dispatch_overflow: bool = False,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -71,18 +65,10 @@ class TtMiniMaxMoE(LightweightModule):
         self.seq_len_per_chip = seq_len_per_chip
         self.experts_per_chip = experts_per_chip
         self.emb_dim = emb_dim
-        self.max_dispatch_buffer_token_size = max_dispatch_buffer_token_size
-        # Host-readback overflow audit (see _check_dispatch_overflow). Off by default: it composes two
-        # small device tensors to host every layer, which is a stall mid-forward and illegal under trace.
-        self.check_dispatch_overflow = check_dispatch_overflow or bool(int(os.environ.get("M3_MOE_AUDIT", "0")))
-        self._overflow_reported = False
 
-        # MiniMax routing: sigmoid + e_score_correction_bias, no groups -> n_group=1.
-        # route_scale MUST match the model's routed_scaling_factor (2.0 for M3), not default to 1.0:
-        # the internal gate applies it to the returned top-k weights, so a 1.0 here silently halves
-        # every routed contribution the moment `gate_fallback_mode` selects the internal gate over the
-        # caller-supplied topk. Harmless while the production path injects topk_indices/topk_weights
-        # (tt/mlp.py -> TopKRouter already scales), which is exactly why it went unnoticed.
+        # MiniMax routing: sigmoid + e_score_correction_bias, no groups -> n_group=1. route_scale must
+        # match the model's routed_scaling_factor (2.0 for M3): the internal gate applies it to the
+        # returned top-k weights whenever it runs instead of a caller-supplied topk.
         gate_config = TtMoEGateConfig(
             dim=emb_dim,
             sp_dim=seq_len_per_chip,
@@ -189,63 +175,6 @@ class TtMiniMaxMoE(LightweightModule):
             reduce_scatter_fn=reduce_scatter_fn,
         )
 
-    def _check_dispatch_overflow(self, tt_expert_token_counts, tt_expert_region_offsets):
-        """Audit the two ways the dispatch kernel SILENTLY drops tokens.
-
-        The kernel bounds-checks every write against max_dispatch_buffer_token_size and, when an
-        expert's region is full, still bumps the counter (so capacity accounting stays consistent) but
-        emits no plan entry — the token is simply gone, with no log and no error. Two things can trip it:
-
-          1. per-chip total > capacity: a chip's experts_per_chip counts sum past its buffer;
-          2. a region offset >= capacity: an expert's region starts past the end of the buffer, so
-             every one of its tokens is dropped even if the total would have fit.
-
-        Ported from DeepSeek's TtMoe.forward (which runs it under `return_intermediates`). Worth having
-        in M3 specifically because §3.1's imbalance raises the stakes: the chips carrying a whale expert
-        (2214 us of expert math against a median 1133) are exactly the ones near their capacity bound.
-
-        This is also the gate on two cheap wins that are otherwise unsafe to take on faith:
-        `init_zeros=False` on combine, and dropping dispatch_buffer_capacity_factor from 2 to 1. Both
-        assume no token is ever dropped; this is how that gets established rather than assumed.
-
-        Costs a host readback of two (1, num_routed_experts) tensors per layer, so it is opt-in
-        (`check_dispatch_overflow=True` or M3_MOE_AUDIT=1) and must stay off under trace capture.
-        """
-        composer = ttnn.create_mesh_composer(self.mesh_device, ttnn.MeshComposerConfig(dims=[1, 0]))
-        counts = ttnn.to_torch(ttnn.unsqueeze_to_4D(tt_expert_token_counts), mesh_composer=composer).squeeze(2)
-        offsets = ttnn.to_torch(ttnn.unsqueeze_to_4D(tt_expert_region_offsets), mesh_composer=composer).squeeze(2)
-        capacity = self.max_dispatch_buffer_token_size
-
-        # Counts are group-sparse: each chip's experts_per_chip-sized slice holds its own nonzero
-        # counts, so a slice sum is that chip's total dispatched tokens.
-        per_chip = counts.to(torch.int64).flatten().view(-1, self.experts_per_chip).sum(dim=1)
-        worst_chip = int(per_chip.max().item())
-
-        offsets_flat = offsets.to(torch.int64).flatten()
-        worst_offset_idx = int(offsets_flat.argmax().item())
-        worst_offset = int(offsets_flat[worst_offset_idx].item())
-
-        overflow = worst_chip > capacity or worst_offset >= capacity
-        # Report once per module unless something is actually wrong — one line per layer per chunk
-        # across 57 layers would bury the run, but a real overflow must never be quiet.
-        if overflow:
-            logger.error(
-                f"[TtMiniMaxMoE] DISPATCH OVERFLOW — tokens were silently dropped, output is corrupt. "
-                f"worst per-chip total {worst_chip} vs capacity {capacity}; "
-                f"worst region offset {worst_offset} (expert slot {worst_offset_idx}, "
-                f"count {int(counts.to(torch.int64).flatten()[worst_offset_idx].item())}). "
-                f"Raise dispatch_buffer_capacity_factor or shorten the chunk."
-            )
-            logger.debug(f"[TtMiniMaxMoE] per-chip totals: {per_chip.tolist()}")
-        elif not self._overflow_reported:
-            self._overflow_reported = True
-            logger.info(
-                f"[TtMiniMaxMoE] dispatch headroom: worst per-chip total {worst_chip} / {capacity} "
-                f"({100.0 * worst_chip / capacity:.1f}%), worst region offset {worst_offset} / {capacity}. "
-                f"(first layer/chunk only; overflows are always logged)"
-            )
-        return overflow
-
     def forward(self, x, topk_indices=None, topk_weights=None, padding_config=None):
         """Routed (expert-parallel) MoE output.
 
@@ -274,8 +203,6 @@ class TtMiniMaxMoE(LightweightModule):
                 num_routed_experts=self.num_routed_experts,
                 num_experts_per_tok=self.num_experts_per_tok,
             )
-            if self.check_dispatch_overflow:
-                self._check_dispatch_overflow(tt_expert_token_counts, tt_expert_region_offsets)
             indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
             scores = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
             b, s = x.shape[0], x.shape[1]
@@ -305,14 +232,10 @@ class TtMiniMaxMoE(LightweightModule):
             indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
 
         with zone("experts_mm"):
-            # Hand the ROW_MAJOR dispatch buffer straight to the composite, as DeepSeek does. The
-            # layout selects the strategy (see TtRoutedExpert.forward): ROW_MAJOR streams sticks into
-            # cb_x_rm and tilizes each K-block in-kernel, so only each expert's real token region is
-            # converted. A standalone to_layout instead tilized all max_dispatch_buffer_token_size
-            # rows — 10240 at chunk 5120/SP=8, of which only ~640 are occupied (4 local experts), a
-            # 16x amplification costing ~0.54 ms/layer at zero cross-chip variance. Upstream #49744.
-            # The ROW_MAJOR input stays live for the duration of the call and the composite returns a
-            # fresh output, so free it after, not before.
+            # Hand the ROW_MAJOR dispatch buffer straight to the composite, as DeepSeek does: it then
+            # tilizes only each expert's real token region in-kernel, instead of a standalone to_layout
+            # tilizing the whole (mostly empty) dispatch buffer. The input stays live for the duration
+            # of the call and the composite returns a fresh output, so free it after, not before.
             expert_outputs = self.routed_expert(
                 ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0),
                 tt_expert_token_counts,
@@ -325,10 +248,7 @@ class TtMiniMaxMoE(LightweightModule):
             combined_output = self.combine_module(
                 expert_outputs, metadata, tt_expert_token_counts, tt_expert_region_offsets
             )
-        # Fused weighted-sum over topk, then a TP reduce-scatter. Two device ops with very different
-        # behaviour: PostCombineReduce is a steady ~0.15 ms, the ReduceScatter is a collective whose
-        # cost swings with cross-chip skew (0.15-3.3 ms observed). The zone report's op breakdown
-        # separates them — see tests/perf/README_profiling.md.
+        # Fused weighted-sum over topk, then the TP reduce-scatter (see tt_reduce.py).
         with zone("moe_reduce"):
             routed_output = self.reduce_module(
                 combined_output, weights=scores, indices=indices, expert_dispatch_table=self.tt_expert_dispatch_table

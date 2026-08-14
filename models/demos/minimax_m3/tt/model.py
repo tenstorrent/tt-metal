@@ -15,7 +15,7 @@ from models.tt_transformers.tt.rope import RotarySetup
 
 from .layer import DecoderLayer
 from .parallel_embedding import TtParallelEmbedding, cache_name_for, embed_shard_2d
-from .residual import log_scheme_once
+from .residual import norm_mode, use_sharded_residual
 from .rms_norm import RMSNorm
 
 
@@ -156,11 +156,13 @@ class Model:
 
         # Prefill mesh parallelization: TP over the cols; SP and the EP MoE follow from the rows.
         self.mesh_config = mesh_config or MeshConfig(mesh_device.shape, tp=mesh_device.shape[1])
-        # Residual-stream layout, logged once per process. Every consumer (embedding, both norms,
-        # attention's closing collective, both MLPs, the LM-head tail) reads tt/residual.py directly, so
-        # this call is the single place a run announces which scheme it is actually executing — a
-        # silently-inactive layout change is invisible in every metric except op count.
-        self.sharded_residual = log_scheme_once(self.mesh_config)
+        # Residual-stream layout (tt/residual.py). Sharded degenerates to replicated on a TP=1 mesh.
+        self.sharded_residual = use_sharded_residual() and self.mesh_config.tp > 1
+        logger.info(
+            f"[residual] residual stream: "
+            + (f"SHARDED emb/tp (norm={norm_mode()})" if self.sharded_residual else "REPLICATED full emb")
+            + f" (tp={self.mesh_config.tp})"
+        )
 
         # Setup RoPE using tt-transformers RotarySetup (handles cos/sin matrices and transformation matrices)
         # Force datatype to bfloat16 since rotary_embedding_llama requires bfloat16

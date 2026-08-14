@@ -82,10 +82,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
 
     l1_small_size = 0
 
-    # The D2D hidden state must ship in whatever layout the residual stream uses at a layer boundary:
-    # emb/tp-sharded by default, emb-replicated under M3_SHARDED_RESIDUAL=0. Read as a
-    # property so one env var moves the layout and the socket mapper together (a mismatch would hand the
-    # next rank a wrong-width activation).
+    # The D2D hidden state ships in the residual stream's layer-boundary layout (see tt/residual.py).
     @property
     def pipeline_activation_emb_tp_sharded(self):
         from models.demos.minimax_m3.tt.residual import use_sharded_residual

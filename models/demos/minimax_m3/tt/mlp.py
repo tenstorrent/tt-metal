@@ -14,6 +14,7 @@ from models.demos.minimax_m3.utils.general_utils import get_cache_file_name
 from models.demos.minimax_m3.utils.profiler_utils import FINE, zone
 from models.demos.minimax_m3.utils.substate import substate
 
+from .attention.operations import assert_sharded_residual_unpadded
 from .dense_mlp import DenseMLP
 from .residual import use_sharded_residual
 from .topk import TopKRouter
@@ -88,6 +89,7 @@ class MLP:
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "router"),
             # Tokens per device per forward — lets the router size the fused gate's wide bias at init.
             num_tokens=ep_seq_len_per_chip,
+            mesh_config=mesh_config,
         )
 
         # Cache-only loading: an empty state_dict means "load every tilized weight from the on-disk
@@ -157,6 +159,9 @@ class MLP:
         # wrapper it replaces) does not normalize a negative dim.
         moe_reduce_scatter = None
         if mesh_config is not None and ccl_manager is not None and mesh_config.tp > 1:
+            # Same guard attention's apply_reduce_scatter runs: a non-tile-aligned hidden/tp would land
+            # output-dim padding inside one TP column's residual slice after the scatter.
+            assert_sharded_residual_unpadded(mesh_config, hf_config.hidden_size)
             moe_reduce_scatter = lambda t: mesh_config.reduce_scatter(  # noqa: E731
                 t, ccl_manager, dim=len(t.shape) - 1, axis=mesh_config.tp_axis
             )

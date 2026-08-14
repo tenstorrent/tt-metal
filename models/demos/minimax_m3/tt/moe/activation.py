@@ -8,16 +8,10 @@ the same clamped swigluoai inside the fused unified_routed_expert_ffn kernel
 (RoutedExpertActivation.SwiGluOai), so this Python implementation is the dense/shared path's.
 Anchor: transformers gpt_oss modeling_gpt_oss.py lines 119-122.
 
-Two implementations of the same math:
-
-  * ``apply_swiglu``       — the readable 7-op chain.
-  * ``apply_swiglu_fused`` — ONE ``ttnn.multiply`` with the whole activation folded into its two
-                             per-operand activation spans, collapsing 7 device ops into 1.
+``swiglu`` runs the whole activation as ONE ``ttnn.multiply`` with per-operand activation spans.
+``apply_swiglu`` is the equivalent 7-op chain, kept as the reference implementation for
+tests/unit/test_swiglu_vs_ref.py.
 """
-
-import os
-
-from loguru import logger
 
 import ttnn
 
@@ -25,36 +19,12 @@ import ttnn
 # magnitude, and far inside bf16/fp32 range so it can never itself overflow.
 _NO_LOWER_BOUND = -1.0e30
 
-# The fused single-op form is the default: 7 device ops -> 1 on every dense MLP and every shared
-# expert (60 calls per chunk, so ~360 fewer op launches). M3_FUSED_SWIGLU=0 restores the chain so a
-# numerics question stays bisectable; the two agree to ~2e-6 of PCC (tests/unit/test_swiglu_vs_ref.py).
-DEFAULT_USE_FUSED_SWIGLU = True
-
-_swiglu_path_logged = False
-
-
-def use_fused_swiglu() -> bool:
-    """True -> one multiply with activation spans; False -> the readable 7-op chain."""
-    v = os.environ.get("M3_FUSED_SWIGLU")
-    if v is None:
-        return DEFAULT_USE_FUSED_SWIGLU
-    return v.strip().lower() in ("1", "true", "yes", "on")
-
 
 def swiglu(gate, up, config):
-    """M3's clamped swigluoai by whichever implementation is selected; logs the choice once.
+    """M3's clamped swigluoai as one fused multiply.
 
     CONSUMES both ``gate`` and ``up`` — the caller must treat them as dead and free only the result.
-    (The chain writes through its inputs and returns one of them; the fused op returns a fresh tensor,
-    so this frees the two inputs itself. Uniform contract either way.)
     """
-    global _swiglu_path_logged
-    fused = use_fused_swiglu()
-    if not _swiglu_path_logged:
-        _swiglu_path_logged = True
-        logger.info(f"[swiglu] clamped swigluoai via the {'FUSED single multiply' if fused else 'LEGACY 7-op chain'}")
-    if not fused:
-        return apply_swiglu(gate, up, config)
     out = apply_swiglu_fused(gate, up, config)
     gate.deallocate(True)
     up.deallocate(True)
@@ -91,13 +61,8 @@ def swiglu_activation_spans(config):
 
 
 def apply_swiglu_fused(gate, up, config, memory_config=None):
-    """Clamped swigluoai as ONE device op.
-
-    Numerically equivalent to ``apply_swiglu``: measured against an fp32 reference at the real
-    per-device shape (640 x 768), fused 0.9999927 vs chain 0.9999949, and fused-vs-chain 0.9999917
-    (tests/unit/test_swiglu_vs_ref.py). The fused form is a hair LESS accurate, not more — the SFPU's
-    SILU approximation differs slightly from an explicit sigmoid+multiply — but 2.5e-6 of PCC is far
-    below anything that matters here.
+    """Clamped swigluoai as ONE device op. Numerically equivalent to ``apply_swiglu``
+    (tests/unit/test_swiglu_vs_ref.py).
 
     Neither input is consumed: the op writes a fresh output. Callers own freeing gate/up.
     """

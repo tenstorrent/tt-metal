@@ -22,16 +22,10 @@ Implemented as ONE device op: `deepseek_prefill.moe_grouped_topk`. Its single-gr
 (n_groups=1) IS this rule — activation -> +bias -> top-k -> gather the UNBIASED activation output
 -> normalize -> * route_scale — computed in fp32 with bf16 only at the inputs.
 
-There is deliberately no second implementation. The original 8-op bf16 chain was kept for a while
-as an A/B arm and measured WORSE: expert-set agreement with an fp32 reference was 99.4 % fused vs
-96.4 % legacy, because it ran sigmoid AND the bias add in bf16, whose ~0.004 resolution around O(1)
-scores resolves top-k near-ties arbitrarily across 128 experts. Falling back to it was therefore
-never the right answer, and keeping it live cost a real bug: `padding_config` sentinel-marks pad
-rows only on the fused path, while dispatch shortens its token loop unconditionally, so the two
-halves of that mechanism came apart on the fallback (bincount counted pad tokens that dispatch
-never wrote -> combine walked stale metadata). MiniMax-M3 ships the bias for every one of its 57
-MoE layers, so the fallback was unreachable in production anyway; a checkpoint without one gets a
-ZERO bias through the same op, which is the same semantics in fp32 rather than a worse code path.
+There is deliberately no second implementation: the earlier multi-op bf16 chain resolved top-k
+near-ties arbitrarily (sigmoid and the bias add in bf16) and did not sentinel-mark pad rows, so it
+diverged from the dispatch op's padding contract. A checkpoint without a correction bias gets a ZERO
+bias through the same op rather than a different code path.
 """
 
 import torch
@@ -48,23 +42,16 @@ def route_tokens_to_experts_fused(
 
     `moe_grouped_topk`'s single-group path (n_groups=1) IS M3's rule: activation (sigmoid) -> + bias ->
     top-k -> gather the UNBIASED activation output at the selected indices -> normalize -> * route_scale.
-    The DeepSeek-specific constraints (n_groups==8, experts==256, n_activated_experts==8) live behind the
-    op's GROUPED branch; the single-group branch requires only a tile-aligned expert count and k <= 64,
-    and 128/4 both pass. `summed_experts_per_group` / `topk_groups` are unread here, so 1 is honest.
-
-    Reach for `deepseek_prefill.moe_grouped_topk`, NOT the older `ttnn.experimental.deepseek_grouped_gate`
-    that TtMoEGatePrefill itself calls — that one asserts all three DeepSeek constants unconditionally
-    and M3 fails every one. Easy to hit and it makes this look like a kernel change.
+    The single-group branch requires only a tile-aligned expert count and k <= 64, and 128/4 both pass;
+    `summed_experts_per_group` / `topk_groups` are unread here, so 1 is honest.
 
     score_bias_wide must be the full [tokens, num_experts] broadcast: the op requires
     bias.logical_shape() == scores.logical_shape(). TopKRouter builds it once at construction.
 
     ``padding_config`` (ROW_MAJOR UINT32 per-device ``[num_real_tokens, pad_side]``) makes the op
     SENTINEL-MARK the padded rows so they route nowhere. It must be the SAME tensor the dispatch op
-    gets: the two are only consistent together — the gate marks the pad rows and dispatch shortens its
-    token loop to match. Marking without shortening (or the reverse) is worse than doing neither, which
-    is why DeepSeek gates the whole thing on its gate mode (tt/moe/tt_moe.py:530). None => every row is
-    treated as real: correct, but it does the padded work.
+    gets: the gate marks the pad rows and dispatch shortens its token loop to match, and the two are
+    only consistent together. None => every row is treated as real: correct, but it does the padded work.
 
     Returns (indices UINT16 TILE, weights BFLOAT16 TILE). TILE indices are what masked_bincount
     consumes natively, so nothing has to untilize them for the routing setup.
@@ -84,13 +71,15 @@ def route_tokens_to_experts_fused(
 
 
 class TopKRouter:
-    def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None, num_tokens=None):
+    def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None, num_tokens=None, mesh_config=None):
         """num_tokens: tokens per device per forward (chunk_size // sp_factor). Required — the gate's
-        bias is materialized at that width (see below)."""
+        bias is materialized at that width (see below).
+        mesh_config: resolves which mesh axis is SP for build_padding_config; None assumes axis 0."""
         self.top_k = hf_config.num_experts_per_tok
         self.num_experts = hf_config.num_local_experts
         self.hidden_dim = hf_config.hidden_size
         self.num_tokens = num_tokens
+        self.mesh_config = mesh_config
         # M3: routed-expert output is scaled by routed_scaling_factor (2.0, from config; 1.0 if absent).
         self.routed_scaling_factor = getattr(hf_config, "routed_scaling_factor", 1.0)
         self.tensor_cache_path = tensor_cache_path
@@ -133,26 +122,11 @@ class TopKRouter:
             else None
         )
 
-        # The fused gate needs the bias at the FULL [num_tokens, num_experts] shape: the op asserts
-        # bias.logical_shape() == scores.logical_shape(). Built ONCE here, never per call, and never via
-        # a host round-trip — one 640x128 bf16 tensor (~164 KiB) per layer, constant for the whole run.
-        #
-        # It is derived on DEVICE with a single ttnn.repeat off the narrow bias rather than expanded on
-        # the host, because the production path is CACHE-ONLY: the tilized weight cache is complete, so
-        # state_dict is empty and score_bias_torch is None. An earlier version built this from the torch
-        # source only, which meant the fused gate was silently disabled on exactly the path that matters
-        # — a full-model KV-PCC run came back digit-for-digit identical to the legacy baseline, which
-        # looked like "the change is accuracy-neutral" and was really "the change never ran".
-        # The op requires bias.logical_shape() == scores.logical_shape(), so the bias is
-        # materialized at the FULL [num_tokens, num_experts] width. Built ONCE here — never per
-        # call, never via a host round-trip: derived on DEVICE with one ttnn.repeat off the narrow
-        # bias, because the production path is CACHE-ONLY (complete tilized cache => empty
-        # state_dict => score_bias_torch is None). An earlier version built it from the torch
-        # source only, so the fused gate was silently disabled on exactly the path that matters.
-        #
-        # A checkpoint with no correction bias gets a ZERO bias rather than a different code path:
-        # same selection semantics, still fp32, still one op. M3 always has one (57 layers, values
-        # in 11.27..11.65), so this branch is for other checkpoints and synthetic-weight tests.
+        # The fused gate requires bias.logical_shape() == scores.logical_shape(), so the bias is
+        # materialized once here at the full [num_tokens, num_experts] width — one ttnn.repeat off the
+        # narrow device bias, since the production path is cache-only (empty state_dict, no torch
+        # source to expand on the host). A checkpoint with no correction bias gets a ZERO bias rather
+        # than a different code path: same selection semantics, still fp32, still one op.
         assert num_tokens, "TopKRouter needs num_tokens: the fused gate's bias is built at that width"
         if self.score_bias is not None:
             self.score_bias_wide = ttnn.repeat(self.score_bias, ttnn.Shape([num_tokens, 1]))
@@ -170,7 +144,9 @@ class TopKRouter:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        # Padding-config memo, keyed by real-token count. See build_padding_config.
+        # Padding-config memo, keyed by real-token count (see build_padding_config). Deliberately
+        # never evicted: only a ragged final chunk populates it, so it saturates at chunk-size-many
+        # tiny [sp, 2] tensors rather than growing with context length.
         self.mesh_device = mesh_device
         self._padding_config_cache = {}
 
@@ -185,18 +161,17 @@ class TopKRouter:
         route_tokens_to_experts_fused. Owned here and memoized per real-token count, so a chunked
         prefill builds each distinct config once instead of per chunk.
 
-        M3's SP sharding within a chunk is CONTIGUOUS and right-padded (tt/attention/msa.py: "SP
-        sharding is CONTIGUOUS, no zigzag/balancing"), so chip c holds chunk tokens
-        [c*tokens_per_chip, (c+1)*tokens_per_chip) and its real count is the clamped remainder. That is
-        DeepSeek's non-rotated branch; M3 needs neither its zigzag nor its rotated-chunk case.
+        M3's SP sharding within a chunk is CONTIGUOUS and right-padded (tt/attention/msa.py), so SP
+        chip c holds chunk tokens [c*tokens_per_chip, (c+1)*tokens_per_chip) and its real count is the
+        clamped remainder.
 
         NOTE this ends in a ttnn.from_torch, i.e. a host->device write. Fine untraced — it is memoized,
         so it costs one tiny [sp, 2] write per distinct count — but a traced runtime must derive the
-        row on-device instead (DeepSeek's build_padding_config_device / the moe_padding_config op).
-        Port that alongside any trace work.
+        row on-device instead (the moe_padding_config op). Port that alongside any trace work.
         """
         tokens_per_chip = self.num_tokens
-        sp_factor = self.mesh_device.shape[0] if isinstance(self.mesh_device, ttnn.MeshDevice) else 1
+        sp_axis = self.mesh_config.sp_axis if self.mesh_config is not None else 0
+        sp_factor = self.mesh_device.shape[sp_axis] if isinstance(self.mesh_device, ttnn.MeshDevice) else 1
         if actual_isl is None or not tokens_per_chip or actual_isl >= sp_factor * tokens_per_chip:
             return None  # full chunk: every row is real
         if actual_isl not in self._padding_config_cache:
@@ -210,7 +185,11 @@ class TopKRouter:
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape),
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device,
+                    dims=(0, None) if sp_axis == 0 else (None, 0),
+                    mesh_shape=self.mesh_device.shape,
+                ),
             )
             logger.info(
                 f"[TopKRouter] padding config built for actual_isl={actual_isl} "

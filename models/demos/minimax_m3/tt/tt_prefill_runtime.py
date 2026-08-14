@@ -366,8 +366,8 @@ class TtPrefillRuntime:
             on_layer_complete=on_layer_complete,
             # Real tokens in THIS chunk. Only the final chunk of a ragged prompt is short; every other
             # chunk is full and the MoE's padding config resolves to None. Without this the padded tail
-            # is routed and dispatched as if real: wasted dispatch work that also eats the per-expert
-            # buffer capacity check_dispatch_overflow guards.
+            # is routed and dispatched as if real: wasted dispatch work that also eats per-expert
+            # dispatch-buffer capacity.
             actual_isl=actual_end - actual_start,
         )
         if not self.config.is_last_rank:

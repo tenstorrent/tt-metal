@@ -3,32 +3,11 @@
 
 """MiniMax-M3 post-combine reduction: fused weighted top-k sum, then the closing TP reduce-scatter.
 
-M3's own copy of DeepSeek's TtReduceModule (deepseek_v3_d_p/tt/moe/tt_reduce.py), which we do not
-modify. The compute half is identical — the same shared `deepseek_prefill.post_combine_reduce` kernel.
-The difference is the collective:
-
-  DeepSeek  ttnn.reduce_scatter                    -- the plain prim, with no barrier semaphore
-  here      caller-supplied reduce_scatter_fn      -- M3 passes MeshConfig.reduce_scatter, i.e.
-                                                      reduce_scatter_minimal_async with the ping-pong
-                                                      + barrier semaphores every other M3 collective
-                                                      already uses (tt/config.py)
-
-Why bother, given both reduce over the same axis and measure the same ~145 us of work: consistency.
-Every M3 collective now goes through one managed path, which matters for debugging — the shared expert's reduce-scatter and the MoE's were
-different ops with different semaphore machinery, which makes a CCL hang or a nondeterministic-PCC
-bisect read as an M3-vs-M3 difference when it is really prim-vs-async.
-
-WHAT THIS OP ACTUALLY DOES — worth stating because it is easy to misread as a plain TP shard. It has
-TWO jobs at once:
-
-  1. EP all-reduce. A mesh column owns only 32 of the 128 experts, so post_combine_reduce's output is a
-     PARTIAL sum over that column's experts. Summing across the 4 columns is what completes top-4.
-  2. TP scatter. The same op scatters emb across those 4 columns, handing the next stage emb/tp.
-
-Expert parallelism is folded onto the tensor-parallel axis. That is also why this collective shows the
-largest barrier wait in the block (measured 145 us work + 879 us wait): unlike `combine`, which
-synchronises 8 chips that share a token set, this synchronises 4 chips whose expert loads are
-unrelated, so four independent whale-expert skews meet here.
+The reduce-scatter has two jobs at once: it completes the top-4 expert sum across mesh columns (each
+column owns a subset of the experts, so its post_combine_reduce output is a partial sum) and scatters
+emb across those columns, handing the next stage emb/tp. The collective runs through the
+caller-supplied ``reduce_scatter_fn`` (MeshConfig.reduce_scatter) so it uses the same managed CCL path
+as every other M3 collective.
 """
 
 from typing import Optional
