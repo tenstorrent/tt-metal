@@ -163,10 +163,16 @@ class _DramShardedMatmul:
             batch *= int(dim)
         return batch == 1
 
-    def __call__(self, x, compute_kernel_config=None):
+    def parts(self, x, compute_kernel_config=None):
+        """The projection's output, as its column blocks, each still L1-sharded.
+
+        Handed back unjoined on purpose: the caller knows what it does with the
+        result, and joining N tile-layout blocks is much more expensive than
+        joining whatever it actually needs them reduced to.
+        """
         kwargs = {"compute_kernel_config": compute_kernel_config} if compute_kernel_config else {}
         x = ttnn.to_memory_config(x, self.in_memory_config)
-        parts = [
+        return [
             ttnn.linear(
                 x,
                 weight,
@@ -176,10 +182,11 @@ class _DramShardedMatmul:
             )
             for weight in self.weights
         ]
+
+    def __call__(self, x, compute_kernel_config=None):
+        parts = self.parts(x, compute_kernel_config)
         if len(parts) == 1:
             return ttnn.sharded_to_interleaved(parts[0])
-        # One concat straight to interleaved, rather than converting each part
-        # and joining after: same bytes, one launch instead of len(parts) + 1.
         return ttnn.concat(parts, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
@@ -624,9 +631,26 @@ class VoxtralTtsBackbonePipeline:
         return self._lm_head(hidden)
 
     def _lm_head(self, hidden):
+        """The vocab projection. Decode gets the bank-sharded head, UNPADDED.
+
+        The bank-sharded head produces the vocab as column blocks that have to
+        be joined, and the cheapest place to join them is AFTER the tile
+        padding is gone. Each block is [1, tile, vocab/n] on device but only
+        row 0 is real -- the decode activation is one token padded up to the
+        tile -- so untilizing a block first turns it from 2 MB into 64 KB, and
+        the join then moves 256 KB instead of 8 MB.
+
+        This is not an extra step: `_greedy_token` has to untilize the logits
+        anyway to reach the multi-core argmax path, and the row it stashes is
+        what the traced decode loop copies out per token. Doing it per block
+        just moves that same work in front of the join instead of behind it,
+        and it runs on the block's own L1 shard rather than out of DRAM.
+        """
         if self.lm_head_dram is not None and self.lm_head_dram.matches(hidden):
             try:
-                return self.lm_head_dram(hidden, self.lm_head_compute_kernel_config)
+                parts = self.lm_head_dram.parts(hidden, self.lm_head_compute_kernel_config)
+                rows = [ttnn.to_layout(part, ttnn.ROW_MAJOR_LAYOUT) for part in parts]
+                return rows[0] if len(rows) == 1 else ttnn.concat(rows, dim=-1)
             except Exception:  # noqa: BLE001 - bank-sharded path refused: general routing
                 self.lm_head_dram = None
         if self.lm_head_compute_kernel_config is not None:
