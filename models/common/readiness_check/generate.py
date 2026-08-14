@@ -127,10 +127,19 @@ def _chat_or_plain_prompt_tokens(tokenizer, prompt_text: str, *, chat_template: 
             add_generation_prompt=True,
             tokenize=True,
         )
+        # `apply_chat_template(tokenize=True)` returns a flat list of ids for some
+        # tokenizers and a BatchEncoding/dict (`{"input_ids": [[...]]}`) for
+        # others, depending on the tokenizer's own `return_dict` default. Unwrap
+        # both to the flat list this function promises; iterating a dict yields
+        # its keys and fails later as `int('input_ids')`.
+        if hasattr(prompt_tokens, "keys") or hasattr(prompt_tokens, "input_ids"):
+            prompt_tokens = prompt_tokens["input_ids"]
+        if len(prompt_tokens) and isinstance(prompt_tokens[0], (list, tuple)):
+            prompt_tokens = prompt_tokens[0]
     else:
         prompt_tokens = tokenizer.encode(prompt_text, add_special_tokens=True)
 
-    if not prompt_tokens:
+    if not len(prompt_tokens):
         raise ValueError("Prompt tokenization produced no tokens")
     return [int(token_id) for token_id in prompt_tokens]
 
