@@ -2,8 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage 4 -- generate a video from the trained LoRA(s) via tt_dit's runtime-LoRA pipeline."""
-
 from __future__ import annotations
 
 import time

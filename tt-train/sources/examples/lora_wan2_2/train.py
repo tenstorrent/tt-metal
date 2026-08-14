@@ -13,6 +13,7 @@ import numpy as np
 import ttnn
 
 import ttml
+from ttml.datasets import InMemoryDataloader
 from ttml.models.wan2_2 import (
     WanConfig,
     WanTransformer3D,
@@ -31,8 +32,8 @@ from utils.lora_targets import resolve as resolve_lora_targets
 from timing import fmt, phase, record
 
 
-def _to_ttml(arr: np.ndarray, dtype=ttnn.bfloat16):
-    return ttml.autograd.Tensor.from_numpy(np.ascontiguousarray(arr, dtype=np.float32), ttnn.Layout.TILE, dtype)
+def _to_ttml(arr: np.ndarray, dtype=ttnn.bfloat16, mapper=None):
+    return ttml.autograd.Tensor.from_numpy(np.ascontiguousarray(arr, dtype=np.float32), ttnn.Layout.TILE, dtype, mapper)
 
 
 def _loss_value(loss) -> float:
@@ -125,6 +126,7 @@ def flow_matching_step(
     patch_size: tuple,
     rng: np.random.Generator,
     fixed_noise: np.ndarray | None = None,
+    dp_mapper=None,
 ):
     x0 = np.asarray(batch["latent"], dtype=np.float32)
     noise = (
@@ -141,10 +143,12 @@ def flow_matching_step(
     text_embed = np.asarray(batch["text_embed"], dtype=np.float32)
     text_embed = text_embed.reshape(text_embed.shape[0], 1, *text_embed.shape[-2:])
 
+    # One t for the whole global batch: per-sample t would need a mapper inside
+    # WanConditioning, and expert routing is a per-step decision.
     timesteps = [t * 1000.0]
 
-    pred = model(_to_ttml(tokens), timesteps, _to_ttml(text_embed), rope_params)
-    return ttml.ops.loss.mse_loss(pred, _to_ttml(target_tokens), reduce=ttml.ops.ReduceType.MEAN)
+    pred = model(_to_ttml(tokens, mapper=dp_mapper), timesteps, _to_ttml(text_embed, mapper=dp_mapper), rope_params)
+    return ttml.ops.loss.mse_loss(pred, _to_ttml(target_tokens, mapper=dp_mapper), reduce=ttml.ops.ReduceType.MEAN)
 
 
 def validation_loss(experts, val_loader, cfg: Config, ctx, rope_params, patch_size: tuple) -> float:
@@ -205,10 +209,19 @@ def train(cfg: Config) -> None:
     train_collate = make_collate_fn(embeds, cfg.TEXT_DROP_PROB, cfg.SEED)
     val_collate = make_collate_fn(embeds, 0.0, cfg.SEED + 1)
 
-    train_loader = ttml.datasets.InMemoryDataloader(
-        train_ds, train_collate, batch_size=cfg.BATCH, shuffle=True, drop_last=True, seed=cfg.SEED
+    # BATCH is per device; dp rows carry distinct samples. Validation stays replicated and
+    # unbatched so its curve remains comparable across runs.
+    global_batch = cfg.BATCH * dp_size
+    dp_mapper = ttml.mesh().axis_mapper("dp", tdim=0) if dp_size > 1 else None
+    print(
+        f"[train] batch: {cfg.BATCH}/device x dp={dp_size} = {global_batch} global, "
+        f"accum={cfg.GRAD_ACCUM} -> effective {global_batch * cfg.GRAD_ACCUM}"
     )
-    val_loader = ttml.datasets.InMemoryDataloader(
+
+    train_loader = InMemoryDataloader(
+        train_ds, train_collate, batch_size=global_batch, shuffle=True, drop_last=True, seed=cfg.SEED
+    )
+    val_loader = InMemoryDataloader(
         val_ds, val_collate, batch_size=1, shuffle=False, drop_last=False, seed=cfg.SEED + 1
     )
 
@@ -259,7 +272,7 @@ def train(cfg: Config) -> None:
 
         t = _sample_timestep(cfg, lo, hi, rng)
         model = _route(t, experts, cfg)
-        loss = flow_matching_step(model, batch, t, rope_params, patch_size, rng)
+        loss = flow_matching_step(model, batch, t, rope_params, patch_size, rng, dp_mapper=dp_mapper)
         accum_loss += _loss_value(loss)
         accum_n += 1
 

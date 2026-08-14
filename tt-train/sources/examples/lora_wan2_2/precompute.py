@@ -2,8 +2,6 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage 2 -- VAE latents + UMT5 text embeddings -> cache, encoded on the mesh."""
-
 from __future__ import annotations
 
 import gc
