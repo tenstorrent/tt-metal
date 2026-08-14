@@ -209,6 +209,26 @@ def test_cross_cardinality_geometry_requires_real_batched_requests_and_source_ro
     batched_32 = (
         {
             "kind": "batched",
+            "source_rows": tuple(range(30)),
+            "active_batch_size": 30,
+            "padded_batch_size": 32,
+            "padded_sequence_length": 128,
+            "operation_variants": ("regular-batched",),
+        },
+        {
+            "kind": "batched",
+            "source_rows": (30, 31),
+            "active_batch_size": 2,
+            "padded_batch_size": 2,
+            "padded_sequence_length": 1024,
+            "operation_variants": ("regular-batched",),
+        },
+    )
+    require(batched_32, cardinality=32, batched_candidate=True)
+
+    stale_31_plus_1 = (
+        {
+            "kind": "batched",
             "source_rows": tuple(range(31)),
             "active_batch_size": 31,
             "padded_batch_size": 32,
@@ -224,7 +244,8 @@ def test_cross_cardinality_geometry_requires_real_batched_requests_and_source_ro
             "operation_variants": ("regular-single",),
         },
     )
-    require(batched_32, cardinality=32, batched_candidate=True)
+    with expect_error(AssertionError, "cardinality 32 prepared-prefill geometry disagrees"):
+        require(stale_31_plus_1, cardinality=32, batched_candidate=True)
 
 
 def test_cross_cardinality_verdict_compares_exact_tokens_and_accepts_negative_execution(expect_error):

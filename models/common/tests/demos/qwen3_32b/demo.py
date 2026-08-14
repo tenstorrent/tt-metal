@@ -1072,19 +1072,19 @@ def _require_cross_cardinality_prefill_geometry(
         expected = (
             {
                 "kind": "batched",
-                "source_rows": tuple(range(31)),
-                "active_batch_size": 31,
+                "source_rows": tuple(range(30)),
+                "active_batch_size": 30,
                 "padded_batch_size": 32,
                 "padded_sequence_length": 128,
                 "operation_variants": ("regular-batched",),
             },
             {
-                "kind": "single",
-                "source_rows": (31,),
-                "active_batch_size": 1,
-                "padded_batch_size": 1,
+                "kind": "batched",
+                "source_rows": (30, 31),
+                "active_batch_size": 2,
+                "padded_batch_size": 2,
                 "padded_sequence_length": 1024,
-                "operation_variants": ("regular-single",),
+                "operation_variants": ("regular-batched",),
             },
         )
     else:

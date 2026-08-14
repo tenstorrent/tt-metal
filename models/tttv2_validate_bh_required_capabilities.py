@@ -182,7 +182,7 @@ _QWEN_DEMO_MANIFEST = {
         "models/common/tests/demos/qwen3_32b/demo.py::test_qwen3_32b_p150x4_seeded_cross_cardinality[P150x4]",
     ),
 }
-_QWEN_DEMO_MANIFEST_SHA256 = "0e1f12b1e76fe9df76e9b1d4ee73528104a6b3f598e3295edc5fb17622ba710a"
+_QWEN_DEMO_MANIFEST_SHA256 = "81371403fab67ffa4bdc02f491154aa484d4ca74a534919031aeed21e05021db"
 
 
 class CapabilityContractValidationError(ValueError):
@@ -800,7 +800,8 @@ def _semantic_errors(contract: Mapping[str, Any]) -> list[str]:
                 "32 true active-batch-1 controls",
                 "token-ID tuples",
                 "regular-batched Q128 rows",
-                "Q128 active-31/padded-32",
+                "Q128 active-30/padded-32",
+                "Q1024 active-2/padded-2 regular-batched",
                 "captures exactly one top-k decode trace",
                 "successful replay of that top-k trace key",
                 "zero coverage misses",
