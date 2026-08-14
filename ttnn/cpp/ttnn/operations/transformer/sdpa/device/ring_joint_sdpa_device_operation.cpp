@@ -500,9 +500,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             N_local_q % k_chunk_size == 0,
             "k_chunk_size must divide the per-device Q slab for chunked sliding attention");
-        // One-hop halo: the work plan covers at most the local slab and its cyclic
-        // predecessor (SlidingQWorkPlan::max_source_ranges == 2), so a window whose
-        // k_chunk-rounded tail exceeds one slab would need a multi-hop exchange.
         TT_FATAL(
             halo_tokens <= N_local_q,
             "Chunked sliding halo {} (window {}) exceeds the per-device Q slab {}; wider windows need a multi-hop "
