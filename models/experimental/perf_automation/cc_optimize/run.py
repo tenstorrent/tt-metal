@@ -518,15 +518,20 @@ def _fullpipe_e2e_inner(repo_root: Path, mcp_env: dict, devices: str, label: str
         f"  [optimize/cc] measuring FULL-model end-to-end ({label}) — ALL layers (uncapped), no tracy (one slow run, minutes)..."
     )
     ms = None
+    # UNCAPPED RUN, UNCAPPED BUDGET. This builds every layer and is the one measurement whose number
+    # describes the whole model; budgeting it from the capped profile's history killed it at 1686 s
+    # (6 x a 281 s capped baseline) when it needed 1734 s. `fullpipe` has its own history and its own
+    # cold start, expressed in baseline-profile units like every other op.
+    _fp_op = timed_op_for(env, "profile")
     rc, out = _run_device_proc(
         [_python_bin(repo_root), "-c", code, str(repo_root / CC_DIR)],
         repo_root / PERF_DIR,
         env,
         devices,
-        _measure_backstop(repo_root),
+        adaptive_timer(repo_root, _fp_op, env_key="PERF_MCP_FULLPIPE_BACKSTOP"),
         f"full-pipeline ({label})",
-        stall_s=adaptive_timer(repo_root, "profile", env_key="PERF_MCP_MEASURE_STALL_SEC"),
-        observe_op="profile",
+        stall_s=adaptive_timer(repo_root, _fp_op, env_key="PERF_MCP_FULLPIPE_STALL_SEC"),
+        observe_op=_fp_op,
         observe_root=repo_root,
     )
     if rc is None:
@@ -2726,6 +2731,32 @@ def _wait_for_thermal_headroom_before_device_work(label: str = "") -> None:
         pass
 
 
+def timed_op_for(env, fallback: str = "profile") -> str:
+    """Which timing bucket a device run belongs to, decided by the run itself.
+
+    THE BUCKET WAS A TYPED STRING AND THE RUNS WERE NOT THE SAME SIZE. Every device subprocess filed
+    its duration under `observe_op="profile"`, so a 25 s capped probe and a 2144 s uncapped
+    full-model measurement shared one history -- and adaptive_timer budgets an op at 6x the p95 of its
+    own bucket.
+
+    Measured on Voxtral 2026-08-14, the bucket held
+    [25.0, 55.0, 85.1, 100.2, 150.5, 281.1, 1734.2, 2143.9]: the first six are capped 2-layer runs,
+    the last two uncapped. Before those last two existed the p95 was 281.1, so the budget was
+    6 x 281.1 = 1686 s -- and the uncapped run, which needs 1734 s, was killed about fifty seconds
+    short. It pollutes the other direction too: with 2143.9 now in the bucket, the next capped probe
+    is budgeted ~12800 s, so a genuinely hung 25 s probe would sit for three hours.
+
+    The distinguishing fact is already in hand: a capped run carries TT_PERF_LAYERS in the environment
+    being launched, and an uncapped one expresses "all layers" by its ABSENCE. Reading that removes
+    the hardcode instead of adding another, and no call site can mislabel a run again.
+    """
+    try:
+        capped = str((env or {}).get("TT_PERF_LAYERS") or "").strip().isdigit()
+    except Exception:  # noqa: BLE001
+        capped = True
+    return fallback if capped else "fullpipe"
+
+
 def _run_device_proc(
     cmd,
     cwd,
@@ -2851,7 +2882,11 @@ def _run_device_proc(
         # So it records in `finally`, on the timeout path as much as the success path, exactly as
         # _fullpipe_e2e already does for "pcc". A hard-limit kill at 900 s becomes 900 s of observed
         # cost, and the next budget is 6x that instead of a constant.
+        # THE BUCKET IS DECIDED BY THE RUN, NOT BY THE CALLER'S STRING. A caller naming "profile" for
+        # an uncapped full-model measurement filed a 2144 s run beside 25 s probes; timed_op_for reads
+        # the cap out of the environment actually launched and routes it to its own history.
         if observe_op and observe_root is not None:
+            observe_op = timed_op_for(env, observe_op)
             try:
                 record_observed(observe_root, observe_op, time.monotonic() - _obs_t0)
             except Exception:  # noqa: BLE001
@@ -3005,10 +3040,13 @@ _MIN_TIMER_S = float(os.environ.get("PERF_MCP_MIN_TIMER_S", "30") or "30")
 # tolerance multiplier per op. "round" is 2.0 because _OP_IN_BASE_UNITS["round"]
 # already estimates the WHOLE cycle (pcc + measure + commit); multiplying a
 # full-cycle estimate again would compound two proxies.
-_OP_MULT = {"profile": 6.0, "pcc": 6.0, "build": 6.0, "round": 2.0, "agent": 8.0}
+_OP_MULT = {"profile": 6.0, "pcc": 6.0, "build": 6.0, "round": 2.0, "agent": 8.0, "fullpipe": 3.0}
 # fallback cost of one operation, expressed in baseline-profile units, used until the
 # operation has been observed in its own right
-_OP_IN_BASE_UNITS = {"profile": 1.0, "pcc": 9.0, "build": 6.0, "round": 12.0, "agent": 2.0}
+# fullpipe measured at 1734-2144 s against a 281 s capped baseline on Voxtral (6.2-7.6x);
+# 8.0 rounds up so the FIRST uncapped run on a model is not killed by a hair, before the
+# bucket has any history of its own.
+_OP_IN_BASE_UNITS = {"profile": 1.0, "pcc": 9.0, "build": 6.0, "round": 12.0, "agent": 2.0, "fullpipe": 8.0}
 
 
 def _timer_overrides_active() -> list:
