@@ -21,11 +21,11 @@ No implementation fix is recommended from this evidence.
 - The current production result, candidate result, and optimized-vLLM final result are byte-identical and clean:
 
   ```text
-  a4a2338f026e0baefcd69a40d41b51fc8889bcb1645fa6d878a5ac7a3c07f3f9
+  6f25fbb4fae65c8e09a1e1a5c8eb7f3dfe72859f6ce04c9f8b92a0319cf11cbb
   ```
 
   This is the SHA-256 of each current `vllm_qualitative_outputs.json`.
-- The earlier compatibility-enabled final artifact contained `In unsupervised learning,,, you have to...`; this is the artifact reviewed in `doc/optimized_vllm/stage_review.md:13,37`. It has since been replaced by the clean production artifact, so the old bytes are not available for further static inspection in the worktree.
+- The earlier compatibility-enabled final artifact contained `In unsupervised learning,,, you have to...`; this is the earlier artifact discussed in the optimized-vLLM stage review's anomaly ledger. It has since been replaced by the clean production artifact, so the old bytes are not available for further static inspection in the worktree.
 - With Mistral's fixed tokenizer regex, `,,,` is two tokens, `[64704 (',,'), 1044 (',')]`, not three repetitions of one comma token. The symptom is therefore not evidence of a one-token feedback loop by itself.
 - No focused production request changed behavior between `httpx` and the OpenAI client.
 

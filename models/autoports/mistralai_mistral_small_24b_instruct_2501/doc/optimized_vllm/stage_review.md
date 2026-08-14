@@ -16,7 +16,7 @@ Verdict: clean-pass
 
 - No serving profiler, Tracy, `tt-perf-report`, watcher, adapter profiler, `ReadDeviceProfiler`, or live device profiler was collected, as the stage contract explicitly prohibited them. Benchmark JSON, live sampling routing, unit checks, stale-input checks, async source inspection, and cleanup evidence substitute for those tools.
 - The production device-sampling evidence is a focused HTTP/routing artifact rather than a pytest transcript. It is nevertheless sufficient here: `server_production_device_sampling.log` records `perform_device_sampling=True` for stochastic prefill, stochastic decode, mixed greedy/stochastic decode, and reversed slot reuse; the companion JSON records 17/17 HTTP 200 and post-run health 200.
-- Local checkpoint commits are intentionally pending the clean review. Stage-owned root changes and the nested plugin audit change are isolatable from the listed unrelated profiler outputs, cluster-descriptor files, and root's untracked nested-repository entry; committing them is the stage owner's required post-review follow-up.
+- Checkpoint commits are complete and correctly recorded: nested `vllm` branch `dev` at `6bd775d` and root branch `mvasiljevic/fast-models/mistralai-mistral-small-24b-instruct-2501` with stage evidence commit `7e14ba84874`; `cf1410271de` records those checkpoint SHAs. Later root commits `f1d5047c9c6` and `cc30b7a1cda` only completed the commit record and repository-branch labels. The current hash-provenance corrections and this post-commit audit report require one final documentation-only follow-up commit.
 
 ## Anomaly Ledger
 
@@ -37,7 +37,7 @@ Verdict: clean-pass
   Resolution: controlled.
 
 - Observed anomaly: An earlier compatibility-enabled greedy completion contained `learning,,,` while the qualitative verdict claimed no mechanical repetition.
-  Evidence: The old bytes were replaced, but the first review preserved the exact symptom. `AUTODEBUG.md` records two isolated HTTP runs, two OpenAI-client runs, two matching greedy-to-stochastic transition sequences, eight concurrent identical prompts, and the full six-prompt host-compatibility-disabled suite. None reproduced the symptom. The current readiness, candidate, and final output files share SHA-256 `a4a2338f026e0baefcd69a40d41b51fc8889bcb1645fa6d878a5ac7a3c07f3f9`; prompt 2 is clean. The comma text tokenizes as two distinct IDs, not a stuck one-token feedback loop.
+  Evidence: The old bytes were replaced, but the first review preserved the exact symptom. `AUTODEBUG.md` records two isolated HTTP runs, two OpenAI-client runs, two matching greedy-to-stochastic transition sequences, eight concurrent identical prompts, and the full six-prompt host-compatibility-disabled suite. None reproduced the symptom. The current readiness, candidate, and final output files are byte-identical at SHA-256 `6f25fbb4fae65c8e09a1e1a5c8eb7f3dfe72859f6ce04c9f8b92a0319cf11cbb` and have identical canonicalized parsed JSON. Removing only the final newline from each produces the previously reported `a4a2338f026e0baefcd69a40d41b51fc8889bcb1645fa6d878a5ac7a3c07f3f9`, proving the hash change is end-of-file normalization rather than content drift. Prompt 2 is clean. The comma text tokenizes as two distinct IDs, not a stuck one-token feedback loop.
   Affected path: Earlier compatibility-enabled artifact only.
   Control or comparison: Prompt-correct HF/full-model controls plus repeated production greedy, mixed-transition, concurrent, and full-suite controls.
   Likely subsystem: Unreproduced compatibility-only host/device transition or close-logit qualitative variance; not the current production token/position/page-table/slot lifecycle.
@@ -65,7 +65,7 @@ Verdict: clean-pass
 - Goal/skill paths: supplied optimized-vLLM contract; `.agents/skills/stage-review/SKILL.md`; stage expectations embodied in `$vllm-integration`, `$optimize`, `$tt-device-usage`, `$tt-enable-tracing`, `$qualitative-check`, and the remediation `$autofix`/`$autodebug` report.
 - Artifact paths: `doc/optimized_vllm/{README.md,work_log.md,perf_summary.json,qualitative_verdict.md,final/,candidates/shard0_read/}`; `AUTODEBUG.md`; `readiness_vllm/` benchmark, sampling, qualitative, non-aligned, exact-chat-template, unsupported-survival, and prior smoke artifacts; `doc/context_contract.json`; `doc/datatype_sweep/selected_precision_config.json`; `doc/optimized_full_model/{README.md,perf_summary.json,qualitative_suite/}`.
 - Code paths: `tt/{generator_vllm.py,generator.py,model.py}`; `tests/test_vllm_adapter.py`; nested plugin `vllm_tt_plugin/{platform.py,async_decode.py,model_runner.py}` and `test_device_sampling_limits.py`.
-- Commands run: read-only `sed`, `nl`, `rg`, `find`, `jq`, `sha256sum`, `wc`, `git status`, `git diff`, `git show`, branch/revision queries, and `git diff --check`. No server, vLLM process, hardware open/reset, profiler, watcher, or TT test was run during review.
+- Commands run: read-only `sed`, `nl`, `rg`, `find`, `jq`, `sha256sum`, `cmp`, `head`, `od`, `wc`, `git status`, `git diff`, `git show`, `git log`, `git cat-file`, branch/revision queries, and `git diff --check`. No server, vLLM process, hardware open/reset, profiler, watcher, or TT test was run during review.
 
 ## Residual Risk
 
@@ -75,6 +75,6 @@ Verdict: clean-pass
 - Supported greedy and stochastic production routes use split Sampling1D with no adapter-local argmax or full-logit readback. Host logits, untilize, and full-vocabulary transfer remain reachable only through explicit host compatibility/diagnostic methods and are excluded from the measured production route.
 - Final vLLM decode is 52.839 token/s/user versus 54.452 for comparable optimized full-model host-free token-out, a 2.96% serving gap. That is consistent with the unavoidable plugin sampled-token boundary and satisfies the “about as fast” requirement.
 - All final qualitative outputs are coherent and prompt-correct. The sampled thermodynamics answer starts by calling the sequence “three laws” but enumerates zeroth through third before truncating; HF/full-model controls use the same conventional zeroth-law framing, so this is ordinary model behavior rather than serving corruption.
-- Stage-owned commits and SHA logging remain procedural post-review work, not an unresolved model or evidence defect. No push is authorized.
+- Stage-owned implementation/evidence commits and branch/SHA logging are complete and correct. Only the current documentation-only hash correction and post-commit audit report remain to checkpoint; they do not alter parsed evidence or the verdict. No push is authorized.
 
 Verdict: clean-pass
