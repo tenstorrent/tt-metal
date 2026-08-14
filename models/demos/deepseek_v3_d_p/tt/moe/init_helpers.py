@@ -1107,6 +1107,35 @@ def create_shared_expert_weights(
     }
 
 
+def create_latent_weights(
+    emb_dim: int,
+    routed_emb_dim: int,
+    seed: int | None = None,
+) -> dict:
+    """
+    Create random LatentMoE projection weights: emb_dim -> latent before dispatch, latent -> emb_dim
+    after the reduce.
+
+    Args:
+        emb_dim: Model embedding dimension
+        routed_emb_dim: Latent (routed-side) dimension the experts run at
+        seed: When provided, weights are drawn from a local ``torch.Generator``
+            seeded with this value, making the output independent of the global
+            RNG state / call order (required for stable shape-keyed weight caches).
+
+    Returns:
+        Dict with down_proj (routed_emb_dim, emb_dim) and up_proj (emb_dim, routed_emb_dim) in HF
+        format, plus norm (routed_emb_dim,). The norm gamma is drawn around 1.0 rather than set to
+        ones, so a dropped or mis-sharded norm weight cannot pass as identity.
+    """
+    gen = torch.Generator().manual_seed(seed) if seed is not None else None
+    return {
+        "down_proj": torch.randn(routed_emb_dim, emb_dim, dtype=torch.float32, generator=gen) * 0.02,
+        "up_proj": torch.randn(emb_dim, routed_emb_dim, dtype=torch.float32, generator=gen) * 0.02,
+        "norm": 1.0 + torch.randn(routed_emb_dim, dtype=torch.float32, generator=gen) * 0.02,
+    }
+
+
 def create_sparse_combine_output(
     num_chips: int,
     seq_len: int,

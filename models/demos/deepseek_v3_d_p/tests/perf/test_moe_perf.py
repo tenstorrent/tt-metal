@@ -109,22 +109,10 @@ _CMD_K3_8X4 = f"pytest {_K3_TEST_PATH} -k 'fabric2d-mesh-8x4 and kimi_k3-5k-perf
 
 @pytest.mark.timeout(0)
 def test_kimi_k3_moe_perf_galaxy():
-    """Kimi-K3 LatentMoE device perf on the 8x4 Galaxy at the production shape: 640 tokens/chip
-    (5120 total = 5K ISL), 896 experts, top-16, routed side at the 3584 latent width, FABRIC_2D.
-
-    NOT comparable to test_deepseek_v3_moe_perf_galaxy: that baseline is 256 experts / top-8 at the
-    full 7168 width with no latent projections AND runs 3200 tokens/chip, whereas this adds a
-    7168->3584 down-projection plus all-gather before dispatch and a latent RMSNorm plus 3584->7168
-    row-parallel up-projection plus reduce-scatter after the reduce, against half-width dispatch
-    traffic and 2x the top-k accumulation depth -- at a fifth of the sequence.
-
-    Measures the SiLU path, not the checkpoint's SiTU-GLU -- no TT kernel implements SiTU yet
-    (#51335). Expect this baseline to move when that lands, since the activation sits inside the
-    routed-expert FFN that dominates the block.
-
-    Bracketed by the MoE_START/MoE_END signposts so the number is the forward only: TtMoe's
-    constructor dispatches one-time weight-load tilize/typecast work before MoE_START, and at 896
-    experts that is a large fraction of the process wall time but is not per-token cost.
+    """
+    Measures the SiLU path, not the checkpoint's SiTU-GLU (#51335), so this baseline moves when that
+    kernel lands. MoE_START/MoE_END bracket the forward only -- the constructor's one-time weight
+    tilize/typecast is a large share of wall time at 896 experts, but is not per-token cost.
     """
     if not _is_galaxy_env():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
