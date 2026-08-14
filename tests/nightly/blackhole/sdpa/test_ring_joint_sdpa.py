@@ -2695,15 +2695,19 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
     expect_error,
     chunk_size_local=128,
     sliding_window_size=128,
+    local_q_heads=8,
+    local_kv_heads=1,
+    head_dim=GPT_OSS_RING_SINK_CONFIG.head_dim,
+    prefix_group_counts=(0, 1, 2, 10),
     num_iterations=2,
     pcc_threshold=CHUNKED_PREFILL_PCC_THRESHOLD,
     rmse_threshold=DEFAULT_RMSE_THRESHOLD,
 ):
-    """Numerically validate GPT-OSS-shaped compact sliding attention over a fixed, garbage-padded KV cache.
+    """Numerically validate compact GQA sliding attention over a fixed, garbage-padded KV cache.
 
-    Case 0 is the cache-backed first complete group (``logical_n == G``). It exercises the exact
-    chunk-0 physical condition used by GPT-OSS: Q is shorter than an oversized K/V cache and both
-    the ignored group-0 wrap payload and device-0 causal clipping are checked against the torch reference.
+    The first case is the cache-backed first complete group (``logical_n == G``). It exercises the
+    physical chunk-0 condition used by GPT-OSS and Gemma: Q is shorter than an oversized K/V cache,
+    while the ignored group-0 wrap payload and device-0 causal clipping are checked against torch.
     """
     sp_size = mesh_config.sp_size
     if sp_size < 2:
@@ -2713,13 +2717,16 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
     assert chunk_size_local % tile_height == 0
     assert sliding_window_size > 0
 
-    local_q_heads = 8
-    local_kv_heads = 1
+    assert local_q_heads > 0 and local_kv_heads > 0
+    assert local_q_heads % local_kv_heads == 0
+    assert head_dim % tile_height == 0
+    assert prefix_group_counts and prefix_group_counts[0] == 0
+    assert all(groups >= 0 for groups in prefix_group_counts)
     nhq = local_q_heads * mesh_config.tp_size
     nhk = local_kv_heads * mesh_config.tp_size
     nhv = nhk
     gqa_ratio = local_q_heads // local_kv_heads
-    d_q = GPT_OSS_RING_SINK_CONFIG.head_dim
+    d_q = head_dim
     d_k = d_q
     d_v = d_q
     q_dtype = GPT_OSS_RING_SINK_CONFIG.q_dtype
@@ -2727,9 +2734,9 @@ def run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
     chunk_size_global = chunk_size_local * sp_size
     # A complete first group is valid even though it has no predecessor *group*: device 0
     # clips at token zero while all other devices consume a predecessor within the group.
-    # Exercise that path, early cache growth, and the production chunk index (5K Q after
-    # ten 5K groups). Partial/wrapped Q groups remain outside this specialization.
-    prefix_lengths = (0, chunk_size_global, 2 * chunk_size_global, 10 * chunk_size_global)
+    # Exercise that path and the requested cache-growth cases. Partial/wrapped Q groups remain outside
+    # this specialization.
+    prefix_lengths = tuple(groups * chunk_size_global for groups in prefix_group_counts)
     logical_lengths = tuple(prefix + chunk_size_global for prefix in prefix_lengths)
     max_logical_n = max(logical_lengths)
 
@@ -3519,9 +3526,15 @@ def test_ring_joint_attention_kv_pad_aware_rotation_accuracy(case_name):
 def test_ring_joint_attention_gpt_oss_first_complete_group_sliding_kv_pad_reuse_accuracy_and_determinism(
     expect_error,
 ):
-    """GPT-OSS-shaped numerical regression for chunk 0 plus cache growth/replay."""
+    """GPT-OSS-shaped numerical regression for chunk 0 plus cache growth/replay.
+
+    The 256-token local Q slab is deliberately larger than the 128-token halo: this exercises the
+    nonzero first-group predecessor tail, rather than the degenerate full-slab halo case.
+    """
     batch_size = gpt_oss_native_ring_batch_size(MESH_CONFIG)
-    run_ring_joint_sdpa_sliding_kv_pad_reuse_case(MESH_CONFIG, batch_size=batch_size, expect_error=expect_error)
+    run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
+        MESH_CONFIG, batch_size=batch_size, expect_error=expect_error, chunk_size_local=256
+    )
 
 
 def test_ring_mla_chunked_kv_actual_isl_indexed_reuse_max_accuracy_and_determinism():
@@ -5014,49 +5027,26 @@ def test_ring_joint_attention_gpt_oss_chunked_sliding_native_ring_gqa_accuracy_a
         close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
 
 
-def test_ring_joint_attention_gemma_complete_group_sliding_geometry():
-    """Compile and run the generalized Gemma sliding geometry on the native SP ring.
+def test_ring_joint_attention_gemma_complete_group_sliding_geometry(expect_error):
+    """Numerically validate the generalized Gemma sliding geometry on the native SP ring.
 
-    The first test in this area covers the one-complete-group halo behavior with
-    a short GPT-OSS window. This smoke test proves that the structural gates also
-    admit Gemma's D256, 4Q:2K:2V and W1024 geometry, where the K-chunk-rounded
-    halo exactly fills one local 1024-token slab.
+    This validates Gemma's D256, 4Q:2K:2V and W1024 geometry, where the
+    K-chunk-rounded halo exactly fills one local 1024-token slab.
     """
-    mesh_config = gpt_oss_chunked_mesh_config()
-    chunk_size = 1024 * mesh_config.sp_size
-    model = replace(
-        GPT_OSS_CHUNKED_MODEL,
-        name="gemma_complete_group_sliding",
-        nhq=4,
-        nhk=2,
-        nhv=2,
-        d_q=256,
-        d_k=256,
-        d_v=256,
-        q_chunk_sizes=[64],
-        k_chunk_sizes=[128],
-        seq_len=chunk_size,
+    run_ring_joint_sdpa_sliding_kv_pad_reuse_case(
+        gpt_oss_chunked_mesh_config(),
+        batch_size=1,
+        expect_error=expect_error,
+        # The helper keeps the physical K/V cache oversized even for group 0, so both
+        # first-group and cache-growth layouts are checked numerically.
+        chunk_size_local=1024,
+        sliding_window_size=1024,
+        local_q_heads=4,
+        local_kv_heads=2,
+        head_dim=256,
+        prefix_group_counts=(0, 1),
+        num_iterations=1,
     )
-
-    # Chunk 0 proves Gemma geometry works at logical_n == G; chunk 1 verifies
-    # that it continues to dispatch after cache growth. This is a geometry/
-    # dispatch test; the GPT-OSS regression above independently checks PCC.
-    for chunk_id in (0, 1):
-        with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(chunk_id)}):
-            run_ring_joint_sdpa_chunked(
-                mesh_config,
-                model,
-                batch_size=1,
-                chunk_size=chunk_size,
-                total_seq=2 * chunk_size,
-                qk_configs=[(64, 128)],
-                # The first call must see a cache physically larger than its Q
-                # slab, just as GPT-OSS's max-sequence cache is sized in production.
-                persistent_buffer_mode="reuse_max",
-                reuse_kv_buffer=True,
-                sliding_window_size=1024,
-                do_check=False,
-            )
 
 
 def test_ring_joint_attention_gpt_oss_chunked_sliding_indexed_kv_cache_accuracy():
