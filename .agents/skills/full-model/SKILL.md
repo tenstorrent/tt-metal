@@ -158,6 +158,17 @@ Build the fast probe before any repeated debugging loop: a reduced full-model va
 
 When full-model accuracy is poor, debug the new wrapper first: embeddings, final norm, LM head/tied weights, positions, masks, cache indexing, prompt lengths, page tables, and sampling all commonly fail outside the decoder itself. If the failure spans several of these boundaries and the causal chain is unclear, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix. Escalate back into decoder precision or fidelity only when evidence points there.
 
+When an accuracy failure appears to follow a dtype, cache dtype, math fidelity, or CCL payload change, treat that as a precision-policy diagnosis, not as a root cause. Write down the whole active policy first: activation dtype, every weight dtype group, math fidelity per projection, cache dtype, CCL payload dtype, page/block size, cache layout, page-table policy, and decode update op. Then run controls that can distinguish a true cache/kernel defect from a policy-margin problem:
+
+- same cache dtype with higher-precision weights/math/CCL payloads;
+- same weights/math with only cache dtype changed;
+- exact page/block/cache-shape probe that imports model constants instead of hard-coding page sizes, local KV heads, batch slots, or mapper behavior;
+- a mature or canonical implementation that uses the same low-precision cache path on a comparable repeated-decode workload, when one exists.
+
+"BF16 fixes it" localizes an error-budget boundary. It does not by itself prove that BFP8 cache is inherently unstable, that `paged_update_cache` is defective, or that accumulated numerical error is the root cause. State those as hypotheses until the controls above isolate them. If a reduced cache probe uses different page block size, batch width, local KV head count, update row shape, mesh mapper, or page-table policy from the full model, label it as smoke evidence only and do not use it as causal proof.
+
+For paged decode, validate the cache/page-table allocation contract against the attention op's rounded read window, not just the requested token count rounded to page size. Record the first top-k miss index, absolute sequence position, page/block id, and dynamic attention chunk boundary before blaming dtype drift. If misses cliff at a page, tile, power-of-two, or chunk boundary, run an over-allocation control where the cache/page table covers the next SDPA decode rounded read window. A passing over-allocation control is an allocation/attention-window bug, even if BF16 happened to mask the shorter allocation.
+
 ## Performance
 
 Measure warmed full-model prefill and decode behavior, not just block latency. Include generator overhead, cache management, final norm, LM head, logits, and sampling in the reported numbers unless the project specifically asks for device-only timing. Use the $optimize skill to ensure on-device performance is as high as you can get it, but in addition now we care about the end-to-end time as measured from the host. Section 4.5 of `tech_reports/LLMs/llms.md` has great advice on this that you should read, understand and follow.

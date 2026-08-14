@@ -6,8 +6,8 @@ This goal creates the optimized-decoder state for the repo-local TTNN autoport p
 
 Stage 03 completion requirements:
 - models/autoports/<model>/tt/optimized_decoder.py exists and the delivered tests exercise the optimized path, not a functional fallback.
-- Preserve the fused decoder's semantics, paged KV cache, determinism, and layer-kind coverage at the functional acceptance bar.
-- Preserve the fused decoder's context contract. If layout, sharding, or KV-cache dtype changes capacity, update doc/context_contract.json. Reduce advertised capability only for an evidenced hard device limit.
+- The optimized decoder preserves the fused decoder's prefill/decode semantics, paged KV-cache behavior, determinism, and representative layer-kind coverage.
+- The optimized decoder preserves the context contract from fused decoder. If optimization changes memory layout, sharding, or KV-cache dtype enough to change capacity, update doc/context_contract.json. Do not complete after reducing advertised capability unless a hard physical device limit, e.g. DRAM, requires it and evidence records the largest feasible value.
 - The optimized decoder preserves support for valid non-aligned logical sequence lengths; internal padding/chunking is fine, public `seq_len % chunk_size == 0` restrictions are not.
 - Prefill and decode PCC remain at the functional acceptance bar for every meaningful layer kind, with any material delta explained.
 - Report warmed prefill and traced warmed decode before and after optimization, using the fused decoder as the baseline.

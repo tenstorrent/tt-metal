@@ -24,7 +24,7 @@ Scan table and the implementation for existing patterns in this skill and the ne
 
 ### Step 4
 
-After the graph change, run a PCC equivalence test (unfused vs fused) on device. Keep it only if PCC still meets the threshold (0.99) and the fused path is faster on the measured workload. See **Verify every rewrite** below. Do not give up on a graph rewrite if the first run fails. Try to solve the problem. Read the implementation and validation of the op that you added and figure out if there is something that can be changed in order for the op to be valid for your case. Sometimes even adding an additional input layout change can help.
+After the graph change, run a PCC equivalence test (unfused vs fused) on device. Keep it only if PCC meets the prior-stage acceptance bar (default PCC >= 0.995), has no material regression, and the fused path is faster on the measured workload. See **Verify every rewrite** below. Do not give up on a graph rewrite if the first run fails. Try to solve the problem. Read the implementation and validation of the op that you added and figure out if there is something that can be changed in order for the op to be valid for your case. Sometimes even adding an additional input layout change can help.
 
 ### Step 5
 
