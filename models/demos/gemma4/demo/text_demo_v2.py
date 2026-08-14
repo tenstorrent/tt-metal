@@ -506,16 +506,53 @@ def test_demo_text(
     prompts = load_inputs(input_prompts, batch_size, instruct)
     profiler.end("loading_inputs")
 
+    # ── Sequential decode groups (batch > device decode width) ──────────────
+    # Decode width is hard-capped at ``_DECODE_TOKEN_FEEDBACK_WIDTH`` (32): the
+    # on-device sampled id is written back into a tile-aligned [1,1,1,32] slot
+    # vector in the captured trace input, so batch>32 raises in
+    # ``Gemma4Model.prepare_decode_inputs_host``. Rather than widen that buffer,
+    # split the requested batch into ceil(B/group) groups of <=group users and
+    # run them back-to-back through the same model / KV pool / page table.
+    #
+    # NOTE ON THROUGHPUT: this buys *capacity*, not speed. Decode is weight-
+    # bandwidth bound (~81% of the step is batch-independent), and each group
+    # re-reads the full weight set, so aggregate tok/s lands at the group-size
+    # value (B=64 as 2x32 ~= B=32 tok/s). A true 64-wide pass would amortise one
+    # weight read over 64 users instead. Groups exist so B>32 is *runnable* and
+    # so demo numbers line up with a vLLM server that queues at max_num_seqs.
+    group_max = int(os.environ.get("GEMMA4_DECODE_GROUP_MAX", 32))
+    if group_max < 1:
+        raise ValueError(f"GEMMA4_DECODE_GROUP_MAX must be >= 1 (got {group_max})")
+    group_size = min(batch_size, group_max)
+    n_groups = math.ceil(batch_size / group_size)
+    # Pad the trailing short group by repeating its own prompts so every group
+    # runs at the same width (one decode trace shape, constant step time).
+    # ``n_real`` keeps padded users out of the token accounting.
+    prompt_groups = []
+    for start in range(0, batch_size, group_size):
+        chunk = prompts[start : start + group_size]
+        n_real = len(chunk)
+        if n_real < group_size:
+            chunk = (chunk * group_size)[:group_size]
+        prompt_groups.append((chunk, n_real))
+    if n_groups > 1:
+        logger.info(
+            f"Sequential decode groups: batch={batch_size} -> {n_groups} x {group_size} "
+            f"(real users per group: {[n for _, n in prompt_groups]}); "
+            f"model/KV/page-table sized to {group_size}"
+        )
+
     # Right-size the paged KV pool.
     #   * batch=1 long-context: configs sometimes over-allocate (e.g. 2048 blocks
     #     for a 64k run); shrink to exactly batch * ceil(max_seq_len / block).
     #   * batch>1 throughput: the row's page_max_num_blocks is the tuned shared
     #     pool (short prompts). Using B*max_seq_len here over-provisions and OOMs
     #     (batch-32 @ 4096 → 4096 blocks vs config 1024).
+    # Sized to ``group_size``: only one group is resident at a time.
     block_size = page_params["page_block_size"]
-    needed_blocks = batch_size * math.ceil(max_seq_len / block_size)
+    needed_blocks = group_size * math.ceil(max_seq_len / block_size)
     configured_blocks = page_params.get("page_max_num_blocks")
-    if batch_size <= 1 or configured_blocks is None:
+    if group_size <= 1 or configured_blocks is None:
         page_max_num_blocks = needed_blocks
     else:
         page_max_num_blocks = configured_blocks
@@ -537,7 +574,7 @@ def test_demo_text(
     generator, tt_kv_cache, tokenizer = Gemma4Generator.from_pretrained(
         mesh_device=mesh_device,
         model_path=model_path,
-        max_batch_size=batch_size,
+        max_batch_size=group_size,
         max_seq_len=max_seq_len,
         num_layers=num_layers,
         paged_attention_config=paged_attention_config,
@@ -546,7 +583,7 @@ def test_demo_text(
     model_args_list = generator.model_args  # preprocess_inputs_prefill iterates this
     model_args = model_args_list[0]
 
-    page_table = create_tt_page_table(batch_size, paged_attention_config)
+    page_table = create_tt_page_table(group_size, paged_attention_config)
 
     # Bounded sliding needs per-layer page tables (sliding layers index their
     # small bounded pool, full layers the full pool). Build them once and stash
@@ -559,7 +596,7 @@ def test_demo_text(
         per_layer_pts = build_hybrid_page_tables(
             n_layers,
             sliding_mask,
-            num_users=batch_size,
+            num_users=group_size,
             block_size=block_size,
             max_seq_len=max_seq_len,
             sliding_window=model_args.sliding_window,
@@ -599,86 +636,124 @@ def test_demo_text(
     )
     logger.info("Warmup complete")
 
-    # ── Prefill ────────────────────────────────────────────────────────────
-    input_tokens_prefill_pt, encoded_prompts, decoding_pos, prefill_lens = preprocess_inputs_prefill(
-        prompts, tokenizer, model_args_list, instruct, max_generated_tokens, max_prefill_len=max_seq_len
-    )
-    max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
-    assert max_generated_tokens + max_encoded_prompt_len <= max_seq_len, (
-        f"prompt ({max_encoded_prompt_len}) + max_generated_tokens ({max_generated_tokens}) "
-        f"must be <= max_seq_len ({max_seq_len})"
-    )
-    input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
+    # ── Prefill + decode, one sequential group at a time ────────────────────
+    def _run_group(group_prompts, n_real, gid, tag):
+        """Prefill + decode one group of ``group_size`` users.
 
-    logger.info("Starting prefill...")
-    profiler.start("inference_prefill")
-    prefill_out = generator.prefill_forward_text(
-        input_tokens_prefill_pt,
-        page_table=page_table,
-        kv_cache=tt_kv_cache,
-        prompt_lens=decoding_pos,
-        warmup_prefill=False,
-        enable_trace=prefill_enable_trace,
-        sampling_params=device_sampling_params,
-    )
-    if device_sampling_params is not None:
-        prefill_tokens, _ = prefill_out
-        prefilled_token = prefill_tokens.long()
-    else:
-        prefilled_token = _host_sample(prefill_out, temperature, top_p)
-    profiler.end("inference_prefill")
-    logger.info("Prefill finished")
+        Returns a dict with this group's timings, token counts and decoded
+        outputs. Profiler keys are namespaced by ``tag`` so per-group durations
+        stay separable (and so ``inference_decode_time_{i}`` keeps its exact
+        historical meaning for the single-group case).
+        """
+        toks_pt, encoded, dec_pos, plens = preprocess_inputs_prefill(
+            group_prompts, tokenizer, model_args_list, instruct, max_generated_tokens, max_prefill_len=max_seq_len
+        )
+        max_encoded_prompt_len = max(len(p) for p in encoded)
+        assert max_generated_tokens + max_encoded_prompt_len <= max_seq_len, (
+            f"prompt ({max_encoded_prompt_len}) + max_generated_tokens ({max_generated_tokens}) "
+            f"must be <= max_seq_len ({max_seq_len})"
+        )
+        toks_pt = torch.stack(toks_pt).view(group_size, -1)
 
-    prefilled_flat = prefilled_token.view(batch_size, -1).squeeze(-1)
-    all_outputs = [encoded_prompts[b][: prefill_lens[b]] for b in range(batch_size)]
-    for user in range(batch_size):
-        all_outputs[user].append(int(prefilled_flat[user].item()))
-
-    # ── Decode loop ─────────────────────────────────────────────────────────
-    current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
-    out_tok = prefilled_flat.reshape(batch_size, 1)
-    user_done = [False] * batch_size
-    iteration = 0
-    users_decoding = True
-
-    logger.info("Starting decode loop...")
-    profiler.start("inference_decode")
-    while users_decoding:
-        profiler.start(f"inference_decode_time_{iteration}")
-        decode_out, _ = generator.decode_forward(
-            out_tok,
-            current_pos,
-            enable_trace=enable_trace,
+        logger.info(f"Starting prefill{tag}...")
+        profiler.start(f"inference_prefill{tag}")
+        prefill_out = generator.prefill_forward_text(
+            toks_pt,
             page_table=page_table,
             kv_cache=tt_kv_cache,
+            prompt_lens=dec_pos,
+            warmup_prefill=False,
+            enable_trace=prefill_enable_trace,
             sampling_params=device_sampling_params,
         )
         if device_sampling_params is not None:
-            out_tok = decode_out.long().view(batch_size, 1)
+            prefill_tokens, _ = prefill_out
+            prefilled_token = prefill_tokens.long()
         else:
-            out_tok = _host_sample(decode_out, temperature, top_p)
-        profiler.end(f"inference_decode_time_{iteration}")
+            prefilled_token = _host_sample(prefill_out, temperature, top_p)
+        profiler.end(f"inference_prefill{tag}")
+        logger.info(f"Prefill finished{tag}")
 
-        current_pos += 1
-        for user in range(batch_size):
-            tok = int(out_tok[user, 0].item())
-            if tok not in tokenizer.stop_tokens and not user_done[user]:
-                all_outputs[user].append(tok)
-            elif stop_at_eos:
-                user_done[user] = True
-                if all(user_done):
-                    users_decoding = False
+        prefilled_flat = prefilled_token.view(group_size, -1).squeeze(-1)
+        outs = [encoded[b][: plens[b]] for b in range(group_size)]
+        for user in range(group_size):
+            outs[user].append(int(prefilled_flat[user].item()))
 
-        if not is_ci_env:
-            for user in range(batch_size):
-                text = "".join(tokenizer.decode(all_outputs[user]))
-                text = ("..." + text[-97:]) if len(text) > 100 else text
-                logger.info(f"[User {user}] {text.replace(chr(10), ' ')}")
+        current_pos = torch.tensor([dec_pos[b] for b in range(group_size)])
+        out_tok = prefilled_flat.reshape(group_size, 1)
+        user_done = [False] * group_size
+        it = 0
+        users_decoding = True
 
-        iteration += 1
-        if iteration >= max_generated_tokens:
-            users_decoding = False
-    profiler.end("inference_decode")
+        logger.info(f"Starting decode loop{tag}...")
+        profiler.start(f"inference_decode{tag}")
+        while users_decoding:
+            profiler.start(f"inference_decode_time{tag}_{it}")
+            decode_out, _ = generator.decode_forward(
+                out_tok,
+                current_pos,
+                enable_trace=enable_trace,
+                page_table=page_table,
+                kv_cache=tt_kv_cache,
+                sampling_params=device_sampling_params,
+            )
+            if device_sampling_params is not None:
+                out_tok = decode_out.long().view(group_size, 1)
+            else:
+                out_tok = _host_sample(decode_out, temperature, top_p)
+            profiler.end(f"inference_decode_time{tag}_{it}")
+
+            current_pos += 1
+            for user in range(group_size):
+                tok = int(out_tok[user, 0].item())
+                if tok not in tokenizer.stop_tokens and not user_done[user]:
+                    outs[user].append(tok)
+                elif stop_at_eos:
+                    user_done[user] = True
+                    if all(user_done):
+                        users_decoding = False
+
+            if not is_ci_env:
+                for user in range(group_size):
+                    text = "".join(tokenizer.decode(outs[user]))
+                    text = ("..." + text[-97:]) if len(text) > 100 else text
+                    logger.info(f"[G{gid} User {user}] {text.replace(chr(10), ' ')}")
+
+            it += 1
+            if it >= max_generated_tokens:
+                users_decoding = False
+        profiler.end(f"inference_decode{tag}")
+
+        # Iteration 0 is the decode compile/trace-capture step for the first
+        # group — excluded from the steady-state average, as before.
+        steady = max(it - 1, 1)
+        decode_s = sum(profiler.get_duration(f"inference_decode_time{tag}_{i}") for i in range(1, it))
+        return {
+            "gid": gid,
+            "n_real": n_real,
+            "iterations": it,
+            "steady_iters": steady,
+            "decode_s": decode_s,
+            "prefill_s": profiler.get_duration(f"inference_prefill{tag}"),
+            "outputs": outs[:n_real],
+            "prompts": group_prompts[:n_real],
+            "prefill_lens": plens[:n_real],
+            "ms_per_token": (decode_s / steady * 1000.0) if steady else 0.0,
+        }
+
+    group_results = []
+    for gid, (group_prompts, n_real) in enumerate(prompt_groups):
+        # Single-group runs keep the historical un-suffixed profiler keys.
+        tag = "" if n_groups == 1 else f"_g{gid}"
+        if n_groups > 1:
+            logger.info(f"=== Decode group {gid + 1}/{n_groups} ({n_real} real users of {group_size}) ===")
+        group_results.append(_run_group(group_prompts, n_real, gid, tag))
+
+    # Flatten per-group results back into whole-run views.
+    all_outputs = [o for r in group_results for o in r["outputs"]]
+    prompts = [p for r in group_results for p in r["prompts"]]
+    prefill_lens = [pl for r in group_results for pl in r["prefill_lens"]]
+    iteration = max(r["iterations"] for r in group_results)
     profiler.end("run")
 
     # ── Final outputs ────────────────────────────────────────────────────────
@@ -693,14 +768,21 @@ def test_demo_text(
         logger.info(f"\n==USER {i} - PROMPT\n{short_prompt}\n==USER {i} - GENERATION ONLY\n{gen_text.strip()}\n")
 
     # ── Performance metrics ───────────────────────────────────────────────────
-    total_prefill = profiler.get_duration("inference_prefill")
-    # Iteration 0 is the decode compile step — exclude from the steady-state average.
-    steady_iters = max(iteration - 1, 1)
-    total_decode = sum(profiler.get_duration(f"inference_decode_time_{i}") for i in range(1, iteration))
+    # Sum over groups: with n_groups == 1 these reduce to the historical values.
+    total_prefill = sum(r["prefill_s"] for r in group_results)
+    total_decode = sum(r["decode_s"] for r in group_results)
+    steady_iters = max(r["steady_iters"] for r in group_results)
+    # Real (non-padding) user-tokens actually produced in the steady state.
+    total_user_tokens = sum(r["steady_iters"] * r["n_real"] for r in group_results)
     ttft_ms = total_prefill * 1000
     amortized_prefill_ms = total_prefill / batch_size * 1000
-    decode_tps_u = steady_iters / total_decode if total_decode > 0 else 0
-    decode_tps = decode_tps_u * batch_size
+    # Per-user rate *while a user's own group is decoding* — the device step rate.
+    # Mean of each group's own steady rate; for n_groups == 1 this is exactly the
+    # historical steady_iters / total_decode.
+    _rates = [r["steady_iters"] / r["decode_s"] for r in group_results if r["decode_s"] > 0]
+    decode_tps_u = sum(_rates) / len(_rates) if _rates else 0
+    # Whole-run aggregate: every real user-token divided by all decode wall-clock.
+    decode_tps = total_user_tokens / total_decode if total_decode > 0 else 0
 
     logger.info("")
     logger.info("=== Performance metrics ===")
@@ -717,9 +799,43 @@ def test_demo_text(
         # No steady-state decode timing (e.g. EoS hit on the first token, so only
         # the compile iteration ran) — avoid dividing by zero.
         logger.info("Decode: n/a (no steady-state decode iterations recorded)")
+
+    if n_groups > 1:
+        # Per-group breakdown plus the two ways of reading a grouped run.
+        logger.info("")
+        logger.info(f"--- Sequential groups: {n_groups} x {group_size} (batch={batch_size}) ---")
+        for r in group_results:
+            logger.info(
+                f"  group {r['gid'] + 1}/{n_groups}: {r['n_real']:>2} real users | "
+                f"{r['ms_per_token']:.2f} ms/token | {r['steady_iters']} steady iters | "
+                f"decode {r['decode_s']:.2f} s | prefill {r['prefill_s']:.2f} s"
+            )
+        in_group_tps = group_size * 1000.0 / group_results[0]["ms_per_token"] if group_results[0]["ms_per_token"] else 0
+        logger.info(
+            f"  in-group throughput (one group live): {in_group_tps:.2f} tok/s "
+            f"@ {group_size} users — this is the device's real decode rate"
+        )
+        logger.info(
+            f"  whole-run aggregate ({batch_size} users over {total_decode:.2f} s): "
+            f"{decode_tps:.2f} tok/s, {decode_tps / batch_size:.2f} tok/s/user"
+        )
+        logger.info(
+            f"  NOTE: groups are sequential, so each group re-reads the full weight set. "
+            f"Aggregate tracks the group-size rate, not batch={batch_size}; per-user rate is "
+            f"~1/{n_groups} of the in-group rate."
+        )
     logger.info(f"Full demo runtime: {profiler.get_duration('run'):.1f} s")
 
-    if is_ci_env:
+    # ``create_benchmark_data`` looks up the un-suffixed "inference_prefill" /
+    # "inference_decode" profiler keys, which only exist for a single group
+    # (grouped runs namespace them per group). Skip the partial-run JSON rather
+    # than emit a KeyError or a half-populated record.
+    if is_ci_env and n_groups > 1:
+        logger.info(
+            f"Skipping benchmark JSON: sequential decode groups ({n_groups}x{group_size}) "
+            "have no single aggregate inference_prefill/inference_decode profiler span."
+        )
+    elif is_ci_env:
         measurements = {
             "inference_prefill": total_prefill,
             "inference_decode": total_decode,
