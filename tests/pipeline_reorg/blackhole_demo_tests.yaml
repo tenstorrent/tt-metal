@@ -91,3 +91,48 @@
   owner_id: U088VJ79WDB # Jonathan Su
   team: models
   model-name: z-image-turbo
+
+# ─── vibevoice-1.5b (single P150) ─────────────────────────────────────────────
+# Weights (microsoft/VibeVoice-1.5B) + demo text/voices auto-download on first run and cache under
+# HF_HOME; the WER and speaker-sim tests additionally pull Whisper / a speaker-verification model
+# (both cached under HF_HOME). Single-P150 only (bh_p150b_civ2).
+
+- name: vibevoice-1.5b demo 4p_climate_100min (P150 1x1)
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export MESH_DEVICE=P150
+    export PYTHONPATH=$(pwd)
+    python models/experimental/vibevoice/demo/demo.py --demo 4p_climate_100min --trace
+  skus:
+    bh_p150b_civ2:
+      timeout: 80
+  team: models
+  model-name: vibevoice-1.5b
+
+- name: vibevoice-1.5b e2e WER (P150 1x1)
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export MESH_DEVICE=P150
+    export PYTHONPATH=$(pwd)
+    export VV_WER_MAX_NEW_TOKENS=256
+    pytest -v models/experimental/vibevoice/tests/pcc/test_e2e_wer.py
+  skus:
+    bh_p150b_civ2:
+      timeout: 25
+  team: models
+  model-name: vibevoice-1.5b
+
+- name: vibevoice-1.5b speaker similarity (P150 1x1)
+  cmd: |
+    set -e
+    export HF_HOME=/localdev/blackhole_demos/huggingface_data
+    export MESH_DEVICE=P150
+    export PYTHONPATH=$(pwd)
+    pytest -v models/experimental/vibevoice/tests/pcc/test_e2e_sim.py
+  skus:
+    bh_p150b_civ2:
+      timeout: 25
+  team: models
+  model-name: vibevoice-1.5b
