@@ -30,6 +30,11 @@
 // TensorAccessor + noc_async_write is the correct mechanism here.
 
 #include "api/dataflow/dataflow_api.h"
+// PERMANENT per-stage instrumentation (never remove — free when the profiler is
+// off). Split wait / stamp / issue / barrier: a writer parked in cb_wait_front
+// is a READER problem, and a writer whose barrier is ~0 but whose issue loop is
+// large is RISC-bound on transaction count, not fabric-bound.
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 // fill_tile_pad / fill_l1_with_val — shared with the reader (which fills the same
 // pad region in the INPUT element format on the way in). See the header for why
 // the fill is materialized twice.
@@ -174,8 +179,16 @@ void kernel_main() {
         // runs: the CB *is* the output tensor, so it edits the shard in place.
         for (uint32_t i = 0; i < num_blocks; ++i) {
             idx.seek(i);
-            cb_wait_front(cb_output_tiles, wt_chunk);
-            stamp_pad(i, get_read_ptr(cb_output_tiles));
+            {
+                // Pure starve: no NoC on this side, so anything here is the
+                // reader/compute half not producing.
+                MaybeDeviceZoneScope("writer_wait");
+                cb_wait_front(cb_output_tiles, wt_chunk);
+            }
+            {
+                MaybeDeviceZoneScope("writer_stamp");
+                stamp_pad(i, get_read_ptr(cb_output_tiles));
+            }
             cb_pop_front(cb_output_tiles, wt_chunk);
             idx.advance();
         }
@@ -204,21 +217,33 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_blocks; ++i) {
             idx.seek(i);
             const uint32_t first_page = first_page_of(i);
-            // The still-unbarriered in-flight block AND this one.
-            cb_wait_front(cb_output_tiles, in_flight ? 2 * wt_chunk : wt_chunk);
+            {
+                // The still-unbarriered in-flight block AND this one.
+                MaybeDeviceZoneScope("writer_wait");
+                cb_wait_front(cb_output_tiles, in_flight ? 2 * wt_chunk : wt_chunk);
+            }
             uint32_t l1_addr = slot_base + slot * slot_bytes;
 
-            stamp_pad(i, l1_addr);  // before the bytes leave L1
-            noc_async_write_set_trid(trid_issue);
-            for (uint32_t k = 0; k < wt_chunk; ++k) {
-                noc_async_write(l1_addr, accessor.get_noc_addr(first_page + k), out_tile_bytes);
-                l1_addr += out_tile_bytes;
+            {
+                MaybeDeviceZoneScope("writer_stamp");
+                stamp_pad(i, l1_addr);  // before the bytes leave L1
+            }
+            {
+                MaybeDeviceZoneScope("writer_issue");
+                noc_async_write_set_trid(trid_issue);
+                for (uint32_t k = 0; k < wt_chunk; ++k) {
+                    noc_async_write(l1_addr, accessor.get_noc_addr(first_page + k), out_tile_bytes);
+                    l1_addr += out_tile_bytes;
+                }
             }
             slot ^= 1;
             trid_issue ^= 3;  // alternate 1 <-> 2
 
             if (in_flight) {
-                noc_async_write_barrier_with_trid(trid_wait);
+                {
+                    MaybeDeviceZoneScope("writer_barrier");
+                    noc_async_write_barrier_with_trid(trid_wait);
+                }
                 cb_pop_front(cb_output_tiles, wt_chunk);
                 trid_wait ^= 3;
             }
@@ -242,30 +267,46 @@ void kernel_main() {
         idx.seek(i);
         const uint32_t first_page = first_page_of(i);
 
-        cb_wait_front(cb_output_tiles, wt_chunk);
+        {
+            // Starved here => the bottleneck is the reader/compute half, not the
+            // write. Split out precisely so a large writer_issue cannot be
+            // misread as expensive when it is merely late.
+            MaybeDeviceZoneScope("writer_wait");
+            cb_wait_front(cb_output_tiles, wt_chunk);
+        }
         uint32_t l1_addr = get_read_ptr(cb_output_tiles);
 
-        stamp_pad(i, l1_addr);  // before the bytes leave L1
+        {
+            MaybeDeviceZoneScope("writer_stamp");
+            stamp_pad(i, l1_addr);  // before the bytes leave L1
+        }
 
-        for (uint32_t k = 0; k < wt_chunk; ++k) {
-            if constexpr (!ablate_dm) {
-                if constexpr (page_write) {
-                    // B13 OFF (the default) is exactly `noc_async_write(...)`.
-                    put.write(l1_addr, accessor.get_noc_addr(first_page + k));
-                } else {
-                    // OFF arm: the same bytes split into two sub-page transactions.
-                    constexpr uint32_t half = out_tile_bytes / 2;
-                    noc_async_write(l1_addr, accessor.get_noc_addr(first_page + k), half);
-                    noc_async_write(l1_addr + half, accessor.get_noc_addr(first_page + k, half), out_tile_bytes - half);
+        {
+            MaybeDeviceZoneScope("writer_issue");
+            for (uint32_t k = 0; k < wt_chunk; ++k) {
+                if constexpr (!ablate_dm) {
+                    if constexpr (page_write) {
+                        // B13 OFF (the default) is exactly `noc_async_write(...)`.
+                        put.write(l1_addr, accessor.get_noc_addr(first_page + k));
+                    } else {
+                        // OFF arm: the same bytes split into two sub-page transactions.
+                        constexpr uint32_t half = out_tile_bytes / 2;
+                        noc_async_write(l1_addr, accessor.get_noc_addr(first_page + k), half);
+                        noc_async_write(
+                            l1_addr + half, accessor.get_noc_addr(first_page + k, half), out_tile_bytes - half);
+                    }
                 }
-            }
-            l1_addr += out_tile_bytes;
-            if constexpr (!block_write) {
-                noc_async_write_barrier();  // OFF arm: barrier per transaction
+                l1_addr += out_tile_bytes;
+                if constexpr (!block_write) {
+                    noc_async_write_barrier();  // OFF arm: barrier per transaction
+                }
             }
         }
 
-        noc_async_write_barrier();
+        {
+            MaybeDeviceZoneScope("writer_barrier");
+            noc_async_write_barrier();
+        }
         cb_pop_front(cb_output_tiles, wt_chunk);
         idx.advance();
     }

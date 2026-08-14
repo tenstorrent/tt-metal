@@ -73,16 +73,53 @@
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 // fill_l1_with_val: the alignment-aware, sub-word-replicating L1 fill (shared with
 // the writer, which stamps the same pad region in the OUTPUT element format after
-// the cast).
+// the cast). copy_l1_words: the retile path's local face-row move. One source for
+// both L1 primitives.
 #include "ttnn/ttnn/operations/tilize/kernels/tilize_fill.hpp"
 // StatefulRead (master.md B13) and BlockIndex (master.md D21) — shared with the
 // writer so each lever has exactly one implementation. Both are OFF-by-default
 // arms that compile to the prior code.
 #include "ttnn/ttnn/operations/tilize/kernels/tilize_noc.hpp"
 
+// ── BAKE-OFF SELECTOR ────────────────────────────────────────────────────────
+// Set by the generated per-arm shim (see bench_retile_permute.py). 0 == the op's
+// current approach, reconstructed verbatim.
+#ifndef RETILE_VARIANT
+#define RETILE_VARIANT 0
+#endif
+
 namespace {
 
+// L1 -> L1 copy, `nonvolatile` selecting whether the compiler is allowed to
+// pipeline the loads ahead of the stores.
+//
+// RAW LLK / raw-dataflow note: the op's own primitive (tilize_fill.hpp
+// `copy_l1_words`) uses `volatile tt_l1_ptr` pointers, which forces every load
+// to complete before the next store issues — an rv32 L1 access is ~10 cycles, so
+// a volatile load/store pair cannot overlap. Nothing in ttnn/cpp/ttnn/kernel_lib
+// offers an L1->L1 block move at all (the dataflow helpers all address a
+// TENSOR through an accessor), so this bench measures the primitive directly.
+template <uint32_t n_bytes, bool nonvolatile>
+FORCE_INLINE void copy_bytes(uint32_t src_addr, uint32_t dst_addr) {
+    static_assert(n_bytes % 4 == 0, "L1 word copy needs a 4-byte multiple");
+    if constexpr (nonvolatile) {
+        // The staged bytes were landed by the NoC, which the compiler cannot
+        // see; the explicit clobber keeps these loads below the read barrier.
+        asm volatile("" ::: "memory");
+        auto* src = reinterpret_cast<tt_l1_ptr uint32_t*>(src_addr);
+        auto* dst = reinterpret_cast<tt_l1_ptr uint32_t*>(dst_addr);
+#pragma GCC unroll 8
+        for (uint32_t i = 0; i < n_bytes / 4; ++i) {
+            dst[i] = src[i];
+        }
+        asm volatile("" ::: "memory");
+    } else {
+        tilize_kernels::copy_l1_words<n_bytes>(src_addr, dst_addr);
+    }
+}
+
 using tilize_kernels::BlockIndex;
+using tilize_kernels::copy_l1_words;
 using tilize_kernels::fill_l1_with_val;
 using tilize_kernels::StatefulRead;
 
@@ -438,10 +475,36 @@ void kernel_main() {
             }
         }
     } else if constexpr (regime == 2 /* R_RETILE */) {
-        // ── R_RETILE ─────────────────────────────────────────────────────
+        // ══ ISOLATED BAKE-OFF: the RETILE permutation ════════════════════
+        // Everything above this point is a VERBATIM copy of the op's reader so
+        // the arms differ only in the permutation. `RETILE_VARIANT` selects:
+        //
+        //   0 baseline        the op's current approach (staged pages ->
+        //                     row-major sticks, one volatile 32 B word copy per
+        //                     (row, tile, face)), reconstructed verbatim.
+        //   1 rm_coalesce     same row-major intermediate, but emitting the
+        //                     LONGEST run contiguous in BOTH source and
+        //                     destination. See the contiguity note below: that
+        //                     run is 16 elements unless src_face_h == 1.
+        //   2 rm_stage_direct no staging at all — when in_tile_h == 1 a source
+        //                     tile PAGE *is* a row-major run, so the DRAM read
+        //                     lands at its final address and there is no copy.
+        //   3 direct_tile     staged pages -> the OUTPUT TILE directly (compute
+        //                     becomes a no-op). The output face is a contiguous
+        //                     run of a source face, so the run is rows_per_run
+        //                     face-rows instead of one.
+        //   4 direct_dram     DRAM -> the OUTPUT TILE. Same runs as (3), but the
+        //                     NoC lands them: no staging, no CPU copy at all.
+        //   5 noc_loopback    baseline geometry, but each L1->L1 face-row move
+        //                     is a local noc_async_read instead of rv32 stores.
+        //   6 nonvolatile     baseline geometry, non-volatile word copy so the
+        //                     compiler may pipeline loads ahead of stores.
+        //   7 direct_tile_nv  (3) + the non-volatile copy.
+        //
         // Stage whole SOURCE tile pages, then move face rows into the CB as
         // ordinary row-major sticks. Everything below the stage is a local L1
         // permutation, so no NoC alignment constraint reaches the face geometry.
+        constexpr uint32_t cb_output_tiles = 16;  // variants 3/4/7 produce this CB directly
         constexpr uint32_t FACE_W = 16;
         // A tile's face height is 16 on a full tile and the tile height itself on
         // a tiny one (tile.cpp TILE_FACE_HW_CHOICES) — the same rule the writer's
@@ -458,6 +521,34 @@ void kernel_main() {
         // Source tile-rows one OUTPUT tile-row spans. Both heights are powers of
         // two <= 32, so one divides the other and this is exact.
         constexpr uint32_t src_rows_per_block = (tile_h + src_tile_h - 1) / src_tile_h;
+
+        // ── run geometry ────────────────────────────────────────────────
+        // (a) ROW-MAJOR intermediate. Stepping the destination by one face row
+        //     (16 elements) steps the SOURCE by src_face_h face rows, because a
+        //     tile's two faces are stored one whole face apart. So source and
+        //     destination advance together only when src_face_h == 1, i.e. only
+        //     for a 1-row source tile. Every other retile is stride-blocked at
+        //     16 elements in this intermediate — the baseline's copy length is
+        //     already maximal there, and coalescing has to change the SCHEME
+        //     (variants 3/4) rather than the copy.
+        constexpr bool rm_contiguous = (src_face_h == 1);
+        // With src_face_h == 1 the whole block collapses: staged tile (t,k) sits
+        // at (t*wt_chunk+k)*src_tile_bytes and row-major (r,k) at
+        // r*row_bytes + k*TILE_W*elem — the same map, so it is ONE copy.
+        constexpr uint32_t rm_run_bytes = rm_contiguous ? tile_h * row_bytes : face_row_bytes;
+
+        // (b) OUTPUT TILE destination. Output face (ofr,ofc) holds out rows
+        //     [ofr*out_face_h, +out_face_h) of column half ofc, row-major, 16
+        //     elements per row — and those rows come from ONE source face as
+        //     long as they stay inside it. Both heights are powers of two and
+        //     the face origin is aligned, so the run is exactly
+        //     min(out_face_h, src_face_h) face rows.
+        constexpr uint32_t out_face_h = tile_h < FACE_W ? tile_h : FACE_W;
+        constexpr uint32_t out_face_rows = tile_h / out_face_h;
+        constexpr uint32_t out_tile_bytes_v = tile_h * TILE_W * elem_bytes;
+        constexpr uint32_t rows_per_run = out_face_h < src_face_h ? out_face_h : src_face_h;
+        constexpr uint32_t runs_per_face = out_face_h / rows_per_run;
+        constexpr uint32_t tile_run_bytes = rows_per_run * face_row_bytes;
 
         const uint32_t stage_base = get_write_ptr(cb_retile_stage);
         // Consecutive blocks of a core share a W chunk and march up the tile-rows,
@@ -482,6 +573,72 @@ void kernel_main() {
                 idx.advance();
             }
             const uint32_t src_row0 = (row * tile_h) / src_tile_h;
+            const uint32_t out_row0 = row * tile_h;  // this block's first OUTPUT row
+
+            // ── V2: no staging — the DRAM page lands at its final RM address ──
+            if constexpr (RETILE_VARIANT == 2 && rm_contiguous) {
+                {
+                    MaybeDeviceZoneScope("reader_reserve");
+                    cb_reserve_back(cb_input_sticks, wt_chunk);
+                }
+                const uint32_t l1_base = get_write_ptr(cb_input_sticks);
+                {
+                    MaybeDeviceZoneScope("retile_stage_issue");
+                    for (uint32_t t = 0; t < src_rows_per_block; ++t) {
+                        for (uint32_t k = 0; k < wt_chunk; ++k) {
+                            issue.read(
+                                accessor.get_noc_addr((src_row0 + t) * wt + col + k),
+                                l1_base + (t * wt_chunk + k) * src_tile_bytes,
+                                src_tile_bytes);
+                        }
+                    }
+                }
+                {
+                    MaybeDeviceZoneScope("retile_stage_barrier");
+                    noc_async_read_barrier();
+                }
+                cb_push_back(cb_input_sticks, wt_chunk);
+                continue;
+            }
+
+            // ── V4: DRAM -> OUTPUT TILE, the NoC does the permutation ────────
+            if constexpr (RETILE_VARIANT == 4) {
+                {
+                    MaybeDeviceZoneScope("reader_reserve");
+                    cb_reserve_back(cb_output_tiles, wt_chunk);
+                }
+                const uint32_t out_base = get_write_ptr(cb_output_tiles);
+                {
+                    MaybeDeviceZoneScope("retile_stage_issue");
+                    for (uint32_t k = 0; k < wt_chunk; ++k) {
+                        const uint32_t dst_tile = out_base + k * out_tile_bytes_v;
+                        for (uint32_t ofr = 0; ofr < out_face_rows; ++ofr) {
+                            for (uint32_t ofc = 0; ofc < faces_per_row; ++ofc) {
+                                const uint32_t dst_face =
+                                    dst_tile + (ofr * faces_per_row + ofc) * out_face_h * face_row_bytes;
+                                for (uint32_t rn = 0; rn < runs_per_face; ++rn) {
+                                    const uint32_t out_row = out_row0 + ofr * out_face_h + rn * rows_per_run;
+                                    const uint32_t si = out_row % src_tile_h;
+                                    const uint32_t page = (out_row / src_tile_h) * wt + col + k;
+                                    const uint32_t off =
+                                        ((si / src_face_h * faces_per_row + ofc) * src_face_h + si % src_face_h) *
+                                        face_row_bytes;
+                                    issue.read(
+                                        accessor.get_noc_addr(page, off),
+                                        dst_face + rn * tile_run_bytes,
+                                        tile_run_bytes);
+                                }
+                            }
+                        }
+                    }
+                }
+                {
+                    MaybeDeviceZoneScope("retile_stage_barrier");
+                    noc_async_read_barrier();
+                }
+                cb_push_back(cb_output_tiles, wt_chunk);
+                continue;
+            }
 
             if (src_row0 != staged_row || col != staged_col) {
                 {
@@ -504,60 +661,97 @@ void kernel_main() {
                 staged_col = col;
             }
 
+            if constexpr (RETILE_VARIANT == 3 || RETILE_VARIANT == 7 || RETILE_VARIANT == 8) {
+                // ── V3/V7: staged pages -> the OUTPUT TILE ──────────────────
+                // The row-major round trip (and with it the compute tilize) is
+                // gone: an output face is a contiguous run of a source face, so
+                // this emits rows_per_run face-rows per copy instead of one.
+                {
+                    MaybeDeviceZoneScope("reader_reserve");
+                    cb_reserve_back(cb_output_tiles, wt_chunk);
+                }
+                {
+                    MaybeDeviceZoneScope("retile_permute");
+                    const uint32_t out_base = get_write_ptr(cb_output_tiles);
+                    for (uint32_t k = 0; k < wt_chunk; ++k) {
+                        const uint32_t dst_tile = out_base + k * out_tile_bytes_v;
+                        for (uint32_t ofr = 0; ofr < out_face_rows; ++ofr) {
+                            for (uint32_t ofc = 0; ofc < faces_per_row; ++ofc) {
+                                const uint32_t dst_face =
+                                    dst_tile + (ofr * faces_per_row + ofc) * out_face_h * face_row_bytes;
+                                for (uint32_t rn = 0; rn < runs_per_face; ++rn) {
+                                    const uint32_t out_row = out_row0 + ofr * out_face_h + rn * rows_per_run;
+                                    const uint32_t si = out_row % src_tile_h;
+                                    const uint32_t st = out_row / src_tile_h - src_row0;
+                                    const uint32_t src =
+                                        stage_base + (st * wt_chunk + k) * src_tile_bytes +
+                                        ((si / src_face_h * faces_per_row + ofc) * src_face_h + si % src_face_h) *
+                                            face_row_bytes;
+                                    if constexpr (RETILE_VARIANT == 8) {
+                                        // V8: staged page -> output tile, but the
+                                        // local NoC lands the run. Costs ONE DRAM
+                                        // page read per source tile instead of one
+                                        // DRAM transaction per run, which is what
+                                        // V4 pays when the run is tiny.
+                                        noc_async_read(
+                                            get_noc_addr(src), dst_face + rn * tile_run_bytes, tile_run_bytes);
+                                    } else {
+                                        copy_bytes<tile_run_bytes, RETILE_VARIANT == 7>(
+                                            src, dst_face + rn * tile_run_bytes);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if constexpr (RETILE_VARIANT == 8) {
+                        noc_async_read_barrier();
+                    }
+                }
+                cb_push_back(cb_output_tiles, wt_chunk);
+                continue;
+            }
+
             {
                 MaybeDeviceZoneScope("reader_reserve");
                 cb_reserve_back(cb_input_sticks, wt_chunk);
             }
             {
-                // The retile's real payload: the face-row permutation.
-                //
-                // PERF 1 — HELPER/PRIMITIVE SUBSTITUTION, justified and MEASURED.
-                // This used to be `copy_l1_words<face_row_bytes>`, an rv32
-                // load/store loop, and it was the single hottest stage in the whole
-                // op: 85,718 of the 100,201 ns wall on a 32->8 retile of
-                // [1,1,1024,1024] bf16 (86%), with the reader as a whole 83% of the
-                // wall by cumulative payload ablation. Issuing each face-row move as
-                // a LOCAL NoC read instead (source and destination are both this
-                // core's own L1, so `get_noc_addr` resolves to a loopback address)
-                // hands the copy to the NoC, which keeps several moves in flight
-                // instead of one rv32 store at a time. Measured 99,849 -> 41,902 ns
-                // (2.38x) on the focus case, and it wins on EVERY retile geometry
-                // measured: 32->16/8/4/2/1 and 1/2/4/8/16->32, bf16 / fp32 / uint8,
-                // interleaved and local-shard destinations.
-                //
-                // Why this and not the 4.19x direct-to-output-tile form: that one
-                // needs `out_dtype == in_dtype` (it hands raw bytes to the writer,
-                // so the packer's cast has no owner) plus a DRAM-alignment
-                // predicate, i.e. a four-way dispatch. This form needs NO predicate
-                // at all — it keeps the row-major intermediate and the real tilize
-                // compute, so it is correct for casting retiles too. The faster
-                // direct form is measured and recorded in changelog.md `## Perf 1`.
-                //
-                // No `ttnn/cpp/ttnn/kernel_lib/` helper covers an L1->L1 block move
-                // (which is why `copy_l1_words` is op-local in the first place).
+                // The retile's real payload: a pure L1->L1 face-row permutation,
+                // no NoC at all. Refinement 5 classified this path L1-store-bound;
+                // this zone is what makes that claim re-checkable per block.
                 MaybeDeviceZoneScope("retile_permute");
                 uint32_t l1_addr = get_write_ptr(cb_input_sticks);
-                for (uint32_t r = 0; r < tile_h; ++r) {
-                    const uint32_t src_row = (row * tile_h + r) / src_tile_h - src_row0;  // staged tile index
-                    const uint32_t rr = (row * tile_h + r) % src_tile_h;                  // row inside it
-                    const uint32_t face_row = rr / src_face_h;
-                    const uint32_t row_in_face = rr % src_face_h;
-                    for (uint32_t k = 0; k < wt_chunk; ++k) {
-                        const uint32_t tile_addr = stage_base + (src_row * wt_chunk + k) * src_tile_bytes;
-                        for (uint32_t fc = 0; fc < faces_per_row; ++fc) {
-                            noc_async_read(
-                                get_noc_addr(
+                if constexpr (RETILE_VARIANT == 1 && rm_contiguous) {
+                    // V1 on the one geometry where the row-major intermediate IS
+                    // contiguous: the whole block is a single run.
+                    copy_bytes<rm_run_bytes, false>(stage_base, l1_addr);
+                } else {
+                    for (uint32_t r = 0; r < tile_h; ++r) {
+                        const uint32_t src_row = (row * tile_h + r) / src_tile_h - src_row0;  // staged tile index
+                        const uint32_t rr = (row * tile_h + r) % src_tile_h;                  // row inside it
+                        const uint32_t face_row = rr / src_face_h;
+                        const uint32_t row_in_face = rr % src_face_h;
+                        for (uint32_t k = 0; k < wt_chunk; ++k) {
+                            const uint32_t tile_addr = stage_base + (src_row * wt_chunk + k) * src_tile_bytes;
+                            for (uint32_t fc = 0; fc < faces_per_row; ++fc) {
+                                const uint32_t src =
                                     tile_addr +
-                                    ((face_row * faces_per_row + fc) * src_face_h + row_in_face) * face_row_bytes),
-                                l1_addr + (k * TILE_W + fc * FACE_W) * elem_bytes,
-                                face_row_bytes);
+                                    ((face_row * faces_per_row + fc) * src_face_h + row_in_face) * face_row_bytes;
+                                const uint32_t dst = l1_addr + (k * TILE_W + fc * FACE_W) * elem_bytes;
+                                if constexpr (RETILE_VARIANT == 5) {
+                                    // V5: let the NoC do the local L1->L1 move.
+                                    noc_async_read(get_noc_addr(src), dst, face_row_bytes);
+                                } else {
+                                    copy_bytes<face_row_bytes, RETILE_VARIANT == 6>(src, dst);
+                                }
+                            }
                         }
+                        l1_addr += row_bytes;
                     }
-                    l1_addr += row_bytes;
+                    if constexpr (RETILE_VARIANT == 5) {
+                        noc_async_read_barrier();
+                    }
                 }
-                // One barrier per block, as everywhere else in this op (master.md
-                // B7). The moves must land before the block is published.
-                noc_async_read_barrier();
             }
             cb_push_back(cb_input_sticks, wt_chunk);
         }

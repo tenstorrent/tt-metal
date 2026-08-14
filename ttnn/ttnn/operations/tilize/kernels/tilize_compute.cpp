@@ -13,6 +13,9 @@
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+// PERMANENT per-stage instrumentation (never remove — free when the profiler is
+// off; see the header's durability contract).
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_input_sticks = 0;
@@ -35,6 +38,7 @@ void kernel_main() {
     using namespace compute_kernel_lib::tilize_config;
 
     if constexpr (ablate_compute) {
+        MaybeDeviceZoneScope("compute_tilize");
         for (uint32_t b = 0; b < num_blocks; ++b) {
             cb_wait_front(cb_input_sticks, wt_chunk);
             cb_reserve_back(cb_output_tiles, wt_chunk);
@@ -43,6 +47,15 @@ void kernel_main() {
         }
         return;
     }
+
+    // ONE zone for the whole helper call. The tilize helper owns its own CB
+    // handshake (wait_front / reserve_back per block, tilize_helpers.inl:250),
+    // so this number is the compute thread's OCCUPANCY — payload plus every
+    // starve on the reader and every back-pressure from the writer — and it is
+    // recorded three times, once per TRISC (unpack / math / pack). Only the
+    // cumulative ablation below it separates payload from wait; see
+    // .claude/references/device-zone-scope-attribution.md §2.
+    MaybeDeviceZoneScope("compute_tilize");
 
     if constexpr (needs_cast) {
         // A real value-preserving cast: reconfigure both unpack and pack.
