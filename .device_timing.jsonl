@@ -89,3 +89,13 @@
 {"source":"tt-probe","pid":254076,"started_at_ms":1786717244205,"wait_ms":336,"run_ms":16632,"test_path":"tilize","exit_code":0}
 {"source":"run_safe_pytest","pid":254652,"started_at_ms":1786717351323,"wait_ms":2,"run_ms":15397,"test_path":"tests/ttnn/unit_tests/operations/tilize/","exit_code":0}
 {"source":"run_safe_pytest","pid":255620,"started_at_ms":1786717376827,"wait_ms":3,"run_ms":21243,"test_path":"eval/golden_tests/tilize/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":256840,"started_at_ms":1786717407982,"wait_ms":2,"run_ms":10697,"test_path":"eval/golden_tests/tilize/test_regression.py","exit_code":1}
+{"source":"run_safe_pytest","pid":257163,"started_at_ms":1786717424119,"wait_ms":2,"run_ms":17807,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":258209,"started_at_ms":1786717461687,"wait_ms":2,"run_ms":9699,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":258575,"started_at_ms":1786717471394,"wait_ms":1,"run_ms":10000,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":258944,"started_at_ms":1786717481400,"wait_ms":2,"run_ms":9629,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":259356,"started_at_ms":1786717495352,"wait_ms":2,"run_ms":9645,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":259730,"started_at_ms":1786717505005,"wait_ms":2,"run_ms":9510,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":260099,"started_at_ms":1786717514522,"wait_ms":1,"run_ms":9696,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":260607,"started_at_ms":1786717555624,"wait_ms":2,"run_ms":11224,"test_path":"tests/ttnn/unit_tests/operations/tilize/_bench_tilize.py","exit_code":0}
+{"source":"run_safe_pytest","pid":261811,"started_at_ms":1786717716456,"wait_ms":2,"run_ms":14217,"test_path":"tests/ttnn/unit_tests/operations/tilize/","exit_code":0}

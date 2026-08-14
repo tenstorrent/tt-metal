@@ -1,14 +1,17 @@
 {
   "op": "tilize",
   "topology": {
-    "phase": 1,
-    "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = shard_ht * n_chunks): e_shard_same_small=4, e_shard_same_wide=8",
+    "phase": 2,
+    "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
     "plan_paths": [
       "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
       "R_PAD/P_ACCESSOR/W_BLOCKS",
       "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
       "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
-      "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION"
+      "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+      "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+      "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+      "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)"
     ],
     "dtypes": [
       "bfloat16",
@@ -91,16 +94,19 @@
         ],
         "on_ns": 1402.0,
         "off_ns": 5257.0,
-        "note": "Conflated with C14 (same knob). Interleaved cells are unaffected: A0 keeps the full grid there.",
+        "note": "Conflated with C14 (same knob). Interleaved cells are unaffected: A0 keeps the full grid there. | Refinement 2 REFINES this: launching only on the cores that hold data pays only while those cores still move data in big enough transfers. An aliased destination pins WT_CHUNK to the shard width, and below MIN_STREAM_READ_BYTES (256 B) the shard's few cores LOSE to the full grid \u2014 measured 1.66x (128 B reads) and 3.21x (one-tile-wide destination shard, 64 B reads). Hence the new `xfer_gate` knob.",
         "topology": {
-          "phase": 1,
-          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = shard_ht * n_chunks): e_shard_same_small=4, e_shard_same_wide=8",
+          "phase": 2,
+          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
             "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
             "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
-            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION"
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)"
           ],
           "dtypes": [
             "bfloat16",
@@ -114,7 +120,7 @@
           ]
         }
       },
-      "phase": 1
+      "phase": 2
     },
     "A3": {
       "status": "deferred",
@@ -183,21 +189,32 @@
         "off_ns": 177432.0,
         "shape": "[1,1,8192,1024] bf16",
         "topology": {
-          "phase": 0,
-          "blocks_per_core": "a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1",
+          "phase": 2,
+          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
-            "R_ALIGNED/P_ACCESSOR",
-            "R_PAD/P_ACCESSOR"
+            "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
+            "R_PAD/P_ACCESSOR/W_BLOCKS",
+            "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)"
           ],
           "dtypes": [
             "bfloat16",
             "float32",
             "bfloat8_b(out)"
+          ],
+          "kernels": [
+            "tilize_compute.cpp",
+            "tilize_reader.cpp",
+            "tilize_writer.cpp"
           ]
         },
-        "note": "2.4% (wide-short 13929 vs 14311 = 2.7%; square and smallest inside noise). Small but never negative, and whole-page writes are the structural precondition for B7's per-block barrier."
+        "note": "2.4% (wide-short 13929 vs 14311 = 2.7%; square and smallest inside noise). Small but never negative, and whole-page writes are the structural precondition for B7's per-block barrier. | Refinement 2 measured the READ side of the same proposition, where the swing is far larger than on the write side: the per-row read is WT_CHUNK*32*elem and an aliased destination shard pins it. xfer_gate=1/0 on [1,1,1024,256]: 19,936 vs 33,126 ns at 128 B reads (1.66x), 16,827 vs 53,945 ns at 64 B reads (3.21x). 256 B is the measured knee (at 256-512 B the local destination still wins 1.19x-2.06x), which is what MIN_STREAM_READ_BYTES encodes."
       },
-      "phase": 0
+      "phase": 2
     },
     "B6": {
       "status": "deferred",
@@ -343,16 +360,19 @@
         ],
         "on_ns": 1402.0,
         "off_ns": 5257.0,
-        "note": "smallest sharded regime, HEIGHT-sharded 4 cores, bf16 -> 3.75x. Larger regime [1,1,2048,256] HEIGHT-sharded 8 cores: 4901 ns on / 46548 ns off -> 9.50x. Ablation on the ON arm: full 4901 -> no_compute 862 -> sync_only 856, i.e. the zero-copy path has NO measurable data movement left and is bound by the tilize LLK.",
+        "note": "smallest sharded regime, HEIGHT-sharded 4 cores, bf16 -> 3.75x. Larger regime [1,1,2048,256] HEIGHT-sharded 8 cores: 4901 ns on / 46548 ns off -> 9.50x. Ablation on the ON arm: full 4901 -> no_compute 862 -> sync_only 856, i.e. the zero-copy path has NO measurable data movement left and is bound by the tilize LLK. | Refinement 2 adds two measured arms on the same knob: padding into a resident destination shard [1,1,2040,256]->[1,1,2048,256] x8 = 22,466 ns ON vs 30,396 ns OFF (1.35x \u2014 per-side eligibility: only the INPUT is disqualified by the fill), and the cross-spec L1 gather [1,1,1024,256] WIDTH x2 -> HEIGHT x8 = 18,487 vs 19,464 ns (1.05x; DM-bound, and with a 2-core source the fan-in is the wall, not the placement).",
         "topology": {
-          "phase": 1,
-          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = shard_ht * n_chunks): e_shard_same_small=4, e_shard_same_wide=8",
+          "phase": 2,
+          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
             "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
             "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
-            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION"
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)"
           ],
           "dtypes": [
             "bfloat16",
@@ -366,7 +386,7 @@
           ]
         }
       },
-      "phase": 1
+      "phase": 2
     },
     "C15": {
       "status": "applied",
@@ -382,16 +402,19 @@
         ],
         "on_ns": 1402.0,
         "off_ns": 5257.0,
-        "note": "Same-spec sharded [1,1,2048,256] bf16 measures 4901 ns (427.9 GB/s of effective read+write) against 46548 ns when the same shard is re-fetched over the NoC; the DRAM->shard crossover of the same shape measures 14768 ns (142 GB/s), i.e. exactly one DRAM leg left. The DRAM floor does NOT describe the zero-copy rows \u2014 they are L1/compute bound (see C14's ablation), which is the re-target Refinement 3 must apply.",
+        "note": "Same-spec sharded [1,1,2048,256] bf16 measures 4901 ns (427.9 GB/s of effective read+write) against 46548 ns when the same shard is re-fetched over the NoC; the DRAM->shard crossover of the same shape measures 14768 ns (142 GB/s), i.e. exactly one DRAM leg left. The DRAM floor does NOT describe the zero-copy rows \u2014 they are L1/compute bound (see C14's ablation), which is the re-target Refinement 3 must apply. | Refinement 2: still holds when the destination is packed from a PADDED stream (1.35x) and when the source is another core's narrow shard (1.05x).",
         "topology": {
-          "phase": 1,
-          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = shard_ht * n_chunks): e_shard_same_small=4, e_shard_same_wide=8",
+          "phase": 2,
+          "blocks_per_core": "interleaved: a_square=1, b_wide_short=1, c_multiblock=4, d_smallest=1; sharded (W_REGION, blocks = that region's tile-rows * n_chunks, PER SHARD \u2014 an uneven grid gives its last shard fewer): e_shard_same_small=4, e_shard_same_wide=8, reshard_cross_spec=4, padded_into_local_shard=8",
           "plan_paths": [
             "R_ALIGNED/P_ACCESSOR/W_BLOCKS",
             "R_PAD/P_ACCESSOR/W_BLOCKS",
             "R_ALIGNED/P_LOCAL_SHARD+P_LOCAL_SHARD/W_REGION",
             "R_ALIGNED/P_ACCESSOR+P_LOCAL_SHARD/W_REGION",
-            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION"
+            "R_ALIGNED/P_LOCAL_SHARD+P_ACCESSOR/W_REGION",
+            "R_PAD/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: padding into a resident destination shard)",
+            "R_PAD(paged source)/P_ACCESSOR+P_LOCAL_SHARD/W_REGION (Refinement 2: cross-spec L1 gather, src_row_pages>1)",
+            "R_PAD(paged source)/P_ACCESSOR/W_BLOCKS (Refinement 2: the same gather on the full grid, chosen by xfer_gate)"
           ],
           "dtypes": [
             "bfloat16",
@@ -405,7 +428,7 @@
           ]
         }
       },
-      "phase": 1
+      "phase": 2
     },
     "C16": {
       "status": "measured-no-payoff",
@@ -633,6 +656,9 @@
   },
   "notes": {
     "L4_split_reader": "Design lamp L4 (master.md example T2 `split_reader`, ~1.7x) becomes APPLICABLE for the first time with Refinement 1: on a sharded-OUTPUT plan the writer issues no NoC work at all, so BRISC is free to take half the reader's DRAM reads on the interleaved->shard crossover. Not built here (Refinement 1 is placement only); it is Refinement 3's business. It has no Part-2 catalog ID, hence this note rather than a levers row.",
-    "phase1_stale_closure_reread": "The 10 'possibly unlocked' staleness signals are the topology block moving from interleaved-only to interleaved + three sharded plan paths. Re-read at Refinement 1 and all still hold: A1 (row_wise) is INAPPLICABLE on the sharded path (cores come from shard order, split_work_to_cores is not called); A4 (cliff cores) \u2014 derive_shard_blocking makes WT_CHUNK divide shard_wt exactly and uneven shards fall back to the accessor path; B11 \u2014 a shard row is shard_w*elem with shard_w % 32 == 0, still a 32 B multiple; B12 \u2014 destination tile regions are disjoint, so even the cross-core gather reads no byte twice; C16 \u2014 an aliased CB has no depth and the zero-copy path is compute-bound (ablation: 4901 -> 862 with compute stubbed), so there is still nothing to overlap; C17 \u2014 RM-in / TILE-out still cannot alias (the two aliased CBs sit on different tensors); D20/F23/F26/F27 are untouched by placement."
+    "phase1_stale_closure_reread": "The 10 'possibly unlocked' staleness signals are the topology block moving from interleaved-only to interleaved + three sharded plan paths. Re-read at Refinement 1 and all still hold: A1 (row_wise) is INAPPLICABLE on the sharded path (cores come from shard order, split_work_to_cores is not called); A4 (cliff cores) \u2014 derive_shard_blocking makes WT_CHUNK divide shard_wt exactly and uneven shards fall back to the accessor path; B11 \u2014 a shard row is shard_w*elem with shard_w % 32 == 0, still a 32 B multiple; B12 \u2014 destination tile regions are disjoint, so even the cross-core gather reads no byte twice; C16 \u2014 an aliased CB has no depth and the zero-copy path is compute-bound (ablation: 4901 -> 862 with compute stubbed), so there is still nothing to overlap; C17 \u2014 RM-in / TILE-out still cannot alias (the two aliased CBs sit on different tensors); D20/F23/F26/F27 are untouched by placement.",
+    "R2_xfer_gate": "Refinement 2 added the `xfer_gate` knob (LEVERS, default 1) with both arms in _bench_tilize.py (test_bench_lever_xfer_gate, test_bench_lever_xfer_gate_narrow_destination). It decides whether aliasing the DESTINATION shard is worth the read transfer the shard's width pins: 1.66x / 3.21x in favour of the grid split below the 256 B knee, no effect above it (dram->HEIGHT x8, 512 B reads: 7,983 vs 8,058 ns). It never gates a SOURCE-local plan \u2014 the writer always moves whole TILE pages, measured 0.94x (2 cores) to 3.85x (8 cores). Mechanism-wise this is B5 (transaction size) crossed with A2 (core placement); it has no catalog ID of its own.",
+    "R2_reshard_retarget": "Re-target for the reshard rows: with the destination local there is NO write traffic, so the ceiling is the SOURCE shard's L1 egress (2 cores x 256 KB in 256 B transfers ~= 14 GB/s/core), not the DRAM floor. Ablation on [1,1,1024,256] WIDTHx2->HEIGHTx8: full 18,487 -> no_compute 17,615 (-4.7%) -> sync_only 745 ns, i.e. DM-bound (95%). Remaining headroom is the source-side fan-in, which the CALLER picks (shard spec), plus L4 split_reader \u2014 now MORE applicable than at Refinement 1, since on a destination-local gather BRISC does no NoC work at all.",
+    "phase2_stale_closure_reread": "The 10 staleness signals at Refinement 2 are the topology block gaining three plan paths (padded-into-local-shard, the paged cross-spec gather, and that gather on the full grid). Re-read, and all still hold: A1 (row_wise) \u2014 still not called on a shard-pinned plan, and the GATED gather does call split_work_to_cores again but over the same round-robin DRAM/L1 page map where it measured as noise; A4 (no cliff width) \u2014 derive_shard_blocking still divides the shard width exactly, and Refinement 2's uneven grids split ROWS, not W, so the short last shard is a cliff in H that the per-shard block count absorbs (no second kernel width); B11 (32 B transactions) \u2014 now stronger, since every page slice of the gather is a 32 B multiple by construction and the one geometry that would break it is refused (test_unaddressable_shard_row_is_refused); B12 (no mcast/semaphores) \u2014 still zero, now asserted per-descriptor in test_reshard_placement_and_source_page_geometry; C16 (double_buffer) and D20 (regime_select) \u2014 unchanged on the interleaved rows they were measured on, though both now have a new consumer (the gather streams through the input CB and forces R_PAD), so they are the two rows most worth re-measuring in a perf phase; C17 / F23 / F26 / F27 \u2014 the format, precision-knob and arithmetic facts they rest on did not move."
   }
 }

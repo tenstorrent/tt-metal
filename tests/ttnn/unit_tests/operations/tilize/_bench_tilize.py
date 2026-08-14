@@ -342,8 +342,13 @@ def _width_shard(shape, num_cores):
     )
 
 
-# (shape, source cores, destination cores)
-RESHARD_SHAPE = ([1, 1, 1024, 256], 4, 8)
+# (shape, source cores, destination cores). The source is WIDTH-sharded on 2 cores,
+# so its page is 128 elements = 256 B: narrow enough to need the page-split gather,
+# wide enough to clear MIN_STREAM_READ_BYTES so the destination stays local.
+RESHARD_SHAPE = ([1, 1, 1024, 256], 2, 8)
+# Same reshard with a 4-core (128 B page) source — below the knee, which is what
+# the `xfer_gate` lever exists to catch.
+GATED_RESHARD_SHAPE = ([1, 1, 1024, 256], 4, 8)
 # (logical shape, pad target, destination cores)
 PAD_SHARD_SHAPE = ([1, 1, 2040, 256], [1, 1, 2048, 256], 8)
 
@@ -359,6 +364,37 @@ def test_bench_reshard_cross_spec(device, zero_copy):
         out_mem_config=_height_shard(shape, dst_cores),
         levers=dict(zero_copy=zero_copy),
         label=f"reshard_cross_spec/zero_copy={zero_copy}",
+    )
+
+
+@pytest.mark.parametrize("xfer_gate", [1, 0], ids=["on", "off"])
+def test_bench_lever_xfer_gate(device, xfer_gate):
+    """The read-transfer gate: OFF aliases a destination whose shard width pins
+    the reader to 128 B transfers on 8 cores instead of a coarse WT_CHUNK on 64."""
+    shape, src_cores, dst_cores = GATED_RESHARD_SHAPE
+    _measure(
+        device,
+        shape,
+        ttnn.bfloat16,
+        in_mem_config=_width_shard(shape, src_cores),
+        out_mem_config=_height_shard(shape, dst_cores),
+        levers=dict(xfer_gate=xfer_gate),
+        label=f"gated_reshard/xfer_gate={xfer_gate}",
+    )
+
+
+@pytest.mark.parametrize("xfer_gate", [1, 0], ids=["on", "off"])
+def test_bench_lever_xfer_gate_narrow_destination(device, xfer_gate):
+    """The worst case for an aliased destination: a ONE-tile-wide shard (64 B
+    reads) — master.md B5 territory, and the largest measured swing."""
+    shape = [1, 1, 1024, 256]
+    _measure(
+        device,
+        shape,
+        ttnn.bfloat16,
+        out_mem_config=_width_shard(shape, 8),
+        levers=dict(xfer_gate=xfer_gate),
+        label=f"narrow_dest_shard/xfer_gate={xfer_gate}",
     )
 
 
