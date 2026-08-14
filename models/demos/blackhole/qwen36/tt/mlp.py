@@ -258,6 +258,12 @@ class Qwen36MLP:
 
         mc = ttnn.DRAM_MEMORY_CONFIG
         _silu_fused = False
+        # 27B-on-Wormhole prefill matmul blocking (gate/up AND down; see both call sites below).
+        # Hoisted out of the gate/up branch because the down-proj block reads it too, and that block
+        # is also reached from Blackhole's fused-AGMM arm, which never enters the gate/up branch.
+        # Length-capped: see tp_common.PREFILL_FULL_GRID_MAX_M for why (CBs scale with per_core_M and
+        # overflow L1 past the production chunk length).
+        _mlp_full_grid = args.dim > 4096 and not tpc.is_blackhole() and x.shape[-2] <= tpc.PREFILL_FULL_GRID_MAX_M
         # Prefill: x is K-sharded (ff_norm skipped AG); fused AG + [gate|up] + SwiGLU
         _fused_gu = self._fuse_gateup_agmm and x.shape[-2] > ttnn.TILE_SIZE and w.w_gate_up is not None
         if _fused_gu:
@@ -341,25 +347,52 @@ class Qwen36MLP:
             # PCC is UNCHANGED to 5 decimals on all three (gate 0.99013, up 0.99313, down 0.99983) --
             # this is pure blocking, not an accuracy trade.
             _sub_cap = tpc.DST_TILES if _kpass1 else None
-            pc_gate = tpc.create_prefill_mlp_matmul_program_config(
-                seq,
-                args.dim,
-                w.w1.shape[-1],
-                fused_activation=ttnn.UnaryOpType.SILU,
-                max_cols=_gw,
-                tuning=_pt,
-                halve_out_block=_half,
-                max_subblock_hw=_sub_cap,
-            )
-            pc_up = tpc.create_prefill_mlp_matmul_program_config(
-                seq,
-                args.dim,
-                w.w3.shape[-1],
-                max_cols=_gw,
-                tuning=_pt,
-                halve_out_block=_half,
-                max_subblock_hw=_sub_cap,
-            )
+            # MODEL-GATED (27B on Wormhole). The 27B's per-device gate/up width is
+            # hidden_dim/tp = 17408/8 = 2176 = 68 tiles, and 68's only divisors <=8 are 1/2/4 -- so
+            # _best_prefill_cols, which picks the grid width that maximises the output subblock,
+            # settles on 6 columns = 48 of 64 cores. That trade is wrong here: the missing 16 cores
+            # cost far more than the wider subblock earns. The 9B's 192 tiles already land on the
+            # full 8 wide, so it never saw this and is left byte-identical (gate on dim, not
+            # model_name: HF_MODEL is often a hashed snapshot directory).
+            #
+            # MEASURED (T3K TP=8, device kernel duration, M=2048, in0 bf8;
+            # tests/perf/test_mlp_prefill_matmul_sweep.py -- and both baselines below reproduce the
+            # real layer's numbers to within 1.5us, which is why this isolated sweep is trusted for
+            # this shape where mlp.py's older caution applied to a compute-config axis):
+            #     gate/up  2048x5120x2176  cols=6 in0_bw=4 sub=1x6  468.5us  (48 cores, 40.7% FPU)
+            #                              cols=8 in0_bw=8 sub=1x3  352.3us  (64 cores, 54.7% FPU)  -24.8%
+            #     down     2048x2176x5120  cols=8 in0_bw=4 sub=1x5  442.8us  (64 cores, 44.5% FPU)
+            #                              cols=8 in0_bw=4 sub=2x4  390.9us  (64 cores, 49.6% FPU)  -11.7%
+            # PCC is unchanged (0.9989485 either way, test_mlp_tp_prefill[in_bf8]) -- pure blocking.
+            # out_subblock_h is passed explicitly because no simple rule predicts both winners; see
+            # create_prefill_mlp_matmul_program_config_full_grid.
+            if _mlp_full_grid:
+                pc_gate = tpc.create_prefill_mlp_matmul_program_config_full_grid(
+                    seq, args.dim, w.w1.shape[-1], fused_activation=ttnn.UnaryOpType.SILU, out_subblock_h=1
+                )
+                pc_up = tpc.create_prefill_mlp_matmul_program_config_full_grid(
+                    seq, args.dim, w.w3.shape[-1], out_subblock_h=1
+                )
+            else:
+                pc_gate = tpc.create_prefill_mlp_matmul_program_config(
+                    seq,
+                    args.dim,
+                    w.w1.shape[-1],
+                    fused_activation=ttnn.UnaryOpType.SILU,
+                    max_cols=_gw,
+                    tuning=_pt,
+                    halve_out_block=_half,
+                    max_subblock_hw=_sub_cap,
+                )
+                pc_up = tpc.create_prefill_mlp_matmul_program_config(
+                    seq,
+                    args.dim,
+                    w.w3.shape[-1],
+                    max_cols=_gw,
+                    tuning=_pt,
+                    halve_out_block=_half,
+                    max_subblock_hw=_sub_cap,
+                )
             if _kpass1:
                 ckc = _CKC_MLP_KPASS1
             w1_out = ttnn.linear(
@@ -429,14 +462,25 @@ class Qwen36MLP:
             # leaves ckc at self.compute_kernel_config, which has fp32 dest acc ON -> cap stays 4).
             # Testing the object directly means this cannot silently desync if that branch changes.
             # MEASURED down 2048x6144x4096: 1015.0us -> 924.8us (-8.9%), PCC 0.99983 unchanged.
-            w2_pc = tpc.create_prefill_mlp_matmul_program_config(
-                hidden.shape[-2],
-                hidden.shape[-1],
-                w.w2.shape[-1],
-                max_cols=getattr(args, "decode_grid_w", 8),
-                tuning=getattr(args, "prefill_tuning", None),
-                max_subblock_hw=tpc.DST_TILES if ckc is _CKC_MLP_KPASS1 else None,
-            )
+            #
+            # MODEL-GATED (27B on Wormhole), same factory and the same reason as gate/up above --
+            # except that here the grid width was ALREADY the full 8 (dim = 5120 = 160 tiles divides
+            # cleanly), so the whole win is out_subblock_h=2: 2x4 uses all 8 DST tiles where the
+            # derived 1x5 uses 5. MEASURED 2048x2176x5120: 442.8us -> 390.9us (-11.7%), PCC
+            # unchanged. Note in0_block_w stays 4 here, not 8 -- K is 68 tiles and 68 % 8 != 0, so 8
+            # is not a legal blocking; the factory's _largest_divisor_le picks 4 on its own.
+            if _mlp_full_grid:
+                w2_pc = tpc.create_prefill_mlp_matmul_program_config_full_grid(
+                    hidden.shape[-2], hidden.shape[-1], w.w2.shape[-1], out_subblock_h=2
+                )
+            else:
+                w2_pc = tpc.create_prefill_mlp_matmul_program_config(
+                    hidden.shape[-2],
+                    hidden.shape[-1],
+                    w.w2.shape[-1],
+                    max_cols=getattr(args, "decode_grid_w", 8),
+                    max_subblock_hw=tpc.DST_TILES if ckc is _CKC_MLP_KPASS1 else None,
+                )
         # down-proj OUTPUT in L1 for the tuned prefill path (DRAM input `hidden` + L1 output = the
         # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial) — but only while
         # the [1,T,dim] output actually fits; see tp_common.prefill_out_memory_config for why WH has to
