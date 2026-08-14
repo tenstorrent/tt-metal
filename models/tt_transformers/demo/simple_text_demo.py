@@ -31,8 +31,6 @@ from models.tt_transformers.tt.generator import Generator, SamplingParams, creat
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
 from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 
-models_not_supported_for_device_sampling = []
-
 
 class TokenAccuracy:
     def __init__(self, model_name):
@@ -1201,10 +1199,6 @@ def test_demo_text(
             if model[0]._supports_on_device_sampling
             else None
         )
-
-        # Fall back to host sampling for any model listed above
-        if model_args[0].base_model_name in models_not_supported_for_device_sampling:
-            device_sampling_params = None
 
         if device_sampling_params is None and isinstance(sampling_params["temperature"], List):
             # host sampling only supports single sample param for all users in a batch

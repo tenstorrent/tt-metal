@@ -267,7 +267,7 @@ class Sampling1D(LightweightModule):
         """Dispatcher."""
         return self.decode_forward(logits, **kwargs)
 
-    # -- Argmax path (port from tt_sampling.py:310-341) -----------------------
+    # -- Argmax path (port of the argmax branch of TTSampling.forward) --------
 
     def _sample_argmax(self, logits, tt_out_tok):
         slice_valid_vocab = self._can_slice_valid_vocab_for_argmax()
@@ -364,7 +364,7 @@ class Sampling1D(LightweightModule):
         """DRAM memory config: no extra round-trip needed."""
         return topk_values, topk_indices_int32
 
-    # -- Top-k sampling (port from tt_sampling.py:343-481) --------------------
+    # -- Top-k sampling (port of the top-k branch of TTSampling.forward) ------
 
     def _sample_topk(self, logits, k, p, temp, seeds, tt_out_tok):
         cfg = self.config
@@ -515,7 +515,7 @@ class Sampling1D(LightweightModule):
     # -- Top-k strategies (bound at init, no if-else in forward) --------------
 
     def _topk_single_device(self, x_bf16):
-        """Split vocab in half → two topk → concat. Port of tt_sampling.py:346-371."""
+        """Split vocab in half → two topk → concat. Port of the single-device branch of TTSampling.forward."""
         cfg = self.config
         x_list = ttnn.split(x_bf16, x_bf16.shape[-1] // 2, dim=3)
 
@@ -542,12 +542,12 @@ class Sampling1D(LightweightModule):
         return gathered_values, gathered_indices
 
     def _topk_multi_device(self, x_bf16):
-        """Local topk → all_gather across devices. Port of tt_sampling.py:372-421."""
+        """Local topk → all_gather across devices. Port of the multi-device branch of TTSampling.forward."""
         cfg = self.config
         cluster_shape = cfg.mesh_device.shape
 
         # Pad the per-device shard up to the next power of 2 so ttnn.topk hits its fast path.
-        # Padded entries get -inf so they are never selected. Mirrors tt_sampling.py:451-458.
+        # Padded entries get -inf so they are never selected. Mirrors the padding in TTSampling.forward.
         if cfg.pad_to_power_of_2 and not _is_power_of_2(x_bf16.shape[-1]):
             padded_width = _upper_power_of_2(x_bf16.shape[-1])
             x_bf16 = ttnn.pad(
@@ -597,7 +597,7 @@ class Sampling1D(LightweightModule):
     def _perform_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
         """Flexible all-gather: prefer line_all_gather if available, else ttnn.all_gather.
 
-        Port of TTSampling._perform_all_gather (tt_sampling.py:231-259).
+        Port of TTSampling._perform_all_gather.
         """
         if callable(self._line_all_gather):
             kwargs = {
